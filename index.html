@@ -150,9 +150,10 @@
 
     <div class="main-container">
 
-        <div class="sidebar-left panel">
-            <h2>Girdi &amp; Çizim Araçları</h2>
-            <button class="btn-primary" style="width: 100%;">📂 KML / SHP Yükle</button>
+            <div class="sidebar-left panel">
+            <h2>Çalışma Alanı &amp; Veri Seçimi</h2>
+            <button class="btn-primary" style="width: 100%;">📂 KML / KMZ / SHP Yükle</button>
+            <input type="file" style="display: none;" accept=".kml,.kmz,.zip">
             <div class="tool-row">
                 <button class="btn-tool" id="btn-polygon">⬠ Poligon</button>
                 <button class="btn-tool" id="btn-rectangle">▭ Dikdörtgen</button>
@@ -461,10 +462,13 @@
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <!-- Leaflet Geoman (gerçek çizim motoru) -->
     <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@latest/dist/leaflet-geoman.min.js"></script>
-    <!-- Turf.js (alan ve çevre hesaplama motoru) -->
     <script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-omnivore/0.3.4/leaflet-omnivore.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://unpkg.com/shpjs@latest/dist/shp.js"></script>
+
     <script>
         // ---------------------------------------------------------
         // 1. Haritayı oluştur ve Türkiye merkezli olarak başlat
@@ -571,8 +575,134 @@
             geomInfoBox.style.display = 'none';
         }
 
-        btnPolygon.addEventListener('click', function () {
+btnPolygon.addEventListener('click', function () {
             setActiveTool(btnPolygon);
+            map.pm.enableDraw('Polygon');
+        });
+
+        btnRectangle.addEventListener('click', function () {
+            setActiveTool(btnRectangle);
+            map.pm.enableDraw('Rectangle');
+        });
+
+        btnClear.addEventListener('click', function () {
+            clearDrawing();
+        });
+
+        btnDeleteGeom.addEventListener('click', function () {
+            clearDrawing();
+        });
+
+        // Haritada çizim bittiğinde tetiklenen Geoman olayı
+        map.on('pm:create', function (e) {
+            if (currentLayer) {
+                map.removeLayer(currentLayer);
+            }
+            currentLayer = e.layer;
+            setActiveTool(null);
+
+            // Turf.js ile alan ve çevre hesaplama
+            var geojson = currentLayer.toGeoJSON();
+            var area = turf.area(geojson); // metrekare
+            var perimeter = turf.length(geojson, { units: 'kilometers' });
+
+            var areaKm = (area / 1000000).toFixed(2);
+            var areaHa = (area / 10000).toFixed(2);
+
+            txtArea.innerHTML = "<b>Alan:</b> " + areaKm + " km² | " + areaHa + " ha";
+            txtPerimeter.innerHTML = "<b>Çevre:</b> " + perimeter.toFixed(2) + " km";
+            geomInfoBox.style.display = 'flex';
+        });
+
+        // =========================================================
+        // KML / KMZ / SHP DOSYA YÜKLEME VE MOTOR ENTEGRASYONU
+        // =========================================================
+        document.getElementById('geo-file-input').addEventListener('change', function(e) {
+            var file = e.target.files[0];
+            if (!file) return;
+
+            var fileName = file.name.toLowerCase();
+            var reader = new FileReader();
+
+            // 1. KML Yükleme Motoru
+            if (fileName.endsWith('.kml')) {
+                reader.onload = function(event) {
+                    if (currentLayer) map.removeLayer(currentLayer);
+                    
+                    currentLayer = omnivore.kml.parse(event.target.result).addTo(map);
+                    currentLayer.on('ready', function() {
+                        map.fitBounds(currentLayer.getBounds());
+                        calculateLayerStats(currentLayer);
+                    });
+                };
+                reader.readAsText(file);
+            } 
+            
+            // 2. KMZ Yükleme Motoru
+            else if (fileName.endsWith('.kmz')) {
+                reader.onload = function(event) {
+                    JSZip.loadAsync(file).then(function(zip) {
+                        var kmlFile = Object.keys(zip.files).find(name => name.endsWith('.kml'));
+                        if (kmlFile) {
+                            zip.file(kmlFile).async("string").then(function(kmlText) {
+                                if (currentLayer) map.removeLayer(currentLayer);
+                                currentLayer = omnivore.kml.parse(kmlText).addTo(map);
+                                currentLayer.on('ready', function() {
+                                    map.fitBounds(currentLayer.getBounds());
+                                    calculateLayerStats(currentLayer);
+                                });
+                            });
+                        }
+                    });
+                };
+                reader.readAsArrayBuffer(file);
+            } 
+            
+            // 3. SHP (ZIP Arşivi) Yükleme Motoru
+            else if (fileName.endsWith('.zip')) {
+                reader.onload = function(event) {
+                    shp(event.target.result).then(function(geojson) {
+                        if (currentLayer) map.removeLayer(currentLayer);
+                        
+                        currentLayer = L.geoJSON(geojson, {
+                            style: function() {
+                                return { color: "#1e3a8a", weight: 3, fillOpacity: 0.4 };
+                            }
+                        }).addTo(map);
+                        
+                        map.fitBounds(currentLayer.getBounds());
+                        calculateLayerStats(currentLayer);
+                    }).catch(function(err) {
+                        alert("Geçersiz veya uyumsuz Shapefile ZIP arşivi!");
+                    });
+                };
+                reader.readAsArrayBuffer(file);
+            } else {
+                alert("Desteklenmeyen dosya formatı!");
+            }
+        });
+
+        // Yüklenen katmanın alanını ve çevresini hesaplayan yardımcı fonksiyon
+        function calculateLayerStats(layer) {
+            try {
+                var geojson = layer.toGeoJSON();
+                var area = turf.area(geojson);
+                var perimeter = turf.length(geojson, { units: 'kilometers' });
+
+                var areaKm = (area / 1000000).toFixed(2);
+                var areaHa = (area / 10000).toFixed(2);
+
+                txtArea.innerHTML = "<b>Alan:</b> " + areaKm + " km² | " + areaHa + " ha";
+                txtPerimeter.innerHTML = "<b>Çevre:</b> " + perimeter.toFixed(2) + " km";
+                geomInfoBox.style.display = 'flex';
+            } catch(e) {
+                // Nokta veya çizgi verilerinde alan hesaplanamayacağı için kutuyu gizle
+                geomInfoBox.style.display = 'none';
+            }
+        }
+    </script>
+</body>
+</html>            setActiveTool(btnPolygon);
             map.pm.enableDraw('Polygon', { snappable: true, snapDistance: 20 });
         });
 
