@@ -643,72 +643,59 @@ if (fileUpload) {
         reader.onload = function(event) {
             var data = event.target.result;
             
-            // --- YENİ HESAPLAMALI DOSYA YÜKLEME MOTORU ---
-var fileUpload = document.getElementById('file-upload');
+// HARİTA KURULUMU - ASLA SİLME
+var HOME_VIEW = { center: [20.0, 0.0], zoom: 2 };
+var map = L.map('map', { zoomControl: false }).setView(HOME_VIEW.center, HOME_VIEW.zoom);
 
+var satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    attribution: 'Esri World Imagery',
+    maxZoom: 19
+}).addTo(map);
+            // ALAN HESAPLAMALI KML/KMZ MOTORU
+var fileUpload = document.getElementById('file-upload');
 if (fileUpload) {
     fileUpload.addEventListener('change', function(e) {
         var file = e.target.files[0];
         if (!file) return;
-
         var reader = new FileReader();
         var fileName = file.name.toLowerCase();
 
         reader.onload = function(event) {
             var data = event.target.result;
             
-            // Veriyi işleyen ve kutuya yazdıran fonksiyon
             function processAndRender(geojson, color) {
-                try {
-                    // 1. Haritaya ekle
-                    var layer = L.geoJSON(geojson, { 
-                        style: { color: color, weight: 3, fillOpacity: 0.3 } 
-                    }).addTo(map);
-                    
-                    // 2. Alan ve çevre hesabı (Turf.js)
-                    var areaSqMeters = turf.area(geojson);
-                    var areaKm2 = (areaSqMeters / 1000000).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
-                    var areaHa = (areaSqMeters / 10000).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
-                    var lengthKm = turf.length(geojson, { units: 'kilometers' }).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
+                var layer = L.geoJSON(geojson, { 
+                    style: { color: color, weight: 3, fillOpacity: 0.3 } 
+                }).addTo(map);
+                
+                // Turf.js ile hesaplama
+                var areaSqMeters = turf.area(geojson);
+                var areaKm2 = (areaSqMeters / 1000000).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
+                var areaHa = (areaSqMeters / 10000).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
+                var lengthKm = turf.length(geojson, { units: 'kilometers' }).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
 
-                    // 3. Bilgi kutusuna yaz
-                    var geomInfoBox = document.getElementById('geom-info');
-                    document.getElementById('geom-area').innerHTML = '<b>Alan:</b> ' + areaKm2 + ' km² | ' + areaHa + ' ha';
-                    document.getElementById('geom-perimeter').innerHTML = '<b>Çevre:</b> ' + lengthKm + ' km';
-                    geomInfoBox.style.display = 'flex';
-
-                    map.fitBounds(layer.getBounds());
-                } catch (err) {
-                    alert("Veri hesaplanamadı veya haritaya basılamadı: " + err.message);
-                }
+                // Bilgi kutusuna yaz
+                document.getElementById('geom-area').innerHTML = '<b>Alan:</b> ' + areaKm2 + ' km² | ' + areaHa + ' ha';
+                document.getElementById('geom-perimeter').innerHTML = '<b>Çevre:</b> ' + lengthKm + ' km';
+                document.getElementById('geom-info').style.display = 'flex';
+                map.fitBounds(layer.getBounds());
             }
 
-            // Dosya tipine göre geoJSON'a dönüştür ve işle
             try {
                 if (fileName.endsWith('.kml')) {
-                    var xml = new DOMParser().parseFromString(data, "text/xml");
-                    processAndRender(toGeoJSON.kml(xml), '#3b82f6');
+                    processAndRender(toGeoJSON.kml(new DOMParser().parseFromString(data, "text/xml")), '#3b82f6');
                 } else if (fileName.endsWith('.kmz')) {
                     JSZip.loadAsync(data).then(zip => {
                         var kmlFile = Object.keys(zip.files).find(n => n.endsWith('.kml'));
-                        if (kmlFile) {
-                            zip.files[kmlFile].async("string").then(text => {
-                                var xml = new DOMParser().parseFromString(text, "text/xml");
-                                processAndRender(toGeoJSON.kml(xml), '#10b981');
-                            });
-                        } else {
-                            alert("KMZ içinde KML dosyası bulunamadı!");
-                        }
+                        zip.files[kmlFile].async("string").then(text => {
+                            processAndRender(toGeoJSON.kml(new DOMParser().parseFromString(text, "text/xml")), '#10b981');
+                        });
                     });
                 }
-            } catch (err) {
-                alert("Dosya işleme hatası: " + err.message);
-            }
+            } catch (err) { alert("Dosya yükleme hatası!"); }
         };
-
         if (fileName.endsWith('.kml')) reader.readAsText(file);
         else reader.readAsArrayBuffer(file);
-        e.target.value = '';
     });
 }
     </script>
