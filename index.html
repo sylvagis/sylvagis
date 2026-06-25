@@ -152,7 +152,8 @@
 
         <div class="sidebar-left panel">
             <h2>Girdi &amp; Çizim Araçları</h2>
-            <button class="btn-primary" style="width: 100%;">📂 KML / SHP Yükle</button>
+            <input type="file" id="file-upload" accept=".kml, .kmz, .zip" style="display: none;">
+            <button class="btn-primary" id="btn-upload" style="width: 100%; margin-bottom: 10px;">📂 KML / KMZ / SHP Yükle</button>            <input type="file" id="file-upload" accept=".kml, .kmz, .shp, .zip" style="display:none;">
             <div class="tool-row">
                 <button class="btn-tool" id="btn-polygon">⬠ Poligon</button>
                 <button class="btn-tool" id="btn-rectangle">▭ Dikdörtgen</button>
@@ -458,11 +459,9 @@
         <span style="font-weight: bold; font-size: 0.9rem;">2026 SylvaGIS</span>
     </div>
 
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <!-- Leaflet Geoman (gerçek çizim motoru) -->
-    <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@latest/dist/leaflet-geoman.min.js"></script>
-    <!-- Turf.js (alan ve çevre hesaplama motoru) -->
-    <script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
+    <script src="https://unpkg.com/@mapbox/togeojson"></script>
+    <script src="https://unpkg.com/shpjs@latest/dist/shp.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script>
         // ---------------------------------------------------------
         // 1. Haritayı oluştur ve Türkiye merkezli olarak başlat
@@ -601,6 +600,89 @@
             txtArea.innerHTML = '<b>Alan:</b> ' + areaKm2 + ' km² | ' + areaHa + ' ha';
             txtPerimeter.innerHTML = '<b>Çevre:</b> ' + lengthKm + ' km';
             geomInfoBox.style.display = 'flex';
+        });
+        // ---------------------------------------------------------
+        // KML / KMZ / SHP YÜKLEME MOTORU
+        // ---------------------------------------------------------
+        var btnUpload = document.getElementById('btn-upload');
+        var fileUpload = document.getElementById('file-upload');
+
+        // 1. Butona tıklanınca gizli dosya seçiciyi aç
+        btnUpload.addEventListener('click', function() {
+            fileUpload.click();
+        });
+
+        // 2. Dosya seçildiğinde işlemleri başlat
+        fileUpload.addEventListener('change', function(e) {
+            var file = e.target.files[0];
+            if (!file) return;
+
+            var fileName = file.name.toLowerCase();
+            var reader = new FileReader();
+
+            reader.onload = function(event) {
+                var data = event.target.result;
+
+                // A) SHP (ZIP) İŞLEME
+                if (fileName.endsWith('.zip')) {
+                    shp(data).then(function(geojson) {
+                        var uploadedLayer = L.geoJSON(geojson, {
+                            style: { color: '#ef4444', weight: 2, fillOpacity: 0.2 }
+                        }).addTo(map);
+                        map.fitBounds(uploadedLayer.getBounds());
+                    }).catch(function(err) { 
+                        alert("SHP yükleme hatası: Dosyanın zip içinde olduğundan emin olun."); 
+                    });
+                } 
+                
+                // B) KML İŞLEME
+                else if (fileName.endsWith('.kml')) {
+                    var parser = new DOMParser();
+                    var xmlDoc = parser.parseFromString(data, "text/xml");
+                    var geojson = toGeoJSON.kml(xmlDoc);
+                    var uploadedLayer = L.geoJSON(geojson, {
+                        style: { color: '#3b82f6', weight: 2, fillOpacity: 0.2 }
+                    }).addTo(map);
+                    map.fitBounds(uploadedLayer.getBounds());
+                }
+
+                // C) KMZ İŞLEME (Ziplenmiş KML)
+                else if (fileName.endsWith('.kmz')) {
+                    var new_zip = new JSZip();
+                    new_zip.loadAsync(data).then(function(zip) {
+                        // KMZ içindeki .kml uzantılı dosyayı bul
+                        var kmlFileName = Object.keys(zip.files).find(function(name) { 
+                            return name.toLowerCase().endsWith('.kml'); 
+                        });
+                        
+                        if (kmlFileName) {
+                            zip.files[kmlFileName].async("string").then(function(kmlText) {
+                                var parser = new DOMParser();
+                                var xmlDoc = parser.parseFromString(kmlText, "text/xml");
+                                var geojson = toGeoJSON.kml(xmlDoc);
+                                var uploadedLayer = L.geoJSON(geojson, {
+                                    style: { color: '#10b981', weight: 2, fillOpacity: 0.2 } 
+                                }).addTo(map);
+                                map.fitBounds(uploadedLayer.getBounds());
+                            });
+                        } else {
+                            alert("KMZ dosyasının içinde geçerli bir KML bulunamadı.");
+                        }
+                    }).catch(function(err) { 
+                        alert("KMZ okuma hatası: " + err); 
+                    });
+                }
+            };
+
+            // Dosya tipine göre okuma metodunu belirle
+            if (fileName.endsWith('.zip') || fileName.endsWith('.kmz')) {
+                reader.readAsArrayBuffer(file);
+            } else if (fileName.endsWith('.kml')) {
+                reader.readAsText(file);
+            }
+            
+            // Aynı dosyayı üst üste yükleyebilmek için inputu temizle
+            e.target.value = '';
         });
     </script>
 
