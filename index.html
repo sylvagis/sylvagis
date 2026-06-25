@@ -94,8 +94,10 @@
         <div class="sidebar-left panel">
             <h2>Girdi &amp; Çizim Araçları</h2>
             
-            <input type="file" id="file-upload" accept=".kml, .kmz, .zip" style="display: block; width: 100%; margin-bottom: 10px; padding: 10px; background: #e2e8f0; border-radius: 5px; border: 1px solid #1e3a8a;">
-            <button type="button" class="btn-primary" onclick="document.getElementById('file-upload').click();" style="width: 100%; margin-bottom: 10px;">📂 KML / KMZ / SHP Yükle</button>
+            <div style="background: #e2e8f0; padding: 10px; border-radius: 5px; margin-bottom: 15px; border: 1px solid #1e3a8a;">
+                <label style="font-weight: bold; font-size: 0.85rem; color: #1e3a8a;">Dosya Yükle (Test Modu)</label>
+                <input type="file" id="test-file-upload" accept=".kml,.kmz,.zip" style="display: block; width: 100%; margin-top: 5px;">
+            </div>
             
             <div class="tool-row">
                 <button class="btn-tool" id="btn-polygon">⬠ Poligon</button>
@@ -295,67 +297,79 @@
             geomInfoBox.style.display = 'flex';
         });
 
-        // DOSYA YÜKLEME VE HARİTAYA İŞLEME MOTORU
-        var fileUpload = document.getElementById('file-upload');
-        if (fileUpload) {
-            fileUpload.addEventListener('change', function(e) {
+        // ---------------------------------------------------------
+        // DOSYA YÜKLEME TEST MOTORU (TEŞHİS İÇİN)
+        // ---------------------------------------------------------
+        var testFileUpload = document.getElementById('test-file-upload');
+        if (testFileUpload) {
+            testFileUpload.addEventListener('change', function(e) {
                 var file = e.target.files[0];
-                if (!file) return;
-
+                if (!file) {
+                    alert("Hata: Dosya seçilemedi!");
+                    return;
+                }
+                
+                alert("1. AŞAMA BAŞARILI: " + file.name + " isimli dosya koda ulaştı.");
+                
                 var fileName = file.name.toLowerCase();
                 var reader = new FileReader();
-
+                
                 reader.onload = function(event) {
+                    alert("2. AŞAMA BAŞARILI: Tarayıcı dosyayı okudu, dönüştürme başlıyor...");
                     var data = event.target.result;
-
-                    if (fileName.endsWith('.zip')) {
-                        shp(data).then(function(geojson) {
-                            var uploadedLayer = L.geoJSON(geojson, {
-                                style: { color: '#ef4444', weight: 2, fillOpacity: 0.2 }
-                            }).addTo(map);
-                            map.fitBounds(uploadedLayer.getBounds());
-                        }).catch(function(err) {
-                            alert("SHP yükleme hatası: Dosyanın zip içinde olduğundan emin olun.");
-                        });
-                    } else if (fileName.endsWith('.kml')) {
-                        var parser = new DOMParser();
-                        var xmlDoc = parser.parseFromString(data, "text/xml");
-                        var geojson = toGeoJSON.kml(xmlDoc);
-                        var uploadedLayer = L.geoJSON(geojson, {
-                            style: { color: '#3b82f6', weight: 2, fillOpacity: 0.2 }
-                        }).addTo(map);
-                        map.fitBounds(uploadedLayer.getBounds());
-                    } else if (fileName.endsWith('.kmz')) {
-                        var new_zip = new JSZip();
-                        new_zip.loadAsync(data).then(function(zip) {
-                            var kmlFileName = Object.keys(zip.files).find(function(name) {
-                                return name.toLowerCase().endsWith('.kml');
+                    
+                    try {
+                        if (fileName.endsWith('.zip')) {
+                            shp(data).then(function(geojson) {
+                                alert("3. AŞAMA BAŞARILI: SHP GeoJSON'a çevrildi. Haritaya basılıyor...");
+                                var uploadedLayer = L.geoJSON(geojson, { style: { color: 'red', weight: 2 } }).addTo(map);
+                                map.fitBounds(uploadedLayer.getBounds());
+                                alert("4. AŞAMA: İşlem Tamamlandı!");
+                            }).catch(function(err) {
+                                alert("HATA (SHP Dönüştürme): " + err);
                             });
-                            if (kmlFileName) {
-                                zip.files[kmlFileName].async("string").then(function(kmlText) {
-                                    var parser = new DOMParser();
-                                    var xmlDoc = parser.parseFromString(kmlText, "text/xml");
-                                    var geojson = toGeoJSON.kml(xmlDoc);
-                                    var uploadedLayer = L.geoJSON(geojson, {
-                                        style: { color: '#10b981', weight: 2, fillOpacity: 0.2 }
-                                    }).addTo(map);
-                                    map.fitBounds(uploadedLayer.getBounds());
+                        } else if (fileName.endsWith('.kml')) {
+                            var parser = new DOMParser();
+                            var xmlDoc = parser.parseFromString(data, "text/xml");
+                            var geojson = toGeoJSON.kml(xmlDoc);
+                            alert("3. AŞAMA BAŞARILI: KML GeoJSON'a çevrildi. Haritaya basılıyor...");
+                            var uploadedLayer = L.geoJSON(geojson, { style: { color: 'blue', weight: 2 } }).addTo(map);
+                            map.fitBounds(uploadedLayer.getBounds());
+                            alert("4. AŞAMA: İşlem Tamamlandı!");
+                        } else if (fileName.endsWith('.kmz')) {
+                            var new_zip = new JSZip();
+                            new_zip.loadAsync(data).then(function(zip) {
+                                var kmlFileName = Object.keys(zip.files).find(function(name) {
+                                    return name.toLowerCase().endsWith('.kml');
                                 });
-                            } else {
-                                alert("KMZ dosyasının içinde geçerli KML bulunamadı.");
-                            }
-                        }).catch(function(err) {
-                            alert("KMZ okuma hatası: " + err);
-                        });
+                                if (kmlFileName) {
+                                    zip.files[kmlFileName].async("string").then(function(kmlText) {
+                                        var parser = new DOMParser();
+                                        var xmlDoc = parser.parseFromString(kmlText, "text/xml");
+                                        var geojson = toGeoJSON.kml(xmlDoc);
+                                        alert("3. AŞAMA BAŞARILI: KMZ içindeki KML okundu. Haritaya basılıyor...");
+                                        var uploadedLayer = L.geoJSON(geojson, { style: { color: '#10b981', weight: 2 } }).addTo(map);
+                                        map.fitBounds(uploadedLayer.getBounds());
+                                        alert("4. AŞAMA: İşlem Tamamlandı!");
+                                    });
+                                } else {
+                                    alert("KMZ dosyasının içinde geçerli KML bulunamadı.");
+                                }
+                            }).catch(function(err) {
+                                alert("KMZ okuma hatası: " + err);
+                            });
+                        }
+                    } catch (error) {
+                        alert("Kritik Kod Hatası: " + error);
                     }
                 };
-
+                
                 if (fileName.endsWith('.zip') || fileName.endsWith('.kmz')) {
                     reader.readAsArrayBuffer(file);
                 } else if (fileName.endsWith('.kml')) {
                     reader.readAsText(file);
                 }
-
+                
                 e.target.value = ''; // Seçimi sıfırla
             });
         }
