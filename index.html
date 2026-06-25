@@ -158,7 +158,7 @@
             <button type="button" class="btn-primary" onclick="document.getElementById('file-upload').click();" style="width: 100%; margin-bottom: 10px;">📂 KML / KMZ Yükle</button>            <div class="tool-row">
                 <button class="btn-tool" id="btn-polygon">⬠ Poligon</button>
                 <button class="btn-tool" id="btn-rectangle">▭ Dikdörtgen</button>
-                <button class="btn-tool btn-danger" id="btn-clear" onclick="tumunuTemizle()">❌ Temizle</button>
+                <button class="btn-tool btn-danger" id="btn-clear">❌ Temizle</button>
             </div>
 
             <div id="geom-info" class="geometry-info" style="display: none;">
@@ -643,32 +643,58 @@ if (fileUpload) {
         reader.onload = function(event) {
             var data = event.target.result;
             
-            // Haritaya basma fonksiyonu
-            function renderGeoJSON(geojson, color) {
+            // --- YENİ HESAPLAMALI DOSYA YÜKLEME MOTORU ---
+var fileUpload = document.getElementById('file-upload');
+
+if (fileUpload) {
+    fileUpload.addEventListener('change', function(e) {
+        var file = e.target.files[0];
+        if (!file) return;
+
+        var reader = new FileReader();
+        var fileName = file.name.toLowerCase();
+
+        reader.onload = function(event) {
+            var data = event.target.result;
+            
+            // Veriyi işleyen ve kutuya yazdıran fonksiyon
+            function processAndRender(geojson, color) {
                 try {
+                    // 1. Haritaya ekle
                     var layer = L.geoJSON(geojson, { 
                         style: { color: color, weight: 3, fillOpacity: 0.3 } 
                     }).addTo(map);
+                    
+                    // 2. Alan ve çevre hesabı (Turf.js)
+                    var areaSqMeters = turf.area(geojson);
+                    var areaKm2 = (areaSqMeters / 1000000).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
+                    var areaHa = (areaSqMeters / 10000).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
+                    var lengthKm = turf.length(geojson, { units: 'kilometers' }).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
+
+                    // 3. Bilgi kutusuna yaz
+                    var geomInfoBox = document.getElementById('geom-info');
+                    document.getElementById('geom-area').innerHTML = '<b>Alan:</b> ' + areaKm2 + ' km² | ' + areaHa + ' ha';
+                    document.getElementById('geom-perimeter').innerHTML = '<b>Çevre:</b> ' + lengthKm + ' km';
+                    geomInfoBox.style.display = 'flex';
+
                     map.fitBounds(layer.getBounds());
-                    console.log("Dosya başarıyla haritaya basıldı.");
                 } catch (err) {
-                    alert("Veri haritaya basılamadı: " + err.message);
+                    alert("Veri hesaplanamadı veya haritaya basılamadı: " + err.message);
                 }
             }
 
+            // Dosya tipine göre geoJSON'a dönüştür ve işle
             try {
-                if (fileName.endsWith('.zip')) {
-                    shp(data).then(geojson => renderGeoJSON(geojson, '#ef4444'));
-                } else if (fileName.endsWith('.kml')) {
+                if (fileName.endsWith('.kml')) {
                     var xml = new DOMParser().parseFromString(data, "text/xml");
-                    renderGeoJSON(toGeoJSON.kml(xml), '#3b82f6');
+                    processAndRender(toGeoJSON.kml(xml), '#3b82f6');
                 } else if (fileName.endsWith('.kmz')) {
                     JSZip.loadAsync(data).then(zip => {
                         var kmlFile = Object.keys(zip.files).find(n => n.endsWith('.kml'));
                         if (kmlFile) {
                             zip.files[kmlFile].async("string").then(text => {
                                 var xml = new DOMParser().parseFromString(text, "text/xml");
-                                renderGeoJSON(toGeoJSON.kml(xml), '#10b981');
+                                processAndRender(toGeoJSON.kml(xml), '#10b981');
                             });
                         } else {
                             alert("KMZ içinde KML dosyası bulunamadı!");
@@ -684,29 +710,6 @@ if (fileUpload) {
         else reader.readAsArrayBuffer(file);
         e.target.value = '';
     });
-}
-        function tumunuTemizle() {
-    // 1. Geoman ile çizilenleri (Poligon/Dikdörtgen) sil
-    if (map.pm) {
-        map.pm.getLayers().forEach(layer => layer.remove());
-    }
-
-    // 2. Haritadaki YÜKLENEN DOSYALARI (KML/KMZ) sil
-    map.eachLayer(function (layer) {
-        // Eğer bu katman haritanın kendisi (satelliteLayer) değilse ve
-        // içinde "feature" bilgisi barındıran bir GeoJSON/KML ise sil
-        if (layer !== satelliteLayer && !(layer instanceof L.TileLayer)) {
-            map.removeLayer(layer);
-        }
-    });
-
-    // 3. Çizim sonrası oluşan bilgi kutusunu (Alan/Çevre) gizle
-    var geomInfoBox = document.getElementById('geom-info');
-    if (geomInfoBox) {
-        geomInfoBox.style.display = 'none';
-    }
-
-    console.log("Harita ve katmanlar temizlendi.");
 }
     </script>
 
