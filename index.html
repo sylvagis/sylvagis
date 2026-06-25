@@ -577,45 +577,40 @@
 
 btnPolygon.addEventListener('click', function () {
             setActiveTool(btnPolygon);
-            map.pm.enableDraw('Polygon');
+            map.pm.enableDraw('Polygon', { snappable: true, snapDistance: 20 });
         });
 
         btnRectangle.addEventListener('click', function () {
             setActiveTool(btnRectangle);
-            map.pm.enableDraw('Rectangle');
+            map.pm.enableDraw('Rectangle', { snappable: true, snapDistance: 20 });
         });
 
-        btnClear.addEventListener('click', function () {
-            clearDrawing();
-        });
+        btnClear.addEventListener('click', clearDrawing);
+        btnDeleteGeom.addEventListener('click', clearDrawing);
 
-        btnDeleteGeom.addEventListener('click', function () {
-            clearDrawing();
-        });
-
-        // Haritada çizim bittiğinde tetiklenen Geoman olayı
+        // Çizim tamamlandığında tetiklenir: alanı/çevreyi hesapla ve göster
         map.on('pm:create', function (e) {
+            // Önceki çizim varsa sil — haritada sadece son şekil kalsın
             if (currentLayer) {
                 map.removeLayer(currentLayer);
             }
             currentLayer = e.layer;
+            map.pm.disableDraw();
             setActiveTool(null);
 
-            // Turf.js ile alan ve çevre hesaplama
             var geojson = currentLayer.toGeoJSON();
-            var area = turf.area(geojson); // metrekare
-            var perimeter = turf.length(geojson, { units: 'kilometers' });
+            var areaSqMeters = turf.area(geojson);
+            var areaKm2 = (areaSqMeters / 1000000).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
+            var areaHa = (areaSqMeters / 10000).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
+            var lengthKm = turf.length(geojson, { units: 'kilometers' }).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
 
-            var areaKm = (area / 1000000).toFixed(2);
-            var areaHa = (area / 10000).toFixed(2);
-
-            txtArea.innerHTML = "<b>Alan:</b> " + areaKm + " km² | " + areaHa + " ha";
-            txtPerimeter.innerHTML = "<b>Çevre:</b> " + perimeter.toFixed(2) + " km";
+            txtArea.innerHTML = '<b>Alan:</b> ' + areaKm2 + ' km² | ' + areaHa + ' ha';
+            txtPerimeter.innerHTML = '<b>Çevre:</b> ' + lengthKm + ' km';
             geomInfoBox.style.display = 'flex';
         });
 
         // =========================================================
-        // KML / KMZ / SHP DOSYA YÜKLEME VE MOTOR ENTEGRASYONU
+        // VEKTÖR VERİ GİRİŞİ & MOTOR ENTEGRASYONU (KML/KMZ/SHP)
         // =========================================================
         document.getElementById('geo-file-input').addEventListener('change', function(e) {
             var file = e.target.files[0];
@@ -682,21 +677,22 @@ btnPolygon.addEventListener('click', function () {
             }
         });
 
-        // Yüklenen katmanın alanını ve çevresini hesaplayan yardımcı fonksiyon
+        // Yüklenen Vektör Katmanın Alan ve Çevresini Orijinal Formatında Hesaplayan Fonksiyon
         function calculateLayerStats(layer) {
             try {
                 var geojson = layer.toGeoJSON();
-                var area = turf.area(geojson);
-                var perimeter = turf.length(geojson, { units: 'kilometers' });
+                var areaSqMeters = turf.area(geojson);
+                
+                // Senin yazdığın orijinal tr-TR formatlama mantığı
+                var areaKm2 = (areaSqMeters / 1000000).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
+                var areaHa = (areaSqMeters / 10000).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
+                var lengthKm = turf.length(geojson, { units: 'kilometers' }).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
 
-                var areaKm = (area / 1000000).toFixed(2);
-                var areaHa = (area / 10000).toFixed(2);
-
-                txtArea.innerHTML = "<b>Alan:</b> " + areaKm + " km² | " + areaHa + " ha";
-                txtPerimeter.innerHTML = "<b>Çevre:</b> " + perimeter.toFixed(2) + " km";
+                txtArea.innerHTML = '<b>Alan:</b> ' + areaKm2 + ' km² | ' + areaHa + ' ha';
+                txtPerimeter.innerHTML = '<b>Çevre:</b> ' + lengthKm + ' km';
                 geomInfoBox.style.display = 'flex';
             } catch(e) {
-                // Nokta veya çizgi verilerinde alan hesaplanamayacağı için kutuyu gizle
+                // Eğer yüklenen veri poligon değilse (nokta veya çizgi ise) hata vermemesi için kutuyu gizle
                 geomInfoBox.style.display = 'none';
             }
         }
