@@ -151,9 +151,9 @@
     <div class="main-container">
 
         <div class="sidebar-left panel">
-            <h2>Çalışma Alanı &amp; Veri Seçimi</h2>
-                <input type="file" id="file-upload" accept=".kml, .kmz, .zip" style="display: none;">
-                <button type="button" class="btn-primary" onclick="document.getElementById('file-upload').click();" style="width: 100%; margin-bottom: 10px;">📂 KML / KMZ / SHP Yükle</button>            <div class="tool-row">
+            <h2>Girdi &amp; Çizim Araçları</h2>
+            <button class="btn-primary" style="width: 100%;">📂 KML / SHP Yükle</button>
+            <div class="tool-row">
                 <button class="btn-tool" id="btn-polygon">⬠ Poligon</button>
                 <button class="btn-tool" id="btn-rectangle">▭ Dikdörtgen</button>
                 <button class="btn-tool btn-danger" id="btn-clear">❌ Temizle</button>
@@ -301,9 +301,7 @@
                 </div>
             </details>
 
-            <button class="btn-primary" style="width: 40%; align-self: center; margin-top: 10px; font-size: 0.95rem;">
-🚀 Analizi Çalıştır
-</button>
+            <button class="btn-primary" style="width: 60%; align-self: center; margin-top: 10px; font-size: 0.95rem;">🚀 Analizi Çalıştır</button>
         </div>
 
         <div class="map-wrapper">
@@ -460,9 +458,11 @@
         <span style="font-weight: bold; font-size: 0.9rem;">2026 SylvaGIS</span>
     </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/togeojson/0.16.0/togeojson.min.js"></script>
-<script src="https://unpkg.com/shpjs@4.0.4/dist/shp.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- Leaflet Geoman (gerçek çizim motoru) -->
+    <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@latest/dist/leaflet-geoman.min.js"></script>
+    <!-- Turf.js (alan ve çevre hesaplama motoru) -->
+    <script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
     <script>
         // ---------------------------------------------------------
         // 1. Haritayı oluştur ve Türkiye merkezli olarak başlat
@@ -473,40 +473,24 @@
         var map = L.map('map', { zoomControl: false }).setView(HOME_VIEW.center, HOME_VIEW.zoom);
 
         // 2. Esri Yüksek Çözünürlüklü Uydu Görüntüsünü altlık olarak ekle
-var satelliteLayer = L.tileLayer(
-    'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    {
-        attribution: 'Tiles © Esri',
-        maxZoom: 19
-    }
-).addTo(map);
+        var satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            attribution: 'Tiles &copy; Esri &mdash; Kaynak: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP',
+            maxZoom: 19
+        }).addTo(map);
 
         // 3. Sağ alta gerçek, metrik bir ölçek çubuğu (Leaflet) ekle
         L.control.scale({ position: 'bottomright', imperial: false }).addTo(map);
-        setTimeout(() => {
-    map.invalidateSize();
-}, 200);
 
         // ---------------------------------------------------------
         // 3b. Geoman çizim motorunu tanımla (kendi butonlarımızı
         //     kullanacağımız için varsayılan araç çubuğunu gizliyoruz)
         // ---------------------------------------------------------
-if (map.pm) {
-
-    map.pm.addControls({
-        drawMarker: false,
-        drawPolyline: false,
-        drawCircle: false,
-        drawCircleMarker: false,
-        drawText: false,
-        editMode: false,
-        dragMode: false,
-        cutPolygon: false,
-        removalMode: false
-    });
-
-    map.pm.toggleControls();
-}
+        map.pm.addControls({
+            drawMarker: false, drawPolyline: false, drawCircle: false,
+            drawCircleMarker: false, drawText: false, editMode: false,
+            dragMode: false, cutPolygon: false, removalMode: false
+        });
+        map.pm.toggleControls();
 
         // ---------------------------------------------------------
         // Sol orta - özel yakınlaştırma butonlarını gerçek harita
@@ -618,44 +602,6 @@ if (map.pm) {
             txtPerimeter.innerHTML = '<b>Çevre:</b> ' + lengthKm + ' km';
             geomInfoBox.style.display = 'flex';
         });
-// --- YENİ DOSYA YÜKLEME MOTORU ---
-document.getElementById('file-upload').addEventListener('change', function(e) {
-    var file = e.target.files[0];
-    if (!file) return;
-
-    var reader = new FileReader();
-    reader.onload = function(event) {
-        var data = event.target.result;
-        var fileName = file.name.toLowerCase();
-
-        try {
-            if (fileName.endsWith('.zip')) {
-                shp(data).then(function(geojson) {
-                    var layer = L.geoJSON(geojson, { style: { color: 'red' } }).addTo(map);
-                    map.fitBounds(layer.getBounds());
-                });
-            } else if (fileName.endsWith('.kml')) {
-                var xml = new DOMParser().parseFromString(data, "text/xml");
-                var geojson = toGeoJSON.kml(xml);
-                var layer = L.geoJSON(geojson, { style: { color: 'blue' } }).addTo(map);
-                map.fitBounds(layer.getBounds());
-            } else if (fileName.endsWith('.kmz')) {
-                JSZip.loadAsync(data).then(function(zip) {
-                    var kmlName = Object.keys(zip.files).find(n => n.endsWith('.kml'));
-                    zip.files[kmlName].async("string").then(function(text) {
-                        var xml = new DOMParser().parseFromString(text, "text/xml");
-                        var geojson = toGeoJSON.kml(xml);
-                        var layer = L.geoJSON(geojson, { style: { color: 'green' } }).addTo(map);
-                        map.fitBounds(layer.getBounds());
-                    });
-                });
-            }
-        } catch (err) { alert("Dosya okunamadı: " + err); }
-    };
-
-    if (file.name.endsWith('.kml')) reader.readAsText(file);
-    else reader.readAsArrayBuffer(file);
-});
     </script>
 
 </body>
