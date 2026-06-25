@@ -1,24 +1,17 @@
-Harika! Hem senin o detaylı, çok seçenekli profesyonel tasarımını korudum hem de Leaflet.js uydu haritası altyapısını bu tasarıma sorunsuz bir şekilde entegre ettim. Haritanın menülerin altında kalmaması için şeffaflık (`z-index`) ayarlarını düzenledim ve tıklama olaylarının (`pointer-events`) sadece butonlarda çalışmasını, aradaki boşlukların doğrudan haritaya yansımasını sağladım.
-
-Ayrıca "Analizi Çalıştır" butonunu istediğin gibi çok daha kompakt ve küçük bir dikdörtgen haline getirdim.
-
-Aşağıdaki kodların tamamını kopyalayıp GitHub'daki `index.html` dosyana yapıştırıp kaydedebilirsin:
-
-```html
 <!DOCTYPE html>
 <html lang="tr">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SylvaGIS - Profesyonel Karar Destek Platformu</title>
-    
+
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 
     <style>
         /* Genel Reset ve Açık Tema Ayarları */
         * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
         body { display: flex; flex-direction: column; height: 100vh; background-color: #f4f6f9; color: #333; overflow: hidden; }
-        
+
         /* Navbar (Üst Bar) */
         .navbar { display: flex; justify-content: space-between; align-items: center; background-color: #ffffff; padding: 12px 25px; border-bottom: 2px solid #1e3a8a; box-shadow: 0 2px 10px rgba(0,0,0,0.05); z-index: 2000; position: relative; }
         .logo-container { font-size: 1.8rem; font-weight: bold; color: #1e3a8a; display: flex; align-items: center; gap: 8px; }
@@ -30,25 +23,26 @@ Aşağıdaki kodların tamamını kopyalayıp GitHub'daki `index.html` dosyana y
         .main-container { display: flex; flex: 1; overflow: hidden; }
 
         /* Ortak Panel Stilleri */
-        .panel { background-color: #ffffff; padding: 20px; overflow-y: auto; box-shadow: 2px 0 10px rgba(0,0,0,0.05); display: flex; flex-direction: column; gap: 15px; position: relative; z-index: 2000; }
+        .panel { background-color: #ffffff; padding: 20px; overflow-y: auto; box-shadow: 2px 0 10px rgba(0,0,0,0.05); display: flex; flex-direction: column; gap: 15px; }
         .panel h2, .panel h3 { color: #1e3a8a; border-bottom: 2px solid #f1f5f9; padding-bottom: 5px; margin-bottom: 5px; font-size: 1.1rem; }
-        
+
         /* Sol Panel */
-        .sidebar-left { width: 340px; border-right: 1px solid #e2e8f0; }
-        
+        .sidebar-left { width: 340px; border-right: 1px solid #e2e8f0; z-index: 100; position: relative; }
+
         /* Çizim ve Dosya Araçları */
         .tool-row { display: flex; gap: 8px; }
         .btn-primary { flex: 1; background-color: #1e3a8a; color: white; border: none; padding: 10px; border-radius: 5px; cursor: pointer; font-weight: bold; transition: 0.2s; }
         .btn-primary:hover { background-color: #172a63; }
         .btn-tool { flex: 1; background-color: #f1f5f9; border: 1px solid #cbd5e1; padding: 8px; border-radius: 5px; cursor: pointer; font-weight: 600; display: flex; justify-content: center; align-items: center; gap: 5px; }
         .btn-tool:hover { background-color: #e2e8f0; }
+        .btn-tool.active { background-color: #1e3a8a; color: #fff; border-color: #1e3a8a; }
         .btn-danger { background-color: #fee2e2; color: #ef4444; border: 1px solid #fca5a5; }
         .btn-danger:hover { background-color: #fecaca; }
 
         /* Çizilen Alan Bilgisi */
         .geometry-info { background-color: #f8fafc; border: 1px dashed #cbd5e1; padding: 10px; border-radius: 5px; display: flex; justify-content: space-between; align-items: center; font-size: 0.85rem; }
         .geom-details { display: flex; flex-direction: column; gap: 3px; }
-        
+
         /* Form Elemanları */
         .control-group { display: flex; flex-direction: column; gap: 5px; }
         .control-group label { font-size: 0.85rem; font-weight: 600; color: #64748b; }
@@ -67,41 +61,46 @@ Aşağıdaki kodların tamamını kopyalayıp GitHub'daki `index.html` dosyana y
         .details-content { padding: 10px; display: flex; flex-direction: column; gap: 12px; }
 
         /* Sağ Panel (Açılır Kapanır Kartografya) */
-        .sidebar-right { width: 340px; border-left: 1px solid #e2e8f0; background-color: #ffffff; }
+        .sidebar-right { width: 340px; border-left: 1px solid #e2e8f0; background-color: #ffffff; z-index: 100; position: relative; }
         .right-menu-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
         .color-ramp { height: 20px; width: 100%; background: linear-gradient(to right, #d7191c, #fdae61, #ffffbf, #a6d96a, #1a9641); border-radius: 3px; border: 1px solid #cbd5e1; margin-top: 5px; }
         .chart-placeholder { height: 120px; background-color: #f1f5f9; border: 1px dashed #cbd5e1; display: flex; align-items: center; justify-content: center; color: #64748b; font-size: 0.9rem; border-radius: 5px; margin-top: 5px; }
-        
+
         /* Renk Paleti (Quick Colors) */
         .quick-colors { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
         .color-swatch { width: 22px; height: 22px; border-radius: 3px; cursor: pointer; border: 1px solid #cbd5e1; transition: 0.2s; }
         .color-swatch:hover { transform: scale(1.15); border-color: #1e3a8a; box-shadow: 0 0 4px rgba(0,0,0,0.3); }
 
-        /* Harita Tuvali ve Üzerindeki Elemanlar */
-        .map-wrapper { flex: 1; position: relative; display: flex; }
-        #map { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; background-color: #e5e7eb; }
-        
-        /* Harita İçi Arayüz Elemanları (Haritanın üstünde yüzen butonlar) */
-        .map-top-right { position: absolute; top: 15px; right: 15px; display: flex; flex-direction: column; gap: 10px; align-items: flex-end; z-index: 1000; pointer-events: none; }
+        /* Harita Tuvali (artık gerçek Leaflet haritası) */
+        .map-wrapper { flex: 1; position: relative; }
+        #map { width: 100%; height: 100%; background-color: #e5e7eb; z-index: 1; }
+
+        /* Harita İçi Overlay Elemanları — pointer-events ile harita sürüklemesi korunuyor */
+        .map-top-right { position: absolute; top: 15px; right: 15px; display: flex; flex-direction: column; gap: 10px; align-items: flex-end; z-index: 500; pointer-events: none; }
         .map-control-box { background: rgba(255, 255, 255, 0.95); padding: 10px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); display: flex; align-items: center; gap: 10px; pointer-events: auto; }
-        
+
         /* Belirgin Kuzey Oku */
         .north-arrow { width: 45px; height: 45px; background-color: rgba(255, 255, 255, 0.95); border: 2px solid #1e3a8a; border-radius: 5px; display: flex; flex-direction: column; justify-content: center; align-items: center; box-shadow: 0 3px 6px rgba(0,0,0,0.3); pointer-events: auto; }
         .north-arrow-icon { color: #ef4444; font-size: 1.2rem; line-height: 0.8; font-weight: 900; }
         .north-arrow-text { color: #1e3a8a; font-size: 0.85rem; font-weight: 900; line-height: 1; }
 
-        /* Harita İçi - Sol Orta (Yakınlaştırma) */
-        .map-left-mid { position: absolute; top: 50%; left: 15px; transform: translateY(-50%); display: flex; flex-direction: column; gap: 5px; z-index: 1000; pointer-events: none; }
+        /* Harita İçi - Sol Orta (Yakınlaştırma) — gerçek Leaflet zoom fonksiyonlarına bağlı */
+        .map-left-mid { position: absolute; top: 50%; left: 15px; transform: translateY(-50%); display: flex; flex-direction: column; gap: 5px; z-index: 500; pointer-events: none; }
         .map-zoom-btn { width: 35px; height: 35px; background: white; border: 1px solid #ccc; border-radius: 5px; font-size: 1.2rem; cursor: pointer; box-shadow: 0 2px 5px rgba(0,0,0,0.2); display: flex; justify-content: center; align-items: center; pointer-events: auto; }
         .map-zoom-btn:hover { background: #f1f5f9; }
 
-        /* Harita İçi - Sol Alt (Lejant ve Ölçek) */
-        .map-bottom-left { position: absolute; bottom: 15px; left: 15px; display: flex; flex-direction: column; gap: 10px; z-index: 1000; pointer-events: none; }
+        /* Harita İçi - Sol Alt (Lejant) */
+        .map-bottom-left { position: absolute; bottom: 15px; left: 15px; display: flex; flex-direction: column; gap: 10px; z-index: 500; pointer-events: none; }
         .map-legend { background: rgba(255, 255, 255, 0.9); padding: 10px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); font-size: 0.85rem; pointer-events: auto; }
 
+        /* Leaflet'in kendi ölçek çubuğunu marka rengine göre hafifçe biçimlendiriyoruz */
+        .leaflet-control-scale-line { border-color: #1e3a8a; color: #1e3a8a; font-weight: 600; background: rgba(255,255,255,0.9); }
+
         /* Harita İçi - Sol Üst (Görüntü Galerisi) */
-        .map-gallery { position: absolute; top: 15px; left: 15px; display: flex; gap: 10px; overflow-x: auto; max-width: 500px; padding-bottom: 5px; z-index: 1000; pointer-events: none; }
-        .gallery-item { min-width: 100px; background: white; border: 2px solid #1e3a8a; border-radius: 5px; overflow: hidden; cursor: pointer; box-shadow: 0 2px 5px rgba(0,0,0,0.2); pointer-events: auto; }
+        .map-gallery { position: absolute; top: 15px; left: 15px; display: flex; gap: 10px; overflow-x: auto; max-width: 500px; padding-bottom: 5px; z-index: 500; pointer-events: none; }
+        .gallery-item { min-width: 100px; background: white; border: 2px solid #1e3a8a; border-radius: 5px; overflow: hidden; cursor: pointer; box-shadow: 0 2px 5px rgba(0,0,0,0.2); pointer-events: auto; transition: 0.2s; }
+        .gallery-item:hover { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.3); }
+        .gallery-item.active { border-color: #10b981; }
         .gallery-img { height: 60px; background-color: #cbd5e1; display: flex; justify-content: center; align-items: center; font-size: 2rem; }
         .gallery-info { padding: 4px; font-size: 0.7rem; text-align: center; font-weight: bold; background: #f8fafc; }
 
@@ -148,16 +147,16 @@ Aşağıdaki kodların tamamını kopyalayıp GitHub'daki `index.html` dosyana y
     </div>
 
     <div class="main-container">
-        
+
         <div class="sidebar-left panel">
-            <h2>Girdi & Çizim Araçları</h2>
+            <h2>Girdi &amp; Çizim Araçları</h2>
             <button class="btn-primary" style="width: 100%;">📂 KML / SHP Yükle</button>
             <div class="tool-row">
-                <button class="btn-tool">⬠ Poligon</button>
-                <button class="btn-tool">▭ Dikdörtgen</button>
-                <button class="btn-tool btn-danger">❌ Temizle</button>
+                <button class="btn-tool" id="btn-polygon">⬠ Poligon</button>
+                <button class="btn-tool" id="btn-rectangle">▭ Dikdörtgen</button>
+                <button class="btn-tool btn-danger" id="btn-clear">❌ Temizle</button>
             </div>
-            
+
             <div class="geometry-info">
                 <div class="geom-details">
                     <span><b>Alan:</b> 12.4 km² | 1240 ha</span>
@@ -203,13 +202,13 @@ Aşağıdaki kodların tamamını kopyalayıp GitHub'daki `index.html` dosyana y
             <div class="control-group">
                 <label>Bulutluluk Oranı (Maks)</label>
                 <div class="slider-group">
-                    <input type="range" min="0" max="100" value="10">
-                    <span class="slider-val">%10</span>
+                    <input type="range" id="cloud-slider" min="0" max="100" value="10">
+                    <span class="slider-val" id="cloud-val">%10</span>
                 </div>
             </div>
 
             <h2>Analiz ve Veri Modülleri</h2>
-            
+
             <details>
                 <summary>🛰️ Uydu Analizleri</summary>
                 <div class="details-content">
@@ -300,23 +299,23 @@ Aşağıdaki kodların tamamını kopyalayıp GitHub'daki `index.html` dosyana y
                 </div>
             </details>
 
-            <button class="btn-primary" style="align-self: center; margin-top: auto; margin-bottom: 5px; padding: 6px 15px; font-size: 0.85rem; border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">🚀 Analizi Çalıştır</button>
+            <button class="btn-primary" style="width: 60%; align-self: center; margin-top: 10px; font-size: 0.95rem;">🚀 Analizi Çalıştır</button>
         </div>
 
         <div class="map-wrapper">
-            
+
             <div id="map"></div>
-            
-            <div class="map-gallery">
-                <div class="gallery-item">
+
+            <div class="map-gallery" id="map-gallery">
+                <div class="gallery-item active" data-date="20.06.2025">
                     <div class="gallery-img">🏞️</div>
                     <div class="gallery-info">20.06.2025<br>Bulut: %2</div>
                 </div>
-                <div class="gallery-item">
+                <div class="gallery-item" data-date="05.07.2025">
                     <div class="gallery-img">🏞️</div>
                     <div class="gallery-info">05.07.2025<br>Bulut: %8</div>
                 </div>
-                <div class="gallery-item">
+                <div class="gallery-item" data-date="21.07.2025">
                     <div class="gallery-img">🏞️</div>
                     <div class="gallery-info">21.07.2025<br>Bulut: %0</div>
                 </div>
@@ -332,10 +331,10 @@ Aşağıdaki kodların tamamını kopyalayıp GitHub'daki `index.html` dosyana y
                 </div>
                 <div class="map-control-box">
                     <label style="font-size: 0.85rem; font-weight: bold;">Şeffaflık:</label>
-                    <input type="range" min="0" max="100" value="100" style="width: 80px;">
-                    <span style="font-size: 0.85rem; font-weight: bold;">%100</span>
+                    <input type="range" id="opacity-slider" min="0" max="100" value="100" style="width: 80px;">
+                    <span style="font-size: 0.85rem; font-weight: bold;" id="opacity-val">%100</span>
                 </div>
-                
+
                 <div class="north-arrow">
                     <span class="north-arrow-icon">▲</span>
                     <span class="north-arrow-text">N</span>
@@ -343,9 +342,9 @@ Aşağıdaki kodların tamamını kopyalayıp GitHub'daki `index.html` dosyana y
             </div>
 
             <div class="map-left-mid">
-                <button class="map-zoom-btn">+</button>
-                <button class="map-zoom-btn">-</button>
-                <button class="map-zoom-btn">🏠</button>
+                <button class="map-zoom-btn" id="zoom-in">+</button>
+                <button class="map-zoom-btn" id="zoom-out">-</button>
+                <button class="map-zoom-btn" id="zoom-home">🏠</button>
             </div>
 
             <div class="map-bottom-left">
@@ -357,13 +356,13 @@ Aşağıdaki kodların tamamını kopyalayıp GitHub'daki `index.html` dosyana y
                     </div>
                     <div class="color-ramp"></div>
                 </div>
-                </div>
+            </div>
 
         </div>
 
         <div class="sidebar-right panel">
             <h2>Kartografya / Harita Düzeni</h2>
-            
+
             <div class="control-group">
                 <label>Harita Elemanları</label>
                 <div class="right-menu-grid">
@@ -377,7 +376,7 @@ Aşağıdaki kodların tamamını kopyalayıp GitHub'daki `index.html` dosyana y
             <h3>Lejant ve Semboloji</h3>
             <div class="control-group">
                 <label>Renk Paleti (Color Ramp)</label>
-                <select><option>Kırmızı -> Yeşil (NDVI)</option><option>Mavi -> Kırmızı (LST)</option></select>
+                <select><option>Kırmızı -&gt; Yeşil (NDVI)</option><option>Mavi -&gt; Kırmızı (LST)</option></select>
                 <div class="color-ramp"></div>
             </div>
             <div class="control-group">
@@ -395,9 +394,9 @@ Aşağıdaki kodların tamamını kopyalayıp GitHub'daki `index.html` dosyana y
                 <button class="btn-tool">⬠ Poligon</button>
                 <button class="btn-tool">⭕ Daire</button>
             </div>
-            
+
             <button class="btn-tool" style="width: 100%; margin-top: 5px; font-size: 1rem;">📝 Metin Ekle</button>
-            
+
             <div class="control-group" style="margin-top: 10px;">
                 <label>Yazı Tipi</label>
                 <select>
@@ -459,19 +458,87 @@ Aşağıdaki kodların tamamını kopyalayıp GitHub'daki `index.html` dosyana y
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
+        // ---------------------------------------------------------
         // 1. Haritayı oluştur ve Türkiye merkezli olarak başlat
-        // zoomControl: false diyerek varsayılan butonları kapattık, çünkü solda kendi butonlarımız var.
-        var map = L.map('map', { zoomControl: false }).setView([39.0, 35.0], 6);
+        //    zoomControl: false -> Leaflet'in varsayılan butonlarını
+        //    gizliyoruz, çünkü solda kendi özel butonlarımız var.
+        // ---------------------------------------------------------
+        var HOME_VIEW = { center: [39.0, 35.0], zoom: 6 };
+        var map = L.map('map', { zoomControl: false }).setView(HOME_VIEW.center, HOME_VIEW.zoom);
 
-        // 2. Esri Yüksek Çözünürlüklü Uydu Görüntüsünü Altlık Olarak Ekle
-        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-            attribution: 'Tiles &copy; Esri &mdash; Kaynak: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP'
+        // 2. Esri Yüksek Çözünürlüklü Uydu Görüntüsünü altlık olarak ekle
+        var satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            attribution: 'Tiles &copy; Esri &mdash; Kaynak: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP',
+            maxZoom: 19
         }).addTo(map);
 
-        // 3. Sağ alta profesyonel ölçek çubuğu (Scale bar) ekle (Sadece Metrik sistem)
+        // 3. Sağ alta gerçek, metrik bir ölçek çubuğu (Leaflet) ekle
         L.control.scale({ position: 'bottomright', imperial: false }).addTo(map);
+
+        // ---------------------------------------------------------
+        // Sol orta - özel yakınlaştırma butonlarını gerçek harita
+        // fonksiyonlarına bağlıyoruz
+        // ---------------------------------------------------------
+        document.getElementById('zoom-in').addEventListener('click', function () {
+            map.zoomIn();
+        });
+        document.getElementById('zoom-out').addEventListener('click', function () {
+            map.zoomOut();
+        });
+        document.getElementById('zoom-home').addEventListener('click', function () {
+            map.setView(HOME_VIEW.center, HOME_VIEW.zoom);
+        });
+
+        // ---------------------------------------------------------
+        // Sağ üst - "Şeffaflık" kaydırıcısı uydu görüntüsünün
+        // opaklığını gerçek zamanlı olarak değiştirir
+        // ---------------------------------------------------------
+        var opacitySlider = document.getElementById('opacity-slider');
+        var opacityVal = document.getElementById('opacity-val');
+        opacitySlider.addEventListener('input', function () {
+            var v = this.value;
+            satelliteLayer.setOpacity(v / 100);
+            opacityVal.textContent = '%' + v;
+        });
+
+        // ---------------------------------------------------------
+        // Sol panel - bulutluluk kaydırıcısının etiketini güncelle
+        // ---------------------------------------------------------
+        var cloudSlider = document.getElementById('cloud-slider');
+        var cloudVal = document.getElementById('cloud-val');
+        cloudSlider.addEventListener('input', function () {
+            cloudVal.textContent = '%' + this.value;
+        });
+
+        // ---------------------------------------------------------
+        // Sol üst - görüntü galerisinde seçili kareyi vurgula
+        // (gerçek altlık görüntü değişimi backend entegrasyonuna bağlı)
+        // ---------------------------------------------------------
+        document.querySelectorAll('#map-gallery .gallery-item').forEach(function (item) {
+            item.addEventListener('click', function () {
+                document.querySelectorAll('#map-gallery .gallery-item').forEach(function (i) {
+                    i.classList.remove('active');
+                });
+                item.classList.add('active');
+            });
+        });
+
+        // ---------------------------------------------------------
+        // Sol panel - Poligon / Dikdörtgen çizim modu anahtarı
+        // (gerçek çizim mantığı için Leaflet.draw eklentisi eklenebilir)
+        // ---------------------------------------------------------
+        var btnPolygon = document.getElementById('btn-polygon');
+        var btnRectangle = document.getElementById('btn-rectangle');
+        var btnClear = document.getElementById('btn-clear');
+
+        function setActiveTool(btn) {
+            [btnPolygon, btnRectangle].forEach(function (b) { b.classList.remove('active'); });
+            if (btn) btn.classList.add('active');
+        }
+        btnPolygon.addEventListener('click', function () { setActiveTool(btnPolygon); });
+        btnRectangle.addEventListener('click', function () { setActiveTool(btnRectangle); });
+        btnClear.addEventListener('click', function () { setActiveTool(null); });
     </script>
+
 </body>
 </html>
-
-```
