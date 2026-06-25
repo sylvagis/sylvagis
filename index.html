@@ -158,7 +158,8 @@
             <button type="button" class="btn-primary" onclick="document.getElementById('file-upload').click();" style="width: 100%; margin-bottom: 10px;">📂 KML / KMZ Yükle</button>            <div class="tool-row">
                 <button class="btn-tool" id="btn-polygon">⬠ Poligon</button>
                 <button class="btn-tool" id="btn-rectangle">▭ Dikdörtgen</button>
-             </div>
+                <button class="btn-tool btn-danger" id="btn-clear">❌ Temizle</button>
+            </div>
 
             <div id="geom-info" class="geometry-info" style="display: none;">
                 <div class="geom-details">
@@ -572,6 +573,7 @@ document.getElementById('zoom-home').addEventListener('click', function () {
         // ---------------------------------------------------------
         var btnPolygon = document.getElementById('btn-polygon');
         var btnRectangle = document.getElementById('btn-rectangle');
+        var btnClear = document.getElementById('btn-clear');
         var btnDeleteGeom = document.getElementById('btn-delete-geom');
         var geomInfoBox = document.getElementById('geom-info');
         var txtArea = document.getElementById('geom-area');
@@ -627,64 +629,61 @@ document.getElementById('zoom-home').addEventListener('click', function () {
             txtPerimeter.innerHTML = '<b>Çevre:</b> ' + lengthKm + ' km';
             geomInfoBox.style.display = 'flex';
         });
-// --- GÜNCELLENMİŞ KML/KMZ MOTORU ---
-document.getElementById('file-upload').addEventListener('change', function(e) {
-    var file = e.target.files[0];
-    if (!file) return;
+       // --- GELİŞTİRİLMİŞ DOSYA YÜKLEME MOTORU ---
+var fileUpload = document.getElementById('file-upload');
 
-    var reader = new FileReader();
-    var fileName = file.name.toLowerCase();
+if (fileUpload) {
+    fileUpload.addEventListener('change', function(e) {
+        var file = e.target.files[0];
+        if (!file) return;
 
-    reader.onload = function(event) {
-        var data = event.target.result;
-        
-        function renderGeoJSON(geojson) {
-            var layer = L.geoJSON(geojson, { style: { color: '#3b82f6', weight: 3 } }).addTo(map);
-            map.fitBounds(layer.getBounds());
-        }
+        var reader = new FileReader();
+        var fileName = file.name.toLowerCase();
 
-        try {
-            if (fileName.endsWith('.kml')) {
-                var xml = new DOMParser().parseFromString(data, "text/xml");
-                renderGeoJSON(toGeoJSON.kml(xml));
-            } else if (fileName.endsWith('.kmz')) {
-                JSZip.loadAsync(data).then(zip => {
-                    var kmlFile = Object.keys(zip.files).find(n => n.endsWith('.kml'));
-                    if (kmlFile) {
-                        zip.files[kmlFile].async("string").then(text => {
-                            var xml = new DOMParser().parseFromString(text, "text/xml");
-                            renderGeoJSON(toGeoJSON.kml(xml));
-                        });
-                    } else {
-                        alert("KMZ içinde geçerli bir KML dosyası bulunamadı.");
-                    }
-                });
+        reader.onload = function(event) {
+            var data = event.target.result;
+            
+            // Haritaya basma fonksiyonu
+            function renderGeoJSON(geojson, color) {
+                try {
+                    var layer = L.geoJSON(geojson, { 
+                        style: { color: color, weight: 3, fillOpacity: 0.3 } 
+                    }).addTo(map);
+                    map.fitBounds(layer.getBounds());
+                    console.log("Dosya başarıyla haritaya basıldı.");
+                } catch (err) {
+                    alert("Veri haritaya basılamadı: " + err.message);
+                }
             }
-        } catch (err) {
-            alert("Dosya yükleme hatası: " + err.message);
-        }
-    };
 
-    if (fileName.endsWith('.kml')) reader.readAsText(file);
-    else reader.readAsArrayBuffer(file);
-    e.target.value = '';
-});
-        // TEMİZLEME FONKSİYONU (Her şeyi siler)
-function tumunuTemizle() {
-    // 1. El ile çizilen poligon/dikdörtgenleri temizle
-    if (typeof drawnItems !== 'undefined') {
-        drawnItems.clearLayers();
-    }
+            try {
+                if (fileName.endsWith('.zip')) {
+                    shp(data).then(geojson => renderGeoJSON(geojson, '#ef4444'));
+                } else if (fileName.endsWith('.kml')) {
+                    var xml = new DOMParser().parseFromString(data, "text/xml");
+                    renderGeoJSON(toGeoJSON.kml(xml), '#3b82f6');
+                } else if (fileName.endsWith('.kmz')) {
+                    JSZip.loadAsync(data).then(zip => {
+                        var kmlFile = Object.keys(zip.files).find(n => n.endsWith('.kml'));
+                        if (kmlFile) {
+                            zip.files[kmlFile].async("string").then(text => {
+                                var xml = new DOMParser().parseFromString(text, "text/xml");
+                                renderGeoJSON(toGeoJSON.kml(xml), '#10b981');
+                            });
+                        } else {
+                            alert("KMZ içinde KML dosyası bulunamadı!");
+                        }
+                    });
+                }
+            } catch (err) {
+                alert("Dosya işleme hatası: " + err.message);
+            }
+        };
 
-    // 2. Yüklenen tüm KML/KMZ dosyalarını haritadan kaldır
-    map.eachLayer(function (layer) {
-        // Arka plan haritası dışındaki tüm GeoJSON katmanlarını siliyoruz
-        if (layer instanceof L.GeoJSON) {
-            map.removeLayer(layer);
-        }
+        if (fileName.endsWith('.kml')) reader.readAsText(file);
+        else reader.readAsArrayBuffer(file);
+        e.target.value = '';
     });
-
-    console.log("Harita başarıyla temizlendi.");
 }
     </script>
 
