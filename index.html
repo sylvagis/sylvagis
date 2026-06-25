@@ -671,6 +671,36 @@ if (fileUpload) {
         e.target.value = ''; // Aynı dosyayı tekrar seçebilmek için inputu sıfırla
     });
 }
+        document.getElementById('file-upload').addEventListener('change', function(e) {
+    var file = e.target.files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function(event) {
+        var data = event.target.result;
+        var fileName = file.name.toLowerCase();
+
+        function processGeoJSON(json) {
+            var layer = L.geoJSON(json, { style: { color: 'red', weight: 3 } }).addTo(map);
+            map.fitBounds(layer.getBounds());
+        }
+
+        if (fileName.endsWith('.zip')) {
+            shp(data).then(processGeoJSON);
+        } else if (fileName.endsWith('.kml')) {
+            var xml = new DOMParser().parseFromString(data, "text/xml");
+            processGeoJSON(toGeoJSON.kml(xml));
+        } else if (fileName.endsWith('.kmz')) {
+            JSZip.loadAsync(data).then(zip => {
+                var kmlName = Object.keys(zip.files).find(n => n.endsWith('.kml'));
+                zip.files[kmlName].async("string").then(text => {
+                    processGeoJSON(toGeoJSON.kml(new DOMParser().parseFromString(text, "text/xml")));
+                });
+            });
+        }
+    };
+    if (fileName.endsWith('.kml')) reader.readAsText(file);
+    else reader.readAsArrayBuffer(file);
+});
     </script>
 
 </body>
