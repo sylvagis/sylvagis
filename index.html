@@ -602,6 +602,75 @@
             txtPerimeter.innerHTML = '<b>Çevre:</b> ' + lengthKm + ' km';
             geomInfoBox.style.display = 'flex';
         });
+        // DOSYA YÜKLEME MOTORU
+var fileUpload = document.getElementById('file-upload');
+
+if (fileUpload) {
+    fileUpload.addEventListener('change', function(e) {
+        var file = e.target.files[0];
+        if (!file) return;
+
+        var fileName = file.name.toLowerCase();
+        var reader = new FileReader();
+
+        reader.onload = function(event) {
+            var data = event.target.result;
+
+            if (fileName.endsWith('.zip')) {
+                // SHP (ZIP içinde) Okuma
+                shp(data).then(function(geojson) {
+                    var uploadedLayer = L.geoJSON(geojson, {
+                        style: { color: '#ef4444', weight: 2, fillOpacity: 0.2 }
+                    }).addTo(map);
+                    map.fitBounds(uploadedLayer.getBounds());
+                }).catch(function(err) {
+                    alert("SHP yükleme hatası: Shapefile dosyalarının (shp, shx, dbf, prj) tek bir .zip içinde olduğundan emin olun.");
+                });
+            } else if (fileName.endsWith('.kml')) {
+                // KML Okuma
+                var parser = new DOMParser();
+                var xmlDoc = parser.parseFromString(data, "text/xml");
+                var geojson = toGeoJSON.kml(xmlDoc);
+                var uploadedLayer = L.geoJSON(geojson, {
+                    style: { color: '#3b82f6', weight: 2, fillOpacity: 0.2 }
+                }).addTo(map);
+                map.fitBounds(uploadedLayer.getBounds());
+            } else if (fileName.endsWith('.kmz')) {
+                // KMZ Okuma (Zip içinden KML çıkarma)
+                var new_zip = new JSZip();
+                new_zip.loadAsync(data).then(function(zip) {
+                    var kmlFileName = Object.keys(zip.files).find(function(name) {
+                        return name.toLowerCase().endsWith('.kml');
+                    });
+                    if (kmlFileName) {
+                        zip.files[kmlFileName].async("string").then(function(kmlText) {
+                            var parser = new DOMParser();
+                            var xmlDoc = parser.parseFromString(kmlText, "text/xml");
+                            var geojson = toGeoJSON.kml(xmlDoc);
+                            var uploadedLayer = L.geoJSON(geojson, {
+                                style: { color: '#10b981', weight: 2, fillOpacity: 0.2 }
+                            }).addTo(map);
+                            map.fitBounds(uploadedLayer.getBounds());
+                        });
+                    } else {
+                        alert("KMZ dosyasının içinde geçerli KML bulunamadı.");
+                    }
+                }).catch(function(err) {
+                    alert("KMZ okuma hatası: " + err);
+                });
+            }
+        };
+
+        // Dosya tipine göre okuma metodunu seç
+        if (fileName.endsWith('.zip') || fileName.endsWith('.kmz')) {
+            reader.readAsArrayBuffer(file);
+        } else if (fileName.endsWith('.kml')) {
+            reader.readAsText(file);
+        }
+
+        e.target.value = ''; // Aynı dosyayı tekrar seçebilmek için inputu sıfırla
+    });
+}
     </script>
 
 </body>
