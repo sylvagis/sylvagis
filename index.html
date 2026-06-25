@@ -1,113 +1,347 @@
+İstediğin tüm bu detaylar, platformu basit bir harita görüntüleyiciden tam teşekküllü, profesyonel bir WebCBS (WebGIS) yazılımına dönüştüren harika eklentiler. Beyaz ve aydınlık temanın üzerine lacivert başlıklarla oluşturulan bu yeni tasarım, çok daha kurumsal ve okunabilir bir arayüz sunacak.
+
+Sol paneldeki detaylı analiz setleri, sağ paneldeki kartografik tasarım araçları, harita üzerindeki galeriler ve alt bilgi çubuğu (footer) dahil tüm isteklerini içeren yeni altyapıyı kodladım.
+
+GitHub'daki `index.html` dosyanın içindeki eski kodların tamamını silip yerine bu yeni kod bloğunu yapıştırman ve "Commit changes" demen yeterli:
+
+```html
 <!DOCTYPE html>
 <html lang="tr">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SylvaGIS - Mekansal Analiz Platformu</title>
+    <title>SylvaGIS - Profesyonel Karar Destek Platformu</title>
     <style>
-        /* Modern Reset */
+        /* Genel Reset ve Açık Tema Ayarları */
         * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-        body { display: flex; flex-direction: column; height: 100vh; background-color: #121212; color: #ffffff; }
+        body { display: flex; flex-direction: column; height: 100vh; background-color: #f4f6f9; color: #333; overflow: hidden; }
         
         /* Navbar (Üst Bar) */
-        .navbar { display: flex; justify-content: space-between; align-items: center; background-color: #1e1e1e; padding: 15px 25px; border-bottom: 2px solid #00ffcc; box-shadow: 0 4px 6px rgba(0,0,0,0.3); z-index: 1000; }
-        .logo-container { display: flex; align-items: center; gap: 10px; font-size: 1.8rem; font-weight: bold; color: #00ffcc; }
+        .navbar { display: flex; justify-content: space-between; align-items: center; background-color: #ffffff; padding: 12px 25px; border-bottom: 2px solid #1e3a8a; box-shadow: 0 2px 10px rgba(0,0,0,0.05); z-index: 1000; }
+        .logo-container { font-size: 1.8rem; font-weight: bold; color: #1e3a8a; display: flex; align-items: center; gap: 8px; }
         .nav-buttons { display: flex; gap: 15px; }
-        .nav-btn { background-color: #2c2c2c; border: 1px solid #444; padding: 8px 15px; border-radius: 5px; cursor: pointer; font-weight: bold; color: #ffffff; transition: 0.3s; }
-        .nav-btn:hover { background-color: #00ffcc; color: #121212; border-color: #00ffcc; }
+        .nav-btn { background-color: #f8fafc; border: 1px solid #cbd5e1; padding: 8px 15px; border-radius: 5px; cursor: pointer; font-weight: 600; color: #1e3a8a; transition: 0.2s; }
+        .nav-btn:hover { background-color: #1e3a8a; color: #ffffff; }
 
         /* Ana İçerik Alanı */
         .main-container { display: flex; flex: 1; overflow: hidden; }
 
-        /* Sol Panel (Kontrol Merkezi) */
-        .sidebar { width: 320px; background-color: #1e1e1e; border-right: 1px solid #333; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 20px; }
-        .sidebar h2 { font-size: 1.2rem; color: #00ffcc; border-bottom: 1px solid #444; padding-bottom: 8px; margin-bottom: 5px; }
+        /* Ortak Panel Stilleri */
+        .panel { background-color: #ffffff; padding: 20px; overflow-y: auto; box-shadow: 2px 0 10px rgba(0,0,0,0.05); display: flex; flex-direction: column; gap: 15px; }
+        .panel h2, .panel h3 { color: #1e3a8a; border-bottom: 2px solid #f1f5f9; padding-bottom: 5px; margin-bottom: 5px; font-size: 1.1rem; }
         
-        .control-group { display: flex; flex-direction: column; gap: 8px; }
-        .control-group label { font-size: 0.9rem; font-weight: bold; color: #bbb; }
-        .control-group input, .control-group select { padding: 10px; border: 1px solid #444; border-radius: 5px; background-color: #2c2c2c; color: white; }
+        /* Sol Panel */
+        .sidebar-left { width: 340px; border-right: 1px solid #e2e8f0; z-index: 100; }
         
-        .upload-btn { background-color: #e67e22; color: white; border: none; padding: 12px; border-radius: 5px; cursor: pointer; font-weight: bold; transition: 0.3s; }
-        .upload-btn:hover { background-color: #d35400; }
+        /* Çizim ve Dosya Araçları */
+        .tool-row { display: flex; gap: 8px; }
+        .btn-primary { flex: 1; background-color: #1e3a8a; color: white; border: none; padding: 10px; border-radius: 5px; cursor: pointer; font-weight: bold; }
+        .btn-primary:hover { background-color: #172a63; }
+        .btn-tool { flex: 1; background-color: #f1f5f9; border: 1px solid #cbd5e1; padding: 8px; border-radius: 5px; cursor: pointer; font-weight: 600; display: flex; justify-content: center; align-items: center; gap: 5px; }
+        .btn-tool:hover { background-color: #e2e8f0; }
+        .btn-danger { background-color: #fee2e2; color: #ef4444; border: 1px solid #fca5a5; }
+        .btn-danger:hover { background-color: #fecaca; }
 
-        .action-btn { background-color: #00ffcc; color: #121212; border: none; padding: 12px; border-radius: 5px; cursor: pointer; font-weight: bold; transition: 0.3s; font-size: 1.1rem; }
-        .action-btn:hover { background-color: #00ccaa; }
-
-        /* Harita Alanı (Orta/Sağ Tuval) */
-        .map-container { flex: 1; background-color: #2a2a2a; position: relative; display: flex; align-items: center; justify-content: center; }
-        .map-placeholder { text-align: center; color: #777; }
-        .map-placeholder h1 { font-size: 4rem; color: #444; margin-bottom: 10px; }
+        /* Çizilen Alan Bilgisi */
+        .geometry-info { background-color: #f8fafc; border: 1px dashed #cbd5e1; padding: 10px; border-radius: 5px; display: flex; justify-content: space-between; align-items: center; font-size: 0.85rem; }
+        .geom-details { display: flex; flex-direction: column; gap: 3px; }
         
-        /* Kartografik Çıktı Butonu (Sağ Alt) */
-        .print-btn { position: absolute; bottom: 30px; right: 30px; background-color: #1e1e1e; border: 2px solid #00ffcc; color: #00ffcc; padding: 12px 20px; border-radius: 5px; font-weight: bold; cursor: pointer; box-shadow: 0 4px 6px rgba(0,0,0,0.5); transition: 0.3s; }
-        .print-btn:hover { background-color: #00ffcc; color: #1e1e1e; }
+        /* Form Elemanları */
+        .control-group { display: flex; flex-direction: column; gap: 5px; }
+        .control-group label { font-size: 0.85rem; font-weight: 600; color: #64748b; }
+        .control-group input, .control-group select { padding: 8px; border: 1px solid #cbd5e1; border-radius: 5px; background-color: #ffffff; outline: none; }
+        .slider-group { display: flex; align-items: center; gap: 10px; }
+        .slider-group input { flex: 1; }
+        .slider-val { font-weight: bold; color: #1e3a8a; font-size: 0.9rem; width: 40px; }
+
+        /* Akordeon Menüler (Detaylar) */
+        details { background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 5px; margin-bottom: 5px; }
+        summary { padding: 10px; font-weight: bold; cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; color: #1e3a8a; }
+        summary::-webkit-details-marker { display: none; }
+        details[open] summary { border-bottom: 1px solid #e2e8f0; }
+        .details-content { padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+
+        /* Sağ Panel (Açılır Kapanır Kartografya) */
+        .sidebar-right { width: 320px; border-left: 1px solid #e2e8f0; background-color: #ffffff; z-index: 100; }
+        .right-menu-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+        .color-ramp { height: 20px; width: 100%; background: linear-gradient(to right, #d7191c, #fdae61, #ffffbf, #a6d96a, #1a9641); border-radius: 3px; border: 1px solid #cbd5e1; margin-top: 5px; }
+        .chart-placeholder { height: 120px; background-color: #f1f5f9; border: 1px dashed #cbd5e1; display: flex; align-items: center; justify-content: center; color: #64748b; font-size: 0.9rem; border-radius: 5px; margin-top: 5px; }
+
+        /* Harita Tuvali ve Üzerindeki Elemanlar */
+        .map-container { flex: 1; background-color: #e5e7eb; position: relative; }
+        
+        /* Harita İçi - Sağ Üst (Kontroller) */
+        .map-top-right { position: absolute; top: 15px; right: 15px; display: flex; flex-direction: column; gap: 10px; align-items: flex-end; z-index: 10; }
+        .map-control-box { background: rgba(255, 255, 255, 0.9); padding: 10px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); display: flex; align-items: center; gap: 10px; }
+        .north-arrow { width: 40px; height: 40px; background-color: rgba(255, 255, 255, 0.8); border-radius: 50%; display: flex; justify-content: center; align-items: center; font-size: 1.5rem; font-weight: bold; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
+
+        /* Harita İçi - Sol Orta (Yakınlaştırma) */
+        .map-left-mid { position: absolute; top: 50%; left: 15px; transform: translateY(-50%); display: flex; flex-direction: column; gap: 5px; z-index: 10; }
+        .map-zoom-btn { width: 35px; height: 35px; background: white; border: 1px solid #ccc; border-radius: 5px; font-size: 1.2rem; cursor: pointer; box-shadow: 0 2px 5px rgba(0,0,0,0.2); display: flex; justify-content: center; align-items: center; }
+        .map-zoom-btn:hover { background: #f1f5f9; }
+
+        /* Harita İçi - Sol Alt (Lejant ve Ölçek) */
+        .map-bottom-left { position: absolute; bottom: 15px; left: 15px; display: flex; flex-direction: column; gap: 10px; z-index: 10; }
+        .map-legend { background: rgba(255, 255, 255, 0.9); padding: 10px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); font-size: 0.85rem; }
+        .scale-bar { width: 150px; height: 10px; border: 2px solid #333; border-top: none; position: relative; }
+        .scale-text { position: absolute; top: -18px; left: 50%; transform: translateX(-50%); font-size: 0.8rem; font-weight: bold; text-shadow: 1px 1px 2px white; }
+
+        /* Harita İçi - Sol Üst (Görüntü Galerisi) */
+        .map-gallery { position: absolute; top: 15px; left: 15px; display: flex; gap: 10px; overflow-x: auto; max-width: 500px; padding-bottom: 5px; z-index: 10; }
+        .gallery-item { min-width: 100px; background: white; border: 2px solid #1e3a8a; border-radius: 5px; overflow: hidden; cursor: pointer; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
+        .gallery-img { height: 60px; background-color: #cbd5e1; display: flex; justify-content: center; align-items: center; font-size: 2rem; }
+        .gallery-info { padding: 4px; font-size: 0.7rem; text-align: center; font-weight: bold; background: #f8fafc; }
+
+        /* Footer (Alt Bilgi Çubuğu) */
+        .footer { background-color: #1e3a8a; color: #ffffff; padding: 5px 25px; display: flex; justify-content: space-between; font-size: 0.8rem; z-index: 1000; }
+        .footer span { font-weight: 500; }
     </style>
 </head>
 <body>
 
-    <!-- Üst Bar -->
     <div class="navbar">
-        <div class="logo-container">
-            <!-- Beyaz arka planlı logon ileride buraya eklenecek -->
-            🌲 SylvaGIS
-        </div>
+        <div class="logo-container">🌲 SylvaGIS</div>
         <div class="nav-buttons">
             <button class="nav-btn">❓ Rehber</button>
-            <button class="nav-btn">🌐 Dil: TR</button>
-            <button class="nav-btn">👤 Giriş Yap</button>
+            <button class="nav-btn">🌐 TR</button>
+            <button class="nav-btn">👤 Kullanıcı Girişi</button>
         </div>
     </div>
 
-    <!-- Ana Ekran -->
     <div class="main-container">
         
-        <!-- Sol Panel -->
-        <div class="sidebar">
-            <h2>Kontrol Merkezi</h2>
+        <div class="sidebar-left panel">
+            <h2>Girdi & Çizim Araçları</h2>
+            <button class="btn-primary">📂 KML / SHP Yükle</button>
+            <div class="tool-row">
+                <button class="btn-tool">⬠ Poligon</button>
+                <button class="btn-tool">▭ Dikdörtgen</button>
+                <button class="btn-tool btn-danger">❌ Temizle</button>
+            </div>
             
-            <button class="upload-btn">📂 KML / Sınır Yükle</button>
+            <div class="geometry-info">
+                <div class="geom-details">
+                    <span><b>Alan:</b> 12.4 km² | 1240 ha</span>
+                    <span><b>Çevre:</b> 14.2 km</span>
+                </div>
+                <div style="font-size: 1.5rem; color: #1e3a8a;">⬠</div>
+                <button class="btn-tool btn-danger" style="flex: none; padding: 5px;">🗑️</button>
+            </div>
 
+            <h2>Veri Seçimi</h2>
             <div class="control-group">
-                <label>Uydu Verisi</label>
+                <label>Uydu Tercihi</label>
                 <select>
-                    <option>Landsat 9 (Level-2)</option>
-                    <option>Sentinel-2 (MSI)</option>
+                    <option>Landsat 9</option>
+                    <option>Landsat 8</option>
+                    <option>Landsat 7</option>
+                    <option>Landsat 5</option>
+                    <option>Sentinel-2</option>
                 </select>
             </div>
 
-            <div class="control-group">
-                <label>Tarih Seçimi</label>
-                <input type="date">
+            <div class="tool-row">
+                <div class="control-group" style="flex: 1;">
+                    <label>Başlangıç</label>
+                    <input type="date">
+                </div>
+                <div class="control-group" style="flex: 1;">
+                    <label>Bitiş</label>
+                    <input type="date">
+                </div>
             </div>
 
             <div class="control-group">
-                <label>Bulut Toleransı (%)</label>
-                <input type="range" min="0" max="100" value="15">
+                <label>Bulutluluk Oranı (Maks)</label>
+                <div class="slider-group">
+                    <input type="range" min="0" max="100" value="10">
+                    <span class="slider-val">%10</span>
+                </div>
             </div>
 
-            <h2>Analiz Modülü</h2>
-            <div class="control-group">
-                <select>
-                    <option>NDVI (Bitki Örtüsü İndeksi)</option>
-                    <option>LST (Yüzey Sıcaklığı)</option>
-                    <option>NDWI (Su İndeksi)</option>
-                    <option>SMI (Toprak Nemi İndeksi)</option>
-                </select>
-            </div>
+            <h2>Analiz ve Veri Modülleri</h2>
             
-            <button class="action-btn">🚀 Analizi Başlat</button>
+            <details>
+                <summary>🛰️ Uydu Analizleri</summary>
+                <div class="details-content">
+                    <select>
+                        <option>NDVI (Normalize Edilmiş Fark Bitki İndeksi)</option>
+                        <option>NDWI (Su İndeksi)</option>
+                        <option>LST (Arazi Yüzey Sıcaklığı)</option>
+                        <option>NBR (Yanmış Alan İndeksi)</option>
+                        <option>SMI (Toprak Nem İndeksi)</option>
+                        <option>EVI (Geliştirilmiş Bitki İndeksi)</option>
+                        <option>SAVI (Toprak Düzenlemeli Bitki İndeksi)</option>
+                    </select>
+                </div>
+            </details>
+
+            <details>
+                <summary>🏘️ Arazi Kullanımı / Land Cover</summary>
+                <div class="details-content">
+                    <select>
+                        <option>Esri Land Cover 2025</option>
+                        <option>Esri Land Cover 2024</option>
+                        <option>Esri Land Cover 2023</option>
+                        <option>Esri Land Cover 2022</option>
+                        <option>Esri Land Cover 2021</option>
+                        <option>Esri Land Cover 2020</option>
+                        <option>Esri Land Cover 2019</option>
+                        <option>Esri Land Cover 2018</option>
+                        <option>CORINE 2018</option>
+                    </select>
+                </div>
+            </details>
+
+            <details>
+                <summary>⛰️ Topografya (SRTM/ALOS)</summary>
+                <div class="details-content">
+                    <select>
+                        <option>DEM (Sayısal Yükseklik Modeli)</option>
+                        <option>Eğim (Slope)</option>
+                        <option>Bakı (Aspect)</option>
+                        <option>Kabartma (Hillshade)</option>
+                    </select>
+                </div>
+            </details>
+
+            <details>
+                <summary>📷 Uydu Görüntüsü (Ham Veri)</summary>
+                <div class="details-content">
+                    <select>
+                        <option>Landsat 5 - Uydu Görüntüsü</option>
+                        <option>Landsat 5 - Bant Kombinasyonu</option>
+                        <option>Landsat 7 - Uydu Görüntüsü</option>
+                        <option>Landsat 7 - Bant Kombinasyonu</option>
+                        <option>Landsat 8 - Uydu Görüntüsü</option>
+                        <option>Landsat 9 - Uydu Görüntüsü</option>
+                        <option>Sentinel-2 - Uydu Görüntüsü</option>
+                    </select>
+                </div>
+            </details>
+
+            <button class="btn-primary" style="margin-top: 10px;">🚀 Analizi Çalıştır</button>
         </div>
 
-        <!-- Harita Alanı -->
-        <div class="map-container" id="map">
-            <div class="map-placeholder">
-                <h1>🗺️</h1>
-                <p>İnteraktif Harita Tuvali Yükleniyor...</p>
+        <div class="map-container">
+            
+            <div class="map-gallery">
+                <div class="gallery-item">
+                    <div class="gallery-img">🏞️</div>
+                    <div class="gallery-info">20.06.2025<br>Bulut: %2</div>
+                </div>
+                <div class="gallery-item">
+                    <div class="gallery-img">🏞️</div>
+                    <div class="gallery-info">05.07.2025<br>Bulut: %8</div>
+                </div>
+                <div class="gallery-item">
+                    <div class="gallery-img">🏞️</div>
+                    <div class="gallery-info">21.07.2025<br>Bulut: %0</div>
+                </div>
             </div>
-            <button class="print-btn">📥 Görsel Çıktı Al (300 DPI)</button>
+
+            <div class="map-top-right">
+                <div class="map-control-box">
+                    <label style="font-size: 0.85rem; font-weight: bold;">Görüntü Alanı:</label>
+                    <select style="padding: 3px; border-radius: 3px;">
+                        <option>KML/SHP İçinde (Clip)</option>
+                        <option>Tüm Uydu Görüntüsü</option>
+                    </select>
+                </div>
+                <div class="map-control-box">
+                    <label style="font-size: 0.85rem; font-weight: bold;">Şeffaflık:</label>
+                    <input type="range" min="0" max="100" value="100" style="width: 80px;">
+                    <span style="font-size: 0.85rem; font-weight: bold;">%100</span>
+                </div>
+                <div class="north-arrow">N<br>↑</div>
+            </div>
+
+            <div class="map-left-mid">
+                <button class="map-zoom-btn">+</button>
+                <button class="map-zoom-btn">-</button>
+                <button class="map-zoom-btn">🏠</button>
+            </div>
+
+            <div class="map-bottom-left">
+                <div class="map-legend">
+                    <b>NDVI Analizi</b><br>
+                    <div style="display: flex; justify-content: space-between; font-size: 0.75rem; margin-top: 5px;">
+                        <span>Low: -1</span>
+                        <span>High: +1</span>
+                    </div>
+                    <div class="color-ramp"></div>
+                </div>
+                <div class="scale-bar"><div class="scale-text">5 km</div></div>
+            </div>
+
         </div>
 
+        <div class="sidebar-right panel">
+            <h2>Kartografya / Harita Düzeni</h2>
+            
+            <div class="control-group">
+                <label>Harita Elemanları</label>
+                <div class="right-menu-grid">
+                    <label><input type="checkbox" checked> Kuzey Oku</label>
+                    <label><input type="checkbox" checked> Ölçek Çubuğu</label>
+                    <label><input type="checkbox" checked> Başlık</label>
+                    <label><input type="checkbox" checked> Etiketler</label>
+                </div>
+            </div>
+
+            <div class="tool-row">
+                <div class="control-group" style="flex: 1;">
+                    <label>Yazı Tipi</label>
+                    <select><option>Arial</option><option>Times New Roman</option></select>
+                </div>
+                <div class="control-group" style="flex: 1;">
+                    <label>Renk</label>
+                    <input type="color" value="#000000" style="width: 100%; height: 30px;">
+                </div>
+            </div>
+
+            <h3>Lejant ve Semboloji</h3>
+            <div class="control-group">
+                <label>Renk Paleti (Color Ramp)</label>
+                <select><option>Kırmızı -> Yeşil (NDVI)</option><option>Mavi -> Kırmızı (LST)</option></select>
+                <div class="color-ramp"></div>
+            </div>
+            <div class="control-group">
+                <label>Sınıflandırma Aralığı</label>
+                <div class="tool-row">
+                    <input type="number" placeholder="Min" style="width: 50%;">
+                    <input type="number" placeholder="Max" style="width: 50%;">
+                </div>
+            </div>
+
+            <h3>Çıktı Araçları (Markup)</h3>
+            <div class="right-menu-grid">
+                <button class="btn-tool">✏️ Kalem</button>
+                <button class="btn-tool">📏 Çizgi</button>
+                <button class="btn-tool">⬠ Poligon</button>
+                <button class="btn-tool">⭕ Daire</button>
+                <button class="btn-tool" style="grid-column: span 2;">📝 Metin Ekle</button>
+            </div>
+
+            <h3>Veri Grafikleri</h3>
+            <div class="chart-placeholder">📊 Pasta/Sütun Grafik ve Tablo Alanı</div>
+
+            <div style="margin-top: auto; display: flex; flex-direction: column; gap: 10px;">
+                <button class="btn-tool" style="background-color: #f8fafc; border-color: #1e3a8a; color: #1e3a8a;">📥 Veriyi İndir (GeoTIFF)</button>
+                <button class="btn-primary" style="background-color: #10b981;">🖨️ Görsel Çıktı Al (PNG/JPEG)</button>
+                <small style="color: #64748b; font-size: 0.7rem; text-align: center;">Çıktı alındığında sadece harita tuvali, lejant, ölçek ve kuzey oku kaydedilir.</small>
+            </div>
+        </div>
+
+    </div>
+
+    <div class="footer">
+        <span>Veri: 10m Sentinel-2 MSI / 30m Landsat</span>
+        <span>Koordinat Sistemi: WGS 84 UTM Zone 37N</span>
+        <span>© 2026 SylvaGIS Platformu</span>
     </div>
 
 </body>
 </html>
+
+```
