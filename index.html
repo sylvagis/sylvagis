@@ -110,12 +110,6 @@
         .footer { background-color: #1e3a8a; color: #ffffff; padding: 5px 25px; display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem; z-index: 2000; position: relative; }
         .footer-left { display: flex; gap: 20px; }
     </style>
-<!-- KML / KMZ -->
-<script src="https://unpkg.com/togeojson@0.16.0/dist/togeojson.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-
-<!-- SHP -->
-<script src="https://unpkg.com/shpjs@latest/dist/shp.min.js"></script>
 </head>
 <body>
 
@@ -158,16 +152,7 @@
 
         <div class="sidebar-left panel">
             <h2>Girdi &amp; Çizim Araçları</h2>
-            <input type="file"
-       id="file-upload"
-       accept=".kml,.kmz,.zip,.shp"
-       style="display:none;">
-
-<button id="upload-btn"
-        class="btn-primary"
-        style="width:100%;">
-📂 KML / KMZ / SHP Yükle
-</button>
+            <button class="btn-primary" style="width: 100%;">📂 KML / SHP Yükle</button>
             <div class="tool-row">
                 <button class="btn-tool" id="btn-polygon">⬠ Poligon</button>
                 <button class="btn-tool" id="btn-rectangle">▭ Dikdörtgen</button>
@@ -617,171 +602,6 @@
             txtPerimeter.innerHTML = '<b>Çevre:</b> ' + lengthKm + ' km';
             geomInfoBox.style.display = 'flex';
         });
-// ==========================
-// KML / KMZ / SHP Yükleme
-// ==========================
-
-var uploadBtn = document.getElementById("upload-btn");
-var fileInput = document.getElementById("file-upload");
-
-uploadBtn.addEventListener("click", () => {
-    fileInput.click();
-});
-
-fileInput.addEventListener("change", async function(e){
-
-    const file = e.target.files[0];
-    if(!file) return;
-
-    try {
-
-        // Önce eski AOI'yi temizle
-        if(currentLayer){
-            map.removeLayer(currentLayer);
-            currentLayer = null;
-        }
-
-        const extension =
-            file.name.split('.').pop().toLowerCase();
-
-        let geojson;
-
-        // -----------------
-        // KML
-        // -----------------
-        if(extension === "kml"){
-
-            const text = await file.text();
-
-            const parser = new DOMParser();
-            const kml = parser.parseFromString(
-                text,
-                "text/xml"
-            );
-
-            geojson = toGeoJSON.kml(kml);
-        }
-
-        // -----------------
-        // KMZ
-        // -----------------
-        else if(extension === "kmz"){
-
-            const zip =
-                await JSZip.loadAsync(file);
-
-            let kmlFile;
-
-            zip.forEach((path, entry)=>{
-                if(path.endsWith(".kml")){
-                    kmlFile = entry;
-                }
-            });
-
-            const text =
-                await kmlFile.async("string");
-
-            const parser = new DOMParser();
-
-            const kml =
-                parser.parseFromString(
-                    text,
-                    "text/xml"
-                );
-
-            geojson = toGeoJSON.kml(kml);
-        }
-
-        // -----------------
-        // SHP ZIP
-        // -----------------
-        else if(extension === "zip"){
-
-            const buffer =
-                await file.arrayBuffer();
-
-            geojson = await shp(buffer);
-        }
-
-        else{
-            alert("Desteklenmeyen format");
-            return;
-        }
-
-        currentLayer = L.geoJSON(
-            geojson,
-            {
-                style:{
-                    color:"#ff0000",
-                    weight:3,
-                    fillOpacity:0.15
-                }
-            }
-        ).addTo(map);
-
-        map.fitBounds(
-            currentLayer.getBounds()
-        );
-
-        calculateAOIStats(geojson);
-
-    }
-    catch(err){
-
-        console.error(err);
-
-        alert(
-            "Dosya okunurken hata oluştu."
-        );
-    }
-
-});
-function calculateAOIStats(geojson){
-
-    const areaSqMeters =
-        turf.area(geojson);
-
-    const areaKm2 =
-        (areaSqMeters/1000000)
-        .toLocaleString(
-            "tr-TR",
-            {maximumFractionDigits:2}
-        );
-
-    const areaHa =
-        (areaSqMeters/10000)
-        .toLocaleString(
-            "tr-TR",
-            {maximumFractionDigits:2}
-        );
-
-    txtArea.innerHTML =
-        "<b>Alan:</b> "
-        + areaKm2
-        + " km² | "
-        + areaHa
-        + " ha";
-
-    txtPerimeter.innerHTML =
-        "<b>AOI Yüklendi</b>";
-
-    geomInfoBox.style.display =
-        "flex";
-}
-console.log("JS çalıştı");
-
-const uploadBtn = document.getElementById("upload-btn");
-const fileInput = document.getElementById("file-upload");
-
-console.log(uploadBtn);
-console.log(fileInput);
-
-if(uploadBtn){
-    uploadBtn.addEventListener("click", function(){
-        alert("Buton çalıştı");
-        fileInput.click();
-    });
-}
     </script>
 
 </body>
