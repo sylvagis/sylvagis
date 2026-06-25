@@ -6,20 +6,32 @@
     <title>SylvaGIS - Profesyonel Karar Destek Platformu</title>
 
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <!-- Leaflet Geoman (gerçek poligon/dikdörtgen çizim motoru) -->
     <link rel="stylesheet" href="https://unpkg.com/@geoman-io/leaflet-geoman-free@latest/dist/leaflet-geoman.css" />
 
     <style>
+        /* Genel Reset ve Açık Tema Ayarları */
         * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
         body { display: flex; flex-direction: column; height: 100vh; background-color: #f4f6f9; color: #333; overflow: hidden; }
+
+        /* Navbar (Üst Bar) */
         .navbar { display: flex; justify-content: space-between; align-items: center; background-color: #ffffff; padding: 12px 25px; border-bottom: 2px solid #1e3a8a; box-shadow: 0 2px 10px rgba(0,0,0,0.05); z-index: 2000; position: relative; }
         .logo-container { font-size: 1.8rem; font-weight: bold; color: #1e3a8a; display: flex; align-items: center; gap: 8px; }
         .nav-buttons { display: flex; gap: 15px; align-items: center; }
         .nav-btn { background-color: #f8fafc; border: 1px solid #cbd5e1; padding: 8px 15px; border-radius: 5px; cursor: pointer; font-weight: 600; color: #1e3a8a; transition: 0.2s; outline: none; }
         .nav-btn:hover { background-color: #1e3a8a; color: #ffffff; }
+
+        /* Ana İçerik Alanı */
         .main-container { display: flex; flex: 1; overflow: hidden; }
+
+        /* Ortak Panel Stilleri */
         .panel { background-color: #ffffff; padding: 20px; overflow-y: auto; box-shadow: 2px 0 10px rgba(0,0,0,0.05); display: flex; flex-direction: column; gap: 15px; }
         .panel h2, .panel h3 { color: #1e3a8a; border-bottom: 2px solid #f1f5f9; padding-bottom: 5px; margin-bottom: 5px; font-size: 1.1rem; }
+
+        /* Sol Panel */
         .sidebar-left { width: 340px; border-right: 1px solid #e2e8f0; z-index: 100; position: relative; }
+
+        /* Çizim ve Dosya Araçları */
         .tool-row { display: flex; gap: 8px; }
         .btn-primary { flex: 1; background-color: #1e3a8a; color: white; border: none; padding: 10px; border-radius: 5px; cursor: pointer; font-weight: bold; transition: 0.2s; }
         .btn-primary:hover { background-color: #172a63; }
@@ -28,8 +40,12 @@
         .btn-tool.active { background-color: #1e3a8a; color: #fff; border-color: #1e3a8a; }
         .btn-danger { background-color: #fee2e2; color: #ef4444; border: 1px solid #fca5a5; }
         .btn-danger:hover { background-color: #fecaca; }
+
+        /* Çizilen Alan Bilgisi */
         .geometry-info { background-color: #f8fafc; border: 1px dashed #cbd5e1; padding: 10px; border-radius: 5px; display: flex; justify-content: space-between; align-items: center; font-size: 0.85rem; }
         .geom-details { display: flex; flex-direction: column; gap: 3px; }
+
+        /* Form Elemanları */
         .control-group { display: flex; flex-direction: column; gap: 5px; }
         .control-group label { font-size: 0.85rem; font-weight: 600; color: #64748b; }
         .control-group input, .control-group select { padding: 8px; border: 1px solid #cbd5e1; border-radius: 5px; background-color: #ffffff; outline: none; }
@@ -38,37 +54,59 @@
         .slider-group { display: flex; align-items: center; gap: 10px; }
         .slider-group input { flex: 1; }
         .slider-val { font-weight: bold; color: #1e3a8a; font-size: 0.9rem; width: 40px; }
+
+        /* Akordeon Menüler (Detaylar) */
         details { background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 5px; margin-bottom: 5px; }
         summary { padding: 10px; font-weight: bold; cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; color: #1e3a8a; }
         summary::-webkit-details-marker { display: none; }
         details[open] summary { border-bottom: 1px solid #e2e8f0; }
         .details-content { padding: 10px; display: flex; flex-direction: column; gap: 12px; }
+
+        /* Sağ Panel (Açılır Kapanır Kartografya) */
         .sidebar-right { width: 340px; border-left: 1px solid #e2e8f0; background-color: #ffffff; z-index: 100; position: relative; }
         .right-menu-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
         .color-ramp { height: 20px; width: 100%; background: linear-gradient(to right, #d7191c, #fdae61, #ffffbf, #a6d96a, #1a9641); border-radius: 3px; border: 1px solid #cbd5e1; margin-top: 5px; }
         .chart-placeholder { height: 120px; background-color: #f1f5f9; border: 1px dashed #cbd5e1; display: flex; align-items: center; justify-content: center; color: #64748b; font-size: 0.9rem; border-radius: 5px; margin-top: 5px; }
+
+        /* Renk Paleti (Quick Colors) */
         .quick-colors { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
         .color-swatch { width: 22px; height: 22px; border-radius: 3px; cursor: pointer; border: 1px solid #cbd5e1; transition: 0.2s; }
         .color-swatch:hover { transform: scale(1.15); border-color: #1e3a8a; box-shadow: 0 0 4px rgba(0,0,0,0.3); }
+
+        /* Harita Tuvali (artık gerçek Leaflet haritası) */
         .map-wrapper { flex: 1; position: relative; }
         #map { width: 100%; height: 100%; background-color: #e5e7eb; z-index: 1; }
+
+        /* Harita İçi Overlay Elemanları — pointer-events ile harita sürüklemesi korunuyor */
         .map-top-right { position: absolute; top: 15px; right: 15px; display: flex; flex-direction: column; gap: 10px; align-items: flex-end; z-index: 500; pointer-events: none; }
         .map-control-box { background: rgba(255, 255, 255, 0.95); padding: 10px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); display: flex; align-items: center; gap: 10px; pointer-events: auto; }
+
+        /* Belirgin Kuzey Oku */
         .north-arrow { width: 45px; height: 45px; background-color: rgba(255, 255, 255, 0.95); border: 2px solid #1e3a8a; border-radius: 5px; display: flex; flex-direction: column; justify-content: center; align-items: center; box-shadow: 0 3px 6px rgba(0,0,0,0.3); pointer-events: auto; }
         .north-arrow-icon { color: #ef4444; font-size: 1.2rem; line-height: 0.8; font-weight: 900; }
         .north-arrow-text { color: #1e3a8a; font-size: 0.85rem; font-weight: 900; line-height: 1; }
+
+        /* Harita İçi - Sol Orta (Yakınlaştırma) — gerçek Leaflet zoom fonksiyonlarına bağlı */
         .map-left-mid { position: absolute; top: 50%; left: 15px; transform: translateY(-50%); display: flex; flex-direction: column; gap: 5px; z-index: 500; pointer-events: none; }
         .map-zoom-btn { width: 35px; height: 35px; background: white; border: 1px solid #ccc; border-radius: 5px; font-size: 1.2rem; cursor: pointer; box-shadow: 0 2px 5px rgba(0,0,0,0.2); display: flex; justify-content: center; align-items: center; pointer-events: auto; }
         .map-zoom-btn:hover { background: #f1f5f9; }
+
+        /* Harita İçi - Sol Alt (Lejant) */
         .map-bottom-left { position: absolute; bottom: 15px; left: 15px; display: flex; flex-direction: column; gap: 10px; z-index: 500; pointer-events: none; }
         .map-legend { background: rgba(255, 255, 255, 0.9); padding: 10px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); font-size: 0.85rem; pointer-events: auto; }
+
+        /* Leaflet'in kendi ölçek çubuğunu marka rengine göre hafifçe biçimlendiriyoruz */
         .leaflet-control-scale-line { border-color: #1e3a8a; color: #1e3a8a; font-weight: 600; background: rgba(255,255,255,0.9); }
+
+        /* Harita İçi - Sol Üst (Görüntü Galerisi) */
         .map-gallery { position: absolute; top: 15px; left: 15px; display: flex; gap: 10px; overflow-x: auto; max-width: 500px; padding-bottom: 5px; z-index: 500; pointer-events: none; }
         .gallery-item { min-width: 100px; background: white; border: 2px solid #1e3a8a; border-radius: 5px; overflow: hidden; cursor: pointer; box-shadow: 0 2px 5px rgba(0,0,0,0.2); pointer-events: auto; transition: 0.2s; }
         .gallery-item:hover { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.3); }
         .gallery-item.active { border-color: #10b981; }
         .gallery-img { height: 60px; background-color: #cbd5e1; display: flex; justify-content: center; align-items: center; font-size: 2rem; }
         .gallery-info { padding: 4px; font-size: 0.7rem; text-align: center; font-weight: bold; background: #f8fafc; }
+
+        /* Footer (Alt Bilgi Çubuğu) */
         .footer { background-color: #1e3a8a; color: #ffffff; padding: 5px 25px; display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem; z-index: 2000; position: relative; }
         .footer-left { display: flex; gap: 20px; }
     </style>
@@ -83,6 +121,27 @@
                 <optgroup label="Sık Kullanılanlar">
                     <option>🇹🇷 Türkçe</option>
                     <option>🇬🇧 English</option>
+                    <option>🇩🇪 Deutsch</option>
+                    <option>🇮🇹 Italiano</option>
+                    <option>🇪🇸 Español</option>
+                    <option>🇨🇳 中文</option>
+                    <option>🇰🇷 한국어</option>
+                    <option>🇫🇷 Français</option>
+                    <option>🇯🇵 日本語</option>
+                </optgroup>
+                <optgroup label="Diğer Diller">
+                    <option>🇷🇺 Русский</option>
+                    <option>🇵🇹 Português</option>
+                    <option>🇸🇦 العربية</option>
+                    <option>🇮🇳 हिन्दी</option>
+                    <option>🇳🇱 Nederlands</option>
+                    <option>🇬🇷 Ελληνικά</option>
+                    <option>🇸🇪 Svenska</option>
+                    <option>🇳🇴 Norsk</option>
+                    <option>🇫🇮 Suomi</option>
+                    <option>🇵🇱 Polski</option>
+                    <option>🇮🇩 Bahasa Indonesia</option>
+                    <option>🇻🇳 Tiếng Việt</option>
                 </optgroup>
             </select>
             <button class="nav-btn">👤 Kullanıcı Girişi</button>
@@ -92,13 +151,8 @@
     <div class="main-container">
 
         <div class="sidebar-left panel">
-            <h2>Çalışma Alanı &amp; Veri Seçimi</h2>
-            
-            <div style="background: #e2e8f0; padding: 10px; border-radius: 5px; margin-bottom: 15px; border: 1px solid #1e3a8a;">
-                <label style="font-weight: bold; font-size: 0.85rem; color: #1e3a8a;">Dosya Yükle (Test Modu)</label>
-                <input type="file" id="test-file-upload" accept=".kml,.kmz,.zip" style="display: block; width: 100%; margin-top: 5px;">
-            </div>
-            
+            <h2>Girdi &amp; Çizim Araçları</h2>
+            <button class="btn-primary" style="width: 100%;">📂 KML / SHP Yükle</button>
             <div class="tool-row">
                 <button class="btn-tool" id="btn-polygon">⬠ Poligon</button>
                 <button class="btn-tool" id="btn-rectangle">▭ Dikdörtgen</button>
@@ -120,6 +174,18 @@
                 <select>
                     <optgroup label="Sentinel">
                         <option>Sentinel-2 L1C</option>
+                        <option>Sentinel-2 L2A</option>
+                    </optgroup>
+                    <optgroup label="Landsat Collection 2 Level-2">
+                        <option>Landsat 8-9 OLI/TIRS C2 L2</option>
+                        <option>Landsat 7 ETM+ C2 L2</option>
+                        <option>Landsat 4-5 TM C2 L2</option>
+                    </optgroup>
+                    <optgroup label="Landsat Collection 2 Level-1">
+                        <option>Landsat 8-9 OLI/TIRS C2 L1</option>
+                        <option>Landsat 7 ETM+ C2 L1</option>
+                        <option>Landsat 4-5 TM C2 L1</option>
+                        <option>Landsat 1-5 MSS C2 L1</option>
                     </optgroup>
                 </select>
             </div>
@@ -144,49 +210,243 @@
             </div>
 
             <h2>Analiz ve Veri Modülleri</h2>
+
             <details>
                 <summary>🛰️ Uydu Analizleri</summary>
                 <div class="details-content">
                     <select>
                         <option>NDVI (Normalize Edilmiş Fark Bitki İndeksi)</option>
+                        <option>NDWI (Su İndeksi)</option>
+                        <option>LST (Arazi Yüzey Sıcaklığı)</option>
+                        <option>NBR (Yanmış Alan İndeksi)</option>
+                        <option>SMI (Toprak Nem İndeksi)</option>
+                        <option>EVI (Geliştirilmiş Bitki İndeksi)</option>
+                        <option>SAVI (Toprak Düzenlemeli Bitki İndeksi)</option>
                     </select>
                 </div>
             </details>
 
-            <button class="btn-primary" style="width: 60%; align-self: center; margin-top: 10px; font-size: 0.95rem;">🚀 Analizi Çalıştır</button>
+            <details>
+                <summary>🏘️ Arazi Kullanımı / Land Cover</summary>
+                <div class="details-content">
+                    <select>
+                        <option>Esri Land Cover 2025</option>
+                        <option>Esri Land Cover 2024</option>
+                        <option>Esri Land Cover 2023</option>
+                        <option>Esri Land Cover 2022</option>
+                        <option>Esri Land Cover 2021</option>
+                        <option>Esri Land Cover 2020</option>
+                        <option>Esri Land Cover 2019</option>
+                        <option>Esri Land Cover 2018</option>
+                        <option>CORINE 2018</option>
+                    </select>
+                </div>
+            </details>
+
+            <details>
+                <summary>⛰️ Topografya (SRTM/ALOS)</summary>
+                <div class="details-content">
+                    <select>
+                        <option>DEM (Sayısal Yükseklik Modeli)</option>
+                        <option>Eğim (Slope)</option>
+                        <option>Bakı (Aspect)</option>
+                        <option>Kabartma (Hillshade)</option>
+                    </select>
+                </div>
+            </details>
+
+            <details>
+                <summary>📷 Ham Veri (Görüntü ve Bantlar)</summary>
+                <div class="details-content">
+                    <div class="control-group">
+                        <label>Uydu Görüntüsü</label>
+                        <select>
+                            <optgroup label="Sentinel">
+                                <option>Sentinel-2 L1C</option>
+                                <option>Sentinel-2 L2A</option>
+                            </optgroup>
+                            <optgroup label="Landsat Collection 2 Level-2">
+                                <option>Landsat 8-9 OLI/TIRS C2 L2</option>
+                                <option>Landsat 7 ETM+ C2 L2</option>
+                                <option>Landsat 4-5 TM C2 L2</option>
+                            </optgroup>
+                            <optgroup label="Landsat Collection 2 Level-1">
+                                <option>Landsat 8-9 OLI/TIRS C2 L1</option>
+                                <option>Landsat 7 ETM+ C2 L1</option>
+                                <option>Landsat 4-5 TM C2 L1</option>
+                                <option>Landsat 1-5 MSS C2 L1</option>
+                            </optgroup>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label>Bantlar</label>
+                        <select>
+                            <optgroup label="Sentinel">
+                                <option>Sentinel-2 L1C</option>
+                                <option>Sentinel-2 L2A</option>
+                            </optgroup>
+                            <optgroup label="Landsat Collection 2 Level-2">
+                                <option>Landsat 8-9 OLI/TIRS C2 L2</option>
+                                <option>Landsat 7 ETM+ C2 L2</option>
+                                <option>Landsat 4-5 TM C2 L2</option>
+                            </optgroup>
+                            <optgroup label="Landsat Collection 2 Level-1">
+                                <option>Landsat 8-9 OLI/TIRS C2 L1</option>
+                                <option>Landsat 7 ETM+ C2 L1</option>
+                                <option>Landsat 4-5 TM C2 L1</option>
+                                <option>Landsat 1-5 MSS C2 L1</option>
+                            </optgroup>
+                        </select>
+                    </div>
+                </div>
+            </details>
+
+            <button class="btn-primary" style="width: 40%; align-self: center; margin-top: 10px; font-size: 0.95rem;">
+🚀 Analizi Çalıştır
+</button>
         </div>
 
         <div class="map-wrapper">
+
             <div id="map"></div>
+
+            <div class="map-gallery" id="map-gallery">
+                <div class="gallery-item active" data-date="20.06.2025">
+                    <div class="gallery-img">🏞️</div>
+                    <div class="gallery-info">20.06.2025<br>Bulut: %2</div>
+                </div>
+                <div class="gallery-item" data-date="05.07.2025">
+                    <div class="gallery-img">🏞️</div>
+                    <div class="gallery-info">05.07.2025<br>Bulut: %8</div>
+                </div>
+                <div class="gallery-item" data-date="21.07.2025">
+                    <div class="gallery-img">🏞️</div>
+                    <div class="gallery-info">21.07.2025<br>Bulut: %0</div>
+                </div>
+            </div>
+
             <div class="map-top-right">
+                <div class="map-control-box">
+                    <label style="font-size: 0.85rem; font-weight: bold;">Görüntü Alanı:</label>
+                    <select style="padding: 3px; border-radius: 3px; border: 1px solid #ccc;">
+                        <option>KML/SHP İçinde (Clip)</option>
+                        <option>Tüm Uydu Görüntüsü</option>
+                    </select>
+                </div>
                 <div class="map-control-box">
                     <label style="font-size: 0.85rem; font-weight: bold;">Şeffaflık:</label>
                     <input type="range" id="opacity-slider" min="0" max="100" value="100" style="width: 80px;">
                     <span style="font-size: 0.85rem; font-weight: bold;" id="opacity-val">%100</span>
                 </div>
+
                 <div class="north-arrow">
                     <span class="north-arrow-icon">▲</span>
                     <span class="north-arrow-text">N</span>
                 </div>
             </div>
+
             <div class="map-left-mid">
                 <button class="map-zoom-btn" id="zoom-in">+</button>
                 <button class="map-zoom-btn" id="zoom-out">-</button>
                 <button class="map-zoom-btn" id="zoom-home">🏠</button>
             </div>
+
+            <div class="map-bottom-left">
+                <div class="map-legend">
+                    <b>NDVI Analizi</b><br>
+                    <div style="display: flex; justify-content: space-between; font-size: 0.75rem; margin-top: 5px;">
+                        <span>Low: -1</span>
+                        <span>High: +1</span>
+                    </div>
+                    <div class="color-ramp"></div>
+                </div>
+            </div>
+
         </div>
 
         <div class="sidebar-right panel">
             <h2>Kartografya / Harita Düzeni</h2>
+
             <div class="control-group">
                 <label>Harita Elemanları</label>
                 <div class="right-menu-grid">
                     <label><input type="checkbox" checked> Kuzey Oku</label>
+                    <label><input type="checkbox" checked> Ölçek Çubuğu</label>
+                    <label><input type="checkbox" checked> Başlık</label>
+                    <label><input type="checkbox" checked> Etiketler</label>
                 </div>
             </div>
+
+            <h3>Lejant ve Semboloji</h3>
+            <div class="control-group">
+                <label>Renk Paleti (Color Ramp)</label>
+                <select><option>Kırmızı -&gt; Yeşil (NDVI)</option><option>Mavi -&gt; Kırmızı (LST)</option></select>
+                <div class="color-ramp"></div>
+            </div>
+            <div class="control-group">
+                <label>Sınıflandırma Aralığı</label>
+                <div class="tool-row">
+                    <input type="number" placeholder="Min" style="width: 50%;">
+                    <input type="number" placeholder="Max" style="width: 50%;">
+                </div>
+            </div>
+
             <h3>Çıktı Araçları (Markup)</h3>
+            <div class="right-menu-grid">
+                <button class="btn-tool">✏️ Kalem</button>
+                <button class="btn-tool">📏 Çizgi</button>
+                <button class="btn-tool">⬠ Poligon</button>
+                <button class="btn-tool">⭕ Daire</button>
+            </div>
+
+            <button class="btn-tool" style="width: 100%; margin-top: 5px; font-size: 1rem;">📝 Metin Ekle</button>
+
+            <div class="control-group" style="margin-top: 10px;">
+                <label>Yazı Tipi</label>
+                <select>
+                    <option>Arial</option>
+                    <option>Times New Roman</option>
+                    <option>Verdana</option>
+                    <option>Tahoma</option>
+                    <option>Georgia</option>
+                    <option>Courier New</option>
+                    <option>Trebuchet MS</option>
+                    <option>Impact</option>
+                    <option>Comic Sans MS</option>
+                    <option>Garamond</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <label>Yazı / Çizim Rengi Seçimi</label>
+                <div class="quick-colors">
+                    <div class="color-swatch" style="background: #ffffff;" title="Beyaz"></div>
+                    <div class="color-swatch" style="background: #000000;" title="Siyah"></div>
+                    <div class="color-swatch" style="background: #ef4444;" title="Kırmızı"></div>
+                    <div class="color-swatch" style="background: #fca5a5;" title="Açık Kırmızı"></div>
+                    <div class="color-swatch" style="background: #f97316;" title="Turuncu"></div>
+                    <div class="color-swatch" style="background: #fdba74;" title="Açık Turuncu"></div>
+                    <div class="color-swatch" style="background: #eab308;" title="Sarı"></div>
+                    <div class="color-swatch" style="background: #fef08a;" title="Açık Sarı"></div>
+                    <div class="color-swatch" style="background: #22c55e;" title="Yeşil"></div>
+                    <div class="color-swatch" style="background: #86efac;" title="Açık Yeşil"></div>
+                    <div class="color-swatch" style="background: #3b82f6;" title="Mavi"></div>
+                    <div class="color-swatch" style="background: #93c5fd;" title="Açık Mavi"></div>
+                    <div class="color-swatch" style="background: #a855f7;" title="Mor"></div>
+                    <div class="color-swatch" style="background: #d8b4fe;" title="Açık Mor"></div>
+                    <div class="color-swatch" style="background: #ec4899;" title="Pembe"></div>
+                    <div class="color-swatch" style="background: #f9a8d4;" title="Açık Pembe"></div>
+                </div>
+                <input type="color" value="#000000" style="width: 100%; height: 35px; border: none; padding: 0; background: none; cursor: pointer;">
+            </div>
+
+            <h3>Veri Grafikleri</h3>
+            <div class="chart-placeholder">📊 Pasta/Sütun Grafik ve Tablo Alanı</div>
+
             <div style="margin-top: auto; display: flex; flex-direction: column; gap: 10px;">
+                <button class="btn-tool" style="background-color: #f8fafc; border-color: #1e3a8a; color: #1e3a8a;">📥 Veriyi İndir (GeoTIFF)</button>
                 <button class="btn-primary" style="background-color: #10b981;">🖨️ Görsel Çıktı Al (PNG/JPEG)</button>
+                <small style="color: #64748b; font-size: 0.7rem; text-align: center;">Çıktı alındığında sadece harita tuvali, lejant, ölçek ve kuzey oku kaydedilir.</small>
             </div>
         </div>
 
@@ -201,24 +461,32 @@
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- Leaflet Geoman (gerçek çizim motoru) -->
     <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@latest/dist/leaflet-geoman.min.js"></script>
+    <!-- Turf.js (alan ve çevre hesaplama motoru) -->
     <script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
-    
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/togeojson/0.16.0/togeojson.min.js"></script>
-    <script src="https://unpkg.com/shpjs@4.0.4/dist/shp.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-
     <script>
+        // ---------------------------------------------------------
+        // 1. Haritayı oluştur ve Türkiye merkezli olarak başlat
+        //    zoomControl: false -> Leaflet'in varsayılan butonlarını
+        //    gizliyoruz, çünkü solda kendi özel butonlarımız var.
+        // ---------------------------------------------------------
         var HOME_VIEW = { center: [39.0, 35.0], zoom: 6 };
         var map = L.map('map', { zoomControl: false }).setView(HOME_VIEW.center, HOME_VIEW.zoom);
 
+        // 2. Esri Yüksek Çözünürlüklü Uydu Görüntüsünü altlık olarak ekle
         var satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-            attribution: 'Tiles &copy; Esri',
+            attribution: 'Tiles &copy; Esri &mdash; Kaynak: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP',
             maxZoom: 19
         }).addTo(map);
 
+        // 3. Sağ alta gerçek, metrik bir ölçek çubuğu (Leaflet) ekle
         L.control.scale({ position: 'bottomright', imperial: false }).addTo(map);
 
+        // ---------------------------------------------------------
+        // 3b. Geoman çizim motorunu tanımla (kendi butonlarımızı
+        //     kullanacağımız için varsayılan araç çubuğunu gizliyoruz)
+        // ---------------------------------------------------------
         map.pm.addControls({
             drawMarker: false, drawPolyline: false, drawCircle: false,
             drawCircleMarker: false, drawText: false, editMode: false,
@@ -226,10 +494,24 @@
         });
         map.pm.toggleControls();
 
-        document.getElementById('zoom-in').addEventListener('click', function () { map.zoomIn(); });
-        document.getElementById('zoom-out').addEventListener('click', function () { map.zoomOut(); });
-        document.getElementById('zoom-home').addEventListener('click', function () { map.setView(HOME_VIEW.center, HOME_VIEW.zoom); });
+        // ---------------------------------------------------------
+        // Sol orta - özel yakınlaştırma butonlarını gerçek harita
+        // fonksiyonlarına bağlıyoruz
+        // ---------------------------------------------------------
+        document.getElementById('zoom-in').addEventListener('click', function () {
+            map.zoomIn();
+        });
+        document.getElementById('zoom-out').addEventListener('click', function () {
+            map.zoomOut();
+        });
+        document.getElementById('zoom-home').addEventListener('click', function () {
+            map.setView(HOME_VIEW.center, HOME_VIEW.zoom);
+        });
 
+        // ---------------------------------------------------------
+        // Sağ üst - "Şeffaflık" kaydırıcısı uydu görüntüsünün
+        // opaklığını gerçek zamanlı olarak değiştirir
+        // ---------------------------------------------------------
         var opacitySlider = document.getElementById('opacity-slider');
         var opacityVal = document.getElementById('opacity-val');
         opacitySlider.addEventListener('input', function () {
@@ -238,10 +520,32 @@
             opacityVal.textContent = '%' + v;
         });
 
+        // ---------------------------------------------------------
+        // Sol panel - bulutluluk kaydırıcısının etiketini güncelle
+        // ---------------------------------------------------------
         var cloudSlider = document.getElementById('cloud-slider');
         var cloudVal = document.getElementById('cloud-val');
-        cloudSlider.addEventListener('input', function () { cloudVal.textContent = '%' + this.value; });
+        cloudSlider.addEventListener('input', function () {
+            cloudVal.textContent = '%' + this.value;
+        });
 
+        // ---------------------------------------------------------
+        // Sol üst - görüntü galerisinde seçili kareyi vurgula
+        // (gerçek altlık görüntü değişimi backend entegrasyonuna bağlı)
+        // ---------------------------------------------------------
+        document.querySelectorAll('#map-gallery .gallery-item').forEach(function (item) {
+            item.addEventListener('click', function () {
+                document.querySelectorAll('#map-gallery .gallery-item').forEach(function (i) {
+                    i.classList.remove('active');
+                });
+                item.classList.add('active');
+            });
+        });
+
+        // ---------------------------------------------------------
+        // Sol panel - Poligon / Dikdörtgen çizim araçları
+        // (Leaflet Geoman ile gerçek çizim, Turf.js ile alan/çevre hesabı)
+        // ---------------------------------------------------------
         var btnPolygon = document.getElementById('btn-polygon');
         var btnRectangle = document.getElementById('btn-rectangle');
         var btnClear = document.getElementById('btn-clear');
@@ -250,7 +554,7 @@
         var txtArea = document.getElementById('geom-area');
         var txtPerimeter = document.getElementById('geom-perimeter');
 
-        var currentLayer = null; 
+        var currentLayer = null; // Haritadaki mevcut çizimi tutan değişken
 
         function setActiveTool(btn) {
             [btnPolygon, btnRectangle].forEach(function (b) { b.classList.remove('active'); });
@@ -280,13 +584,17 @@
         btnClear.addEventListener('click', clearDrawing);
         btnDeleteGeom.addEventListener('click', clearDrawing);
 
+        // Çizim tamamlandığında tetiklenir: alanı/çevreyi hesapla ve göster
         map.on('pm:create', function (e) {
+            // Önceki çizim varsa sil — haritada sadece son şekil kalsın
             if (currentLayer) { map.removeLayer(currentLayer); }
+
             currentLayer = e.layer;
             map.pm.disableDraw();
             setActiveTool(null);
 
             var geojson = currentLayer.toGeoJSON();
+
             var areaSqMeters = turf.area(geojson);
             var areaKm2 = (areaSqMeters / 1000000).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
             var areaHa = (areaSqMeters / 10000).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
@@ -296,83 +604,7 @@
             txtPerimeter.innerHTML = '<b>Çevre:</b> ' + lengthKm + ' km';
             geomInfoBox.style.display = 'flex';
         });
-
-        // ---------------------------------------------------------
-        // DOSYA YÜKLEME TEST MOTORU (TEŞHİS İÇİN)
-        // ---------------------------------------------------------
-        var testFileUpload = document.getElementById('test-file-upload');
-        if (testFileUpload) {
-            testFileUpload.addEventListener('change', function(e) {
-                var file = e.target.files[0];
-                if (!file) {
-                    alert("Hata: Dosya seçilemedi!");
-                    return;
-                }
-                
-                alert("1. AŞAMA BAŞARILI: " + file.name + " isimli dosya koda ulaştı.");
-                
-                var fileName = file.name.toLowerCase();
-                var reader = new FileReader();
-                
-                reader.onload = function(event) {
-                    alert("2. AŞAMA BAŞARILI: Tarayıcı dosyayı okudu, dönüştürme başlıyor...");
-                    var data = event.target.result;
-                    
-                    try {
-                        if (fileName.endsWith('.zip')) {
-                            shp(data).then(function(geojson) {
-                                alert("3. AŞAMA BAŞARILI: SHP GeoJSON'a çevrildi. Haritaya basılıyor...");
-                                var uploadedLayer = L.geoJSON(geojson, { style: { color: 'red', weight: 2 } }).addTo(map);
-                                map.fitBounds(uploadedLayer.getBounds());
-                                alert("4. AŞAMA: İşlem Tamamlandı!");
-                            }).catch(function(err) {
-                                alert("HATA (SHP Dönüştürme): " + err);
-                            });
-                        } else if (fileName.endsWith('.kml')) {
-                            var parser = new DOMParser();
-                            var xmlDoc = parser.parseFromString(data, "text/xml");
-                            var geojson = toGeoJSON.kml(xmlDoc);
-                            alert("3. AŞAMA BAŞARILI: KML GeoJSON'a çevrildi. Haritaya basılıyor...");
-                            var uploadedLayer = L.geoJSON(geojson, { style: { color: 'blue', weight: 2 } }).addTo(map);
-                            map.fitBounds(uploadedLayer.getBounds());
-                            alert("4. AŞAMA: İşlem Tamamlandı!");
-                        } else if (fileName.endsWith('.kmz')) {
-                            var new_zip = new JSZip();
-                            new_zip.loadAsync(data).then(function(zip) {
-                                var kmlFileName = Object.keys(zip.files).find(function(name) {
-                                    return name.toLowerCase().endsWith('.kml');
-                                });
-                                if (kmlFileName) {
-                                    zip.files[kmlFileName].async("string").then(function(kmlText) {
-                                        var parser = new DOMParser();
-                                        var xmlDoc = parser.parseFromString(kmlText, "text/xml");
-                                        var geojson = toGeoJSON.kml(xmlDoc);
-                                        alert("3. AŞAMA BAŞARILI: KMZ içindeki KML okundu. Haritaya basılıyor...");
-                                        var uploadedLayer = L.geoJSON(geojson, { style: { color: '#10b981', weight: 2 } }).addTo(map);
-                                        map.fitBounds(uploadedLayer.getBounds());
-                                        alert("4. AŞAMA: İşlem Tamamlandı!");
-                                    });
-                                } else {
-                                    alert("KMZ dosyasının içinde geçerli KML bulunamadı.");
-                                }
-                            }).catch(function(err) {
-                                alert("KMZ okuma hatası: " + err);
-                            });
-                        }
-                    } catch (error) {
-                        alert("Kritik Kod Hatası: " + error);
-                    }
-                };
-                
-                if (fileName.endsWith('.zip') || fileName.endsWith('.kmz')) {
-                    reader.readAsArrayBuffer(file);
-                } else if (fileName.endsWith('.kml')) {
-                    reader.readAsText(file);
-                }
-                
-                e.target.value = ''; // Seçimi sıfırla
-            });
-        }
     </script>
+
 </body>
 </html>
