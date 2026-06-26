@@ -330,11 +330,14 @@
                     </select>
                 </div>
                 <div class="map-control-box">
-                    <label style="font-size: 0.85rem; font-weight: bold;">Şeffaflık:</label>
+                    <label style="font-size: 0.85rem; font-weight: bold;">Arazi Saydamlık:</label>
                     <input type="range" id="opacity-slider" min="0" max="100" value="100" style="width: 80px;">
                     <span style="font-size: 0.85rem; font-weight: bold;" id="opacity-val">%100</span>
                 </div>
-
+                <div class="control-group">
+    <label>Katman Saydamlığı</label>
+    <input type="range" id="layerOpacity" min="0" max="1" step="0.1" value="1" style="width: 100%;">
+</div>
                 <div class="north-arrow">
                     <span class="north-arrow-icon">▲</span>
                     <span class="north-arrow-text">N</span>
@@ -570,7 +573,7 @@
         });
 
         // ---------------------------------------------------------
-        // Sağ üst - "Şeffaflık" kaydırıcısı
+        // Sağ üst - "Arazi Saydamlık" kaydırıcısı
         // ---------------------------------------------------------
         var opacitySlider = document.getElementById('opacity-slider');
         var opacityVal = document.getElementById('opacity-val');
@@ -580,6 +583,33 @@
             opacityVal.textContent = '%' + v;
         });
 
+        // Katman şeffaflığı kontrolü
+document.getElementById('layerOpacity').addEventListener('input', function(e) {
+    var val = e.target.value;
+    document.getElementById('layer-opacity-val').textContent = '%' + Math.round(val * 100);
+
+    // 1. Elle çizilen poligon/dikdörtgenleri şeffaflaştır
+    if (map.pm) {
+        map.pm.getLayers().forEach(function(layer) {
+            if (layer.setStyle) layer.setStyle({ fillOpacity: val, opacity: val });
+        });
+    }
+
+    // 2. Yüklenen KML/KMZ dosyasını şeffaflaştır
+    if (currentKmlLayer) {
+        currentKmlLayer.setStyle({ fillOpacity: val, opacity: val });
+        // Eğer katman bir tile (görüntü) ise setOpacity kullan
+        if (currentKmlLayer.setOpacity) currentKmlLayer.setOpacity(val);
+    }
+    
+    // 3. Eğer başka analiz katmanların varsa (tile layer olarak) onları da güncel tut
+    map.eachLayer(function(layer) {
+        // Uydu görüntüsü (basemap) hariç tüm katmanlara uygula
+        if (layer !== satelliteLayer && layer.setOpacity && !layer.pm) {
+            layer.setOpacity(val);
+        }
+    });
+});
         // ---------------------------------------------------------
         // Sol panel - bulutluluk kaydırıcısı
         // ---------------------------------------------------------
