@@ -410,12 +410,218 @@
 
 </div>
             <h3>Lejant ve Semboloji</h3>
-            <div class="control-group">
-                <label>Renk Paleti (Color Ramp)</label>
-                <select><option>Kırmızı -&gt; Yeşil </option><option>Mavi -&gt; Kırmızı </option></select>
-                <div class="color-ramp"></div>
-            </div>
-            <div class="control-group">
+            const colorPalettes = {
+  // Açık Kahveden Koyu Kahveye
+  brownScale: {
+    name: 'Kahve Tonları',
+    colors: ['#F5DEB3', '#D2B48C', '#CD853F', '#8B4513', '#3E2723'],
+    min: 0,
+    max: 1
+  },
+  
+  // Mavi Tonları
+  blueScale: {
+    name: 'Mavi Tonları',
+    colors: ['#E3F2FD', '#90CAF9', '#42A5F5', '#1E88E5', '#0D47A1'],
+    min: 0,
+    max: 1
+  },
+  
+  // Pembe Tonları
+  pinkScale: {
+    name: 'Pembe Tonları',
+    colors: ['#FCE4EC', '#F8BBD0', '#F48FB1', '#EC407A', '#C2185B'],
+    min: 0,
+    max: 1
+  },
+  
+  // Yeşil Tonları
+  greenScale: {
+    name: 'Yeşil Tonları',
+    colors: ['#E8F5E9', '#A5D6A7', '#66BB6A', '#43A047', '#1B5E20'],
+    min: 0,
+    max: 1
+  },
+  
+  // Turuncu Tonları
+  orangeScale: {
+    name: 'Turuncu Tonları',
+    colors: ['#FFE0B2', '#FFB74D', '#FFA726', '#FB8C00', '#E65100'],
+    min: 0,
+    max: 1
+  },
+  
+  // Gökkuşağı (Rainbow)
+  rainbowScale: {
+    name: 'Gökkuşağı',
+    colors: ['#FF0000', '#FF7F00', '#FFFF00', '#00FF00', '#0000FF', '#4B0082', '#9400D3'],
+    min: 0,
+    max: 1
+  },
+  
+  // Mavi-Yeşil Karışık
+  blueGreenScale: {
+    name: 'Mavi-Yeşil',
+    colors: ['#0D47A1', '#1976D2', '#42A5F5', '#66BB6A', '#43A047', '#1B5E20'],
+    min: 0,
+    max: 1
+  },
+  
+  // Siyah-Gri (Grayscale)
+  grayscaleScale: {
+    name: 'Siyah-Gri',
+    colors: ['#000000', '#424242', '#757575', '#BDBDBD', '#EEEEEE'],
+    min: 0,
+    max: 1
+  },
+  
+  // Kırmızı-Sarı-Yeşil (Isı Haritası)
+  heatmapScale: {
+    name: 'Isı Haritası',
+    colors: ['#00FF00', '#FFFF00', '#FF7F00', '#FF0000'],
+    min: 0,
+    max: 1
+  },
+  
+  // Mor Tonları
+  purpleScale: {
+    name: 'Mor Tonları',
+    colors: ['#F3E5F5', '#CE93D8', '#BA68C8', '#8E24AA', '#4A148C'],
+    min: 0,
+    max: 1
+  },
+  
+  // Turkuaz Tonları
+  turquoiseScale: {
+    name: 'Turkuaz Tonları',
+    colors: ['#E0F2F1', '#80DEEA', '#4DD0E1', '#26C6DA', '#00838F'],
+    min: 0,
+    max: 1
+  }
+};
+
+// ============================================
+// RENK PALETİ SEÇİCİ UI
+// ============================================
+
+function createColorPaletteUI() {
+  const container = document.getElementById('colorPaletteContainer');
+  
+  if (!container) {
+    console.warn('colorPaletteContainer bulunamadı!');
+    return;
+  }
+  
+  let html = `
+    <div class="palette-selector">
+      <label for="paletteSelect">📊 Renk Paleti:</label>
+      <select id="paletteSelect">
+        <option value="">-- Renk Seç --</option>
+  `;
+  
+  // Tüm paletleri dropdown'a ekle
+  Object.keys(colorPalettes).forEach(key => {
+    html += `<option value="${key}">${colorPalettes[key].name}</option>`;
+  });
+  
+  html += `
+      </select>
+      
+      <label style="margin-left: 15px;">
+        <input type="checkbox" id="reverseColorCheck"> 
+        🔄 Tersine Çevir
+      </label>
+    </div>
+    
+    <div id="colorBarContainer" style="margin-top: 10px;"></div>
+  `;
+  
+  container.innerHTML = html;
+  
+  // Event listeners
+  document.getElementById('paletteSelect').addEventListener('change', updateColorPalette);
+  document.getElementById('reverseColorCheck').addEventListener('change', updateColorPalette);
+}
+
+// ============================================
+// RENK PALETİ GÜNCELLE
+// ============================================
+
+function updateColorPalette() {
+  const selectedPalette = document.getElementById('paletteSelect').value;
+  const isReversed = document.getElementById('reverseColorCheck').checked;
+  
+  if (!selectedPalette) {
+    document.getElementById('colorBarContainer').innerHTML = '';
+    return;
+  }
+  
+  let colors = [...colorPalettes[selectedPalette].colors];
+  
+  // Tersine çevir
+  if (isReversed) {
+    colors = colors.reverse();
+  }
+  
+  // Renk barını göster
+  displayColorBar(colors, colorPalettes[selectedPalette].name);
+  
+  // Haritayı güncelle (eğer analiz yapıldıysa)
+  updateMapWithNewPalette(colors);
+}
+
+// ============================================
+// RENK BARI GÖSTER
+// ============================================
+
+function displayColorBar(colors, paletteName) {
+  const container = document.getElementById('colorBarContainer');
+  
+  let html = `
+    <div class="color-bar-wrapper">
+      <div class="color-bar">
+  `;
+  
+  colors.forEach((color, index) => {
+    const width = (100 / colors.length);
+    html += `
+      <div class="color-segment" 
+           style="background-color: ${color}; width: ${width}%;" 
+           title="${color}">
+      </div>
+    `;
+  });
+  
+  html += `
+      </div>
+      <div class="color-labels">
+        <span class="label-min">Min</span>
+        <span class="label-max">Max</span>
+      </div>
+    </div>
+  `;
+  
+  container.innerHTML = html;
+}
+
+// ============================================
+// HAKİTA YENİ PALETİ UYGULA
+// ============================================
+
+function updateMapWithNewPalette(colors) {
+  // Eğer haritada bir layer varsa, renkleri güncelle
+  // Bu kısım GEE analiz sonuçlarına göre değişecek
+  console.log('Yeni renk paleti uygulandı:', colors);
+}
+
+// ============================================
+// BAŞLATMA
+// ============================================
+
+// Sayfa yüklendiğinde UI'ı oluştur
+document.addEventListener('DOMContentLoaded', function() {
+  createColorPaletteUI();
+});
                 <label>Sınıflandırma Aralığı</label>
                 <div class="tool-row">
                     <input type="number" placeholder="Min" style="width: 50%;">
