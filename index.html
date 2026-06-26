@@ -329,18 +329,12 @@
                         <option>Tüm Veri Görüntüsü</option>
                     </select>
                 </div>
-<div class="map-top-right">
-    <div class="map-control-box">
-        <label style="font-size: 0.85rem; font-weight: bold;">Uydu Saydamlığı:</label>
-        <input type="range" id="opacity-slider" min="0" max="100" value="100" style="width: 80px;">
-        <span style="font-size: 0.85rem; font-weight: bold;" id="opacity-val">%100</span>
-    </div>
+<div class="map-control-box">
+    <label style="font-size: 0.85rem; font-weight: bold;">Veri Şeffaflığı:</label>
+    <input type="range" id="layerOpacity" min="0" max="1" step="0.1" value="1" style="width: 80px;">
+    <span style="font-size: 0.85rem; font-weight: bold;" id="layer-opacity-val">%100</span>
+</div>
 
-    <div class="map-control-box">
-        <label style="font-size: 0.85rem; font-weight: bold;">Veri Saydamlığı:</label>
-        <input type="range" id="layerOpacity" min="0" max="1" step="0.1" value="1" style="width: 80px;">
-        <span style="font-size: 0.85rem; font-weight: bold;" id="layer-opacity-val">%100</span>
-    </div>
                 <div class="north-arrow">
                     <span class="north-arrow-icon">▲</span>
                     <span class="north-arrow-text">N</span>
@@ -480,7 +474,7 @@
         // ---------------------------------------------------------
         // 1. Haritayı oluştur ve Türkiye merkezli olarak başlat
         // ---------------------------------------------------------
-        var HOME_VIEW = { center: [20.0, 0.0], zoom: 2 };
+        var HOME_VIEW = { center: [39.0, 35.0], zoom: 6 };
         var map = L.map('map', { zoomControl: false }).setView(HOME_VIEW.center, HOME_VIEW.zoom);
 
         // 2. Esri Yüksek Çözünürlüklü Uydu Görüntüsünü altlık olarak ekle
@@ -576,20 +570,14 @@
         });
 
         // ---------------------------------------------------------
-        // Sağ üst - "Arazi Saydamlığı" kaydırıcısı
-        // ---------------------------------------------------------
-        var opacitySlider = document.getElementById('opacity-slider');
-        var opacityVal = document.getElementById('opacity-val');
-        opacitySlider.addEventListener('input', function () {
-            var v = this.value;
-            satelliteLayer.setOpacity(v / 100);
-            opacityVal.textContent = '%' + v;
-        });
+// TEK ÇUBUK: Veri Şeffaflığı
+// ---------------------------------------------------------
+var layerOpacity = document.getElementById('layerOpacity');
+var layerOpacityVal = document.getElementById('layer-opacity-val');
 
-        // Katman şeffaflığı kontrolü
-document.getElementById('layerOpacity').addEventListener('input', function(e) {
-    var val = e.target.value;
-    document.getElementById('layer-opacity-val').textContent = '%' + Math.round(val * 100);
+layerOpacity.addEventListener('input', function () {
+    var val = parseFloat(this.value);
+    layerOpacityVal.textContent = '%' + Math.round(val * 100);
 
     // 1. Elle çizilen poligon/dikdörtgenleri şeffaflaştır
     if (map.pm) {
@@ -601,18 +589,17 @@ document.getElementById('layerOpacity').addEventListener('input', function(e) {
     // 2. Yüklenen KML/KMZ dosyasını şeffaflaştır
     if (currentKmlLayer) {
         currentKmlLayer.setStyle({ fillOpacity: val, opacity: val });
-        // Eğer katman bir tile (görüntü) ise setOpacity kullan
         if (currentKmlLayer.setOpacity) currentKmlLayer.setOpacity(val);
     }
-    
-    // 3. Eğer başka analiz katmanların varsa (tile layer olarak) onları da güncel tut
+
+    // 3. Basemap (satelliteLayer) hariç diğer tüm analiz katmanlarını şeffaflaştır
     map.eachLayer(function(layer) {
-        // Uydu görüntüsü (basemap) hariç tüm katmanlara uygula
         if (layer !== satelliteLayer && layer.setOpacity && !layer.pm) {
             layer.setOpacity(val);
         }
     });
 });
+
         // ---------------------------------------------------------
         // Sol panel - bulutluluk kaydırıcısı
         // ---------------------------------------------------------
