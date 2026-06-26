@@ -587,13 +587,29 @@ document.getElementById('zoom-home').addEventListener('click', function () {
         }
 
         function clearDrawing() {
+            // 1. Çizim modundan çık
             map.pm.disableDraw();
             setActiveTool(null);
+            
+            // 2. Elle çizilenleri sil
             if (currentLayer) {
                 map.removeLayer(currentLayer);
                 currentLayer = null;
             }
+            if (map.pm) {
+                map.pm.getLayers().forEach(layer => layer.remove());
+            }
+
+            // 3. Yüklenen KML/KMZ dosyalarını sil (Uydu görüntüsüne asla dokunmaz)
+            map.eachLayer(function (layer) {
+                if (layer !== satelliteLayer && !(layer instanceof L.TileLayer)) {
+                    map.removeLayer(layer);
+                }
+            });
+
+            // 4. Bilgi kutusunu kapat
             geomInfoBox.style.display = 'none';
+            console.log("Harita temizlendi, uydu görüntüsü korundu.");
         }
 
         btnPolygon.addEventListener('click', function () {
@@ -643,14 +659,26 @@ if (fileUpload) {
         reader.onload = function(event) {
             var data = event.target.result;
             
-            // Haritaya basma fonksiyonu
+// Haritaya basma ve hesaplama fonksiyonu
             function renderGeoJSON(geojson, color) {
                 try {
                     var layer = L.geoJSON(geojson, { 
                         style: { color: color, weight: 3, fillOpacity: 0.3 } 
                     }).addTo(map);
+                    
+                    // --- ALAN VE ÇEVRE HESAPLAMA (Turf.js) ---
+                    var areaSqMeters = turf.area(geojson);
+                    var areaKm2 = (areaSqMeters / 1000000).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
+                    var areaHa = (areaSqMeters / 10000).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
+                    var lengthKm = turf.length(geojson, { units: 'kilometers' }).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
+
+                    // --- BİLGİ KUTUSUNA YAZ ---
+                    document.getElementById('geom-area').innerHTML = '<b>Alan:</b> ' + areaKm2 + ' km² | ' + areaHa + ' ha';
+                    document.getElementById('geom-perimeter').innerHTML = '<b>Çevre:</b> ' + lengthKm + ' km';
+                    document.getElementById('geom-info').style.display = 'flex';
+
                     map.fitBounds(layer.getBounds());
-                    console.log("Dosya başarıyla haritaya basıldı.");
+                    console.log("Dosya haritaya basıldı ve alanı hesaplandı.");
                 } catch (err) {
                     alert("Veri haritaya basılamadı: " + err.message);
                 }
