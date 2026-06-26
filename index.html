@@ -579,22 +579,29 @@ layerOpacity.addEventListener('input', function () {
     var val = parseFloat(this.value);
     layerOpacityVal.textContent = '%' + Math.round(val * 100);
 
-    // 1. Elle çizilen poligon/dikdörtgenleri şeffaflaştır
-    if (map.pm) {
-        map.pm.getLayers().forEach(function(layer) {
-            if (layer.setStyle) layer.setStyle({ fillOpacity: val, opacity: val });
-        });
-    }
-
-    // 2. Yüklenen KML/KMZ dosyasını şeffaflaştır
-    if (currentKmlLayer) {
-        currentKmlLayer.setStyle({ fillOpacity: val, opacity: val });
-        if (currentKmlLayer.setOpacity) currentKmlLayer.setOpacity(val);
-    }
-
-    // 3. Basemap (satelliteLayer) hariç diğer tüm analiz katmanlarını şeffaflaştır
     map.eachLayer(function(layer) {
-        if (layer !== satelliteLayer && layer.setOpacity && !layer.pm) {
+        // 1. Basemap (Uydu) hariç tut
+        if (layer === satelliteLayer) return;
+
+        // 2. Eğer çizim katmanıysa (Poligon/Dikdörtgen)
+        if (layer.pm || (layer.options && layer.options.pmIgnore === false)) {
+            if (layer.setStyle) layer.setStyle({ fillOpacity: val, opacity: val });
+        }
+
+        // 3. KML/KMZ veya diğer GeoJSON katmanlarıysa
+        if (layer instanceof L.GeoJSON) {
+            layer.eachLayer(function(subLayer) {
+                if (subLayer.setStyle) {
+                    subLayer.setStyle({ fillOpacity: val, opacity: val });
+                }
+                if (subLayer.setOpacity) {
+                    subLayer.setOpacity(val);
+                }
+            });
+        }
+
+        // 4. Diğer tüm analiz/raster katmanlarıysa
+        if (layer.setOpacity && !(layer instanceof L.TileLayer)) {
             layer.setOpacity(val);
         }
     });
