@@ -152,13 +152,13 @@
 
         <div class="sidebar-left panel">
             <h2>Çalışma Alanı &amp; Veri Seçimi</h2>
-            <input type="file" id="file-upload" accept=".kml, .kmz, .zip" style="display: none;">
-           <input type="file" id="file-upload" accept=".kml, .kmz, .zip" style="display: none;">
 
-            <button type="button" class="btn-primary" onclick="document.getElementById('file-upload').click();" style="width: 100%; margin-bottom: 10px;">📂 KML / KMZ Yükle</button>            <div class="tool-row">
+            <input type="file" id="file-upload" accept=".kml,.kmz,.zip" style="display: none;">
+            <button type="button" class="btn-primary" id="btn-upload" style="width: 100%; margin-bottom: 10px;">📂 KML / KMZ / SHP Yükle</button>
+
+            <div class="tool-row">
                 <button class="btn-tool" id="btn-polygon">⬠ Poligon</button>
                 <button class="btn-tool" id="btn-rectangle">▭ Dikdörtgen</button>
-                <button class="btn-tool btn-danger" id="btn-clear">❌ Temizle</button>
             </div>
 
             <div id="geom-info" class="geometry-info" style="display: none;">
@@ -350,7 +350,7 @@
             <div class="map-left-mid">
                 <button class="map-zoom-btn" id="zoom-in">+</button>
                 <button class="map-zoom-btn" id="zoom-out">-</button>
-                <button class="map-zoom-btn" id="zoom-home" onclick="zoomToLayer()">🏠</button>
+                <button class="map-zoom-btn" id="zoom-home">🏠</button>
             </div>
 
             <div class="map-bottom-left">
@@ -462,19 +462,23 @@
         <span style="font-weight: bold; font-size: 0.9rem;">2026 SylvaGIS</span>
     </div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- KML/KMZ ayrıştırma -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/togeojson/0.16.0/togeojson.min.js"></script>
+    <!-- KMZ (zip) ve SHP (zip) içini açma -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <!-- SHP -> GeoJSON dönüştürücü -->
+    <script src="https://unpkg.com/shpjs@latest/dist/shp.js"></script>
+    <!-- Gerçek çizim motoru -->
+    <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@latest/dist/leaflet-geoman.min.js"></script>
+    <!-- Alan / çevre hesaplama -->
+    <script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/togeojson/0.16.0/togeojson.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>    
-<script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@latest/dist/leaflet-geoman.min.js"></script>
-<script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
     <script>
         // ---------------------------------------------------------
         // 1. Haritayı oluştur ve Türkiye merkezli olarak başlat
-        //    zoomControl: false -> Leaflet'in varsayılan butonlarını
-        //    gizliyoruz, çünkü solda kendi özel butonlarımız var.
         // ---------------------------------------------------------
-        var HOME_VIEW = { center: [20.0, 0.0], zoom: 2 };
+        var HOME_VIEW = { center: [39.0, 35.0], zoom: 6 };
         var map = L.map('map', { zoomControl: false }).setView(HOME_VIEW.center, HOME_VIEW.zoom);
 
         // 2. Esri Yüksek Çözünürlüklü Uydu Görüntüsünü altlık olarak ekle
@@ -486,10 +490,7 @@
         // 3. Sağ alta gerçek, metrik bir ölçek çubuğu (Leaflet) ekle
         L.control.scale({ position: 'bottomright', imperial: false }).addTo(map);
 
-        // ---------------------------------------------------------
-        // 3b. Geoman çizim motorunu tanımla (kendi butonlarımızı
-        //     kullanacağımız için varsayılan araç çubuğunu gizliyoruz)
-        // ---------------------------------------------------------
+        // 3b. Geoman çizim motorunu tanımla (kendi butonlarımızı kullanacağız)
         map.pm.addControls({
             drawMarker: false, drawPolyline: false, drawCircle: false,
             drawCircleMarker: false, drawText: false, editMode: false,
@@ -498,44 +499,82 @@
         map.pm.toggleControls();
 
         // ---------------------------------------------------------
-        // Sol orta - özel yakınlaştırma butonlarını gerçek harita
-        // fonksiyonlarına bağlıyoruz
+        // Ortak durum: Haritada her zaman TEK bir "çalışma alanı"
+        // (currentLayer) olur — ister elle çizilsin, ister KML/KMZ/SHP
+        // ile yüklensin. 🗑️ butonu daima bu tek katmanı siler.
         // ---------------------------------------------------------
-// Zoom butonlarını çalıştıran yeni blok
-document.getElementById('zoom-in').addEventListener('click', function () {
-    map.zoomIn();
-});
-document.getElementById('zoom-out').addEventListener('click', function () {
-    map.zoomOut();
-});
+        var btnPolygon = document.getElementById('btn-polygon');
+        var btnRectangle = document.getElementById('btn-rectangle');
+        var btnDeleteGeom = document.getElementById('btn-delete-geom');
+        var geomInfoBox = document.getElementById('geom-info');
+        var txtArea = document.getElementById('geom-area');
+        var txtPerimeter = document.getElementById('geom-perimeter');
+        var btnUpload = document.getElementById('btn-upload');
+        var fileUpload = document.getElementById('file-upload');
 
-// EVE DÖNÜŞ (GÜNCELLENMİŞ VERSİYON)
-document.getElementById('zoom-home').addEventListener('click', function () {
-    var layerBounds = null;
+        var currentLayer = null;
 
-    map.eachLayer(function (layer) {
-        // Sadece GeoJSON (yüklediğimiz dosyalar) olanları alıyoruz
-        if (layer instanceof L.GeoJSON) {
-            if (!layerBounds) {
-                layerBounds = layer.getBounds();
-            } else {
-                layerBounds.extend(layer.getBounds());
+        function setActiveTool(btn) {
+            [btnPolygon, btnRectangle].forEach(function (b) { b.classList.remove('active'); });
+            if (btn) btn.classList.add('active');
+        }
+
+        // Alan/çevreyi hesaplayıp bilgi kutusuna yazar (çizim ve dosya yükleme için ortak)
+        function showGeometryInfo(geojson) {
+            try {
+                var areaSqMeters = turf.area(geojson);
+                var areaKm2 = (areaSqMeters / 1000000).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
+                var areaHa = (areaSqMeters / 10000).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
+                var lengthKm = turf.length(geojson, { units: 'kilometers' }).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
+
+                txtArea.innerHTML = '<b>Alan:</b> ' + areaKm2 + ' km² | ' + areaHa + ' ha';
+                txtPerimeter.innerHTML = '<b>Çevre:</b> ' + lengthKm + ' km';
+                geomInfoBox.style.display = 'flex';
+            } catch (err) {
+                console.warn('Alan/çevre hesaplanamadı:', err);
             }
         }
-    });
 
-    if (layerBounds) {
-        // Dosya varsa hepsini kapsayacak şekilde odaklan
-        map.fitBounds(layerBounds);
-    } else {
-        // Dosya yoksa başlangıçtaki dünya görünümüne dön
-        map.setView(HOME_VIEW.center, HOME_VIEW.zoom);
-    }
-});
+        // Yeni bir katmanı "çalışma alanı" yapar — eskisi varsa kaldırır,
+        // haritaya ekler (henüz eklenmemişse), yakınlaştırır ve bilgi kutusunu gösterir
+        function setCurrentLayer(layer) {
+            if (currentLayer) {
+                map.removeLayer(currentLayer);
+            }
+            currentLayer = layer;
+            if (!map.hasLayer(currentLayer)) {
+                currentLayer.addTo(map);
+            }
+            map.fitBounds(currentLayer.getBounds());
+            showGeometryInfo(currentLayer.toGeoJSON());
+        }
+
+        // 🗑️ butonu — çizimi VEYA yüklenmiş KML/KMZ/SHP katmanını siler
+        function clearCurrentLayer() {
+            map.pm.disableDraw();
+            setActiveTool(null);
+            if (currentLayer) {
+                map.removeLayer(currentLayer);
+                currentLayer = null;
+            }
+            geomInfoBox.style.display = 'none';
+        }
 
         // ---------------------------------------------------------
-        // Sağ üst - "Şeffaflık" kaydırıcısı uydu görüntüsünün
-        // opaklığını gerçek zamanlı olarak değiştirir
+        // Sol orta - özel yakınlaştırma butonları
+        // ---------------------------------------------------------
+        document.getElementById('zoom-in').addEventListener('click', function () { map.zoomIn(); });
+        document.getElementById('zoom-out').addEventListener('click', function () { map.zoomOut(); });
+        document.getElementById('zoom-home').addEventListener('click', function () {
+            if (currentLayer) {
+                map.fitBounds(currentLayer.getBounds());
+            } else {
+                map.setView(HOME_VIEW.center, HOME_VIEW.zoom);
+            }
+        });
+
+        // ---------------------------------------------------------
+        // Sağ üst - "Şeffaflık" kaydırıcısı
         // ---------------------------------------------------------
         var opacitySlider = document.getElementById('opacity-slider');
         var opacityVal = document.getElementById('opacity-val');
@@ -546,75 +585,25 @@ document.getElementById('zoom-home').addEventListener('click', function () {
         });
 
         // ---------------------------------------------------------
-        // Sol panel - bulutluluk kaydırıcısının etiketini güncelle
+        // Sol panel - bulutluluk kaydırıcısı
         // ---------------------------------------------------------
         var cloudSlider = document.getElementById('cloud-slider');
         var cloudVal = document.getElementById('cloud-val');
-        cloudSlider.addEventListener('input', function () {
-            cloudVal.textContent = '%' + this.value;
-        });
+        cloudSlider.addEventListener('input', function () { cloudVal.textContent = '%' + this.value; });
 
         // ---------------------------------------------------------
-        // Sol üst - görüntü galerisinde seçili kareyi vurgula
-        // (gerçek altlık görüntü değişimi backend entegrasyonuna bağlı)
+        // Sol üst - görüntü galerisi vurgusu
         // ---------------------------------------------------------
         document.querySelectorAll('#map-gallery .gallery-item').forEach(function (item) {
             item.addEventListener('click', function () {
-                document.querySelectorAll('#map-gallery .gallery-item').forEach(function (i) {
-                    i.classList.remove('active');
-                });
+                document.querySelectorAll('#map-gallery .gallery-item').forEach(function (i) { i.classList.remove('active'); });
                 item.classList.add('active');
             });
         });
 
         // ---------------------------------------------------------
-        // Sol panel - Poligon / Dikdörtgen çizim araçları
-        // (Leaflet Geoman ile gerçek çizim, Turf.js ile alan/çevre hesabı)
+        // Poligon / Dikdörtgen çizim araçları (Leaflet Geoman)
         // ---------------------------------------------------------
-        var btnPolygon = document.getElementById('btn-polygon');
-        var btnRectangle = document.getElementById('btn-rectangle');
-        var btnClear = document.getElementById('btn-clear');
-        var btnDeleteGeom = document.getElementById('btn-delete-geom');
-        var geomInfoBox = document.getElementById('geom-info');
-        var txtArea = document.getElementById('geom-area');
-        var txtPerimeter = document.getElementById('geom-perimeter');
-
-        var currentLayer = null; // Haritadaki mevcut çizimi tutan değişken
-
-        function setActiveTool(btn) {
-            [btnPolygon, btnRectangle].forEach(function (b) { b.classList.remove('active'); });
-            if (btn) btn.classList.add('active');
-        }
-
-function clearDrawing() {
-    // 1. Çizim modundan çık
-    map.pm.disableDraw();
-    setActiveTool(null);
-    
-    // 2. Elle çizilen poligon/dikdörtgenleri sil
-    if (currentLayer) {
-        map.removeLayer(currentLayer);
-        currentLayer = null;
-    }
-    if (map.pm) {
-        map.pm.getLayers().forEach(layer => layer.remove());
-    }
-
-    // 3. YÜKLENEN KML/KMZ DOSYALARINI SİL (%100 Garantili)
-    map.eachLayer(function (layer) {
-        // Eğer katmanın alnında bizim etiketimiz varsa sil
-        if (layer.isKML === true) {
-            map.removeLayer(layer);
-        }
-    });
-
-    // 4. Bilgi kutusunu kapat
-    var infoBox = document.getElementById('geom-info');
-    if (infoBox) infoBox.style.display = 'none';
-
-    console.log("Çizimler ve KML/KMZ dosyaları başarıyla temizlendi.");
-}
-
         btnPolygon.addEventListener('click', function () {
             setActiveTool(btnPolygon);
             map.pm.enableDraw('Polygon', { snappable: true, snapDistance: 20 });
@@ -625,100 +614,83 @@ function clearDrawing() {
             map.pm.enableDraw('Rectangle', { snappable: true, snapDistance: 20 });
         });
 
-        btnClear.addEventListener('click', clearDrawing);
-        btnDeleteGeom.addEventListener('click', clearDrawing);
+        btnDeleteGeom.addEventListener('click', clearCurrentLayer);
 
-        // Çizim tamamlandığında tetiklenir: alanı/çevreyi hesapla ve göster
+        // Çizim tamamlandığında: tek çalışma alanı olarak ayarla
         map.on('pm:create', function (e) {
-            // Önceki çizim varsa sil — haritada sadece son şekil kalsın
-            if (currentLayer) { map.removeLayer(currentLayer); }
-
-            currentLayer = e.layer;
             map.pm.disableDraw();
             setActiveTool(null);
-
-            var geojson = currentLayer.toGeoJSON();
-
-            var areaSqMeters = turf.area(geojson);
-            var areaKm2 = (areaSqMeters / 1000000).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
-            var areaHa = (areaSqMeters / 10000).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
-            var lengthKm = turf.length(geojson, { units: 'kilometers' }).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
-
-            txtArea.innerHTML = '<b>Alan:</b> ' + areaKm2 + ' km² | ' + areaHa + ' ha';
-            txtPerimeter.innerHTML = '<b>Çevre:</b> ' + lengthKm + ' km';
-            geomInfoBox.style.display = 'flex';
+            setCurrentLayer(e.layer);
         });
-       // --- GELİŞTİRİLMİŞ DOSYA YÜKLEME MOTORU ---
-var fileUpload = document.getElementById('file-upload');
 
-if (fileUpload) {
-    fileUpload.addEventListener('change', function(e) {
-        var file = e.target.files[0];
-        if (!file) return;
+        // ---------------------------------------------------------
+        // KML / KMZ / SHP yükleme motoru
+        // ---------------------------------------------------------
+        if (btnUpload && fileUpload) {
+            btnUpload.addEventListener('click', function () {
+                fileUpload.click();
+            });
 
-        var reader = new FileReader();
-        var fileName = file.name.toLowerCase();
+            fileUpload.addEventListener('change', function (e) {
+                var file = e.target.files[0];
+                if (!file) return;
 
-        reader.onload = function(event) {
-            var data = event.target.result;
-            
-// Haritaya basma ve hesaplama fonksiyonu
-function renderGeoJSON(geojson, color) {
-    try {
-        var layer = L.geoJSON(geojson, { 
-            style: { color: color, weight: 3, fillOpacity: 0.3 } 
-        }).addTo(map);
+                var fileName = file.name.toLowerCase();
+                var reader = new FileReader();
 
-        // İŞTE BÜTÜN SIR BURADA: Dosyayı haritaya eklerken onu etiketliyoruz!
-        layer.isKML = true;
-        
-        // --- ALAN VE ÇEVRE HESAPLAMA (Turf.js) ---
-        var areaSqMeters = turf.area(geojson);
-        var areaKm2 = (areaSqMeters / 1000000).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
-        var areaHa = (areaSqMeters / 10000).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
-        var lengthKm = turf.length(geojson, { units: 'kilometers' }).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
+                reader.onload = function (event) {
+                    var data = event.target.result;
 
-        // --- BİLGİ KUTUSUNA YAZ ---
-        document.getElementById('geom-area').innerHTML = '<b>Alan:</b> ' + areaKm2 + ' km² | ' + areaHa + ' ha';
-        document.getElementById('geom-perimeter').innerHTML = '<b>Çevre:</b> ' + lengthKm + ' km';
-        document.getElementById('geom-info').style.display = 'flex';
-
-        map.fitBounds(layer.getBounds());
-        console.log("Dosya haritaya basıldı, etiketlendi ve alanı hesaplandı.");
-    } catch (err) {
-        alert("Veri haritaya basılamadı: " + err.message);
-    }
-}
-
-            try {
-                if (fileName.endsWith('.zip')) {
-                    shp(data).then(geojson => renderGeoJSON(geojson, '#ef4444'));
-                } else if (fileName.endsWith('.kml')) {
-                    var xml = new DOMParser().parseFromString(data, "text/xml");
-                    renderGeoJSON(toGeoJSON.kml(xml), '#3b82f6');
-                } else if (fileName.endsWith('.kmz')) {
-                    JSZip.loadAsync(data).then(zip => {
-                        var kmlFile = Object.keys(zip.files).find(n => n.endsWith('.kml'));
-                        if (kmlFile) {
-                            zip.files[kmlFile].async("string").then(text => {
-                                var xml = new DOMParser().parseFromString(text, "text/xml");
-                                renderGeoJSON(toGeoJSON.kml(xml), '#10b981');
+                    try {
+                        if (fileName.endsWith('.zip')) {
+                            // SHP (ZIP içinde .shp/.shx/.dbf/.prj)
+                            shp(data).then(function (geojson) {
+                                var layer = L.geoJSON(geojson, { style: { color: '#ef4444', weight: 3, fillOpacity: 0.3 } });
+                                setCurrentLayer(layer);
+                            }).catch(function (err) {
+                                alert('SHP yükleme hatası: Lütfen SHP, SHX, DBF, PRJ dosyalarını tek bir ZIP içinde yükleyin.');
+                                console.error(err);
+                            });
+                        } else if (fileName.endsWith('.kml')) {
+                            var xml = new DOMParser().parseFromString(data, 'text/xml');
+                            var layer = L.geoJSON(toGeoJSON.kml(xml), { style: { color: '#3b82f6', weight: 3, fillOpacity: 0.3 } });
+                            setCurrentLayer(layer);
+                        } else if (fileName.endsWith('.kmz')) {
+                            JSZip.loadAsync(data).then(function (zip) {
+                                var kmlFileName = Object.keys(zip.files).find(function (name) {
+                                    return name.toLowerCase().endsWith('.kml');
+                                });
+                                if (kmlFileName) {
+                                    zip.files[kmlFileName].async('string').then(function (kmlText) {
+                                        var xml = new DOMParser().parseFromString(kmlText, 'text/xml');
+                                        var layer = L.geoJSON(toGeoJSON.kml(xml), { style: { color: '#10b981', weight: 3, fillOpacity: 0.3 } });
+                                        setCurrentLayer(layer);
+                                    });
+                                } else {
+                                    alert('KMZ dosyasının içinde geçerli bir KML bulunamadı.');
+                                }
+                            }).catch(function (err) {
+                                alert('KMZ okuma hatası: ' + err);
                             });
                         } else {
-                            alert("KMZ içinde KML dosyası bulunamadı!");
+                            alert('Desteklenmeyen dosya türü. Lütfen .kml, .kmz veya (içinde .shp/.shx/.dbf bulunan) .zip yükleyin.');
                         }
-                    });
-                }
-            } catch (err) {
-                alert("Dosya işleme hatası: " + err.message);
-            }
-        };
+                    } catch (err) {
+                        alert('Dosya işleme hatası: ' + err.message);
+                    }
+                };
 
-        if (fileName.endsWith('.kml')) reader.readAsText(file);
-        else reader.readAsArrayBuffer(file);
-        e.target.value = '';
-    });
-}
+                // Dosya formatına göre okuma tekniği
+                if (fileName.endsWith('.kml')) {
+                    reader.readAsText(file);
+                } else {
+                    reader.readAsArrayBuffer(file);
+                }
+
+                // Aynı dosyayı tekrar seçebilmek için input'u sıfırla
+                e.target.value = '';
+            });
+        }
     </script>
 
 </body>
