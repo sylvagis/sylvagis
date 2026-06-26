@@ -586,31 +586,34 @@ document.getElementById('zoom-home').addEventListener('click', function () {
             if (btn) btn.classList.add('active');
         }
 
-        function clearDrawing() {
-            // 1. Çizim modundan çık
-            map.pm.disableDraw();
-            setActiveTool(null);
-            
-            // 2. Elle çizilenleri sil
-            if (currentLayer) {
-                map.removeLayer(currentLayer);
-                currentLayer = null;
-            }
-            if (map.pm) {
-                map.pm.getLayers().forEach(layer => layer.remove());
-            }
+function clearDrawing() {
+    // 1. Çizim modundan çık
+    map.pm.disableDraw();
+    setActiveTool(null);
+    
+    // 2. Elle çizilen poligon/dikdörtgenleri sil
+    if (currentLayer) {
+        map.removeLayer(currentLayer);
+        currentLayer = null;
+    }
+    if (map.pm) {
+        map.pm.getLayers().forEach(layer => layer.remove());
+    }
 
-            // 3. Yüklenen KML/KMZ dosyalarını sil (Uydu görüntüsüne asla dokunmaz)
-            map.eachLayer(function (layer) {
-                if (layer !== satelliteLayer && !(layer instanceof L.TileLayer)) {
-                    map.removeLayer(layer);
-                }
-            });
-
-            // 4. Bilgi kutusunu kapat
-            geomInfoBox.style.display = 'none';
-            console.log("Harita temizlendi, uydu görüntüsü korundu.");
+    // 3. YÜKLENEN KML/KMZ DOSYALARINI SİL (%100 Garantili)
+    map.eachLayer(function (layer) {
+        // Eğer katmanın alnında bizim etiketimiz varsa sil
+        if (layer.isKML === true) {
+            map.removeLayer(layer);
         }
+    });
+
+    // 4. Bilgi kutusunu kapat
+    var infoBox = document.getElementById('geom-info');
+    if (infoBox) infoBox.style.display = 'none';
+
+    console.log("Çizimler ve KML/KMZ dosyaları başarıyla temizlendi.");
+}
 
         btnPolygon.addEventListener('click', function () {
             setActiveTool(btnPolygon);
@@ -660,29 +663,32 @@ if (fileUpload) {
             var data = event.target.result;
             
 // Haritaya basma ve hesaplama fonksiyonu
-            function renderGeoJSON(geojson, color) {
-                try {
-                    var layer = L.geoJSON(geojson, { 
-                        style: { color: color, weight: 3, fillOpacity: 0.3 } 
-                    }).addTo(map);
-                    
-                    // --- ALAN VE ÇEVRE HESAPLAMA (Turf.js) ---
-                    var areaSqMeters = turf.area(geojson);
-                    var areaKm2 = (areaSqMeters / 1000000).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
-                    var areaHa = (areaSqMeters / 10000).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
-                    var lengthKm = turf.length(geojson, { units: 'kilometers' }).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
+function renderGeoJSON(geojson, color) {
+    try {
+        var layer = L.geoJSON(geojson, { 
+            style: { color: color, weight: 3, fillOpacity: 0.3 } 
+        }).addTo(map);
 
-                    // --- BİLGİ KUTUSUNA YAZ ---
-                    document.getElementById('geom-area').innerHTML = '<b>Alan:</b> ' + areaKm2 + ' km² | ' + areaHa + ' ha';
-                    document.getElementById('geom-perimeter').innerHTML = '<b>Çevre:</b> ' + lengthKm + ' km';
-                    document.getElementById('geom-info').style.display = 'flex';
+        // İŞTE BÜTÜN SIR BURADA: Dosyayı haritaya eklerken onu etiketliyoruz!
+        layer.isKML = true;
+        
+        // --- ALAN VE ÇEVRE HESAPLAMA (Turf.js) ---
+        var areaSqMeters = turf.area(geojson);
+        var areaKm2 = (areaSqMeters / 1000000).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
+        var areaHa = (areaSqMeters / 10000).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
+        var lengthKm = turf.length(geojson, { units: 'kilometers' }).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
 
-                    map.fitBounds(layer.getBounds());
-                    console.log("Dosya haritaya basıldı ve alanı hesaplandı.");
-                } catch (err) {
-                    alert("Veri haritaya basılamadı: " + err.message);
-                }
-            }
+        // --- BİLGİ KUTUSUNA YAZ ---
+        document.getElementById('geom-area').innerHTML = '<b>Alan:</b> ' + areaKm2 + ' km² | ' + areaHa + ' ha';
+        document.getElementById('geom-perimeter').innerHTML = '<b>Çevre:</b> ' + lengthKm + ' km';
+        document.getElementById('geom-info').style.display = 'flex';
+
+        map.fitBounds(layer.getBounds());
+        console.log("Dosya haritaya basıldı, etiketlendi ve alanı hesaplandı.");
+    } catch (err) {
+        alert("Veri haritaya basılamadı: " + err.message);
+    }
+}
 
             try {
                 if (fileName.endsWith('.zip')) {
