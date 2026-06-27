@@ -237,7 +237,8 @@
         .map-control-box { background: rgba(255, 255, 255, 0.95); padding: 10px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); display: flex; align-items: center; gap: 10px; pointer-events: auto; }
 
         /* Belirgin Kuzey Oku */
-        .north-arrow { width: 45px; height: 45px; background-color: rgba(255, 255, 255, 0.95); border: 2px solid #1e3a8a; border-radius: 5px; display: flex; flex-direction: column; justify-content: center; align-items: center; box-shadow: 0 3px 6px rgba(0,0,0,0.3); pointer-events: auto; }
+        .north-arrow { width: 45px; height: 45px; background-color: rgba(255, 255, 255, 0.95); border: 2px solid #1e3a8a; border-radius: 5px; display: flex; flex-direction: column; justify-content: center; align-items: center; box-shadow: 0 3px 6px rgba(0,0,0,0.3); pointer-events: auto; flex-shrink: 0; }
+        .north-arrow.hidden-element { visibility: hidden; pointer-events: none; }
         .north-arrow-icon { color: #ef4444; font-size: 1.2rem; line-height: 0.8; font-weight: 900; }
         .north-arrow-text { color: #1e3a8a; font-size: 0.85rem; font-weight: 900; line-height: 1; }
 
@@ -325,6 +326,15 @@
             .nav-buttons { justify-content: center; width: 100%; }
 
             .footer { flex-direction: column; align-items: flex-start; }
+        }
+
+        /* SVG metin altı çizili — harflerin alt uzantılarından bağımsız kesintisiz çizgi */
+        #markup-layer text[text-decoration="underline"],
+        #markup-preview-layer text[text-decoration="underline"] {
+            text-decoration: underline;
+            text-underline-offset: 3px;
+            text-decoration-skip-ink: none; /* g, j, p, q, y gibi harflerin çizgiyi kesmesini önler */
+            text-decoration-thickness: 1.5px;
         }
 
         /* Telefon boyutu: yazı tipleri, boşluklar ve kutucuklar biraz daha sıkışır */
@@ -446,12 +456,12 @@
                 <summary>🌍 Uydu Analizleri</summary>
                 <div class="details-content">
                     <div class="option-list">
-                        <label class="option-item"><input type="checkbox"> NDVI (Normalize Edilmiş Fark Bitki İndeksi)</label>
-                        <label class="option-item"><input type="checkbox"> NDWI (Su İndeksi)</label>
-                        <label class="option-item"><input type="checkbox"> LST (Arazi Yüzey Sıcaklığı)</label>
-                        <label class="option-item"><input type="checkbox"> SMI (Toprak Nem İndeksi)</label>
-                        <label class="option-item"><input type="checkbox"> EVI (Geliştirilmiş Bitki İndeksi)</label>
-                        <label class="option-item"><input type="checkbox"> SAVI (Toprak Düzenlemeli Bitki İndeksi)</label>
+                        <label class="option-item"><input type="checkbox" data-analysis="NDVI (Normalize Edilmiş Fark Bitki İndeksi)" data-ramp-key="viridis"> NDVI (Normalize Edilmiş Fark Bitki İndeksi)</label>
+                        <label class="option-item"><input type="checkbox" data-analysis="NDWI (Su İndeksi)" data-ramp-key="blue-ocean"> NDWI (Su İndeksi)</label>
+                        <label class="option-item"><input type="checkbox" data-analysis="LST (Arazi Yüzey Sıcaklığı)" data-ramp-key="heat"> LST (Arazi Yüzey Sıcaklığı)</label>
+                        <label class="option-item"><input type="checkbox" data-analysis="SMI (Toprak Nem İndeksi)" data-ramp-key="brown"> SMI (Toprak Nem İndeksi)</label>
+                        <label class="option-item"><input type="checkbox" data-analysis="EVI (Geliştirilmiş Bitki İndeksi)" data-ramp-key="green"> EVI (Geliştirilmiş Bitki İndeksi)</label>
+                        <label class="option-item"><input type="checkbox" data-analysis="SAVI (Toprak Düzenlemeli Bitki İndeksi)" data-ramp-key="red-yellow-green"> SAVI (Toprak Düzenlemeli Bitki İndeksi)</label>
                     </div>
                 </div>
             </details>
@@ -507,13 +517,27 @@
                 </div>
             </details>
 
-            <button class="btn-primary" style="width: 50%; align-self: center; margin-top: 15px;">🚀 Analizi Çalıştır
-</button>
+            <button class="btn-primary" id="btn-run-analysis" style="width: 50%; align-self: center; margin-top: 15px;" onclick="runAnalysis()">🚀 Analizi Çalıştır</button>
         </div>
 
         <div class="map-wrapper">
 
             <div id="map"></div>
+            <!-- Markup SVG Overlay -->
+            <svg id="markup-svg"
+                 style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:400;"
+                 xmlns="http://www.w3.org/2000/svg">
+                <defs>
+                    <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+                        <polygon id="arrowhead-poly" points="0 0, 8 3, 0 6" fill="#ef4444"/>
+                    </marker>
+                    <marker id="arrowhead-preview" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+                        <polygon id="arrowhead-preview-poly" points="0 0, 8 3, 0 6" fill="#ef4444" opacity="0.5"/>
+                    </marker>
+                </defs>
+                <g id="markup-layer"></g>
+                <g id="markup-preview-layer"></g>
+            </svg>
 
             <div class="map-gallery" id="map-gallery">
                 <div class="gallery-item active" data-date="20.06.2025">
@@ -581,6 +605,21 @@
         Lejant
     </label>
 
+    <label class="option-item">
+        <input type="checkbox" id="toggle-zoom-in" checked>
+        Yakınlaştır (+)
+    </label>
+
+    <label class="option-item">
+        <input type="checkbox" id="toggle-zoom-out" checked>
+        Uzaklaştır (−)
+    </label>
+
+    <label class="option-item">
+        <input type="checkbox" id="toggle-zoom-home" checked>
+        Ana Görünüm (🏠)
+    </label>
+
     <label class="option-item" style="grid-column: span 2;">
         <input type="checkbox" id="toggle-opacity" checked>
         Veri Şeffaflığı
@@ -619,52 +658,87 @@
 
 </div>
             <h3>Lejant ve Semboloji</h3>
+
+<!-- ===== SINIFLANDIRMA TÜRÜ SEÇİCİ ===== -->
+<div class="control-group" id="classification-type-group">
+    <label style="font-weight: bold; font-size: 0.85rem; color: #64748b;">Sınıflandırma Türü</label>
+    <div style="display:flex; gap:6px; margin-top:4px;">
+        <button type="button" id="btn-type-stretched" onclick="setClassificationType('stretched')"
+            style="flex:1; padding:7px 4px; border-radius:5px; border:2px solid #1e3a8a; background:#1e3a8a; color:#fff; font-weight:600; font-size:0.82rem; cursor:pointer; transition:0.2s;">
+            🌈 Stretched
+        </button>
+        <button type="button" id="btn-type-classified" onclick="setClassificationType('classified')"
+            style="flex:1; padding:7px 4px; border-radius:5px; border:2px solid #cbd5e1; background:#f8fafc; color:#1e3a8a; font-weight:600; font-size:0.82rem; cursor:pointer; transition:0.2s;">
+            🗂️ Classified
+        </button>
+    </div>
+</div>
+
 <div class="control-group">
-
     <label>Renk Paleti</label>
-
     <!-- SEÇİLİ BAR -->
     <div class="ramp-selector" onclick="togglePalette()">
-        <div id="selectedRamp" class="color-ramp viridis"></div>
+        <div id="selectedRamp" class="color-ramp" style="background:linear-gradient(to right,#440154,#482777,#3f4a8a,#31688e,#26828e,#1f9e89,#35b779,#6ece58,#b5de2b,#fde725)" data-ramp="viridis"></div>
         <span class="arrow">▼</span>
     </div>
-
     <!-- AÇILAN PALETLER -->
     <div id="paletteList" class="palette-list hidden">
-
-        <div class="color-ramp viridis" onclick="selectRamp('viridis')"></div>
-        <div class="color-ramp plasma" onclick="selectRamp('plasma')"></div>
-        <div class="color-ramp inferno" onclick="selectRamp('inferno')"></div>
-        <div class="color-ramp magma" onclick="selectRamp('magma')"></div>
-        <div class="color-ramp cividis" onclick="selectRamp('cividis')"></div>
-
-        <div class="color-ramp red-yellow-green" onclick="selectRamp('red-yellow-green')"></div>
-        <div class="color-ramp blue-white-red" onclick="selectRamp('blue-white-red')"></div>
-        <div class="color-ramp black-white" onclick="selectRamp('black-white')"></div>
-
-        <div class="color-ramp brown" onclick="selectRamp('brown')"></div>
-        <div class="color-ramp green" onclick="selectRamp('green')"></div>
-        <div class="color-ramp blue-ocean" onclick="selectRamp('blue-ocean')"></div>
-
-        <div class="color-ramp rainbow" onclick="selectRamp('rainbow')"></div>
-        <div class="color-ramp terrain" onclick="selectRamp('terrain')"></div>
-        <div class="color-ramp sea-land" onclick="selectRamp('sea-land')"></div>
-
-        <div class="color-ramp heat" onclick="selectRamp('heat')"></div>
-        <div class="color-ramp cool" onclick="selectRamp('cool')"></div>
-        <div class="color-ramp spring" onclick="selectRamp('spring')"></div>
-        <div class="color-ramp autumn" onclick="selectRamp('autumn')"></div>
-
-        <div class="color-ramp purple-pink" onclick="selectRamp('purple-pink')"></div>
-        <div class="color-ramp orange-red" onclick="selectRamp('orange-red')"></div>
-
+        <div class="color-ramp" style="background:linear-gradient(to right,#440154,#482777,#3f4a8a,#31688e,#26828e,#1f9e89,#35b779,#6ece58,#b5de2b,#fde725)" onclick="selectRamp('viridis')" title="Viridis"></div>
+        <div class="color-ramp" style="background:linear-gradient(to right,#0d0887,#5b02a3,#9a179b,#cb4679,#ed7953,#fdb42f,#f0f921)" onclick="selectRamp('plasma')" title="Plasma"></div>
+        <div class="color-ramp" style="background:linear-gradient(to right,#000004,#420a68,#932667,#dd513a,#fca50a,#fcffa4)" onclick="selectRamp('inferno')" title="Inferno"></div>
+        <div class="color-ramp" style="background:linear-gradient(to right,#000004,#3b0f70,#8c2981,#de4968,#fe9f6d,#fcfdbf)" onclick="selectRamp('magma')" title="Magma"></div>
+        <div class="color-ramp" style="background:linear-gradient(to right,#00224e,#3b528b,#6a7fb1,#a5c0dd,#f0f0f0)" onclick="selectRamp('cividis')" title="Cividis"></div>
+        <div class="color-ramp" style="background:linear-gradient(to right,#d73027,#fee08b,#1a9850)" onclick="selectRamp('red-yellow-green')" title="Kırmızı-Sarı-Yeşil"></div>
+        <div class="color-ramp" style="background:linear-gradient(to right,#313695,#ffffff,#a50026)" onclick="selectRamp('blue-white-red')" title="Mavi-Beyaz-Kırmızı"></div>
+        <div class="color-ramp" style="background:linear-gradient(to right,#000000,#ffffff)" onclick="selectRamp('black-white')" title="Siyah-Beyaz"></div>
+        <div class="color-ramp" style="background:linear-gradient(to right,#f5deb3,#8b5a2b)" onclick="selectRamp('brown')" title="Kahverengi"></div>
+        <div class="color-ramp" style="background:linear-gradient(to right,#b7e4c7,#1b4332)" onclick="selectRamp('green')" title="Yeşil"></div>
+        <div class="color-ramp" style="background:linear-gradient(to right,#a0d8ef,#003566)" onclick="selectRamp('blue-ocean')" title="Okyanus Mavisi"></div>
+        <div class="color-ramp" style="background:linear-gradient(to right,red,orange,yellow,green,blue,indigo,violet)" onclick="selectRamp('rainbow')" title="Gökkuşağı"></div>
+        <div class="color-ramp" style="background:linear-gradient(to right,#2c7bb6,#abd9e9,#ffffbf,#fdae61,#d7191c)" onclick="selectRamp('terrain')" title="Arazi"></div>
+        <div class="color-ramp" style="background:linear-gradient(to right,#08306b,#4292c6,#c6dbef,#31a354,#006d2c)" onclick="selectRamp('sea-land')" title="Deniz-Kara"></div>
+        <div class="color-ramp" style="background:linear-gradient(to right,#ffffb2,#fecc5c,#fd8d3c,#f03b20,#bd0026)" onclick="selectRamp('heat')" title="Isı"></div>
+        <div class="color-ramp" style="background:linear-gradient(to right,#00ffff,#0000ff)" onclick="selectRamp('cool')" title="Serin"></div>
+        <div class="color-ramp" style="background:linear-gradient(to right,#ff00ff,#00ff00)" onclick="selectRamp('spring')" title="İlkbahar"></div>
+        <div class="color-ramp" style="background:linear-gradient(to right,#ff7f00,#8b0000)" onclick="selectRamp('autumn')" title="Sonbahar"></div>
+        <div class="color-ramp" style="background:linear-gradient(to right,#4b0082,#ff69b4)" onclick="selectRamp('purple-pink')" title="Mor-Pembe"></div>
+        <div class="color-ramp" style="background:linear-gradient(to right,#ffa500,#ff0000)" onclick="selectRamp('orange-red')" title="Turuncu-Kırmızı"></div>
     </div>
-
 </div>
-<div class="control-group">
-    <label style="font-weight: bold; font-size: 0.9rem; color: #333;">Sınıflandırma Aralığı</label>
-    
-    <div style="margin-top: 8px; margin-bottom: 12px;">
+
+<!-- ===== STRETCHED MOD AYARLARI ===== -->
+<div id="stretched-settings" class="control-group" style="display:flex; flex-direction:column; gap:8px;">
+    <label style="font-weight:bold; font-size:0.85rem; color:#64748b;">Stretched Aralığı</label>
+    <div style="display:flex; gap:6px; align-items:center;">
+        <div style="flex:1;">
+            <label style="font-size:0.75rem; color:#94a3b8;">Min</label>
+            <input type="number" id="stretched-min" value="-1" step="0.01"
+                style="width:100%; padding:6px; border:1px solid #cbd5e1; border-radius:4px; font-size:0.85rem;">
+        </div>
+        <div style="flex:1;">
+            <label style="font-size:0.75rem; color:#94a3b8;">Max</label>
+            <input type="number" id="stretched-max" value="1" step="0.01"
+                style="width:100%; padding:6px; border:1px solid #cbd5e1; border-radius:4px; font-size:0.85rem;">
+        </div>
+    </div>
+    <label style="font-size:0.75rem; color:#94a3b8; margin-top:2px;">Lejant Başlığı</label>
+    <input type="text" id="stretched-title" value="NDVI Analizi"
+        style="width:100%; padding:6px; border:1px solid #cbd5e1; border-radius:4px; font-size:0.85rem;">
+    <button type="button" id="btn-apply-stretched" class="btn-primary" style="margin-top:4px;">
+        ✅ Lejantı Uygula
+    </button>
+</div>
+
+<!-- ===== CLASSIFIED MOD AYARLARI ===== -->
+<div id="classified-settings" class="control-group" style="display:none; flex-direction:column; gap:8px;">
+    <div style="display:flex; align-items:center; justify-content:space-between;">
+        <label style="font-weight: bold; font-size: 0.9rem; color: #333;">Sınıflandırma Aralığı</label>
+        <button type="button" id="btn-auto-classify" title="Seçili palete göre renkleri otomatik dağıt"
+            style="background:#e0f2fe; border:1px solid #7dd3fc; color:#0369a1; padding:4px 8px; border-radius:4px; font-size:0.75rem; cursor:pointer; white-space:nowrap;">
+            🎨 Paletten Renk Dağıt
+        </button>
+    </div>
+    <div>
         <select id="class-count" style="width: 100%; padding: 6px; border-radius: 4px; border: 1px solid #cbd5e1; font-size: 0.85rem; cursor: pointer;">
             <option value="1">1 Sınıf</option>
             <option value="2">2 Sınıf</option>
@@ -678,63 +752,89 @@
             <option value="10">10 Sınıf</option>
         </select>
     </div>
-    
     <div id="class-rows-container"></div>
-
     <button type="button" id="btn-apply-legend" class="btn-primary" style="margin-top: 10px;">
         ✅ Lejantı Uygula
     </button>
 </div>
 
             <h3>Çıktı Araçları (Markup)</h3>
-            <div class="right-menu-grid">
-                <button class="btn-tool">✏️ Kalem</button>
-                <button class="btn-tool">📏 Çizgi</button>
-                <button class="btn-tool">⬠ Alan (Poligon)</button>
-                <button class="btn-tool">⭕ Daire</button>
-                <button class="btn-tool">→ Ok</button>
-                <button class="btn-tool">↪ Kavisli Ok</button>
+
+            <!-- Undo / Redo / Clear -->
+            <div style="display:flex; gap:5px; margin-bottom:4px;">
+                <button class="btn-tool" id="markup-undo" title="Geri Al (Ctrl+Z)" style="flex:1; font-size:1rem;">↶</button>
+                <button class="btn-tool" id="markup-redo" title="İleri Al (Ctrl+Y)" style="flex:1; font-size:1rem;">↷</button>
+                <button class="btn-tool btn-danger" id="markup-clear" title="Tümünü Sil" style="flex:1; font-size:0.9rem;">🗑️</button>
             </div>
 
-            <button class="btn-tool" style="width: 100%; margin-top: 5px; font-size: 1rem;">📝 Metin Ekle</button>
+            <!-- Araç Butonları -->
+            <div class="right-menu-grid">
+                <button class="btn-tool markup-tool-btn" id="tool-pen"     data-tool="pen">✏️ Kalem</button>
+                <button class="btn-tool markup-tool-btn" id="tool-line"    data-tool="line">📏 Çizgi</button>
+                <button class="btn-tool markup-tool-btn" id="tool-polygon" data-tool="polygon">⬠ Poligon</button>
+                <button class="btn-tool markup-tool-btn" id="tool-circle"  data-tool="circle">⭕ Daire</button>
+                <button class="btn-tool markup-tool-btn" id="tool-arrow"   data-tool="arrow">→ Ok</button>
+                <button class="btn-tool markup-tool-btn" id="tool-carrow"  data-tool="carrow">↪ Kavisli Ok</button>
+            </div>
+            <button class="btn-tool markup-tool-btn" id="tool-text" data-tool="text"
+                style="width:100%; margin-top:5px; font-size:1rem;">📝 Metin Ekle</button>
 
-            <div class="control-group" style="margin-top: 10px;">
-                <label>Yazı Tipi</label>
-                <select>
-                    <option>Arial</option>
-                    <option>Times New Roman</option>
-                    <option>Verdana</option>
-                    <option>Tahoma</option>
-                    <option>Georgia</option>
-                    <option>Courier New</option>
-                    <option>Trebuchet MS</option>
-                    <option>Impact</option>
-                    <option>Comic Sans MS</option>
-                    <option>Garamond</option>
+            <!-- Kalem Kalınlığı -->
+            <div class="control-group" style="margin-top:6px;">
+                <label style="font-size:0.8rem; color:#64748b;">Çizgi Kalınlığı</label>
+                <div style="display:flex; gap:8px; align-items:center;">
+                    <input type="range" id="markup-stroke-width" min="1" max="20" value="3" style="flex:1;">
+                    <span id="markup-stroke-label" style="font-size:0.8rem; font-weight:bold; min-width:28px;">3px</span>
+                </div>
+            </div>
+
+            <!-- Daire: dolgu modu -->
+            <div id="circle-fill-options" class="control-group" style="display:none;">
+                <label style="font-size:0.8rem; color:#64748b;">Daire Stili</label>
+                <div style="display:flex; gap:6px;">
+                    <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;cursor:pointer;">
+                        <input type="radio" name="circle-style" value="fill" checked> İçi Dolu
+                    </label>
+                    <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;cursor:pointer;">
+                        <input type="radio" name="circle-style" value="stroke"> Sadece Kenarlık
+                    </label>
+                </div>
+            </div>
+
+            <!-- Metin Biçimlendirme -->
+            <div id="text-format-options" class="control-group" style="display:none; gap:6px;">
+                <label style="font-size:0.8rem; color:#64748b;">Metin Biçimlendirme</label>
+                <div style="display:flex; gap:5px; flex-wrap:wrap; align-items:center;">
+                    <button type="button" id="fmt-pointer"   title="Fare / Seçim Aracı" style="width:30px;height:28px;border:1px solid #cbd5e1;border-radius:4px;cursor:pointer;background:#f8fafc;font-size:14px;line-height:1;">🖱</button>
+                    <button type="button" id="fmt-bold"      style="width:30px;height:28px;font-weight:bold;border:1px solid #cbd5e1;border-radius:4px;cursor:pointer;background:#f8fafc;">B</button>
+                    <button type="button" id="fmt-italic"    style="width:30px;height:28px;font-style:italic;border:1px solid #cbd5e1;border-radius:4px;cursor:pointer;background:#f8fafc;">I</button>
+                    <button type="button" id="fmt-underline" style="width:30px;height:28px;border:1px solid #cbd5e1;border-radius:4px;cursor:pointer;background:#f8fafc;border-bottom:2px solid currentColor;">U</button>
+                    <select id="markup-font-size" style="padding:3px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.8rem;">
+                        <option value="12">12</option><option value="14">14</option>
+                        <option value="16" selected>16</option><option value="18">18</option>
+                        <option value="20">20</option><option value="24">24</option>
+                        <option value="28">28</option><option value="32">32</option>
+                        <option value="40">40</option><option value="48">48</option>
+                    </select>
+                </div>
+                <select id="markup-font-family" style="padding:5px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.8rem;">
+                    <option>Arial</option><option>Times New Roman</option><option>Verdana</option>
+                    <option>Tahoma</option><option>Georgia</option><option>Courier New</option>
+                    <option>Trebuchet MS</option><option>Impact</option>
                 </select>
             </div>
 
-            <div class="control-group">
-                <label>Yazı / Çizim Rengi Seçimi</label>
-                <div class="quick-colors">
-                    <div class="color-swatch" style="background: #ffffff;" title="Beyaz"></div>
-                    <div class="color-swatch" style="background: #000000;" title="Siyah"></div>
-                    <div class="color-swatch" style="background: #ef4444;" title="Kırmızı"></div>
-                    <div class="color-swatch" style="background: #fca5a5;" title="Açık Kırmızı"></div>
-                    <div class="color-swatch" style="background: #f97316;" title="Turuncu"></div>
-                    <div class="color-swatch" style="background: #fdba74;" title="Açık Turuncu"></div>
-                    <div class="color-swatch" style="background: #eab308;" title="Sarı"></div>
-                    <div class="color-swatch" style="background: #fef08a;" title="Açık Sarı"></div>
-                    <div class="color-swatch" style="background: #22c55e;" title="Yeşil"></div>
-                    <div class="color-swatch" style="background: #86efac;" title="Açık Yeşil"></div>
-                    <div class="color-swatch" style="background: #3b82f6;" title="Mavi"></div>
-                    <div class="color-swatch" style="background: #93c5fd;" title="Açık Mavi"></div>
-                    <div class="color-swatch" style="background: #a855f7;" title="Mor"></div>
-                    <div class="color-swatch" style="background: #d8b4fe;" title="Açık Mor"></div>
-                    <div class="color-swatch" style="background: #ec4899;" title="Pembe"></div>
-                    <div class="color-swatch" style="background: #f9a8d4;" title="Açık Pembe"></div>
+            <!-- Renk Seçimi -->
+            <div class="control-group" style="margin-top:4px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px;">
+                    <label style="font-size:0.8rem; color:#64748b;">Renk Seçimi</label>
+                    <span style="font-size:0.75rem; color:#94a3b8;">Seçili:
+                        <span id="markup-active-color-preview"
+                            style="display:inline-block;width:14px;height:14px;border-radius:2px;border:1px solid #cbd5e1;vertical-align:middle;background:#ef4444;"></span>
+                    </span>
                 </div>
-                <input type="color" value="#000000" style="width: 100%; height: 35px; border: none; padding: 0; background: none; cursor: pointer;">
+                <div id="markup-color-palette" style="display:flex; flex-wrap:wrap; gap:4px;">
+                </div>
             </div>
 
             <h3>Veri Grafikleri</h3>
@@ -869,54 +969,79 @@
         });
         
         // ---------------------------------------------------------
-// Şeffaflık durumu ve bar kontrolü
-document.getElementById('toggle-opacity').addEventListener('change', function() {
-    var container = document.getElementById('opacity-control-container');
-    container.style.display = this.checked ? 'flex' : 'none';
-});
-
-// Yüzde değerini güncelleme
+// Yüzde değerini güncelleme + tüm çalışma alanı katmanlarına uygula
 document.getElementById('layerOpacity').addEventListener('input', function() {
     var val = Math.round(this.value * 100);
     document.getElementById('layer-opacity-val').textContent = '%' + val;
-});
-        // -------------------------------------------------------
-        document.addEventListener('DOMContentLoaded', function() {
-    // 1. Şeffaflık Barı
-    document.getElementById('toggle-opacity').addEventListener('change', function() {
-        var container = document.getElementById('opacity-control-container');
-        var slider = document.getElementById('layerOpacity');
-        
-        if (this.checked) {
-            container.style.display = 'block';
-        } else {
-            container.style.display = 'none';
-            slider.value = 1;
-            slider.dispatchEvent(new Event('input')); 
-        }
-    });
-
-    // 2. Harita Elemanları (Kuzey, Ölçek vb.)
-    var elements = [
-        { id: 'toggle-north', selector: '.north-arrow' },
-        { id: 'toggle-scale', selector: '.leaflet-control-scale' },
-        { id: 'toggle-gallery', selector: '.satellite-gallery-container' },
-        { id: 'toggle-legend', selector: '.legend-container' }
-    ];
-
-    elements.forEach(function(item) {
-        var checkbox = document.getElementById(item.id);
-        if (checkbox) {
-            checkbox.addEventListener('change', function() {
-                var el = document.querySelector(item.selector);
-                if (el) {
-                    el.style.display = this.checked ? 'block' : 'none';
-                } else {
-                    console.warn(item.selector + " bulunamadı.");
+    var opacity = parseFloat(this.value);
+    // Aktif currentLayer'a uygula
+    if (typeof currentLayer !== 'undefined' && currentLayer) {
+        if (typeof currentLayer.setStyle === 'function') {
+            currentLayer.setStyle({ opacity: opacity, fillOpacity: opacity * 0.6 });
+        } else if (typeof currentLayer.eachLayer === 'function') {
+            currentLayer.eachLayer(function(l) {
+                if (typeof l.setStyle === 'function') {
+                    l.setStyle({ opacity: opacity, fillOpacity: opacity * 0.6 });
                 }
             });
         }
+    }
+});
+
+        // -------------------------------------------------------
+        document.addEventListener('DOMContentLoaded', function() {
+
+    // 1. Şeffaflık Barı göster/gizle
+    document.getElementById('toggle-opacity').addEventListener('change', function() {
+        var container = document.getElementById('opacity-control-container');
+        var slider = document.getElementById('layerOpacity');
+        if (this.checked) {
+            container.style.display = 'flex';
+        } else {
+            container.style.display = 'none';
+            slider.value = 1;
+            slider.dispatchEvent(new Event('input'));
+        }
     });
+
+    // 2. Kuzey Oku — visibility ile (boyut değişmez)
+    document.getElementById('toggle-north').addEventListener('change', function() {
+        var el = document.querySelector('.north-arrow');
+        if (el) el.classList.toggle('hidden-element', !this.checked);
+    });
+
+    // 3. Ölçek Çubuğu
+    document.getElementById('toggle-scale').addEventListener('change', function() {
+        var el = document.querySelector('.leaflet-control-scale');
+        if (el) el.style.display = this.checked ? '' : 'none';
+    });
+
+    // 4. Uydu Görüntü Galerisi
+    document.getElementById('toggle-gallery').addEventListener('change', function() {
+        var el = document.getElementById('map-gallery');
+        if (el) el.style.display = this.checked ? 'flex' : 'none';
+    });
+
+    // 5. Lejant
+    document.getElementById('toggle-legend').addEventListener('change', function() {
+        var el = document.querySelector('.map-bottom-left');
+        if (el) el.style.display = this.checked ? '' : 'none';
+    });
+
+    // 6. Yakınlaştır / Uzaklaştır / Ana Görünüm butonları
+    document.getElementById('toggle-zoom-in').addEventListener('change', function() {
+        var el = document.getElementById('zoom-in');
+        if (el) el.style.display = this.checked ? '' : 'none';
+    });
+    document.getElementById('toggle-zoom-out').addEventListener('change', function() {
+        var el = document.getElementById('zoom-out');
+        if (el) el.style.display = this.checked ? '' : 'none';
+    });
+    document.getElementById('toggle-zoom-home').addEventListener('change', function() {
+        var el = document.getElementById('zoom-home');
+        if (el) el.style.display = this.checked ? '' : 'none';
+    });
+
 });
         // ---------------------------------------------------------
         // Sol panel - bulutluluk kaydırıcısı
@@ -1173,16 +1298,143 @@ function togglePalette() {
 }
 
 function selectRamp(name) {
-    document.getElementById("selectedRamp").style.background = ramps[name];
+    var el = document.getElementById("selectedRamp");
+    el.style.background = ramps[name];
+    el.setAttribute('data-ramp', name);
     document.getElementById("paletteList").classList.add("hidden");
 
-    // YENİ: seçilen renk paleti, mevcut sınıflandırma satırlarının rengini de günceller
-    // ve haritayı + lejantı otomatik olarak bu paletle yeniden renklendirir.
-    applyRampToClassification(name);
+    // Eğer Classified modundaysa renkleri sınıflara dağıt
+    if (currentClassificationType === 'classified') {
+        applyRampToClassification(name);
+    }
+    // Stretched modunda renk çubuğunu güncelle (anında önizleme)
+    // (Kullanıcı "Lejantı Uygula" ile uygulayacak)
 }
 
         // ===========================================================
-        // DİNAMİK SINIFLANDIRMA SATIRLARI (Min/Max, Lejant Adı, Renk)
+        // SINIFLANDIRMA TÜRÜ YÖNETİMİ (Stretched / Classified)
+        // ===========================================================
+        var currentClassificationType = 'stretched';
+
+        function setClassificationType(type) {
+            currentClassificationType = type;
+
+            var btnS = document.getElementById('btn-type-stretched');
+            var btnC = document.getElementById('btn-type-classified');
+            var stretchedSettings = document.getElementById('stretched-settings');
+            var classifiedSettings = document.getElementById('classified-settings');
+
+            if (type === 'stretched') {
+                btnS.style.background = '#1e3a8a';
+                btnS.style.color = '#fff';
+                btnS.style.borderColor = '#1e3a8a';
+                btnC.style.background = '#f8fafc';
+                btnC.style.color = '#1e3a8a';
+                btnC.style.borderColor = '#cbd5e1';
+                stretchedSettings.style.display = 'flex';
+                classifiedSettings.style.display = 'none';
+            } else {
+                btnC.style.background = '#1e3a8a';
+                btnC.style.color = '#fff';
+                btnC.style.borderColor = '#1e3a8a';
+                btnS.style.background = '#f8fafc';
+                btnS.style.color = '#1e3a8a';
+                btnS.style.borderColor = '#cbd5e1';
+                stretchedSettings.style.display = 'none';
+                classifiedSettings.style.display = 'flex';
+            }
+        }
+
+        // Stretched modu: sürekli renk geçişli lejant oluşturur
+        function applyStretchedLegend() {
+            var minVal = parseFloat(document.getElementById('stretched-min').value);
+            var maxVal = parseFloat(document.getElementById('stretched-max').value);
+            var title = document.getElementById('stretched-title').value.trim() || 'Veri';
+
+            if (isNaN(minVal) || isNaN(maxVal)) {
+                alert('Lütfen geçerli Min ve Max değerleri girin.');
+                return;
+            }
+
+            var selectedRampEl = document.getElementById('selectedRamp');
+            var rampCss = selectedRampEl.style.background || ramps['viridis'];
+
+            // Harita lejantını sürekli renk skalası olarak güncelle
+            var legendBox = document.querySelector('.map-legend');
+            if (legendBox) {
+                legendBox.innerHTML =
+                    '<b>' + escapeHtml(title) + '</b>' +
+                    '<div style="display:flex; justify-content:space-between; font-size:0.72rem; margin-top:5px; color:#475569;">' +
+                        '<span>' + minVal + '</span>' +
+                        '<span>' + ((minVal + maxVal) / 2).toFixed(2) + '</span>' +
+                        '<span>' + maxVal + '</span>' +
+                    '</div>' +
+                    '<div style="height:14px; border-radius:3px; border:1px solid #cbd5e1; margin-top:2px; background:' + rampCss + ';"></div>' +
+                    '<div style="display:flex; justify-content:space-between; font-size:0.7rem; color:#94a3b8; margin-top:2px;">' +
+                        '<span>Düşük</span><span>Yüksek</span>' +
+                    '</div>';
+            }
+
+            // Katmanı stretched palette göre yeniden boyar (değer aralığına normalize eder)
+            recolorCurrentLayerStretched(minVal, maxVal, rampCss);
+        }
+
+        // Stretched mod için katman boyama
+        function recolorCurrentLayerStretched(minVal, maxVal, rampCss) {
+            if (!currentLayer) return;
+
+            // Aktif renk paletinin adını bul
+            var selectedRampEl = document.getElementById('selectedRamp');
+            var rampName = selectedRampEl.getAttribute('data-ramp') || 'viridis';
+
+            function styleSingleLayer(layer) {
+                var feature = (typeof layer.toGeoJSON === 'function') ? layer.toGeoJSON() : null;
+                if (feature && feature.type === 'FeatureCollection' && feature.features.length) {
+                    feature = feature.features[0];
+                }
+
+                var value = feature ? getNumericValueFromFeature(feature) : null;
+                var t = 0.5; // varsayılan orta renk
+                if (value !== null && maxVal !== minVal) {
+                    t = Math.max(0, Math.min(1, (value - minVal) / (maxVal - minVal)));
+                }
+
+                var sampledColors = sampleRampColors(rampName, 256);
+                var colorIndex = Math.round(t * (sampledColors.length - 1));
+                var styleColor = sampledColors[colorIndex] || '#888888';
+
+                if (typeof layer.setStyle === 'function') {
+                    layer.setStyle({ color: styleColor, fillColor: styleColor, fillOpacity: 0.6 });
+                }
+            }
+
+            if (typeof currentLayer.eachLayer === 'function') {
+                currentLayer.eachLayer(styleSingleLayer);
+            } else {
+                styleSingleLayer(currentLayer);
+            }
+        }
+
+        // Stretched buton olayı
+        document.addEventListener('DOMContentLoaded', function() {
+            var btnApplyStretched = document.getElementById('btn-apply-stretched');
+            if (btnApplyStretched) {
+                btnApplyStretched.addEventListener('click', applyStretchedLegend);
+            }
+
+            // "Paletten Renk Dağıt" butonu
+            var btnAutoClassify = document.getElementById('btn-auto-classify');
+            if (btnAutoClassify) {
+                btnAutoClassify.addEventListener('click', function() {
+                    var selectedRampEl = document.getElementById('selectedRamp');
+                    var rampName = selectedRampEl.getAttribute('data-ramp') || 'viridis';
+                    applyRampToClassification(rampName);
+                });
+            }
+        });
+
+        // ===========================================================
+        // SINIFLANDIRMA TÜRÜ FARKINDA selectRamp güncelleme
         // ===========================================================
 
         // Gradyan DEĞİL — her biri kendi özgün ve net rengiyle ayrı ayrı
@@ -1444,6 +1696,790 @@ function selectRamp(name) {
                 console.info('SylvaGIS: Aktif katmanda sınıflandırmaya uygun sayısal bir öznitelik bulunamadı; katman ilk sınıfın rengiyle boyandı. Gerçek NDVI/raster verisi entegre edildiğinde, özniteliklerine göre otomatik doğru sınıfa boyanacaktır.');
             }
         }
+
+        // ============================================================
+        //  MARKUP ENGINE — Coğrafi koordinatlara sabitlenmiş çizim sistemi
+        //  Her nesne harita LatLng koordinatlarında saklanır.
+        //  Pan/Zoom'da SVG viewBox/transform güncellenerek tüm çizimler
+        //  haritayla birlikte doğru konumda kalır.
+        // ============================================================
+
+        // runAnalysis fonksiyonu — lejant başlığını günceller
+        function runAnalysis() {
+            var checked = document.querySelector('.option-item input[data-analysis]:checked');
+            var legendBox = document.querySelector('.map-legend');
+            if (!legendBox) return;
+            if (!checked) { alert('Lütfen bir analiz seçin.'); return; }
+            var analysisName = checked.getAttribute('data-analysis');
+            var rampKey = checked.getAttribute('data-ramp-key') || 'viridis';
+            var selectedRampEl = document.getElementById('selectedRamp');
+            var rampCss = (selectedRampEl && ramps[rampKey])
+                ? 'linear-gradient(to right,' + ramps[rampKey] + ')'
+                : ramps['viridis'] || '';
+            legendBox.innerHTML =
+                '<b>' + analysisName + '</b>' +
+                '<div style="display:flex;justify-content:space-between;font-size:0.72rem;margin-top:5px;color:#475569;"><span>-1</span><span>0</span><span>+1</span></div>' +
+                '<div style="height:14px;border-radius:3px;border:1px solid #cbd5e1;margin-top:2px;background:' + rampCss + ';"></div>' +
+                '<div style="display:flex;justify-content:space-between;font-size:0.7rem;color:#94a3b8;margin-top:2px;"><span>Düşük</span><span>Yüksek</span></div>';
+        }
+
+        (function() {
+
+        // ---- Renk Paleti (36 renk) ---------------------------------
+        var MARKUP_COLORS = [
+            '#000000','#ffffff','#6b7280','#9ca3af','#d1d5db','#f3f4f6',
+            '#ef4444','#fca5a5','#f97316','#fdba74','#eab308','#fef08a',
+            '#22c55e','#86efac','#16a34a','#14532d',
+            '#3b82f6','#93c5fd','#1d4ed8','#1e3a8a',
+            '#06b6d4','#a5f3fc','#0891b2','#164e63',
+            '#a855f7','#d8b4fe','#7c3aed','#4c1d95',
+            '#ec4899','#f9a8d4','#be185d',
+            '#f59e0b','#d97706','#b45309',
+            '#10b981','#065f46'
+        ];
+
+        var paletteEl = document.getElementById('markup-color-palette');
+        var activeColor = '#ef4444';
+        var activeColorPreview = document.getElementById('markup-active-color-preview');
+
+        MARKUP_COLORS.forEach(function(hex) {
+            var sw = document.createElement('div');
+            sw.style.cssText = 'width:20px;height:20px;border-radius:3px;cursor:pointer;border:2px solid transparent;background:' + hex + ';flex-shrink:0;';
+            sw.title = hex;
+            sw.setAttribute('data-color', hex);
+            sw.addEventListener('click', function() {
+                activeColor = hex;
+                activeColorPreview.style.background = hex;
+                paletteEl.querySelectorAll('div').forEach(function(s){ s.style.borderColor='transparent'; });
+                sw.style.borderColor = '#1e3a8a';
+            });
+            if (hex === activeColor) sw.style.borderColor = '#1e3a8a';
+            paletteEl.appendChild(sw);
+        });
+
+        // ---- Durum -------------------------------------------------
+        var activeTool = null;
+        var strokeWidth = 3;
+        var penPoints = [];    // piksel (çizim sırasında geçici)
+        var polyPoints = [];   // LatLng (kalıcı geo nokta listesi)
+        var circleCenter = null;  // LatLng
+        var arrowStart = null;    // LatLng
+        var drawingActive = false;
+        var textMode = false;
+
+        // Metin biçimlendirme durumu
+        var textBold = false, textItalic = false, textUnderline = false;
+
+        // ---- SVG referansları --------------------------------------
+        var svgEl = document.getElementById('markup-svg');
+        var markupLayer = document.getElementById('markup-layer');
+        var previewLayer = document.getElementById('markup-preview-layer');
+
+        // ---- Coğrafi koordinat sistemi --------------------------------
+        // SVG, harita konteynerinin tam üzerine konumlanmış.
+        // viewBox, her pan/zoom sonrası harita piksel sistemine göre güncellenir.
+        // Tüm nesneler harita LatLng'de saklanır; render sırasında piksel'e dönüştürülür.
+
+        // Piksel koordinatı → LatLng
+        function pxToLatLng(px) {
+            return map.containerPointToLatLng(L.point(px.x, px.y));
+        }
+        // LatLng → piksel koordinatı
+        function latLngToPx(latlng) {
+            return map.latLngToContainerPoint(latlng);
+        }
+        // Fare olayından container-piksel koordinatı
+        function getSVGPoint(e) {
+            var rect = svgEl.getBoundingClientRect();
+            var clientX = e.clientX || (e.touches && e.touches[0].clientX);
+            var clientY = e.clientY || (e.touches && e.touches[0].clientY);
+            return { x: clientX - rect.left, y: clientY - rect.top };
+        }
+        // Fare olayından direkt LatLng (coğrafi)
+        function getGeoPoint(e) {
+            var px = getSVGPoint(e);
+            return pxToLatLng(px);
+        }
+
+        function dist(a, b) {
+            var dx = a.x-b.x, dy = a.y-b.y;
+            return Math.sqrt(dx*dx+dy*dy);
+        }
+        function distGeo(a, b) {
+            // a,b LatLng — piksele çevirip uzaklık ölç
+            var pa = latLngToPx(a), pb = latLngToPx(b);
+            return dist(pa, pb);
+        }
+
+        // ---- SVG element oluşturucular (piksel koord ile çalışır) ------
+        function svgEl2(tag, attrs) {
+            var el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+            for (var k in attrs) el.setAttribute(k, attrs[k]);
+            return el;
+        }
+
+        function makeStrokeAttrs(extra) {
+            return Object.assign({
+                stroke: activeColor,
+                'stroke-width': strokeWidth,
+                fill: 'none',
+                'stroke-linecap': 'round',
+                'stroke-linejoin': 'round'
+            }, extra || {});
+        }
+
+        // ---- Nesne deposu (coğrafi koordinatlarda) ----------------
+        // Her nesne: { type, color, width, geoData, options }
+        var geoObjects = [];   // kalıcı nesneler
+        var historyStack = []; // undo için anlık kopyalar
+        var redoStack = [];
+
+        function saveGeoHistory() {
+            historyStack.push(JSON.stringify(geoObjects));
+            redoStack = [];
+        }
+
+        function renderAll() {
+            markupLayer.innerHTML = '';
+            previewLayer.innerHTML = '';
+            geoObjects.forEach(function(obj) { renderObject(obj); });
+        }
+
+        function renderObject(obj) {
+            var el = buildSVGElement(obj);
+            if (el) markupLayer.appendChild(el);
+        }
+
+        function buildSVGElement(obj) {
+            var color = obj.color, w = obj.width, opts = obj.options || {};
+            var strokeAttrs = {
+                stroke: color, 'stroke-width': w, fill: 'none',
+                'stroke-linecap': 'round', 'stroke-linejoin': 'round'
+            };
+
+            if (obj.type === 'pen' || obj.type === 'line') {
+                var pts = obj.geo.map(function(ll) { return latLngToPx(ll); });
+                if (pts.length < 2) return null;
+                var d = pts.map(function(p,i){ return (i===0?'M':'L') + p.x.toFixed(1) + ' ' + p.y.toFixed(1); }).join(' ');
+                return svgEl2('path', Object.assign({}, strokeAttrs, { d: d }));
+            }
+            if (obj.type === 'polygon') {
+                var pts = obj.geo.map(function(ll) { return latLngToPx(ll); });
+                var d = pts.map(function(p,i){ return (i===0?'M':'L') + p.x.toFixed(1) + ' ' + p.y.toFixed(1); }).join(' ') + ' Z';
+                return svgEl2('path', Object.assign({}, strokeAttrs, { d: d, fill: color, 'fill-opacity': '0.18' }));
+            }
+            if (obj.type === 'circle') {
+                var cp = latLngToPx(obj.geo.center);
+                var ep = latLngToPx(obj.geo.edge);
+                var r = dist(cp, ep);
+                var attrs = Object.assign({}, strokeAttrs, { cx: cp.x.toFixed(1), cy: cp.y.toFixed(1), r: r.toFixed(1) });
+                if (opts.fillMode === 'fill') { attrs.fill = color; attrs['fill-opacity'] = '0.25'; }
+                return svgEl2('circle', attrs);
+            }
+            if (obj.type === 'arrow') {
+                updateArrowheadColor(color);
+                var p1 = latLngToPx(obj.geo.start), p2 = latLngToPx(obj.geo.end);
+                return svgEl2('line', Object.assign({}, strokeAttrs, {
+                    x1: p1.x.toFixed(1), y1: p1.y.toFixed(1),
+                    x2: p2.x.toFixed(1), y2: p2.y.toFixed(1),
+                    'marker-end': 'url(#arrowhead)'
+                }));
+            }
+            if (obj.type === 'carrow') {
+                updateArrowheadColor(color);
+                var p1 = latLngToPx(obj.geo.start), p2 = latLngToPx(obj.geo.end);
+                var mx = (p1.x+p2.x)/2, my = (p1.y+p2.y)/2;
+                var dx = p2.x-p1.x, dy = p2.y-p1.y;
+                var cx = mx - dy*0.35, cy = my + dx*0.35;
+                var d = 'M '+p1.x.toFixed(1)+' '+p1.y.toFixed(1)+' Q '+cx.toFixed(1)+' '+cy.toFixed(1)+' '+p2.x.toFixed(1)+' '+p2.y.toFixed(1);
+                return svgEl2('path', Object.assign({}, strokeAttrs, { d: d, 'marker-end': 'url(#arrowhead)' }));
+            }
+            if (obj.type === 'text') {
+                var p = latLngToPx(obj.geo);
+                var attrs = {
+                    x: p.x.toFixed(1), y: p.y.toFixed(1),
+                    fill: color,
+                    'font-family': opts.fontFamily || 'Arial',
+                    'font-size': opts.fontSize || '16',
+                    'font-weight': opts.bold ? 'bold' : 'normal',
+                    'font-style': opts.italic ? 'italic' : 'normal',
+                    'cursor': 'move',
+                    'data-draggable-text': '1'
+                };
+                if (opts.underline) {
+                    attrs['text-decoration'] = 'underline';
+                    attrs['text-decoration-skip-ink'] = 'none';
+                    attrs['text-underline-offset'] = '3px';
+                    attrs['text-decoration-thickness'] = '1.5px';
+                }
+                var el = svgEl2('text', attrs);
+                el.textContent = obj.text;
+                el._geoObj = obj; // referans sakla
+                makeTextDraggable(el);
+                return el;
+            }
+            return null;
+        }
+
+        // Harita her hareket ettiğinde tüm nesneleri yeniden çiz
+        map.on('moveend zoomend move zoom', function() {
+            renderAll();
+        });
+
+        // ---- Undo/Redo (geo nesne listesi üzerinde) ----------------
+        function saveHistory() { saveGeoHistory(); }
+
+        document.getElementById('markup-undo').addEventListener('click', function() {
+            if (historyStack.length === 0) return;
+            redoStack.push(JSON.stringify(geoObjects));
+            geoObjects = JSON.parse(historyStack.pop());
+            renderAll();
+        });
+        document.getElementById('markup-redo').addEventListener('click', function() {
+            if (redoStack.length === 0) return;
+            historyStack.push(JSON.stringify(geoObjects));
+            geoObjects = JSON.parse(redoStack.pop());
+            renderAll();
+        });
+        document.getElementById('markup-clear').addEventListener('click', function() {
+            if (geoObjects.length === 0) return;
+            saveHistory();
+            geoObjects = [];
+            renderAll();
+        });
+
+        document.addEventListener('keydown', function(e) {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'z') { document.getElementById('markup-undo').click(); }
+            if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'z'))) { document.getElementById('markup-redo').click(); }
+            if (e.key === 'Escape') cancelCurrentDraw();
+        });
+
+        // ---- Kalınlık slider ----------------------------------------
+        document.getElementById('markup-stroke-width').addEventListener('input', function() {
+            strokeWidth = parseInt(this.value);
+            document.getElementById('markup-stroke-label').textContent = strokeWidth + 'px';
+        });
+
+        // ---- Araç seçimi -------------------------------------------
+        document.querySelectorAll('.markup-tool-btn').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                var tool = btn.getAttribute('data-tool');
+                if (activeTool === tool) {
+                    deactivateTool();
+                    return;
+                }
+                activateTool(tool);
+            });
+        });
+
+        // ---- Orta tuş ile çizim sırasında harita kaydırma --------
+        var middleMousePanning = false;
+        var middleMouseStartXY = null;
+        var middleMouseMapCenter = null;
+
+        svgEl.addEventListener('mousedown', function(e) {
+            if (e.button === 1 && activeTool) { // orta tuş
+                e.preventDefault();
+                middleMousePanning = true;
+                middleMouseStartXY = { x: e.clientX, y: e.clientY };
+                middleMouseMapCenter = map.getCenter();
+                svgEl.style.cursor = 'grab';
+            }
+        });
+
+        document.addEventListener('mousemove', function(e) {
+            if (!middleMousePanning) return;
+            var dx = e.clientX - middleMouseStartXY.x;
+            var dy = e.clientY - middleMouseStartXY.y;
+            var startPx = map.latLngToContainerPoint(middleMouseMapCenter);
+            var newCenter = map.containerPointToLatLng(L.point(startPx.x - dx, startPx.y - dy));
+            map.setView(newCenter, map.getZoom(), { animate: false });
+        });
+
+        document.addEventListener('mouseup', function(e) {
+            if (e.button === 1 && middleMousePanning) {
+                middleMousePanning = false;
+                middleMouseStartXY = null;
+                middleMouseMapCenter = null;
+                if (activeTool) {
+                    svgEl.style.cursor = (activeTool === 'text') ? 'text' : 'crosshair';
+                }
+            }
+        });
+
+        // Çizim sırasında mouse wheel zoom aktif kalsın
+        svgEl.addEventListener('wheel', function(e) {
+            if (!activeTool) return;
+            e.preventDefault();
+            if (e.deltaY < 0) {
+                map.zoomIn();
+            } else {
+                map.zoomOut();
+            }
+        }, { passive: false });
+
+        function activateTool(tool) {
+            cancelCurrentDraw();
+            activeTool = tool;
+            // UI güncellemeleri
+            document.querySelectorAll('.markup-tool-btn').forEach(function(b){
+                b.classList.toggle('active', b.getAttribute('data-tool') === tool);
+            });
+            // Araç özel panelleri
+            document.getElementById('circle-fill-options').style.display = (tool === 'circle') ? 'flex' : 'none';
+            document.getElementById('text-format-options').style.display = (tool === 'text') ? 'flex' : 'none';
+
+            svgEl.style.pointerEvents = 'all';
+            svgEl.style.cursor = (tool === 'text') ? 'text' : 'crosshair';
+
+            // Leaflet harita sürüklemeyi kapat (orta tuş ile manuel pan yapıyoruz)
+            map.dragging.disable();
+            map.doubleClickZoom.disable();
+            // Scroll zoom'u açık bırak
+            map.scrollWheelZoom.disable(); // SVG wheel eventi haritaya iletecek
+        }
+
+        function deactivateTool() {
+            cancelCurrentDraw();
+            activeTool = null;
+            document.querySelectorAll('.markup-tool-btn').forEach(function(b){ b.classList.remove('active'); });
+            svgEl.style.pointerEvents = 'none';
+            svgEl.style.cursor = '';
+            map.dragging.enable();
+            map.doubleClickZoom.enable();
+            document.getElementById('circle-fill-options').style.display = 'none';
+            document.getElementById('text-format-options').style.display = 'none';
+        }
+
+        function cancelCurrentDraw() {
+            penPoints = [];
+            polyPoints = [];
+            circleCenter = null;
+            arrowStart = null;
+            drawingActive = false;
+            previewLayer.innerHTML = '';
+        }
+
+        // ---- Metin biçimlendirme butonları -------------------------
+        function setupFmtBtn(id, onToggle) {
+            var btn = document.getElementById(id);
+            if (!btn) return;
+            btn.addEventListener('click', function() {
+                var active = btn.getAttribute('data-active') === '1';
+                btn.setAttribute('data-active', active ? '0' : '1');
+                btn.style.background = active ? '#f8fafc' : '#1e3a8a';
+                btn.style.color = active ? '' : '#fff';
+                onToggle(!active);
+            });
+        }
+        setupFmtBtn('fmt-bold',      function(v){ textBold = v; });
+        setupFmtBtn('fmt-italic',    function(v){ textItalic = v; });
+        setupFmtBtn('fmt-underline', function(v){ textUnderline = v; });
+
+        // ---- Fare / Seçim Aracı -----------------------------------
+        var fmtPointerBtn = document.getElementById('fmt-pointer');
+        if (fmtPointerBtn) {
+            fmtPointerBtn.addEventListener('click', function() {
+                deactivateTool();
+                // Fare aracı aktifken butonu vurgula
+                fmtPointerBtn.style.background = '#1e3a8a';
+                fmtPointerBtn.style.color = '#fff';
+                fmtPointerBtn.style.borderColor = '#1e3a8a';
+            });
+        }
+
+        // Başka bir araç seçilince fare butonunun vurgusunu kaldır
+        var _origActivateTool = activateTool;
+        // (activateTool zaten yukarıda tanımlı, deactivateTool içinde sıfırlıyoruz)
+        var _origDeactivateTool = deactivateTool;
+        function resetPointerBtn() {
+            if (fmtPointerBtn) {
+                fmtPointerBtn.style.background = '#f8fafc';
+                fmtPointerBtn.style.color = '';
+                fmtPointerBtn.style.borderColor = '#cbd5e1';
+            }
+        }
+        document.querySelectorAll('.markup-tool-btn').forEach(function(btn) {
+            btn.addEventListener('click', function() { resetPointerBtn(); });
+        });
+
+        // ---- Önizleme temizle -------------------------------------
+        function clearPreview() { previewLayer.innerHTML = ''; }
+
+        // ---- Ok başlığı renk güncelle ----------------------------
+        function updateArrowheadColor(color) {
+            var poly = document.getElementById('arrowhead-poly');
+            var polyP = document.getElementById('arrowhead-preview-poly');
+            if (poly) poly.setAttribute('fill', color);
+            if (polyP) polyP.setAttribute('fill', color);
+        }
+
+        // ---- Kalem (piksel ara tampon, tamamlandığında LatLng'e çevrilir) ——
+        function penStart(px) {
+            drawingActive = true;
+            penPoints = [px]; // piksel
+        }
+        function penMove(px) {
+            if (!drawingActive) return;
+            penPoints.push(px);
+            clearPreview();
+            if (penPoints.length < 2) return;
+            var d = penPoints.map(function(p,i){ return (i===0?'M':'L') + p.x.toFixed(1) + ' ' + p.y.toFixed(1); }).join(' ');
+            previewLayer.appendChild(svgEl2('path', makeStrokeAttrs({ d: d, opacity:'0.85' })));
+        }
+        function penEnd() {
+            if (!drawingActive || penPoints.length < 2) { cancelCurrentDraw(); return; }
+            saveHistory();
+            var geoLine = penPoints.map(function(p) { return pxToLatLng(p); });
+            geoObjects.push({ type:'pen', color:activeColor, width:strokeWidth, geo:geoLine });
+            renderAll();
+            cancelCurrentDraw();
+        }
+
+        // ---- Çizgi (tıkla-tıkla, LatLng'de saklama) ——————————————
+        function lineClick(px) {
+            var ll = pxToLatLng(px);
+            if (!drawingActive) {
+                drawingActive = true;
+                polyPoints = [ll];
+            } else {
+                polyPoints.push(ll);
+            }
+        }
+        function lineMove(px) {
+            if (!drawingActive || polyPoints.length === 0) return;
+            clearPreview();
+            var allPx = polyPoints.map(function(ll) { return latLngToPx(ll); });
+            allPx.push(px);
+            if (allPx.length > 1) {
+                var d = allPx.slice(0,-1).map(function(p,i){ return (i===0?'M':'L') + p.x.toFixed(1)+' '+p.y.toFixed(1); }).join(' ');
+                previewLayer.appendChild(svgEl2('path', makeStrokeAttrs({ d: d })));
+            }
+            var last = allPx[allPx.length-2];
+            previewLayer.appendChild(svgEl2('line', makeStrokeAttrs({
+                x1: last.x.toFixed(1), y1: last.y.toFixed(1), x2: px.x.toFixed(1), y2: px.y.toFixed(1),
+                opacity:'0.5', 'stroke-dasharray':'5,4'
+            })));
+        }
+        function lineDblClick(px) {
+            if (!drawingActive || polyPoints.length < 1) return;
+            polyPoints.push(pxToLatLng(px));
+            saveHistory();
+            geoObjects.push({ type:'line', color:activeColor, width:strokeWidth, geo:polyPoints.slice() });
+            renderAll();
+            cancelCurrentDraw();
+        }
+
+        // ---- Poligon ——————————————————————————————————————————————
+        var SNAP_RADIUS = 14;
+        function polygonClick(px) {
+            var ll = pxToLatLng(px);
+            if (polyPoints.length >= 3) {
+                var firstPx = latLngToPx(polyPoints[0]);
+                if (dist(px, firstPx) < SNAP_RADIUS) { finishPolygon(); return; }
+            }
+            if (!drawingActive) drawingActive = true;
+            polyPoints.push(ll);
+        }
+        function polygonMove(px) {
+            if (!drawingActive || polyPoints.length === 0) return;
+            clearPreview();
+            var allPx = polyPoints.map(function(ll) { return latLngToPx(ll); }).concat([px]);
+            var d = allPx.map(function(p,i){ return (i===0?'M':'L') + p.x.toFixed(1)+' '+p.y.toFixed(1); }).join(' ') + ' Z';
+            previewLayer.appendChild(svgEl2('path', Object.assign(makeStrokeAttrs(), { d: d, fill: activeColor, 'fill-opacity':'0.15' })));
+            if (polyPoints.length >= 3) {
+                var firstPx = latLngToPx(polyPoints[0]);
+                if (dist(px, firstPx) < SNAP_RADIUS) {
+                    previewLayer.appendChild(svgEl2('circle', {
+                        cx: firstPx.x.toFixed(1), cy: firstPx.y.toFixed(1), r: SNAP_RADIUS,
+                        fill: 'none', stroke: activeColor, 'stroke-width': 1.5, 'stroke-dasharray': '3,2'
+                    }));
+                }
+            }
+        }
+        function polygonDblClick() { if (polyPoints.length >= 3) finishPolygon(); }
+        function finishPolygon() {
+            saveHistory();
+            geoObjects.push({ type:'polygon', color:activeColor, width:strokeWidth, geo:polyPoints.slice() });
+            renderAll();
+            cancelCurrentDraw();
+        }
+
+        // ---- Daire ———————————————————————————————————————————————
+        function circleClick(px) {
+            if (!circleCenter) {
+                circleCenter = pxToLatLng(px);
+                drawingActive = true;
+            } else {
+                var edgeLL = pxToLatLng(px);
+                var style = document.querySelector('input[name="circle-style"]:checked');
+                var fillMode = style ? style.value : 'fill';
+                saveHistory();
+                geoObjects.push({ type:'circle', color:activeColor, width:strokeWidth,
+                    geo:{ center:circleCenter, edge:edgeLL }, options:{ fillMode:fillMode } });
+                renderAll();
+                cancelCurrentDraw();
+            }
+        }
+        function circleMove(px) {
+            if (!circleCenter) return;
+            clearPreview();
+            var cp = latLngToPx(circleCenter);
+            var r = dist(cp, px);
+            var attrs = makeStrokeAttrs({ cx: cp.x.toFixed(1), cy: cp.y.toFixed(1), r: r.toFixed(1), opacity: '0.6' });
+            attrs.fill = activeColor; attrs['fill-opacity'] = '0.1';
+            previewLayer.appendChild(svgEl2('circle', attrs));
+        }
+
+        // ---- Ok ————————————————————————————————————————————————————
+        function arrowClick(px) {
+            if (!arrowStart) {
+                arrowStart = pxToLatLng(px);
+                drawingActive = true;
+            } else {
+                var endLL = pxToLatLng(px);
+                saveHistory();
+                updateArrowheadColor(activeColor);
+                geoObjects.push({ type:'arrow', color:activeColor, width:strokeWidth, geo:{ start:arrowStart, end:endLL } });
+                renderAll();
+                cancelCurrentDraw();
+            }
+        }
+        function arrowMove(px) {
+            if (!arrowStart) return;
+            clearPreview();
+            updateArrowheadColor(activeColor);
+            var p1 = latLngToPx(arrowStart);
+            previewLayer.appendChild(svgEl2('line', Object.assign(makeStrokeAttrs(), {
+                x1: p1.x.toFixed(1), y1: p1.y.toFixed(1), x2: px.x.toFixed(1), y2: px.y.toFixed(1),
+                opacity:'0.5', 'stroke-dasharray':'6,4', 'marker-end':'url(#arrowhead-preview)'
+            })));
+        }
+
+        // ---- Kavisli Ok ———————————————————————————————————————————
+        function carrowClick(px) {
+            if (!arrowStart) {
+                arrowStart = pxToLatLng(px);
+                drawingActive = true;
+            } else {
+                var endLL = pxToLatLng(px);
+                saveHistory();
+                updateArrowheadColor(activeColor);
+                geoObjects.push({ type:'carrow', color:activeColor, width:strokeWidth, geo:{ start:arrowStart, end:endLL } });
+                renderAll();
+                cancelCurrentDraw();
+            }
+        }
+        function carrowMove(px) {
+            if (!arrowStart) return;
+            clearPreview();
+            updateArrowheadColor(activeColor);
+            var p1 = latLngToPx(arrowStart);
+            var mx = (p1.x+px.x)/2, my = (p1.y+px.y)/2;
+            var dx = px.x-p1.x, dy = px.y-p1.y;
+            var cx = mx-dy*0.35, cy = my+dx*0.35;
+            var d = 'M '+p1.x.toFixed(1)+' '+p1.y.toFixed(1)+' Q '+cx.toFixed(1)+' '+cy.toFixed(1)+' '+px.x.toFixed(1)+' '+px.y.toFixed(1);
+            previewLayer.appendChild(svgEl2('path', Object.assign(makeStrokeAttrs(), {
+                d: d, opacity:'0.5', 'stroke-dasharray':'6,4', 'marker-end':'url(#arrowhead-preview)'
+            })));
+        }
+
+        // ---- Metin seçimi ve taşıma (geo koordinatlarda) ----------
+        var selectedGeoObj = null;
+        var textSelectionRect = null;
+
+        function clearTextSelection() {
+            if (textSelectionRect) { textSelectionRect.remove(); textSelectionRect = null; }
+            selectedGeoObj = null;
+        }
+
+        function selectTextEl(el) {
+            clearTextSelection();
+            try {
+                var bbox = el.getBBox();
+                var pad = 4;
+                textSelectionRect = svgEl2('rect', {
+                    x: bbox.x - pad, y: bbox.y - pad,
+                    width: bbox.width + pad*2, height: bbox.height + pad*2,
+                    fill: 'none', stroke: '#1e3a8a',
+                    'stroke-width': '1.5', 'stroke-dasharray': '4,3',
+                    'pointer-events': 'none', rx: '3'
+                });
+                markupLayer.appendChild(textSelectionRect);
+            } catch(ex) {}
+        }
+
+        function makeTextDraggable(textEl) {
+            textEl.style.cursor = 'move';
+            textEl.setAttribute('data-draggable-text', '1');
+
+            textEl.addEventListener('mousedown', function(e) {
+                if (activeTool && activeTool !== 'select') return;
+                if (activeTool === 'text') return;
+                e.preventDefault(); e.stopPropagation();
+                selectTextEl(textEl);
+                var obj = textEl._geoObj;
+                var startX = e.clientX, startY = e.clientY;
+                var origPx = latLngToPx(obj.geo);
+
+                function onMove(ev) {
+                    var dx = ev.clientX - startX;
+                    var dy = ev.clientY - startY;
+                    var newPx = { x: origPx.x + dx, y: origPx.y + dy };
+                    obj.geo = pxToLatLng(newPx);
+                    // Sadece bu elementi güncelle (renderAll() pahalı)
+                    textEl.setAttribute('x', newPx.x.toFixed(1));
+                    textEl.setAttribute('y', newPx.y.toFixed(1));
+                    if (textSelectionRect) {
+                        try {
+                            var bbox = textEl.getBBox();
+                            var pad = 4;
+                            textSelectionRect.setAttribute('x', bbox.x - pad);
+                            textSelectionRect.setAttribute('y', bbox.y - pad);
+                            textSelectionRect.setAttribute('width', bbox.width + pad*2);
+                            textSelectionRect.setAttribute('height', bbox.height + pad*2);
+                        } catch(ex) {}
+                    }
+                }
+                function onUp() {
+                    document.removeEventListener('mousemove', onMove);
+                    document.removeEventListener('mouseup', onUp);
+                }
+                document.addEventListener('mousemove', onMove);
+                document.addEventListener('mouseup', onUp);
+            });
+
+            textEl.addEventListener('click', function(e) {
+                if (activeTool) return;
+                e.stopPropagation();
+                selectTextEl(textEl);
+            });
+        }
+
+        // Haritaya tıklayınca seçimi temizle
+        svgEl.addEventListener('click', function(e) {
+            if (!e.target.hasAttribute('data-draggable-text')) {
+                clearTextSelection();
+            }
+        });
+
+        // ---- Metin — geo koordinata kaydedilir ————————————————————
+        function textClick(px) {
+            var fontSize = document.getElementById('markup-font-size').value || '16';
+            var fontFamily = document.getElementById('markup-font-family').value || 'Arial';
+            var geoPos = pxToLatLng(px);
+
+            var input = document.createElement('div');
+            input.contentEditable = true;
+            input.style.cssText = [
+                'position:absolute',
+                'left:' + px.x + 'px',
+                'top:' + (px.y - parseInt(fontSize) - 2) + 'px',
+                'font-family:' + fontFamily,
+                'font-size:' + fontSize + 'px',
+                'color:' + activeColor,
+                'font-weight:' + (textBold ? 'bold' : 'normal'),
+                'font-style:' + (textItalic ? 'italic' : 'normal'),
+                'text-decoration:' + (textUnderline ? 'underline solid' : 'none'),
+                'text-underline-offset:3px',
+                'text-decoration-thickness:1.5px',
+                'background:rgba(255,255,255,0.6)',
+                'border:1.5px dashed ' + activeColor,
+                'border-radius:3px',
+                'padding:2px 5px',
+                'min-width:60px',
+                'outline:none',
+                'z-index:1000',
+                'cursor:text',
+                'white-space:nowrap'
+            ].join(';');
+            svgEl.parentElement.appendChild(input);
+            input.focus();
+
+            function commitText() {
+                var txt = input.innerText.trim();
+                input.remove();
+                if (!txt) return;
+                saveHistory();
+                geoObjects.push({
+                    type: 'text',
+                    color: activeColor,
+                    width: strokeWidth,
+                    geo: geoPos,
+                    text: txt,
+                    options: {
+                        fontFamily: fontFamily,
+                        fontSize: fontSize,
+                        bold: textBold,
+                        italic: textItalic,
+                        underline: textUnderline
+                    }
+                });
+                renderAll();
+            }
+
+            input.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commitText(); }
+                if (e.key === 'Escape') { input.remove(); }
+                e.stopPropagation();
+            });
+            input.addEventListener('blur', commitText);
+        }
+
+        // ---- Ana SVG olay yöneticileri ——————————————————————————————
+        var isPenDown = false;
+
+        svgEl.addEventListener('mousedown', function(e) {
+            if (e.button === 0 && activeTool) { // sol tuş
+                e.preventDefault(); e.stopPropagation();
+                var px = getSVGPoint(e);
+                if (activeTool === 'pen') { isPenDown = true; penStart(px); }
+            }
+        });
+
+        svgEl.addEventListener('mousemove', function(e) {
+            if (!activeTool) return;
+            var px = getSVGPoint(e);
+            if (activeTool === 'pen' && isPenDown) { penMove(px); return; }
+            if (activeTool === 'line')    { lineMove(px); return; }
+            if (activeTool === 'polygon') { polygonMove(px); return; }
+            if (activeTool === 'circle')  { circleMove(px); return; }
+            if (activeTool === 'arrow')   { arrowMove(px); return; }
+            if (activeTool === 'carrow')  { carrowMove(px); return; }
+        });
+
+        svgEl.addEventListener('mouseup', function(e) {
+            if (e.button === 0 && activeTool === 'pen' && isPenDown) {
+                isPenDown = false; penEnd();
+            }
+        });
+
+        svgEl.addEventListener('click', function(e) {
+            if (!activeTool) return;
+            e.preventDefault(); e.stopPropagation();
+            var px = getSVGPoint(e);
+            if (activeTool === 'text')    { textClick(px); return; }
+            if (activeTool === 'line')    { lineClick(px); return; }
+            if (activeTool === 'polygon') { polygonClick(px); return; }
+            if (activeTool === 'circle')  { circleClick(px); return; }
+            if (activeTool === 'arrow')   { arrowClick(px); return; }
+            if (activeTool === 'carrow')  { carrowClick(px); return; }
+        });
+
+        svgEl.addEventListener('dblclick', function(e) {
+            if (!activeTool) return;
+            e.preventDefault(); e.stopPropagation();
+            var px = getSVGPoint(e);
+            if (activeTool === 'line')    { lineDblClick(px); return; }
+            if (activeTool === 'polygon') { polygonDblClick(); return; }
+        });
+
+        // Harita resize'da tüm nesneleri yeniden çiz
+        map.on('resize', function() { renderAll(); });
+
+        })(); // END markup engine
+
+
     </script>
 
 </body>
