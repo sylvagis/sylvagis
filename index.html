@@ -4920,74 +4920,143 @@ function selectRamp(name) {
     <script>
     (function() {
         'use strict';
+        var MOBILE_BREAKPOINT = 900;
         var drawerOpen = false;
         var activeTab  = 'veri';
-        var panelsCloned = false;
+        var panelsMoved = false;
+        var anchors = {}; // Masaüstüne geri dönüşte elemanları eski yerine koymak için yer tutucular
 
-        function clonePanelsOnce() {
-            if (panelsCloned) return;
-            panelsCloned = true;
+        // ===================================================================
+        // ÖNEMLİ DÜZELTME:
+        // Eski sürüm masaüstü panellerini cloneNode(true) ile KOPYALIYORDU.
+        // cloneNode HTML yapısını kopyalar ama addEventListener ile bağlanmış
+        // olay dinleyicilerini KOPYALAMAZ. Bu yüzden mobildeki kopya butonlar/
+        // checkbox'lar/dropdown'lar görünüyordu ama hiçbir şeye tıklayınca
+        // tetiklenmiyordu (KML yükleme, basemap seçimi, katman aç/kapat,
+        // çizim araçı butonları, analiz radyo butonları vs.).
+        //
+        // Çözüm: Klonlamak yerine GERÇEK DOM elemanlarını mobil çekmeceye
+        // TAŞIYORUZ (appendChild ile "move"). Aynı elemanlar, aynı id'ler,
+        // aynı olay dinleyicileri — bu yüzden her şey masaüstündeki gibi
+        // çalışır. Masaüstüne dönüldüğünde elemanlar eski yerlerine geri
+        // taşınır (anchor/yer tutucu kullanılarak).
+        // ===================================================================
 
-            // Sol panel klonla (Veri sekmesi)
+        function moveToMobile() {
+            if (panelsMoved) return;
+            panelsMoved = true;
+
+            // ---- Sol panel (Veri sekmesi) ----
             var leftPanel = document.querySelector('.sidebar-left.panel');
-            if (leftPanel) {
-                var veriEl = document.getElementById('mobile-tab-veri');
-                var leftClone = leftPanel.cloneNode(true);
-                prefixIds(leftClone, 'mc');
-                veriEl.appendChild(leftClone);
+            var veriEl    = document.getElementById('mobile-tab-veri');
+            var analizEl  = document.getElementById('mobile-tab-analiz');
 
-                // Analiz sekmesi: sadece details elementleri
-                var analizEl = document.getElementById('mobile-tab-analiz');
-                var analizWrap = document.createElement('div');
-                analizWrap.style.cssText = 'padding:16px;display:flex;flex-direction:column;gap:10px;';
-                leftPanel.querySelectorAll('details').forEach(function(det) {
-                    var clone = det.cloneNode(true);
-                    prefixIds(clone, 'ma');
-                    analizWrap.appendChild(clone);
-                });
-                analizEl.appendChild(analizWrap);
+            if (leftPanel && veriEl) {
+                // Orijinal konumunu hatırlamak için bir yer tutucu (anchor) bırak
+                var leftAnchor = document.createComment('mobile-anchor-left-panel');
+                leftPanel.parentNode.insertBefore(leftAnchor, leftPanel);
+                anchors.leftPanel = leftAnchor;
+
+                // "Analiz ve Veri Modülleri" altındaki <details> bloklarını
+                // (Sentinel / Landsat / NDVI / DEM / Land Cover vb.) GERÇEKTEN
+                // (klon değil) Analiz sekmesine taşı.
+                if (analizEl) {
+                    var analizWrap = document.createElement('div');
+                    analizWrap.id = 'mobile-analiz-wrap';
+                    analizWrap.style.cssText = 'display:flex;flex-direction:column;gap:10px;';
+                    leftPanel.querySelectorAll('details').forEach(function(det) {
+                        analizWrap.appendChild(det);
+                    });
+                    // "Analizi Çalıştır" butonunu da anlamsal olarak buraya taşı
+                    var runBtn = leftPanel.querySelector('#btn-run-analysis');
+                    if (runBtn) analizWrap.appendChild(runBtn);
+                    analizEl.appendChild(analizWrap);
+                }
+
+                // Geri kalan leftPanel (Basemap, Görüntü Alanı, KML/KMZ yükleme,
+                // Poligon/Dikdörtgen, tarih/bulut filtresi) Veri sekmesine taşınır.
+                // "sidebar-left" sınıfını kaldırıyoruz çünkü mobil CSS kuralı
+                // ".sidebar-left, .sidebar-right { display:none !important; }"
+                // sınıf bazlı çalışıyor — eleman nereye taşınırsa taşınsın bu
+                // sınıfı taşıdığı sürece gizli kalırdı.
+                leftPanel.classList.remove('sidebar-left');
+                leftPanel.classList.add('mobile-moved-panel');
+                veriEl.appendChild(leftPanel);
             }
 
-            // Sag panel klonla (Cizim + Harita sekmeleri)
+            // ---- Sağ panel (Çizim + Harita sekmeleri) ----
             var rightContent = document.querySelector('.sidebar-right .panel-content');
-            if (rightContent) {
-                var cizimEl  = document.getElementById('mobile-tab-cizim');
-                var haritaEl = document.getElementById('mobile-tab-harita');
-                var cizimWrap  = mkWrap();
-                var haritaWrap = mkWrap();
-                var inCizim = true;
+            var cizimEl  = document.getElementById('mobile-tab-cizim');
+            var haritaEl = document.getElementById('mobile-tab-harita');
+
+            if (rightContent && cizimEl && haritaEl) {
+                var cizimWrap = document.createElement('div');
+                cizimWrap.id = 'mobile-cizim-wrap';
+                cizimWrap.style.cssText = 'display:flex;flex-direction:column;gap:12px;';
+                var haritaWrap = document.createElement('div');
+                haritaWrap.id = 'mobile-harita-wrap';
+                haritaWrap.style.cssText = 'display:flex;flex-direction:column;gap:12px;';
+
+                // Bölünme noktası: "Çıktı Araçları (Markup)" başlığından ÖNCESİ
+                // (Harita Düzeni: kuzey oku/ölçek/galeri/lejant/şeffaflık
+                // checkbox'ları + Lejant ve Semboloji bölümü) → Harita sekmesi.
+                // O başlıktan SONRASI (Kalem/Çizgi/Poligon/Daire/Dikdörtgen/Kare/
+                // Ok/Kavisli Ok/Metin çizim araçları + Veri Grafikleri + Çıktı
+                // butonları) → Çizim sekmesi.
+                var inHarita = true;
                 Array.from(rightContent.children).forEach(function(child) {
                     var txt = (child.textContent || '').trim();
-                    if (child.tagName === 'H3' && /Harita|Kartografya|Düzen/i.test(txt)) inCizim = false;
-                    var clone = child.cloneNode(true);
-                    prefixIds(clone, inCizim ? 'mc2' : 'mh');
-                    (inCizim ? cizimWrap : haritaWrap).appendChild(clone);
+                    if (child.tagName === 'H3' && /Çıktı Araçları/i.test(txt)) inHarita = false;
+                    (inHarita ? haritaWrap : cizimWrap).appendChild(child); // GERÇEK TAŞIMA
                 });
                 cizimEl.appendChild(cizimWrap);
                 haritaEl.appendChild(haritaWrap);
             }
         }
 
-        function prefixIds(root, pfx) {
-            root.querySelectorAll('[id]').forEach(function(el) {
-                el.id = pfx + '-' + el.id;
-            });
-            root.querySelectorAll('[for]').forEach(function(el) {
-                el.setAttribute('for', pfx + '-' + el.getAttribute('for'));
-            });
-            root.querySelectorAll('input[name],textarea[name]').forEach(function(el) {
-                el.name = pfx + '-' + el.name;
-            });
-        }
+        // Mobilden masaüstüne dönüşte (pencere büyütme / tablet döndürme vb.)
+        // taşınan elemanları eski konumlarına geri yerleştirir.
+        function moveBackToDesktop() {
+            if (!panelsMoved) return;
+            panelsMoved = false;
 
-        function mkWrap() {
-            var d = document.createElement('div');
-            d.style.cssText = 'padding:16px;display:flex;flex-direction:column;gap:12px;';
-            return d;
+            var leftPanel  = document.querySelector('#mobile-tab-veri .mobile-moved-panel');
+            var analizWrap = document.getElementById('mobile-analiz-wrap');
+            if (leftPanel) {
+                if (analizWrap) {
+                    // <details> (ve run butonunu) orijinal sıraya (panel sonuna) geri ekle
+                    Array.from(analizWrap.children).forEach(function(node) {
+                        leftPanel.appendChild(node);
+                    });
+                    analizWrap.remove();
+                }
+                leftPanel.classList.remove('mobile-moved-panel');
+                leftPanel.classList.add('sidebar-left');
+                if (anchors.leftPanel && anchors.leftPanel.parentNode) {
+                    anchors.leftPanel.parentNode.insertBefore(leftPanel, anchors.leftPanel);
+                    anchors.leftPanel.remove();
+                }
+                anchors.leftPanel = null;
+            }
+
+            var rightContent = document.querySelector('.sidebar-right .panel-content');
+            var haritaWrap = document.getElementById('mobile-harita-wrap');
+            var cizimWrap  = document.getElementById('mobile-cizim-wrap');
+            if (rightContent) {
+                // Orijinal sıralama: önce Harita Düzeni/Lejant bölümü, sonra Markup bölümü
+                if (haritaWrap) {
+                    Array.from(haritaWrap.children).forEach(function(child) { rightContent.appendChild(child); });
+                    haritaWrap.remove();
+                }
+                if (cizimWrap) {
+                    Array.from(cizimWrap.children).forEach(function(child) { rightContent.appendChild(child); });
+                    cizimWrap.remove();
+                }
+            }
         }
 
         window.openDrawer = function(tab) {
-            clonePanelsOnce();
+            moveToMobile();
             switchTab(tab || activeTab);
             document.getElementById('mobile-drawer').classList.add('open');
             document.getElementById('mobile-panel-overlay').classList.add('open');
@@ -5022,19 +5091,34 @@ function selectRamp(name) {
         document.getElementById('mobile-drawer-close').addEventListener('click', closeDrawer);
         document.getElementById('mobile-panel-overlay').addEventListener('click', closeDrawer);
 
-        // Mobil Poligon Tetikleyici
+        // Mobil hızlı araç çubuğu: Poligon kısayolu — artık gerçek (taşınmış
+        // değil, orijinal) btn-polygon elemanına doğrudan tıklıyor, her zaman çalışır.
         window.mobileTriggerPolygon = function() {
             closeDrawer();
             var realBtn = document.getElementById('btn-polygon');
             if (realBtn) realBtn.click();
         };
 
-        // SVG dokunmatik olay kopyalama
+        // ===================================================================
+        // DOKUNMATİK (TOUCH) DESTEĞİ
+        // #markup-svg üzerindeki serbest çizim motoru (kalem/çizgi/poligon/
+        // daire/dikdörtgen/kare/ok/kavisli ok/metin) tamamen mousedown/
+        // mousemove/mouseup/click olaylarına dayanıyor. Bu katman Leaflet'in
+        // bir parçası olmadığından dokunmatik olaylar otomatik gelmiyor;
+        // bu yüzden touch olaylarını karşılık gelen mouse olaylarına çeviriyoruz.
+        //
+        // touchstart/touchmove sırasında preventDefault() çağırmak güvenlidir:
+        // bu olaylar SADECE svg'nin pointer-events:'all' olduğu (yani bir çizim
+        // aracının aktif olduğu) anda svg'ye ulaşır; araç aktif değilken
+        // pointer-events:'none' olduğundan dokunuşlar doğrudan haritaya gider
+        // ve Leaflet'in kendi (yerleşik) dokunmatik kaydırma/yakınlaştırması
+        // bundan etkilenmez.
+        // ===================================================================
         function touchToMouse(touchEvt, type) {
             var t = touchEvt.touches[0] || touchEvt.changedTouches[0];
             if (!t) return;
             var evt = new MouseEvent(type, {
-                bubbles: true, cancelable: true,
+                bubbles: true, cancelable: true, button: 0,
                 clientX: t.clientX, clientY: t.clientY,
                 screenX: t.screenX, screenY: t.screenY
             });
@@ -5052,23 +5136,24 @@ function selectRamp(name) {
             el.addEventListener('touchend', function(e) {
                 e.preventDefault(); touchToMouse(e, 'mouseup'); touchToMouse(e, 'click');
             }, { passive: false });
+            el.addEventListener('touchcancel', function(e) {
+                touchToMouse(e, 'mouseup');
+            }, { passive: true });
         }
 
-        document.addEventListener('DOMContentLoaded', function() {
-            setTimeout(function() {
-                var svg = document.getElementById('markup-svg');
-                if (svg) addTouchToEl(svg);
-                // Leaflet dokunmatik
-                var checkMap = setInterval(function() {
-                    if (typeof map !== 'undefined' && map) {
-                        clearInterval(checkMap);
-                        if (map.touchZoom) map.touchZoom.enable();
-                        if (map.tap) map.tap.enable();
-                        if (map.pm) map.pm.setGlobalOptions({ allowSelfIntersection: false });
-                    }
-                }, 300);
-            }, 1200);
-        });
+        // Sayfa parse edildiğinde #markup-svg zaten DOM'dadır (statik HTML) —
+        // eski koddaki 1200ms'lik gereksiz bekleme kaldırıldı; gecikme süresince
+        // dokunuşlar kayboluyordu.
+        var markupSvgEl = document.getElementById('markup-svg');
+        if (markupSvgEl) addTouchToEl(markupSvgEl);
+
+        // Leaflet dokunmatik (touchZoom/tap): bu script en altta olduğundan
+        // `map` değişkeni zaten tanımlı — interval ile bekletmeye gerek yok.
+        if (typeof map !== 'undefined' && map) {
+            if (map.touchZoom && !map.touchZoom.enabled()) map.touchZoom.enable();
+            if (map.tap && !map.tap.enabled()) map.tap.enable();
+            if (map.pm) map.pm.setGlobalOptions({ allowSelfIntersection: false });
+        }
 
         // Swipe ile drawer kapat
         var drawer = document.getElementById('mobile-drawer');
@@ -5078,8 +5163,13 @@ function selectRamp(name) {
             if (e.changedTouches[0].clientX - swipeX < -60) closeDrawer();
         }, { passive: true });
 
+        // Masaüstü genişliğine dönüldüğünde: çekmeceyi kapat ve taşınan
+        // panelleri eski (masaüstü) konumlarına geri yerleştir.
         window.addEventListener('resize', function() {
-            if (window.innerWidth > 900 && drawerOpen) closeDrawer();
+            if (window.innerWidth > MOBILE_BREAKPOINT) {
+                if (drawerOpen) closeDrawer();
+                moveBackToDesktop();
+            }
         });
 
     })();
