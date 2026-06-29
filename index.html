@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🌲SylvaGIS  </title>
+    <title>🌲SylvaGIS 12</title>
 
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <!-- Leaflet Geoman (gerçek poligon/dikdörtgen çizim motoru) -->
@@ -369,6 +369,34 @@
             backdrop-filter: blur(2px);
         }
         #mobile-panel-overlay.open { display: block; }
+
+        /* ===== ANALİZ YÜKLEME OVERLAY ===== */
+        #analysis-loading-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(248,250,252,0.72);
+            z-index: 99990;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            gap: 18px;
+            backdrop-filter: blur(2px);
+        }
+        #analysis-loading-overlay.active { display: flex; }
+        @keyframes sylvaPulse {
+            0%, 100% { opacity: 0.25; }
+            50%       { opacity: 1; }
+        }
+        #analysis-loading-text {
+            font-size: 2rem;
+            font-weight: 800;
+            color: #1e3a8a;
+            letter-spacing: 0.04em;
+            animation: sylvaPulse 1.5s ease-in-out infinite;
+            user-select: none;
+        }
+        #analysis-loading-sub { display: none; }
 
         /* Mobil araç menüsü (drawer) */
         #mobile-drawer {
@@ -783,6 +811,11 @@
     </style>
 </head>
 <body>
+    <!-- ANALİZ YÜKLEME OVERLAY -->
+    <div id="analysis-loading-overlay">
+        <div id="analysis-loading-text">🌲 SylvaGIS</div>
+    </div>
+
     <!-- Mobil Panel Overlay -->
     <div id="mobile-panel-overlay"></div>
 
@@ -826,7 +859,11 @@
     </div>
 
     <div class="navbar">
-        <div class="logo-container">🌲 SylvaGIS</div>
+        <div class="logo-container">🌲 SylvaGIS <span style="font-size:0.7rem;font-weight:400;color:#64748b;margin-left:4px;">11</span></div>
+        <div id="server-status" title="Python sunucu durumu" style="display:flex;align-items:center;gap:5px;font-size:0.75rem;font-weight:600;color:#94a3b8;cursor:default;user-select:none;">
+            <span id="server-dot" style="width:9px;height:9px;border-radius:50%;background:#e2e8f0;display:inline-block;transition:background 0.3s;"></span>
+            <span id="server-label">Sunucu</span>
+        </div>
         <button id="hamburger-btn" onclick="toggleDrawer()" aria-label="Menuyu Ac/Kapat">
             <span></span><span></span><span></span>
         </button>
@@ -980,8 +1017,8 @@
             <div class="control-group">
                 <label>Bulutluluk Oranı (Maks)</label>
                 <div class="slider-group">
-                    <input type="range" id="cloud-slider" min="0" max="100" value="10">
-                    <span class="slider-val" id="cloud-val">%10</span>
+                    <input type="range" id="cloud-slider" min="0" max="100" value="100">
+                    <span class="slider-val" id="cloud-val">%100</span>
                 </div>
             </div>
 
@@ -1594,6 +1631,13 @@
                     <span style="font-size:0.72rem; margin-top:4px;">Classified modda "✅ Lejantı Uygula" butonuna basınca burada belirir.</span>
                 </div>
                 <div id="stats-chart-table"></div>
+
+                <!-- İndirme butonları — analiz çalıştıktan sonra tabloyu/grafiği dışa aktarır -->
+                <div style="margin-top:8px; display:flex; gap:5px; flex-wrap:wrap;">
+                    <button type="button" onclick="downloadChartPNG()" class="btn-tool" style="flex:1; font-size:0.78rem;">🖼️ Grafik PNG</button>
+                    <button type="button" onclick="downloadCSV()" class="btn-tool" style="flex:1; font-size:0.78rem;">📥 CSV İndir</button>
+                    <button type="button" onclick="downloadPDF()" class="btn-tool" style="flex:1; font-size:0.78rem;">📄 PDF İndir</button>
+                </div>
             </div>
 
             <div style="margin-top: auto; display: flex; flex-direction: column; gap: 10px;">
@@ -1775,6 +1819,10 @@
     <script src="https://unpkg.com/leaflet-image@0.4.0/leaflet-image.js"></script>
     <!-- jsPDF (PDF çıktısı) -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <!-- jsPDF-AutoTable (tablo → PDF) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+    <!-- html2canvas — GEE tile dahil tüm harita DOM'unu yakalar -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 
     <script>
         // ---------------------------------------------------------
@@ -2213,10 +2261,16 @@ document.getElementById('layerOpacity').addEventListener('input', function() {
         btnDeleteGeom.addEventListener('click', clearCurrentLayer);
 
         // Çizim tamamlandığında: tek çalışma alanı olarak ayarla
+        // + "Çalışma Alanı" göster/gizle checkbox'ını otomatik işaretle
         map.on('pm:create', function (e) {
             map.pm.disableDraw();
             setActiveTool(null);
             setCurrentLayer(e.layer);
+            var waToggle = document.getElementById('toggle-working-area');
+            if (waToggle && !waToggle.checked) {
+                waToggle.checked = true;
+                waToggle.dispatchEvent(new Event('change'));
+            }
         });
 
         // ---------------------------------------------------------
@@ -2504,11 +2558,11 @@ function selectRamp(name) {
                 legendBox.innerHTML =
                     '<b style="font-size:0.78rem;">' + escapeHtml(title) + '</b>' +
                     '<div style="display:flex; justify-content:space-between; font-size:0.68rem; margin-top:4px; color:#475569;">' +
-                        '<span>' + minVal + '</span>' +
+                        '<span class="legend-min-label">' + minVal + '</span>' +
                         '<span>' + ((minVal + maxVal) / 2).toFixed(2) + '</span>' +
-                        '<span>' + maxVal + '</span>' +
+                        '<span class="legend-max-label">' + maxVal + '</span>' +
                     '</div>' +
-                    '<div style="height:10px; border-radius:3px; border:1px solid #cbd5e1; margin-top:2px; background:' + rampCss + ';"></div>' +
+                    '<div class="color-ramp" style="height:10px; border-radius:3px; border:1px solid #cbd5e1; margin-top:2px; background:' + rampCss + ';"></div>' +
                     '<div style="display:flex; justify-content:space-between; font-size:0.65rem; color:#94a3b8; margin-top:2px;">' +
                         '<span>Düşük</span><span>Yüksek</span>' +
                     '</div>';
@@ -2519,6 +2573,67 @@ function selectRamp(name) {
 
             // Katmanı stretched palette göre yeniden boyar (değer aralığına normalize eder)
             recolorCurrentLayerStretched(minVal, maxVal, rampCss);
+
+            // ── GEE senkronizasyonu: Stretched modda da artık classified moddaki
+            // gibi sunucuya gerçek bir "yeniden hesapla ve boya" talimatı gider.
+            // (Önceden sadece classified mod GEE'ye senkronize oluyordu — bu eksiklik
+            // "değişiklik sadece tarayıcıda kalıyor" sorununun ana kaynağıydı.)
+            syncStretchedToGEE(minVal, maxVal);
+        }
+
+        // Stretched mod min/max + renk rampasını GEE'ye göndererek tile URL'yi
+        // yeniler (syncClassificationToGEE'nin sürekli/stretched karşılığı).
+        function syncStretchedToGEE(minVal, maxVal) {
+            if (!currentLayer) return;
+            var meta = getSelectedAnalysisMeta();
+            if (!meta || meta.legendType !== 'stretched') return; // sadece sürekli indeks katmanları
+
+            var startInput    = document.getElementById('date-start');
+            var endInput      = document.getElementById('date-end');
+            var sensorRadio   = document.querySelector('.uydu-sensor-radio:checked');
+            var viewModeEl    = document.getElementById('viewMode');
+            var cloudSliderEl = document.getElementById('cloud-slider');
+
+            var roiGeoJSON = currentLayer.toGeoJSON();
+            var geometry   = (roiGeoJSON.type === 'FeatureCollection')
+                           ? roiGeoJSON.features[0].geometry : roiGeoJSON.geometry;
+            if (!geometry) return;
+
+            var selectedRampEl = document.getElementById('selectedRamp');
+            var rampName = selectedRampEl ? (selectedRampEl.getAttribute('data-ramp') || 'viridis') : 'viridis';
+            var palette  = sampleRampColors(rampName, 6); // GEE paleti için 6 renkli örnek
+
+            fetch('http://127.0.0.1:5000/api/analyze', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    roi:       geometry.coordinates,
+                    clipMode:  viewModeEl    ? viewModeEl.value : 'clip',
+                    startDate: startInput    ? startInput.value : '',
+                    endDate:   endInput      ? endInput.value   : '',
+                    satellite: sensorRadio   ? sensorRadio.value : 's2-l2a',
+                    index:     meta.analysisName,
+                    maxCloud:  cloudSliderEl ? parseInt(cloudSliderEl.value, 10) : 20,
+                    sceneId:   currentSceneId,
+                    palette:   palette,
+                    min:       minVal,
+                    max:       maxVal
+                })
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (!data.success) return;
+                if (_geeLayer) { map.removeLayer(_geeLayer); _geeLayer = null; }
+                _geeLayer = L.tileLayer(data.tileUrl, { opacity: 0.85, zIndex: 10, crossOrigin: true }).addTo(map);
+                if (data.stats) {
+                    updateStatsTable(data.stats);
+                    renderChart(data.stats, meta);
+                    // Lejanta gerçek veri aralığını ekle (kullanıcının girdiği
+                    // stretch aralığından bağımsız, ham veriden gelen gerçek min/max)
+                    appendRealStatsToLegend(data.stats);
+                }
+            })
+            .catch(function() { /* sessiz hata — GEE yoksa yerel önizleme yeterli */ });
         }
 
         // Stretched mod için katman boyama
@@ -2811,6 +2926,77 @@ function selectRamp(name) {
             renderDynamicLegend(classes);
             recolorCurrentLayerByClasses(classes);
             updateStatsChartFromClasses(classes);
+
+            // ── GEE senkronizasyonu: özel renk/aralık bilgisini sunucuya gönder ──
+            // Böylece haritadaki GEE tile de seçilen sınıflandırmayı yansıtır.
+            syncClassificationToGEE(classes);
+        }
+
+        // Sınıf renk/aralık bilgisini GEE'ye göndererek tile URL'yi yeniler
+        // classes: [ { min, max, name, color }, ... ] — tam sınıf tanımları JSON olarak gönderilir
+        function syncClassificationToGEE(classes) {
+            if (!currentLayer) return;
+            var meta = getSelectedAnalysisMeta();
+            if (!meta || meta.legendType === 'image') return;
+
+            var startInput    = document.getElementById('date-start');
+            var endInput      = document.getElementById('date-end');
+            var sensorRadio   = document.querySelector('.uydu-sensor-radio:checked');
+            var viewModeEl    = document.getElementById('viewMode');
+            var cloudSliderEl = document.getElementById('cloud-slider');
+
+            var roiGeoJSON = currentLayer.toGeoJSON();
+            var geometry   = (roiGeoJSON.type === 'FeatureCollection')
+                           ? roiGeoJSON.features[0].geometry : roiGeoJSON.geometry;
+            if (!geometry) return;
+
+            // Sınıf renklerini palet dizisine çevir (küçükten büyüğe sıralı)
+            var palette = classes.map(function(c) { return c.color; });
+            var overallMin = classes[0].min;
+            var overallMax = classes[classes.length - 1].max;
+
+            // Tam sınıf tanımları — Python backend image.where() zinciri için
+            var classBreaks = classes.map(function(c) {
+                return { min: c.min, max: c.max, color: c.color, label: c.name };
+            });
+
+            fetch('http://127.0.0.1:5000/api/analyze', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    roi:         geometry.coordinates,
+                    clipMode:    viewModeEl    ? viewModeEl.value : 'clip',
+                    startDate:   startInput    ? startInput.value : '',
+                    endDate:     endInput      ? endInput.value   : '',
+                    satellite:   sensorRadio   ? sensorRadio.value : 's2-l2a',
+                    index:       meta.analysisName,
+                    maxCloud:    cloudSliderEl ? parseInt(cloudSliderEl.value, 10) : 20,
+                    sceneId:     currentSceneId,
+                    palette:     palette,
+                    min:         overallMin,
+                    max:         overallMax,
+                    classBreaks: classBreaks
+                })
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (!data.success) return;
+                if (_geeLayer) { map.removeLayer(_geeLayer); _geeLayer = null; }
+                _geeLayer = L.tileLayer(data.tileUrl, { opacity: 0.85, zIndex: 10, crossOrigin: true }).addTo(map);
+
+                // ── Gerçek veri besleme: rastgele simülasyon yerine, GEE'den
+                // dönen gerçek histogramdan her sınıfın gerçek piksel yüzdesini
+                // hesapla ve grafiği/tabloyu bu gerçek veriyle güncelle.
+                if (data.stats && data.stats.value) {
+                    var realPct = computeClassPercentagesFromHistogram(classes, data.stats.value);
+                    if (realPct) {
+                        var areaHa = null;
+                        try { areaHa = turf.area(currentLayer.toGeoJSON()) / 10000; } catch (e) {}
+                        renderStatsChart({ classes: classes, percentages: realPct, areaHa: areaHa });
+                    }
+                }
+            })
+            .catch(function() { /* sessiz hata — GEE yoksa yerel renklendirme yeterli */ });
         }
 
         // Harita üzerindeki lejantı (.map-legend), girilen özel isim/aralık/renklerle yeniden çizer
@@ -3012,8 +3198,11 @@ function selectRamp(name) {
                     + '<div style="height:10px;border-radius:3px;border:1px solid #cbd5e1;margin-top:3px;background:' + rampCss + ';"></div>';
             } else if (legendType !== 'classified' || !meta.classesRaw) {
                 html += '<div style="display:flex;justify-content:space-between;font-size:0.68rem;margin-top:4px;color:#475569;">'
-                    + '<span>' + escapeHtml(meta.legendMin) + '</span><span>' + escapeHtml(meta.legendMax) + '</span></div>'
-                    + '<div style="height:10px;border-radius:3px;border:1px solid #cbd5e1;margin-top:2px;background:' + rampCss + ';"></div>';
+                    + '<span class="legend-min-label">' + escapeHtml(meta.legendMin) + '</span>'
+                    + '<span class="legend-max-label">' + escapeHtml(meta.legendMax) + '</span></div>'
+                    + '<div class="color-ramp" style="height:10px;border-radius:3px;border:1px solid #cbd5e1;margin-top:2px;background:' + rampCss + ';"></div>'
+                    + '<div style="display:flex;justify-content:space-between;font-size:0.65rem;color:#94a3b8;margin-top:2px;">'
+                    + '<span>Düşük</span><span>Yüksek</span></div>';
             }
 
             legendBox.innerHTML = html;
@@ -3057,12 +3246,13 @@ function selectRamp(name) {
             var galleryEl = document.getElementById('map-gallery');
             if (!galleryEl) return;
             galleryEl.innerHTML = '';
+            var emoji = getAnalysisEmoji(meta ? meta.analysisName : '');
 
             scenes.forEach(function (scene, idx) {
                 var item = document.createElement('div');
                 item.className = 'gallery-item' + (idx === 0 ? ' active' : '');
                 item.setAttribute('data-date', scene.dateLabel);
-                item.innerHTML = '<div class="gallery-img">🛰️</div><div class="gallery-info">' + scene.dateLabel + '<br>Bulut: %' + scene.cloud + '</div>';
+                item.innerHTML = '<div class="gallery-img">' + emoji + '</div><div class="gallery-info">' + scene.dateLabel + '<br>Bulut: %' + scene.cloud + '</div>';
                 item.addEventListener('click', function () {
                     galleryEl.querySelectorAll('.gallery-item').forEach(function (i) { i.classList.remove('active'); });
                     item.classList.add('active');
@@ -3135,19 +3325,591 @@ function selectRamp(name) {
         }
 
         // "🚀 Analizi Çalıştır" butonu
+        var _geeLayer = null; // Haritaya eklenen GEE tile katmanı (bir öncekini kaldırmak için)
+        // Galeriden seçilen sahnenin GEE system:index'i. null ise "tarih aralığı medyanı"
+        // kullanılır. Sınıflandırma/Stretched senkronizasyonu sırasında bu ID korunarak
+        // gönderilir; aksi halde renk/aralık değişince sahne sessizce medyana döner.
+        var currentSceneId = null;
+
         function runAnalysis() {
             var meta = getSelectedAnalysisMeta();
             if (!meta) { alert('Lütfen bir analiz veya veri katmanı seçin.'); return; }
 
-            if (meta.needsGallery) {
-                if (!currentLayer) {
-                    alert('Lütfen önce haritada bir Çalışma Alanı (AOI) çizin veya KML/KMZ yükleyin.');
+            // Uydu görüntüsü (RGB) — sunucu gerektirmeyen mock galeri akışı
+            if (meta.legendType === 'image') {
+                if (!currentLayer) { alert('Lütfen önce bir Çalışma Alanı (AOI) çizin veya KML/KMZ yükleyin.'); return; }
+                openSceneGallery(meta);
+                return;
+            }
+
+            // İndeks analizi (NDVI, NDWI, EVI …) — gerçek Python sunucusu
+            if (!currentLayer) { alert('Lütfen önce bir Çalışma Alanı (AOI) çizin veya KML/KMZ yükleyin.'); return; }
+            currentSceneId = null; // Yeni analiz = tarih aralığı medyanından başla
+
+            var startInput = document.getElementById('date-start');
+            var endInput   = document.getElementById('date-end');
+            if (!startInput || !startInput.value || !endInput || !endInput.value) {
+                alert('Lütfen başlangıç ve bitiş tarihlerini seçin.'); return;
+            }
+
+            var sensorRadio   = document.querySelector('.uydu-sensor-radio:checked');
+            var viewModeEl    = document.getElementById('viewMode');
+            var cloudSliderEl = document.getElementById('cloud-slider');
+
+            var satellite = sensorRadio   ? sensorRadio.value    : 's2-l2a';
+            var clipMode  = viewModeEl    ? viewModeEl.value     : 'clip';
+            var maxCloud  = cloudSliderEl ? parseInt(cloudSliderEl.value, 10) : 20;
+
+            // AOI geometrisini al
+            var roiGeoJSON = currentLayer.toGeoJSON();
+            var geometry   = (roiGeoJSON.type === 'FeatureCollection')
+                           ? roiGeoJSON.features[0].geometry
+                           : roiGeoJSON.geometry;
+            if (!geometry || geometry.type !== 'Polygon') {
+                alert('AOI geometrisi Polygon olmalıdır.'); return;
+            }
+
+            // Yükleniyor durumu
+            var runBtn = document.getElementById('btn-run-analysis');
+            if (runBtn) { runBtn.disabled = true; runBtn.textContent = '⏳ Çalışıyor…'; }
+            var loadingOverlay = document.getElementById('analysis-loading-overlay');
+            if (loadingOverlay) loadingOverlay.classList.add('active');
+
+            renderAnalysisLegend(meta);
+
+            fetch('http://127.0.0.1:5000/api/analyze', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    roi:       geometry.coordinates,
+                    clipMode:  clipMode,
+                    startDate: startInput.value,
+                    endDate:   endInput.value,
+                    satellite: satellite,
+                    index:     meta.analysisName,   // 'NDVI', 'NDWI', 'LST' …
+                    maxCloud:  maxCloud
+                })
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (runBtn) { runBtn.disabled = false; runBtn.textContent = '🚀 Analizi Çalıştır'; }
+                if (loadingOverlay) loadingOverlay.classList.remove('active');
+                if (!data.success) {
+                    alert('Sunucu hatası: ' + (data.error || 'Bilinmeyen hata'));
                     return;
                 }
-                openSceneGallery(meta);
-            } else {
-                applyAnalysisResult(meta, null);
+                // Önceki GEE katmanını kaldır
+                if (_geeLayer) { map.removeLayer(_geeLayer); _geeLayer = null; }
+                // Yeni GEE tile katmanını ekle (crossOrigin: html2canvas tabanlı
+                // export'un tile'ları yakalayabilmesi için gerekli)
+                _geeLayer = L.tileLayer(data.tileUrl, { opacity: 0.85, zIndex: 10, crossOrigin: true }).addTo(map);
+                // Ham histogram tablosu ve görsel grafik
+                if (data.stats) {
+                    updateStatsTable(data.stats);
+                    renderChart(data.stats, meta);
+                    // Lejanttaki min/max artık sabit metin değil — GEE'den gelen
+                    // gerçek istatistiksel veriye göre otomatik güncellenir.
+                    appendRealStatsToLegend(data.stats);
+                }
+                // Backend'den gelen kesin min/max/mean değerleri (histogram değil,
+                // reduceRegion minMax) ile lejantı ve stretched giriş kutularını güncelle
+                if (data.realStats) {
+                    applyRealStatsToLegendUI(data.realStats);
+                }
+                // Galeri kutucuklarını yanıtten gelen scenes ile doldur
+                // (ayrı bir /api/get-scenes isteğine gerek yok)
+                if (data.scenes && data.scenes.length) {
+                    renderGalleryFromScenes(data.scenes);
+                }
+            })
+            .catch(function(err) {
+                if (runBtn) { runBtn.disabled = false; runBtn.textContent = '🚀 Analizi Çalıştır'; }
+                if (loadingOverlay) loadingOverlay.classList.remove('active');
+                alert('Sunucuya bağlanılamadı.\nserver.py çalışıyor mu?\n\n' + err.message);
+            });
+        }
+
+        // ── Analiz adına göre galeri ikonunu döndürür ─────────────
+        function getAnalysisEmoji(analysisName) {
+            if (!analysisName) return '🛰️';
+            var n = analysisName.toUpperCase();
+            if (n === 'NDVI')       return '🌿';
+            if (n === 'NDWI')       return '💧';
+            if (n === 'LST')        return '🌡️';
+            if (n === 'EVI')        return '🌱';
+            if (n === 'SAVI')       return '🌾';
+            if (n === 'SMI')        return '🏜️';
+            if (n === 'NBR')        return '🔥';
+            if (n === 'NDSI')       return '❄️';
+            if (n === 'BSI')        return '🪨';
+            if (n.includes('RGB') || n.includes('IMAGE')) return '🖼️';
+            if (n.includes('DEM') || n.includes('ELEVATION')) return '🏔️';
+            if (n.includes('LAND') || n.includes('COVER')) return '🗺️';
+            return '🛰️';
+        }
+
+        // ── analyze yanıtından gelen scenes dizisini galeriye yazar ─
+        // scenes: [ [sceneId, timestamp_ms, cloud_pct], ... ]
+        // Global: analiz legend'ına yazılacak tarih bilgisi
+        var _currentLegendDate = null;
+
+        function renderGalleryFromScenes(scenes) {
+            var galleryEl = document.getElementById('map-gallery');
+            if (!galleryEl || !scenes || !scenes.length) return;
+            var meta  = getSelectedAnalysisMeta();
+            var emoji = getAnalysisEmoji(meta ? meta.analysisName : '');
+            // İlk sahneyi tarih kaynağı olarak kaydet
+            if (scenes[0] && scenes[0][1]) {
+                _currentLegendDate = new Date(scenes[0][1]).toISOString().slice(0, 10);
             }
+            galleryEl.innerHTML = '';
+            scenes.forEach(function(scene, idx) {
+                var sceneId   = scene[0];
+                var dateLabel = scene[1] ? new Date(scene[1]).toLocaleDateString('tr-TR') : '—';
+                var cloud     = typeof scene[2] === 'number' ? scene[2].toFixed(1) : '—';
+                var div = document.createElement('div');
+                div.className = 'gallery-item' + (idx === 0 ? ' active' : '');
+                div.setAttribute('data-scene-id', sceneId);
+                div.innerHTML = '<div class="gallery-img">' + emoji + '</div>'
+                              + '<div class="gallery-info">' + dateLabel + '<br>☁ %' + cloud + '</div>';
+                div.addEventListener('click', function() {
+                    galleryEl.querySelectorAll('.gallery-item').forEach(function(i) { i.classList.remove('active'); });
+                    div.classList.add('active');
+                    // Seçilen sahneyi galeri başına taşı (hiyerarşik sıralama)
+                    galleryEl.insertBefore(div, galleryEl.firstChild);
+                    // Legend tarihini güncelle
+                    if (scene[1]) _currentLegendDate = new Date(scene[1]).toISOString().slice(0, 10);
+                    loadSpecificScene(sceneId);
+                });
+                galleryEl.appendChild(div);
+            });
+        }
+
+        // ── Gerçek sahne listesini sunucudan çekip galeriye dağıtır ─
+        // (Doğrudan galeri yenilemek için bağımsız kullanılabilir)
+        function getSceneList(roiCoords, startDate, endDate, satellite, cloudCover) {
+            var galleryEl = document.getElementById('map-gallery');
+            if (!galleryEl) return;
+            galleryEl.innerHTML = '<div style="padding:6px 10px;font-size:0.75rem;color:#94a3b8;">⏳ Sahneler yükleniyor…</div>';
+
+            fetch('http://127.0.0.1:5000/api/get-scenes', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    roi: roiCoords,
+                    startDate: startDate,
+                    endDate: endDate,
+                    satellite: satellite || 's2-l2a',
+                    cloudCover: cloudCover || 20
+                })
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (!data.success || !data.scenes || !data.scenes.length) {
+                    galleryEl.innerHTML = '<div style="padding:6px 10px;font-size:0.75rem;color:#94a3b8;">Bu tarih aralığında sahne bulunamadı.</div>';
+                    return;
+                }
+                galleryEl.innerHTML = '';
+                var metaG = getSelectedAnalysisMeta();
+                var emojiG = getAnalysisEmoji(metaG ? metaG.analysisName : '');
+                data.scenes.forEach(function(scene, idx) {
+                    var sceneId   = scene[0];
+                    var dateLabel = scene[1] ? new Date(scene[1]).toLocaleDateString('tr-TR') : '—';
+                    var cloud     = typeof scene[2] === 'number' ? scene[2].toFixed(1) : '—';
+
+                    var div = document.createElement('div');
+                    div.className = 'gallery-item' + (idx === 0 ? ' active' : '');
+                    div.setAttribute('data-scene-id', sceneId);
+                    div.innerHTML = '<div class="gallery-img">' + emojiG + '</div>'
+                                  + '<div class="gallery-info">' + dateLabel + '<br>☁ %' + cloud + '</div>';
+                    div.addEventListener('click', function() {
+                        galleryEl.querySelectorAll('.gallery-item').forEach(function(i) { i.classList.remove('active'); });
+                        div.classList.add('active');
+                        // Seçilen sahneyi galeri başına taşı (hiyerarşik sıralama)
+                        galleryEl.insertBefore(div, galleryEl.firstChild);
+                        if (scene[1]) _currentLegendDate = new Date(scene[1]).toISOString().slice(0, 10);
+                        loadSpecificScene(sceneId);
+                    });
+                    galleryEl.appendChild(div);
+                });
+            })
+            .catch(function() {
+                galleryEl.innerHTML = '<div style="padding:6px 10px;font-size:0.75rem;color:#ef4444;">Sahne listesi alınamadı.</div>';
+            });
+        }
+
+        // ── Belirli bir sahneyi haritaya yükler ──────────────────────
+        function loadSpecificScene(sceneId) {
+            var meta = getSelectedAnalysisMeta();
+            if (!meta || !currentLayer) return;
+            currentSceneId = sceneId; // Sınıflandırma/Stretched senkronizasyonu bu sahneyi korusun
+
+            var startInput    = document.getElementById('date-start');
+            var endInput      = document.getElementById('date-end');
+            var sensorRadio   = document.querySelector('.uydu-sensor-radio:checked');
+            var viewModeEl    = document.getElementById('viewMode');
+            var cloudSliderEl = document.getElementById('cloud-slider');
+
+            var roiGeoJSON = currentLayer.toGeoJSON();
+            var geometry   = (roiGeoJSON.type === 'FeatureCollection')
+                           ? roiGeoJSON.features[0].geometry
+                           : roiGeoJSON.geometry;
+            if (!geometry) return;
+
+            fetch('http://127.0.0.1:5000/api/analyze', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    roi:       geometry.coordinates,
+                    clipMode:  viewModeEl    ? viewModeEl.value : 'clip',
+                    startDate: startInput    ? startInput.value : '',
+                    endDate:   endInput      ? endInput.value   : '',
+                    satellite: sensorRadio   ? sensorRadio.value : 's2-l2a',
+                    index:     meta.analysisName,
+                    maxCloud:  cloudSliderEl ? parseInt(cloudSliderEl.value, 10) : 20,
+                    sceneId:   sceneId
+                })
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (!data.success) { alert('Sahne yüklenemedi: ' + (data.error || '')); return; }
+                // Harita katmanını güncelle
+                if (_geeLayer) { map.removeLayer(_geeLayer); _geeLayer = null; }
+                _geeLayer = L.tileLayer(data.tileUrl, { opacity: 0.85, zIndex: 10, crossOrigin: true }).addTo(map);
+                // Lejantı sıfırdan yeniden oluştur, ardından gerçek istatistikleri uygula
+                renderAnalysisLegend(meta);
+                if (data.stats) {
+                    updateStatsTable(data.stats);
+                    renderChart(data.stats, meta);
+                    appendRealStatsToLegend(data.stats);
+                }
+                if (data.realStats) {
+                    applyRealStatsToLegendUI(data.realStats);
+                    // Stretched modda renk skalasını yeni min/max ile yeniden boyar
+                    var mn = parseFloat(data.realStats.min);
+                    var mx = parseFloat(data.realStats.max);
+                    if (!isNaN(mn) && !isNaN(mx)) {
+                        var selectedRampEl = document.getElementById('selectedRamp');
+                        var rampStyle = selectedRampEl ? selectedRampEl.style.background : '';
+                        var viewModeEl = document.getElementById('viewMode');
+                        if (!viewModeEl || viewModeEl.value === 'stretched') {
+                            recolorCurrentLayerStretched(mn, mx, rampStyle);
+                        }
+                    }
+                }
+            })
+            .catch(function(err) { alert('Sahne yüklenemedi.\n' + err.message); });
+        }
+
+        // ── Ham histogram tablosunu #stats-chart-table'a yazar ──────
+        // stats: sunucudan gelen tam nesne  { value: { "0.12": 34, ... } }
+        function updateStatsTable(stats) {
+            var tableWrap = document.getElementById('stats-chart-table');
+            if (!tableWrap) return;
+            var hist = (stats && stats.value) ? stats.value : null;
+            if (!hist || !Object.keys(hist).length) {
+                tableWrap.innerHTML = '<p style="color:#94a3b8;font-size:0.75rem;text-align:center;margin:6px 0;">İstatistik yok</p>';
+                return;
+            }
+            var keys = Object.keys(hist).map(Number).sort(function(a, b) { return a - b; });
+            var total = keys.reduce(function(s, k) { return s + hist[k]; }, 0) || 1;
+            var rows = keys.map(function(k) {
+                var pct = ((hist[k] / total) * 100).toFixed(1);
+                return '<tr><td style="padding:2px 5px;">' + k.toFixed(4) + '</td>'
+                     + '<td style="padding:2px 5px;text-align:right;">' + hist[k] + '</td>'
+                     + '<td style="padding:2px 5px;text-align:right;">' + pct + '%</td></tr>';
+            }).join('');
+            tableWrap.innerHTML =
+                '<table style="width:100%;font-size:0.70rem;border-collapse:collapse;margin-top:6px;">'
+                + '<thead><tr style="background:#f1f5f9;color:#475569;">'
+                +   '<th style="padding:3px 5px;text-align:left;">Değer</th>'
+                +   '<th style="padding:3px 5px;text-align:right;">Piksel</th>'
+                +   '<th style="padding:3px 5px;text-align:right;">%</th>'
+                + '</tr></thead><tbody>' + rows + '</tbody></table>';
+        }
+
+        // ── İstatistik tablosunu CSV olarak indirir ──────────────────
+        function downloadCSV() {
+            var tableEl = document.querySelector('#stats-chart-table table');
+            if (!tableEl) { alert('Önce bir analiz çalıştırın.'); return; }
+            var rows = tableEl.querySelectorAll('tr');
+            var csv = [];
+            rows.forEach(function(row) {
+                var cols = row.querySelectorAll('td, th');
+                var vals = Array.from(cols).map(function(c) {
+                    return '"' + c.innerText.replace(/"/g, '""') + '"';
+                });
+                csv.push(vals.join(','));
+            });
+            var blob = new Blob(['\uFEFF' + csv.join('\n')], { type: 'text/csv;charset=utf-8;' });
+            var a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'SylvaGIS_Analiz_Sonuclari.csv';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+
+        // ── İstatistik tablosunu PDF olarak indirir (jsPDF-AutoTable) ─
+        function downloadPDF() {
+            var tableEl = document.querySelector('#stats-chart-table table');
+            if (!tableEl) { alert('Önce bir analiz çalıştırın.'); return; }
+            var jspdfLib = window.jspdf || window.jsPDF;
+            if (!jspdfLib) { alert('jsPDF kütüphanesi yüklenemedi.'); return; }
+            var JsPDF = jspdfLib.jsPDF || jspdfLib;
+            var doc = new JsPDF();
+            doc.setFontSize(14);
+            doc.text('SylvaGIS Analiz Raporu', 14, 16);
+            doc.setFontSize(9);
+            doc.setTextColor(100);
+            doc.text('Tarih: ' + new Date().toLocaleDateString('tr-TR'), 14, 23);
+            if (typeof doc.autoTable === 'function') {
+                doc.autoTable({ html: tableEl, startY: 28, styles: { fontSize: 8 }, headStyles: { fillColor: [30, 58, 138] } });
+            } else {
+                doc.text('autoTable eklentisi yüklenemedi.', 14, 35);
+            }
+            doc.save('SylvaGIS_Analiz_Raporu.pdf');
+        }
+
+        // ── Grafik alanındaki SVG'yi temiz PNG olarak indirir ────────
+        // Yalnızca SVG grafik alanı çıktıya alınır; butonlar ve paneller dahil edilmez.
+        function downloadChartPNG() {
+            var wrap = document.getElementById('stats-chart-svg-wrap');
+            if (!wrap) { alert('Önce bir analiz çalıştırın.'); return; }
+            var svgEl = wrap.querySelector('svg');
+            if (!svgEl) { alert('Önce bir analiz çalıştırın.'); return; }
+
+            // SVG boyutlarını al (viewBox varsa, yoksa offsetWidth/Height)
+            var vb = svgEl.getAttribute('viewBox');
+            var svgW, svgH;
+            if (vb) {
+                var parts = vb.split(/\s+|,/);
+                svgW = parseFloat(parts[2]) || svgEl.offsetWidth || 480;
+                svgH = parseFloat(parts[3]) || svgEl.offsetHeight || 320;
+            } else {
+                svgW = svgEl.getAttribute('width')  ? parseFloat(svgEl.getAttribute('width'))  : (svgEl.offsetWidth  || 480);
+                svgH = svgEl.getAttribute('height') ? parseFloat(svgEl.getAttribute('height')) : (svgEl.offsetHeight || 320);
+            }
+            var scale = 2; // Retina kalite
+
+            // SVG'yi blob URL'e çevir
+            var serializer = new XMLSerializer();
+            var svgStr = serializer.serializeToString(svgEl);
+            // Eksik xmlns ekle
+            if (svgStr.indexOf('xmlns=') === -1) {
+                svgStr = svgStr.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
+            }
+            var blob = new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' });
+            var url  = URL.createObjectURL(blob);
+
+            var img = new Image();
+            img.onload = function() {
+                var canvas = document.createElement('canvas');
+                canvas.width  = svgW * scale;
+                canvas.height = svgH * scale;
+                var ctx = canvas.getContext('2d');
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                URL.revokeObjectURL(url);
+                canvas.toBlob(function(pngBlob) {
+                    var a = document.createElement('a');
+                    a.href = URL.createObjectURL(pngBlob);
+                    a.download = 'SylvaGIS_Grafik_' + new Date().toISOString().slice(0,10) + '.png';
+                    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                    setTimeout(function() { URL.revokeObjectURL(a.href); }, 2000);
+                }, 'image/png');
+            };
+            img.onerror = function() { URL.revokeObjectURL(url); alert('Grafik kaydedilemedi.'); };
+            img.src = url;
+        }
+
+        // ── Histogram → 7 bin → bar/pie SVG grafiği ─────────────────
+        // stats: sunucudan gelen tam nesne  { value: { ... } }
+        function renderChart(stats, meta) {
+            var hist = (stats && stats.value) ? stats.value : null;
+            if (!hist) return;
+            var keys = Object.keys(hist).map(Number).sort(function(a, b) { return a - b; });
+            if (!keys.length) return;
+
+            var minVal  = keys[0];
+            var maxVal  = keys[keys.length - 1];
+            var numBins = 7;
+            var binSize = (maxVal - minVal) / numBins || 1;
+
+            var rampPalette = {
+                'viridis':         ['#440154','#31688e','#35b779','#fde725'],
+                'blue-ocean':      ['#08306b','#2171b5','#6baed6','#c6dbef'],
+                'heat':            ['#313695','#4575b4','#fdae61','#d73027','#a50026'],
+                'green':           ['#f7fcf5','#74c476','#238b45','#00441b'],
+                'red-yellow-green':['#d73027','#fc8d59','#fee08b','#d9ef8b','#1a9850'],
+                'brown':           ['#f5f5dc','#c8a96e','#8b5e2d','#4a3000']
+            };
+            var palette = (meta && rampPalette[meta.rampKey]) ? rampPalette[meta.rampKey] : rampPalette['viridis'];
+
+            var bins = [];
+            for (var i = 0; i < numBins; i++) {
+                var bMin = minVal + i * binSize;
+                var bMax = minVal + (i + 1) * binSize;
+                var count = 0;
+                keys.forEach(function(k) {
+                    if (k >= bMin && (i === numBins - 1 ? k <= bMax : k < bMax)) count += hist[k];
+                });
+                var t  = (i + 0.5) / numBins;
+                var ci = Math.round(t * (palette.length - 1));
+                bins.push({
+                    color: palette[ci],
+                    name:  bMin.toFixed(2) + ' – ' + bMax.toFixed(2),
+                    min:   bMin.toFixed(2),
+                    max:   bMax.toFixed(2),
+                    count: count
+                });
+            }
+            var totalCount = bins.reduce(function(s, b) { return s + b.count; }, 0) || 1;
+            var areaHa = null;
+            try { if (currentLayer) areaHa = turf.area(currentLayer.toGeoJSON()) / 10000; } catch(e) {}
+            var percentages = bins.map(function(b) { return (b.count / totalCount) * 100; });
+            renderStatsChart({ classes: bins, percentages: percentages, areaHa: areaHa });
+        }
+
+        // ── GEE histogramından (stats.value) gerçek min/max/ortalama hesaplar ──
+        // Statik HTML metni yerine sunucudan gelen gerçek piksel değerlerini kullanır.
+        function computeStatsMinMaxMean(stats) {
+            var hist = (stats && stats.value) ? stats.value : null;
+            if (!hist) return null;
+            var keys = Object.keys(hist).map(Number).filter(function(n) { return !isNaN(n); });
+            if (!keys.length) return null;
+            keys.sort(function(a, b) { return a - b; });
+
+            var totalCount = 0, weightedSum = 0;
+            keys.forEach(function(k) {
+                var c = hist[k];
+                totalCount += c;
+                weightedSum += k * c;
+            });
+
+            return {
+                min:  keys[0],
+                max:  keys[keys.length - 1],
+                mean: totalCount ? (weightedSum / totalCount) : null
+            };
+        }
+
+        // ── Harita lejantına, sunucudan dönen GERÇEK veri aralığını ekler ──────
+        // Stretched mod lejantındaki min/max etiketlerini gerçek veri ile günceller;
+        // ayrıca Stretched-min/max giriş kutularını da doldurur ki sonraki
+        // "Lejantı Uygula" baskıları gerçek aralığı kullansın.
+        function appendRealStatsToLegend(stats) {
+            var legendBox = document.querySelector('.map-legend');
+            if (!legendBox) return;
+            var real = computeStatsMinMaxMean(stats);
+            if (!real) return;
+
+            // Stretched mod min/max kutularını doldur (kullanıcı henüz girmemişse)
+            var stretchedMinEl = document.getElementById('stretched-min');
+            var stretchedMaxEl = document.getElementById('stretched-max');
+            if (stretchedMinEl && !stretchedMinEl._userEdited) {
+                stretchedMinEl.value = real.min.toFixed(4);
+            }
+            if (stretchedMaxEl && !stretchedMaxEl._userEdited) {
+                stretchedMaxEl.value = real.max.toFixed(4);
+            }
+
+            // Lejant içindeki min/max etiketlerini güncelle (var ise)
+            var minSpan = legendBox.querySelector('.legend-min-label');
+            var maxSpan = legendBox.querySelector('.legend-max-label');
+            if (minSpan) minSpan.textContent = real.min.toFixed(3);
+            if (maxSpan) maxSpan.textContent = real.max.toFixed(3);
+
+            // Gerçek veri özeti satırını lejanta ekle / güncelle
+            var row = legendBox.querySelector('.real-stats-row');
+            if (!row) {
+                row = document.createElement('div');
+                row.className = 'real-stats-row';
+                row.style.cssText = 'font-size:0.62rem;color:#16a34a;margin-top:4px;border-top:1px dashed #cbd5e1;padding-top:3px;';
+                legendBox.appendChild(row);
+            }
+            var datePart = _currentLegendDate ? ' | ' + _currentLegendDate : '';
+            row.textContent = '📡 Tarih: ' + (_currentLegendDate || '—')
+                + ' | Min: ' + real.min.toFixed(3)
+                + ' | Max: ' + real.max.toFixed(3);
+        }
+
+        // Kullanıcı stretched min/max kutularına elle değer girmişse flag'i işaretle
+        (function() {
+            function markUserEdited(id) {
+                var el = document.getElementById(id);
+                if (el) el.addEventListener('input', function() { el._userEdited = true; });
+            }
+            markUserEdited('stretched-min');
+            markUserEdited('stretched-max');
+        })();
+
+        // ── Backend'den gelen kesin realStats { min, max, mean } ile
+        // lejant ve stretched giriş kutularını senkronize eder.
+        // stats.value histogram yerine reduceRegion(minMax+mean) sonucunu kullanır.
+        function applyRealStatsToLegendUI(realStats) {
+            if (!realStats) return;
+            var mn  = realStats.min;
+            var mx  = realStats.max;
+            var avg = realStats.mean;
+            if (mn === null || mn === undefined || mx === null || mx === undefined) return;
+
+            // Stretched giriş kutularını doldur (kullanıcı henüz elle girmemişse)
+            var stretchedMinEl = document.getElementById('stretched-min');
+            var stretchedMaxEl = document.getElementById('stretched-max');
+            if (stretchedMinEl && !stretchedMinEl._userEdited) {
+                stretchedMinEl.value = parseFloat(mn).toFixed(4);
+            }
+            if (stretchedMaxEl && !stretchedMaxEl._userEdited) {
+                stretchedMaxEl.value = parseFloat(mx).toFixed(4);
+            }
+
+            // currentClassRangeMin/Max'ı da güncelle (sınıflandırma motoru için)
+            if (!stretchedMinEl || !stretchedMinEl._userEdited) currentClassRangeMin = parseFloat(mn);
+            if (!stretchedMaxEl || !stretchedMaxEl._userEdited) currentClassRangeMax = parseFloat(mx);
+
+            // Lejantın min/max span'larını güncelle (stretched mod)
+            var legendBox = document.querySelector('.map-legend');
+            if (legendBox) {
+                var minSpan = legendBox.querySelector('.legend-min-label');
+                var maxSpan = legendBox.querySelector('.legend-max-label');
+                if (minSpan) minSpan.textContent = parseFloat(mn).toFixed(3);
+                if (maxSpan) maxSpan.textContent = parseFloat(mx).toFixed(3);
+
+                // Gerçek veri satırını güncelle
+                var row = legendBox.querySelector('.real-stats-row');
+                if (!row) {
+                    row = document.createElement('div');
+                    row.className = 'real-stats-row';
+                    row.style.cssText = 'font-size:0.62rem;color:#16a34a;margin-top:4px;border-top:1px dashed #cbd5e1;padding-top:3px;';
+                    legendBox.appendChild(row);
+                }
+                row.textContent = '📡 Tarih: ' + (_currentLegendDate || '—')
+                    + ' | Min: ' + parseFloat(mn).toFixed(3)
+                    + ' | Max: ' + parseFloat(mx).toFixed(3);
+            }
+        }
+
+        // ── Kullanıcının tanımladığı sınıf aralıklarına göre, GERÇEK GEE
+        // histogramından her sınıfın gerçek piksel yüzdesini hesaplar.
+        // (generateMockClassDistribution'daki rastgele simülasyonun yerini alır.)
+        function computeClassPercentagesFromHistogram(classes, hist) {
+            if (!hist) return null;
+            var keys = Object.keys(hist).map(Number).filter(function(n) { return !isNaN(n); });
+            if (!keys.length) return null;
+
+            var counts = classes.map(function() { return 0; });
+            var total = 0;
+            keys.forEach(function(k) {
+                var c = hist[k];
+                total += c;
+                for (var i = 0; i < classes.length; i++) {
+                    if (k >= classes[i].min && k <= classes[i].max) { counts[i] += c; break; }
+                }
+            });
+            if (!total) return null;
+            return counts.map(function(c) { return (c / total) * 100; });
         }
 
         // ------------------------------------------------------------
@@ -5150,38 +5912,137 @@ function selectRamp(name) {
 
             // --- Ekran elemanlarını (lejant, kuzey oku, ölçek) canvas'a çiz ---
             function drawOverlaysOnCanvas(ctx, mapEl, scale) {
-                // Lejant
+                // ── Lejant: gerçek içerik canvas'a native olarak çizilir ──────
                 var legend = document.getElementById('map-legend-box');
                 if (legend && legend.offsetParent) {
                     var lRect = legend.getBoundingClientRect();
                     var mRect = mapEl.getBoundingClientRect();
                     ctx.save();
-                    ctx.fillStyle = 'rgba(255,255,255,0.92)';
-                    ctx.strokeStyle = '#cbd5e1';
-                    ctx.lineWidth = 1 * scale;
+
                     var lx = (lRect.left - mRect.left) * scale;
                     var ly = (lRect.top  - mRect.top)  * scale;
                     var lw = lRect.width  * scale;
-                    var lh = lRect.height * scale;
+
+                    // İçeriği ölç (sınıf satırları + başlık + gradyan)
+                    var legendItems = [];
+                    var titleText = '';
+                    var bEl = legend.querySelector('b');
+                    if (bEl) titleText = bEl.textContent;
+
+                    // Classified satırlar mı yoksa stretched gradyan mı?
+                    var classRows = legend.querySelectorAll('div[style*="display:flex"]');
+                    var isClassified = classRows.length > 0 && legend.querySelector('[style*="border-radius:2px"]');
+                    var realStatsText = '';
+                    var realStatsRow = legend.querySelector('.real-stats-row');
+                    if (realStatsRow) realStatsText = realStatsRow.textContent;
+
+                    // Yüksekliği dinamik hesapla
+                    var lineH = 13 * scale;
+                    var pad   = 8 * scale;
+                    var lh;
+                    if (isClassified) {
+                        lh = pad * 2 + lineH + classRows.length * (lineH + 2 * scale) + (realStatsText ? lineH : 0) + pad;
+                    } else {
+                        lh = pad * 2 + lineH + lineH + 10 * scale + lineH + (realStatsText ? lineH : 0) + pad;
+                    }
+
+                    // Arka plan kutu
+                    ctx.fillStyle = 'rgba(255,255,255,0.94)';
+                    ctx.strokeStyle = '#cbd5e1';
+                    ctx.lineWidth = 1 * scale;
                     ctx.beginPath();
                     ctx.roundRect(lx, ly, lw, lh, 5 * scale);
                     ctx.fill();
                     ctx.stroke();
+
+                    // Başlık
                     ctx.fillStyle = '#1e3a8a';
                     ctx.font = 'bold ' + (11 * scale) + 'px Segoe UI, sans-serif';
-                    ctx.fillText(legend.querySelector('b') ? legend.querySelector('b').textContent : '', lx + 8 * scale, ly + 16 * scale);
-                    // Renk bandı
-                    var ramp = legend.querySelector('.color-ramp');
-                    if (ramp) {
-                        var cs = ramp.style.background;
-                        var grad = ctx.createLinearGradient(lx + 4 * scale, 0, lx + lw - 4 * scale, 0);
-                        // Basit renk bandı — mevcut gradient'i parse et
-                        var colors = ['#d7191c','#fdae61','#ffffbf','#a6d96a','#1a9641'];
-                        if (cs.includes('440154')) colors = ['#440154','#31688e','#35b779','#fde725'];
-                        colors.forEach(function(c, i) { grad.addColorStop(i / (colors.length - 1), c); });
+                    ctx.textAlign = 'left';
+                    ctx.fillText(titleText, lx + pad, ly + pad + lineH * 0.85);
+
+                    var curY = ly + pad + lineH + 4 * scale;
+
+                    if (isClassified) {
+                        // Classified mod: renk kutusu + etiket satırları
+                        classRows.forEach(function(row) {
+                            var colorEl = row.querySelector('[style*="border-radius:2px"]');
+                            var labelEl = row.querySelector('span:last-child');
+                            if (!colorEl || !labelEl) return;
+                            var bg = colorEl.style.background || '#999';
+                            var label = labelEl.textContent;
+                            // Renk kutusu
+                            ctx.fillStyle = bg;
+                            ctx.fillRect(lx + pad, curY, 10 * scale, 10 * scale);
+                            ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+                            ctx.lineWidth = 0.5 * scale;
+                            ctx.strokeRect(lx + pad, curY, 10 * scale, 10 * scale);
+                            // Etiket
+                            ctx.fillStyle = '#334155';
+                            ctx.font = (9 * scale) + 'px Segoe UI, sans-serif';
+                            ctx.textAlign = 'left';
+                            ctx.fillText(label, lx + pad + 13 * scale, curY + 9 * scale);
+                            curY += lineH + 2 * scale;
+                        });
+                    } else {
+                        // Stretched mod: gerçek seçili renk rampasından gradyan çiz
+                        var selectedRampEl = document.getElementById('selectedRamp');
+                        var rampName = selectedRampEl ? (selectedRampEl.getAttribute('data-ramp') || 'viridis') : 'viridis';
+                        var rampPaletteForExport = {
+                            'viridis':          ['#440154','#31688e','#35b779','#fde725'],
+                            'blue-ocean':       ['#08306b','#2171b5','#6baed6','#c6dbef'],
+                            'heat':             ['#313695','#4575b4','#fdae61','#d73027','#a50026'],
+                            'green':            ['#f7fcf5','#74c476','#238b45','#00441b'],
+                            'red-yellow-green': ['#d73027','#fc8d59','#fee08b','#d9ef8b','#1a9850'],
+                            'brown':            ['#f5f5dc','#c8a96e','#8b5e2d','#4a3000']
+                        };
+                        var pal = rampPaletteForExport[rampName] || rampPaletteForExport['viridis'];
+
+                        // Min/Max etiketleri
+                        var minLabel = '', maxLabel = '';
+                        var legendBox2 = document.querySelector('.map-legend');
+                        if (legendBox2) {
+                            var spans = legendBox2.querySelectorAll('span');
+                            if (spans.length >= 2) { minLabel = spans[0].textContent; maxLabel = spans[spans.length-1].textContent; }
+                        }
+                        // Etiket satırı
+                        ctx.fillStyle = '#475569';
+                        ctx.font = (9 * scale) + 'px Segoe UI, sans-serif';
+                        ctx.textAlign = 'left';
+                        ctx.fillText(minLabel, lx + pad, curY + 9 * scale);
+                        ctx.textAlign = 'right';
+                        ctx.fillText(maxLabel, lx + lw - pad, curY + 9 * scale);
+                        curY += lineH;
+
+                        // Gradyan bant
+                        var gx1 = lx + pad, gx2 = lx + lw - pad;
+                        var grad = ctx.createLinearGradient(gx1, 0, gx2, 0);
+                        pal.forEach(function(c, i) { grad.addColorStop(i / (pal.length - 1), c); });
                         ctx.fillStyle = grad;
-                        ctx.fillRect(lx + 4 * scale, ly + 28 * scale, lw - 8 * scale, 10 * scale);
+                        ctx.fillRect(gx1, curY, gx2 - gx1, 10 * scale);
+                        ctx.strokeStyle = '#cbd5e1';
+                        ctx.lineWidth = 0.5 * scale;
+                        ctx.strokeRect(gx1, curY, gx2 - gx1, 10 * scale);
+                        curY += 10 * scale + 2 * scale;
+
+                        // Düşük / Yüksek
+                        ctx.fillStyle = '#94a3b8';
+                        ctx.font = (8 * scale) + 'px Segoe UI, sans-serif';
+                        ctx.textAlign = 'left';
+                        ctx.fillText('Düşük', gx1, curY + 8 * scale);
+                        ctx.textAlign = 'right';
+                        ctx.fillText('Yüksek', gx2, curY + 8 * scale);
+                        curY += lineH;
                     }
+
+                    // Gerçek veri özeti satırı
+                    if (realStatsText) {
+                        ctx.fillStyle = '#16a34a';
+                        ctx.font = (8 * scale) + 'px Segoe UI, sans-serif';
+                        ctx.textAlign = 'left';
+                        ctx.fillText(realStatsText, lx + pad, curY + 8 * scale);
+                    }
+
                     ctx.restore();
                 }
 
@@ -5234,13 +6095,27 @@ function selectRamp(name) {
                     ctx.restore();
                 }
 
-                // Watermark
+                        // Watermark + rapor başlığı
                 ctx.save();
                 ctx.globalAlpha = 1;
-                ctx.fillStyle = '#1e3a8a';
-                ctx.font = 'bold ' + (12 * scale) + 'px Segoe UI, sans-serif';
+                var mapH = mapEl.offsetHeight * scale;
+                var mapW = mapEl.offsetWidth  * scale;
+                // Alt bant arka planı
+                ctx.fillStyle = 'rgba(30,58,138,0.88)';
+                ctx.fillRect(0, mapH - 28 * scale, mapW, 28 * scale);
+                // Sol: SylvaGIS logosu
+                ctx.fillStyle = '#ffffff';
+                ctx.font = 'bold ' + (11 * scale) + 'px Segoe UI, sans-serif';
                 ctx.textAlign = 'left';
-                ctx.fillText('🌲 SylvaGIS', 12 * scale, (mapEl.offsetHeight * scale) - 10 * scale);
+                ctx.fillText('🌲 SylvaGIS', 10 * scale, mapH - 9 * scale);
+                // Orta: rapor başlığı
+                ctx.font = 'bold ' + (11 * scale) + 'px Segoe UI, sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('SylvaGIS Analysis Report', mapW / 2, mapH - 9 * scale);
+                // Sağ: tarih
+                ctx.font = (9 * scale) + 'px Segoe UI, sans-serif';
+                ctx.textAlign = 'right';
+                ctx.fillText(new Date().toLocaleDateString('tr-TR'), mapW - 10 * scale, mapH - 9 * scale);
                 ctx.restore();
             }
 
@@ -5275,19 +6150,43 @@ function selectRamp(name) {
                 });
             }
 
-            // --- leaflet-image ile tile + vektör katmanlarını al ---
+            // --- Harita canvas'ını döndürür (GEE tile dahil) ---
+            // Önce html2canvas denenir; başarısız olursa leaflet-image'a düşer.
             function getLeafletCanvas(scaleFactor) {
                 return new Promise(function(resolve, reject) {
-                    // leaflet-image kütüphanesi tile'ları cross-origin yükler
-                    if (typeof leafletImage === 'undefined') {
-                        reject(new Error('leaflet-image yüklenemedi'));
+                    var mapEl = document.getElementById('map');
+
+                    // html2canvas: DOM tabanlı → GEE tile'larını da yakalar
+                    if (typeof html2canvas !== 'undefined') {
+                        html2canvas(mapEl, {
+                            useCORS:        true,
+                            allowTaint:     true,
+                            scale:          scaleFactor || 1,
+                            logging:        false,
+                            backgroundColor: null
+                        }).then(function(canvas) {
+                            resolve(canvas);
+                        }).catch(function() {
+                            // html2canvas başarısız → leaflet-image'a düş
+                            tryLeafletImage(resolve, reject);
+                        });
                         return;
                     }
+
+                    // Fallback: leaflet-image
+                    tryLeafletImage(resolve, reject);
+                });
+            }
+
+            function tryLeafletImage(resolve, reject) {
+                if (typeof leafletImage !== 'undefined') {
                     leafletImage(map, function(err, canvas) {
-                        if (err) { reject(err); return; }
+                        if (err || !canvas) { reject(err || new Error('leaflet-image başarısız')); return; }
                         resolve(canvas);
                     });
-                });
+                } else {
+                    reject(new Error('Hiçbir render kütüphanesi yüklenemedi'));
+                }
             }
 
             // --- Ana export fonksiyonu ---
@@ -5349,24 +6248,23 @@ function selectRamp(name) {
                     });
                 }
 
-                // leaflet-image ile dene
-                if (typeof leafletImage !== 'undefined') {
-                    leafletImage(map, function(err, canvas) {
-                        if (err || !canvas) {
-                            // Fallback: tile'ları doğrudan oku
-                            buildFinalCanvas(null);
-                        } else {
-                            buildFinalCanvas(canvas);
-                        }
-                    });
-                } else {
-                    // Fallback: Leaflet tile canvas'larını topla
+                // ── DÜZELTME: önceden burada doğrudan leafletImage çağrılıyordu ve
+                // tanımlı olan getLeafletCanvas() (html2canvas-öncelikli, DOM tabanlı
+                // yakalama) hiçbir zaman kullanılmıyordu. GEE tile'ları çoğunlukla
+                // CORS destekliyor; html2canvas bunları gerçekten "görür", leaflet-image
+                // ise genellikle "yabancı/güvensiz" kabul edip boş bırakırdı.
+                // Artık: 1) html2canvas dene → 2) o da olmazsa leaflet-image'a düş
+                // (getLeafletCanvas içinde) → 3) ikisi de başarısız olursa DOM'daki
+                // tile <img>/<canvas>'ları manuel topla.
+                getLeafletCanvas(scale).then(function(canvas) {
+                    buildFinalCanvas(canvas);
+                }).catch(function() {
+                    // Son çare: Leaflet tile canvas'larını/img'lerini manuel topla
                     var tileCanvas = document.createElement('canvas');
                     tileCanvas.width  = W * scale;
                     tileCanvas.height = H * scale;
                     var tctx = tileCanvas.getContext('2d');
                     var tilePanes = mapEl.querySelectorAll('.leaflet-tile-pane canvas, .leaflet-tile img');
-                    var tilePromises = [];
                     tilePanes.forEach(function(tile) {
                         try {
                             if (tile.tagName === 'CANVAS') {
@@ -5381,7 +6279,7 @@ function selectRamp(name) {
                         } catch(e) {} // cross-origin tile'lar atlanır
                     });
                     buildFinalCanvas(tileCanvas);
-                }
+                });
             });
 
             // --- Canvas'ı kaydet ---
@@ -5479,6 +6377,30 @@ function selectRamp(name) {
         })(); // END Export Motor
         }); // END DOMContentLoaded — Export
 
+    </script>
+
+    <!-- ===== SUNUCU DURUM KONTROLÜ ===== -->
+    <script>
+    (function() {
+        var dot   = document.getElementById('server-dot');
+        var label = document.getElementById('server-label');
+        function check() {
+            fetch('http://127.0.0.1:5000/api/ping', { method:'GET', mode:'cors', signal: AbortSignal.timeout(2500) })
+                .then(function(r) {
+                    if (r.ok) {
+                        if (dot)   { dot.style.background = '#22c55e'; }
+                        if (label) { label.textContent = 'Sunucu Çevrimiçi'; label.style.color = '#16a34a'; }
+                    } else { setOffline(); }
+                })
+                .catch(setOffline);
+        }
+        function setOffline() {
+            if (dot)   { dot.style.background = '#ef4444'; }
+            if (label) { label.textContent = 'Sunucu Çevrimdışı'; label.style.color = '#dc2626'; }
+        }
+        check();
+        setInterval(check, 15000);
+    })();
     </script>
 
     <!-- ===== EXPORT MODAL ===== -->
