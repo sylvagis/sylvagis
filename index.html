@@ -292,12 +292,13 @@
         .leaflet-control-scale-line { border-color: #1e3a8a; color: #1e3a8a; font-weight: 600; background: rgba(255,255,255,0.9); }
 
         /* Harita İçi - Sol Üst (Görüntü Galerisi) */
-        .map-gallery { position: absolute; top: 15px; left: 15px; right: 15px; display: flex; gap: 10px; overflow-x: auto; max-width: calc(100% - 30px); padding-bottom: 5px; z-index: 500; pointer-events: none; }
+        .map-gallery { position: absolute; top: 15px; left: 15px; right: 15px; display: flex; gap: 10px; overflow-x: auto; max-width: calc(100% - 30px); padding-bottom: 5px; z-index: 500; pointer-events: none; cursor: grab; user-select: none; scroll-behavior: smooth; }
+        .map-gallery.dragging { cursor: grabbing; }
         .gallery-item { min-width: 100px; background: white; border: 2px solid #1e3a8a; border-radius: 5px; overflow: hidden; cursor: pointer; box-shadow: 0 2px 5px rgba(0,0,0,0.2); pointer-events: auto; transition: 0.2s; }
         .gallery-item:hover { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.3); }
         .gallery-item.active { border-color: #10b981; }
         .gallery-img { height: 60px; background-color: #cbd5e1; display: flex; justify-content: center; align-items: center; font-size: 2rem; }
-        .gallery-info { display: none; }
+        .gallery-info { display: block; font-size: 0.68rem; padding: 4px 5px; color: #334155; line-height: 1.4; text-align: center; }
 
         /* Footer (Alt Bilgi Çubuğu) */
         .footer { background-color: #1e3a8a; color: #ffffff; padding: 5px 25px; display: flex; flex-wrap: wrap; gap: 5px 20px; justify-content: space-between; align-items: center; font-size: 0.8rem; z-index: 2000; position: relative; }
@@ -384,17 +385,17 @@
             backdrop-filter: blur(2px);
         }
         #analysis-loading-overlay.active { display: flex; }
-        @keyframes sylvaPulse {
-            0%, 100% { opacity: 0.25; }
-            50%       { opacity: 1; }
+        @keyframes sylva-pulse {
+            0%, 100% { opacity: 1; }
+            50%       { opacity: 0.25; }
         }
         #analysis-loading-text {
             font-size: 2rem;
             font-weight: 800;
             color: #1e3a8a;
             letter-spacing: 0.04em;
-            animation: sylvaPulse 1.5s ease-in-out infinite;
             user-select: none;
+            animation: sylva-pulse 1.6s ease-in-out infinite;
         }
         #analysis-loading-sub { display: none; }
 
@@ -859,7 +860,10 @@
     </div>
 
     <div class="navbar">
-        <div class="logo-container">🌲 SylvaGIS <span style="font-size:0.7rem;font-weight:400;color:#64748b;margin-left:4px;">11</span></div>
+        <div class="logo-container" style="display:flex;align-items:center;gap:5px;">
+            <span style="font-size:1.15em;line-height:1;">🌲</span>
+            SylvaGIS
+        </div>
         <div id="server-status" title="Python sunucu durumu" style="display:flex;align-items:center;gap:5px;font-size:0.75rem;font-weight:600;color:#94a3b8;cursor:default;user-select:none;">
             <span id="server-dot" style="width:9px;height:9px;border-radius:50%;background:#e2e8f0;display:inline-block;transition:background 0.3s;"></span>
             <span id="server-label">Sunucu</span>
@@ -1002,8 +1006,8 @@
                 <button class="btn-tool btn-danger" id="btn-delete-geom" style="flex: none; padding: 5px;">🗑️</button>
             </div>
 
-            <h2>Tarih Seçimi</h2>
-            <div class="tool-row">
+            <h2 id="date-section-title">Tarih Seçimi</h2>
+            <div class="tool-row" id="date-range-row">
                 <div class="control-group" style="flex: 1;">
                     <label>Başlangıç</label>
                     <input type="date" id="date-start">
@@ -1014,7 +1018,8 @@
                 </div>
             </div>
 
-            <div class="control-group">
+
+            <div class="control-group" id="cloud-control-group">
                 <label>Bulutluluk Oranı (Maks)</label>
                 <div class="slider-group">
                     <input type="range" id="cloud-slider" min="0" max="100" value="100">
@@ -1051,19 +1056,25 @@
                 <div class="details-content">
                     <div class="option-list">
                         <div class="sensor-group-label">Sentinel-2 (Copernicus)</div>
-                        <label class="option-item"><input type="radio" name="uydu-sensor" class="uydu-sensor-radio" value="s2-l1c" data-sensor-label="Sentinel-2 L1C (TOA)" data-analyses='["NDVI","NDWI","EVI","SAVI"]'> Sentinel-2 L1C (TOA)</label>
-                        <label class="option-item"><input type="radio" name="uydu-sensor" class="uydu-sensor-radio" value="s2-l2a" data-sensor-label="Sentinel-2 L2A (BOA)" data-analyses='["NDVI","NDWI","EVI","SAVI"]'> Sentinel-2 L2A (BOA)</label>
+                        <label class="option-item"><input type="radio" name="uydu-sensor" class="uydu-sensor-radio" value="s2-l1c" data-sensor-label="Sentinel-2 L1C (TOA)" data-analyses='["NDVI","NDWI","EVI","SAVI","BSI","NDSI","NBR","AVI","SI","NDGI","NDMI","NPCRI","VHI"]'> Sentinel-2 L1C (TOA)</label>
+                        <label class="option-item"><input type="radio" name="uydu-sensor" class="uydu-sensor-radio" value="s2-l2a" data-sensor-label="Sentinel-2 L2A (BOA)" data-analyses='["NDVI","NDWI","EVI","SAVI","BSI","NDSI","NBR","AVI","SI","NDGI","NDMI","NPCRI","VHI"]'> Sentinel-2 L2A (BOA)</label>
 
                         <div class="sensor-group-label" style="margin-top:10px;">Landsat Collection 2 Level-2 (Yüzey Yansıma / Termal)</div>
-                        <label class="option-item"><input type="radio" name="uydu-sensor" class="uydu-sensor-radio" value="l89-l2" data-sensor-label="Landsat 8-9 OLI/TIRS (C2 L2)" data-analyses='["NDVI","NDWI","LST","SMI","EVI","SAVI"]'> Landsat 8-9 OLI/TIRS</label>
-                        <label class="option-item"><input type="radio" name="uydu-sensor" class="uydu-sensor-radio" value="l7-l2" data-sensor-label="Landsat 7 ETM+ (C2 L2)" data-analyses='["NDVI","NDWI","LST","SMI","EVI","SAVI"]'> Landsat 7 ETM+</label>
-                        <label class="option-item"><input type="radio" name="uydu-sensor" class="uydu-sensor-radio" value="l45-l2" data-sensor-label="Landsat 4-5 TM (C2 L2)" data-analyses='["NDVI","NDWI","LST","SMI","EVI","SAVI"]'> Landsat 4-5 TM</label>
+                        <label class="option-item"><input type="radio" name="uydu-sensor" class="uydu-sensor-radio" value="l89-l2" data-sensor-label="Landsat 8-9 OLI/TIRS (C2 L2)" data-analyses='["NDVI","NDWI","LST","SMI","EVI","SAVI","BSI","NDSI","NBR","AVI","SI","NDGI","NDMI","NPCRI","VHI"]'> Landsat 8-9 OLI/TIRS</label>
+                        <label class="option-item"><input type="radio" name="uydu-sensor" class="uydu-sensor-radio" value="l7-l2" data-sensor-label="Landsat 7 ETM+ (C2 L2)" data-analyses='["NDVI","NDWI","LST","SMI","EVI","SAVI","BSI","NDSI","NBR","AVI","SI","NDGI","NDMI","NPCRI","VHI"]'> Landsat 7 ETM+</label>
+                        <label class="option-item"><input type="radio" name="uydu-sensor" class="uydu-sensor-radio" value="l45-l2" data-sensor-label="Landsat 4-5 TM (C2 L2)" data-analyses='["NDVI","NDWI","LST","SMI","EVI","SAVI","BSI","NDSI","NBR","AVI","SI","NDGI","NDMI","NPCRI","VHI"]'> Landsat 4-5 TM</label>
 
                         <div class="sensor-group-label" style="margin-top:10px;">Landsat Collection 2 Level-1 (Tepe Yansıma)</div>
-                        <label class="option-item"><input type="radio" name="uydu-sensor" class="uydu-sensor-radio" value="l89-l1" data-sensor-label="Landsat 8-9 OLI/TIRS (C2 L1)" data-analyses='["NDVI","NDWI"]'> Landsat 8-9 OLI/TIRS</label>
-                        <label class="option-item"><input type="radio" name="uydu-sensor" class="uydu-sensor-radio" value="l7-l1" data-sensor-label="Landsat 7 ETM+ (C2 L1)" data-analyses='["NDVI","NDWI"]'> Landsat 7 ETM+</label>
-                        <label class="option-item"><input type="radio" name="uydu-sensor" class="uydu-sensor-radio" value="l45-l1" data-sensor-label="Landsat 4-5 TM (C2 L1)" data-analyses='["NDVI","NDWI"]'> Landsat 4-5 TM</label>
+                        <label class="option-item"><input type="radio" name="uydu-sensor" class="uydu-sensor-radio" value="l89-l1" data-sensor-label="Landsat 8-9 OLI/TIRS (C2 L1)" data-analyses='["NDVI","NDWI","AVI","SI","NDGI","NPCRI"]'> Landsat 8-9 OLI/TIRS</label>
+                        <label class="option-item"><input type="radio" name="uydu-sensor" class="uydu-sensor-radio" value="l7-l1" data-sensor-label="Landsat 7 ETM+ (C2 L1)" data-analyses='["NDVI","NDWI","AVI","SI","NDGI","NPCRI"]'> Landsat 7 ETM+</label>
+                        <label class="option-item"><input type="radio" name="uydu-sensor" class="uydu-sensor-radio" value="l45-l1" data-sensor-label="Landsat 4-5 TM (C2 L1)" data-analyses='["NDVI","NDWI","AVI","SI","NDGI","NPCRI"]'> Landsat 4-5 TM</label>
                         <label class="option-item"><input type="radio" name="uydu-sensor" class="uydu-sensor-radio" value="mss-l1" data-sensor-label="Landsat 1-5 MSS (C2 L1)" data-analyses='["NDVI","NDWI"]'> Landsat 1-5 MSS</label>
+
+                        <div class="sensor-group-label" style="margin-top:10px;">SAR (Radar)</div>
+                        <label class="option-item"><input type="radio" name="uydu-sensor" class="uydu-sensor-radio" value="s1-sar" data-sensor-label="Sentinel-1 GRD (IW VV)" data-analyses='["SAR"]'> Sentinel-1 GRD (IW VV)</label>
+
+                        <div class="sensor-group-label" style="margin-top:10px;">Global Veri Setleri (GEE)</div>
+                        <label class="option-item"><input type="radio" name="uydu-sensor" class="uydu-sensor-radio" value="global-datasets" data-sensor-label="Global Datasets (Dynamic World / SRTM)" data-analyses='["LULC","TOPO"]'> Dynamic World / SRTM</label>
 
                         <div class="sensor-group-label" id="uydu-analiz-baslik" style="margin-top:12px;">
                             Kullanılabilir Analizler <span style="font-weight:normal;color:#94a3b8;">(önce bir sensör seçin)</span>
@@ -1087,6 +1098,45 @@
                             <label class="option-item uydu-analiz-item disabled-analysis" data-key="SAVI">
                                 <input type="checkbox" class="uydu-analiz-checkbox" disabled data-analysis="SAVI" data-ramp-key="red-yellow-green" data-legend-min="-1" data-legend-max="+1"> SAVI
                             </label>
+                            <label class="option-item uydu-analiz-item disabled-analysis" data-key="BSI">
+                                <input type="checkbox" class="uydu-analiz-checkbox" disabled data-analysis="BSI" data-ramp-key="brown" data-legend-min="-1" data-legend-max="+1"> BSI
+                            </label>
+                            <label class="option-item uydu-analiz-item disabled-analysis" data-key="NDSI">
+                                <input type="checkbox" class="uydu-analiz-checkbox" disabled data-analysis="NDSI" data-ramp-key="blue-ocean" data-legend-min="-0.5" data-legend-max="0.8"> NDSI
+                            </label>
+                            <label class="option-item uydu-analiz-item disabled-analysis" data-key="NBR">
+                                <input type="checkbox" class="uydu-analiz-checkbox" disabled data-analysis="NBR" data-ramp-key="heat" data-legend-min="-1" data-legend-max="+1"> NBR
+                            </label>
+                            <label class="option-item uydu-analiz-item disabled-analysis" data-key="AVI">
+                                <input type="checkbox" class="uydu-analiz-checkbox" disabled data-analysis="AVI" data-ramp-key="green" data-legend-min="0" data-legend-max="0.9"> AVI
+                            </label>
+                            <label class="option-item uydu-analiz-item disabled-analysis" data-key="SI">
+                                <input type="checkbox" class="uydu-analiz-checkbox" disabled data-analysis="SI" data-ramp-key="gray" data-legend-min="0" data-legend-max="0.8"> SI
+                            </label>
+                            <label class="option-item uydu-analiz-item disabled-analysis" data-key="NDGI">
+                                <input type="checkbox" class="uydu-analiz-checkbox" disabled data-analysis="NDGI" data-ramp-key="blue-ocean" data-legend-min="-0.5" data-legend-max="0.5"> NDGI
+                            </label>
+                            <label class="option-item uydu-analiz-item disabled-analysis" data-key="NDMI">
+                                <input type="checkbox" class="uydu-analiz-checkbox" disabled data-analysis="NDMI" data-ramp-key="blue-ocean" data-legend-min="-0.8" data-legend-max="0.8"> NDMI
+                            </label>
+                            <label class="option-item uydu-analiz-item disabled-analysis" data-key="NPCRI">
+                                <input type="checkbox" class="uydu-analiz-checkbox" disabled data-analysis="NPCRI" data-ramp-key="heat" data-legend-min="-0.5" data-legend-max="0.5"> NPCRI
+                            </label>
+                            <label class="option-item uydu-analiz-item disabled-analysis" data-key="VHI">
+                                <input type="checkbox" class="uydu-analiz-checkbox" disabled data-analysis="VHI" data-ramp-key="red-yellow-green" data-legend-min="0" data-legend-max="1"> VHI
+                            </label>
+                            <label class="option-item uydu-analiz-item disabled-analysis" data-key="dNBR" title="Yangın öncesi ve sonrası tarih aralığı gerektirir (startDate2/endDate2)" style="display:none;">
+                                <input type="checkbox" class="uydu-analiz-checkbox" disabled data-analysis="dNBR" data-ramp-key="heat" data-legend-min="-0.5" data-legend-max="1.0"> dNBR 🔥
+                            </label>
+                            <label class="option-item uydu-analiz-item disabled-analysis" data-key="LULC">
+                                <input type="checkbox" class="uydu-analiz-checkbox" disabled data-analysis="LULC" data-ramp-key="rainbow" data-legend-min="0" data-legend-max="8"> LULC
+                            </label>
+                            <label class="option-item uydu-analiz-item disabled-analysis" data-key="TOPO">
+                                <input type="checkbox" class="uydu-analiz-checkbox" disabled data-analysis="TOPO" data-ramp-key="terrain" data-legend-min="0°" data-legend-max="60°"> TOPO
+                            </label>
+                            <label class="option-item uydu-analiz-item disabled-analysis" data-key="SAR">
+                                <input type="checkbox" class="uydu-analiz-checkbox" disabled data-analysis="SAR" data-ramp-key="blue-ocean" data-legend-min="-25 dB" data-legend-max="0 dB"> SAR
+                            </label>
                         </div>
                     </div>
                 </div>
@@ -1096,14 +1146,12 @@
                 <summary>🏘️ Arazi Kullanımı / Land Cover</summary>
                 <div class="details-content">
                     <div class="option-list">
-                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="Esri Land Cover 2025" data-ramp-key="rainbow" data-legend-type="classified" data-legend-classes='[{"color":"#1a9850","label":"Orman"},{"color":"#91cf60","label":"Tarım"},{"color":"#d9ef8b","label":"Çayır"},{"color":"#4575b4","label":"Su"},{"color":"#d73027","label":"Yapay/Kentsel"},{"color":"#f4f4f4","label":"Kar/Buz"},{"color":"#d9d9d9","label":"Çıplak Alan"}]'> Esri Land Cover 2025</label>
-                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="Esri Land Cover 2024" data-ramp-key="rainbow" data-legend-type="classified" data-legend-classes='[{"color":"#1a9850","label":"Orman"},{"color":"#91cf60","label":"Tarım"},{"color":"#d9ef8b","label":"Çayır"},{"color":"#4575b4","label":"Su"},{"color":"#d73027","label":"Yapay/Kentsel"},{"color":"#f4f4f4","label":"Kar/Buz"},{"color":"#d9d9d9","label":"Çıplak Alan"}]'> Esri Land Cover 2024</label>
-                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="Esri Land Cover 2023" data-ramp-key="rainbow" data-legend-type="classified" data-legend-classes='[{"color":"#1a9850","label":"Orman"},{"color":"#91cf60","label":"Tarım"},{"color":"#d9ef8b","label":"Çayır"},{"color":"#4575b4","label":"Su"},{"color":"#d73027","label":"Yapay/Kentsel"},{"color":"#f4f4f4","label":"Kar/Buz"},{"color":"#d9d9d9","label":"Çıplak Alan"}]'> Esri Land Cover 2023</label>
-                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="Esri Land Cover 2022" data-ramp-key="rainbow" data-legend-type="classified" data-legend-classes='[{"color":"#1a9850","label":"Orman"},{"color":"#91cf60","label":"Tarım"},{"color":"#d9ef8b","label":"Çayır"},{"color":"#4575b4","label":"Su"},{"color":"#d73027","label":"Yapay/Kentsel"},{"color":"#f4f4f4","label":"Kar/Buz"},{"color":"#d9d9d9","label":"Çıplak Alan"}]'> Esri Land Cover 2022</label>
-                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="Esri Land Cover 2021" data-ramp-key="rainbow" data-legend-type="classified" data-legend-classes='[{"color":"#1a9850","label":"Orman"},{"color":"#91cf60","label":"Tarım"},{"color":"#d9ef8b","label":"Çayır"},{"color":"#4575b4","label":"Su"},{"color":"#d73027","label":"Yapay/Kentsel"},{"color":"#f4f4f4","label":"Kar/Buz"},{"color":"#d9d9d9","label":"Çıplak Alan"}]'> Esri Land Cover 2021</label>
-                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="Esri Land Cover 2020" data-ramp-key="rainbow" data-legend-type="classified" data-legend-classes='[{"color":"#1a9850","label":"Orman"},{"color":"#91cf60","label":"Tarım"},{"color":"#d9ef8b","label":"Çayır"},{"color":"#4575b4","label":"Su"},{"color":"#d73027","label":"Yapay/Kentsel"},{"color":"#f4f4f4","label":"Kar/Buz"},{"color":"#d9d9d9","label":"Çıplak Alan"}]'> Esri Land Cover 2020</label>
-                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="Esri Land Cover 2019" data-ramp-key="rainbow" data-legend-type="classified" data-legend-classes='[{"color":"#1a9850","label":"Orman"},{"color":"#91cf60","label":"Tarım"},{"color":"#d9ef8b","label":"Çayır"},{"color":"#4575b4","label":"Su"},{"color":"#d73027","label":"Yapay/Kentsel"},{"color":"#f4f4f4","label":"Kar/Buz"},{"color":"#d9d9d9","label":"Çıplak Alan"}]'> Esri Land Cover 2019</label>
-                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="Esri Land Cover 2018" data-ramp-key="rainbow" data-legend-type="classified" data-legend-classes='[{"color":"#1a9850","label":"Orman"},{"color":"#91cf60","label":"Tarım"},{"color":"#d9ef8b","label":"Çayır"},{"color":"#4575b4","label":"Su"},{"color":"#d73027","label":"Yapay/Kentsel"},{"color":"#f4f4f4","label":"Kar/Buz"},{"color":"#d9d9d9","label":"Çıplak Alan"}]'> Esri Land Cover 2018</label>
+                        <div style="font-size:0.68rem;color:#64748b;margin-bottom:4px;">
+                            Google Earth Engine üzerinden çekilen güncel arazi örtüsü
+                            sınıflandırmaları — NDVI/NDWI gibi doğrudan AOI'ye göre çalışır.
+                        </div>
+                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="LULC" data-ramp-key="rainbow" data-legend-type="classified" data-legend-classes='[{"color":"#419bdf","label":"Su Kütlesi"},{"color":"#397d49","label":"Orman / Ağaçlık"},{"color":"#88b053","label":"Çayır / Otlak"},{"color":"#7a87c6","label":"Sulak Bitki Örtüsü"},{"color":"#e49635","label":"Tarım Alanı"},{"color":"#dfc35a","label":"Çalılık"},{"color":"#c4281b","label":"Yapay / Kentsel Alan"},{"color":"#a59b8f","label":"Çıplak Toprak"},{"color":"#b39fe1","label":"Kar / Buz"}]'> 🛰️ Dynamic World V1 (Güncel / 10 m)</label>
+                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="LULC_ESA" data-ramp-key="rainbow" data-legend-type="classified" data-legend-classes='[{"color":"#006400","label":"Ağaç Örtüsü / Orman"},{"color":"#ffbb22","label":"Çalılık"},{"color":"#ffff4c","label":"Çayır / Otlak"},{"color":"#f096ff","label":"Tarım Alanı"},{"color":"#fa0000","label":"Yapay / Kentsel Alan"},{"color":"#b4b4b4","label":"Çıplak / Seyrek Bitki Örtüsü"},{"color":"#f0f0f0","label":"Kar / Buz"},{"color":"#0064c8","label":"Su Kütlesi"},{"color":"#0096a0","label":"Sulak Alan / Bataklık"},{"color":"#00cf75","label":"Mangrov"},{"color":"#fae6a0","label":"Yosun / Liken"}]'> 🌍 ESA WorldCover (10 m Global)</label>
                     </div>
                 </div>
             </details>
@@ -1179,20 +1227,7 @@
                 <g id="markup-preview-layer"></g>
             </svg>
 
-            <div class="map-gallery" id="map-gallery">
-                <div class="gallery-item active" data-date="20.06.2025">
-                    <div class="gallery-img">🏞️</div>
-                    <div class="gallery-info">20.06.2025<br>Bulut: %2</div>
-                </div>
-                <div class="gallery-item" data-date="05.07.2025">
-                    <div class="gallery-img">🏞️</div>
-                    <div class="gallery-info">05.07.2025<br>Bulut: %8</div>
-                </div>
-                <div class="gallery-item" data-date="21.07.2025">
-                    <div class="gallery-img">🏞️</div>
-                    <div class="gallery-info">21.07.2025<br>Bulut: %0</div>
-                </div>
-            </div>
+            <div class="map-gallery" id="map-gallery" style="display:none;"></div>
 
 <div class="map-top-right">
     <div class="north-arrow">
@@ -1259,11 +1294,6 @@
         Veri Şeffaflığı
     </label>
 
-    <label class="option-item">
-        <input type="checkbox" id="toggle-working-area" checked>
-        Çalışma Alanı
-    </label>
-
     <div id="opacity-control-container"
          class="option-item"
          style="grid-column: span 2; display:flex; gap:10px; align-items:center;">
@@ -1272,15 +1302,65 @@
                id="layerOpacity"
                min="0"
                max="1"
-               step="0.1"
-               value="1"
+               step="0.05"
+               value="0.85"
                style="flex:1;">
 
         <span id="layer-opacity-val"
               style="font-size:0.75rem; font-weight:bold; min-width:35px;">
+            %85
+        </span>
+
+    </div>
+
+    <!-- Çalışma Alanı Şeffaflığı checkbox + slider -->
+    <label class="option-item" style="grid-column: span 2; margin-top:6px; border-top:1px solid #e2e8f0; padding-top:6px;">
+        <input type="checkbox" id="toggle-workspace-opacity">
+        Çalışma Alanı
+    </label>
+
+    <div id="workspace-opacity-container"
+         class="option-item"
+         style="grid-column: span 2; display:none; gap:10px; align-items:center;">
+
+        <input type="range"
+               id="workspaceOpacity"
+               min="0"
+               max="1"
+               step="0.05"
+               value="1"
+               style="flex:1;">
+
+        <span id="workspace-opacity-val"
+              style="font-size:0.75rem; font-weight:bold; min-width:35px;">
             %100
         </span>
 
+    </div>
+
+    <!-- Çalışma Alanı Renk Ayarları -->
+    <div class="option-item" style="grid-column:span 2; margin-top:6px; border-top:1px solid #e2e8f0; padding-top:8px; display:flex; flex-direction:column; gap:8px;">
+        <div style="font-size:0.8rem; font-weight:600; color:#475569;">🎨 Çalışma Alanı Renkleri</div>
+
+        <!-- Dış Kenar Rengi -->
+        <div style="display:flex; flex-direction:column; gap:4px;">
+            <label style="display:flex; align-items:center; gap:6px; font-size:0.78rem; color:#64748b; cursor:pointer; user-select:none;">
+                <input type="checkbox" id="ws-stroke-active" checked>
+                Dış Kenar Rengi
+                <span id="ws-stroke-preview" style="display:inline-block;width:14px;height:14px;border-radius:2px;border:2px solid #3b82f6;background:transparent;flex-shrink:0;"></span>
+            </label>
+            <div id="ws-stroke-palette" style="display:flex; flex-wrap:wrap; gap:3px;"></div>
+        </div>
+
+        <!-- İç Dolgu Rengi -->
+        <div style="display:flex; flex-direction:column; gap:4px;">
+            <label style="display:flex; align-items:center; gap:6px; font-size:0.78rem; color:#64748b; cursor:pointer; user-select:none;">
+                <input type="checkbox" id="ws-fill-active">
+                İç Dolgu Rengi
+                <span id="ws-fill-preview" style="display:inline-block;width:14px;height:14px;border-radius:2px;border:1px solid #cbd5e1;background:#cbd5e1;flex-shrink:0;"></span>
+            </label>
+            <div id="ws-fill-palette" style="display:flex; flex-wrap:wrap; gap:3px;"></div>
+        </div>
     </div>
 
     <!-- Görüntü Alanı — hidden, sol paneldeki kutular tarafından yönetilir -->
@@ -1317,7 +1397,7 @@
     </div>
     <!-- SEÇİLİ BAR -->
     <div class="ramp-selector" onclick="togglePalette()">
-        <div id="selectedRamp" class="color-ramp" style="background:linear-gradient(to right,#440154,#482777,#3f4a8a,#31688e,#26828e,#1f9e89,#35b779,#6ece58,#b5de2b,#fde725)" data-ramp="viridis"></div>
+        <div id="selectedRamp" class="color-ramp" style="background:linear-gradient(to right,#000000,#ffffff)" data-ramp="black-white"></div>
         <span class="arrow">▼</span>
     </div>
     <!-- AÇILAN PALETLER -->
@@ -1425,9 +1505,9 @@
                 <button class="btn-tool markup-tool-btn" id="tool-square"  data-tool="square">⬜ Kare</button>
                 <button class="btn-tool markup-tool-btn" id="tool-arrow"   data-tool="arrow">→ Ok</button>
                 <button class="btn-tool markup-tool-btn" id="tool-carrow"  data-tool="carrow">↪ Kavisli Ok</button>
+                <button class="btn-tool markup-tool-btn" id="tool-text"    data-tool="text">📝 Metin Ekle</button>
+                <button class="btn-tool markup-tool-btn" id="tool-point"   data-tool="point">📍 Nokta</button>
             </div>
-            <button class="btn-tool markup-tool-btn" id="tool-text" data-tool="text"
-                style="width:100%; margin-top:5px; font-size:1rem;">📝 Metin Ekle</button>
 
             <!-- Kalem Kalınlığı -->
             <div class="control-group" style="margin-top:6px;">
@@ -1607,6 +1687,39 @@
 
             </div>
 
+            <!-- Nokta Araç Seçenekleri -->
+            <div id="point-options" class="control-group" style="display:none; flex-direction:column; gap:8px;">
+                <label style="font-size:0.8rem; color:#64748b;">Sembol Seçimi</label>
+                <div id="point-icon-grid" style="display:grid; grid-template-columns:repeat(5,1fr); gap:4px;"></div>
+
+                <label style="font-size:0.8rem; color:#64748b;">Boyut</label>
+                <div style="display:flex; gap:8px; align-items:center;">
+                    <input type="range" id="point-size" min="8" max="80" value="28" style="flex:1;">
+                    <span id="point-size-label" style="font-size:0.8rem; font-weight:bold; min-width:32px;">28px</span>
+                </div>
+
+                <label style="font-size:0.8rem; color:#64748b;">Döndürme</label>
+                <div style="display:flex; gap:8px; align-items:center;">
+                    <input type="range" id="point-rotation" min="0" max="360" value="0" style="flex:1;">
+                    <span id="point-rotation-label" style="font-size:0.8rem; font-weight:bold; min-width:36px;">0°</span>
+                </div>
+
+                <label style="font-size:0.8rem; color:#64748b;">Saydamlık</label>
+                <div style="display:flex; gap:8px; align-items:center;">
+                    <input type="range" id="point-opacity" min="10" max="100" value="100" style="flex:1;">
+                    <span id="point-opacity-label" style="font-size:0.8rem; font-weight:bold; min-width:36px;">100%</span>
+                </div>
+
+                <label style="font-size:0.8rem; color:#64748b;">Kenarlık Rengi</label>
+                <div id="point-border-color-palette" style="display:flex; flex-wrap:wrap; gap:3px;"></div>
+
+                <div style="display:flex; gap:8px; align-items:center;">
+                    <label style="font-size:0.8rem; color:#64748b; flex-shrink:0;">Kenarlık Kalınlığı</label>
+                    <input type="range" id="point-border-width" min="0" max="8" value="1" style="flex:1;">
+                    <span id="point-border-width-label" style="font-size:0.8rem; font-weight:bold; min-width:24px;">1px</span>
+                </div>
+            </div>
+
             <!-- Renk Seçimi -->
             <div class="control-group" style="margin-top:4px;">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px;">
@@ -1626,22 +1739,20 @@
                     <button type="button" id="btn-chart-bar" class="btn-tool active" style="flex:1; font-size:0.8rem;">📊 Sütun Grafik</button>
                     <button type="button" id="btn-chart-pie" class="btn-tool" style="flex:1; font-size:0.8rem;">🥧 Pasta Grafik</button>
                 </div>
-                <div id="stats-chart-svg-wrap" class="chart-placeholder" style="height:auto; min-height:120px; flex-direction:column; padding:10px;">
-                    📊 Pasta/Sütun Grafik ve Tablo Alanı<br>
-                    <span style="font-size:0.72rem; margin-top:4px;">Classified modda "✅ Lejantı Uygula" butonuna basınca burada belirir.</span>
-                </div>
+                <div id="stats-chart-svg-wrap" class="chart-placeholder" style="height:auto; min-height:120px; flex-direction:column; padding:10px;"></div>
                 <div id="stats-chart-table"></div>
 
                 <!-- İndirme butonları — analiz çalıştıktan sonra tabloyu/grafiği dışa aktarır -->
                 <div style="margin-top:8px; display:flex; gap:5px; flex-wrap:wrap;">
-                    <button type="button" onclick="downloadChartPNG()" class="btn-tool" style="flex:1; font-size:0.78rem;">🖼️ Grafik PNG</button>
+                    <button type="button" onclick="openChartDownloadDialog()" class="btn-tool" style="flex:1; font-size:0.78rem;">🖼️ Görsel</button>
                     <button type="button" onclick="downloadCSV()" class="btn-tool" style="flex:1; font-size:0.78rem;">📥 CSV İndir</button>
                     <button type="button" onclick="downloadPDF()" class="btn-tool" style="flex:1; font-size:0.78rem;">📄 PDF İndir</button>
                 </div>
             </div>
 
             <div style="margin-top: auto; display: flex; flex-direction: column; gap: 10px;">
-                <button class="btn-tool" style="background-color: #f8fafc; border-color: #1e3a8a; color: #1e3a8a;">📥 Veriyi İndir (GeoTIFF)</button>
+                <hr style="border:none; border-top:1px solid #1e3a8a; opacity:0.18; margin:0;">
+                <button class="btn-tool" id="btn-geotiff-download" onclick="openGeoTiffDownloadDialog()" style="background-color: #f8fafc; border-color: #1e3a8a; color: #1e3a8a;">📥 Veriyi İndir (GeoTIFF)</button>
                 <button class="btn-primary" id="btn-open-export" style="background-color: #10b981;">🖨️ Görsel Çıktı Al (PNG / JPEG / PDF)</button>
             </div>
         </div><!-- /panel-content -->
@@ -1952,14 +2063,15 @@
                 map.removeLayer(currentLayer);
             }
             currentLayer = layer;
-            var waToggle = document.getElementById('toggle-working-area');
-            var showWA = !waToggle || waToggle.checked;
-            if (showWA && !map.hasLayer(currentLayer)) {
+            window._workspaceLayer = layer;
+            if (!map.hasLayer(currentLayer)) {
                 currentLayer.addTo(map);
             }
             // Sınır görünür olsun ya da olmasın fitBounds çalışır
             try { map.fitBounds(currentLayer.getBounds()); } catch(e) {}
             showGeometryInfo(currentLayer.toGeoJSON());
+            // Seçili renkleri hemen uygula
+            if (typeof window._applyWorkspaceStyle === 'function') window._applyWorkspaceStyle();
         }
 
         // 🗑️ butonu — çizimi VEYA yüklenmiş KML/KMZ katmanını siler
@@ -1969,6 +2081,7 @@
             if (currentLayer) {
                 map.removeLayer(currentLayer);
                 currentLayer = null;
+                window._workspaceLayer = null;
             }
             geomInfoBox.style.display = 'none';
         }
@@ -1987,19 +2100,28 @@
         });
         
         // ---------------------------------------------------------
-// Yüzde değerini güncelleme + tüm çalışma alanı katmanlarına uygula
+// Veri Şeffaflığı — yalnızca analiz rasterını (_geeLayer) etkiler
 document.getElementById('layerOpacity').addEventListener('input', function() {
     var val = Math.round(this.value * 100);
     document.getElementById('layer-opacity-val').textContent = '%' + val;
     var opacity = parseFloat(this.value);
-    // Aktif currentLayer'a uygula
+    if (typeof _geeLayer !== 'undefined' && _geeLayer && typeof _geeLayer.setOpacity === 'function') {
+        _geeLayer.setOpacity(opacity);
+    }
+});
+
+// Çalışma Alanı Şeffaflığı — yalnızca KML/KMZ/çizim (currentLayer) etkiler
+document.getElementById('workspaceOpacity').addEventListener('input', function() {
+    var val = Math.round(this.value * 100);
+    document.getElementById('workspace-opacity-val').textContent = '%' + val;
+    var opacity = parseFloat(this.value);
     if (typeof currentLayer !== 'undefined' && currentLayer) {
         if (typeof currentLayer.setStyle === 'function') {
-            currentLayer.setStyle({ opacity: opacity, fillOpacity: opacity * 0.6 });
+            currentLayer.setStyle({ opacity: opacity, fillOpacity: opacity * 0.55 });
         } else if (typeof currentLayer.eachLayer === 'function') {
             currentLayer.eachLayer(function(l) {
                 if (typeof l.setStyle === 'function') {
-                    l.setStyle({ opacity: opacity, fillOpacity: opacity * 0.6 });
+                    l.setStyle({ opacity: opacity, fillOpacity: opacity * 0.55 });
                 }
             });
         }
@@ -2009,7 +2131,7 @@ document.getElementById('layerOpacity').addEventListener('input', function() {
         // -------------------------------------------------------
         document.addEventListener('DOMContentLoaded', function() {
 
-    // 1. Şeffaflık Barı göster/gizle
+    // 1. Şeffaflık Barı göster/gizle (Veri Şeffaflığı = raster)
     document.getElementById('toggle-opacity').addEventListener('change', function() {
         var container = document.getElementById('opacity-control-container');
         var slider = document.getElementById('layerOpacity');
@@ -2017,7 +2139,7 @@ document.getElementById('layerOpacity').addEventListener('input', function() {
             container.style.display = 'flex';
         } else {
             container.style.display = 'none';
-            slider.value = 1;
+            slider.value = 0.85;
             slider.dispatchEvent(new Event('input'));
         }
     });
@@ -2071,17 +2193,116 @@ document.getElementById('layerOpacity').addEventListener('input', function() {
         }, 50);
     });
 
-    // 8. Çalışma Alanı — KML/KMZ/çizim katmanını göster/gizle
-    document.getElementById('toggle-working-area').addEventListener('change', function() {
-        var show = this.checked;
-        if (typeof currentLayer !== 'undefined' && currentLayer) {
-            if (show) {
-                if (!map.hasLayer(currentLayer)) map.addLayer(currentLayer);
-            } else {
-                if (map.hasLayer(currentLayer)) map.removeLayer(currentLayer);
-            }
+    // ── Çalışma Alanı Renk Ayarları ──────────────────────────────────────
+    (function() {
+        var WS_COLORS = [
+            '#3b82f6','#1e3a8a','#06b6d4','#0891b2',
+            '#22c55e','#16a34a','#14532d','#10b981',
+            '#ef4444','#dc2626','#991b1b','#f97316',
+            '#eab308','#d97706','#a855f7','#7c3aed',
+            '#ec4899','#be185d','#64748b','#000000',
+            '#ffffff','#94a3b8',
+            '#f43f5e','#fb923c','#fbbf24','#84cc16',
+            '#2dd4bf','#818cf8','#c084fc','#f472b6',
+            '#78350f','#166534','#0c4a6e','#581c87'
+        ];
+
+        window._wsStrokeActive = true;
+        window._wsFillActive   = false;
+        window._wsStrokeColor  = '#3b82f6';
+        window._wsFillColor    = '#3b82f6';
+
+        window._applyWorkspaceStyle = function() {
+            var wl = window._workspaceLayer;
+            if (!wl) return;
+            var sA = !!window._wsStrokeActive;
+            var fA = !!window._wsFillActive;
+            var style = {
+                stroke:      sA,
+                color:       sA ? window._wsStrokeColor : '#3b82f6',
+                weight:      sA ? 2 : 0,
+                opacity:     sA ? 1 : 0,
+                fill:        fA,
+                fillColor:   fA ? window._wsFillColor : '#3b82f6',
+                fillOpacity: fA ? 0.35 : 0
+            };
+            try {
+                if (typeof wl.setStyle === 'function') {
+                    wl.setStyle(style);
+                } else if (typeof wl.eachLayer === 'function') {
+                    wl.eachLayer(function(l) { if (typeof l.setStyle === 'function') l.setStyle(style); });
+                }
+            } catch(e) {}
+        };
+
+        function buildPalette(containerId, previewId, getActive, setColor, getColor) {
+            var container = document.getElementById(containerId);
+            var preview   = document.getElementById(previewId);
+            if (!container) return;
+            WS_COLORS.forEach(function(hex) {
+                var sw = document.createElement('div');
+                sw.setAttribute('data-color', hex);
+                sw.style.cssText = 'width:18px;height:18px;border-radius:3px;cursor:pointer;border:2px solid ' +
+                    (hex === getColor() ? '#1e3a8a' : 'transparent') + ';background:' + hex + ';flex-shrink:0;';
+                sw.addEventListener('click', function() {
+                    container.querySelectorAll('div').forEach(function(s) { s.style.borderColor = 'transparent'; });
+                    sw.style.borderColor = '#1e3a8a';
+                    setColor(hex);
+                    if (preview) { preview.style.background = hex; preview.style.borderColor = hex; }
+                    window._applyWorkspaceStyle();
+                });
+                container.appendChild(sw);
+            });
+            // Initial preview colour
+            if (preview) { preview.style.background = getColor(); preview.style.borderColor = getColor(); }
         }
-    });
+
+        buildPalette(
+            'ws-stroke-palette', 'ws-stroke-preview',
+            function() { return window._wsStrokeActive; },
+            function(c) { window._wsStrokeColor = c; },
+            function()  { return window._wsStrokeColor; }
+        );
+        buildPalette(
+            'ws-fill-palette', 'ws-fill-preview',
+            function() { return window._wsFillActive; },
+            function(c) { window._wsFillColor = c; },
+            function()  { return window._wsFillColor; }
+        );
+
+        var strokeChk = document.getElementById('ws-stroke-active');
+        var fillChk   = document.getElementById('ws-fill-active');
+        if (strokeChk) strokeChk.addEventListener('change', function() {
+            window._wsStrokeActive = this.checked;
+            window._applyWorkspaceStyle();
+        });
+        if (fillChk) fillChk.addEventListener('change', function() {
+            window._wsFillActive = this.checked;
+            window._applyWorkspaceStyle();
+        });
+    })();
+    // ─────────────────────────────────────────────────────────────────────
+
+    // 8. Çalışma Alanı Şeffaflığı — checkbox: katmanı gizle/göster + slider
+    var wsOpacityCheckbox = document.getElementById('toggle-workspace-opacity');
+    if (wsOpacityCheckbox) {
+        wsOpacityCheckbox.addEventListener('change', function() {
+            var wsContainer = document.getElementById('workspace-opacity-container');
+            if (this.checked) {
+                if (wsContainer) wsContainer.style.display = 'flex';
+                // Çalışma alanı katmanlarını haritaya geri ekle
+                if (typeof currentLayer !== 'undefined' && currentLayer && !map.hasLayer(currentLayer)) {
+                    currentLayer.addTo(map);
+                }
+            } else {
+                if (wsContainer) wsContainer.style.display = 'none';
+                // Çalışma alanı katmanlarını haritadan tamamen gizle (kaldırmaz — sadece görünmez yapar)
+                if (typeof currentLayer !== 'undefined' && currentLayer && map.hasLayer(currentLayer)) {
+                    map.removeLayer(currentLayer);
+                }
+            }
+        });
+    }
 
 });
         // ---------------------------------------------------------
@@ -2105,6 +2326,37 @@ document.getElementById('layerOpacity').addEventListener('input', function() {
         // indeks checkbox'ları (ve diğer sylva-module radyoları) birbirini
         // dışlar — bir indeks işaretlenince diğerleri otomatik temizlenir.
         // ===========================================================
+        // ===========================================================
+        // 🏘️ ARAZİ KULLANIMI (LULC) — Filtre İzolasyonu
+        // LULC ailesindeki analizler (Dynamic World / ESA WorldCover) statik
+        // tek-katmanlı veri setleridir; tarih aralığı/bulutluluk filtresi
+        // bunlara uygulanamaz. Bu analizler seçiliyken ilgili kontroller
+        // gizlenir/devre dışı bırakılır.
+        // ===========================================================
+        var _LULC_FAMILY_ANALYSES = ['LULC', 'LULC_ESA'];
+        function isLulcAnalysis(name) {
+            return _LULC_FAMILY_ANALYSES.indexOf(name) !== -1;
+        }
+
+        function _updateDateCloudControlsVisibility() {
+            var meta = (typeof getSelectedAnalysisMeta === 'function') ? getSelectedAnalysisMeta() : null;
+            var isLulc = !!(meta && isLulcAnalysis(meta.analysisName));
+
+            var dateTitle = document.getElementById('date-section-title');
+            var dateRow   = document.getElementById('date-range-row');
+            var cloudGrp  = document.getElementById('cloud-control-group');
+            var dateStart = document.getElementById('date-start');
+            var dateEnd   = document.getElementById('date-end');
+            var cloudSl   = document.getElementById('cloud-slider');
+
+            [dateTitle, dateRow, cloudGrp].forEach(function (el) {
+                if (el) el.style.display = isLulc ? 'none' : '';
+            });
+            if (dateStart) dateStart.disabled = isLulc;
+            if (dateEnd)   dateEnd.disabled   = isLulc;
+            if (cloudSl)   cloudSl.disabled   = isLulc;
+        }
+
         (function () {
             var sensorRadios = document.querySelectorAll('.uydu-sensor-radio');
             var analizCheckboxes = document.querySelectorAll('.uydu-analiz-checkbox');
@@ -2127,6 +2379,8 @@ document.getElementById('layerOpacity').addEventListener('input', function() {
                     if (!isAllowed) cb.checked = false;
                 });
 
+                syncDnbrPanel();
+
                 if (analizBaslik) {
                     analizBaslik.innerHTML = checkedSensor
                         ? 'Kullanılabilir Analizler <span style="font-weight:normal;color:#64748b;">— ' + checkedSensor.getAttribute('data-sensor-label') + '</span>'
@@ -2139,6 +2393,7 @@ document.getElementById('layerOpacity').addEventListener('input', function() {
                     updateAvailableAnalyses();
                     // Farklı bir sensör seçilince eski "Uydu Görüntüsü/Land Cover/DEM vb." seçimini iptal et
                     document.querySelectorAll('input[name="sylva-module"]:checked').forEach(function (sm) { sm.checked = false; });
+                    _updateDateCloudControlsVisibility();
                 });
             });
 
@@ -2148,6 +2403,14 @@ document.getElementById('layerOpacity').addEventListener('input', function() {
                         analizCheckboxes.forEach(function (other) { if (other !== cb) other.checked = false; });
                         document.querySelectorAll('input[name="sylva-module"]:checked').forEach(function (sm) { sm.checked = false; });
                     }
+
+                    // Herhangi bir analiz seçildiğinde AOI (çalışma alanı) bilgi kutusunu
+                    // ve mevcut katmanı koru — seçim değişikliği AOI'yi sıfırlamamalı.
+                    var geomBox = document.getElementById('geom-info');
+                    if (geomBox && typeof currentLayer !== 'undefined' && currentLayer) {
+                        geomBox.style.display = 'flex';
+                    }
+                    _updateDateCloudControlsVisibility();
                 });
             });
 
@@ -2156,6 +2419,7 @@ document.getElementById('layerOpacity').addEventListener('input', function() {
             document.querySelectorAll('input[name="sylva-module"]').forEach(function (r) {
                 r.addEventListener('change', function () {
                     if (r.checked) analizCheckboxes.forEach(function (cb) { cb.checked = false; });
+                    _updateDateCloudControlsVisibility();
                 });
             });
         })();
@@ -2266,11 +2530,6 @@ document.getElementById('layerOpacity').addEventListener('input', function() {
             map.pm.disableDraw();
             setActiveTool(null);
             setCurrentLayer(e.layer);
-            var waToggle = document.getElementById('toggle-working-area');
-            if (waToggle && !waToggle.checked) {
-                waToggle.checked = true;
-                waToggle.dispatchEvent(new Event('change'));
-            }
         });
 
         // ---------------------------------------------------------
@@ -2550,22 +2809,36 @@ function selectRamp(name) {
             }
 
             var selectedRampEl = document.getElementById('selectedRamp');
-            var rampCss = selectedRampEl.style.background || ramps['viridis'];
+            var rampCss = selectedRampEl.style.background || ramps['black-white'];
 
             // Harita lejantını sürekli renk skalası olarak güncelle
             var legendBox = document.querySelector('.map-legend');
             if (legendBox) {
-                legendBox.innerHTML =
+                // "Lejantı Uygula" çağrısı tüm HTML'yi yeniden çizdiğinden,
+                // lejanttaki tarih satırı (real-stats-row) silinmeden önce
+                // hafızaya alınır ve yeniden çizimden sonra geri eklenir. (Issue-2 fix)
+                var savedDateRow = legendBox.querySelector('.real-stats-row');
+                var savedDateHTML = savedDateRow ? savedDateRow.outerHTML : null;
+
+                _setLegendHTML(legendBox,
                     '<b style="font-size:0.78rem;">' + escapeHtml(title) + '</b>' +
                     '<div style="display:flex; justify-content:space-between; font-size:0.68rem; margin-top:4px; color:#475569;">' +
                         '<span class="legend-min-label">' + minVal + '</span>' +
-                        '<span>' + ((minVal + maxVal) / 2).toFixed(2) + '</span>' +
                         '<span class="legend-max-label">' + maxVal + '</span>' +
                     '</div>' +
                     '<div class="color-ramp" style="height:10px; border-radius:3px; border:1px solid #cbd5e1; margin-top:2px; background:' + rampCss + ';"></div>' +
                     '<div style="display:flex; justify-content:space-between; font-size:0.65rem; color:#94a3b8; margin-top:2px;">' +
                         '<span>Düşük</span><span>Yüksek</span>' +
-                    '</div>';
+                    '</div>');
+
+                // Tarih satırını geri ekle
+                if (savedDateHTML) {
+                    var tmp = document.createElement('div');
+                    tmp.innerHTML = savedDateHTML;
+                    var restoredRow = tmp.firstChild;
+                    if (restoredRow) legendBox.appendChild(restoredRow);
+                }
+
                 // Lejant checkbox işaretliyse içerik geldiğinde göster
                 var lgToggle = document.getElementById('toggle-legend');
                 if (!lgToggle || lgToggle.checked) legendBox.style.display = '';
@@ -2594,20 +2867,24 @@ function selectRamp(name) {
             var viewModeEl    = document.getElementById('viewMode');
             var cloudSliderEl = document.getElementById('cloud-slider');
 
-            var roiGeoJSON = currentLayer.toGeoJSON();
-            var geometry   = (roiGeoJSON.type === 'FeatureCollection')
-                           ? roiGeoJSON.features[0].geometry : roiGeoJSON.geometry;
-            if (!geometry) return;
+            var _roi = _extractROIGeometry(currentLayer);
+            if (!_roi) return;
 
             var selectedRampEl = document.getElementById('selectedRamp');
-            var rampName = selectedRampEl ? (selectedRampEl.getAttribute('data-ramp') || 'viridis') : 'viridis';
+            var rampName = selectedRampEl ? (selectedRampEl.getAttribute('data-ramp') || 'black-white') : 'black-white';
+            if (rampName === '__gee__') rampName = 'black-white';
             var palette  = sampleRampColors(rampName, 6); // GEE paleti için 6 renkli örnek
+            if (typeof rampReversed !== 'undefined' && rampReversed) palette.reverse(); // Tersine çevrilmişse paleti de ters gönder
+
+            // 2. Lejant İşlemlerine Entegrasyon: renk paleti/veri yeniden
+            // hesaplanırken standart "🌲 SylvaGIS" yükleme ekranı gösterilir.
+            showSylvaLoading();
 
             fetch('http://127.0.0.1:5000/api/analyze', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    roi:       geometry.coordinates,
+                    roi:       _roi,
                     clipMode:  viewModeEl    ? viewModeEl.value : 'clip',
                     startDate: startInput    ? startInput.value : '',
                     endDate:   endInput      ? endInput.value   : '',
@@ -2622,9 +2899,12 @@ function selectRamp(name) {
             })
             .then(function(r) { return r.json(); })
             .then(function(data) {
-                if (!data.success) return;
+                if (!data.success) { hideSylvaLoading(); return; }
                 if (_geeLayer) { map.removeLayer(_geeLayer); _geeLayer = null; }
                 _geeLayer = L.tileLayer(data.tileUrl, { opacity: 0.85, zIndex: 10, crossOrigin: true }).addTo(map);
+                // Renklendirilmiş yeni veri haritada hazır olup tamamen ekrana
+                // yansıdığında (tüm karolar yüklenince) yükleme ekranı kapanır.
+                _hideLoadingWhenTileReady(_geeLayer);
                 if (data.stats) {
                     updateStatsTable(data.stats);
                     renderChart(data.stats, meta);
@@ -2633,7 +2913,7 @@ function selectRamp(name) {
                     appendRealStatsToLegend(data.stats);
                 }
             })
-            .catch(function() { /* sessiz hata — GEE yoksa yerel önizleme yeterli */ });
+            .catch(function() { hideSylvaLoading(); /* sessiz hata — GEE yoksa yerel önizleme yeterli */ });
         }
 
         // Stretched mod için katman boyama
@@ -2642,7 +2922,7 @@ function selectRamp(name) {
 
             // Her zaman verilen rampCss'i (tersine çevrilmiş olabilir) doğrudan kullan
             var selectedRampEl = document.getElementById('selectedRamp');
-            var currentCss = (rampCss && rampCss.trim()) ? rampCss : (selectedRampEl ? selectedRampEl.style.background : ramps['viridis']);
+            var currentCss = (rampCss && rampCss.trim()) ? rampCss : (selectedRampEl ? selectedRampEl.style.background : ramps['black-white']);
 
             // CSS gradyanından renk duraklarını örnekle
             function getSampledColors(count) {
@@ -2660,7 +2940,8 @@ function selectRamp(name) {
                     return colors;
                 }
                 // Fallback: ramp adından örnekle
-                var rampName = selectedRampEl ? (selectedRampEl.getAttribute('data-ramp') || 'viridis') : 'viridis';
+                var rampName = selectedRampEl ? (selectedRampEl.getAttribute('data-ramp') || 'black-white') : 'black-white';
+                if (rampName === '__gee__') rampName = 'black-white';
                 return sampleRampColors(rampName, count);
             }
 
@@ -2704,7 +2985,8 @@ function selectRamp(name) {
             if (btnAutoClassify) {
                 btnAutoClassify.addEventListener('click', function() {
                     var selectedRampEl = document.getElementById('selectedRamp');
-                    var rampName = selectedRampEl.getAttribute('data-ramp') || 'viridis';
+                    var rampName = selectedRampEl.getAttribute('data-ramp') || 'black-white';
+                    if (rampName === '__gee__') rampName = 'black-white';
                     applyRampToClassification(rampName);
                 });
             }
@@ -2945,10 +3227,12 @@ function selectRamp(name) {
             var viewModeEl    = document.getElementById('viewMode');
             var cloudSliderEl = document.getElementById('cloud-slider');
 
-            var roiGeoJSON = currentLayer.toGeoJSON();
-            var geometry   = (roiGeoJSON.type === 'FeatureCollection')
-                           ? roiGeoJSON.features[0].geometry : roiGeoJSON.geometry;
-            if (!geometry) return;
+            // Önceden burada FeatureCollection'ın yalnızca ilk feature'ı alınıyor,
+            // delikler (donut) ve diğer MultiPolygon parçaları sessizce atılıyordu.
+            // Artık tüm diğer çağrı noktalarıyla tutarlı şekilde _extractROIGeometry
+            // kullanılarak hiçbir parça/halka kaybedilmez.
+            var _roiCls = _extractROIGeometry(currentLayer);
+            if (!_roiCls) return;
 
             // Sınıf renklerini palet dizisine çevir (küçükten büyüğe sıralı)
             var palette = classes.map(function(c) { return c.color; });
@@ -2960,11 +3244,15 @@ function selectRamp(name) {
                 return { min: c.min, max: c.max, color: c.color, label: c.name };
             });
 
+            // 2. Lejant İşlemlerine Entegrasyon: renk paleti/veri yeniden
+            // hesaplanırken standart "🌲 SylvaGIS" yükleme ekranı gösterilir.
+            showSylvaLoading();
+
             fetch('http://127.0.0.1:5000/api/analyze', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    roi:         geometry.coordinates,
+                    roi:         _roiCls,
                     clipMode:    viewModeEl    ? viewModeEl.value : 'clip',
                     startDate:   startInput    ? startInput.value : '',
                     endDate:     endInput      ? endInput.value   : '',
@@ -2980,9 +3268,12 @@ function selectRamp(name) {
             })
             .then(function(r) { return r.json(); })
             .then(function(data) {
-                if (!data.success) return;
+                if (!data.success) { hideSylvaLoading(); return; }
                 if (_geeLayer) { map.removeLayer(_geeLayer); _geeLayer = null; }
                 _geeLayer = L.tileLayer(data.tileUrl, { opacity: 0.85, zIndex: 10, crossOrigin: true }).addTo(map);
+                // Renklendirilmiş yeni veri haritada hazır olup tamamen ekrana
+                // yansıdığında (tüm karolar yüklenince) yükleme ekranı kapanır.
+                _hideLoadingWhenTileReady(_geeLayer);
 
                 // ── Gerçek veri besleme: rastgele simülasyon yerine, GEE'den
                 // dönen gerçek histogramdan her sınıfın gerçek piksel yüzdesini
@@ -2996,7 +3287,7 @@ function selectRamp(name) {
                     }
                 }
             })
-            .catch(function() { /* sessiz hata — GEE yoksa yerel renklendirme yeterli */ });
+            .catch(function() { hideSylvaLoading(); /* sessiz hata — GEE yoksa yerel renklendirme yeterli */ });
         }
 
         // Harita üzerindeki lejantı (.map-legend), girilen özel isim/aralık/renklerle yeniden çizer
@@ -3017,7 +3308,14 @@ function selectRamp(name) {
                 );
             }).join('');
 
-            legendBox.innerHTML = '<b style="font-size:0.78rem;">' + title + '</b>' + rowsHtml;
+            var classifiedInfoHtml = '';
+            if (_currentLegendDate) {
+                classifiedInfoHtml = '<div class="real-stats-row" style="font-size:0.62rem;color:#16a34a;margin-top:4px;border-top:1px dashed #cbd5e1;padding-top:3px;">'
+                    + '📡 Tarih: ' + _currentLegendDate
+                    + '</div>';
+            }
+
+            _setLegendHTML(legendBox, '<b style="font-size:0.78rem;">' + title + '</b>' + rowsHtml + classifiedInfoHtml);
             // Lejant checkbox işaretliyse içerik geldiğinde göster
             var lgToggle2 = document.getElementById('toggle-legend');
             if (!lgToggle2 || lgToggle2.checked) legendBox.style.display = '';
@@ -3128,7 +3426,7 @@ function selectRamp(name) {
                 var sensorRadio = document.querySelector('.uydu-sensor-radio:checked');
                 return {
                     analysisName: checkedAnaliz.getAttribute('data-analysis') || 'Analiz',
-                    rampKey: checkedAnaliz.getAttribute('data-ramp-key') || 'viridis',
+                    rampKey: checkedAnaliz.getAttribute('data-ramp-key') || 'black-white',
                     legendType: 'stretched',
                     legendMin: checkedAnaliz.getAttribute('data-legend-min') || '-1',
                     legendMax: checkedAnaliz.getAttribute('data-legend-max') || '+1',
@@ -3143,7 +3441,7 @@ function selectRamp(name) {
                 var legendType = checked.getAttribute('data-legend-type') || 'stretched';
                 return {
                     analysisName: checked.getAttribute('data-analysis') || 'Veri',
-                    rampKey: checked.getAttribute('data-ramp-key') || 'viridis',
+                    rampKey: checked.getAttribute('data-ramp-key') || 'black-white',
                     legendType: legendType,
                     legendMin: checked.getAttribute('data-legend-min') || '-1',
                     legendMax: checked.getAttribute('data-legend-max') || '+1',
@@ -3205,7 +3503,7 @@ function selectRamp(name) {
                     + '<span>Düşük</span><span>Yüksek</span></div>';
             }
 
-            legendBox.innerHTML = html;
+            _setLegendHTML(legendBox, html);
             // Lejant checkbox işaretliyse içerik geldiğinde göster
             var lgToggle3 = document.getElementById('toggle-legend');
             if (!lgToggle3 || lgToggle3.checked) legendBox.style.display = '';
@@ -3285,6 +3583,7 @@ function selectRamp(name) {
         var currentMockMeanValue = null;
 
         function applyAnalysisResult(meta, scene) {
+            if (scene && scene.dateLabel) _currentLegendDate = scene.dateLabel;
             renderAnalysisLegend(meta);
 
             if (meta.legendType === 'image') {
@@ -3324,12 +3623,116 @@ function selectRamp(name) {
             }
         }
 
+        // ── Lejant konum/boyut koruyucu yardımcı ─────────────────────
+        function _setLegendHTML(legendBox, html) {
+            // İlk render'dan önce mevcut konumu/boyutu kaydet
+            var s = legendBox.style;
+            var pos = s.position, lft = s.left, top = s.top, mw = s.minWidth;
+            // Eğer legend daha önce en az bir kez render edildiyse ve genişliği kilitliyse koru
+            var lockedW = legendBox._lockedMinW || 0;
+
+            legendBox.innerHTML = html;
+
+            // Konum bilgilerini geri yaz (sürükleme sonrası kaybolmasin)
+            if (pos) s.position = pos;
+            if (lft) s.left = lft;
+            if (top) s.top = top;
+
+            // İlk render: mevcut genişliği kilitle (sonraki güncellemelerde küçülmesin)
+            if (!legendBox._lockedMinW) {
+                requestAnimationFrame(function() {
+                    var cw = legendBox.offsetWidth;
+                    if (cw > 0) {
+                        legendBox._lockedMinW = cw;
+                        legendBox.style.minWidth = cw + 'px';
+                    }
+                });
+            } else {
+                // Kilitleme zaten yapılmış — minWidth'i koru
+                s.minWidth = lockedW + 'px';
+            }
+        }
+
+        // ── Logo ilerleme halkası (kullanılmıyor — halka kaldırıldı) ──────
+        // _startLogoRing / _stopLogoRing çağrılmamaktadır; kalmış dead code.
+        var _ringTimer = null;
+        var _ringPct = 0;
+        function _startLogoRing() {
+            var ring = document.getElementById('logo-progress-ring');
+            var fill = document.getElementById('logo-ring-fill');
+            if (!ring || !fill) return;
+            _ringPct = 0;
+            fill.style.transition = 'none';
+            fill.style.strokeDashoffset = '100.53';
+            fill.style.stroke = '#10b981';
+            void fill.getBoundingClientRect(); // reflow
+            fill.style.transition = 'stroke-dashoffset 0.4s ease';
+            ring.style.opacity = '1';
+            if (_ringTimer) clearInterval(_ringTimer);
+            _ringTimer = setInterval(function() {
+                if (_ringPct < 88) {
+                    _ringPct += (88 - _ringPct) * 0.1;
+                    fill.style.strokeDashoffset = (100.53 * (1 - _ringPct / 100)).toFixed(2);
+                }
+            }, 250);
+        }
+        function _stopLogoRing(success) {
+            if (_ringTimer) { clearInterval(_ringTimer); _ringTimer = null; }
+            var ring = document.getElementById('logo-progress-ring');
+            var fill = document.getElementById('logo-ring-fill');
+            if (!ring || !fill) return;
+            fill.style.transition = 'stroke-dashoffset 0.5s ease';
+            if (success) {
+                fill.style.stroke = '#10b981';
+                fill.style.strokeDashoffset = '0';
+                setTimeout(function() { ring.style.opacity = '0'; setTimeout(function() { fill.style.strokeDashoffset = '100.53'; }, 400); }, 800);
+            } else {
+                fill.style.stroke = '#ef4444';
+                fill.style.strokeDashoffset = '100.53';
+                setTimeout(function() { ring.style.opacity = '0'; setTimeout(function() { fill.style.stroke = '#10b981'; }, 400); }, 500);
+            }
+        }
+
         // "🚀 Analizi Çalıştır" butonu
         var _geeLayer = null; // Haritaya eklenen GEE tile katmanı (bir öncekini kaldırmak için)
         // Galeriden seçilen sahnenin GEE system:index'i. null ise "tarih aralığı medyanı"
         // kullanılır. Sınıflandırma/Stretched senkronizasyonu sırasında bu ID korunarak
         // gönderilir; aksi halde renk/aralık değişince sahne sessizce medyana döner.
         var currentSceneId = null;
+
+        // ============================================================
+        // 🌲 SylvaGIS YÜKLEME EKRANI — ortak yardımcılar
+        // "Analizi Çalıştır" akışında kullanılan standart, yarı şeffaf
+        // beyaz arka plan üzerinde yanıp sönen "🌲 SylvaGIS" overlay'i;
+        // galeri sahne geçişleri ve lejant uygulama işlemleri de dahil
+        // olmak üzere TÜM uzun süren (sunucu/GEE) işlemlerde kullanılır.
+        // ============================================================
+        function showSylvaLoading() {
+            var ov = document.getElementById('analysis-loading-overlay');
+            if (ov) ov.classList.add('active');
+        }
+        function hideSylvaLoading() {
+            var ov = document.getElementById('analysis-loading-overlay');
+            if (ov) ov.classList.remove('active');
+        }
+        // Verilen Leaflet tile katmanı, geçerli görünümdeki tüm karoları
+        // (tile) tamamen yükleyip ekrana yansıtana kadar bekler, ardından
+        // yükleme ekranını kapatır. Bir hata/karo yükleme sorunu olursa ya
+        // da makul bir süre içinde 'load' tetiklenmezse (güvenlik ağı),
+        // overlay yine de kapanır — ekran sonsuza dek takılı kalmaz.
+        function _hideLoadingWhenTileReady(layer) {
+            var done = false;
+            function finish() {
+                if (done) return;
+                done = true;
+                hideSylvaLoading();
+            }
+            if (layer && typeof layer.once === 'function') {
+                layer.once('load', finish);
+                layer.once('tileerror', finish);
+            }
+            setTimeout(finish, 12000); // güvenlik ağı
+        }
 
         function runAnalysis() {
             var meta = getSelectedAnalysisMeta();
@@ -3346,9 +3749,13 @@ function selectRamp(name) {
             if (!currentLayer) { alert('Lütfen önce bir Çalışma Alanı (AOI) çizin veya KML/KMZ yükleyin.'); return; }
             currentSceneId = null; // Yeni analiz = tarih aralığı medyanından başla
 
+            var isLulc = isLulcAnalysis(meta.analysisName);
+
             var startInput = document.getElementById('date-start');
             var endInput   = document.getElementById('date-end');
-            if (!startInput || !startInput.value || !endInput || !endInput.value) {
+            // Arazi Kullanımı (LULC) analizleri statik/tek-katmanlı veri setleridir;
+            // tarih aralığı gerektirmez — bu doğrulama yalnızca diğer analizlerde uygulanır.
+            if (!isLulc && (!startInput || !startInput.value || !endInput || !endInput.value)) {
                 alert('Lütfen başlangıç ve bitiş tarihlerini seçin.'); return;
             }
 
@@ -3357,16 +3764,16 @@ function selectRamp(name) {
             var cloudSliderEl = document.getElementById('cloud-slider');
 
             var satellite = sensorRadio   ? sensorRadio.value    : 's2-l2a';
-            var clipMode  = viewModeEl    ? viewModeEl.value     : 'clip';
+            // Mekansal Sınırlandırma: LULC analizleri her zaman AOI sınırlarına göre
+            // kesilir (clip) — kullanıcının genel "Görüntü Alanı" tercihinden bağımsız.
+            var clipMode  = isLulc ? 'clip' : (viewModeEl ? viewModeEl.value : 'clip');
             var maxCloud  = cloudSliderEl ? parseInt(cloudSliderEl.value, 10) : 20;
 
-            // AOI geometrisini al
-            var roiGeoJSON = currentLayer.toGeoJSON();
-            var geometry   = (roiGeoJSON.type === 'FeatureCollection')
-                           ? roiGeoJSON.features[0].geometry
-                           : roiGeoJSON.geometry;
-            if (!geometry || geometry.type !== 'Polygon') {
-                alert('AOI geometrisi Polygon olmalıdır.'); return;
+            // AOI geometrisini normalize et (Polygon, MultiPolygon, KML FeatureCollection)
+            var _roi = _extractROIGeometry(currentLayer);
+            if (!_roi) {
+                alert('Geçerli bir çalışma alanı geometrisi bulunamadı. Lütfen AOI\'yi kontrol edin.');
+                return;
             }
 
             // Yükleniyor durumu
@@ -3377,18 +3784,20 @@ function selectRamp(name) {
 
             renderAnalysisLegend(meta);
 
+            var analyzePayload = {
+                roi:       _roi,
+                clipMode:  clipMode,
+                startDate: startInput.value,
+                endDate:   endInput.value,
+                satellite: satellite,
+                index:     meta.analysisName,
+                maxCloud:  maxCloud
+            };
+
             fetch('http://127.0.0.1:5000/api/analyze', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    roi:       geometry.coordinates,
-                    clipMode:  clipMode,
-                    startDate: startInput.value,
-                    endDate:   endInput.value,
-                    satellite: satellite,
-                    index:     meta.analysisName,   // 'NDVI', 'NDWI', 'LST' …
-                    maxCloud:  maxCloud
-                })
+                body: JSON.stringify(analyzePayload)
             })
             .then(function(r) { return r.json(); })
             .then(function(data) {
@@ -3403,12 +3812,14 @@ function selectRamp(name) {
                 // Yeni GEE tile katmanını ekle (crossOrigin: html2canvas tabanlı
                 // export'un tile'ları yakalayabilmesi için gerekli)
                 _geeLayer = L.tileLayer(data.tileUrl, { opacity: 0.85, zIndex: 10, crossOrigin: true }).addTo(map);
+                // Analiz tamamlandığında lejantı sıfırdan yeniden çiz (Clip ve Full mod
+                // fark etmeksizin her zaman güncel analizin meta'sını yansıtsın).
+                renderAnalysisLegend(meta);
                 // Ham histogram tablosu ve görsel grafik
                 if (data.stats) {
                     updateStatsTable(data.stats);
                     renderChart(data.stats, meta);
-                    // Lejanttaki min/max artık sabit metin değil — GEE'den gelen
-                    // gerçek istatistiksel veriye göre otomatik güncellenir.
+                    // Lejanttaki tarih bilgisini GEE'den dönen veriye göre güncelle.
                     appendRealStatsToLegend(data.stats);
                 }
                 // Backend'den gelen kesin min/max/mean değerleri (histogram değil,
@@ -3416,11 +3827,51 @@ function selectRamp(name) {
                 if (data.realStats) {
                     applyRealStatsToLegendUI(data.realStats);
                 }
-                // Galeri kutucuklarını yanıtten gelen scenes ile doldur
-                // (ayrı bir /api/get-scenes isteğine gerek yok)
-                if (data.scenes && data.scenes.length) {
+                // Sunucudan gelen gerçek vis parametreleriyle lejant renk çubuğunu
+                // ve selectedRamp önizlemesini senkronize et. (Issue-3 fix)
+                if (data.visPalette && Array.isArray(data.visPalette) && data.visPalette.length >= 2) {
+                    var visCss = 'linear-gradient(to right, ' + data.visPalette.join(', ') + ')';
+                    var selRampEl = document.getElementById('selectedRamp');
+                    if (selRampEl) {
+                        selRampEl.style.background = visCss;
+                        selRampEl.setAttribute('data-ramp', '__gee__');
+                    }
+                    var legendBox2 = document.querySelector('.map-legend');
+                    if (legendBox2) {
+                        var rampBar = legendBox2.querySelector('.color-ramp');
+                        if (rampBar) rampBar.style.background = visCss;
+                    }
+                    if (data.visMin !== undefined && data.visMin !== null) {
+                        var smEl = document.getElementById('stretched-min');
+                        if (smEl && !smEl._userEdited) smEl.value = parseFloat(data.visMin).toFixed(4);
+                        var lMinSpan = document.querySelector('.map-legend .legend-min-label');
+                        if (lMinSpan) lMinSpan.textContent = parseFloat(data.visMin).toFixed(3);
+                    }
+                    if (data.visMax !== undefined && data.visMax !== null) {
+                        var sxEl = document.getElementById('stretched-max');
+                        if (sxEl && !sxEl._userEdited) sxEl.value = parseFloat(data.visMax).toFixed(4);
+                        var lMaxSpan = document.querySelector('.map-legend .legend-max-label');
+                        if (lMaxSpan) lMaxSpan.textContent = parseFloat(data.visMax).toFixed(3);
+                    }
+                }
+
+                // LULC / TOPO / SAR statik veri setlerinde sahne seçici yerine
+                // Dataset Info kartı göster; diğer analizlerde scenes listesini doldur.
+                if (_STATIC_DATASETS.indexOf(meta.analysisName) !== -1) {
+                    renderDatasetInfoCard(meta.analysisName);
+                } else if (data.scenes && data.scenes.length) {
                     renderGalleryFromScenes(data.scenes);
                 }
+
+                // 3. Akıllı Lejant ve İstatistiksel Raporlama (Arazi Kullanımı):
+                // Lejant yalnızca çizilen AOI içinde GERÇEKTEN tespit edilen sınıfları
+                // Türkçe isimleriyle gösterir; alansal/oransal dağılım sütun/pasta
+                // grafikle raporlanır. Yukarıdaki genel lejant/grafik çağrılarından
+                // SONRA çalışır ki LULC için her zaman son söz bunda olsun.
+                if (isLulcAnalysis(meta.analysisName)) {
+                    renderLulcLegendAndChart(meta, data.stats);
+                }
+                _ensureDefaultVisibility();
             })
             .catch(function(err) {
                 if (runBtn) { runBtn.disabled = false; runBtn.textContent = '🚀 Analizi Çalıştır'; }
@@ -3442,10 +3893,173 @@ function selectRamp(name) {
             if (n === 'NBR')        return '🔥';
             if (n === 'NDSI')       return '❄️';
             if (n === 'BSI')        return '🪨';
+            if (n === 'AVI')        return '🌳';
+            if (n === 'SI')         return '🌑';
+            if (n === 'NDGI')       return '🧊';
+            if (n === 'NDMI')       return '💦';
+            if (n === 'NPCRI')      return '🍃';
+            if (n === 'VHI')        return '💚';
+            if (n === 'LULC')       return '🗺️';
+            if (n === 'TOPO')       return '⛰️';
+            if (n === 'SAR')        return '📡';
             if (n.includes('RGB') || n.includes('IMAGE')) return '🖼️';
             if (n.includes('DEM') || n.includes('ELEVATION')) return '🏔️';
             if (n.includes('LAND') || n.includes('COVER')) return '🗺️';
             return '🛰️';
+        }
+
+        // ── Statik veri setleri (LULC / LULC_ESA / TOPO / SAR) için galeri
+        //    alanına sahne seçici yerine Dataset Info kartı çizer ─────────
+        var _STATIC_DATASETS = ['LULC', 'LULC_ESA', 'TOPO', 'SAR'];
+
+        var _DATASET_INFO = {
+            LULC: {
+                title: '🗺️ Google Dynamic World V1',
+                rows: [
+                    ['Kaynak', 'Google / World Resources Institute'],
+                    ['Çözünürlük', '10 m (Sentinel-2 tabanlı)'],
+                    ['Güncelleme', 'Gerçek zamanlı (sahne bazlı)'],
+                    ['Sınıflar', '9 sınıf'],
+                    ['Sınıf Listesi', 'Su · Ağaç · Çayır · Sulak Alan · Tarım · Çalılık · Yerleşim · Çıplak Zemin · Kar/Buz'],
+                    ['Değer Aralığı', '0 – 8 (sınıf indeksi)']
+                ]
+            },
+            LULC_ESA: {
+                title: '🌍 ESA WorldCover v200',
+                rows: [
+                    ['Kaynak', 'European Space Agency (ESA)'],
+                    ['Çözünürlük', '10 m global'],
+                    ['Güncelleme', 'Yıllık global mozaik'],
+                    ['Sınıflar', '11 sınıf'],
+                    ['Sınıf Listesi', 'Orman · Çalılık · Çayır · Tarım · Yerleşim · Çıplak/Seyrek · Kar/Buz · Su · Sulak Alan · Mangrov · Yosun/Liken'],
+                    ['Kapsam', 'Global']
+                ]
+            },
+            TOPO: {
+                title: '⛰️ USGS SRTM – Eğim (Slope)',
+                rows: [
+                    ['Kaynak', 'NASA / USGS (SRTM 2000)'],
+                    ['Çözünürlük', '~30 m (1 arc-saniye)'],
+                    ['Türev', 'Sayısal Yükseklik Modeli → Eğim'],
+                    ['Birim', 'Derece (°)'],
+                    ['Değer Aralığı', '0° (düz) – 60°+ (dik yamaç)'],
+                    ['Kapsam', 'Global (60°G – 56°K)']
+                ]
+            },
+            SAR: {
+                title: '📡 Sentinel-1 GRD – VV Backscatter',
+                rows: [
+                    ['Kaynak', 'ESA Copernicus – Sentinel-1A/B'],
+                    ['Çözünürlük', '~20 m (IW modu)'],
+                    ['Polarizasyon', 'VV (dikey – dikey)'],
+                    ['Frekans', 'C-band (~5.4 GHz)'],
+                    ['Birim', 'dB (logaritmik backscatter)'],
+                    ['Değer Aralığı', '−25 dB (düşük) – 0 dB (yüksek)'],
+                    ['Bağımsızlık', 'Bulut ve gece görüşünden bağımsız']
+                ]
+            }
+        };
+
+        // ── LULC sınıf tanımları — kod (sunucudan dönen histogram anahtarı),
+        // Türkçe isim ve resmi renk paleti. Backend'deki sıra/renk ile birebir
+        // eşleşir (bkz. server.py build_result_image → LULC / LULC_ESA).
+        var LULC_CLASS_DEFS = {
+            LULC: [ // Google Dynamic World V1 — band 'label', kod 0-8
+                { code: 0, label: 'Su Kütlesi',            color: '#419bdf' },
+                { code: 1, label: 'Orman / Ağaçlık',        color: '#397d49' },
+                { code: 2, label: 'Çayır / Otlak',          color: '#88b053' },
+                { code: 3, label: 'Sulak Bitki Örtüsü',     color: '#7a87c6' },
+                { code: 4, label: 'Tarım Alanı',            color: '#e49635' },
+                { code: 5, label: 'Çalılık',                color: '#dfc35a' },
+                { code: 6, label: 'Yapay / Kentsel Alan',   color: '#c4281b' },
+                { code: 7, label: 'Çıplak Toprak',          color: '#a59b8f' },
+                { code: 8, label: 'Kar / Buz',              color: '#b39fe1' }
+            ],
+            LULC_ESA: [ // ESA WorldCover v200 — sunucuda 1..11'e yeniden kodlanmış sıra
+                { code: 1,  label: 'Ağaç Örtüsü / Orman',          color: '#006400' },
+                { code: 2,  label: 'Çalılık',                      color: '#ffbb22' },
+                { code: 3,  label: 'Çayır / Otlak',                color: '#ffff4c' },
+                { code: 4,  label: 'Tarım Alanı',                  color: '#f096ff' },
+                { code: 5,  label: 'Yapay / Kentsel Alan',         color: '#fa0000' },
+                { code: 6,  label: 'Çıplak / Seyrek Bitki Örtüsü', color: '#b4b4b4' },
+                { code: 7,  label: 'Kar / Buz',                    color: '#f0f0f0' },
+                { code: 8,  label: 'Su Kütlesi',                   color: '#0064c8' },
+                { code: 9,  label: 'Sulak Alan / Bataklık',        color: '#0096a0' },
+                { code: 10, label: 'Mangrov',                      color: '#00cf75' },
+                { code: 11, label: 'Yosun / Liken',                color: '#fae6a0' }
+            ]
+        };
+
+        // ── Lejantı, AOI içinde GERÇEKTEN tespit edilen LULC sınıflarıyla
+        // (yalnızca bunlarla) Türkçe isimlendirerek yeniden çizer; ardından
+        // sınıfların alansal/oransal dağılımını sütun/pasta grafiğe yansıtır.
+        // stats: /api/analyze yanıtındaki frequencyHistogram (stats.value)
+        function renderLulcLegendAndChart(meta, stats) {
+            var defs = LULC_CLASS_DEFS[meta.analysisName];
+            var legendBox = document.querySelector('.map-legend');
+            if (!defs || !legendBox) return;
+
+            var hist = (stats && stats.value) ? stats.value : null;
+            var presentCodes = hist
+                ? Object.keys(hist).map(Number).filter(function (n) { return !isNaN(n); })
+                : [];
+            var presentDefs = defs.filter(function (d) { return presentCodes.indexOf(d.code) !== -1; });
+            // Güvenlik: histogram boş/eşleşmezse (örn. veri henüz gelmediyse)
+            // kullanıcının boş bir lejant görmesindense tüm olası sınıfları göster.
+            if (!presentDefs.length) presentDefs = defs;
+
+            var title = (meta.analysisName === 'LULC_ESA')
+                ? 'Arazi Örtüsü (ESA WorldCover)'
+                : 'Arazi Örtüsü (Dynamic World)';
+
+            var rowsHtml = presentDefs.map(function (d) {
+                return '<div style="display:flex;align-items:center;gap:5px;margin-top:3px;">' +
+                    '<span style="width:12px;height:12px;border-radius:2px;background:' + d.color +
+                        ';border:1px solid #cbd5e1;flex-shrink:0;display:inline-block;"></span>' +
+                    '<span style="font-size:0.7rem;">' + escapeHtml(d.label) + '</span>' +
+                    '</div>';
+            }).join('');
+
+            _setLegendHTML(legendBox, '<b style="font-size:0.78rem;">' + escapeHtml(title) + '</b>' + rowsHtml);
+            var lgToggle = document.getElementById('toggle-legend');
+            if (!lgToggle || lgToggle.checked) legendBox.style.display = '';
+
+            // Sınıf bazında alansal/oransal dağılım — mevcut sütun/pasta grafik
+            // motoru, her sınıfı tek bir değere (min=max=code) sabitleyerek yeniden kullanılır.
+            if (hist) {
+                var classesForChart = presentDefs.map(function (d) {
+                    return { min: d.code, max: d.code, name: d.label, color: d.color };
+                });
+                var percentages = computeClassPercentagesFromHistogram(classesForChart, hist);
+                if (percentages) {
+                    var areaHa = null;
+                    try { if (currentLayer) areaHa = turf.area(currentLayer.toGeoJSON()) / 10000; } catch (e) {}
+                    renderStatsChart({ classes: classesForChart, percentages: percentages, areaHa: areaHa });
+                }
+            }
+        }
+
+        function renderDatasetInfoCard(analysisName) {
+            var galleryEl = document.getElementById('map-gallery');
+            if (!galleryEl) return;
+            var key = (analysisName || '').toUpperCase();
+            var info = _DATASET_INFO[key];
+            if (!info) { galleryEl.style.display = 'none'; return; }
+
+            var rows = info.rows.map(function(r) {
+                return '<tr>'
+                    + '<td style="padding:3px 6px 3px 0;color:#64748b;font-size:0.72rem;white-space:nowrap;font-weight:600;">' + r[0] + '</td>'
+                    + '<td style="padding:3px 0;color:#1e293b;font-size:0.72rem;">' + r[1] + '</td>'
+                    + '</tr>';
+            }).join('');
+
+            galleryEl.style.display = 'block';
+            galleryEl.innerHTML =
+                '<div style="padding:10px 12px;background:linear-gradient(135deg,#f0f9ff,#e0f2fe);border:1px solid #bae6fd;border-radius:8px;min-width:240px;max-width:340px;">'
+                + '<div style="font-size:0.82rem;font-weight:700;color:#0369a1;margin-bottom:8px;">' + info.title + '</div>'
+                + '<table style="border-collapse:collapse;width:100%;"><tbody>' + rows + '</tbody></table>'
+                + '<div style="margin-top:8px;font-size:0.68rem;color:#94a3b8;border-top:1px solid #bae6fd;padding-top:5px;">Bu veri seti zaman serisi sahne seçimini desteklememektedir.</div>'
+                + '</div>';
         }
 
         // ── analyze yanıtından gelen scenes dizisini galeriye yazar ─
@@ -3453,16 +4067,96 @@ function selectRamp(name) {
         // Global: analiz legend'ına yazılacak tarih bilgisi
         var _currentLegendDate = null;
 
+        // Lejant tarih satırını güncel _currentLegendDate ile senkronize eder
+        function _syncLegendDate() {
+            var legendBox = document.querySelector('.map-legend');
+            if (!legendBox) return;
+            var row = legendBox.querySelector('.real-stats-row');
+            if (!row) return;
+            // "📡 Tarih: XXXX" satırını güncelle
+            row.textContent = '📡 Tarih: ' + (_currentLegendDate || '—');
+        }
+
+        // ROI geometrisini her türlü Leaflet layer'dan normalize eder.
+        // Polygon, MultiPolygon, FeatureCollection (KML/KMZ çoklu poligon) desteklenir.
+        // Döndürür: { coordinates: [...], type: 'Polygon' } veya null
+        function _extractROIGeometry(layer) {
+            if (!layer) return null;
+            var gj = layer.toGeoJSON();
+
+            // Tüm Polygon parçalarını (her birinin TÜM halkaları — dış + donut/iç
+            // halkalar dahil) toplar. Önceden burada sadece ilk poligon/ilk halka
+            // alınıp geri kalanı (delikler, çoklu poligonun diğer parçaları) sessizce
+            // atılıyordu; bu da KML/KMZ'den gelen karmaşık (MultiPolygon, donut)
+            // geometrilerin sunucuya eksik/bozuk gitmesine ve "Invalid geometry"
+            // hatasına yol açıyordu. Artık hiçbir parça/halka kaybedilmez.
+            var polyRingSets = [];
+            function collect(geom) {
+                if (!geom) return;
+                if (geom.type === 'Polygon') {
+                    polyRingSets.push(geom.coordinates); // [dışHalka, içHalka1, içHalka2, ...]
+                } else if (geom.type === 'MultiPolygon') {
+                    geom.coordinates.forEach(function(ringSet) { polyRingSets.push(ringSet); });
+                } else if (geom.type === 'GeometryCollection' && geom.geometries) {
+                    geom.geometries.forEach(collect);
+                }
+            }
+
+            if (gj.type === 'FeatureCollection') {
+                (gj.features || []).forEach(function(f) { if (f.geometry) collect(f.geometry); });
+            } else if (gj.type === 'Feature') {
+                collect(gj.geometry);
+            } else {
+                collect(gj);
+            }
+
+            if (!polyRingSets.length) return null;
+
+            // Tek poligon (deliklerle birlikte) → Polygon; birden fazla poligon
+            // (MultiPolygon veya KML'deki çoklu çizim) → hiçbiri kaybedilmeden MultiPolygon.
+            if (polyRingSets.length === 1) {
+                return { type: 'Polygon', coordinates: polyRingSets[0] };
+            }
+            return { type: 'MultiPolygon', coordinates: polyRingSets };
+        }
+
+        // Analiz tamamlandığında tüm harita elemanlarını varsayılan görünür konuma alır.
+        function _ensureDefaultVisibility() {
+            var ids = [
+                'toggle-north', 'toggle-scale', 'toggle-gallery',
+                'toggle-legend', 'toggle-side-buttons', 'toggle-opacity',
+                'toggle-rulers'
+            ];
+            ids.forEach(function(id) {
+                var cb = document.getElementById(id);
+                if (!cb) return;
+                if (!cb.checked) {
+                    cb.checked = true;
+                    cb.dispatchEvent(new Event('change'));
+                } else {
+                    cb.dispatchEvent(new Event('change'));
+                }
+            });
+            // Çalışma Alanı Şeffaflığı (sınır çizgisi) varsayılan aktif
+            var wsStroke = document.getElementById('ws-stroke-active');
+            if (wsStroke && !wsStroke.checked) {
+                wsStroke.checked = true;
+                wsStroke.dispatchEvent(new Event('change'));
+            }
+        }
+
         function renderGalleryFromScenes(scenes) {
             var galleryEl = document.getElementById('map-gallery');
             if (!galleryEl || !scenes || !scenes.length) return;
             var meta  = getSelectedAnalysisMeta();
             var emoji = getAnalysisEmoji(meta ? meta.analysisName : '');
-            // İlk sahneyi tarih kaynağı olarak kaydet
+            // İlk sahneyi tarih kaynağı olarak kaydet ve lejantı hemen güncelle
             if (scenes[0] && scenes[0][1]) {
                 _currentLegendDate = new Date(scenes[0][1]).toISOString().slice(0, 10);
+                _syncLegendDate();
             }
             galleryEl.innerHTML = '';
+            galleryEl.style.display = 'flex';
             scenes.forEach(function(scene, idx) {
                 var sceneId   = scene[0];
                 var dateLabel = scene[1] ? new Date(scene[1]).toLocaleDateString('tr-TR') : '—';
@@ -3475,10 +4169,11 @@ function selectRamp(name) {
                 div.addEventListener('click', function() {
                     galleryEl.querySelectorAll('.gallery-item').forEach(function(i) { i.classList.remove('active'); });
                     div.classList.add('active');
-                    // Seçilen sahneyi galeri başına taşı (hiyerarşik sıralama)
                     galleryEl.insertBefore(div, galleryEl.firstChild);
-                    // Legend tarihini güncelle
-                    if (scene[1]) _currentLegendDate = new Date(scene[1]).toISOString().slice(0, 10);
+                    if (scene[1]) {
+                        _currentLegendDate = new Date(scene[1]).toISOString().slice(0, 10);
+                        _syncLegendDate();
+                    }
                     loadSpecificScene(sceneId);
                 });
                 galleryEl.appendChild(div);
@@ -3525,9 +4220,11 @@ function selectRamp(name) {
                     div.addEventListener('click', function() {
                         galleryEl.querySelectorAll('.gallery-item').forEach(function(i) { i.classList.remove('active'); });
                         div.classList.add('active');
-                        // Seçilen sahneyi galeri başına taşı (hiyerarşik sıralama)
                         galleryEl.insertBefore(div, galleryEl.firstChild);
-                        if (scene[1]) _currentLegendDate = new Date(scene[1]).toISOString().slice(0, 10);
+                        if (scene[1]) {
+                            _currentLegendDate = new Date(scene[1]).toISOString().slice(0, 10);
+                            _syncLegendDate();
+                        }
                         loadSpecificScene(sceneId);
                     });
                     galleryEl.appendChild(div);
@@ -3550,37 +4247,54 @@ function selectRamp(name) {
             var viewModeEl    = document.getElementById('viewMode');
             var cloudSliderEl = document.getElementById('cloud-slider');
 
-            var roiGeoJSON = currentLayer.toGeoJSON();
-            var geometry   = (roiGeoJSON.type === 'FeatureCollection')
-                           ? roiGeoJSON.features[0].geometry
-                           : roiGeoJSON.geometry;
-            if (!geometry) return;
+            var _roi = _extractROIGeometry(currentLayer);
+            if (!_roi) return;
+
+            // 1. Galeri Geçişlerine Entegrasyon: yeni sahne sunucudan/GEE'den
+            // çekilirken standart "🌲 SylvaGIS" yükleme ekranı gösterilir.
+            showSylvaLoading();
 
             fetch('http://127.0.0.1:5000/api/analyze', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    roi:       geometry.coordinates,
+                    roi:       _roi,
                     clipMode:  viewModeEl    ? viewModeEl.value : 'clip',
                     startDate: startInput    ? startInput.value : '',
                     endDate:   endInput      ? endInput.value   : '',
                     satellite: sensorRadio   ? sensorRadio.value : 's2-l2a',
                     index:     meta.analysisName,
                     maxCloud:  cloudSliderEl ? parseInt(cloudSliderEl.value, 10) : 20,
-                    sceneId:   sceneId
+                    sceneId:   sceneId,
+                    palette:   (function() {
+                        var rEl = document.getElementById('selectedRamp');
+                        var rKey = rEl ? (rEl.getAttribute('data-ramp') || 'black-white') : 'black-white';
+                        if (rKey === '__gee__') return ['black', 'white'];
+                        return sampleRampColors(rKey, 6);
+                    })()
                 })
             })
             .then(function(r) { return r.json(); })
             .then(function(data) {
-                if (!data.success) { alert('Sahne yüklenemedi: ' + (data.error || '')); return; }
+                if (!data.success) { hideSylvaLoading(); alert('Sahne yüklenemedi: ' + (data.error || '')); return; }
                 // Harita katmanını güncelle
                 if (_geeLayer) { map.removeLayer(_geeLayer); _geeLayer = null; }
                 _geeLayer = L.tileLayer(data.tileUrl, { opacity: 0.85, zIndex: 10, crossOrigin: true }).addTo(map);
+                // Yeni görüntü haritada tamamen görünür hale gelince (tüm karolar
+                // yüklenince) yükleme ekranı otomatik olarak kapanır.
+                _hideLoadingWhenTileReady(_geeLayer);
+
+                // Sahne değişiminde aktif renk paleti ve lejant senkronize kalmalı.
+                // Kullanıcının seçtiği ramp'i koruyarak meta'yı klonla (Issue-4 düzeltmesi).
+                var activeRampEl = document.getElementById('selectedRamp');
+                var currentRampKey = (activeRampEl && activeRampEl.getAttribute('data-ramp')) || meta.rampKey;
+                var metaForScene = Object.assign({}, meta, { rampKey: currentRampKey });
+
                 // Lejantı sıfırdan yeniden oluştur, ardından gerçek istatistikleri uygula
-                renderAnalysisLegend(meta);
+                renderAnalysisLegend(metaForScene);
                 if (data.stats) {
                     updateStatsTable(data.stats);
-                    renderChart(data.stats, meta);
+                    renderChart(data.stats, metaForScene);
                     appendRealStatsToLegend(data.stats);
                 }
                 if (data.realStats) {
@@ -3597,8 +4311,9 @@ function selectRamp(name) {
                         }
                     }
                 }
+                _ensureDefaultVisibility();
             })
-            .catch(function(err) { alert('Sahne yüklenemedi.\n' + err.message); });
+            .catch(function(err) { hideSylvaLoading(); alert('Sahne yüklenemedi.\n' + err.message); });
         }
 
         // ── Ham histogram tablosunu #stats-chart-table'a yazar ──────
@@ -3671,57 +4386,139 @@ function selectRamp(name) {
             doc.save('SylvaGIS_Analiz_Raporu.pdf');
         }
 
-        // ── Grafik alanındaki SVG'yi temiz PNG olarak indirir ────────
-        // Yalnızca SVG grafik alanı çıktıya alınır; butonlar ve paneller dahil edilmez.
-        function downloadChartPNG() {
+        // ── Grafik İndirme Diyaloğunu Açar ──────────────────────────
+        function openChartDownloadDialog() {
             var wrap = document.getElementById('stats-chart-svg-wrap');
             if (!wrap) { alert('Önce bir analiz çalıştırın.'); return; }
             var svgEl = wrap.querySelector('svg');
             if (!svgEl) { alert('Önce bir analiz çalıştırın.'); return; }
+            document.getElementById('chart-download-modal').style.display = 'flex';
+        }
 
-            // SVG boyutlarını al (viewBox varsa, yoksa offsetWidth/Height)
+        // ── Grafik + Tablo verisini seçilen formatta indirir ─────────
+        function executeChartDownload() {
+            var wrap = document.getElementById('stats-chart-svg-wrap');
+            if (!wrap) return;
+            var svgEl = wrap.querySelector('svg');
+            if (!svgEl) return;
+
+            var fmtEl = document.querySelector('input[name="chart-dl-fmt"]:checked');
+            var fnInput = document.getElementById('chart-dl-filename');
+            var format = fmtEl ? fmtEl.value : 'png';
+            var baseName = (fnInput ? fnInput.value.trim() : '') || 'SylvaGIS_Grafik';
+            var filename = baseName + '_' + new Date().toISOString().slice(0,10);
+
+            // SVG boyutlarını al
             var vb = svgEl.getAttribute('viewBox');
             var svgW, svgH;
             if (vb) {
-                var parts = vb.split(/\s+|,/);
-                svgW = parseFloat(parts[2]) || svgEl.offsetWidth || 480;
-                svgH = parseFloat(parts[3]) || svgEl.offsetHeight || 320;
+                var vbParts = vb.split(/\s+|,/);
+                svgW = parseFloat(vbParts[2]) || svgEl.offsetWidth || 280;
+                svgH = parseFloat(vbParts[3]) || svgEl.offsetHeight || 160;
             } else {
-                svgW = svgEl.getAttribute('width')  ? parseFloat(svgEl.getAttribute('width'))  : (svgEl.offsetWidth  || 480);
-                svgH = svgEl.getAttribute('height') ? parseFloat(svgEl.getAttribute('height')) : (svgEl.offsetHeight || 320);
+                svgW = svgEl.getAttribute('width')  ? parseFloat(svgEl.getAttribute('width'))  : (svgEl.offsetWidth  || 280);
+                svgH = svgEl.getAttribute('height') ? parseFloat(svgEl.getAttribute('height')) : (svgEl.offsetHeight || 160);
             }
-            var scale = 2; // Retina kalite
+            var scale = 2;
 
-            // SVG'yi blob URL'e çevir
+            // Tablo verisi (lastChartData'dan)
+            var data = lastChartData;
+            var rowLines = [];
+            if (data && data.classes) {
+                data.classes.forEach(function(c, i) {
+                    var pct = data.percentages[i] || 0;
+                    var ha  = (data.areaHa !== null && data.areaHa !== undefined) ? (data.areaHa * pct / 100) : null;
+                    rowLines.push({ color: c.color, name: c.name, pct: pct, ha: ha });
+                });
+            }
+            var rowH = 18, headerH = 24, footerPad = 10;
+            var tableH = rowLines.length > 0 ? (headerH + rowLines.length * rowH + footerPad) : 0;
+            var totalH = svgH + tableH;
+
+            // SVG grafiğinin iç içeriğini al
             var serializer = new XMLSerializer();
-            var svgStr = serializer.serializeToString(svgEl);
-            // Eksik xmlns ekle
-            if (svgStr.indexOf('xmlns=') === -1) {
-                svgStr = svgStr.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
+            var chartStr = serializer.serializeToString(svgEl);
+            if (chartStr.indexOf('xmlns=') === -1) {
+                chartStr = chartStr.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
             }
-            var blob = new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' });
-            var url  = URL.createObjectURL(blob);
+            var innerMatch = chartStr.match(/<svg[^>]*>([\s\S]*)<\/svg>/);
+            var chartInner = innerMatch ? innerMatch[1] : '';
 
-            var img = new Image();
+            // Tablo SVG bölümü
+            var tableSvg = '';
+            if (rowLines.length > 0) {
+                var sepY = svgH + 4;
+                tableSvg += '<line x1="0" y1="' + sepY + '" x2="' + svgW + '" y2="' + sepY + '" stroke="#e2e8f0" stroke-width="1"/>';
+                var hdrY = svgH + 16;
+                tableSvg += '<text x="26" y="' + hdrY + '" font-size="9" fill="#64748b" font-family="Arial,sans-serif">Sınıf Adı</text>';
+                tableSvg += '<text x="' + (svgW * 0.65) + '" y="' + hdrY + '" font-size="9" fill="#64748b" font-family="Arial,sans-serif" text-anchor="middle">%</text>';
+                tableSvg += '<text x="' + (svgW - 6) + '" y="' + hdrY + '" font-size="9" fill="#64748b" font-family="Arial,sans-serif" text-anchor="end">Alan (ha)</text>';
+                rowLines.forEach(function(row, i) {
+                    var y = svgH + 16 + (i + 1) * rowH;
+                    var swatchY = y - 9;
+                    tableSvg += '<rect x="6" y="' + swatchY + '" width="10" height="10" rx="2" fill="' + row.color + '"/>';
+                    var nm = row.name.length > 22 ? row.name.substring(0, 21) + '…' : row.name;
+                    tableSvg += '<text x="22" y="' + y + '" font-size="9" fill="#334155" font-family="Arial,sans-serif">' + nm.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</text>';
+                    tableSvg += '<text x="' + (svgW * 0.65) + '" y="' + y + '" font-size="9" fill="#334155" font-family="Arial,sans-serif" text-anchor="middle">' + row.pct.toFixed(1) + '%</text>';
+                    var haText = row.ha !== null ? row.ha.toLocaleString('tr-TR', { maximumFractionDigits: 1 }) + ' ha' : '—';
+                    tableSvg += '<text x="' + (svgW - 6) + '" y="' + y + '" font-size="9" fill="#334155" font-family="Arial,sans-serif" text-anchor="end">' + haText + '</text>';
+                });
+            }
+
+            var fullSvg = '<?xml version="1.0" encoding="UTF-8"?>'
+                + '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + svgW + ' ' + totalH + '" width="' + svgW + '" height="' + totalH + '">'
+                + '<rect width="' + svgW + '" height="' + totalH + '" fill="#ffffff"/>'
+                + chartInner
+                + tableSvg
+                + '</svg>';
+
+            var blob = new Blob([fullSvg], { type: 'image/svg+xml;charset=utf-8' });
+            var url  = URL.createObjectURL(blob);
+            var img  = new Image();
             img.onload = function() {
                 var canvas = document.createElement('canvas');
                 canvas.width  = svgW * scale;
-                canvas.height = svgH * scale;
+                canvas.height = totalH * scale;
                 var ctx = canvas.getContext('2d');
                 ctx.fillStyle = '#ffffff';
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
                 ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
                 URL.revokeObjectURL(url);
-                canvas.toBlob(function(pngBlob) {
-                    var a = document.createElement('a');
-                    a.href = URL.createObjectURL(pngBlob);
-                    a.download = 'SylvaGIS_Grafik_' + new Date().toISOString().slice(0,10) + '.png';
-                    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-                    setTimeout(function() { URL.revokeObjectURL(a.href); }, 2000);
-                }, 'image/png');
+                var mimeType = format === 'jpeg' ? 'image/jpeg' : 'image/png';
+                var ext      = format === 'jpeg' ? '.jpg' : '.png';
+                canvas.toBlob(function(resultBlob) {
+                    document.getElementById('chart-download-modal').style.display = 'none';
+                    // showSaveFilePicker destekleniyorsa klasör seçimini sun
+                    if (window.showSaveFilePicker) {
+                        var acceptObj = {};
+                        acceptObj[mimeType] = [ext];
+                        window.showSaveFilePicker({
+                            suggestedName: filename + ext,
+                            types: [{ description: format.toUpperCase() + ' Görsel', accept: acceptObj }]
+                        }).then(function(fh) {
+                            return fh.createWritable();
+                        }).then(function(w) {
+                            return w.write(resultBlob).then(function() { return w; });
+                        }).then(function(w) {
+                            return w.close();
+                        }).catch(function(e) {
+                            if (e.name !== 'AbortError') _fallbackChartDownload(resultBlob, filename + ext);
+                        });
+                    } else {
+                        _fallbackChartDownload(resultBlob, filename + ext);
+                    }
+                }, mimeType, format === 'jpeg' ? 0.92 : undefined);
             };
             img.onerror = function() { URL.revokeObjectURL(url); alert('Grafik kaydedilemedi.'); };
             img.src = url;
+        }
+
+        function _fallbackChartDownload(blob, filename) {
+            var a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = filename;
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            setTimeout(function() { URL.revokeObjectURL(a.href); }, 2000);
         }
 
         // ── Histogram → 7 bin → bar/pie SVG grafiği ─────────────────
@@ -3745,7 +4542,7 @@ function selectRamp(name) {
                 'red-yellow-green':['#d73027','#fc8d59','#fee08b','#d9ef8b','#1a9850'],
                 'brown':           ['#f5f5dc','#c8a96e','#8b5e2d','#4a3000']
             };
-            var palette = (meta && rampPalette[meta.rampKey]) ? rampPalette[meta.rampKey] : rampPalette['viridis'];
+            var palette = (meta && rampPalette[meta.rampKey]) ? rampPalette[meta.rampKey] : (['#000000', '#ffffff']);
 
             var bins = [];
             for (var i = 0; i < numBins; i++) {
@@ -3829,10 +4626,7 @@ function selectRamp(name) {
                 row.style.cssText = 'font-size:0.62rem;color:#16a34a;margin-top:4px;border-top:1px dashed #cbd5e1;padding-top:3px;';
                 legendBox.appendChild(row);
             }
-            var datePart = _currentLegendDate ? ' | ' + _currentLegendDate : '';
-            row.textContent = '📡 Tarih: ' + (_currentLegendDate || '—')
-                + ' | Min: ' + real.min.toFixed(3)
-                + ' | Max: ' + real.max.toFixed(3);
+            row.textContent = '📡 Tarih: ' + (_currentLegendDate || '—');
         }
 
         // Kullanıcı stretched min/max kutularına elle değer girmişse flag'i işaretle
@@ -3848,12 +4642,20 @@ function selectRamp(name) {
         // ── Backend'den gelen kesin realStats { min, max, mean } ile
         // lejant ve stretched giriş kutularını senkronize eder.
         // stats.value histogram yerine reduceRegion(minMax+mean) sonucunu kullanır.
+        // Global olarak sınıflandırılmış lejant için istatistikleri tutar
+        var _classifiedStatsMin;
+        var _classifiedStatsMax;
+
         function applyRealStatsToLegendUI(realStats) {
             if (!realStats) return;
             var mn  = realStats.min;
             var mx  = realStats.max;
             var avg = realStats.mean;
             if (mn === null || mn === undefined || mx === null || mx === undefined) return;
+
+            // Global istatistikleri sakla (classified lejant için)
+            _classifiedStatsMin = parseFloat(mn);
+            _classifiedStatsMax = parseFloat(mx);
 
             // Stretched giriş kutularını doldur (kullanıcı henüz elle girmemişse)
             var stretchedMinEl = document.getElementById('stretched-min');
@@ -3877,7 +4679,7 @@ function selectRamp(name) {
                 if (minSpan) minSpan.textContent = parseFloat(mn).toFixed(3);
                 if (maxSpan) maxSpan.textContent = parseFloat(mx).toFixed(3);
 
-                // Gerçek veri satırını güncelle
+                // Gerçek veri satırını güncelle (stretched veya classified)
                 var row = legendBox.querySelector('.real-stats-row');
                 if (!row) {
                     row = document.createElement('div');
@@ -3885,9 +4687,7 @@ function selectRamp(name) {
                     row.style.cssText = 'font-size:0.62rem;color:#16a34a;margin-top:4px;border-top:1px dashed #cbd5e1;padding-top:3px;';
                     legendBox.appendChild(row);
                 }
-                row.textContent = '📡 Tarih: ' + (_currentLegendDate || '—')
-                    + ' | Min: ' + parseFloat(mn).toFixed(3)
-                    + ' | Max: ' + parseFloat(mx).toFixed(3);
+                row.textContent = '📡 Tarih: ' + (_currentLegendDate || '—');
             }
         }
 
@@ -4036,6 +4836,9 @@ function selectRamp(name) {
             var btnChartPie = document.getElementById('btn-chart-pie');
             if (btnChartBar) btnChartBar.addEventListener('click', function () { setChartType('bar'); });
             if (btnChartPie) btnChartPie.addEventListener('click', function () { setChartType('pie'); });
+            // Sayfa ilk açıldığında hiçbir LULC analizi seçili değildir —
+            // tarih/bulutluluk kontrolleri varsayılan (görünür) durumda kalır.
+            _updateDateCloudControlsVisibility();
         });
 
         // ============================================================
@@ -4324,6 +5127,43 @@ function selectRamp(name) {
                 makeTextDraggable(el);
                 return el;
             }
+            if (obj.type === 'point') {
+                var p = latLngToPx(obj.geo);
+                var opts = obj.options || {};
+                var sz = opts.size || 28;
+                var rot = opts.rotation || 0;
+                var opac = (opts.opacity !== undefined) ? opts.opacity : 1;
+                var bColor = opts.borderColor || 'none';
+                var bWidth = (opts.borderWidth !== undefined) ? opts.borderWidth : 1;
+                var icon = opts.icon || '📍';
+                var grp = svgEl2('g', {
+                    'data-selectable': '1',
+                    'transform': 'translate(' + p.x.toFixed(1) + ',' + p.y.toFixed(1) + ') rotate(' + rot + ')',
+                    'opacity': opac
+                });
+                if (bWidth > 0 && bColor && bColor !== 'none') {
+                    var bg = svgEl2('circle', {
+                        cx: '0', cy: '0',
+                        r: (sz * 0.6 + bWidth).toFixed(1),
+                        fill: bColor, stroke: 'none'
+                    });
+                    grp.appendChild(bg);
+                }
+                var txt = svgEl2('text', {
+                    x: '0', y: '0',
+                    'text-anchor': 'middle',
+                    'dominant-baseline': 'central',
+                    'font-size': sz.toFixed(0),
+                    fill: obj.color,
+                    'pointer-events': 'all',
+                    style: 'user-select:none;cursor:move;'
+                });
+                txt.textContent = icon;
+                grp.appendChild(txt);
+                grp._geoObj = obj;
+                makeShapeDraggable(grp, obj);
+                return grp;
+            }
             return null;
         }
 
@@ -4448,6 +5288,7 @@ function selectRamp(name) {
                 document.getElementById('rect-style-label').textContent = 'Dikdörtgen Stili';
             }
             document.getElementById('text-format-options').style.display = (tool === 'text') ? 'flex' : 'none';
+            document.getElementById('point-options').style.display = (tool === 'point') ? 'flex' : 'none';
 
             svgEl.style.pointerEvents = 'all';
             svgEl.style.cursor = (tool === 'text') ? 'text' : 'crosshair';
@@ -5373,6 +6214,7 @@ function selectRamp(name) {
             if (activeTool === 'rect' || activeTool === 'square') { rectClick(px); return; }
             if (activeTool === 'arrow')   { arrowClick(px); return; }
             if (activeTool === 'carrow')  { carrowClick(px); return; }
+            if (activeTool === 'point')   { pointClick(px); return; }
         });
 
         svgEl.addEventListener('dblclick', function(e) {
@@ -5385,6 +6227,127 @@ function selectRamp(name) {
 
         // Harita resize'da tüm nesneleri yeniden çiz
         map.on('resize', function() { renderAll(); });
+
+        // ============================================================
+        // NOKTA (POINT) ARACI — sembol seçimi, boyut, döndürme, saydamlık
+        // ============================================================
+        var POINT_ICONS = [
+            '📍','●','■','▲','✖','★','◆','▼','◉','✚',
+            '🌲','🌳','🌴','🏠','🏢','🚩','💧','⚠','⛺','📡',
+            '🌉','⛪','🐾','🦅','🌿'
+        ];
+        var activePointIcon = '📍';
+        var pointSize = 28;
+        var pointRotation = 0;
+        var pointOpacity = 1.0;
+        var pointBorderColor = '#000000';
+        var pointBorderWidth = 1;
+
+        (function initPointUI() {
+            var grid = document.getElementById('point-icon-grid');
+            if (!grid) return;
+            POINT_ICONS.forEach(function(icon) {
+                var btn = document.createElement('button');
+                btn.textContent = icon;
+                btn.title = icon;
+                btn.style.cssText = 'width:100%;height:30px;border:2px solid transparent;border-radius:4px;cursor:pointer;background:#f8fafc;font-size:1.1rem;display:flex;align-items:center;justify-content:center;transition:border-color 0.15s;padding:0;';
+                btn.addEventListener('click', function() {
+                    activePointIcon = icon;
+                    grid.querySelectorAll('button').forEach(function(b) {
+                        b.style.borderColor = 'transparent';
+                        b.style.background = '#f8fafc';
+                    });
+                    btn.style.borderColor = '#1e3a8a';
+                    btn.style.background = '#dbeafe';
+                    if (selectedGeoObj && selectedGeoObj.type === 'point') {
+                        saveHistory();
+                        selectedGeoObj.options.icon = icon;
+                        renderAll();
+                    }
+                });
+                if (icon === activePointIcon) {
+                    btn.style.borderColor = '#1e3a8a';
+                    btn.style.background = '#dbeafe';
+                }
+                grid.appendChild(btn);
+            });
+
+            var BORDER_COLORS = ['#000000','#ffffff','#6b7280','#ef4444','#f97316','#eab308',
+                                  '#22c55e','#3b82f6','#a855f7','#ec4899','#1e3a8a','#10b981'];
+            var bcp = document.getElementById('point-border-color-palette');
+            BORDER_COLORS.forEach(function(hex) {
+                var sw = document.createElement('div');
+                sw.style.cssText = 'width:20px;height:20px;border-radius:3px;cursor:pointer;border:2px solid ' + (hex === pointBorderColor ? '#1e3a8a' : 'transparent') + ';background:' + hex + ';flex-shrink:0;';
+                sw.addEventListener('click', function() {
+                    pointBorderColor = hex;
+                    bcp.querySelectorAll('div').forEach(function(s) { s.style.borderColor = 'transparent'; });
+                    sw.style.borderColor = '#1e3a8a';
+                    if (selectedGeoObj && selectedGeoObj.type === 'point') {
+                        saveHistory();
+                        selectedGeoObj.options.borderColor = hex;
+                        renderAll();
+                    }
+                });
+                bcp.appendChild(sw);
+            });
+
+            document.getElementById('point-size').addEventListener('input', function() {
+                pointSize = parseInt(this.value);
+                document.getElementById('point-size-label').textContent = pointSize + 'px';
+                if (selectedGeoObj && selectedGeoObj.type === 'point') {
+                    saveHistory();
+                    selectedGeoObj.options.size = pointSize;
+                    renderAll();
+                }
+            });
+            document.getElementById('point-rotation').addEventListener('input', function() {
+                pointRotation = parseInt(this.value);
+                document.getElementById('point-rotation-label').textContent = pointRotation + '°';
+                if (selectedGeoObj && selectedGeoObj.type === 'point') {
+                    saveHistory();
+                    selectedGeoObj.options.rotation = pointRotation;
+                    renderAll();
+                }
+            });
+            document.getElementById('point-opacity').addEventListener('input', function() {
+                pointOpacity = parseInt(this.value) / 100;
+                document.getElementById('point-opacity-label').textContent = parseInt(this.value) + '%';
+                if (selectedGeoObj && selectedGeoObj.type === 'point') {
+                    saveHistory();
+                    selectedGeoObj.options.opacity = pointOpacity;
+                    renderAll();
+                }
+            });
+            document.getElementById('point-border-width').addEventListener('input', function() {
+                pointBorderWidth = parseInt(this.value);
+                document.getElementById('point-border-width-label').textContent = pointBorderWidth + 'px';
+                if (selectedGeoObj && selectedGeoObj.type === 'point') {
+                    saveHistory();
+                    selectedGeoObj.options.borderWidth = pointBorderWidth;
+                    renderAll();
+                }
+            });
+        })();
+
+        function pointClick(px) {
+            var ll = pxToLatLng(px);
+            saveHistory();
+            geoObjects.push({
+                type: 'point',
+                color: activeColor,
+                width: strokeWidth,
+                geo: ll,
+                options: {
+                    icon: activePointIcon,
+                    size: pointSize,
+                    rotation: pointRotation,
+                    opacity: pointOpacity,
+                    borderColor: pointBorderColor,
+                    borderWidth: pointBorderWidth
+                }
+            });
+            renderAll();
+        }
 
         })(); // END markup engine
 
@@ -5987,8 +6950,10 @@ function selectRamp(name) {
                     } else {
                         // Stretched mod: gerçek seçili renk rampasından gradyan çiz
                         var selectedRampEl = document.getElementById('selectedRamp');
-                        var rampName = selectedRampEl ? (selectedRampEl.getAttribute('data-ramp') || 'viridis') : 'viridis';
+                        var rampName = selectedRampEl ? (selectedRampEl.getAttribute('data-ramp') || 'black-white') : 'black-white';
+                        if (rampName === '__gee__') rampName = 'black-white';
                         var rampPaletteForExport = {
+                            'black-white':      ['#000000','#ffffff'],
                             'viridis':          ['#440154','#31688e','#35b779','#fde725'],
                             'blue-ocean':       ['#08306b','#2171b5','#6baed6','#c6dbef'],
                             'heat':             ['#313695','#4575b4','#fdae61','#d73027','#a50026'],
@@ -5996,7 +6961,7 @@ function selectRamp(name) {
                             'red-yellow-green': ['#d73027','#fc8d59','#fee08b','#d9ef8b','#1a9850'],
                             'brown':            ['#f5f5dc','#c8a96e','#8b5e2d','#4a3000']
                         };
-                        var pal = rampPaletteForExport[rampName] || rampPaletteForExport['viridis'];
+                        var pal = rampPaletteForExport[rampName] || rampPaletteForExport['black-white'];
 
                         // Min/Max etiketleri
                         var minLabel = '', maxLabel = '';
@@ -6095,57 +7060,85 @@ function selectRamp(name) {
                     ctx.restore();
                 }
 
-                        // Watermark + rapor başlığı
+                // Sol alt köşe: 🌲 SylvaGIS marka logosu (hafif, haritayı engellemez)
                 ctx.save();
-                ctx.globalAlpha = 1;
                 var mapH = mapEl.offsetHeight * scale;
-                var mapW = mapEl.offsetWidth  * scale;
-                // Alt bant arka planı
-                ctx.fillStyle = 'rgba(30,58,138,0.88)';
-                ctx.fillRect(0, mapH - 28 * scale, mapW, 28 * scale);
-                // Sol: SylvaGIS logosu
-                ctx.fillStyle = '#ffffff';
-                ctx.font = 'bold ' + (11 * scale) + 'px Segoe UI, sans-serif';
+                ctx.font = 'bold ' + (10 * scale) + 'px Segoe UI, sans-serif';
+                var logoTxt = '🌲 SylvaGIS';
+                var logoMetrics = ctx.measureText(logoTxt);
+                var logoPad = 5 * scale;
+                var logoW   = logoMetrics.width + logoPad * 2;
+                var logoH   = 18 * scale;
+                var logoX   = logoPad;
+                var logoY   = mapH - logoPad - logoH;
+                ctx.fillStyle = '#1e3a8a';
                 ctx.textAlign = 'left';
-                ctx.fillText('🌲 SylvaGIS', 10 * scale, mapH - 9 * scale);
-                // Orta: rapor başlığı
-                ctx.font = 'bold ' + (11 * scale) + 'px Segoe UI, sans-serif';
-                ctx.textAlign = 'center';
-                ctx.fillText('SylvaGIS Analysis Report', mapW / 2, mapH - 9 * scale);
-                // Sağ: tarih
-                ctx.font = (9 * scale) + 'px Segoe UI, sans-serif';
-                ctx.textAlign = 'right';
-                ctx.fillText(new Date().toLocaleDateString('tr-TR'), mapW - 10 * scale, mapH - 9 * scale);
+                ctx.fillText(logoTxt, logoX + logoPad, logoY + logoH * 0.72);
                 ctx.restore();
+                // Altlık harita atıf/kaynak bilgisi (sağ alt köşe) — html2canvas bu küçük
+                // kontrolü bazen hiç yakalamıyordu, leaflet-image yedek yolunda ise DOM
+                // metnini hiçbir zaman yakalamaz. Bu yüzden artık her zaman burada native
+                // olarak elle çiziliyor; böylece PNG/JPEG/PDF çıktısında atıf bilgisi
+                // hiçbir koşulda kaybolmaz.
+                var attribEl = document.querySelector('.leaflet-control-attribution');
+                if (attribEl) {
+                    var attribText = attribEl.textContent.replace(/\s+/g, ' ').trim();
+                    if (attribText) {
+                        ctx.save();
+                        ctx.font = (9 * scale) + 'px Segoe UI, sans-serif';
+                        var aMetrics = ctx.measureText(attribText);
+                        var aPad = 4 * scale;
+                        var aW = aMetrics.width + aPad * 2;
+                        var aH = 14 * scale;
+                        var mapW2 = mapEl.offsetWidth  * scale;
+                        var mapH2 = mapEl.offsetHeight * scale;
+                        var aX = mapW2 - aW - 2 * scale;
+                        var aY = mapH2 - aH - 2 * scale;
+                        ctx.fillStyle = 'rgba(255,255,255,0.75)';
+                        ctx.fillRect(aX, aY, aW, aH);
+                        ctx.fillStyle = '#333333';
+                        ctx.textAlign = 'left';
+                        ctx.fillText(attribText, aX + aPad, aY + aH * 0.72);
+                        ctx.restore();
+                    }
+                }
             }
 
             // --- Markup SVG'yi canvas'a çiz (WYSIWYG — piksel-mükemmel konum) ---
+            // CSS transform (leaflet-zoom-animated panning offseti) de hesaba katılır;
+            // aksi takdirde vektör katmanlar kaymış görünür.
             function drawSVGOnCanvas(ctx, svgEl, mapEl, scale) {
                 return new Promise(function(resolve) {
-                    var W = mapEl.offsetWidth;
-                    var H = mapEl.offsetHeight;
-                    // SVG'ye eksik width/height/viewBox ekle — aksi takdirde
-                    // tarayıcı görüntüyü yanlış boyutta render eder ve nesneler kayar.
-                    var origW  = svgEl.getAttribute('width');
-                    var origH  = svgEl.getAttribute('height');
-                    var origVB = svgEl.getAttribute('viewBox');
-                    svgEl.setAttribute('width',  W);
-                    svgEl.setAttribute('height', H);
-                    if (!origVB) svgEl.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+                    // Harita ve SVG'nin sayfadaki mutlak piksel konumlarını ölçüyoruz
+                    var mapRect = mapEl.getBoundingClientRect();
+                    var svgRect = svgEl.getBoundingClientRect();
+                    // SVG'nin haritaya göre milimetrik kayma (offset) miktarını hesaplıyoruz
+                    var dx = svgRect.left - mapRect.left;
+                    var dy = svgRect.top - mapRect.top;
+
+                    // Orijinal boyutları koruyoruz (zorla harita boyutuna eşitlemiyoruz)
+                    var drawW = svgRect.width;
+                    var drawH = svgRect.height;
                     var svgData = new XMLSerializer().serializeToString(svgEl);
-                    // Orijinal attribute'ları geri yükle
-                    if (origW  === null) svgEl.removeAttribute('width');  else svgEl.setAttribute('width',  origW);
-                    if (origH  === null) svgEl.removeAttribute('height'); else svgEl.setAttribute('height', origH);
-                    if (!origVB) svgEl.removeAttribute('viewBox');
+                    if (svgData.indexOf('xmlns=') === -1) {
+                        svgData = svgData.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
+                    }
                     var blob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
                     var url  = URL.createObjectURL(blob);
                     var img  = new Image();
+
                     img.onload = function() {
-                        ctx.drawImage(img, 0, 0, W * scale, H * scale);
+                        // SVG'yi hesaplanan kesin koordinatlara çiz (Kayma ortadan kalkar)
+                        ctx.drawImage(img, dx * scale, dy * scale, drawW * scale, drawH * scale);
                         URL.revokeObjectURL(url);
                         resolve();
                     };
-                    img.onerror = function() { URL.revokeObjectURL(url); resolve(); };
+
+                    img.onerror = function() {
+                        URL.revokeObjectURL(url);
+                        resolve();
+                    };
+
                     img.src = url;
                 });
             }
@@ -6163,10 +7156,39 @@ function selectRamp(name) {
                             allowTaint:     true,
                             scale:          scaleFactor || 1,
                             logging:        false,
-                            backgroundColor: null
+                            backgroundColor: null,
+                            width:          mapEl.offsetWidth,
+                            height:         mapEl.offsetHeight,
+                            ignoreElements: function(el) {
+                                if (!el || !el.classList) return false;
+                                // Leaflet SVG vektör katmanları html2canvas yerine
+                                // drawSVGOnCanvas ile ayrıca çizilir; böylece
+                                // map-pane transform kaymaları düzeltilir (WYSIWYG).
+                                if (el.tagName === 'svg' &&
+                                    (el.classList.contains('leaflet-zoom-animated') ||
+                                     el.classList.contains('leaflet-zoom-hide'))) return true;
+                                return el.classList.contains('footer') ||
+                                       el.classList.contains('navbar') ||
+                                       el.id === 'export-modal-overlay' ||
+                                       el.id === 'analysis-loading-overlay' ||
+                                       el.id === 'mobile-toolbar' ||
+                                       el.id === 'mobile-panel-overlay' ||
+                                       el.id === 'sidebar-right' ||
+                                       el.id === 'sidebar-left' ||
+                                       el.classList.contains('ruler-top-row') ||
+                                       // Atıf/kaynak bilgisi artık her zaman drawOverlaysOnCanvas
+                                       // içinde elle (native) çiziliyor — html2canvas'ın bu küçük
+                                       // kontrolü tutarsız yakalaması (bazen tamamen kayboluyordu)
+                                       // sorununu kalıcı olarak çözmek için burada hariç tutuluyor.
+                                       el.classList.contains('leaflet-control-attribution') ||
+                                       el.id === 'ruler-v' ||
+                                       el.id === 'ruler-corner';
+                            }
                         }).then(function(canvas) {
+                            window._exportUsedHtml2canvas = true;
                             resolve(canvas);
                         }).catch(function() {
+                            window._exportUsedHtml2canvas = false;
                             // html2canvas başarısız → leaflet-image'a düş
                             tryLeafletImage(resolve, reject);
                         });
@@ -6221,8 +7243,13 @@ function selectRamp(name) {
                         ctx.drawImage(tileCanvas, 0, 0, final.width, final.height);
                     }
 
-                    // Leaflet vektör katmanları (SVG overlay)
-                    var leafletSVGs = mapEl.querySelectorAll('svg.leaflet-zoom-animated, svg.leaflet-zoom-hide');
+                    // Leaflet vektör katmanları (SVG overlay) — her zaman manuel olarak
+                    // yeniden çizilir; html2canvas SVG transform'larını bazen yanlış
+                    // konumlandırır ve çalışma alanı kayar. Bu yüzden html2canvas
+                    // ignoreElements içinde bu SVG'ler zaten dışarıda bırakılmaktadır.
+                    // NOT: Leaflet-image fallback yolunda SVG'ler zaten tile canvas'ına
+                    // dahil değildir; çift çizim riski yoktur.
+                    var leafletSVGs = Array.from(mapEl.querySelectorAll('svg.leaflet-zoom-animated, svg.leaflet-zoom-hide'));
                     var svgPromises = [];
                     leafletSVGs.forEach(function(svg) {
                         svgPromises.push(drawSVGOnCanvas(ctx, svg, mapEl, scale));
@@ -6231,8 +7258,10 @@ function selectRamp(name) {
                     Promise.all(svgPromises).then(function() {
                         setProgress(75, 'Markup çizimleri aktarılıyor…');
 
-                        // Kullanıcı markup SVG
-                        var markupSVG = document.getElementById('markup-svg');
+                        // html2canvas DOM'u (markup-svg dahil) zaten yakaladıysa tekrar çizmiyoruz
+                        var markupSVG = (!window._exportUsedHtml2canvas)
+                            ? document.getElementById('markup-svg')
+                            : null;
                         if (markupSVG) {
                             drawSVGOnCanvas(ctx, markupSVG, mapEl, scale).then(function() {
                                 setProgress(88, 'Harita elemanları ekleniyor…');
@@ -6256,6 +7285,35 @@ function selectRamp(name) {
                 // Artık: 1) html2canvas dene → 2) o da olmazsa leaflet-image'a düş
                 // (getLeafletCanvas içinde) → 3) ikisi de başarısız olursa DOM'daki
                 // tile <img>/<canvas>'ları manuel topla.
+                // ── Feature 7: Çıktıda Renk Kuralları ──────────────────────
+                // Yakalama öncesi çalışma alanı stilini dışa aktarma kuralına göre ayarla.
+                var _wsExportState = (function() {
+                    var wl = window._workspaceLayer;
+                    if (!wl) return null;
+                    var onMap = typeof map !== 'undefined' && map.hasLayer(wl);
+                    var sA = !!window._wsStrokeActive;
+                    var fA = !!window._wsFillActive;
+                    if (!sA && !fA) {
+                        // İkisi de seçili değilse katmanı geçici olarak gizle
+                        if (onMap) map.removeLayer(wl);
+                        return { hidden: true, layer: wl, wasOnMap: onMap };
+                    }
+                    // Export stili — kullanıcının mevcut Şeffaflık ve Renk ayarları aynen uygulanır
+                    var expStyle = {
+                        stroke: sA, color: sA ? (window._wsStrokeColor || '#3b82f6') : '#3b82f6',
+                        weight: sA ? 2 : 0, opacity: sA ? 1 : 0,
+                        fill: fA, fillColor: fA ? (window._wsFillColor || '#3b82f6') : '#3b82f6',
+                        fillOpacity: fA ? 0.35 : 0
+                    };
+                    try {
+                        if (typeof wl.setStyle === 'function') wl.setStyle(expStyle);
+                        else if (typeof wl.eachLayer === 'function') wl.eachLayer(function(l) { if (typeof l.setStyle === 'function') l.setStyle(expStyle); });
+                    } catch(e) {}
+                    return { hidden: false, layer: wl };
+                })();
+                // ───────────────────────────────────────────────────────────
+
+                window._exportUsedHtml2canvas = false;
                 getLeafletCanvas(scale).then(function(canvas) {
                     buildFinalCanvas(canvas);
                 }).catch(function() {
@@ -6284,6 +7342,14 @@ function selectRamp(name) {
 
             // --- Canvas'ı kaydet ---
             function saveCanvas(canvas, fmt, filename, scale, W, H) {
+                // Feature 7: Çalışma alanı stilini export öncesi hale geri getir
+                if (typeof _wsExportState !== 'undefined' && _wsExportState) {
+                    if (_wsExportState.hidden && _wsExportState.wasOnMap && _wsExportState.layer) {
+                        try { _wsExportState.layer.addTo(map); } catch(e) {}
+                    } else if (!_wsExportState.hidden && typeof window._applyWorkspaceStyle === 'function') {
+                        window._applyWorkspaceStyle();
+                    }
+                }
                 setProgress(100, 'Dosya indiriliyor…');
 
                 if (fmt === 'pdf') {
@@ -6734,6 +7800,339 @@ function selectRamp(name) {
     })();
     </script>
     <!-- ===== /MOBİL RESPONSIVE SİSTEM ===== -->
+
+
+<!-- ===== GRAFİK İNDİRME DİYALOĞU ===== -->
+<div id="chart-download-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.52); z-index:99998; align-items:center; justify-content:center;">
+    <div style="background:#fff; border-radius:10px; padding:28px 24px 20px; width:360px; max-width:92vw; box-shadow:0 12px 40px rgba(0,0,0,0.25); position:relative;">
+        <h3 style="color:#1e3a8a; margin-bottom:18px; font-size:1rem;">🖼️ Grafiği İndir</h3>
+
+        <div style="margin-bottom:14px;">
+            <label style="font-size:0.82rem; font-weight:600; color:#64748b; display:block; margin-bottom:6px;">Format</label>
+            <div style="display:flex; gap:16px;">
+                <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:0.85rem;">
+                    <input type="radio" name="chart-dl-fmt" value="png" checked> PNG
+                </label>
+                <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:0.85rem;">
+                    <input type="radio" name="chart-dl-fmt" value="jpeg"> JPEG
+                </label>
+            </div>
+        </div>
+
+        <div style="margin-bottom:20px;">
+            <label for="chart-dl-filename" style="font-size:0.82rem; font-weight:600; color:#64748b; display:block; margin-bottom:6px;">Dosya Adı</label>
+            <input type="text" id="chart-dl-filename" value="SylvaGIS_Grafik"
+                style="width:100%; padding:8px 10px; border:1px solid #cbd5e1; border-radius:5px; font-size:0.85rem; outline:none; box-sizing:border-box;">
+        </div>
+
+        <p style="font-size:0.72rem; color:#94a3b8; margin-bottom:14px;">
+            💡 Kayıt konumu için klasör seçimi destekleniyorsa otomatik açılır; desteklenmiyorsa Tarayıcı İndirmeler klasörüne kaydedilir.
+        </p>
+
+        <div style="display:flex; gap:8px; justify-content:flex-end;">
+            <button onclick="document.getElementById('chart-download-modal').style.display='none'"
+                style="padding:8px 18px; border:1px solid #cbd5e1; border-radius:5px; cursor:pointer; background:#f1f5f9; font-size:0.85rem; color:#475569;">
+                İptal
+            </button>
+            <button onclick="executeChartDownload()"
+                style="padding:8px 18px; background:#1e3a8a; color:#fff; border:none; border-radius:5px; cursor:pointer; font-weight:600; font-size:0.85rem;">
+                ⬇️ İndir
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- ===== GeoTIFF İNDİRME DİYALOĞU ===== -->
+<div id="geotiff-download-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.52); z-index:99998; align-items:center; justify-content:center;">
+    <div style="background:#fff; border-radius:10px; padding:28px 24px 20px; width:380px; max-width:92vw; box-shadow:0 12px 40px rgba(0,0,0,0.25); position:relative;">
+        <h3 style="color:#1e3a8a; margin-bottom:6px; font-size:1rem;">📥 Veriyi İndir (GeoTIFF)</h3>
+        <p style="font-size:0.78rem; color:#64748b; margin-bottom:18px;">GEE üzerinden coğrafi referanslı raster dosyası oluşturulur. ArcGIS Pro, QGIS vb. CBS yazılımlarında doğrudan açılabilir.</p>
+
+        <div style="margin-bottom:14px;">
+            <label for="geotiff-filename" style="font-size:0.82rem; font-weight:600; color:#64748b; display:block; margin-bottom:6px;">Dosya Adı</label>
+            <input type="text" id="geotiff-filename" value="SylvaGIS_export"
+                style="width:100%; padding:8px 10px; border:1px solid #cbd5e1; border-radius:5px; font-size:0.85rem; outline:none; box-sizing:border-box;">
+        </div>
+
+        <div style="margin-bottom:14px;">
+            <label for="geotiff-scale" style="font-size:0.82rem; font-weight:600; color:#64748b; display:block; margin-bottom:6px;">Piksel Çözünürlüğü (metre)</label>
+            <select id="geotiff-scale" style="width:100%; padding:8px 10px; border:1px solid #cbd5e1; border-radius:5px; font-size:0.85rem; outline:none; background:#fff;">
+                <option value="10">10 m — Yüksek Çözünürlük (küçük alanlar)</option>
+                <option value="30" selected>30 m — Orta Çözünürlük (önerilen)</option>
+                <option value="100">100 m — Düşük Çözünürlük (büyük alanlar)</option>
+                <option value="250">250 m — Çok Düşük (çok büyük alanlar)</option>
+            </select>
+        </div>
+
+        <!-- ── Koordinat Sistemi Seçici ── -->
+        <div style="margin-bottom:14px;">
+            <label for="geotiff-crs" style="font-size:0.82rem; font-weight:600; color:#64748b; display:block; margin-bottom:6px;">🌐 Koordinat Sistemi (CRS)</label>
+            <select id="geotiff-crs" onchange="onGeoTiffCrsChange()" style="width:100%; padding:8px 10px; border:1px solid #cbd5e1; border-radius:5px; font-size:0.85rem; outline:none; background:#fff;">
+                <optgroup label="Coğrafi (derece)">
+                    <option value="EPSG:4326" selected>WGS 84 — EPSG:4326 (varsayılan)</option>
+                </optgroup>
+                <optgroup label="Projeksiyon">
+                    <option value="EPSG:3857">Web Mercator — EPSG:3857</option>
+                    <option value="EPSG:32630">UTM Zone 30N — EPSG:32630</option>
+                    <option value="EPSG:32631">UTM Zone 31N — EPSG:32631</option>
+                    <option value="EPSG:32632">UTM Zone 32N — EPSG:32632</option>
+                    <option value="EPSG:32633">UTM Zone 33N — EPSG:32633</option>
+                    <option value="EPSG:32634">UTM Zone 34N — EPSG:32634</option>
+                    <option value="EPSG:32635">UTM Zone 35N — EPSG:32635</option>
+                    <option value="EPSG:32636">UTM Zone 36N — EPSG:32636</option>
+                    <option value="EPSG:32637">UTM Zone 37N — EPSG:32637</option>
+                    <option value="EPSG:32638">UTM Zone 38N — EPSG:32638</option>
+                    <option value="EPSG:32639">UTM Zone 39N — EPSG:32639</option>
+                    <option value="EPSG:32640">UTM Zone 40N — EPSG:32640</option>
+                    <option value="EPSG:32641">UTM Zone 41N — EPSG:32641</option>
+                    <option value="EPSG:32642">UTM Zone 42N — EPSG:32642</option>
+                    <option value="EPSG:32643">UTM Zone 43N — EPSG:32643</option>
+                    <option value="EPSG:32644">UTM Zone 44N — EPSG:32644</option>
+                    <option value="EPSG:32645">UTM Zone 45N — EPSG:32645</option>
+                    <option value="EPSG:32730">UTM Zone 30S — EPSG:32730</option>
+                    <option value="EPSG:32731">UTM Zone 31S — EPSG:32731</option>
+                    <option value="EPSG:32732">UTM Zone 32S — EPSG:32732</option>
+                    <option value="EPSG:32733">UTM Zone 33S — EPSG:32733</option>
+                    <option value="EPSG:32734">UTM Zone 34S — EPSG:32734</option>
+                    <option value="EPSG:32735">UTM Zone 35S — EPSG:32735</option>
+                    <option value="EPSG:32736">UTM Zone 36S — EPSG:32736</option>
+                </optgroup>
+                <optgroup label="Ulusal">
+                    <option value="EPSG:5254">TUREF / TM30 — EPSG:5254 (Türkiye)</option>
+                    <option value="EPSG:5255">TUREF / TM33 — EPSG:5255 (Türkiye)</option>
+                    <option value="EPSG:5256">TUREF / TM36 — EPSG:5256 (Türkiye)</option>
+                    <option value="EPSG:5257">TUREF / TM39 — EPSG:5257 (Türkiye)</option>
+                    <option value="EPSG:5258">TUREF / TM42 — EPSG:5258 (Türkiye)</option>
+                    <option value="EPSG:5259">TUREF / TM45 — EPSG:5259 (Türkiye)</option>
+                </optgroup>
+                <optgroup label="Manuel Giriş">
+                    <option value="custom">Manuel EPSG kodu girin…</option>
+                </optgroup>
+            </select>
+        </div>
+
+        <!-- Manuel EPSG girişi (sadece "custom" seçildiğinde görünür) -->
+        <div id="geotiff-crs-custom-wrap" style="display:none; margin-bottom:14px;">
+            <label for="geotiff-crs-custom" style="font-size:0.82rem; font-weight:600; color:#64748b; display:block; margin-bottom:6px;">EPSG Kodu (örn: EPSG:32637)</label>
+            <input type="text" id="geotiff-crs-custom" placeholder="EPSG:32637"
+                style="width:100%; padding:8px 10px; border:1px solid #cbd5e1; border-radius:5px; font-size:0.85rem; outline:none; box-sizing:border-box;">
+            <p style="font-size:0.72rem; color:#94a3b8; margin-top:4px;">GEE'nin desteklediği geçerli bir EPSG kodu giriniz. Hatalı kod sunucu hatasına yol açar.</p>
+        </div>
+
+        <p style="font-size:0.72rem; color:#94a3b8; margin-bottom:14px;">
+            💡 Büyük alanlarda veya "Too Large" hatası alırsanız çözünürlüğü artırın. İndirme linki tarayıcı üzerinden başlatılır.
+        </p>
+
+        <div id="geotiff-clip-mode-info" style="display:none; font-size:0.78rem; color:#065f46; margin-bottom:12px; padding:7px 10px; background:#d1fae5; border-radius:5px; border:1px solid #6ee7b7;"></div>
+        <div id="geotiff-status" style="display:none; font-size:0.82rem; color:#1e3a8a; margin-bottom:12px; padding:8px; background:#eff6ff; border-radius:5px; border:1px solid #bfdbfe;"></div>
+
+        <div style="display:flex; gap:8px; justify-content:flex-end;">
+            <button onclick="document.getElementById('geotiff-download-modal').style.display='none'"
+                style="padding:8px 18px; border:1px solid #cbd5e1; border-radius:5px; cursor:pointer; background:#f1f5f9; font-size:0.85rem; color:#475569;">
+                İptal
+            </button>
+            <button id="btn-geotiff-execute" onclick="executeGeoTiffDownload()"
+                style="padding:8px 18px; background:#1e3a8a; color:#fff; border:none; border-radius:5px; cursor:pointer; font-weight:600; font-size:0.85rem;">
+                📥 İndir
+            </button>
+        </div>
+    </div>
+</div>
+
+<script>
+// ===== UYDU GALERİSİ YATAY KAYDIRMA =====
+(function initGalleryScroll() {
+    var gallery = null;
+    var isDown = false;
+    var startX, startScrollLeft, dragMoved;
+
+    function setup() {
+        gallery = document.getElementById('map-gallery');
+        if (!gallery || gallery._scrollInited) return;
+        gallery._scrollInited = true;
+
+        // Galeri öğeleri üzerinde mousedown — drag vs click ayrımı
+        function onItemMousedown(e) {
+            var item = e.currentTarget;
+            isDown = true;
+            dragMoved = false;
+            startX = e.pageX;
+            startScrollLeft = gallery.scrollLeft;
+            gallery.classList.add('dragging');
+
+            function onMove(mv) {
+                var dx = mv.pageX - startX;
+                if (Math.abs(dx) > 5) {
+                    dragMoved = true;
+                    gallery.scrollLeft = startScrollLeft - dx;
+                }
+            }
+            function onUp(uv) {
+                isDown = false;
+                gallery.classList.remove('dragging');
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+                // Eğer gerçekten sürüklendi ise öğenin click olayını iptal et
+                if (dragMoved) {
+                    uv.stopImmediatePropagation();
+                    item.addEventListener('click', function stopClick(ce) {
+                        ce.stopImmediatePropagation(); ce.preventDefault();
+                        item.removeEventListener('click', stopClick, true);
+                    }, true);
+                }
+            }
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        }
+
+        // Galeri öğelerine mousedown listener'ı ekle (mevcut + gelecek)
+        function bindItems() {
+            gallery.querySelectorAll('.gallery-item').forEach(function(item) {
+                if (!item._dragBound) {
+                    item._dragBound = true;
+                    item.addEventListener('mousedown', onItemMousedown);
+                }
+            });
+        }
+        bindItems();
+
+        // Yeni öğeler eklendiğinde de bağla
+        var mo = new MutationObserver(bindItems);
+        mo.observe(gallery, { childList: true });
+
+        // Shift + Fare Tekerleği → yatay kaydırma
+        gallery.addEventListener('wheel', function(e) {
+            if (e.shiftKey) {
+                e.preventDefault();
+                gallery.scrollLeft += e.deltaY;
+            } else if (Math.abs(e.deltaX) > 0) {
+                e.preventDefault();
+                gallery.scrollLeft += e.deltaX;
+            }
+        }, { passive: false });
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', setup);
+    } else {
+        setup();
+    }
+
+    // Galeri dinamik oluşturulduğunda tekrar dene
+    document.addEventListener('DOMContentLoaded', function() {
+        var mapInner = document.getElementById('map-wrapper-inner');
+        if (mapInner) {
+            new MutationObserver(function() {
+                if (!gallery || !gallery._scrollInited) setup();
+            }).observe(mapInner, { childList: true, subtree: false });
+        }
+    });
+})();
+</script>
+
+<script>
+// ===== GeoTIFF İNDİRME FONKSİYONLARI =====
+
+function openGeoTiffDownloadDialog() {
+    var modal = document.getElementById('geotiff-download-modal');
+    var status = document.getElementById('geotiff-status');
+    var btn = document.getElementById('btn-geotiff-execute');
+    status.style.display = 'none';
+    status.textContent = '';
+    if (btn) { btn.disabled = false; btn.textContent = '📥 İndir'; }
+    // Aktif Görüntü Alanı modunu göster
+    var modeEl = document.getElementById('geotiff-clip-mode-info');
+    if (modeEl) {
+        var vm = (document.getElementById('viewMode') || {}).value || 'clip';
+        modeEl.innerHTML = vm === 'clip'
+            ? '✂️ <b>Clip modu:</b> Yalnızca çalışma alanı sınırları içindeki veri indirilecek.'
+            : '🌐 <b>Tüm Veri modu:</b> Ekrandaki analiz rasterının tamamı indirilecek (clip uygulanmaz).';
+        modeEl.style.display = 'block';
+    }
+    modal.style.display = 'flex';
+}
+
+function onGeoTiffCrsChange() {
+    var sel = document.getElementById('geotiff-crs');
+    var wrap = document.getElementById('geotiff-crs-custom-wrap');
+    if (sel && wrap) {
+        wrap.style.display = (sel.value === 'custom') ? 'block' : 'none';
+    }
+}
+
+function getSelectedCrs() {
+    var sel = document.getElementById('geotiff-crs');
+    if (!sel) return 'EPSG:4326';
+    if (sel.value === 'custom') {
+        var raw = (document.getElementById('geotiff-crs-custom').value || '').trim();
+        if (!raw) return 'EPSG:4326';
+        // Normalize: kullanıcı sadece rakam girdiyse başına EPSG: ekle
+        return /^\d+$/.test(raw) ? 'EPSG:' + raw : raw;
+    }
+    return sel.value;
+}
+
+function executeGeoTiffDownload() {
+    var filename = (document.getElementById('geotiff-filename').value || 'SylvaGIS_export').trim();
+    var scale    = parseInt(document.getElementById('geotiff-scale').value) || 30;
+    var crs      = getSelectedCrs();
+    var status   = document.getElementById('geotiff-status');
+    var btn      = document.getElementById('btn-geotiff-execute');
+
+    status.style.display = 'block';
+    status.style.color   = '#1e3a8a';
+    status.style.background = '#eff6ff';
+    status.style.borderColor = '#bfdbfe';
+    status.innerHTML     = '⏳ GEE görüntüsü hazırlanıyor, lütfen bekleyin…';
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Hazırlanıyor…'; }
+
+    var _dlClipMode = (document.getElementById('viewMode') || {}).value || 'clip';
+    fetch('http://127.0.0.1:5000/api/download-geotiff', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: filename, scale: scale, crs: crs, clipMode: _dlClipMode })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        if (data.success && data.url) {
+            status.style.color      = '#065f46';
+            status.style.background = '#d1fae5';
+            status.style.borderColor = '#6ee7b7';
+            var tifName = data.filename || filename + '.tif';
+            status.innerHTML = '✅ İndirme linki oluşturuldu!<br>' +
+                '<a href="' + data.url + '" target="_blank" download="' + tifName + '" ' +
+                'style="color:#1e3a8a;font-weight:700;word-break:break-all;display:block;margin-top:6px;">' +
+                '📥 ' + tifName + ' — Buraya tıklayarak indirin</a>' +
+                '<span style="font-size:0.78rem;color:#64748b;display:block;margin-top:4px;">Link açılmazsa GEE imzalı URL\'yi yeni sekmede açabilirsiniz.</span>';
+            // Otomatik indirme dene
+            try {
+                var a = document.createElement('a');
+                a.href     = data.url;
+                a.download = tifName;
+                a.target   = '_blank';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+            } catch(e) {}
+            if (btn) { btn.disabled = false; btn.textContent = '📥 İndir'; }
+        } else {
+            status.style.color      = '#991b1b';
+            status.style.background = '#fee2e2';
+            status.style.borderColor = '#fca5a5';
+            status.innerHTML = '❌ Hata: ' + (data.error || 'Bilinmeyen hata');
+            if (btn) { btn.disabled = false; btn.textContent = '📥 İndir'; }
+        }
+    })
+    .catch(function(err) {
+        status.style.color      = '#991b1b';
+        status.style.background = '#fee2e2';
+        status.style.borderColor = '#fca5a5';
+        status.innerHTML = '❌ Bağlantı hatası: Sunucu çalışıyor mu? (' + err.message + ')' +
+            '<br><span style="font-size:0.78rem;color:#64748b;">Flask sunucusunun 5000 portunda çalıştığından emin olun.</span>';
+        if (btn) { btn.disabled = false; btn.textContent = '📥 İndir'; }
+    });
+}
+</script>
 
 </body>
 </html>
