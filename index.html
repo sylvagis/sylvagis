@@ -7360,6 +7360,18 @@ function selectRamp(name) {
                 });
             });
 
+            // İndirme Kapsamı (Clip / Tüm Veri) seçeneklerini, Çalışma Alanı (AOI)
+            // ↔ Görüntü Alanı (Full Scene) modu her değiştiğinde senkronize et.
+            // (syncRawBandsScopeWithViewMode fonksiyonu bantlar render edildiğinde
+            // de çağrılır; burada yalnızca değişiklik dinleyicisini bağlıyoruz.)
+            if (viewModeSelect) {
+                viewModeSelect.addEventListener('change', function() {
+                    if (typeof syncRawBandsScopeWithViewMode === 'function') {
+                        syncRawBandsScopeWithViewMode();
+                    }
+                });
+            }
+
             // Dışarı tıklanınca kapat
             document.addEventListener('click', function() {
                 closeSbBox('sb-basemap-box');
@@ -8411,8 +8423,37 @@ function selectRamp(name) {
 </div>
 
 <!-- ===== GeoTIFF İNDİRME DİYALOĞU ===== -->
+<style>
+    /* GeoTIFF indirme penceresi SABİT boyutunu korur (genişlemez/daralmaz).
+       İndirme sürerken pencerenin ALT kısmında, ortalanmış şekilde sürekli
+       yanıp sönen "🌲 SylvaGIS" göstergesi belirir — sistemin çalıştığını
+       ve donmadığını gösterir. */
+    #geotiff-dialog-box {
+        background:#fff; border-radius:10px; padding:28px 24px 20px;
+        width:380px; max-width:92vw; max-height:88vh; overflow-y:auto;
+        box-shadow:0 12px 40px rgba(0,0,0,0.25); position:relative;
+        box-sizing:border-box;
+    }
+    @keyframes sylva-pulse-modal {
+        0%, 100% { opacity: 1; }
+        50%       { opacity: 0.22; }
+    }
+    #geotiff-bottom-indicator {
+        display:none; text-align:center; margin-top:14px; padding-top:12px;
+        border-top:1px solid #e2e8f0;
+    }
+    #geotiff-dialog-box.downloading #geotiff-bottom-indicator { display:block; }
+    #geotiff-bottom-indicator-text {
+        font-size: 1.15rem; font-weight: 800; color: #1e3a8a;
+        letter-spacing: 0.03em; user-select: none;
+        animation: sylva-pulse-modal 1.6s ease-in-out infinite;
+    }
+    #geotiff-bottom-indicator-sub {
+        font-size:0.7rem; color:#64748b; margin-top:4px; line-height:1.4;
+    }
+</style>
 <div id="geotiff-download-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.52); z-index:99998; align-items:center; justify-content:center;">
-    <div style="background:#fff; border-radius:10px; padding:28px 24px 20px; width:380px; max-width:92vw; box-shadow:0 12px 40px rgba(0,0,0,0.25); position:relative;">
+    <div id="geotiff-dialog-box">
         <h3 style="color:#1e3a8a; margin-bottom:6px; font-size:1rem;">📥 Veriyi İndir (GeoTIFF)</h3>
         <p style="font-size:0.78rem; color:#64748b; margin-bottom:18px;">GEE üzerinden coğrafi referanslı raster dosyası oluşturulur. ArcGIS Pro, QGIS vb. CBS yazılımlarında doğrudan açılabilir.</p>
 
@@ -8425,8 +8466,10 @@ function selectRamp(name) {
         <div style="margin-bottom:14px;">
             <label for="geotiff-scale" style="font-size:0.82rem; font-weight:600; color:#64748b; display:block; margin-bottom:6px;">Piksel Çözünürlüğü (metre)</label>
             <select id="geotiff-scale" style="width:100%; padding:8px 10px; border:1px solid #cbd5e1; border-radius:5px; font-size:0.85rem; outline:none; background:#fff;">
-                <option value="10">10 m — Yüksek Çözünürlük (küçük alanlar)</option>
-                <option value="30" selected>30 m — Orta Çözünürlük (önerilen)</option>
+                <option value="10" selected>10 m — Yüksek Çözünürlük (küçük alanlar)</option>
+                <option value="20">20 m — Yüksek-Orta Çözünürlük</option>
+                <option value="30">30 m — Orta Çözünürlük (önerilen)</option>
+                <option value="60">60 m — Orta-Düşük Çözünürlük</option>
                 <option value="100">100 m — Düşük Çözünürlük (büyük alanlar)</option>
                 <option value="250">250 m — Çok Düşük (çok büyük alanlar)</option>
             </select>
@@ -8495,7 +8538,7 @@ function selectRamp(name) {
         <div id="geotiff-status" style="display:none; font-size:0.82rem; color:#1e3a8a; margin-bottom:12px; padding:8px; background:#eff6ff; border-radius:5px; border:1px solid #bfdbfe;"></div>
 
         <div style="display:flex; gap:8px; justify-content:flex-end;">
-            <button onclick="document.getElementById('geotiff-download-modal').style.display='none'"
+            <button id="btn-geotiff-cancel" onclick="document.getElementById('geotiff-download-modal').style.display='none'"
                 style="padding:8px 18px; border:1px solid #cbd5e1; border-radius:5px; cursor:pointer; background:#f1f5f9; font-size:0.85rem; color:#475569;">
                 İptal
             </button>
@@ -8503,6 +8546,13 @@ function selectRamp(name) {
                 style="padding:8px 18px; background:#1e3a8a; color:#fff; border:none; border-radius:5px; cursor:pointer; font-weight:600; font-size:0.85rem;">
                 📥 İndir
             </button>
+        </div>
+
+        <!-- Alt gösterge: yalnızca indirme sürerken görünür, tamamlanana
+             kadar ortalanmış şekilde yanıp söner. Pencere boyutu sabit kalır. -->
+        <div id="geotiff-bottom-indicator">
+            <div id="geotiff-bottom-indicator-text">🌲 SylvaGIS</div>
+            <div id="geotiff-bottom-indicator-sub">Veriniz hazırlanıyor… Bu pencere indirme tamamlanınca otomatik kapanacak.</div>
         </div>
     </div>
 </div>
@@ -8675,6 +8725,39 @@ function fetchRawBandsCatalog(datasetKey) {
     });
 }
 
+// İndirme Kapsamı (🗂️ Clip / 🌍 Tüm Veri) seçeneklerini genel Görüntü Alanı
+// moduyla (Çalışma Alanı/AOI ↔ Full Scene) senkronize eder. Kullanıcı,
+// aktif olmayan çalışma modunun kapsamını seçemez — o seçenek pasif
+// (saydam/devre dışı) hale getirilir ve aktif olan otomatik işaretlenir.
+function syncRawBandsScopeWithViewMode() {
+    var viewModeEl = document.getElementById('viewMode');
+    // 'clip' → Çalışma Alanı (AOI) modu, 'full' → Görüntü Alanı (Full Scene) modu
+    var mode       = viewModeEl ? viewModeEl.value : 'clip';
+    var clipRadio  = document.querySelector('input[name="raw-bands-scope"][value="clip"]');
+    var fullRadio  = document.querySelector('input[name="raw-bands-scope"][value="full"]');
+    if (!clipRadio || !fullRadio) return;
+
+    if (mode === 'full') {
+        fullRadio.disabled = false;
+        fullRadio.checked  = true;
+        clipRadio.checked  = false;
+        clipRadio.disabled = true;
+    } else {
+        clipRadio.disabled = false;
+        clipRadio.checked  = true;
+        fullRadio.checked  = false;
+        fullRadio.disabled = true;
+    }
+
+    // Pasif seçeneği görsel olarak soluklaştır
+    [clipRadio, fullRadio].forEach(function(radio) {
+        var label = radio.closest('label');
+        if (!label) return;
+        label.style.opacity = radio.disabled ? '0.45' : '1';
+        label.style.cursor  = radio.disabled ? 'not-allowed' : 'pointer';
+    });
+}
+
 // Çözünürlük gruplarını (10 m / 20 m / 30 m / 60 m …) checkbox listesi olarak çizer;
 // her bant adının yanında açıklaması (Blue, Green, Red, NIR, SWIR vb.) VE
 // kendi çözünürlüğü (10 m, 20 m, 30 m, 60 m vb.) gösterilir.
@@ -8719,6 +8802,8 @@ function renderRawBandsGroups() {
     if (aoiWrap) aoiWrap.style.display = 'block';
     if (scopeWrap) scopeWrap.style.display = 'block';
     if (downloadBtn) downloadBtn.style.display = 'block';
+    // Kapsam radyolarını mevcut Çalışma Alanı/Görüntü Alanı moduna kilitle
+    syncRawBandsScopeWithViewMode();
 
     // Checkbox durumu her değiştiğinde "X bant seçildi" sayacını güncelle
     container.querySelectorAll('.raw-band-checkbox').forEach(function(cb) {
@@ -8770,6 +8855,9 @@ function downloadRawBands() {
         return;
     }
 
+    // İndirme sürerken kullanıcının yeni bir indirme başlatmasını engelle
+    if (btn && btn.disabled) return;
+
     var selectedBands = Array.prototype.slice.call(document.querySelectorAll('.raw-band-checkbox:checked')).map(function(cb) { return cb.value; });
     if (!selectedBands.length) { alert('Lütfen indirmek için en az bir bant seçin.'); return; }
 
@@ -8780,6 +8868,10 @@ function downloadRawBands() {
     var cloudSliderEl = document.getElementById('cloud-slider');
     var scopeInput    = document.querySelector('input[name="raw-bands-scope"]:checked');
     var scope         = scopeInput ? scopeInput.value : 'clip';
+
+    // 📥 İndirme animasyonu: ZIP hazır olup indirilene kadar ekranı yarı
+    // saydam beyaz katmanla kapla ve ortada yanıp sönen "🌲 SylvaGIS" göster.
+    showSylvaLoading();
 
     if (status) {
         status.style.display = 'block';
@@ -8827,6 +8919,8 @@ function downloadRawBands() {
     })
     .then(function(result) {
         if (btn) { btn.disabled = false; btn.textContent = '📥 Seçili Bantları İndir (ZIP)'; }
+        // ZIP indirilmeye hazır: yükleme overlay'ini kapat
+        hideSylvaLoading();
 
         var url = URL.createObjectURL(result.blob);
         var a = document.createElement('a');
@@ -8852,6 +8946,8 @@ function downloadRawBands() {
     })
     .catch(function(err) {
         if (btn) { btn.disabled = false; btn.textContent = '📥 Seçili Bantları İndir (ZIP)'; }
+        // Hata durumunda da overlay'i kapat, kullanıcı kilitlenmesin
+        hideSylvaLoading();
         if (status) {
             status.style.color = '#991b1b';
             status.style.background = '#fee2e2';
@@ -8870,6 +8966,12 @@ function openGeoTiffDownloadDialog() {
     status.style.display = 'none';
     status.textContent = '';
     if (btn) { btn.disabled = false; btn.textContent = '📥 İndir'; }
+    // Pencere her açıldığında, alt kısımdaki yanıp sönen "SylvaGIS"
+    // göstergesi kapalı başlangıç durumuna sıfırlanır.
+    var dialogBox = document.getElementById('geotiff-dialog-box');
+    if (dialogBox) dialogBox.classList.remove('downloading');
+    var cancelBtn = document.getElementById('btn-geotiff-cancel');
+    if (cancelBtn) cancelBtn.disabled = false;
     // Aktif Görüntü Alanı modunu göster
     var modeEl = document.getElementById('geotiff-clip-mode-info');
     if (modeEl) {
@@ -8878,6 +8980,13 @@ function openGeoTiffDownloadDialog() {
             ? '✂️ <b>Clip modu:</b> Yalnızca çalışma alanı sınırları içindeki veri indirilecek.'
             : '🌐 <b>Tüm Veri modu:</b> Ekrandaki analiz rasterının tamamı indirilecek (clip uygulanmaz).';
         modeEl.style.display = 'block';
+    }
+    // Piksel Çözünürlüğü: TÜM uydu veri setleri için varsayılan değer 10 m'dir.
+    // Kullanıcı dialog açıldıktan sonra 20/30/60/100/250 m gibi desteklenen
+    // diğer çözünürlüklere dilediği gibi geçiş yapabilir.
+    var scaleSelect = document.getElementById('geotiff-scale');
+    if (scaleSelect) {
+        scaleSelect.value = '10';
     }
     modal.style.display = 'flex';
 }
@@ -8909,12 +9018,24 @@ function executeGeoTiffDownload() {
     var status   = document.getElementById('geotiff-status');
     var btn      = document.getElementById('btn-geotiff-execute');
 
+    // İndirme sürerken kullanıcının yeni bir indirme başlatmasını engelle
+    if (btn && btn.disabled) return;
+
     status.style.display = 'block';
     status.style.color   = '#1e3a8a';
     status.style.background = '#eff6ff';
     status.style.borderColor = '#bfdbfe';
-    status.innerHTML     = '⏳ GEE görüntüsü hazırlanıyor, lütfen bekleyin…';
+    status.innerHTML     = '⏳ GeoTIFF hazırlanıyor ve indiriliyor, lütfen bekleyin… ' +
+        '<span style="font-size:0.78rem;color:#64748b;display:block;margin-top:4px;">Geniş alanlarda / 10 m ve 30 m çözünürlükte veri otomatik olarak parçalara bölünüp sunucuda birleştirilir, bu birkaç dakika sürebilir.</span>';
     if (btn) { btn.disabled = true; btn.textContent = '⏳ Hazırlanıyor…'; }
+    var cancelBtn = document.getElementById('btn-geotiff-cancel');
+    if (cancelBtn) cancelBtn.disabled = true;
+
+    // 📥 İndirme animasyonu: pencere boyutu SABİT kalır; yalnızca pencerenin
+    // ALT kısmında, ortalanmış şekilde indirme tamamlanana kadar sürekli
+    // yanıp sönen "🌲 SylvaGIS" yazısı belirir — sistemin çalıştığını gösterir.
+    var dialogBox = document.getElementById('geotiff-dialog-box');
+    if (dialogBox) dialogBox.classList.add('downloading');
 
     var _dlClipMode = (document.getElementById('viewMode') || {}).value || 'clip';
     fetch('http://127.0.0.1:5000/api/download-geotiff', {
@@ -8922,44 +9043,66 @@ function executeGeoTiffDownload() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ filename: filename, scale: scale, crs: crs, clipMode: _dlClipMode })
     })
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-        if (data.success && data.url) {
-            status.style.color      = '#065f46';
-            status.style.background = '#d1fae5';
-            status.style.borderColor = '#6ee7b7';
-            var tifName = data.filename || filename + '.tif';
-            status.innerHTML = '✅ İndirme linki oluşturuldu!<br>' +
-                '<a href="' + data.url + '" target="_blank" download="' + tifName + '" ' +
-                'style="color:#1e3a8a;font-weight:700;word-break:break-all;display:block;margin-top:6px;">' +
-                '📥 ' + tifName + ' — Buraya tıklayarak indirin</a>' +
-                '<span style="font-size:0.78rem;color:#64748b;display:block;margin-top:4px;">Link açılmazsa GEE imzalı URL\'yi yeni sekmede açabilirsiniz.</span>';
-            // Otomatik indirme dene
-            try {
-                var a = document.createElement('a');
-                a.href     = data.url;
-                a.download = tifName;
-                a.target   = '_blank';
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-            } catch(e) {}
-            if (btn) { btn.disabled = false; btn.textContent = '📥 İndir'; }
-        } else {
-            status.style.color      = '#991b1b';
-            status.style.background = '#fee2e2';
-            status.style.borderColor = '#fca5a5';
-            status.innerHTML = '❌ Hata: ' + (data.error || 'Bilinmeyen hata');
-            if (btn) { btn.disabled = false; btn.textContent = '📥 İndir'; }
+    .then(function(r) {
+        var ct = r.headers.get('Content-Type') || '';
+        // Sunucu hata durumunda JSON, başarı durumunda binary .tif döner.
+        if (ct.indexOf('application/json') !== -1) {
+            return r.json().then(function(data) {
+                throw new Error((data && data.error) || 'Bilinmeyen hata');
+            });
         }
+        if (!r.ok) {
+            throw new Error('Sunucu hatası (HTTP ' + r.status + ')');
+        }
+        var cd = r.headers.get('Content-Disposition') || '';
+        var m = /filename="?([^"]+)"?/.exec(cd);
+        var tifName = m ? m[1] : (filename + '.tif');
+        return r.blob().then(function(blob) { return { blob: blob, tifName: tifName }; });
+    })
+    .then(function(res) {
+        var blobUrl = URL.createObjectURL(res.blob);
+        // Otomatik indirme dene
+        try {
+            var a = document.createElement('a');
+            a.href     = blobUrl;
+            a.download = res.tifName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        } catch(e) {}
+        setTimeout(function() { URL.revokeObjectURL(blobUrl); }, 4000);
+
+        if (btn) { btn.disabled = false; btn.textContent = '📥 İndir'; }
+
+        // İndirme tamamlandı: yanıp sönen animasyonu durdur, pencereyi otomatik
+        // kapat ve kullanıcıyı doğrudan ana harita ekranına döndür — kullanıcı
+        // haritada kaldığı yerden devam edebilir.
+        var dialogBoxDone = document.getElementById('geotiff-dialog-box');
+        if (dialogBoxDone) dialogBoxDone.classList.remove('downloading');
+        var cancelBtnDone = document.getElementById('btn-geotiff-cancel');
+        if (cancelBtnDone) cancelBtnDone.disabled = false;
+        var modal = document.getElementById('geotiff-download-modal');
+        if (modal) modal.style.display = 'none';
+        // Mobilde araç çekmecesi açık kalmışsa onu da kapat — kullanıcı
+        // gerçekten ana harita ekranına dönsün.
+        if (typeof closeDrawer === 'function') closeDrawer();
+        // Bir sonraki açılışta durum mesajı sıfırdan başlasın
+        status.style.display = 'none';
+        status.innerHTML = '';
     })
     .catch(function(err) {
         status.style.color      = '#991b1b';
         status.style.background = '#fee2e2';
         status.style.borderColor = '#fca5a5';
-        status.innerHTML = '❌ Bağlantı hatası: Sunucu çalışıyor mu? (' + err.message + ')' +
+        status.innerHTML = '❌ Hata: ' + ((err && err.message) || 'Bilinmeyen hata') +
             '<br><span style="font-size:0.78rem;color:#64748b;">Flask sunucusunun 5000 portunda çalıştığından emin olun.</span>';
         if (btn) { btn.disabled = false; btn.textContent = '📥 İndir'; }
+        // Hata durumunda animasyonu durdur, kullanıcı kilitlenmesin — ancak
+        // pencere açık kalır ki kullanıcı hata mesajını görüp tekrar deneyebilsin.
+        var dialogBoxErr = document.getElementById('geotiff-dialog-box');
+        if (dialogBoxErr) dialogBoxErr.classList.remove('downloading');
+        var cancelBtnErr = document.getElementById('btn-geotiff-cancel');
+        if (cancelBtnErr) cancelBtnErr.disabled = false;
     });
 }
 </script>
