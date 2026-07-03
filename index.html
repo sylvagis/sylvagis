@@ -11,6 +11,10 @@
         // Asıl t() fonksiyonu yüklendiğinde bu stub'ı otomatik olarak geçersiz kılar.
         if (typeof window.t !== 'function') {
             window.t = function(key, fallback) { return fallback || key; };
+        // SylvaGIS sunucu URL'si: Flask bu HTML'yi sunuyorsa relative URL;
+        // file:// üzerinden açılıyorsa localhost:5000 kullanılır.
+        window.API_BASE = (typeof location !== 'undefined' && location.protocol === 'file:')
+            ? 'http://127.0.0.1:5000' : '';
         }
     </script>
     <meta charset="UTF-8">
@@ -69,6 +73,20 @@
     padding: 6px;
     border-radius: 6px;
     border: 1px solid #e2e8f0;
+}
+
+/* Sınıf Vurgulama (Haritada Vurgula) — legend/grafik/tablo satırı seçili */
+.class-highlight-target:hover {
+    filter: brightness(1.08);
+}
+.class-highlight-active {
+    outline: 2px solid #1e3a8a;
+    outline-offset: 1px;
+    border-radius: 4px;
+    background: rgba(30, 58, 138, 0.08);
+}
+tr.class-highlight-active {
+    outline-offset: -1px;
 }
 
 /* Min ve Max Kutuları */
@@ -197,6 +215,35 @@
 
         /* Navbar (Üst Bar) */
         .navbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; background-color: #ffffff; padding: 12px 25px; border-bottom: 2px solid #1e3a8a; box-shadow: 0 2px 10px rgba(0,0,0,0.05); z-index: 2000; position: relative; }
+
+        /* Deneme Sürümü Bilgilendirme Kutusu */
+        #trial-info-banner {
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #eff6ff;
+            border-bottom: 1px solid #bfdbfe;
+            padding: 8px 16px;
+            box-sizing: border-box;
+            z-index: 1500;
+            position: relative;
+        }
+        #trial-info-box {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            max-width: 900px;
+            width: 100%;
+            text-align: center;
+            color: #1e3a8a;
+            font-size: 0.82rem;
+            font-weight: 500;
+            line-height: 1.4;
+        }
+        #trial-info-icon { flex-shrink: 0; font-size: 1rem; }
+        #trial-info-text { flex: 1; white-space: pre-line; }
         .logo-container { font-size: 1.8rem; font-weight: bold; color: #1e3a8a; display: flex; align-items: center; gap: 8px; white-space: nowrap; }
         .nav-buttons { display: flex; flex-wrap: wrap; gap: 15px; align-items: center; justify-content: flex-end; }
         .nav-btn { background-color: #f8fafc; border: 1px solid #cbd5e1; padding: 8px 15px; border-radius: 5px; cursor: pointer; font-weight: 600; color: #1e3a8a; transition: 0.2s; outline: none; }
@@ -310,16 +357,96 @@
 
         /* Harita İçi - Sol Alt (Lejant) */
         .map-bottom-left { position: absolute; bottom: 15px; left: 15px; display: flex; flex-direction: column; gap: 10px; z-index: 500; pointer-events: none; }
-        .map-legend { background: rgba(255,255,255,0.9); padding: 5px 7px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); font-size: 0.74rem; pointer-events: auto; min-width: 100px; }
+        /* DÜZELTİLDİ: padding/min-width sabit px değerleri; box-sizing eklendi →
+           html2canvas ve @media print çıktısında lejant boşluğu/kayması önlenir. */
+        .map-legend { background: #ffffff; padding: 5px 7px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); font-size: 0.74rem; pointer-events: auto; min-width: 100px; box-sizing: border-box; }
         .map-legend.detached { min-width: 80px; min-height: 36px; overflow: auto; position: relative; box-sizing: border-box; }
         .map-top-left-infobox { position: absolute; top: 70px; left: 15px; z-index: 520; pointer-events: none; }
-        .map-info-box { background: rgba(255,255,255,0.93); border: 1px solid #bae6fd; border-radius: 8px; padding: 6px 10px; font-size: 0.74rem; pointer-events: auto; min-width: 180px; max-width: 320px; box-shadow: 0 2px 5px rgba(0,0,0,0.18); cursor: grab; word-wrap: break-word; overflow-wrap: break-word; box-sizing: border-box; }
+        /* DÜZELTİLDİ: padding/min-width/max-width sabit px; box-sizing zaten vardı →
+           html2canvas render sırasında bilgi kutusu font/boşluk kayması önlenir. */
+        .map-info-box { background: #ffffff; border: 1px solid #bae6fd; border-radius: 8px; padding: 6px 10px; font-size: 0.74rem; pointer-events: auto; min-width: 180px; max-width: 320px; box-shadow: 0 2px 5px rgba(0,0,0,0.18); cursor: grab; word-wrap: break-word; overflow-wrap: break-word; box-sizing: border-box; }
         .map-info-box table { width: 100%; table-layout: fixed; word-break: break-word; }
-        .map-info-box td { word-break: break-word; }
+        .map-info-box td { word-break: break-word; padding: 2px 0; line-height: 1.4; }
         .map-info-box.detached { min-width: 140px; min-height: 50px; max-width: none; overflow: auto; position: relative; box-sizing: border-box; }
 
+        /* ── @media print: Tarayıcının native Yazdır / PDF dışa aktarımı ──────────
+           Leaflet haritasının position:absolute öğeleri (lejant, bilgi kutusu)
+           ekranla aynı görünümü koruyacak biçimde sabit px değerleriyle sabitlenir.
+           calc() / % / vw / vh gibi esnek değerler print motorunda farklı
+           hesaplanabileceğinden burada override edilir.
+        ───────────────────────────────────────────────────────────────────────── */
+        @media print {
+            /* Sayfa kenar boşluklarını sıfırla — harita tam sayfayı kaplasın */
+            @page { margin: 0; }
+            body { margin: 0; padding: 0; }
+
+            /* Sidebar, navbar, footer gibi harita dışı öğeleri gizle
+               Selector'lar gerçek DOM yapısına göre ayarlandı:
+                 .sidebar-left  — class (ID değil)
+                 #sidebar-right — ID
+                 .navbar        — class
+                 .footer        — class
+                 #trial-info-banner — trial bilgi şeridi (hem banner hem içindeki box)
+                 #mobile-toolbar, #mobile-panel-overlay — mobil UI
+                 .ruler-top-row, #ruler-v, #ruler-corner — cetvel aracı
+            */
+            .sidebar-left, #sidebar-right, .navbar, .footer,
+            #export-modal-overlay, #mobile-toolbar, #mobile-panel-overlay,
+            #trial-info-banner, .ruler-top-row, #ruler-v, #ruler-corner { display: none !important; }
+
+            /* Harita kapsayıcısı tam sayfaya yayılsın
+               #map-wrapper-inner — gerçek wrapper ID'si; .map-wrapper class alternatifi */
+            #map-wrapper-inner, .map-wrapper, #map {
+                width: 100vw !important;
+                height: 100vh !important;
+                position: relative !important;
+                overflow: hidden !important;
+                page-break-inside: avoid;
+            }
+
+            /* Lejant: sabit boyut, sol-alt köşeye sabitle */
+            .map-bottom-left {
+                position: absolute !important;
+                bottom: 15px !important;
+                left: 15px !important;
+            }
+            .map-legend {
+                padding: 5px 7px !important;
+                min-width: 100px !important;
+                box-sizing: border-box !important;
+                font-size: 0.74rem !important;
+                line-height: 1.4 !important;
+            }
+
+            /* Bilgi kutusu: sabit konum, sabit iç boşluk */
+            .map-top-left-infobox {
+                position: absolute !important;
+                top: 70px !important;
+                left: 15px !important;
+            }
+            .map-info-box {
+                padding: 6px 10px !important;
+                min-width: 180px !important;
+                max-width: 320px !important;
+                box-sizing: border-box !important;
+                font-size: 0.74rem !important;
+                line-height: 1.4 !important;
+            }
+            .map-info-box td {
+                padding: 2px 0 !important;
+                line-height: 1.4 !important;
+            }
+
+            /* Geçiş/animasyon efektlerini print sırasında dondur */
+            *, *::before, *::after {
+                transition: none !important;
+                animation: none !important;
+                animation-duration: 0s !important;
+            }
+        }
+
         /* Leaflet'in kendi ölçek çubuğunu marka rengine göre hafifçe biçimlendiriyoruz */
-        .leaflet-control-scale-line { border-color: #1e3a8a; color: #1e3a8a; font-weight: 600; background: rgba(255,255,255,0.9); }
+        .leaflet-control-scale-line { border-color: #1e3a8a; color: #1e3a8a; font-weight: 600; background: #ffffff; }
 
         /* Harita İçi - Sol Üst (Görüntü Galerisi) */
         .map-gallery { position: absolute; top: 15px; left: 15px; right: 15px; display: flex; gap: 10px; overflow-x: auto; max-width: calc(100% - 30px); padding-bottom: 5px; z-index: 500; pointer-events: none; cursor: grab; user-select: none; scroll-behavior: smooth; transition: opacity 0.3s ease; }
@@ -958,15 +1085,11 @@
             <span style="font-size:1.15em;line-height:1;">🌲</span>
             SylvaGIS
         </div>
-        <div id="server-status" title="Python sunucu durumu" style="display:flex;align-items:center;gap:5px;font-size:0.75rem;font-weight:600;color:#94a3b8;cursor:default;user-select:none;">
-            <span id="server-dot" style="width:9px;height:9px;border-radius:50%;background:#e2e8f0;display:inline-block;transition:background 0.3s;"></span>
-            <span id="server-label" data-i18n="server_label">Sunucu</span>
-        </div>
         <button id="hamburger-btn" onclick="toggleDrawer()" aria-label="Menuyu Ac/Kapat">
             <span></span><span></span><span></span>
         </button>
         <div class="nav-buttons">
-            <button class="nav-btn" data-i18n="nav_guide">❓ Rehber</button>
+            <button class="nav-btn" id="nav-guide-btn" data-i18n="nav_guide">❓ Rehber</button>
 
             <!-- Dil Seçimi — özel dropdown (her tarayıcıda bayrak görünür) -->
             <div id="lang-dropdown-wrapper" style="position:relative;">
@@ -1011,6 +1134,14 @@
                 .lang-opt.active { background: #eff6ff; font-weight: 700; }
             </style>
             <button class="nav-btn" data-i18n="nav_login">👤 Kullanıcı Girişi</button>
+        </div>
+    </div>
+
+    <div id="trial-info-banner">
+        <div id="trial-info-box">
+            <span id="trial-info-icon">ℹ️</span>
+            <span id="trial-info-text" data-i18n="trial_notice">Sistem şu anda deneme sürümündedir. Bu nedenle kullanıcı girişi ve iletişim özellikleri geçici olarak aktif değildir.
+Sistemi giriş yapmadan tüm analiz özellikleriyle kullanabilirsiniz.</span>
         </div>
     </div>
 
@@ -1282,35 +1413,35 @@
                     <div class="option-list">
                         <!-- Temel Topografik Analizler -->
                         <div class="sensor-group-label" data-i18n="topo_basic">🏔 Temel Topografik Analizler</div>
-                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_DEM" data-ramp-key="black-white" data-legend-type="stretched" data-legend-min="0 m" data-legend-max="3000 m"> <span data-i18n="topo_dem_label">YSM / Yükseklik (DEM)</span></label>
-                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_SLOPE" data-ramp-key="black-white" data-legend-type="stretched" data-legend-min="0°" data-legend-max="60°"> <span data-i18n="topo_slope_label">Eğim (Slope)</span></label>
-                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_ASPECT" data-ramp-key="black-white" data-legend-type="stretched" data-legend-min="0°" data-legend-max="360°"> <span data-i18n="topo_aspect_label">Bakı (Aspect)</span></label>
-                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_HILLSHADE" data-ramp-key="black-white" data-legend-type="stretched" data-legend-min-key="shadow_label" data-legend-max-key="light_label" data-legend-min="Gölge" data-legend-max="Işık"> <span data-i18n="topo_hillshade_label">Kabartma (Hillshade)</span></label>
-                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_RELIEF" data-ramp-key="black-white" data-legend-type="stretched" data-legend-min-key="flat_label" data-legend-max-key="high_label" data-legend-min="Düz" data-legend-max="Yüksek"> <span data-i18n="topo_relief_label">Rölyef Haritası</span></label>
+                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_DEM" data-ramp-key="terrain" data-legend-type="stretched" data-legend-min="0 m" data-legend-max="3000 m"> <span data-i18n="topo_dem_label">YSM / Yükseklik (DEM)</span></label>
+                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_SLOPE" data-ramp-key="heat" data-legend-type="stretched" data-legend-min="0°" data-legend-max="60°"> <span data-i18n="topo_slope_label">Eğim (Slope)</span></label>
+                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_ASPECT" data-ramp-key="rainbow" data-legend-type="stretched" data-legend-min="0°" data-legend-max="360°"> <span data-i18n="topo_aspect_label">Bakı (Aspect)</span></label>
+                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_HILLSHADE" data-ramp-key="gray" data-legend-type="stretched" data-legend-min-key="shadow_label" data-legend-max-key="light_label" data-legend-min="Gölge" data-legend-max="Işık"> <span data-i18n="topo_hillshade_label">Kabartma (Hillshade)</span></label>
+                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_RELIEF" data-ramp-key="terrain" data-legend-type="stretched" data-legend-min-key="flat_label" data-legend-max-key="high_label" data-legend-min="Düz" data-legend-max="Yüksek"> <span data-i18n="topo_relief_label">Rölyef Haritası</span></label>
 
                         <!-- Morfometrik Analizler -->
                         <div class="sensor-group-label" style="margin-top:8px;" data-i18n="topo_morpho">⛰ Morfometrik Analizler</div>
-                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_TPI" data-ramp-key="black-white" data-legend-type="stretched" data-legend-min="-50" data-legend-max="+50"> <span data-i18n="topo_item_tpi">TPI (Topoğrafik Konum İndeksi)</span></label>
-                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_TRI" data-ramp-key="black-white" data-legend-type="stretched" data-legend-min="0" data-legend-max="80"> <span data-i18n="topo_item_tri">TRI (Arazi Pürüzlülük İndeksi)</span></label>
-                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_ROUGHNESS" data-ramp-key="black-white" data-legend-type="stretched" data-legend-min="0" data-legend-max="150"> <span data-i18n="topo_item_roughness">Pürüzlülük (Roughness)</span></label>
-                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_CURVATURE" data-ramp-key="black-white" data-legend-type="stretched" data-legend-min="-30" data-legend-max="+30"> <span data-i18n="topo_item_curvature">Eğrilik (Curvature)</span></label>
-                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_PLAN_CURV" data-ramp-key="black-white" data-legend-type="stretched" data-legend-min="-30" data-legend-max="+30"> <span data-i18n="topo_item_plan_curv">Düzlem Eğriliği (Plan Curv.)</span></label>
-                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_PROFILE_CURV" data-ramp-key="black-white" data-legend-type="stretched" data-legend-min="-30" data-legend-max="+30"> <span data-i18n="topo_item_profile_curv">Profil Eğriliği (Profile Curv.)</span></label>
+                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_TPI" data-ramp-key="red-yellow-green" data-legend-type="stretched" data-legend-min="-50" data-legend-max="+50"> <span data-i18n="topo_item_tpi">TPI (Topoğrafik Konum İndeksi)</span></label>
+                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_TRI" data-ramp-key="heat" data-legend-type="stretched" data-legend-min="0" data-legend-max="80"> <span data-i18n="topo_item_tri">TRI (Arazi Pürüzlülük İndeksi)</span></label>
+                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_ROUGHNESS" data-ramp-key="heat" data-legend-type="stretched" data-legend-min="0" data-legend-max="150"> <span data-i18n="topo_item_roughness">Pürüzlülük (Roughness)</span></label>
+                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_CURVATURE" data-ramp-key="red-yellow-green" data-legend-type="stretched" data-legend-min="-30" data-legend-max="+30"> <span data-i18n="topo_item_curvature">Eğrilik (Curvature)</span></label>
+                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_PLAN_CURV" data-ramp-key="red-yellow-green" data-legend-type="stretched" data-legend-min="-30" data-legend-max="+30"> <span data-i18n="topo_item_plan_curv">Düzlem Eğriliği (Plan Curv.)</span></label>
+                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_PROFILE_CURV" data-ramp-key="red-yellow-green" data-legend-type="stretched" data-legend-min="-30" data-legend-max="+30"> <span data-i18n="topo_item_profile_curv">Profil Eğriliği (Profile Curv.)</span></label>
 
                         <!-- Hidrolojik Analizler -->
                         <div class="sensor-group-label" style="margin-top:8px;" data-i18n="topo_hydro">💧 Hidrolojik Analizler</div>
-                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_FLOWDIR" data-ramp-key="black-white" data-legend-type="stretched" data-legend-min="0°" data-legend-max="360°"> <span data-i18n="topo_item_flowdir">Akış Yönü (Flow Direction)</span></label>
-                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_FLOWACC" data-ramp-key="black-white" data-legend-type="stretched" data-legend-min="0" data-legend-max="200"> <span data-i18n="topo_item_flowacc">Akış Birikimi (Flow Accum.)</span></label>
-                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_STREAM" data-ramp-key="black-white" data-legend-type="stretched" data-legend-min-key="land_label" data-legend-max-key="stream_label" data-legend-min="Kara" data-legend-max="Dere"> <span data-i18n="topo_item_stream">Dere Ağı (Stream Network)</span></label>
-                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_TWI" data-ramp-key="black-white" data-legend-type="stretched" data-legend-min="0" data-legend-max="15"> <span data-i18n="topo_item_twi">TWI (Topoğrafik Islanma İndeksi)</span></label>
-                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_SPI" data-ramp-key="black-white" data-legend-type="stretched" data-legend-min="0" data-legend-max="20"> <span data-i18n="topo_item_spi">SPI (Akış Gücü İndeksi)</span></label>
-                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_STI" data-ramp-key="black-white" data-legend-type="stretched" data-legend-min="0" data-legend-max="50"> <span data-i18n="topo_item_sti">STI (Sediman Taşınım İndeksi)</span></label>
+                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_FLOWDIR" data-ramp-key="rainbow" data-legend-type="stretched" data-legend-min="0°" data-legend-max="360°"> <span data-i18n="topo_item_flowdir">Akış Yönü (Flow Direction)</span></label>
+                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_FLOWACC" data-ramp-key="blue-ocean" data-legend-type="stretched" data-legend-min="0" data-legend-max="200"> <span data-i18n="topo_item_flowacc">Akış Birikimi (Flow Accum.)</span></label>
+                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_STREAM" data-ramp-key="blue-ocean" data-legend-type="stretched" data-legend-min-key="land_label" data-legend-max-key="stream_label" data-legend-min="Kara" data-legend-max="Dere"> <span data-i18n="topo_item_stream">Dere Ağı (Stream Network)</span></label>
+                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_TWI" data-ramp-key="blue-ocean" data-legend-type="stretched" data-legend-min="0" data-legend-max="15"> <span data-i18n="topo_item_twi">TWI (Topoğrafik Islanma İndeksi)</span></label>
+                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_SPI" data-ramp-key="blue-ocean" data-legend-type="stretched" data-legend-min="0" data-legend-max="20"> <span data-i18n="topo_item_spi">SPI (Akış Gücü İndeksi)</span></label>
+                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_STI" data-ramp-key="heat" data-legend-type="stretched" data-legend-min="0" data-legend-max="50"> <span data-i18n="topo_item_sti">STI (Sediman Taşınım İndeksi)</span></label>
 
                         <!-- Güneş ve Görünürlük -->
                         <div class="sensor-group-label" style="margin-top:8px;" data-i18n="topo_sun">☀ Güneş ve Görünürlük</div>
-                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_HILLSHADE_MULTI" data-ramp-key="black-white" data-legend-type="stretched" data-legend-min-key="shadow_label" data-legend-max-key="light_label" data-legend-min="Gölge" data-legend-max="Işık"> <span data-i18n="topo_item_hillshade_multi">Çok Yönlü Kabartma</span></label>
-                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_SOLAR" data-ramp-key="black-white" data-legend-type="stretched" data-legend-min-key="low_label" data-legend-max-key="high_label"> <span data-i18n="topo_item_solar">Güneş Radyasyonu</span></label>
-                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_SHADOW" data-ramp-key="black-white" data-legend-type="stretched" data-legend-min-key="shadow_label" data-legend-max-key="bright_label" data-legend-min="Gölge" data-legend-max="Aydınlık"> <span data-i18n="topo_item_shadow">Gölge Analizi</span></label>
+                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_HILLSHADE_MULTI" data-ramp-key="gray" data-legend-type="stretched" data-legend-min-key="shadow_label" data-legend-max-key="light_label" data-legend-min="Gölge" data-legend-max="Işık"> <span data-i18n="topo_item_hillshade_multi">Çok Yönlü Kabartma</span></label>
+                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_SOLAR" data-ramp-key="heat" data-legend-type="stretched" data-legend-min-key="low_label" data-legend-max-key="high_label"> <span data-i18n="topo_item_solar">Güneş Radyasyonu</span></label>
+                        <label class="option-item"><input type="radio" name="sylva-module" data-analysis="TOPO_SHADOW" data-ramp-key="gray" data-legend-type="stretched" data-legend-min-key="shadow_label" data-legend-max-key="bright_label" data-legend-min="Gölge" data-legend-max="Aydınlık"> <span data-i18n="topo_item_shadow">Gölge Analizi</span></label>
                     </div>
                 </div>
             </details>
@@ -1510,7 +1641,7 @@
 
             <div class="map-left-mid">
                 <div id="zoom-pct-wrap" style="display:flex;flex-direction:row;align-items:stretch;">
-                    <div id="zoom-percent-display" class="map-zoom-btn" style="font-size:0.62rem;font-weight:700;color:#1e3a8a;display:flex;align-items:center;justify-content:center;gap:0;border-radius:5px;box-shadow:none;padding:0;" title="Zoom (0–100)"><input id="zoom-num" type="number" min="0" max="100" step="1" value="50" style="width:35px;height:100%;text-align:center;border:none;outline:none;font-size:0.62rem;font-weight:700;color:#1e3a8a;background:transparent;padding:0;margin:0;line-height:1;appearance:none;-moz-appearance:textfield;-webkit-appearance:none;" /></div>
+                    <div id="zoom-percent-display" class="map-zoom-btn" style="font-size:0.62rem;font-weight:700;color:#1e3a8a;display:flex;align-items:center;justify-content:center;gap:0;border-radius:5px;box-shadow:none;padding:0;" title="Zoom (0–100) — yazıp Enter'a bas veya fareyle kaydır (5 adım)"><input id="zoom-num" type="number" min="0" max="100" step="1" value="10" style="width:35px;height:100%;text-align:center;border:none;outline:none;font-size:0.62rem;font-weight:700;color:#1e3a8a;background:transparent;padding:0;margin:0;line-height:1;appearance:none;-moz-appearance:textfield;-webkit-appearance:none;" /></div>
                 </div>
                 <button class="map-zoom-btn" id="zoom-in">+</button>
                 <button class="map-zoom-btn" id="zoom-out">-</button>
@@ -1519,7 +1650,7 @@
 
             <div class="map-bottom-left">
                 <div class="map-legend" id="map-legend-box" style="display:none;"></div>
-                <div id="sylvagis-watermark" style="opacity:1; font-size:0.78rem; font-weight:700; color:#1e3a8a; letter-spacing:0.04em; pointer-events:none; user-select:none; padding: 4px 9px; margin-top:6px; background-color: rgba(255,255,255,0.65); border-radius: 8px; display:inline-block; backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px);">
+                <div id="sylvagis-watermark" style="opacity:1; font-size:0.78rem; font-weight:700; color:#1e3a8a; letter-spacing:0.04em; pointer-events:none; user-select:none; padding: 4px 9px; margin-top:6px; background-color: rgba(255,255,255,0.65); border-radius: 8px; display:inline-block; align-self:flex-start; width:fit-content; backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px);">
                     🌲 SylvaGIS
                 </div>
             </div>
@@ -1552,7 +1683,7 @@
         <span data-i18n="sat_gallery">Uydu Görüntü Galerisi</span>
     </label>
 
-    <label class="option-item">
+    <label class="option-item" id="legend-toggle-row">
         <input type="checkbox" id="toggle-legend" checked>
         <span data-i18n="legend_lbl">Lejant</span>
     </label>
@@ -2469,28 +2600,29 @@
         });
 
         // ---------------------------------------------------------
-        // Zoom Yüzde Göstergesi (0–100)
-        // 0 = haritanın minimum zoom seviyesi, 100 = maksimum zoom seviyesi.
-        // Kullanıcı 0-100 arasında istediği değeri yazar → harita anında gider.
-        // Fare tekerleği ve +/- butonları da aynı 0-100 ölçeğini kullanır.
+        // Zoom Yüzde Göstergesi (0–100, 5'er adım)
+        // 0 = haritanın minimum zoom, 100 = maksimum zoom referansı.
+        // Fare tekerleği ve +/- butonları 5'er adım ilerler.
+        // Manuel giriş: herhangi bir sayı yazılıp Enter'a basılabilir;
+        // değer 0-100 aralığına sınırlanarak uygulanır.
         // ---------------------------------------------------------
-        var ZOOM_PCT_MAX = 20; // %100'e karşılık gelen Leaflet zoom referansı
+        var ZOOM_PCT_MAX  = 20;  // %100'e karşılık gelen Leaflet zoom referansı
+        var ZOOM_PCT_STEP = 5;   // tekerlek / ok adımı
+
         function _getMapMinZoom() {
             return (map.getMinZoom && isFinite(map.getMinZoom())) ? map.getMinZoom() : 0;
         }
         function _zoomToPercent(z) {
             var minZ = _getMapMinZoom();
-            var pct = Math.round(((z - minZ) / (ZOOM_PCT_MAX - minZ)) * 100);
-            return Math.max(0, Math.min(100, pct));
+            return Math.max(0, Math.min(100, Math.round(((z - minZ) / (ZOOM_PCT_MAX - minZ)) * 100)));
         }
         function _percentToZoom(pct) {
             var minZ = _getMapMinZoom();
             var maxZ = isFinite(map.getMaxZoom()) ? map.getMaxZoom() : ZOOM_PCT_MAX;
-            var z = Math.round(minZ + (pct / 100) * (ZOOM_PCT_MAX - minZ));
-            return Math.max(minZ, Math.min(maxZ, z));
+            return Math.max(minZ, Math.min(maxZ, Math.round(minZ + (pct / 100) * (ZOOM_PCT_MAX - minZ))));
         }
 
-        // _zoomFromInput: kullanıcı kutusundan tetiklenen setZoom sonrası
+        // _zoomFromInput: kullanıcı girişinden tetiklenen setZoom sonrası
         // zoomend olayının kutu değerini otomatik yuvarlamaması için bayrak.
         var _zoomFromInput = false;
 
@@ -2500,7 +2632,6 @@
             numEl.value = _zoomToPercent(map.getZoom());
         }
         map.on('zoomend', function() {
-            // Girişten tetiklenen zoom ise bayrak temizle, kutuya dokunma
             if (_zoomFromInput) { _zoomFromInput = false; return; }
             updateZoomPercentDisplay();
         });
@@ -2510,26 +2641,27 @@
         (function initZoomNumInput() {
             var numEl = document.getElementById('zoom-num');
             if (!numEl) return;
+
             function applyZoomFromInput() {
                 var pct = parseInt(numEl.value, 10);
                 if (isNaN(pct)) { updateZoomPercentDisplay(); return; }
                 pct = Math.max(0, Math.min(100, pct));
-                _zoomFromInput = true;          // zoomend sonrası kutuya dokunma
+                numEl.value = pct;
+                _zoomFromInput = true;
                 map.setZoom(_percentToZoom(pct));
-                numEl.value = pct;             // kullanıcının yazdığı tam değer korunur
             }
+
             numEl.addEventListener('keydown', function(e) {
-                if (e.key === 'Enter') { applyZoomFromInput(); numEl.blur(); }
+                if (e.key === 'Enter')  { applyZoomFromInput(); numEl.blur(); }
                 if (e.key === 'Escape') { updateZoomPercentDisplay(); numEl.blur(); }
             });
-            numEl.addEventListener('blur', applyZoomFromInput);
+            numEl.addEventListener('blur',  applyZoomFromInput);
             numEl.addEventListener('focus', function() { numEl.select(); });
             numEl.addEventListener('wheel', function(e) {
                 e.preventDefault();
-                var delta = e.deltaY < 0 ? 1 : -1;
                 var cur = parseInt(numEl.value, 10);
                 if (isNaN(cur)) cur = _zoomToPercent(map.getZoom());
-                numEl.value = Math.max(0, Math.min(100, cur + delta));
+                numEl.value = Math.max(0, Math.min(100, cur + (e.deltaY < 0 ? ZOOM_PCT_STEP : -ZOOM_PCT_STEP)));
                 applyZoomFromInput();
             }, { passive: false });
         })();
@@ -3450,6 +3582,11 @@ function selectRamp(name) {
                 btnC.style.borderColor = '#cbd5e1';
                 stretchedSettings.style.display = 'flex';
                 classifiedSettings.style.display = 'none';
+                 // Stretched modda grafik + istatistik alanını temizle
+                 var _svgW = document.getElementById('stats-chart-svg-wrap');
+                 var _tblW = document.getElementById('stats-chart-table');
+                 if (_svgW) _svgW.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:80px;color:#94a3b8;font-size:0.78rem;gap:6px;"><span>🗂️</span><span>' + (typeof t==="function"?(t('chart_classified_only')||'Grafikler yalnızca Classified modda kullanılabilir.'):'Grafikler yalnızca Classified modda kullanılabilir.') + '</span></div>';
+                 if (_tblW) _tblW.innerHTML = '';
             } else {
                 btnC.style.background = '#1e3a8a';
                 btnC.style.color = '#fff';
@@ -3536,41 +3673,54 @@ function selectRamp(name) {
         // Stretched mod min/max + renk rampasını GEE'ye göndererek tile URL'yi
         // yeniler (syncClassificationToGEE'nin sürekli/stretched karşılığı).
         function syncStretchedToGEE(minVal, maxVal) {
-            if (!currentLayer) return;
+            // Son analiz ROI'si tercih edilir; yoksa currentLayer'dan çıkar
+            var _roi = _lastAnalysisROI;
+            if (!_roi) {
+                if (!currentLayer) return;
+                _roi = _extractROIGeometry(currentLayer);
+                if (!_roi) return;
+            }
             var meta = getSelectedAnalysisMeta();
             if (!meta || meta.legendType !== 'stretched') return; // sadece sürekli indeks katmanları
 
-            var startInput    = document.getElementById('date-start');
-            var endInput      = document.getElementById('date-end');
-            var sensorRadio   = document.querySelector('.uydu-sensor-radio:checked');
             var viewModeEl    = document.getElementById('viewMode');
             var cloudSliderEl = document.getElementById('cloud-slider');
+            var sensorRadio   = document.querySelector('.uydu-sensor-radio:checked');
+            var startInput    = document.getElementById('date-start');
+            var endInput      = document.getElementById('date-end');
 
-            var _roi = _extractROIGeometry(currentLayer);
-            if (!_roi) return;
+            // Son analiz parametrelerini kullan (geçerli UI değerlerinden öncelikli)
+            var _p = _lastAnalysisParams || {};
+            var _satellite  = _p.satellite  || (sensorRadio ? sensorRadio.value : 's2-l2a');
+            var _startDate  = _p.startDate  || (startInput  ? startInput.value  : '');
+            var _endDate    = _p.endDate    || (endInput    ? endInput.value    : '');
+            var _maxCloud   = _p.maxCloud   != null ? _p.maxCloud : (cloudSliderEl ? parseInt(cloudSliderEl.value, 10) : 20);
+            var _clipMode   = _p.clipMode   || (viewModeEl ? viewModeEl.value : 'clip');
+            var _demSource  = _p.demSource  || 'SRTM';
 
             var selectedRampEl = document.getElementById('selectedRamp');
             var rampName = selectedRampEl ? (selectedRampEl.getAttribute('data-ramp') || 'black-white') : 'black-white';
             if (rampName === '__gee__') rampName = 'black-white';
-            var palette  = sampleRampColors(rampName, 6); // GEE paleti için 6 renkli örnek
-            if (typeof rampReversed !== 'undefined' && rampReversed) palette.reverse(); // Tersine çevrilmişse paleti de ters gönder
+            var palette  = sampleRampColors(rampName, 8); // GEE paleti için 8 renkli örnek (daha hassas geçiş)
+            if (typeof rampReversed !== 'undefined' && rampReversed) palette.reverse();
+            // GEE: palette renkleri # ön-eki olmadan gönderilmeli
+            palette = palette.map(function(c) { return c.replace(/^#/, ''); });
 
-            // 2. Lejant İşlemlerine Entegrasyon: renk paleti/veri yeniden
-            // hesaplanırken standart "🌲 SylvaGIS" yükleme ekranı gösterilir.
             showSylvaLoading();
 
-            fetch('http://127.0.0.1:5000/api/analyze', {
+            fetch(API_BASE + '/api/analyze', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     roi:       _roi,
-                    clipMode:  viewModeEl    ? viewModeEl.value : 'clip',
-                    startDate: startInput    ? startInput.value : '',
-                    endDate:   endInput      ? endInput.value   : '',
-                    satellite: sensorRadio   ? sensorRadio.value : 's2-l2a',
+                    clipMode:  _clipMode,
+                    startDate: _startDate,
+                    endDate:   _endDate,
+                    satellite: _satellite,
                     index:     meta.analysisName,
-                    maxCloud:  cloudSliderEl ? parseInt(cloudSliderEl.value, 10) : 20,
+                    maxCloud:  _maxCloud,
                     sceneId:   currentSceneId,
+                    demSource: _demSource,
                     palette:   palette,
                     min:       minVal,
                     max:       maxVal
@@ -3895,25 +4045,33 @@ function selectRamp(name) {
         // Sınıf renk/aralık bilgisini GEE'ye göndererek tile URL'yi yeniler
         // classes: [ { min, max, name, color }, ... ] — tam sınıf tanımları JSON olarak gönderilir
         function syncClassificationToGEE(classes) {
-            if (!currentLayer) return;
+            // Son analiz ROI'si tercih edilir; yoksa currentLayer'dan çıkar
+            var _roiCls = _lastAnalysisROI;
+            if (!_roiCls) {
+                if (!currentLayer) return;
+                _roiCls = _extractROIGeometry(currentLayer);
+                if (!_roiCls) return;
+            }
             var meta = getSelectedAnalysisMeta();
             if (!meta || meta.legendType === 'image') return;
 
-            var startInput    = document.getElementById('date-start');
-            var endInput      = document.getElementById('date-end');
-            var sensorRadio   = document.querySelector('.uydu-sensor-radio:checked');
             var viewModeEl    = document.getElementById('viewMode');
             var cloudSliderEl = document.getElementById('cloud-slider');
+            var sensorRadio   = document.querySelector('.uydu-sensor-radio:checked');
+            var startInput    = document.getElementById('date-start');
+            var endInput      = document.getElementById('date-end');
 
-            // Önceden burada FeatureCollection'ın yalnızca ilk feature'ı alınıyor,
-            // delikler (donut) ve diğer MultiPolygon parçaları sessizce atılıyordu.
-            // Artık tüm diğer çağrı noktalarıyla tutarlı şekilde _extractROIGeometry
-            // kullanılarak hiçbir parça/halka kaybedilmez.
-            var _roiCls = _extractROIGeometry(currentLayer);
-            if (!_roiCls) return;
+            // Son analiz parametrelerini kullan
+            var _p = _lastAnalysisParams || {};
+            var _satellite  = _p.satellite  || (sensorRadio ? sensorRadio.value : 's2-l2a');
+            var _startDate  = _p.startDate  || (startInput  ? startInput.value  : '');
+            var _endDate    = _p.endDate    || (endInput    ? endInput.value    : '');
+            var _maxCloud   = _p.maxCloud   != null ? _p.maxCloud : (cloudSliderEl ? parseInt(cloudSliderEl.value, 10) : 20);
+            var _clipMode   = _p.clipMode   || (viewModeEl ? viewModeEl.value : 'clip');
+            var _demSource  = _p.demSource  || 'SRTM';
 
-            // Sınıf renklerini palet dizisine çevir (küçükten büyüğe sıralı)
-            var palette = classes.map(function(c) { return c.color; });
+            // Sınıf renklerini palet dizisine çevir (GEE: # olmadan)
+            var palette = classes.map(function(c) { return (c.color || '#888888').replace(/^#/, ''); });
             var overallMin = classes[0].min;
             var overallMax = classes[classes.length - 1].max;
 
@@ -3922,22 +4080,21 @@ function selectRamp(name) {
                 return { min: c.min, max: c.max, color: c.color, label: c.name };
             });
 
-            // 2. Lejant İşlemlerine Entegrasyon: renk paleti/veri yeniden
-            // hesaplanırken standart "🌲 SylvaGIS" yükleme ekranı gösterilir.
             showSylvaLoading();
 
-            fetch('http://127.0.0.1:5000/api/analyze', {
+            fetch(API_BASE + '/api/analyze', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     roi:         _roiCls,
-                    clipMode:    viewModeEl    ? viewModeEl.value : 'clip',
-                    startDate:   startInput    ? startInput.value : '',
-                    endDate:     endInput      ? endInput.value   : '',
-                    satellite:   sensorRadio   ? sensorRadio.value : 's2-l2a',
+                    clipMode:    _clipMode,
+                    startDate:   _startDate,
+                    endDate:     _endDate,
+                    satellite:   _satellite,
                     index:       meta.analysisName,
-                    maxCloud:    cloudSliderEl ? parseInt(cloudSliderEl.value, 10) : 20,
+                    maxCloud:    _maxCloud,
                     sceneId:     currentSceneId,
+                    demSource:   _demSource,
                     palette:     palette,
                     min:         overallMin,
                     max:         overallMax,
@@ -3980,9 +4137,10 @@ function selectRamp(name) {
             var title = (titleEl && titleEl.value.trim()) ? escapeHtml(titleEl.value.trim()) : (_clTitleFallback[_sylvaLang] || 'Classified Data');
 
             var rowsHtml = '<div style="display:flex;flex-direction:column;gap:2px;margin-top:5px;">' +
-                classes.map(function (c) {
+                classes.map(function (c, i) {
+                    var isActive = (_classHighlightIndex === i);
                     return (
-                        '<div style="display:flex; align-items:center; gap:5px;">' +
+                        '<div class="class-highlight-target' + (isActive ? ' class-highlight-active' : '') + '" data-class-idx="' + i + '" style="display:flex; align-items:center; gap:5px; cursor:pointer;" title="' + t('highlight_class_hint', 'Haritada vurgulamak için tıklayın') + '">' +
                             '<span style="width:12px; height:12px; border-radius:2px; background:' + c.color +
                                 '; border:1px solid #cbd5e1; flex-shrink:0; display:inline-block;"></span>' +
                             '<span style="font-size:0.7rem;">' + escapeHtml(c.name) + ' (' + c.min + ' - ' + c.max + ')</span>' +
@@ -4225,6 +4383,28 @@ function selectRamp(name) {
             if (stretchedTitle) stretchedTitle.value = meta.analysisName;
             var classifiedTitle = document.getElementById('classified-title');
             if (classifiedTitle) classifiedTitle.value = meta.analysisName;
+
+            // ── Semboloji panelini doğru moda getir ─────────────────────────
+            // TOPO ve indeks analizler → Stretched; LULC vb. → Classified
+            if (typeof setClassificationType === 'function') {
+                setClassificationType(legendType === 'classified' ? 'classified' : 'stretched');
+            }
+
+            // ── Stretched aralığını meta değerleriyle ön-doldur ─────────────
+            // Bu sayede kullanıcı rampayı seçip "Lejantı Uygula"ya basınca
+            // doğru min/max (ör. DEM: 0–3000, Eğim: 0–60) sunucuya gönderilir.
+            if (legendType !== 'classified') {
+                var _sMinEl = document.getElementById('stretched-min');
+                var _sMaxEl = document.getElementById('stretched-max');
+                if (_sMinEl && meta.legendMin !== undefined) {
+                    var _pMin = parseFloat(meta.legendMin);
+                    if (!isNaN(_pMin)) _sMinEl.value = _pMin;
+                }
+                if (_sMaxEl && meta.legendMax !== undefined) {
+                    var _pMax = parseFloat(meta.legendMax);
+                    if (!isNaN(_pMax)) _sMaxEl.value = _pMax;
+                }
+            }
         }
 
         // Tarih aralığı + bulutluluk filtresine "uyan" örnek sahneler üretir.
@@ -4422,6 +4602,8 @@ function selectRamp(name) {
 
         // "🚀 Analizi Çalıştır" butonu
         var _geeLayer = null; // Haritaya eklenen GEE tile katmanı (bir öncekini kaldırmak için)
+        var _lastAnalysisROI = null;    // Son analizin AOI geometrisi — syncLegend için hafızada tutulur
+        var _lastAnalysisParams = {};   // Son analizin tam parametreleri (satellite, dates, demSource…)
         // Galeriden seçilen sahnenin GEE system:index'i. null ise "tarih aralığı medyanı"
         // kullanılır. Sınıflandırma/Stretched senkronizasyonu sırasında bu ID korunarak
         // gönderilir; aksi halde renk/aralık değişince sahne sessizce medyana döner.
@@ -4507,6 +4689,18 @@ function selectRamp(name) {
                 return;
             }
 
+            // ── Son analiz parametrelerini sakla (Lejant senkronizasyonu için) ──
+            _lastAnalysisROI = _roi;
+            var _demSrcRadioNow = document.querySelector('input[name="dem-source"]:checked');
+            _lastAnalysisParams = {
+                satellite:  satellite,
+                startDate:  startInput ? (startInput.value || '') : '',
+                endDate:    endInput   ? (endInput.value   || '') : '',
+                maxCloud:   maxCloud,
+                clipMode:   clipMode,
+                demSource:  _demSrcRadioNow ? _demSrcRadioNow.value : 'SRTM'
+            };
+
             // Yükleniyor durumu
             var runBtn = document.getElementById('btn-run-analysis');
             if (runBtn) { runBtn.disabled = true; runBtn.textContent = t('running'); }
@@ -4516,6 +4710,8 @@ function selectRamp(name) {
             // Lejantı varsayılan konumuna ve boyutuna sıfırla (her yeni analiz
             // lejantın aynı sol-alt konumdan ve orijinal boyuttan başlamasını sağlar)
             if (typeof window._resetLegendPosition === 'function') window._resetLegendPosition();
+            // Bilgi Kutusunu da varsayılan konumuna ve boyutuna sıfırla
+            if (typeof window._resetInfoBoxPosition === 'function') window._resetInfoBoxPosition();
 
             renderAnalysisLegend(meta);
 
@@ -4530,8 +4726,13 @@ function selectRamp(name) {
                 maxCloud:  maxCloud,
                 demSource: demSourceRadio ? demSourceRadio.value : 'SRTM',
             };
+            // Sınıf vurgulama (highlight) özelliği bu payload'ı yeniden kullanır —
+            // aynı ROI/tarih/uydu parametreleriyle tek bir sınıfa maskelenmiş
+            // ayrı bir tile katmanı istenebilsin diye saklanıyor.
+            window._lastAnalyzePayload = analyzePayload;
+            _clearClassHighlight();
 
-            fetch('http://127.0.0.1:5000/api/analyze', {
+            fetch(API_BASE + '/api/analyze', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(analyzePayload)
@@ -4583,6 +4784,30 @@ function selectRamp(name) {
                 // reduceRegion minMax) ile lejantı ve stretched giriş kutularını güncelle
                 if (data.realStats) {
                     applyRealStatsToLegendUI(data.realStats);
+                    // 🛠️ BUG FİX: applyRealStatsToLegendUI() currentClassRangeMin/Max'ı
+                    // AOI'nin GERÇEK min/max'ına günceller ama "Sınıflandırılmış" modda
+                    // sınıf satırları (buildClassRows) daha önce (analiz seçilir seçilmez,
+                    // statik data-legend-min/max ile) kurulduğu için hiç yeniden kurulmuyordu.
+                    // Sonuç: farklı bir AOI'de tekrar analiz çalıştırılsa bile lejanttaki
+                    // sınıf aralıkları (örn. "0–3000 m") hep AYNI/statik kalıyor, AOI'nin
+                    // gerçek yükseklik aralığını hiç yansıtmıyordu. Burada sınıf satırlarını
+                    // güncel gerçek aralıkla yeniden kurup haritayı yeniden boyuyoruz.
+                    //
+                    // 🛠️ BUG FİX: LULC ailesi (Dynamic World / ESA / MODIS / CORINE) kendi
+                    // özel lejant+grafik motorunu kullanır (renderLulcLegendAndChart, aşağıda
+                    // çağrılıyor) — legendType'ı da 'classified' olduğu için bu blok LULC
+                    // analizlerinde de tetikleniyor, kullanıcının "Sınıflandırılmış Veri"
+                    // panelindeki VARSAYILAN tek satırlık "Class 1" (0-100 aralığı, tam AOI)
+                    // sahte dağılımını applyClassificationToMap() üzerinden pasta/sütun
+                    // grafiğe VE tabloya yazıyordu; ayrıca senkron GEE isteği geç dönünce bu
+                    // sahte veri, LULC'nin gerçek grafiğinin ÜZERİNE geç yazılıyordu. Bu yüzden
+                    // ekranda gerçek sınıf yüzdeleri yerine "Class 1 / %100" görünüyordu.
+                    // Bu blok artık SADECE kullanıcının elle kurduğu Sınıflandırılmış Veri
+                    // modunda (LULC olmayan analizler) çalışır.
+                    if (currentClassificationType === 'classified' && !isLulcAnalysis(meta.analysisName)) {
+                        buildClassRows(parseInt(classCountSelect.value, 10) || 1);
+                        applyClassificationToMap();
+                    }
                 }
                 // Sunucudan gelen gerçek vis parametreleriyle lejant renk çubuğunu
                 // ve selectedRamp önizlemesini senkronize et. (Issue-3 fix)
@@ -4603,18 +4828,18 @@ function selectRamp(name) {
                         var rampBar = legendBox2.querySelector('.color-ramp');
                         if (rampBar) rampBar.style.background = visCss;
                     }
-                    if (data.visMin !== undefined && data.visMin !== null) {
-                        var smEl = document.getElementById('stretched-min');
-                        if (smEl && !smEl._userEdited) smEl.value = parseFloat(data.visMin).toFixed(4);
-                        var lMinSpan = document.querySelector('.map-legend .legend-min-label');
-                        if (lMinSpan) lMinSpan.textContent = parseFloat(data.visMin).toFixed(3);
-                    }
-                    if (data.visMax !== undefined && data.visMax !== null) {
-                        var sxEl = document.getElementById('stretched-max');
-                        if (sxEl && !sxEl._userEdited) sxEl.value = parseFloat(data.visMax).toFixed(4);
-                        var lMaxSpan = document.querySelector('.map-legend .legend-max-label');
-                        if (lMaxSpan) lMaxSpan.textContent = parseFloat(data.visMax).toFixed(3);
-                    }
+                    // 🛠️ BUG FİX: Burada data.visMin/data.visMax (haritadaki renk
+                    // germe/kontrast için kullanılan, bazı AOI'lerde persentil hesabı
+                    // GEE tarafında sağlıksız/varsayılana düşebilen değer) lejant
+                    // kutularını EZİYORDU — applyRealStatsToLegendUI() az önce
+                    // data.realStats (gerçek reduceRegion min/max, HER ZAMAN doğru
+                    // ve AOI'ye özgü) ile doğru değerleri yazmışken, bu blok hemen
+                    // ardından "min 0 / max 3000" gibi sabit/varsayılan bir persentil
+                    // germe değeriyle üzerine yazıyordu — kullanıcı ekranda hep aynı
+                    // sabit sayıları görüyordu. Artık lejant/stretched kutuları SADECE
+                    // gerçek istatistiklerden (realStats) besleniyor; visMin/visMax
+                    // yalnızca haritadaki renk kontrastı için kullanılır, lejant
+                    // metnini bir daha ezmez.
                 }
 
                 // LULC / TOPO / SAR statik veri setlerinde sahne seçici yerine
@@ -4848,6 +5073,33 @@ function selectRamp(name) {
             }
         };
 
+        // ── Bilgi Kutusu Başlık i18n Haritası ─────────────────────────────────
+        // Her TOPO analizi için: mevcut çeviri anahtarı + emoji öneki.
+        // renderDatasetInfoCard() bu tabloyu kullanarak başlığı seçilen dilde gösterir.
+        var _DATASET_INFO_TITLE_KEYS = {
+            'TOPO':              { key: 'topo_dem_label',           emoji: '⛰️ ' },
+            'TOPO_DEM':          { key: 'topo_dem_label',           emoji: '🏔️ ' },
+            'TOPO_SLOPE':        { key: 'topo_slope_label',         emoji: '📐 ' },
+            'TOPO_ASPECT':       { key: 'topo_aspect_label',        emoji: '🧭 ' },
+            'TOPO_HILLSHADE':    { key: 'topo_hillshade_label',     emoji: '🌗 ' },
+            'TOPO_RELIEF':       { key: 'topo_relief_label',        emoji: '🗻 ' },
+            'TOPO_TPI':          { key: 'topo_item_tpi',            emoji: '⛰️ ' },
+            'TOPO_TRI':          { key: 'topo_item_tri',            emoji: '🪨 ' },
+            'TOPO_ROUGHNESS':    { key: 'topo_item_roughness',      emoji: '〰️ ' },
+            'TOPO_CURVATURE':    { key: 'topo_item_curvature',      emoji: '〰️ ' },
+            'TOPO_PLAN_CURV':    { key: 'topo_item_plan_curv',      emoji: '〰️ ' },
+            'TOPO_PROFILE_CURV': { key: 'topo_item_profile_curv',   emoji: '〰️ ' },
+            'TOPO_FLOWDIR':      { key: 'topo_item_flowdir',        emoji: '➡️ ' },
+            'TOPO_FLOWACC':      { key: 'topo_item_flowacc',        emoji: '🌊 ' },
+            'TOPO_STREAM':       { key: 'topo_item_stream',         emoji: '🏞️ ' },
+            'TOPO_TWI':          { key: 'topo_item_twi',            emoji: '💧 ' },
+            'TOPO_SPI':          { key: 'topo_item_spi',            emoji: '⚡ ' },
+            'TOPO_STI':          { key: 'topo_item_sti',            emoji: '🏜️ ' },
+            'TOPO_HILLSHADE_MULTI': { key: 'topo_item_hillshade_multi', emoji: '🌗 ' },
+            'TOPO_SOLAR':        { key: 'topo_item_solar',          emoji: '☀️ ' },
+            'TOPO_SHADOW':       { key: 'topo_item_shadow',         emoji: '🌑 ' }
+        };
+
         // ── LULC sınıf tanımları — kod (sunucudan dönen histogram anahtarı),
         // Türkçe isim ve resmi renk paleti. Backend'deki sıra/renk ile birebir
         // eşleşir (bkz. server.py build_result_image → LULC / LULC_ESA).
@@ -4970,9 +5222,10 @@ function selectRamp(name) {
             };
             var title = _lulcTitles[meta.analysisName] || _lulcBase;
 
-            var rowsHtml = presentDefs.map(function (d) {
+            var rowsHtml = presentDefs.map(function (d, i) {
                 var label = (d.key ? (t(d.key) || d.label) : d.label);
-                return '<div style="display:flex;align-items:center;gap:5px;margin-top:3px;">' +
+                var isActive = (_classHighlightIndex === i);
+                return '<div class="class-highlight-target' + (isActive ? ' class-highlight-active' : '') + '" data-class-idx="' + i + '" style="display:flex;align-items:center;gap:5px;margin-top:3px;cursor:pointer;" title="' + t('highlight_class_hint', 'Haritada vurgulamak için tıklayın') + '">' +
                     '<span style="width:12px;height:12px;border-radius:2px;background:' + d.color +
                         ';border:1px solid #cbd5e1;flex-shrink:0;display:inline-block;"></span>' +
                     '<span style="font-size:0.7rem;">' + escapeHtml(label) + '</span>' +
@@ -5013,8 +5266,14 @@ function selectRamp(name) {
                     + '</tr>';
             }).join('');
 
+            // Başlık: i18n haritasında kayıtlıysa seçilen dilde göster, yoksa orijinal title
+            var _itk = _DATASET_INFO_TITLE_KEYS && _DATASET_INFO_TITLE_KEYS[key];
+            var _infoTitle = (_itk && typeof t === 'function')
+                ? (_itk.emoji + t(_itk.key))
+                : info.title;
+
             box.innerHTML =
-                '<div style="font-size:0.77rem;font-weight:700;color:#0369a1;margin-bottom:5px;">' + info.title + '</div>'
+                '<div style="font-size:0.77rem;font-weight:700;color:#0369a1;margin-bottom:5px;">' + _infoTitle + '</div>'
                 + '<table style="border-collapse:collapse;width:100%;table-layout:fixed;"><tbody>' + rows + '</tbody></table>'
                 + '<div style="margin-top:5px;font-size:0.65rem;color:#94a3b8;border-top:1px solid #bae6fd;padding-top:4px;">' + t('ib_no_timeseries') + '</div>';
 
@@ -5160,7 +5419,7 @@ function selectRamp(name) {
             if (!galleryEl) return;
             galleryEl.innerHTML = '<div style="padding:6px 10px;font-size:0.75rem;color:#94a3b8;">⏳ Sahneler yükleniyor…</div>';
 
-            fetch('http://127.0.0.1:5000/api/get-scenes', {
+            fetch(API_BASE + '/api/get-scenes', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -5228,7 +5487,7 @@ function selectRamp(name) {
             // çekilirken standart "🌲 SylvaGIS" yükleme ekranı gösterilir.
             showSylvaLoading();
 
-            fetch('http://127.0.0.1:5000/api/analyze', {
+            fetch(API_BASE + '/api/analyze', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -5273,6 +5532,13 @@ function selectRamp(name) {
                 }
                 if (data.realStats) {
                     applyRealStatsToLegendUI(data.realStats);
+                    // 🛠️ BUG FİX: bkz. yukarıdaki analyze() akışındaki aynı düzeltme —
+                    // sınıflandırılmış modda sınıf satırları AOI'nin gerçek aralığına
+                    // göre yeniden kurulmalı, yoksa hep eski/statik aralıkta kalır.
+                    if (currentClassificationType === 'classified') {
+                        buildClassRows(parseInt(classCountSelect.value, 10) || 1);
+                        applyClassificationToMap();
+                    }
                     // Stretched modda renk skalasını yeni min/max ile yeniden boyar
                     var mn = parseFloat(data.realStats.min);
                     var mx = parseFloat(data.realStats.max);
@@ -5336,7 +5602,7 @@ function selectRamp(name) {
             })();
             galleryEl.innerHTML = '<div style="padding:6px 10px;font-size:0.75rem;color:#94a3b8;">' + t('scan_gallery') + '</div>';
 
-            fetch('http://127.0.0.1:5000/api/rgb-scenes', {
+            fetch(API_BASE + '/api/rgb-scenes', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -5465,7 +5731,7 @@ function selectRamp(name) {
 
             showSylvaLoading();
 
-            fetch('http://127.0.0.1:5000/api/analyze', {
+            fetch(API_BASE + '/api/analyze', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -5554,6 +5820,8 @@ function selectRamp(name) {
         // ── Ham histogram tablosunu #stats-chart-table'a yazar ──────
         // stats: sunucudan gelen tam nesne  { value: { "0.12": 34, ... } }
         function updateStatsTable(stats) {
+             // Değer/Piksel/% tablosu yalnızca Classified modunda aktif
+             if (typeof currentClassificationType !== 'undefined' && currentClassificationType !== 'classified') return;
             var tableWrap = document.getElementById('stats-chart-table');
             if (!tableWrap) return;
             var hist = (stats && stats.value) ? stats.value : null;
@@ -5791,6 +6059,7 @@ function selectRamp(name) {
         // ── Histogram → 7 bin → bar/pie SVG grafiği ─────────────────
         // stats: sunucudan gelen tam nesne  { value: { ... } }
         function renderChart(stats, meta) {
+             if (typeof currentClassificationType !== 'undefined' && currentClassificationType !== 'classified') return;
             var hist = (stats && stats.value) ? stats.value : null;
             if (!hist) return;
             var keys = Object.keys(hist).map(Number).sort(function(a, b) { return a - b; });
@@ -6004,6 +6273,84 @@ function selectRamp(name) {
         var currentChartType = 'bar';
         var lastChartData = null;
 
+        // ── Sınıf Vurgulama (Highlight) ─────────────────────────────
+        // Lejant satırı / grafik dilimi / tablo satırından herhangi birine
+        // tıklanınca, o sınıfa ait alanlar haritada ayrı bir maskeli tile
+        // katmanıyla parlak sarı renkte vurgulanır; tekrar tıklanınca kaldırılır.
+        var _classHighlightLayer = null;
+        var _classHighlightIndex = null;
+
+        function _clearClassHighlight() {
+            if (_classHighlightLayer) {
+                try { map.removeLayer(_classHighlightLayer); } catch (e) {}
+                _classHighlightLayer = null;
+            }
+            _classHighlightIndex = null;
+            _updateHighlightSelectionUI();
+        }
+
+        // Lejant/grafik/tablo üzerindeki aktif seçim görünümünü senkronize eder
+        function _updateHighlightSelectionUI() {
+            document.querySelectorAll('[data-class-idx]').forEach(function (el) {
+                var idx = parseInt(el.getAttribute('data-class-idx'), 10);
+                var active = (_classHighlightIndex !== null && idx === _classHighlightIndex);
+                el.classList.toggle('class-highlight-active', active);
+            });
+        }
+
+        function _toggleClassHighlight(idx) {
+            if (!lastChartData || !lastChartData.classes || !lastChartData.classes[idx]) return;
+            if (!window._lastAnalyzePayload) return;
+
+            // Aynı sınıfa tekrar tıklanırsa vurgulamayı kaldır
+            if (_classHighlightIndex === idx) {
+                _clearClassHighlight();
+                return;
+            }
+
+            var cls = lastChartData.classes[idx];
+            var payload = Object.assign({}, window._lastAnalyzePayload, {
+                classMin: cls.min,
+                classMax: cls.max
+            });
+
+            _classHighlightIndex = idx;
+            _updateHighlightSelectionUI();
+
+            fetch(API_BASE + '/api/highlight-class', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                // Kullanıcı vurgulama isteği yanıtı gelmeden önce seçimi
+                // değiştirmiş/kaldırmışsa (idx artık eski), sonucu uygulama.
+                if (_classHighlightIndex !== idx) return;
+                if (!data.success) {
+                    showAnalysisToast(t('server_error') + '(' + (data.error || '?') + ')', 'error');
+                    return;
+                }
+                if (_classHighlightLayer) { try { map.removeLayer(_classHighlightLayer); } catch (e) {} }
+                _classHighlightLayer = L.tileLayer(data.tileUrl, { opacity: 0.95, zIndex: 20, crossOrigin: true }).addTo(map);
+            })
+            .catch(function (err) {
+                if (_classHighlightIndex === idx) _classHighlightIndex = null;
+                _updateHighlightSelectionUI();
+                showAnalysisToast(t('server_error') + '(' + err.message + ')', 'error');
+            });
+        }
+
+        // Lejant/tablo/grafik satırlarına ortak tıklama davranışı eklemek için
+        // event delegation — dinamik olarak yeniden çizilen elemanlar için de çalışır.
+        document.addEventListener('click', function (e) {
+            var el = e.target.closest ? e.target.closest('[data-class-idx]') : null;
+            if (!el) return;
+            var idx = parseInt(el.getAttribute('data-class-idx'), 10);
+            if (isNaN(idx)) return;
+            _toggleClassHighlight(idx);
+        });
+
         // Sınıfların aralık ortası, mevcut simüle edilmiş ortalama değere ne kadar
         // yakınsa o sınıfa orantılı olarak daha fazla "piksel" ağırlığı verir.
         function generateMockClassDistribution(classes, meanValue) {
@@ -6061,8 +6408,11 @@ function selectRamp(name) {
                 var barH = (pct / maxPct) * (h - padding - 16);
                 var x = padding + i * barW + 4;
                 var y = h - padding - barH;
-                return '<rect x="' + x + '" y="' + y + '" width="' + Math.max(barW - 8, 2) + '" height="' + Math.max(barH, 1) + '" fill="' + c.color + '" rx="2"></rect>' +
-                    '<text x="' + (x + Math.max(barW - 8, 2) / 2) + '" y="' + (y - 4) + '" font-size="9" text-anchor="middle" fill="#334155">' + pct.toFixed(1) + '%</text>';
+                var isActive = (_classHighlightIndex === i);
+                return '<g class="class-highlight-target' + (isActive ? ' class-highlight-active' : '') + '" data-class-idx="' + i + '" style="cursor:pointer;">' +
+                    '<rect x="' + x + '" y="' + y + '" width="' + Math.max(barW - 8, 2) + '" height="' + Math.max(barH, 1) + '" fill="' + c.color + '" rx="2" stroke="' + (isActive ? '#1e3a8a' : 'none') + '" stroke-width="2"></rect>' +
+                    '<text x="' + (x + Math.max(barW - 8, 2) / 2) + '" y="' + (y - 4) + '" font-size="9" text-anchor="middle" fill="#334155">' + pct.toFixed(1) + '%</text>' +
+                    '</g>';
             }).join('');
             var axisY = h - padding;
             return '<svg viewBox="0 0 ' + w + ' ' + h + '" width="100%" height="150" style="display:block;">' +
@@ -6081,7 +6431,8 @@ function selectRamp(name) {
                 var endAngle = startAngle + angle;
                 var path = describeArc(cx, cy, r, startAngle, Math.min(endAngle, startAngle + 359.999));
                 startAngle = endAngle;
-                return '<path d="' + path + '" fill="' + c.color + '" stroke="#fff" stroke-width="1"></path>';
+                var isActive = (_classHighlightIndex === i);
+                return '<path d="' + path + '" fill="' + c.color + '" stroke="' + (isActive ? '#1e3a8a' : '#fff') + '" stroke-width="' + (isActive ? 3 : 1) + '" data-class-idx="' + i + '" class="class-highlight-target' + (isActive ? ' class-highlight-active' : '') + '" style="cursor:pointer;"></path>';
             }).join('');
             return '<svg viewBox="0 0 ' + size + ' ' + size + '" width="100%" height="150" style="display:block;margin:0 auto;">' + slices + '</svg>';
         }
@@ -6090,7 +6441,8 @@ function selectRamp(name) {
             var rows = data.classes.map(function (c, i) {
                 var pct = data.percentages[i];
                 var ha = (data.areaHa !== null && data.areaHa !== undefined) ? (data.areaHa * pct / 100) : null;
-                return '<tr>' +
+                var isActive = (_classHighlightIndex === i);
+                return '<tr class="class-highlight-target' + (isActive ? ' class-highlight-active' : '') + '" data-class-idx="' + i + '" style="cursor:pointer;" title="' + t('highlight_class_hint', 'Haritada vurgulamak için tıklayın') + '">' +
                     '<td style="padding:3px 4px;"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:' + c.color + ';margin-right:4px;vertical-align:middle;"></span>' + escapeHtml(c.name) + '</td>' +
                     '<td style="padding:3px 4px;text-align:right;">' + pct.toFixed(1) + '%</td>' +
                     '<td style="padding:3px 4px;text-align:right;">' + (ha !== null ? ha.toLocaleString('tr-TR', { maximumFractionDigits: 1 }) + ' ha' : '—') + '</td>' +
@@ -6932,6 +7284,27 @@ function selectRamp(name) {
                 _makeResizable(boxEl, 140, 50);
                 mapInner.appendChild(boxEl);
             }
+
+            // Bilgi Kutusunu varsayılan (sol-üst) konumuna ve orijinal boyutuna sıfırlar.
+            // "Analizi Çalıştır" başlarken çağrılır; böylece her yeni analiz
+            // bilgi kutusunu aynı boyut ve konumdan başlatır.
+            window._resetInfoBoxPosition = function() {
+                var topLeftContainer = document.querySelector('.map-top-left-infobox');
+                if (!topLeftContainer) return;
+                boxEl.classList.remove('detached');
+                boxEl.style.position = '';
+                boxEl.style.left     = '';
+                boxEl.style.top      = '';
+                boxEl.style.width    = '';
+                boxEl.style.margin   = '';
+                boxEl.style.zIndex   = '';
+                boxEl.style.cursor   = '';
+                boxEl.style.minWidth = '';
+                boxEl.style.height   = '';
+                boxEl._lockedMinW    = 0;
+                detached = false;
+                topLeftContainer.appendChild(boxEl);
+            };
 
             boxEl.addEventListener('mousedown', function(e) {
                 if (!pointerModeActive) return;
@@ -8385,424 +8758,526 @@ function selectRamp(name) {
             // --- Ekran elemanlarını (lejant, kuzey oku, ölçek) canvas'a çiz ---
             function drawOverlaysOnCanvas(ctx, mapEl, scale) {
                 // ── Lejant: gerçek içerik canvas'a native olarak çizilir ──────
-                var legend = document.getElementById('map-legend-box');
-                if (legend && legend.style.display !== 'none' && legend.getBoundingClientRect().width > 0) {
-                    var lRect = legend.getBoundingClientRect();
-                    // Konum referansı: canvas her zaman mapEl (#map) boyutlarını temsil eder.
-                    // Lejant nerede olursa olsun (detach/normal), viewport koordinatları
-                    // mapEl'e göre hesaplanır — bu canvas piksel koordinatlarıyla örtüşür.
-                    var mRect = mapEl.getBoundingClientRect();
-                    ctx.save();
-
-                    var lx = (lRect.left - mRect.left) * scale;
-                    var ly = (lRect.top  - mRect.top)  * scale;
-                    var lw = lRect.width  * scale;
-
-                    // İçeriği ölç (sınıf satırları + başlık + gradyan)
-                    var legendItems = [];
-                    var titleText = '';
-                    var bEl = legend.querySelector('b');
-                    if (bEl) titleText = bEl.textContent;
-
-                    // Classified satırlar mı yoksa stretched gradyan mı?
-                    var classRows = legend.querySelectorAll('div[style*="display:flex"]');
-                    var isClassified = classRows.length > 0 && legend.querySelector('[style*="border-radius:2px"]');
-                    var realStatsText = '';
-                    var realStatsRow = legend.querySelector('.real-stats-row');
-                    if (realStatsRow) realStatsText = realStatsRow.textContent;
-
-                    // WYSIWYG: genişlik doğrudan DOM'dan alındı (lw = lRect.width * scale), auto-expand yok.
-
-                    // Uydu görüntüsü modunda gradyan bar ve sayısal değerler çıktıda gizlenir
-                    var _exportMeta = (typeof getSelectedAnalysisMeta === 'function') ? getSelectedAnalysisMeta() : null;
-                    var _isImageLegend = _exportMeta && _exportMeta.legendType === 'image';
-
-                    // Uydu görüntüsü lejantındaki detay satırlarını DOM'dan oku
-                    var imageDetailRows = [];
-                    if (_isImageLegend) {
-                        var _detailDivs = legend.querySelectorAll('div[style*="justify-content:space-between"]');
-                        _detailDivs.forEach(function(div) {
-                            var sp2 = div.querySelectorAll('span');
-                            if (sp2.length >= 2) {
-                                imageDetailRows.push({
-                                    label: sp2[0].textContent.trim(),
-                                    value: sp2[sp2.length - 1].textContent.trim()
-                                });
-                            }
-                        });
-                    }
-
-                    // WYSIWYG: boyutları doğrudan DOM'dan al (sürükleme / resize sonrası birebir)
-                    var lineH = 13 * scale;
-                    var pad   = 8 * scale;
-                    // Yükseklik: getBoundingClientRect().height → kullanıcının resize ettiği değeri yansıtır
-                    var lh = lRect.height * scale;
-
-                    // Arka plan kutu
-                    ctx.fillStyle = 'rgba(255,255,255,0.94)';
-                    ctx.strokeStyle = '#cbd5e1';
-                    ctx.lineWidth = 1 * scale;
-                    ctx.beginPath();
-                    ctx.roundRect(lx, ly, lw, lh, 5 * scale);
-                    ctx.fill();
-                    ctx.stroke();
-
-                    // Lejant içeriği kutu dışına taşmasın:
-                    // kutunun iç sınırını canvas kırpma bölgesi olarak ayarla.
-                    ctx.beginPath();
-                    if (ctx.roundRect) ctx.roundRect(lx + 1 * scale, ly + 1 * scale, lw - 2 * scale, lh - 2 * scale, 4 * scale);
-                    else ctx.rect(lx + 1 * scale, ly + 1 * scale, lw - 2 * scale, lh - 2 * scale);
-                    ctx.clip();
-
-                    // Başlık — kelime kırmalı çizim:
-                    // canvas fillText otomatik satır kırmaz; burada CSS word-wrap davranışı
-                    // taklit edilir. Kullanılabilir genişlik (lw - 2*pad) ölçülerek
-                    // başlık gerektiği kadar satıra bölünür.
-                    ctx.fillStyle = '#1e3a8a';
-                    ctx.font = 'bold ' + (11 * scale) + 'px Segoe UI, sans-serif';
-                    ctx.textAlign = 'left';
-                    var _titleMaxW = lw - pad * 2;
-                    var _titleLines = (function(text, maxW) {
-                        var words = text.split(' ');
-                        var lines = [], cur = '';
-                        for (var wi = 0; wi < words.length; wi++) {
-                            var test = cur ? (cur + ' ' + words[wi]) : words[wi];
-                            if (ctx.measureText(test).width > maxW && cur) {
-                                lines.push(cur);
-                                cur = words[wi];
-                            } else { cur = test; }
-                        }
-                        if (cur) lines.push(cur);
-                        return lines.length ? lines : [text];
-                    })(titleText, _titleMaxW);
-                    _titleLines.forEach(function(tl, ti) {
-                        ctx.fillText(tl, lx + pad, ly + pad + lineH * 0.85 + ti * lineH);
-                    });
-
-                    var curY = ly + pad + _titleLines.length * lineH + 4 * scale;
-
-                    if (isClassified) {
-                        // Classified mod: renk kutusu + etiket satırları
-                        classRows.forEach(function(row) {
-                            var colorEl = row.querySelector('[style*="border-radius:2px"]');
-                            var labelEl = row.querySelector('span:last-child');
-                            if (!colorEl || !labelEl) return;
-                            var bg = colorEl.style.background || '#999';
-                            var label = labelEl.textContent;
-                            // Renk kutusu
-                            ctx.fillStyle = bg;
-                            ctx.fillRect(lx + pad, curY, 10 * scale, 10 * scale);
-                            ctx.strokeStyle = 'rgba(0,0,0,0.15)';
-                            ctx.lineWidth = 0.5 * scale;
-                            ctx.strokeRect(lx + pad, curY, 10 * scale, 10 * scale);
-                            // Etiket — tam metin, kesme yok
-                            ctx.fillStyle = '#334155';
-                            ctx.font = (9 * scale) + 'px Segoe UI, sans-serif';
-                            ctx.textAlign = 'left';
-                            ctx.fillText(label, lx + pad + 13 * scale, curY + 9 * scale);
-                            curY += lineH + 2 * scale;
-                        });
-                    } else if (_isImageLegend) {
-                        // Uydu görüntüsü lejantı: tarih + separator + detay satırları
-                        if (realStatsText) {
-                            ctx.fillStyle = '#475569';
-                            ctx.font = (8.5 * scale) + 'px Segoe UI, sans-serif';
-                            ctx.textAlign = 'left';
-                            ctx.fillText(realStatsText, lx + pad, curY + 8.5 * scale);
-                            curY += lineH + 2 * scale;
-                        }
-                        if (imageDetailRows.length > 0) {
-                            // Yatay ayırıcı çizgi
-                            ctx.strokeStyle = '#e2e8f0';
-                            ctx.lineWidth = 0.5 * scale;
-                            ctx.beginPath();
-                            ctx.moveTo(lx + pad, curY);
-                            ctx.lineTo(lx + lw - pad, curY);
-                            ctx.stroke();
-                            curY += lineH;
-                            // Detay satırları: etiket solda, değer sağda
-                            imageDetailRows.forEach(function(item) {
-                                ctx.fillStyle = '#64748b';
-                                ctx.font = (8.5 * scale) + 'px Segoe UI, sans-serif';
-                                ctx.textAlign = 'left';
-                                ctx.fillText(item.label, lx + pad, curY + 8.5 * scale);
-                                ctx.fillStyle = '#1e293b';
-                                ctx.font = 'bold ' + (8.5 * scale) + 'px Segoe UI, sans-serif';
-                                ctx.textAlign = 'right';
-                                ctx.fillText(item.value, lx + lw - pad, curY + 8.5 * scale);
-                                curY += lineH + 2 * scale;
+                 // Lejant: html2canvas yolunda ayrı h2c ile yakalanır (captureLegendOverlay).
+                 // Fallback (leaflet-image) yolunda burada elle çizilir.
+                 // Lejant ve bilgi kutusu her zaman native canvas 2D ile çizilir.
+                 // html2canvas bağlamından bağımsız garantili beyaz arka plan için
+                 // captureLegendOverlay / captureInfoBoxOverlay artık kullanılmıyor.
+                 {
+                    var legend = document.getElementById('map-legend-box');
+                    if (legend && legend.style.display !== 'none' && legend.getBoundingClientRect().width > 0) {
+                        var lRect = legend.getBoundingClientRect();
+                        // Konum referansı: canvas her zaman mapEl (#map) boyutlarını temsil eder.
+                        // Lejant nerede olursa olsun (detach/normal), viewport koordinatları
+                        // mapEl'e göre hesaplanır — bu canvas piksel koordinatlarıyla örtüşür.
+                        var mRect = mapEl.getBoundingClientRect();
+                        ctx.save();
+    
+                        var lx = (lRect.left - mRect.left) * scale;
+                        var ly = (lRect.top  - mRect.top)  * scale;
+                        var lw = lRect.width  * scale;
+    
+                        // İçeriği ölç (sınıf satırları + başlık + gradyan)
+                        var legendItems = [];
+                        var titleText = '';
+                        var bEl = legend.querySelector('b');
+                        if (bEl) titleText = bEl.textContent;
+    
+                        // Classified satırlar mı yoksa stretched gradyan mı?
+                        var classRows = legend.querySelectorAll('div[style*="align-items:center"]') // FIX: yalnızca satır div;
+                        var isClassified = classRows.length > 0 && legend.querySelector('[style*="border-radius:2px"]');
+                        var realStatsText = '';
+                        var realStatsRow = legend.querySelector('.real-stats-row');
+                        if (realStatsRow) realStatsText = realStatsRow.textContent;
+    
+                        // WYSIWYG: genişlik doğrudan DOM'dan alındı (lw = lRect.width * scale), auto-expand yok.
+    
+                        // Uydu görüntüsü modunda gradyan bar ve sayısal değerler çıktıda gizlenir
+                        var _exportMeta = (typeof getSelectedAnalysisMeta === 'function') ? getSelectedAnalysisMeta() : null;
+                        var _isImageLegend = _exportMeta && _exportMeta.legendType === 'image';
+    
+                        // Uydu görüntüsü lejantındaki detay satırlarını DOM'dan oku
+                        var imageDetailRows = [];
+                        if (_isImageLegend) {
+                            var _detailDivs = legend.querySelectorAll('div[style*="justify-content:space-between"]');
+                            _detailDivs.forEach(function(div) {
+                                var sp2 = div.querySelectorAll('span');
+                                if (sp2.length >= 2) {
+                                    imageDetailRows.push({
+                                        label: sp2[0].textContent.trim(),
+                                        value: sp2[sp2.length - 1].textContent.trim()
+                                    });
+                                }
                             });
                         }
-                    } else if (!_isImageLegend) {
-                        // Stretched mod: gerçek seçili renk rampasından gradyan çiz
-                        // (Uydu Görüntüsü / image tipinde bu blok atlanır — bar ve sayılar çıktıda gizlenir)
-                        var selectedRampEl = document.getElementById('selectedRamp');
-                        var rampName = selectedRampEl ? (selectedRampEl.getAttribute('data-ramp') || 'black-white') : 'black-white';
-                        if (rampName === '__gee__') rampName = 'black-white';
-                        var rampPaletteForExport = {
-                            'black-white':      ['#000000','#ffffff'],
-                            'viridis':          ['#440154','#31688e','#35b779','#fde725'],
-                            'blue-ocean':       ['#08306b','#2171b5','#6baed6','#c6dbef'],
-                            'heat':             ['#313695','#4575b4','#fdae61','#d73027','#a50026'],
-                            'green':            ['#f7fcf5','#74c476','#238b45','#00441b'],
-                            'red-yellow-green': ['#d73027','#fc8d59','#fee08b','#d9ef8b','#1a9850'],
-                            'brown':            ['#f5f5dc','#c8a96e','#8b5e2d','#4a3000']
+    
+                        // ── Font Boyutu Uyumu (WYSIWYG) ─────────────────────────────────────
+                        // SORUN: Önceki sürüm canvas font boyutlarını sabit (11px / 9px)
+                        // olarak tanımlıyordu. DOM ise .map-legend { font-size: 0.74rem }
+                        // CSS kuralını tarayıcı kök font boyutuna (genelde 16px) göre
+                        // hesaplayıp ~11.84px olarak render eder. Sabit değerler bu
+                        // gerçek boyuttan farklı olduğunda:
+                        //   • Canvas metni DOM'dan farklı satırlara bölünür.
+                        //   • Kutu yüksekliği DOM'dan alındığı için uyumsuz → beyaz boşluk.
+                        // ÇÖZÜM: getComputedStyle ile gerçek px boyutu okunur; tüm
+                        // font ve satır yükseklikleri bu değerden türetilir.
+                        // ─────────────────────────────────────────────────────────────────
+                        var _lgdFS   = parseFloat(window.getComputedStyle(legend).fontSize) || 11.84;
+                        var lineH    = Math.round(_lgdFS * 1.45) * scale;  // satır yüksekliği ~1.45× font
+                        var pad      = 8 * scale;
+                        // Türetilmiş font boyutları (DOM hiyerarşisini yansıtır)
+                        var _lgdTitleFS  = Math.round(_lgdFS * 1.05) * scale;  // başlık ≈ DOM bold
+                        var _lgdBodyFS   = Math.round(_lgdFS * 0.92) * scale;  // satır metni
+                        var _lgdFooterFS = Math.round(_lgdFS * 0.82) * scale;  // alt istatistik
+                        // ── Yardımcı: kelime kırma ────────────────────────────────────────────
+                        var _lgdWrap = function(text, maxW, font) {
+                            if (font) ctx.font = font;
+                            var words = String(text == null ? '' : text).split(' ');
+                            var lines = [], cur = '';
+                            for (var wi = 0; wi < words.length; wi++) {
+                                var test = cur ? (cur + ' ' + words[wi]) : words[wi];
+                                if (ctx.measureText(test).width > maxW && cur) {
+                                    lines.push(cur); cur = words[wi];
+                                } else { cur = test; }
+                            }
+                            if (cur) lines.push(cur);
+                            return lines.length ? lines : [''];
                         };
-                        var pal = rampPaletteForExport[rampName] || rampPaletteForExport['black-white'];
 
-                        // Min/Max etiketleri
-                        var minLabel = '', maxLabel = '';
-                        var legendBox2 = document.querySelector('.map-legend');
-                        if (legendBox2) {
-                            var spans = legendBox2.querySelectorAll('span');
-                            if (spans.length >= 2) { minLabel = spans[0].textContent; maxLabel = spans[spans.length-1].textContent; }
+                        // ── 1. GEÇİŞ: Başlık ve sınıf satırlarını ölç ────────────────────
+                        var _lgdLabelMaxW = lw - pad - (13 * scale) - pad;
+                        var _titleLines = _lgdWrap(titleText, lw - pad * 2,
+                                                    'bold ' + _lgdTitleFS + 'px Segoe UI, sans-serif');
+
+                        var _lgdPreRows = [];
+                        if (isClassified) {
+                            classRows.forEach(function(row) {
+                                var colorEl = row.querySelector('[style*="border-radius:2px"]');
+                                var labelEl = row.querySelector('span:last-child');
+                                if (!colorEl || !labelEl) return;
+                                var lns = _lgdWrap(labelEl.textContent, _lgdLabelMaxW,
+                                                    _lgdBodyFS + 'px Segoe UI, sans-serif');
+                                _lgdPreRows.push({ bg: colorEl.style.background || '#999', lines: lns });
+                            });
                         }
-                        // Etiket satırı
-                        ctx.fillStyle = '#475569';
-                        ctx.font = (9 * scale) + 'px Segoe UI, sans-serif';
-                        ctx.textAlign = 'left';
-                        ctx.fillText(minLabel, lx + pad, curY + 9 * scale);
-                        ctx.textAlign = 'right';
-                        ctx.fillText(maxLabel, lx + lw - pad, curY + 9 * scale);
-                        curY += lineH;
 
-                        // Gradyan bant
-                        var gx1 = lx + pad, gx2 = lx + lw - pad;
-                        var grad = ctx.createLinearGradient(gx1, 0, gx2, 0);
-                        pal.forEach(function(c, i) { grad.addColorStop(i / (pal.length - 1), c); });
-                        ctx.fillStyle = grad;
-                        ctx.fillRect(gx1, curY, gx2 - gx1, 10 * scale);
+                        // ── Gereken yüksekliği hesapla ────────────────────────────────────
+                        var _lgdCalcH = pad + _titleLines.length * lineH + 4 * scale;
+                        if (isClassified) {
+                            _lgdPreRows.forEach(function(r) {
+                                _lgdCalcH += Math.max(r.lines.length, 1) * lineH + 2 * scale;
+                            });
+                            _lgdCalcH += pad;
+                        } else {
+                            _lgdCalcH = lRect.height * scale; // stretched/image: DOM yüksekliği yeterli
+                        }
+                        var lh = Math.max(lRect.height * scale, _lgdCalcH);
+
+                        // ── Kutu arka planı ────────────────────────────────────────────────
+                        ctx.fillStyle = '#ffffff';
                         ctx.strokeStyle = '#cbd5e1';
-                        ctx.lineWidth = 0.5 * scale;
-                        ctx.strokeRect(gx1, curY, gx2 - gx1, 10 * scale);
-                        curY += 10 * scale + 2 * scale;
+                        ctx.lineWidth = 1 * scale;
+                        ctx.beginPath();
+                        ctx.roundRect(lx, ly, lw, lh, 5 * scale);
+                        ctx.fill();
+                        ctx.stroke();
 
-                        // Low / High labels
-                        ctx.fillStyle = '#94a3b8';
-                        ctx.font = (8 * scale) + 'px Segoe UI, sans-serif';
+                        // ── 2. GEÇİŞ: Başlık çiz ─────────────────────────────────────────
+                        ctx.fillStyle = '#1e3a8a';
+                        ctx.font = 'bold ' + _lgdTitleFS + 'px Segoe UI, sans-serif';
                         ctx.textAlign = 'left';
-                        ctx.fillText(t('low_label','Low'), gx1, curY + 8 * scale);
-                        ctx.textAlign = 'right';
-                        ctx.fillText(t('high_label','High'), gx2, curY + 8 * scale);
-                        curY += lineH;
-                    }
+                        _titleLines.forEach(function(tl, ti) {
+                            ctx.fillText(tl, lx + pad, ly + pad + lineH * 0.85 + ti * lineH);
+                        });
 
-                    // Gerçek veri özeti satırı (analiz modları; image lejantında zaten çizildi)
-                    if (realStatsText && !_isImageLegend) {
-                        ctx.fillStyle = '#16a34a';
-                        ctx.font = (8 * scale) + 'px Segoe UI, sans-serif';
-                        ctx.textAlign = 'left';
-                        ctx.fillText(realStatsText, lx + pad, curY + 8 * scale);
-                    }
+                        var curY = ly + pad + _titleLines.length * lineH + 4 * scale;
 
-                    ctx.restore();
-                }
-
-                // ── Bilgi Kutusu: LULC / TOPO analizlerinde görünen veri seti
-                // bilgi kartı, ekrandaki durumuyla birebir (WYSIWYG) çizilir ──
-                var infoBox = document.getElementById('map-info-box');
-                if (infoBox && infoBox.offsetParent && infoBox.style.display !== 'none') {
-                    var ibRect = infoBox.getBoundingClientRect();
-                    var mRectIb = mapEl.getBoundingClientRect();
-                    ctx.save();
-
-                    var ix = (ibRect.left - mRectIb.left) * scale;
-                    var iy = (ibRect.top  - mRectIb.top)  * scale;
-                    var iw = ibRect.width  * scale;
-
-                    var ibTitleEl = infoBox.querySelector('div');
-                    var ibTitle = ibTitleEl ? ibTitleEl.textContent : '';
-                    var ibRows = Array.prototype.slice.call(infoBox.querySelectorAll('table tr')).map(function(tr) {
-                        var tds = tr.querySelectorAll('td');
-                        return tds.length >= 2 ? [tds[0].textContent, tds[1].textContent] : null;
-                    }).filter(Boolean);
-                    var ibFooterEl = infoBox.querySelector('div[style*="border-top"]');
-                    var ibFooter = ibFooterEl ? ibFooterEl.textContent : '';
-
-                    // WYSIWYG: genişlik doğrudan DOM'dan alındı (iw = ibRect.width * scale), auto-expand yok.
-
-                    var iLineH = 12 * scale;
-                    var iPad   = 8 * scale;
-                    // WYSIWYG: yükseklik DOM'dan (sürükleme / resize sonrası birebir)
-                    var ih = ibRect.height * scale;
-
-                    ctx.fillStyle = 'rgba(255,255,255,0.94)';
-                    ctx.strokeStyle = '#bae6fd';
-                    ctx.lineWidth = 1 * scale;
-                    ctx.beginPath();
-                    ctx.roundRect(ix, iy, iw, ih, 6 * scale);
-                    ctx.fill();
-                    ctx.stroke();
-
-                    // Bilgi kutusu içeriği dışa taşmasın:
-                    // kutunun iç sınırını canvas kırpma bölgesi olarak ayarla.
-                    ctx.beginPath();
-                    if (ctx.roundRect) ctx.roundRect(ix + 1 * scale, iy + 1 * scale, iw - 2 * scale, ih - 2 * scale, 5 * scale);
-                    else ctx.rect(ix + 1 * scale, iy + 1 * scale, iw - 2 * scale, ih - 2 * scale);
-                    ctx.clip();
-
-                    ctx.fillStyle = '#0369a1';
-                    ctx.font = 'bold ' + (10.5 * scale) + 'px Segoe UI, sans-serif';
-                    ctx.textAlign = 'left';
-                    var _ibTitleMaxW = iw - iPad * 2;
-                    var _ibTitleLines = (function(text, maxW) {
-                        var words = text.split(' ');
-                        var lines = [], cur = '';
-                        for (var wi = 0; wi < words.length; wi++) {
-                            var test = cur ? (cur + ' ' + words[wi]) : words[wi];
-                            if (ctx.measureText(test).width > maxW && cur) {
-                                lines.push(cur);
-                                cur = words[wi];
-                            } else { cur = test; }
+                        if (isClassified) {
+                            // Classified mod: renk kutusu + etiket satırları
+                            //
+                            // 🛠️ BUG FİX: Uzun sınıf isimleri (ör. bir arada iki dil etiketi
+                            // ya da uzun LULC sınıf adları) önceden tek satırda çiziliyor,
+                            // kutu genişliğini aşınca kırpma (clip) alanının kenarında
+                            // yarım kesiliyordu. Başlıkta zaten kullanılan kelime kaydırma
+                            // mantığı burada da uygulanarak etiket gerekirse birden çok
+                            // satıra bölünüyor — içerik her zaman kutunun içine sığıyor.
+                            // 1. geçişte ölçülen _lgdPreRows kullan
+                            _lgdPreRows.forEach(function(r) {
+                                ctx.fillStyle = r.bg;
+                                ctx.fillRect(lx + pad, curY, 10 * scale, 10 * scale);
+                                ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+                                ctx.lineWidth = 0.5 * scale;
+                                ctx.strokeRect(lx + pad, curY, 10 * scale, 10 * scale);
+                                ctx.fillStyle = '#334155';
+                                ctx.font = _lgdBodyFS + 'px Segoe UI, sans-serif';
+                                ctx.textAlign = 'left';
+                                r.lines.forEach(function(ll, li) {
+                                    ctx.fillText(ll, lx + pad + 13 * scale, curY + lineH * 0.78 + li * lineH);
+                                });
+                                curY += Math.max(r.lines.length, 1) * lineH + 2 * scale;
+                            });
+                        } else if (_isImageLegend) {
+                            // Uydu görüntüsü lejantı: tarih + separator + detay satırları
+                            if (realStatsText) {
+                                ctx.fillStyle = '#475569';
+                                ctx.font = _lgdBodyFS + 'px Segoe UI, sans-serif';
+                                ctx.textAlign = 'left';
+                                ctx.fillText(realStatsText, lx + pad, curY + lineH * 0.72);
+                                curY += lineH + 2 * scale;
+                            }
+                            if (imageDetailRows.length > 0) {
+                                // Yatay ayırıcı çizgi
+                                ctx.strokeStyle = '#e2e8f0';
+                                ctx.lineWidth = 0.5 * scale;
+                                ctx.beginPath();
+                                ctx.moveTo(lx + pad, curY);
+                                ctx.lineTo(lx + lw - pad, curY);
+                                ctx.stroke();
+                                curY += lineH;
+                                // Detay satırları: etiket solda, değer sağda
+                                imageDetailRows.forEach(function(item) {
+                                    ctx.fillStyle = '#64748b';
+                                    ctx.font = _lgdBodyFS + 'px Segoe UI, sans-serif';
+                                    ctx.textAlign = 'left';
+                                    ctx.fillText(item.label, lx + pad, curY + lineH * 0.72);
+                                    ctx.fillStyle = '#1e293b';
+                                    ctx.font = 'bold ' + _lgdBodyFS + 'px Segoe UI, sans-serif';
+                                    ctx.textAlign = 'right';
+                                    ctx.fillText(item.value, lx + lw - pad, curY + lineH * 0.72);
+                                    curY += lineH + 2 * scale;
+                                });
+                            }
+                        } else if (!_isImageLegend) {
+                            // Stretched mod: gerçek seçili renk rampasından gradyan çiz
+                            // (Uydu Görüntüsü / image tipinde bu blok atlanır — bar ve sayılar çıktıda gizlenir)
+                            var selectedRampEl = document.getElementById('selectedRamp');
+                            var rampName = selectedRampEl ? (selectedRampEl.getAttribute('data-ramp') || 'black-white') : 'black-white';
+                            if (rampName === '__gee__') rampName = 'black-white';
+                            var rampPaletteForExport = {
+                                'black-white':      ['#000000','#ffffff'],
+                                'viridis':          ['#440154','#31688e','#35b779','#fde725'],
+                                'blue-ocean':       ['#08306b','#2171b5','#6baed6','#c6dbef'],
+                                'heat':             ['#313695','#4575b4','#fdae61','#d73027','#a50026'],
+                                'green':            ['#f7fcf5','#74c476','#238b45','#00441b'],
+                                'red-yellow-green': ['#d73027','#fc8d59','#fee08b','#d9ef8b','#1a9850'],
+                                'brown':            ['#f5f5dc','#c8a96e','#8b5e2d','#4a3000']
+                            };
+                            var pal = rampPaletteForExport[rampName] || rampPaletteForExport['black-white'];
+    
+                            // Min/Max etiketleri
+                            var minLabel = '', maxLabel = '';
+                            var legendBox2 = document.querySelector('.map-legend');
+                            if (legendBox2) {
+                                var spans = legendBox2.querySelectorAll('span');
+                                if (spans.length >= 2) { minLabel = spans[0].textContent; maxLabel = spans[spans.length-1].textContent; }
+                            }
+                            // Etiket satırı
+                            ctx.fillStyle = '#475569';
+                            ctx.font = _lgdBodyFS + 'px Segoe UI, sans-serif';
+                            ctx.textAlign = 'left';
+                            ctx.fillText(minLabel, lx + pad, curY + lineH * 0.72);
+                            ctx.textAlign = 'right';
+                            ctx.fillText(maxLabel, lx + lw - pad, curY + lineH * 0.72);
+                            curY += lineH;
+    
+                            // Gradyan bant
+                            var gx1 = lx + pad, gx2 = lx + lw - pad;
+                            var grad = ctx.createLinearGradient(gx1, 0, gx2, 0);
+                            pal.forEach(function(c, i) { grad.addColorStop(i / (pal.length - 1), c); });
+                            ctx.fillStyle = grad;
+                            ctx.fillRect(gx1, curY, gx2 - gx1, 10 * scale);
+                            ctx.strokeStyle = '#cbd5e1';
+                            ctx.lineWidth = 0.5 * scale;
+                            ctx.strokeRect(gx1, curY, gx2 - gx1, 10 * scale);
+                            curY += 10 * scale + 2 * scale;
+    
+                            // Low / High labels
+                            ctx.fillStyle = '#94a3b8';
+                            ctx.font = _lgdFooterFS + 'px Segoe UI, sans-serif';
+                            ctx.textAlign = 'left';
+                            ctx.fillText(t('low_label','Low'), gx1, curY + lineH * 0.72);
+                            ctx.textAlign = 'right';
+                            ctx.fillText(t('high_label','High'), gx2, curY + lineH * 0.72);
+                            curY += lineH;
                         }
-                        if (cur) lines.push(cur);
-                        return lines.length ? lines : [text];
-                    })(ibTitle, _ibTitleMaxW);
-                    _ibTitleLines.forEach(function(tl, ti) {
-                        ctx.fillText(tl, ix + iPad, iy + iPad + iLineH * 0.85 + ti * iLineH);
-                    });
-
-                    var ibCurY = iy + iPad + _ibTitleLines.length * iLineH + 4 * scale;
-                    ibRows.forEach(function(row) {
-                        ctx.fillStyle = '#64748b';
-                        ctx.font = 'bold ' + (8.5 * scale) + 'px Segoe UI, sans-serif';
-                        ctx.textAlign = 'left';
-                        ctx.fillText(row[0], ix + iPad, ibCurY + 8 * scale);
-                        ctx.fillStyle = '#1e293b';
-                        ctx.font = (8.5 * scale) + 'px Segoe UI, sans-serif';
-                        var labelW = ctx.measureText(row[0]).width;
-                        var _valXOff = ix + iPad + labelW + 8 * scale;
-                        ctx.fillText(row[1], _valXOff, ibCurY + 8 * scale);
-                        ibCurY += iLineH + 2 * scale;
-                    });
-
-                    if (ibFooter) {
-                        ctx.fillStyle = '#94a3b8';
-                        ctx.font = (7.5 * scale) + 'px Segoe UI, sans-serif';
-                        ctx.textAlign = 'left';
-                        ctx.fillText(ibFooter, ix + iPad, ibCurY + 8 * scale);
-                    }
-
-                    ctx.restore();
-                }
-                var north = document.querySelector('.north-arrow:not(.hidden-element)');
-                if (north && north.offsetParent) {
-                    var nRect = north.getBoundingClientRect();
-                    var mRect2 = mapEl.getBoundingClientRect();
-                    var nx = (nRect.right - mRect2.left - nRect.width / 2) * scale;
-                    var ny = (nRect.top   - mRect2.top  + nRect.height / 2) * scale;
-                    var r  = 18 * scale;
-                    ctx.save();
-                    ctx.fillStyle = 'rgba(255,255,255,0.95)';
-                    ctx.strokeStyle = '#1e3a8a';
-                    ctx.lineWidth = 2 * scale;
-                    ctx.beginPath();
-                    ctx.roundRect(nx - r, ny - r, r * 2, r * 2, 4 * scale);
-                    ctx.fill(); ctx.stroke();
-                    // Ok işareti
-                    ctx.fillStyle = '#ef4444';
-                    ctx.font = 'bold ' + (16 * scale) + 'px sans-serif';
-                    ctx.textAlign = 'center';
-                    ctx.fillText('▲', nx, ny + 4 * scale);
-                    // N yazısı
-                    ctx.fillStyle = '#1e3a8a';
-                    ctx.font = 'bold ' + (11 * scale) + 'px sans-serif';
-                    ctx.fillText('N', nx, ny + 16 * scale);
-                    ctx.restore();
-                }
-
-                // Ölçek çubuğu (Leaflet'in .leaflet-control-scale-line'ı)
-                var scaleLine = document.querySelector('.leaflet-control-scale-line');
-                if (scaleLine) {
-                    var sRect = scaleLine.getBoundingClientRect();
-                    var mRect3 = mapEl.getBoundingClientRect();
-                    var sx = (sRect.left - mRect3.left) * scale;
-                    var sy = (sRect.top  - mRect3.top)  * scale;
-                    var sw = sRect.width  * scale;
-                    var sh = sRect.height * scale;
-                    ctx.save();
-                    ctx.fillStyle = 'rgba(255,255,255,0.88)';
-                    ctx.fillRect(sx - 2 * scale, sy - 2 * scale, sw + 4 * scale, sh + 4 * scale);
-                    ctx.strokeStyle = '#1e3a8a';
-                    ctx.lineWidth = 2 * scale;
-                    ctx.strokeRect(sx, sy + sh / 2, sw, 0);
-                    ctx.fillStyle = '#1e3a8a';
-                    ctx.font = 'bold ' + (10 * scale) + 'px Segoe UI, sans-serif';
-                    ctx.textAlign = 'center';
-                    ctx.fillText(scaleLine.textContent.trim(), sx + sw / 2, sy + sh / 2 - 2 * scale);
-                    ctx.restore();
-                }
-
-                // ── Sol alt köşe: 🌲 SylvaGIS logosu ─────────────────────────────────────
-                // #sylvagis-watermark #map DOM'unun dışında (kardeş element) olduğu için
-                // html2canvas tarafından yakalanmaz. Logo tüm çıktı formatlarında (PNG /
-                // JPEG / PDF) tutarlı görünmesi için burada native olarak çizilir.
-                // Stil: basemap üzerindeki DOM watermark'la birebir aynı (beyaz %65 yarı
-                // saydam arka plan, 8 px yuvarlak köşe, kenarlık/accent yok).
-                (function() {
-                    var wmEl = document.getElementById('sylvagis-watermark');
-                    var wmPad = 8 * scale;   // köşeden iç boşluk
-                    var wmFS  = 11 * scale;
-                    var wmPadX = 9 * scale;
-                    var wmPadY = 4 * scale;
-                    var wmTxt = '🌲 SylvaGIS';
-                    ctx.save();
-                    ctx.font = 'bold ' + wmFS + 'px Segoe UI, sans-serif';
-                    var wmMet = ctx.measureText(wmTxt);
-                    var wmW   = wmMet.width + wmPadX * 2;
-                    var wmH   = wmFS + wmPadY * 2;
-                    // Konumu DOM watermark'tan oku; görünmüyorsa sabit sol-alt köşeye yerleştir
-                    var wmX, wmY;
-                    if (wmEl && wmEl.getBoundingClientRect) {
-                        var wr = wmEl.getBoundingClientRect();
-                        var mr = document.getElementById('map').getBoundingClientRect();
-                        wmX = (wr.left - mr.left) * scale;
-                        wmY = (wr.top  - mr.top)  * scale;
-                    } else {
-                        wmX = wmPad;
-                        wmY = mapEl.offsetHeight * scale - wmPad - wmH;
-                    }
-                    // Beyaz yarı saydam arka plan
-                    ctx.fillStyle = 'rgba(255,255,255,0.65)';
-                    ctx.beginPath();
-                    if (ctx.roundRect) ctx.roundRect(wmX, wmY, wmW, wmH, 8 * scale);
-                    else              ctx.rect(wmX, wmY, wmW, wmH);
-                    ctx.fill();
-                    // Metin
-                    ctx.fillStyle  = '#1e3a8a';
-                    ctx.textAlign  = 'left';
-                    ctx.font       = 'bold ' + wmFS + 'px Segoe UI, sans-serif';
-                    ctx.fillText(wmTxt, wmX + wmPadX, wmY + wmH - wmPadY - 1 * scale);
-                    ctx.restore();
-                })();
-
-                // Altlık harita atıf/kaynak bilgisi (sağ alt köşe) — html2canvas bu küçük
-                // kontrolü bazen hiç yakalamıyordu, leaflet-image yedek yolunda ise DOM
-                // metnini hiçbir zaman yakalamaz. Bu yüzden artık her zaman burada native
-                // olarak elle çiziliyor; böylece PNG/JPEG/PDF çıktısında atıf bilgisi
-                // hiçbir koşulda kaybolmaz.
-                var attribEl = document.querySelector('.leaflet-control-attribution');
-                if (attribEl) {
-                    var attribText = attribEl.textContent.replace(/\s+/g, ' ').trim();
-                    if (attribText) {
-                        ctx.save();
-                        ctx.font = (9 * scale) + 'px Segoe UI, sans-serif';
-                        var aMetrics = ctx.measureText(attribText);
-                        var aPad = 4 * scale;
-                        var aW = aMetrics.width + aPad * 2;
-                        var aH = 14 * scale;
-                        var mapW2 = mapEl.offsetWidth  * scale;
-                        var mapH2 = mapEl.offsetHeight * scale;
-                        var aX = mapW2 - aW - 2 * scale;
-                        var aY = mapH2 - aH - 2 * scale;
-                        ctx.fillStyle = 'rgba(255,255,255,0.75)';
-                        ctx.fillRect(aX, aY, aW, aH);
-                        ctx.fillStyle = '#333333';
-                        ctx.textAlign = 'left';
-                        ctx.fillText(attribText, aX + aPad, aY + aH * 0.72);
+    
+                        // Gerçek veri özeti satırı (analiz modları; image lejantında zaten çizildi)
+                        if (realStatsText && !_isImageLegend) {
+                            ctx.fillStyle = '#16a34a';
+                            ctx.font = _lgdFooterFS + 'px Segoe UI, sans-serif';
+                            ctx.textAlign = 'left';
+                            ctx.fillText(realStatsText, lx + pad, curY + lineH * 0.72);
+                        }
+    
                         ctx.restore();
                     }
-                }
+    
+                    // ── Bilgi Kutusu: LULC / TOPO analizlerinde görünen veri seti
+                    // bilgi kartı, ekrandaki durumuyla birebir (WYSIWYG) çizilir ──
+                    var infoBox = document.getElementById('map-info-box');
+                    var _ibR0 = infoBox ? infoBox.getBoundingClientRect() : null;
+                    if (infoBox && infoBox.style.display !== 'none' && _ibR0 && _ibR0.width > 0 && _ibR0.height > 0) {
+                        var ibRect = infoBox.getBoundingClientRect();
+                        var mRectIb = mapEl.getBoundingClientRect();
+                        ctx.save();
+    
+                        var ix = (ibRect.left - mRectIb.left) * scale;
+                        var iy = (ibRect.top  - mRectIb.top)  * scale;
+                        var iw = ibRect.width  * scale;
+    
+                        var ibTitleEl = infoBox.querySelector('div');
+                        var ibTitle = ibTitleEl ? ibTitleEl.textContent : '';
+                        var ibRows = Array.prototype.slice.call(infoBox.querySelectorAll('table tr')).map(function(tr) {
+                            var tds = tr.querySelectorAll('td');
+                            return tds.length >= 2 ? [tds[0].textContent, tds[1].textContent] : null;
+                        }).filter(Boolean);
+                        var ibFooterEl = infoBox.querySelector('div[style*="border-top"]');
+                        var ibFooter = ibFooterEl ? ibFooterEl.textContent : '';
+    
+                        // WYSIWYG: genişlik doğrudan DOM'dan alındı (iw = ibRect.width * scale), auto-expand yok.
+    
+                        // ── Font Boyutu Uyumu (WYSIWYG) ─────────────────────────────────────
+                        // Lejant çizimindeki aynı sorun bilgi kutusunda da geçerliydi:
+                        // sabit 8.5px canvas fontu, DOM'un 0.74rem ≈ 11.84px render
+                        // boyutundan küçük olduğu için metin daha az satıra bölünüyor,
+                        // içerik erken bitiyor ve kutunun altı boş kalıyordu.
+                        // Çözüm: Gerçek computed font boyutu okunur; tüm font ve satır
+                        // yükseklikleri bu değerden türetilir.
+                        // ─────────────────────────────────────────────────────────────────
+                        var _ibFS       = parseFloat(window.getComputedStyle(infoBox).fontSize) || 11.84;
+                        var iLineH      = Math.round(_ibFS * 1.45) * scale;
+                        var _ibTitleFS  = Math.round(_ibFS * 1.1)  * scale;   // başlık biraz büyük
+                        var _ibBodyFS   = Math.round(_ibFS)        * scale;   // etiket / değer
+                        var _ibFooterFS = Math.round(_ibFS * 0.82) * scale;   // alt not
+                        var iPad   = 8 * scale;
+                        // ── Yardımcı: kelime kırma (ölçüm için font geçici ayarlanır) ─────────
+                        var _ibWrapLines = function(text, maxW, font) {
+                            if (font) ctx.font = font;
+                            var words = String(text == null ? '' : text).split(' ');
+                            var lines = [], cur = '';
+                            for (var wi = 0; wi < words.length; wi++) {
+                                var test = cur ? (cur + ' ' + words[wi]) : words[wi];
+                                if (ctx.measureText(test).width > maxW && cur) {
+                                    lines.push(cur); cur = words[wi];
+                                } else { cur = test; }
+                            }
+                            if (cur) lines.push(cur);
+                            return lines.length ? lines : [''];
+                        };
+
+                        // ── Sütun genişlikleri ─────────────────────────────────────────────
+                        var ibUsableW   = iw - iPad * 2;
+                        var ibLabelColW = ibUsableW * 0.38;
+                        var ibColGap    = 6 * scale;
+                        var ibValueColW = Math.max(ibUsableW - ibLabelColW - ibColGap, 20 * scale);
+                        var ibValueX    = ix + iPad + ibLabelColW + ibColGap;
+
+                        // ── 1. GEÇİŞ: Tüm metni ölç → gereken yüksekliği hesapla ─────────
+                        // Kutu yüksekliği DOM'dan DEĞİL canvas ölçümünden hesaplanır.
+                        // Font büyüdüğünde satır sayısı artar; kutu otomatik genişler.
+                        var _ibTitleLines = _ibWrapLines(ibTitle, iw - iPad * 2,
+                                                         'bold ' + _ibTitleFS + 'px Segoe UI, sans-serif');
+
+                        var _ibPreRows = ibRows.map(function(row) {
+                            var lL = _ibWrapLines(row[0], ibLabelColW,
+                                                   'bold ' + _ibBodyFS + 'px Segoe UI, sans-serif');
+                            var vL = _ibWrapLines(row[1], ibValueColW,
+                                                   _ibBodyFS + 'px Segoe UI, sans-serif');
+                            return { lL: lL, vL: vL, n: Math.max(lL.length, vL.length) };
+                        });
+
+                        var _ibCalcH = iPad
+                                     + _ibTitleLines.length * iLineH + 4 * scale
+                                     + _ibPreRows.reduce(function(s, r) {
+                                           return s + r.n * iLineH + 2 * scale;
+                                       }, 0)
+                                     + (ibFooter ? iLineH + 6 * scale : 0)
+                                     + iPad;
+
+                        // DOM yüksekliğinden küçük olmaz; içerik büyükse kutu otomatik genişler.
+                        var ih = Math.max(ibRect.height * scale, _ibCalcH);
+
+                        // ── Kutu arka planı ────────────────────────────────────────────────
+                        ctx.fillStyle = '#ffffff';
+                        ctx.strokeStyle = '#bae6fd';
+                        ctx.lineWidth = 1 * scale;
+                        ctx.beginPath();
+                        ctx.roundRect(ix, iy, iw, ih, 6 * scale);
+                        ctx.fill();
+                        ctx.stroke();
+
+                        // ── 2. GEÇİŞ: İçeriği çiz ───────────────────────────────────────
+                        ctx.fillStyle = '#0369a1';
+                        ctx.font = 'bold ' + _ibTitleFS + 'px Segoe UI, sans-serif';
+                        ctx.textAlign = 'left';
+                        _ibTitleLines.forEach(function(tl, ti) {
+                            ctx.fillText(tl, ix + iPad, iy + iPad + iLineH * 0.85 + ti * iLineH);
+                        });
+
+                        var ibCurY = iy + iPad + _ibTitleLines.length * iLineH + 4 * scale;
+                        _ibPreRows.forEach(function(row) {
+                            for (var li = 0; li < row.n; li++) {
+                                var lineBaseY = ibCurY + li * iLineH + iLineH * 0.72;
+                                if (row.lL[li] !== undefined) {
+                                    ctx.fillStyle = '#64748b';
+                                    ctx.font = 'bold ' + _ibBodyFS + 'px Segoe UI, sans-serif';
+                                    ctx.textAlign = 'left';
+                                    ctx.fillText(row.lL[li], ix + iPad, lineBaseY);
+                                }
+                                if (row.vL[li] !== undefined) {
+                                    ctx.fillStyle = '#1e293b';
+                                    ctx.font = _ibBodyFS + 'px Segoe UI, sans-serif';
+                                    ctx.textAlign = 'left';
+                                    ctx.fillText(row.vL[li], ibValueX, lineBaseY);
+                                }
+                            }
+                            ibCurY += row.n * iLineH + 2 * scale;
+                        });
+
+                        if (ibFooter) {
+                            ctx.fillStyle = '#94a3b8';
+                            ctx.font = _ibFooterFS + 'px Segoe UI, sans-serif';
+                            ctx.textAlign = 'left';
+                            ctx.fillText(ibFooter, ix + iPad, ibCurY + iLineH * 0.72);
+                        }
+
+                        ctx.restore();
+                    }
+                 } // lejant ve bilgi kutusu her zaman native canvas ile çizildi
+                    // ── Aşağıdakiler HTML2CANVAS veya LEAFLET-IMAGE fark etmeksizin
+                    // HER ZAMAN çizilir (kullanıcı gizlemiş olsa bile). ────────────
+                    var north = document.querySelector('.north-arrow');
+                    if (north) {
+                        var nRect  = north.getBoundingClientRect();
+                        var mRect2 = mapEl.getBoundingClientRect();
+                        // Kutunun sol-üst köşesi (DOM'dan birebir)
+                        var nX = (nRect.left - mRect2.left) * scale;
+                        var nY = (nRect.top  - mRect2.top)  * scale;
+                        var nW = nRect.width  * scale;
+                        var nH = nRect.height * scale;
+                        // Merkez nokta
+                        var cx = nX + nW / 2;
+                        var cy = nY + nH / 2;
+                        ctx.save();
+                        // Arka plan kutusu — DOM boyutunda, tam üst üste
+                        ctx.fillStyle = 'rgba(255,255,255,0.95)';
+                        ctx.strokeStyle = '#1e3a8a';
+                        ctx.lineWidth = 2 * scale;
+                        ctx.beginPath();
+                        if (ctx.roundRect) ctx.roundRect(nX, nY, nW, nH, 5 * scale);
+                        else ctx.rect(nX, nY, nW, nH);
+                        ctx.fill(); ctx.stroke();
+                        // textBaseline:'middle' → y = metnin tam dikey ortası, kayma yok
+                        ctx.textAlign    = 'center';
+                        ctx.textBaseline = 'middle';
+                        // ▲ kuzey oku — kutunun üst %40'ı
+                        ctx.fillStyle = '#ef4444';
+                        ctx.font = 'bold ' + Math.round(nH * 0.38) + 'px sans-serif';
+                        ctx.fillText('▲', cx, cy - nH * 0.14);
+                        // N harfi — kutunun alt %35'i
+                        ctx.fillStyle = '#1e3a8a';
+                        ctx.font = 'bold ' + Math.round(nH * 0.28) + 'px sans-serif';
+                        ctx.fillText('N', cx, cy + nH * 0.28);
+                        ctx.restore();
+                    }
+    
+                    // Ölçek çubuğu (Leaflet'in .leaflet-control-scale-line'ı)
+                    // Kullanıcı ölçeği gizlemiş olsa bile çıktıda her zaman göster.
+                    var scaleLine = document.querySelector('.leaflet-control-scale-line');
+                    if (scaleLine) {
+                        var _scaleParent = document.querySelector('.leaflet-control-scale');
+                        var _scaleWasHidden = _scaleParent && _scaleParent.style.display === 'none';
+                        if (_scaleWasHidden) _scaleParent.style.display = '';
+                        var sRect = scaleLine.getBoundingClientRect();
+                        if (_scaleWasHidden) _scaleParent.style.display = 'none';
+                        var mRect3 = mapEl.getBoundingClientRect();
+                        var sx = (sRect.left - mRect3.left) * scale;
+                        var sy = (sRect.top  - mRect3.top)  * scale;
+                        var sw = sRect.width  * scale;
+                        var sh = sRect.height * scale;
+                        ctx.save();
+                        ctx.fillStyle = 'rgba(255,255,255,0.88)';
+                        ctx.fillRect(sx - 2 * scale, sy - 2 * scale, sw + 4 * scale, sh + 4 * scale);
+                        ctx.strokeStyle = '#1e3a8a';
+                        ctx.lineWidth = 2 * scale;
+                        ctx.strokeRect(sx, sy + sh / 2, sw, 0);
+                        ctx.fillStyle = '#1e3a8a';
+                        ctx.font = 'bold ' + (10 * scale) + 'px Segoe UI, sans-serif';
+                        ctx.textAlign = 'center';
+                        ctx.fillText(scaleLine.textContent.trim(), sx + sw / 2, sy + sh / 2 - 2 * scale);
+                        ctx.restore();
+                    }
+    
+                    // ── Sol alt köşe: 🌲 SylvaGIS logosu ─────────────────────────────────────
+                    // #sylvagis-watermark #map DOM'unun dışında (kardeş element) olduğu için
+                    // html2canvas tarafından yakalanmaz. Logo tüm çıktı formatlarında (PNG /
+                    // JPEG / PDF) tutarlı görünmesi için burada native olarak çizilir.
+                    // Stil: basemap üzerindeki DOM watermark'la birebir aynı (beyaz %65 yarı
+                    // saydam arka plan, 8 px yuvarlak köşe, kenarlık/accent yok).
+                    (function() {
+                        var wmEl = document.getElementById('sylvagis-watermark');
+                        var wmPad = 8 * scale;   // köşeden iç boşluk
+                        var wmFS  = 11 * scale;
+                        var wmPadX = 9 * scale;
+                        var wmPadY = 4 * scale;
+                        var wmTxt = '🌲 SylvaGIS';
+                        ctx.save();
+                        ctx.font = 'bold ' + wmFS + 'px Segoe UI, sans-serif';
+                        var wmMet = ctx.measureText(wmTxt);
+                        var wmW   = wmMet.width + wmPadX * 2;
+                        var wmH   = wmFS + wmPadY * 2;
+                        // Konumu DOM watermark'tan oku; görünmüyorsa sabit sol-alt köşeye yerleştir
+                        var wmX, wmY;
+                        if (wmEl && wmEl.getBoundingClientRect) {
+                            var wr = wmEl.getBoundingClientRect();
+                            var mr = document.getElementById('map').getBoundingClientRect();
+                            wmX = (wr.left - mr.left) * scale;
+                            wmY = (wr.top  - mr.top)  * scale;
+                        } else {
+                            wmX = wmPad;
+                            wmY = mapEl.offsetHeight * scale - wmPad - wmH;
+                        }
+                        // Beyaz yarı saydam arka plan
+                        ctx.fillStyle = 'rgba(255,255,255,0.65)';
+                        ctx.beginPath();
+                        if (ctx.roundRect) ctx.roundRect(wmX, wmY, wmW, wmH, 8 * scale);
+                        else              ctx.rect(wmX, wmY, wmW, wmH);
+                        ctx.fill();
+                        // Metin
+                        ctx.fillStyle  = '#1e3a8a';
+                        ctx.textAlign  = 'left';
+                        ctx.font       = 'bold ' + wmFS + 'px Segoe UI, sans-serif';
+                        ctx.fillText(wmTxt, wmX + wmPadX, wmY + wmH - wmPadY - 1 * scale);
+                        ctx.restore();
+                    })();
+    
+                    // Altlık harita atıf/kaynak bilgisi (sağ alt köşe) — html2canvas bu küçük
+                    // kontrolü bazen hiç yakalamıyordu, leaflet-image yedek yolunda ise DOM
+                    // metnini hiçbir zaman yakalamaz. Bu yüzden artık her zaman burada native
+                    // olarak elle çiziliyor; böylece PNG/JPEG/PDF çıktısında atıf bilgisi
+                    // hiçbir koşulda kaybolmaz.
+                    var attribEl = document.querySelector('.leaflet-control-attribution');
+                    if (attribEl) {
+                        var attribText = attribEl.textContent.replace(/\s+/g, ' ').trim();
+                        if (attribText) {
+                            ctx.save();
+                            ctx.font = (9 * scale) + 'px Segoe UI, sans-serif';
+                            var aMetrics = ctx.measureText(attribText);
+                            var aPad = 4 * scale;
+                            var aW = aMetrics.width + aPad * 2;
+                            var aH = 14 * scale;
+                            var mapW2 = mapEl.offsetWidth  * scale;
+                            var mapH2 = mapEl.offsetHeight * scale;
+                            var aX = mapW2 - aW - 2 * scale;
+                            var aY = mapH2 - aH - 2 * scale;
+                            ctx.fillStyle = 'rgba(255,255,255,0.75)';
+                            ctx.fillRect(aX, aY, aW, aH);
+                            ctx.fillStyle = '#333333';
+                            ctx.textAlign = 'left';
+                            ctx.fillText(attribText, aX + aPad, aY + aH * 0.72);
+                            ctx.restore();
+                        }
+                 }
             }
 
             // --- Markup SVG'yi canvas'a çiz (WYSIWYG — piksel-mükemmel konum) ---
@@ -8904,6 +9379,52 @@ function selectRamp(name) {
                             backgroundColor: null,
                             width:          mapEl.offsetWidth,
                             height:         mapEl.offsetHeight,
+                            // ── onclone: Çıktıya özel CSS enjeksiyonu ───────────────────
+                            // html2canvas, DOM'u kopyaladıktan (klonladıktan) hemen sonra
+                            // bu callback'i çağırır. Klonlanmış belgede:
+                            //   1. Tüm geçiş/animasyon efektleri dondurulur →
+                            //      render sırasında layout kayması önlenir.
+                            //   2. Lejant ve bilgi kutusunun CSS değerleri sabit px ile
+                            //      override edilir → font/boşluk uyumsuzluğu giderilir.
+                            //   3. Harita kapsayıcısının boyutu açıkça sabitlenerek
+                            //      position:absolute öğelerin (lejant, info-box) köşeye
+                            //      olan mesafelerinin orantısız kayması önlenir.
+                            // NOT: Bu override'lar YALNIZCA klonlanmış belgede uygulanır;
+                            //      canlı DOM'a dokunulmaz.
+                            // ──────────────────────────────────────────────────────────
+                            onclone: function(clonedDoc) {
+                                // ──────────────────────────────────────────────────────────
+                                // Sadece html2canvas'ın GERÇEKTEN render edeceği öğeler
+                                // düzeltiliyor. Lejant (#map-legend-box) ve bilgi kutusu
+                                // (.map-top-left-infobox) ignoreElements listesinde hariç
+                                // tutulduğundan o CSS override'ları burada gereksizdir;
+                                // onlar drawOverlaysOnCanvas() ile native canvas'a çiziliyor.
+                                // Bu callback'de yalnızca iki şey yapılıyor:
+                                //   1. Tüm geçiş/animasyon efektleri dondurulur →
+                                //      render sırasında layout kayması önlenir.
+                                //   2. #map boyutu render anındaki gerçek offsetWidth/Height
+                                //      ile sabitlenir → position:absolute öğelerin
+                                //      (harita kontrolleri, atıf çubuğu vb.) orantısız
+                                //      kayması önlenir.
+                                // ──────────────────────────────────────────────────────────
+                                var s = clonedDoc.createElement('style');
+                                s.textContent = [
+                                    /* Tüm geçiş ve animasyonları dondur */
+                                    '*, *::before, *::after {',
+                                    '  transition: none !important;',
+                                    '  animation: none !important;',
+                                    '  animation-duration: 0s !important;',
+                                    '}',
+                                    /* Harita kapsayıcısını render anındaki gerçek boyuta sabitle */
+                                    '#map {',
+                                    '  position: relative !important;',
+                                    '  overflow: hidden !important;',
+                                    '  width: ' + mapEl.offsetWidth  + 'px !important;',
+                                    '  height: ' + mapEl.offsetHeight + 'px !important;',
+                                    '}'
+                                ].join('\n');
+                                clonedDoc.head.appendChild(s);
+                            },
                             ignoreElements: function(el) {
                                 if (!el || !el.classList) return false;
                                 // Leaflet SVG vektör katmanları html2canvas yerine
@@ -8932,7 +9453,19 @@ function selectRamp(name) {
                                        // #sylvagis-watermark #map dışında olduğu için
                                        // html2canvas'tan dışlanır; drawOverlaysOnCanvas
                                        // logoyu tutarlı biçimde elle çizer.
-                                       el.id === 'sylvagis-watermark';
+                                       el.id === 'sylvagis-watermark' ||
+                                       // Bilgi kutusu ayrı h2c çağrısıyla piksel-mükemmel
+                                       // yakalanır; ana yakalamada atlanır.
+                                       // NOT: konteyner bir CLASS'a sahip, ID'ye değil —
+                                       // el.id yerine classList.contains kullanılmalı.
+                                       el.classList.contains('map-top-left-infobox') ||
+                                       // Lejant ayrı h2c çağrısıyla piksel-mükemmel yakalanır.
+                                       el.id === 'map-legend-box' ||
+                                       // Kuzey oku ve ölçek çubuğu drawOverlaysOnCanvas ile
+                                       // her zaman çizilir (kullanıcı gizlemiş olsa bile).
+                                       // html2canvas'tan hariç tutularak çift çizim önlenir.
+                                       el.classList.contains('map-top-right') ||
+                                       el.classList.contains('leaflet-control-scale');
                             }
                         }).then(function(canvas) {
                             window._exportUsedHtml2canvas = true;
@@ -9017,20 +9550,39 @@ function selectRamp(name) {
                         // html2canvas'tan bağımsız olarak birebir WYSIWYG çıktı sağlanır.
                         // (html2canvas ignoreElements'te markup-svg zaten hariç tutuldu)
                         var markupSVG = document.getElementById('markup-svg');
-                        if (markupSVG) {
-                            drawSVGOnCanvas(ctx, markupSVG, mapEl, scale).then(function() {
-                                setProgress(88, 'Harita elemanları ekleniyor…');
-                                drawOverlaysOnCanvas(ctx, mapEl, scale);
+
+                        // Bilgi kutusunu ayrı html2canvas çağrısıyla piksel-mükemmel yakala.
+                        // Ana h2c render'da map-top-left-infobox ignoreElements'te hariç tutulur;
+                        // burada overflow/table-layout CSS'i doğru render etmek için ayrı
+                        // html2canvas çağrısı kullanılır ve sonuç doğru konuma yapıştırılır.
+                        function captureLegendOverlay() {
+                            // Lejant artık drawOverlaysOnCanvas içinde native canvas ile çiziliyor.
+                            // html2canvas yaklaşımı üst bağlamdan gri renk sızdırdığı için kullanılmıyor.
+                            return Promise.resolve();
+                        }
+
+                        function captureInfoBoxOverlay() {
+                            // Bilgi kutusu artık drawOverlaysOnCanvas içinde native canvas ile çiziliyor.
+                            // html2canvas yaklaşımı üst bağlamdan gri renk sızdırdığı için kullanılmıyor.
+                            return Promise.resolve();
+                        }
+
+                        function finishExport() {
+                            setProgress(88, 'Harita elemanları ekleniyor…');
+                            drawOverlaysOnCanvas(ctx, mapEl, scale);
+                            Promise.all([captureInfoBoxOverlay(), captureLegendOverlay()]).then(function() {
                                 setProgress(95, 'Dosya oluşturuluyor…');
                                 saveCanvas(final, fmt, filename, scale, W, H);
                             });
+                        }
+
+                        if (markupSVG) {
+                            drawSVGOnCanvas(ctx, markupSVG, mapEl, scale).then(finishExport);
                         } else {
-                            drawOverlaysOnCanvas(ctx, mapEl, scale);
-                            setProgress(95, 'Dosya oluşturuluyor…');
-                            saveCanvas(final, fmt, filename, scale, W, H);
+                            finishExport();
                         }
                     });
-                }
+                 }
 
                 // ── DÜZELTME: önceden burada doğrudan leafletImage çağrılıyordu ve
                 // tanımlı olan getLeafletCanvas() (html2canvas-öncelikli, DOM tabanlı
@@ -9198,30 +9750,6 @@ function selectRamp(name) {
         })(); // END Export Motor
         }); // END DOMContentLoaded — Export
 
-    </script>
-
-    <!-- ===== SUNUCU DURUM KONTROLÜ ===== -->
-    <script>
-    (function() {
-        var dot   = document.getElementById('server-dot');
-        var label = document.getElementById('server-label');
-        function check() {
-            fetch('http://127.0.0.1:5000/api/ping', { method:'GET', mode:'cors', signal: AbortSignal.timeout(2500) })
-                .then(function(r) {
-                    if (r.ok) {
-                        if (dot)   { dot.style.background = '#22c55e'; }
-                        if (label) { label.textContent = 'Sunucu Çevrimiçi'; label.style.color = '#16a34a'; }
-                    } else { setOffline(); }
-                })
-                .catch(setOffline);
-        }
-        function setOffline() {
-            if (dot)   { dot.style.background = '#ef4444'; }
-            if (label) { label.textContent = 'Sunucu Çevrimdışı'; label.style.color = '#dc2626'; }
-        }
-        check();
-        setInterval(check, 15000);
-    })();
     </script>
 
     <!-- ===== EXPORT MODAL ===== -->
@@ -10036,7 +10564,7 @@ function sendContactMessage() {
     // sunucu üzerinden sylvagis.world@gmail.com adresine gönderilir.
     if (sendBtn) { sendBtn.disabled = true; sendBtn.style.opacity = '0.6'; }
 
-    fetch('http://127.0.0.1:5000/api/contact', {
+    fetch(API_BASE + '/api/contact', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: name, email: email, subject: subject, message: message })
@@ -10236,7 +10764,7 @@ function fetchRawBandsCatalog(datasetKey) {
         container.innerHTML = '<div style="font-size:0.72rem;color:#94a3b8;padding:4px 2px;">⏳ Bantlar yükleniyor…</div>';
     }
 
-    fetch('http://127.0.0.1:5000/api/raw-bands', {
+    fetch(API_BASE + '/api/raw-bands', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ dataset: datasetKey })
@@ -10430,7 +10958,7 @@ function downloadRawBands() {
     }
     if (btn) { btn.disabled = true; btn.textContent = '⏳ Hazırlanıyor…'; }
 
-    fetch('http://127.0.0.1:5000/api/download-raw-bands', {
+    fetch(API_BASE + '/api/download-raw-bands', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -10594,7 +11122,7 @@ function executeGeoTiffDownload() {
     if (dialogBox) dialogBox.classList.add('downloading');
 
     var _dlClipMode = (document.getElementById('viewMode') || {}).value || 'clip';
-    fetch('http://127.0.0.1:5000/api/download-geotiff', {
+    fetch(API_BASE + '/api/download-geotiff', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ filename: filename, scale: scale, crs: crs, clipMode: _dlClipMode })
@@ -10952,6 +11480,8 @@ var SYLVA_TRANSLATIONS = {
     btn_export: '🖨️ Export Image (PNG / JPEG / PDF)',
     mobile_data: 'Data', mobile_analysis: 'Analysis', mobile_draw: 'Draw', mobile_output: 'Output',
     server_label: 'Server',
+    server_online: 'Online', server_offline: 'Offline',
+    trial_notice: 'The system is currently in trial version. Therefore, user login and contact features are temporarily inactive.\nYou can use the system with all analysis features without logging in.',
     chart_dl_title: '🖼️ Download Chart', lbl_format: 'Format', lbl_filename: 'File Name',
     btn_cancel: 'Cancel', btn_download: '⬇️ Download',
     contact_btn_label: 'Contact', contact_btn_title: 'Contact Us',
@@ -11247,6 +11777,8 @@ var SYLVA_TRANSLATIONS = {
     btn_export: '🖨️ Görsel Çıktı Al (PNG / JPEG / PDF)',
     mobile_data: 'Veri', mobile_analysis: 'Analiz', mobile_draw: 'Çizim', mobile_output: 'Çıktı',
     server_label: 'Sunucu',
+    server_online: 'Çevrimiçi', server_offline: 'Çevrimdışı',
+    trial_notice: 'Sistem şu anda deneme sürümündedir. Bu nedenle kullanıcı girişi ve iletişim özellikleri geçici olarak aktif değildir.\nSistemi giriş yapmadan tüm analiz özellikleriyle kullanabilirsiniz.',
     chart_dl_title: '🖼️ Grafiği İndir', lbl_format: 'Format', lbl_filename: 'Dosya Adı',
     btn_cancel: 'İptal', btn_download: '⬇️ İndir',
     contact_btn_label: 'İletişim', contact_btn_title: 'İletişim',
@@ -11538,6 +12070,7 @@ var SYLVA_TRANSLATIONS = {
     btn_export: '🖨️ Bild exportieren (PNG / JPEG / PDF)',
     mobile_data: 'Daten', mobile_analysis: 'Analyse', mobile_draw: 'Zeichnen', mobile_output: 'Ausgabe',
     server_label: 'Server',
+    trial_notice: 'Das System befindet sich derzeit in der Testversion. Daher sind die Benutzeranmeldung und die Kontaktfunktionen vorübergehend deaktiviert.\nSie können das System mit allen Analysefunktionen ohne Anmeldung nutzen.',
     chart_dl_title: '🖼️ Diagramm herunterladen', lbl_format: 'Format', lbl_filename: 'Dateiname',
     btn_cancel: 'Abbrechen', btn_download: '⬇️ Herunterladen',
     contact_btn_label: 'Kontakt', contact_btn_title: 'Kontakt',
@@ -11829,6 +12362,7 @@ var SYLVA_TRANSLATIONS = {
     btn_export: '🖨️ Exporter image (PNG / JPEG / PDF)',
     mobile_data: 'Données', mobile_analysis: 'Analyse', mobile_draw: 'Dessiner', mobile_output: 'Sortie',
     server_label: 'Serveur',
+    trial_notice: "Le système est actuellement en version d'essai. Par conséquent, la connexion utilisateur et les fonctionnalités de contact sont temporairement désactivées.\nVous pouvez utiliser le système avec toutes les fonctionnalités d'analyse sans vous connecter.",
     chart_dl_title: '🖼️ Télécharger graphique', lbl_format: 'Format', lbl_filename: 'Nom de fichier',
     btn_cancel: 'Annuler', btn_download: '⬇️ Télécharger',
     contact_btn_label: 'Contact', contact_btn_title: 'Nous contacter',
@@ -12120,6 +12654,7 @@ var SYLVA_TRANSLATIONS = {
     btn_export: '🖨️ Exportar imagen (PNG / JPEG / PDF)',
     mobile_data: 'Datos', mobile_analysis: 'Análisis', mobile_draw: 'Dibujar', mobile_output: 'Salida',
     server_label: 'Servidor',
+    trial_notice: 'El sistema se encuentra actualmente en versión de prueba. Por ello, las funciones de inicio de sesión y contacto están temporalmente desactivadas.\nPuede utilizar el sistema con todas las funciones de análisis sin iniciar sesión.',
     chart_dl_title: '🖼️ Descargar gráfico', lbl_format: 'Formato', lbl_filename: 'Nombre de archivo',
     btn_cancel: 'Cancelar', btn_download: '⬇️ Descargar',
     contact_btn_label: 'Contacto', contact_btn_title: 'Contáctenos',
@@ -12411,6 +12946,7 @@ var SYLVA_TRANSLATIONS = {
     btn_export: '🖨️ تصدير صورة (PNG / JPEG / PDF)',
     mobile_data: 'بيانات', mobile_analysis: 'تحليل', mobile_draw: 'رسم', mobile_output: 'إخراج',
     server_label: 'الخادم',
+    trial_notice: 'النظام حاليًا في الإصدار التجريبي. لذلك، ميزات تسجيل الدخول والتواصل غير مفعّلة مؤقتًا.\nيمكنك استخدام النظام بجميع ميزات التحليل دون تسجيل الدخول.',
     chart_dl_title: '🖼️ تحميل المخطط', lbl_format: 'الصيغة', lbl_filename: 'اسم الملف',
     btn_cancel: 'إلغاء', btn_download: '⬇️ تحميل',
     contact_btn_label: 'اتصل بنا', contact_btn_title: 'اتصل بنا',
@@ -12702,6 +13238,7 @@ var SYLVA_TRANSLATIONS = {
     btn_export: '🖨️ خروجی تصویر (PNG / JPEG / PDF)',
     mobile_data: 'داده', mobile_analysis: 'تحلیل', mobile_draw: 'رسم', mobile_output: 'خروجی',
     server_label: 'سرور',
+    trial_notice: 'سیستم در حال حاضر در نسخه آزمایشی است. به همین دلیل، ویژگی‌های ورود کاربر و تماس موقتاً غیرفعال هستند.\nمی‌توانید بدون ورود به سیستم از تمام امکانات تحلیل استفاده کنید.',
     chart_dl_title: '🖼️ دانلود نمودار', lbl_format: 'قالب', lbl_filename: 'نام فایل',
     btn_cancel: 'لغو', btn_download: '⬇️ دانلود',
     contact_btn_label: 'تماس با ما', contact_btn_title: 'تماس با ما',
@@ -12993,6 +13530,7 @@ var SYLVA_TRANSLATIONS = {
     btn_export: '🖨️ 导出图像 (PNG / JPEG / PDF)',
     mobile_data: '数据', mobile_analysis: '分析', mobile_draw: '绘图', mobile_output: '输出',
     server_label: '服务器',
+    trial_notice: '系统当前处于试用版阶段，因此用户登录和联系功能暂时不可用。\n您无需登录即可使用系统的全部分析功能。',
     chart_dl_title: '🖼️ 下载图表', lbl_format: '格式', lbl_filename: '文件名',
     btn_cancel: '取消', btn_download: '⬇️ 下载',
     contact_btn_label: '联系我们', contact_btn_title: '联系我们',
@@ -13284,6 +13822,7 @@ var SYLVA_TRANSLATIONS = {
     btn_export: '🖨️ 画像エクスポート (PNG / JPEG / PDF)',
     mobile_data: 'データ', mobile_analysis: '解析', mobile_draw: '描画', mobile_output: '出力',
     server_label: 'サーバー',
+    trial_notice: '現在このシステムは試用版です。そのため、ユーザーログインおよびお問い合わせ機能は一時的に無効になっています。\nログインせずにすべての分析機能をご利用いただけます。',
     chart_dl_title: '🖼️ チャートダウンロード', lbl_format: 'フォーマット', lbl_filename: 'ファイル名',
     btn_cancel: 'キャンセル', btn_download: '⬇️ ダウンロード',
     contact_btn_label: 'お問い合わせ', contact_btn_title: 'お問い合わせ',
@@ -13575,6 +14114,7 @@ var SYLVA_TRANSLATIONS = {
     btn_export: '🖨️ 이미지 내보내기 (PNG / JPEG / PDF)',
     mobile_data: '데이터', mobile_analysis: '분석', mobile_draw: '그리기', mobile_output: '출력',
     server_label: '서버',
+    trial_notice: '현재 시스템은 체험판입니다. 이에 따라 사용자 로그인 및 문의 기능은 일시적으로 비활성화되어 있습니다.\n로그인하지 않고도 모든 분석 기능을 이용하실 수 있습니다.',
     chart_dl_title: '🖼️ 차트 다운로드', lbl_format: '형식', lbl_filename: '파일 이름',
     btn_cancel: '취소', btn_download: '⬇️ 다운로드',
     contact_btn_label: '문의하기', contact_btn_title: '문의하기',
@@ -13866,6 +14406,7 @@ var SYLVA_TRANSLATIONS = {
     btn_export: '🖨️ छवि निर्यात (PNG / JPEG / PDF)',
     mobile_data: 'डेटा', mobile_analysis: 'विश्लेषण', mobile_draw: 'आरेखण', mobile_output: 'आउटपुट',
     server_label: 'सर्वर',
+    trial_notice: 'सिस्टम अभी ट्रायल संस्करण में है। इसलिए, उपयोगकर्ता लॉगिन और संपर्क सुविधाएँ अस्थायी रूप से निष्क्रिय हैं।\nआप बिना लॉगिन किए सभी विश्लेषण सुविधाओं के साथ सिस्टम का उपयोग कर सकते हैं।',
     chart_dl_title: '🖼️ चार्ट डाउनलोड', lbl_format: 'प्रारूप', lbl_filename: 'फ़ाइल नाम',
     btn_cancel: 'रद्द करें', btn_download: '⬇️ डाउनलोड',
     contact_btn_label: 'संपर्क करें', contact_btn_title: 'हमसे संपर्क करें',
@@ -14129,6 +14670,7 @@ var SYLVA_TRANSLATIONS = {
     btn_export: '🖨️ Ekspor Gambar (PNG / JPEG / PDF)',
     mobile_data: 'Data', mobile_analysis: 'Analisis', mobile_draw: 'Gambar', mobile_output: 'Keluaran',
     server_label: 'Server',
+    trial_notice: 'Sistem saat ini berada dalam versi uji coba. Oleh karena itu, fitur login pengguna dan kontak untuk sementara tidak aktif.\nAnda dapat menggunakan sistem dengan semua fitur analisis tanpa perlu login.',
     chart_dl_title: '🖼️ Unduh Grafik', lbl_format: 'Format', lbl_filename: 'Nama File',
     btn_cancel: 'Batal', btn_download: '⬇️ Unduh',
     contact_btn_label: 'Kontak', contact_btn_title: 'Hubungi Kami',
@@ -14931,5 +15473,501 @@ document.addEventListener('DOMContentLoaded',function(){
 });
 })();
 </script>
+
+<!-- ============================================================
+     📖 ETKİLEŞİMLİ REHBER (Interactive Onboarding Tour)
+     ------------------------------------------------------------
+     Navbar'daki "❓ Rehber" (id="nav-guide-btn") butonuna basıldığında
+     uygulamanın temel bölümlerini adım adım tanıtan, spotlight +
+     ok + kavisli bilgi kutusu şeklinde çalışan bir tanıtım modu.
+     - "İleri" butonu VEYA sayfanın herhangi bir yerine sol tık ile
+       bir sonraki adıma geçilir.
+     - Kutunun sağ üstündeki ✕ ile rehber istenildiği an kapatılabilir.
+     - Çok dilli: mevcut _sylvaLang / applySylvaLang sistemiyle senkron
+       çalışır (dil değişince açık adım da otomatik güncellenir).
+     - Mobilde ilgili sekmeyi (Veri / Analiz / Harita / Çizim) otomatik
+       açar; masaüstünde sağ panel daraltılmışsa otomatik genişletir.
+     ============================================================ -->
+<style>
+#sylva-tour-backdrop {
+    position: fixed; inset: 0; z-index: 999990;
+    background: transparent; /* karartma spotlight'ın box-shadow'undan gelir */
+    cursor: pointer;
+    display: none;
+}
+#sylva-tour-backdrop.active { display: block; }
+
+#sylva-tour-spotlight {
+    position: fixed; z-index: 999991;
+    border-radius: 12px;
+    box-shadow: 0 0 0 9999px rgba(9, 14, 28, 0.62);
+    border: 2px solid #38bdf8;
+    pointer-events: none;
+    display: none;
+    transition: top .32s cubic-bezier(.4,0,.2,1), left .32s cubic-bezier(.4,0,.2,1),
+                width .32s cubic-bezier(.4,0,.2,1), height .32s cubic-bezier(.4,0,.2,1);
+}
+
+#sylva-tour-arrow {
+    position: fixed; z-index: 999992;
+    width: 26px; height: 26px;
+    pointer-events: none;
+    display: none;
+    filter: drop-shadow(0 2px 3px rgba(0,0,0,.35));
+    transition: top .32s cubic-bezier(.4,0,.2,1), left .32s cubic-bezier(.4,0,.2,1), transform .32s;
+    animation: sylvaTourArrowPulse 1.3s ease-in-out infinite;
+}
+@keyframes sylvaTourArrowPulse {
+    0%, 100% { opacity: 0.55; }
+    50% { opacity: 1; }
+}
+
+#sylva-tour-card {
+    position: fixed; z-index: 999993;
+    width: 300px; max-width: calc(100vw - 24px);
+    background: #ffffff;
+    border-radius: 16px;
+    border-top: 3px solid #1e3a8a;
+    box-shadow: 0 14px 34px rgba(0,0,0,0.30);
+    padding: 16px 18px 14px;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    display: none;
+    transition: top .32s cubic-bezier(.4,0,.2,1), left .32s cubic-bezier(.4,0,.2,1);
+}
+#sylva-tour-close {
+    position: absolute; top: 8px; right: 10px;
+    border: none; background: transparent; font-size: 1rem; color: #94a3b8; cursor: pointer;
+    width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    transition: background .15s, color .15s;
+}
+#sylva-tour-close:hover { background: #f1f5f9; color: #ef4444; }
+#sylva-tour-step-count {
+    font-size: .68rem; font-weight: 800; letter-spacing: .04em; color: #2563eb;
+    text-transform: uppercase; margin-bottom: 5px;
+}
+#sylva-tour-title { font-size: 1rem; font-weight: 800; color: #1e3a8a; margin-bottom: 6px; padding-right: 22px; line-height: 1.3; }
+#sylva-tour-desc { font-size: .83rem; line-height: 1.55; color: #475569; margin-bottom: 13px; }
+#sylva-tour-dots { display: flex; gap: 5px; margin-bottom: 13px; flex-wrap: wrap; }
+.sylva-tour-dot { width: 6px; height: 6px; border-radius: 50%; background: #cbd5e1; transition: background .2s, transform .2s; }
+.sylva-tour-dot.active { background: #1e3a8a; transform: scale(1.35); }
+#sylva-tour-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+#sylva-tour-next {
+    background: #1e3a8a; color: #fff; border: none; padding: 8px 18px; border-radius: 8px; font-weight: 700;
+    font-size: .83rem; cursor: pointer; transition: background .15s;
+}
+#sylva-tour-next:hover { background: #172a63; }
+#sylva-tour-prev {
+    background: transparent; color: #64748b; border: none; padding: 8px 4px; font-size: .8rem; cursor: pointer; font-weight: 600;
+}
+#sylva-tour-prev:disabled { opacity: .3; cursor: default; }
+[dir="rtl"] #sylva-tour-close { right: auto; left: 10px; }
+[dir="rtl"] #sylva-tour-title,
+[dir="rtl"] #sylva-tour-desc { padding-right: 0; padding-left: 22px; text-align: right; }
+@media (max-width: 520px) {
+    #sylva-tour-card { width: calc(100vw - 24px); padding: 14px 16px 12px; }
+}
+</style>
+
+<div id="sylva-tour-backdrop"></div>
+<div id="sylva-tour-spotlight"></div>
+<svg id="sylva-tour-arrow" viewBox="0 0 24 24">
+    <path d="M12 4 L12 20 M12 4 L6 10 M12 4 L18 10" stroke="#38bdf8" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+<div id="sylva-tour-card">
+    <button type="button" id="sylva-tour-close" title="Kapat">✕</button>
+    <div id="sylva-tour-step-count"></div>
+    <div id="sylva-tour-title"></div>
+    <div id="sylva-tour-desc"></div>
+    <div id="sylva-tour-dots"></div>
+    <div id="sylva-tour-footer">
+        <button type="button" id="sylva-tour-prev">‹</button>
+        <button type="button" id="sylva-tour-next">İleri ›</button>
+    </div>
+</div>
+
+<script>
+(function () {
+
+    // ── Çok dilli rehber metinleri ─────────────────────────────
+    var TOUR_I18N = {
+        tr: { next:'İleri ›', finish:'Bitir ✓', stepOf:'Adım {n} / {total}', steps: {
+            workspace:{title:'📍 Çalışma Alanı', desc:'Analiz yapmak istediğiniz bölgeyi burada tanımlarsınız. Bir KML/KMZ/SHP dosyası yükleyebilir ya da haritada Poligon veya Dikdörtgen çizerek çalışma alanınızı (AOI) belirleyebilirsiniz. Tüm analizler bu alana göre çalışır.'},
+            dates:{title:'📅 Tarih Seçimi', desc:'Uydu görüntülerini taramak istediğiniz başlangıç ve bitiş tarihlerini seçin. Sistem, bu tarih aralığında çekilmiş sahneleri arayacaktır.'},
+            satelliteData:{title:'🛰️ Uydu Veri Seçimi', desc:'Sentinel-2 veya Landsat gibi kullanmak istediğiniz uydu/sensörü seçin. AOI, tarih ve bulutluluk kriterlerinize uyan gerçek sahneler galeri olarak listelenir.'},
+            analysisModules:{title:'🌍 Analiz Modülleri', desc:'NDVI/NDWI gibi bitki-su indeksleri, arazi kullanımı (LULC), topografik analizler (eğim, bakı, DEM) veya ham bant verileri arasından istediğinizi seçip 🚀 Analizi Çalıştır butonuna basın.'},
+            legend:{title:'🗂️ Lejant', desc:'Analiz sonucundaki sınıfları/değer aralıklarını açıklayan lejant kutusunu burada haritada gösterip gizleyebilir, haritadaki konumunu sürükleyerek değiştirebilirsiniz.'},
+            symbology:{title:'🎨 Semboloji', desc:'Sonucun haritada nasıl görüneceğini burada özelleştirirsiniz: Stretched (sürekli renk geçişi) veya Classified (sınıflandırılmış) mod, renk paleti ve sınıf aralıkları buradan ayarlanır.'},
+            charts:{title:'📊 Grafikler', desc:'Analiz sonucundaki istatistikler burada sütun veya pasta grafik olarak gösterilir; grafiği görsel, CSV veya PDF olarak indirebilirsiniz.'},
+            exportImage:{title:'🖨️ Görsel Çıktı Al', desc:'Haritanızı; kuzey oku, ölçek çubuğu, lejant ve eklediğiniz çizimlerle birlikte PNG, JPEG veya PDF formatında dışa aktarın — rapor ya da sunum için hazır bir harita çıktısı elde edin.'},
+            geotiff:{title:'📥 GeoTIFF İndirme', desc:'Analiz sonucunun ham piksel verisini, istediğiniz çözünürlük ve koordinat sistemiyle (CRS) GeoTIFF formatında bilgisayarınıza indirin — QGIS, ArcGIS gibi CBS yazılımlarında doğrudan kullanılabilir.'},
+            drawTools:{title:'✏️ Metin ve Çizim Araçları', desc:'Kalem, çizgi, ok, poligon, daire ve metin araçlarıyla haritanız üzerine notlar, işaretlemeler ve açıklamalar ekleyebilirsiniz.'}
+        }},
+        en: { next:'Next ›', finish:'Finish ✓', stepOf:'Step {n} of {total}', steps: {
+            workspace:{title:'📍 Work Area', desc:'Define the region you want to analyze here. Upload a KML/KMZ/SHP file, or draw a Polygon or Rectangle on the map to set your Area of Interest (AOI). All analyses run within this area.'},
+            dates:{title:'📅 Date Selection', desc:'Choose the start and end dates for your satellite imagery search. The system will look for scenes captured within this date range.'},
+            satelliteData:{title:'🛰️ Satellite Data Selection', desc:'Pick the satellite/sensor you want to use, such as Sentinel-2 or Landsat. Real scenes matching your AOI, dates and cloud cover are listed in a gallery.'},
+            analysisModules:{title:'🌍 Analysis Modules', desc:'Choose from vegetation/water indices (NDVI, NDWI...), land cover (LULC), topographic analyses (slope, aspect, DEM), or raw band data, then click 🚀 Run Analysis.'},
+            legend:{title:'🗂️ Legend', desc:'Show or hide the legend box that explains the classes/value ranges on the map, and drag it to reposition it.'},
+            symbology:{title:'🎨 Symbology', desc:'Customize how your result looks: choose Stretched (continuous gradient) or Classified mode, pick a color palette, and set class ranges here.'},
+            charts:{title:'📊 Charts', desc:'Statistics from your analysis are shown here as a bar or pie chart; download them as an image, CSV or PDF.'},
+            exportImage:{title:'🖨️ Export Image', desc:'Export your map — with north arrow, scale bar, legend and any drawings — as PNG, JPEG or PDF, ready for a report or presentation.'},
+            geotiff:{title:'📥 GeoTIFF Download', desc:'Download the raw pixel data of your analysis as a GeoTIFF, with your chosen resolution and coordinate system (CRS) — ready to use in QGIS, ArcGIS and other GIS software.'},
+            drawTools:{title:'✏️ Text & Drawing Tools', desc:'Use the pen, line, arrow, polygon, circle and text tools to add notes, markup and annotations on your map.'}
+        }},
+        de: { next:'Weiter ›', finish:'Fertig ✓', stepOf:'Schritt {n} von {total}', steps: {
+            workspace:{title:'📍 Arbeitsbereich', desc:'Legen Sie hier die zu analysierende Region fest. Laden Sie eine KML/KMZ/SHP-Datei hoch oder zeichnen Sie ein Polygon/Rechteck auf der Karte, um Ihr Untersuchungsgebiet (AOI) festzulegen. Alle Analysen beziehen sich auf diesen Bereich.'},
+            dates:{title:'📅 Datumsauswahl', desc:'Wählen Sie Start- und Enddatum für die Satellitenbildsuche. Das System sucht nach Aufnahmen in diesem Zeitraum.'},
+            satelliteData:{title:'🛰️ Satellitendatenauswahl', desc:'Wählen Sie den gewünschten Satelliten/Sensor, z. B. Sentinel-2 oder Landsat. Passende Szenen werden nach AOI, Datum und Bewölkung als Galerie angezeigt.'},
+            analysisModules:{title:'🌍 Analysemodule', desc:'Wählen Sie zwischen Vegetations-/Wasserindizes (NDVI, NDWI…), Landbedeckung (LULC), topografischen Analysen (Neigung, Exposition, DEM) oder Rohbanddaten und klicken Sie auf 🚀 Analyse starten.'},
+            legend:{title:'🗂️ Legende', desc:'Blenden Sie die Legende ein/aus, die Klassen bzw. Wertebereiche auf der Karte erklärt, und verschieben Sie sie per Drag & Drop.'},
+            symbology:{title:'🎨 Symbolik', desc:'Passen Sie die Darstellung an: Stretched (kontinuierlicher Verlauf) oder Classified (klassifiziert), Farbpalette und Klassenbereiche.'},
+            charts:{title:'📊 Diagramme', desc:'Statistiken Ihrer Analyse werden als Balken- oder Kreisdiagramm angezeigt; als Bild, CSV oder PDF herunterladbar.'},
+            exportImage:{title:'🖨️ Bildexport', desc:'Exportieren Sie Ihre Karte – mit Nordpfeil, Maßstab, Legende und Zeichnungen – als PNG, JPEG oder PDF für Bericht oder Präsentation.'},
+            geotiff:{title:'📥 GeoTIFF-Download', desc:'Laden Sie die Rohpixeldaten Ihrer Analyse als GeoTIFF mit gewünschter Auflösung und Koordinatensystem (CRS) herunter – nutzbar in QGIS, ArcGIS usw.'},
+            drawTools:{title:'✏️ Text- & Zeichenwerkzeuge', desc:'Fügen Sie mit Stift, Linie, Pfeil, Polygon, Kreis und Text Notizen und Markierungen auf der Karte hinzu.'}
+        }},
+        fr: { next:'Suivant ›', finish:'Terminer ✓', stepOf:'Étape {n} sur {total}', steps: {
+            workspace:{title:'📍 Zone de travail', desc:"Définissez ici la région à analyser. Importez un fichier KML/KMZ/SHP ou dessinez un polygone/rectangle sur la carte pour définir votre zone d'intérêt (AOI). Toutes les analyses portent sur cette zone."},
+            dates:{title:'📅 Sélection des dates', desc:"Choisissez les dates de début et de fin pour la recherche d'images satellite. Le système recherchera les scènes prises durant cette période."},
+            satelliteData:{title:'🛰️ Sélection des données satellite', desc:"Choisissez le satellite/capteur souhaité, comme Sentinel-2 ou Landsat. Les scènes correspondant à l'AOI, aux dates et à la nébulosité sont listées dans une galerie."},
+            analysisModules:{title:"🌍 Modules d'analyse", desc:"Choisissez parmi les indices de végétation/eau (NDVI, NDWI…), l'occupation du sol (LULC), les analyses topographiques (pente, orientation, MNT) ou les bandes brutes, puis cliquez sur 🚀 Lancer l'analyse."},
+            legend:{title:'🗂️ Légende', desc:"Affichez ou masquez la légende expliquant les classes/plages de valeurs sur la carte, et déplacez-la par glisser-déposer."},
+            symbology:{title:'🎨 Symbologie', desc:"Personnalisez l'affichage du résultat : mode Stretched (dégradé continu) ou Classified (classé), palette de couleurs et plages de classes."},
+            charts:{title:'📊 Graphiques', desc:'Les statistiques de votre analyse sont affichées en graphique à barres ou circulaire ; téléchargeables en image, CSV ou PDF.'},
+            exportImage:{title:"🖨️ Export d'image", desc:'Exportez votre carte — avec flèche du nord, échelle, légende et dessins — en PNG, JPEG ou PDF, prête pour un rapport ou une présentation.'},
+            geotiff:{title:'📥 Téléchargement GeoTIFF', desc:'Téléchargez les données brutes de votre analyse en GeoTIFF, avec la résolution et le système de coordonnées (CRS) de votre choix — utilisable dans QGIS, ArcGIS, etc.'},
+            drawTools:{title:'✏️ Outils de texte et de dessin', desc:'Utilisez le stylo, la ligne, la flèche, le polygone, le cercle et le texte pour annoter votre carte.'}
+        }},
+        es: { next:'Siguiente ›', finish:'Finalizar ✓', stepOf:'Paso {n} de {total}', steps: {
+            workspace:{title:'📍 Área de trabajo', desc:'Defina aquí la región que desea analizar. Cargue un archivo KML/KMZ/SHP o dibuje un polígono o rectángulo en el mapa para definir su área de interés (AOI). Todos los análisis se basan en esta área.'},
+            dates:{title:'📅 Selección de fechas', desc:'Elija las fechas de inicio y fin para buscar imágenes satelitales. El sistema buscará escenas dentro de ese rango.'},
+            satelliteData:{title:'🛰️ Selección de datos satelitales', desc:'Elija el satélite/sensor que desea usar, como Sentinel-2 o Landsat. Las escenas que coincidan con su AOI, fechas y nubosidad se muestran en una galería.'},
+            analysisModules:{title:'🌍 Módulos de análisis', desc:'Elija entre índices de vegetación/agua (NDVI, NDWI…), cobertura del suelo (LULC), análisis topográficos (pendiente, orientación, DEM) o bandas sin procesar, y pulse 🚀 Ejecutar análisis.'},
+            legend:{title:'🗂️ Leyenda', desc:'Muestre u oculte el cuadro de leyenda que explica las clases/rangos de valores en el mapa, y arrástrelo para reposicionarlo.'},
+            symbology:{title:'🎨 Simbología', desc:'Personalice cómo se ve el resultado: modo Stretched (degradado continuo) o Classified (clasificado), paleta de colores y rangos de clases.'},
+            charts:{title:'📊 Gráficos', desc:'Las estadísticas de su análisis se muestran como gráfico de barras o circular; puede descargarlas como imagen, CSV o PDF.'},
+            exportImage:{title:'🖨️ Exportar imagen', desc:'Exporte su mapa —con flecha norte, escala, leyenda y dibujos— en PNG, JPEG o PDF, listo para un informe o presentación.'},
+            geotiff:{title:'📥 Descarga GeoTIFF', desc:'Descargue los datos de píxeles sin procesar de su análisis en formato GeoTIFF, con la resolución y sistema de coordenadas (CRS) que elija.'},
+            drawTools:{title:'✏️ Herramientas de texto y dibujo', desc:'Use el lápiz, línea, flecha, polígono, círculo y texto para añadir notas y marcas en su mapa.'}
+        }},
+        ar: { next:'التالي ›', finish:'إنهاء ✓', stepOf:'الخطوة {n} من {total}', steps: {
+            workspace:{title:'📍 منطقة العمل', desc:'حدد هنا المنطقة التي تريد تحليلها. ارفع ملف KML/KMZ/SHP أو ارسم مضلعًا أو مستطيلًا على الخريطة لتحديد منطقة الاهتمام (AOI). تعتمد كل التحليلات على هذه المنطقة.'},
+            dates:{title:'📅 اختيار التاريخ', desc:'اختر تاريخ البدء والانتهاء للبحث عن الصور الفضائية. سيبحث النظام عن المشاهد الملتقطة ضمن هذا النطاق.'},
+            satelliteData:{title:'🛰️ اختيار بيانات القمر الصناعي', desc:'اختر القمر الصناعي أو المستشعر المطلوب مثل Sentinel-2 أو Landsat. ستُعرض المشاهد المطابقة لمنطقتك وتواريخك ونسبة الغيوم في معرض.'},
+            analysisModules:{title:'🌍 وحدات التحليل', desc:'اختر من بين مؤشرات النبات/الماء (NDVI، NDWI...)، الغطاء الأرضي (LULC)، التحليلات الطبوغرافية (الانحدار، الاتجاه، DEM)، أو النطاقات الخام، ثم اضغط 🚀 تشغيل التحليل.'},
+            legend:{title:'🗂️ مفتاح الخريطة', desc:'أظهر أو أخفِ صندوق مفتاح الخريطة الذي يوضح الفئات ونطاقات القيم، ويمكنك سحبه لتغيير موضعه.'},
+            symbology:{title:'🎨 الترميز', desc:'خصّص شكل النتيجة: وضع Stretched (تدرج مستمر) أو Classified (مصنّف)، لوحة الألوان ونطاقات الفئات.'},
+            charts:{title:'📊 الرسوم البيانية', desc:'تُعرض إحصاءات تحليلك كرسم بياني شريطي أو دائري؛ يمكن تنزيلها كصورة أو CSV أو PDF.'},
+            exportImage:{title:'🖨️ تصدير صورة', desc:'صدّر خريطتك — مع سهم الشمال ومقياس الرسم ومفتاح الخريطة والرسومات — بصيغة PNG أو JPEG أو PDF جاهزة للتقرير أو العرض.'},
+            geotiff:{title:'📥 تنزيل GeoTIFF', desc:'نزّل بيانات البكسل الخام لتحليلك بصيغة GeoTIFF، بالدقة ونظام الإحداثيات (CRS) الذي تختاره — قابلة للاستخدام في QGIS وArcGIS.'},
+            drawTools:{title:'✏️ أدوات النص والرسم', desc:'استخدم القلم والخط والسهم والمضلع والدائرة والنص لإضافة ملاحظات وتعليقات على خريطتك.'}
+        }},
+        fa: { next:'بعدی ›', finish:'پایان ✓', stepOf:'مرحله {n} از {total}', steps: {
+            workspace:{title:'📍 محدوده کاری', desc:'منطقه‌ای که می‌خواهید تحلیل کنید را اینجا مشخص کنید. فایل KML/KMZ/SHP بارگذاری کنید یا با رسم چندضلعی/مستطیل روی نقشه، محدوده مورد نظر (AOI) را تعیین کنید. همه تحلیل‌ها بر اساس این محدوده انجام می‌شود.'},
+            dates:{title:'📅 انتخاب تاریخ', desc:'تاریخ شروع و پایان جستجوی تصاویر ماهواره‌ای را انتخاب کنید. سامانه صحنه‌های ثبت‌شده در این بازه را جستجو می‌کند.'},
+            satelliteData:{title:'🛰️ انتخاب داده ماهواره‌ای', desc:'ماهواره/حسگر مورد نظر مانند Sentinel-2 یا Landsat را انتخاب کنید. صحنه‌های منطبق با محدوده، تاریخ و ابرناکی در گالری نمایش داده می‌شوند.'},
+            analysisModules:{title:'🌍 ماژول‌های تحلیل', desc:'از میان شاخص‌های پوشش گیاهی/آب (NDVI، NDWI...)، کاربری اراضی (LULC)، تحلیل‌های توپوگرافی (شیب، جهت، DEM) یا باندهای خام انتخاب کنید و سپس 🚀 اجرای تحلیل را بزنید.'},
+            legend:{title:'🗂️ راهنمای نقشه', desc:'کادر راهنمای نقشه که کلاس‌ها و بازه‌های مقدار را توضیح می‌دهد نمایش یا پنهان کنید و با کشیدن آن جابه‌جا کنید.'},
+            symbology:{title:'🎨 نمادگذاری', desc:'نحوه نمایش نتیجه را سفارشی کنید: حالت Stretched (طیف پیوسته) یا Classified (طبقه‌بندی‌شده)، پالت رنگ و بازه‌های کلاس.'},
+            charts:{title:'📊 نمودارها', desc:'آمار تحلیل شما به‌صورت نمودار میله‌ای یا دایره‌ای نمایش داده می‌شود؛ قابل دانلود به‌صورت تصویر، CSV یا PDF.'},
+            exportImage:{title:'🖨️ خروجی تصویری', desc:'نقشه خود را — همراه با فلش شمال، مقیاس، راهنما و رسم‌ها — به‌صورت PNG، JPEG یا PDF خروجی بگیرید.'},
+            geotiff:{title:'📥 دانلود GeoTIFF', desc:'داده خام پیکسلی تحلیل خود را با وضوح و سیستم مختصات (CRS) دلخواه به‌صورت GeoTIFF دانلود کنید.'},
+            drawTools:{title:'✏️ ابزارهای متن و ترسیم', desc:'با ابزارهای قلم، خط، فلش، چندضلعی، دایره و متن، یادداشت و نشانه‌گذاری روی نقشه اضافه کنید.'}
+        }},
+        zh: { next:'下一步 ›', finish:'完成 ✓', stepOf:'第 {n} / {total} 步', steps: {
+            workspace:{title:'📍 工作区域', desc:'在此定义您要分析的区域。上传 KML/KMZ/SHP 文件，或在地图上绘制多边形/矩形来设定研究区域（AOI）。所有分析均基于此区域。'},
+            dates:{title:'📅 日期选择', desc:'选择要搜索卫星影像的起止日期，系统将查找该时间范围内拍摄的影像。'},
+            satelliteData:{title:'🛰️ 卫星数据选择', desc:'选择要使用的卫星/传感器，如 Sentinel-2 或 Landsat。符合区域、日期和云量条件的影像将以图库形式列出。'},
+            analysisModules:{title:'🌍 分析模块', desc:'可从植被/水体指数（NDVI、NDWI 等）、土地覆盖（LULC）、地形分析（坡度、坡向、DEM）或原始波段中选择，然后点击 🚀 运行分析。'},
+            legend:{title:'🗂️ 图例', desc:'显示或隐藏用于说明地图上类别/数值范围的图例框，并可拖动改变其位置。'},
+            symbology:{title:'🎨 符号化', desc:'自定义结果的显示方式：Stretched（连续渐变）或 Classified（分类）模式、配色方案及分类区间。'},
+            charts:{title:'📊 图表', desc:'分析统计结果以柱状图或饼图显示；可下载为图片、CSV 或 PDF。'},
+            exportImage:{title:'🖨️ 导出图像', desc:'将地图连同指北针、比例尺、图例和标注一起导出为 PNG、JPEG 或 PDF，可直接用于报告或演示。'},
+            geotiff:{title:'📥 GeoTIFF 下载', desc:'以所选分辨率和坐标系（CRS）下载分析结果的原始像素数据（GeoTIFF），可在 QGIS、ArcGIS 等软件中使用。'},
+            drawTools:{title:'✏️ 文字与绘图工具', desc:'使用画笔、直线、箭头、多边形、圆形和文字工具在地图上添加注释和标记。'}
+        }},
+        ja: { next:'次へ ›', finish:'完了 ✓', stepOf:'ステップ {n} / {total}', steps: {
+            workspace:{title:'📍 作業エリア', desc:'分析したい範囲をここで指定します。KML/KMZ/SHPファイルをアップロードするか、地図上でポリゴンまたは長方形を描いて対象範囲（AOI）を設定できます。すべての分析はこの範囲に基づいて実行されます。'},
+            dates:{title:'📅 日付選択', desc:'衛星画像を検索する開始日と終了日を選択します。この期間内に撮影されたシーンが検索されます。'},
+            satelliteData:{title:'🛰️ 衛星データ選択', desc:'Sentinel-2やLandsatなど使用したい衛星・センサーを選びます。AOI、日付、雲量条件に合うシーンがギャラリーに一覧表示されます。'},
+            analysisModules:{title:'🌍 解析モジュール', desc:'NDVI・NDWIなどの植生/水指数、土地被覆（LULC）、地形解析（傾斜、方位、DEM）、または生バンドデータから選択し、🚀解析実行を押してください。'},
+            legend:{title:'🗂️ 凡例', desc:'地図上のクラス・値の範囲を説明する凡例ボックスの表示/非表示を切り替え、ドラッグで位置を変更できます。'},
+            symbology:{title:'🎨 シンボロジー', desc:'結果の表示方法をカスタマイズします：Stretched（連続グラデーション）またはClassified（分類）モード、カラーパレット、クラス範囲を設定します。'},
+            charts:{title:'📊 グラフ', desc:'分析結果の統計が棒グラフまたは円グラフで表示されます。画像、CSV、PDFとしてダウンロードできます。'},
+            exportImage:{title:'🖨️ 画像出力', desc:'方位記号、縮尺、凡例、描画を含めた地図をPNG・JPEG・PDF形式で出力し、レポートやプレゼンにすぐ使えます。'},
+            geotiff:{title:'📥 GeoTIFFダウンロード', desc:'分析結果の生ピクセルデータを、任意の解像度・座標系（CRS）でGeoTIFF形式でダウンロードできます。QGISやArcGISなどでそのまま利用可能です。'},
+            drawTools:{title:'✏️ テキスト・描画ツール', desc:'ペン、線、矢印、ポリゴン、円、テキストツールを使って地図にメモや注釈を追加できます。'}
+        }},
+        ko: { next:'다음 ›', finish:'완료 ✓', stepOf:'{n} / {total} 단계', steps: {
+            workspace:{title:'📍 작업 영역', desc:'분석하려는 지역을 여기서 지정합니다. KML/KMZ/SHP 파일을 업로드하거나 지도에 다각형/사각형을 그려 관심 영역(AOI)을 설정할 수 있습니다. 모든 분석은 이 영역을 기준으로 실행됩니다.'},
+            dates:{title:'📅 날짜 선택', desc:'위성 영상을 검색할 시작일과 종료일을 선택하세요. 시스템이 해당 기간 내 촬영된 장면을 검색합니다.'},
+            satelliteData:{title:'🛰️ 위성 데이터 선택', desc:'Sentinel-2, Landsat 등 사용할 위성/센서를 선택하세요. AOI, 날짜, 구름량 조건에 맞는 장면이 갤러리로 표시됩니다.'},
+            analysisModules:{title:'🌍 분석 모듈', desc:'식생/수분 지수(NDVI, NDWI 등), 토지 피복(LULC), 지형 분석(경사, 방위, DEM) 또는 원시 밴드 데이터 중에서 선택한 후 🚀 분석 실행을 누르세요.'},
+            legend:{title:'🗂️ 범례', desc:'지도에 표시된 클래스/값 범위를 설명하는 범례 상자를 표시하거나 숨기고, 드래그하여 위치를 바꿀 수 있습니다.'},
+            symbology:{title:'🎨 심볼로지', desc:'결과 표시 방식을 사용자 지정합니다: Stretched(연속 그라데이션) 또는 Classified(분류) 모드, 색상 팔레트, 클래스 범위를 설정합니다.'},
+            charts:{title:'📊 차트', desc:'분석 통계가 막대 또는 원형 차트로 표시됩니다. 이미지, CSV, PDF로 다운로드할 수 있습니다.'},
+            exportImage:{title:'🖨️ 이미지 출력', desc:'북쪽 화살표, 축척, 범례, 그림을 포함한 지도를 PNG, JPEG, PDF로 내보내 보고서나 발표에 바로 사용할 수 있습니다.'},
+            geotiff:{title:'📥 GeoTIFF 다운로드', desc:'분석 결과의 원시 픽셀 데이터를 원하는 해상도와 좌표계(CRS)로 GeoTIFF 형식으로 다운로드합니다.'},
+            drawTools:{title:'✏️ 텍스트 및 그리기 도구', desc:'펜, 선, 화살표, 다각형, 원, 텍스트 도구로 지도에 메모와 표시를 추가할 수 있습니다.'}
+        }},
+        hi: { next:'आगे ›', finish:'समाप्त ✓', stepOf:'चरण {n} / {total}', steps: {
+            workspace:{title:'📍 कार्य क्षेत्र', desc:'जिस क्षेत्र का विश्लेषण करना है उसे यहाँ परिभाषित करें। KML/KMZ/SHP फ़ाइल अपलोड करें या मानचित्र पर बहुभुज/आयत बनाकर अपना रुचि क्षेत्र (AOI) निर्धारित करें। सभी विश्लेषण इसी क्षेत्र पर आधारित होंगे।'},
+            dates:{title:'📅 तिथि चयन', desc:'उपग्रह चित्र खोजने के लिए आरंभ और समाप्ति तिथि चुनें। सिस्टम इस अवधि में लिए गए दृश्यों को खोजेगा।'},
+            satelliteData:{title:'🛰️ उपग्रह डेटा चयन', desc:'Sentinel-2 या Landsat जैसे उपयोग करने वाले उपग्रह/सेंसर को चुनें। आपके क्षेत्र, तिथि और बादल की स्थिति से मेल खाने वाले दृश्य गैलरी में दिखेंगे।'},
+            analysisModules:{title:'🌍 विश्लेषण मॉड्यूल', desc:'वनस्पति/जल सूचकांक (NDVI, NDWI...), भूमि उपयोग (LULC), स्थलाकृतिक विश्लेषण (ढलान, दिशा, DEM), या कच्चे बैंड डेटा में से चुनें, फिर 🚀 विश्लेषण चलाएँ दबाएँ।'},
+            legend:{title:'🗂️ लेजेंड', desc:'मानचित्र पर वर्गों/मानों की श्रेणियों को समझाने वाले लेजेंड बॉक्स को दिखाएँ या छिपाएँ, और उसे खींचकर स्थानांतरित करें।'},
+            symbology:{title:'🎨 सिंबोलॉजी', desc:'परिणाम कैसे दिखे यह अनुकूलित करें: Stretched (सतत ग्रेडिएंट) या Classified (वर्गीकृत) मोड, रंग पैलेट और वर्ग श्रेणियाँ।'},
+            charts:{title:'📊 चार्ट', desc:'आपके विश्लेषण के आँकड़े बार या पाई चार्ट के रूप में दिखाए जाते हैं; इमेज, CSV या PDF के रूप में डाउनलोड करें।'},
+            exportImage:{title:'🖨️ चित्र निर्यात करें', desc:'उत्तर तीर, स्केल बार, लेजेंड और चित्रों सहित अपना मानचित्र PNG, JPEG या PDF में निर्यात करें।'},
+            geotiff:{title:'📥 GeoTIFF डाउनलोड', desc:'अपने विश्लेषण का कच्चा पिक्सेल डेटा मनचाहे रिज़ॉल्यूशन और निर्देशांक प्रणाली (CRS) के साथ GeoTIFF के रूप में डाउनलोड करें।'},
+            drawTools:{title:'✏️ टेक्स्ट व ड्रॉइंग टूल्स', desc:'पेन, लाइन, ऐरो, बहुभुज, वृत्त और टेक्स्ट टूल्स से अपने मानचित्र पर नोट्स और चिह्न जोड़ें।'}
+        }},
+        id: { next:'Lanjut ›', finish:'Selesai ✓', stepOf:'Langkah {n} dari {total}', steps: {
+            workspace:{title:'📍 Area Kerja', desc:'Tentukan wilayah yang ingin dianalisis di sini. Unggah file KML/KMZ/SHP atau gambar Poligon/Persegi di peta untuk menentukan area minat (AOI) Anda. Semua analisis berjalan berdasarkan area ini.'},
+            dates:{title:'📅 Pemilihan Tanggal', desc:'Pilih tanggal mulai dan akhir untuk mencari citra satelit. Sistem akan mencari scene yang diambil dalam rentang ini.'},
+            satelliteData:{title:'🛰️ Pemilihan Data Satelit', desc:'Pilih satelit/sensor yang ingin digunakan, seperti Sentinel-2 atau Landsat. Scene yang sesuai dengan AOI, tanggal, dan tingkat awan akan ditampilkan dalam galeri.'},
+            analysisModules:{title:'🌍 Modul Analisis', desc:'Pilih dari indeks vegetasi/air (NDVI, NDWI...), tutupan lahan (LULC), analisis topografi (kemiringan, arah lereng, DEM), atau band mentah, lalu klik 🚀 Jalankan Analisis.'},
+            legend:{title:'🗂️ Legenda', desc:'Tampilkan atau sembunyikan kotak legenda yang menjelaskan kelas/rentang nilai di peta, dan seret untuk mengubah posisinya.'},
+            symbology:{title:'🎨 Simbologi', desc:'Sesuaikan tampilan hasil: mode Stretched (gradasi kontinu) atau Classified (terklasifikasi), palet warna, dan rentang kelas.'},
+            charts:{title:'📊 Grafik', desc:'Statistik hasil analisis Anda ditampilkan sebagai grafik batang atau pai; dapat diunduh sebagai gambar, CSV, atau PDF.'},
+            exportImage:{title:'🖨️ Ekspor Gambar', desc:'Ekspor peta Anda — lengkap dengan penunjuk arah utara, skala, legenda, dan gambar — sebagai PNG, JPEG, atau PDF.'},
+            geotiff:{title:'📥 Unduh GeoTIFF', desc:'Unduh data piksel mentah hasil analisis Anda sebagai GeoTIFF, dengan resolusi dan sistem koordinat (CRS) pilihan Anda.'},
+            drawTools:{title:'✏️ Alat Teks & Gambar', desc:'Gunakan alat pena, garis, panah, poligon, lingkaran, dan teks untuk menambahkan catatan dan penanda di peta Anda.'}
+        }}
+    };
+
+    // ── Rehber adımları: her adım hedef eleman(ler)ini CSS seçici
+    // dizisi ya da (dinamik durumlarda) bir fonksiyon olarak tanımlar ──
+    var STEPS = [
+        { id: 'workspace',       tab: 'veri',   sel: ['#btn-upload', '#btn-polygon', '#btn-rectangle'] },
+        { id: 'dates',           tab: 'veri',   sel: ['#date-range-row'] },
+        { id: 'satelliteData',   tab: 'analiz', sel: function () {
+            var d = document.querySelectorAll('details.main-module-details');
+            return d[0] ? [d[0]] : [];
+        }, before: function () {
+            var d = document.querySelectorAll('details.main-module-details');
+            if (d[0] && !d[0].open) {
+                var s = d[0].querySelector(':scope > summary');
+                if (s) s.click();
+            }
+        }},
+        { id: 'analysisModules', tab: 'analiz', sel: function () {
+            var out = [];
+            var d = document.querySelectorAll('details.main-module-details');
+            for (var i = 1; i < d.length; i++) out.push(d[i]);
+            var rb = document.getElementById('raw-bands-details');
+            if (rb) out.push(rb);
+            var runBtn = document.getElementById('btn-run-analysis');
+            if (runBtn) out.push(runBtn);
+            return out;
+        }},
+        { id: 'legend',          tab: 'harita', sel: ['#legend-toggle-row'] },
+        { id: 'symbology',       tab: 'harita', sel: ['#legend-symbology-panel'] },
+        { id: 'charts',          tab: 'cizim',  sel: ['#stats-chart-container'] },
+        { id: 'exportImage',     tab: 'cizim',  sel: ['#btn-open-export'] },
+        { id: 'geotiff',         tab: 'cizim',  sel: ['#btn-geotiff-download'] },
+        { id: 'drawTools',       tab: 'cizim',  sel: ['.right-menu-grid'] }
+    ];
+
+    var curStep = 0;
+    var active = false;
+    var repositionTimer = null;
+
+    function currentLang() {
+        return (typeof _sylvaLang !== 'undefined' && _sylvaLang && TOUR_I18N[_sylvaLang]) ? _sylvaLang : 'tr';
+    }
+    function L() { return TOUR_I18N[currentLang()] || TOUR_I18N.tr; }
+
+    function resolveTargets(step) {
+        var sels = (typeof step.sel === 'function') ? step.sel() : step.sel;
+        var els = [];
+        (sels || []).forEach(function (s) {
+            if (typeof s === 'string') {
+                var el = document.querySelector(s);
+                if (el) els.push(el);
+            } else if (s && s.nodeType) {
+                els.push(s);
+            }
+        });
+        return els;
+    }
+
+    function ensurePanelsVisible(step) {
+        var sidebarRight = document.getElementById('sidebar-right');
+        if (sidebarRight && sidebarRight.classList.contains('collapsed')) {
+            var btn = document.getElementById('right-collapse-btn');
+            if (btn) btn.click();
+        }
+        var isMobile = window.matchMedia('(max-width: 900px)').matches;
+        if (isMobile && typeof window.openDrawer === 'function') {
+            window.openDrawer(step.tab);
+        }
+    }
+
+    function unionRect(els) {
+        var rects = els.map(function (e) { return e.getBoundingClientRect(); })
+                        .filter(function (r) { return r.width > 0 && r.height > 0; });
+        if (!rects.length) return null;
+        var top = Math.min.apply(null, rects.map(function (r) { return r.top; }));
+        var left = Math.min.apply(null, rects.map(function (r) { return r.left; }));
+        var right = Math.max.apply(null, rects.map(function (r) { return r.right; }));
+        var bottom = Math.max.apply(null, rects.map(function (r) { return r.bottom; }));
+        return { top: top, left: left, right: right, bottom: bottom, width: right - left, height: bottom - top };
+    }
+
+    function positionUI(rect) {
+        var pad = 8;
+        var spot = document.getElementById('sylva-tour-spotlight');
+        spot.style.top = (rect.top - pad) + 'px';
+        spot.style.left = (rect.left - pad) + 'px';
+        spot.style.width = (rect.width + pad * 2) + 'px';
+        spot.style.height = (rect.height + pad * 2) + 'px';
+        spot.style.display = 'block';
+
+        var card = document.getElementById('sylva-tour-card');
+        card.style.display = 'block';
+        var cardW = card.offsetWidth || 300;
+        var cardH = card.offsetHeight || 170;
+        var vw = window.innerWidth, vh = window.innerHeight;
+
+        var spotBottom = rect.bottom + pad;
+        var spotTop = rect.top - pad;
+        var placeBelow = (spotBottom + 40 + cardH) <= vh;
+
+        var top, arrowTop, arrowRotate;
+        if (placeBelow) {
+            top = spotBottom + 26;
+            arrowTop = spotBottom + 3;
+            arrowRotate = 0;
+        } else {
+            top = Math.max(12, spotTop - cardH - 26);
+            arrowTop = spotTop - 29;
+            arrowRotate = 180;
+        }
+        top = Math.min(Math.max(12, top), Math.max(12, vh - cardH - 12));
+
+        var left = rect.left + rect.width / 2 - cardW / 2;
+        left = Math.min(Math.max(12, left), Math.max(12, vw - cardW - 12));
+
+        card.style.top = top + 'px';
+        card.style.left = left + 'px';
+
+        var arrow = document.getElementById('sylva-tour-arrow');
+        arrow.style.display = 'block';
+        var arrowLeft = rect.left + rect.width / 2 - 13;
+        arrowLeft = Math.min(Math.max(8, arrowLeft), vw - 34);
+        arrow.style.left = arrowLeft + 'px';
+        arrow.style.top = arrowTop + 'px';
+        arrow.style.transform = 'rotate(' + arrowRotate + 'deg)';
+    }
+
+    function renderDots(total) {
+        var wrap = document.getElementById('sylva-tour-dots');
+        wrap.innerHTML = '';
+        for (var i = 0; i < total; i++) {
+            var d = document.createElement('div');
+            d.className = 'sylva-tour-dot' + (i === curStep ? ' active' : '');
+            wrap.appendChild(d);
+        }
+    }
+
+    function renderStep() {
+        var step = STEPS[curStep];
+        if (!step) { endTour(); return; }
+        ensurePanelsVisible(step);
+
+        // Mobil sekme geçişi / panel genişletme animasyonlarının oturması
+        // için kısa bir gecikme bırakılır.
+        setTimeout(function () {
+            if (step.before) step.before();
+            setTimeout(function () {
+                var els = resolveTargets(step);
+                var target = els[0] || document.body;
+                if (target && target.scrollIntoView) {
+                    target.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+                }
+                setTimeout(function () {
+                    var rect = unionRect(els.length ? els : [document.body]);
+                    if (!rect) rect = { top: 20, left: 20, right: 220, bottom: 80, width: 200, height: 60 };
+                    positionUI(rect);
+
+                    var lang = L();
+                    var s = (lang.steps && lang.steps[step.id]) || TOUR_I18N.tr.steps[step.id];
+                    document.getElementById('sylva-tour-step-count').textContent =
+                        (lang.stepOf || TOUR_I18N.tr.stepOf).replace('{n}', curStep + 1).replace('{total}', STEPS.length);
+                    document.getElementById('sylva-tour-title').textContent = s.title;
+                    document.getElementById('sylva-tour-desc').textContent = s.desc;
+                    document.getElementById('sylva-tour-next').textContent =
+                        (curStep === STEPS.length - 1) ? (lang.finish || TOUR_I18N.tr.finish) : (lang.next || TOUR_I18N.tr.next);
+                    document.getElementById('sylva-tour-prev').disabled = (curStep === 0);
+                    renderDots(STEPS.length);
+                }, 260);
+            }, step.before ? 300 : 0);
+        }, 60);
+    }
+
+    function nextStep() {
+        if (!active) return;
+        if (curStep >= STEPS.length - 1) { endTour(); return; }
+        curStep++;
+        renderStep();
+    }
+    function prevStep() {
+        if (!active || curStep <= 0) return;
+        curStep--;
+        renderStep();
+    }
+
+    function startTour() {
+        active = true;
+        curStep = 0;
+        document.getElementById('sylva-tour-backdrop').classList.add('active');
+        renderStep();
+    }
+
+    function endTour() {
+        active = false;
+        document.getElementById('sylva-tour-backdrop').classList.remove('active');
+        document.getElementById('sylva-tour-spotlight').style.display = 'none';
+        document.getElementById('sylva-tour-arrow').style.display = 'none';
+        document.getElementById('sylva-tour-card').style.display = 'none';
+    }
+
+    document.getElementById('sylva-tour-backdrop').addEventListener('click', function () { nextStep(); });
+    document.getElementById('sylva-tour-next').addEventListener('click', function (e) { e.stopPropagation(); nextStep(); });
+    document.getElementById('sylva-tour-prev').addEventListener('click', function (e) { e.stopPropagation(); prevStep(); });
+    document.getElementById('sylva-tour-close').addEventListener('click', function (e) { e.stopPropagation(); endTour(); });
+    document.getElementById('sylva-tour-card').addEventListener('click', function (e) { e.stopPropagation(); });
+
+    document.addEventListener('keydown', function (e) {
+        if (!active) return;
+        if (e.key === 'Escape') endTour();
+        else if (e.key === 'ArrowRight' || e.key === 'Enter') nextStep();
+        else if (e.key === 'ArrowLeft') prevStep();
+    });
+
+    window.addEventListener('resize', function () {
+        if (!active) return;
+        clearTimeout(repositionTimer);
+        repositionTimer = setTimeout(renderStep, 120);
+    });
+
+    // Dil değiştirildiğinde açık adımın metnini de güncelle
+    var _origApplySylvaLang = window.applySylvaLang;
+    if (typeof _origApplySylvaLang === 'function') {
+        window.applySylvaLang = function (lang) {
+            var r = _origApplySylvaLang.apply(this, arguments);
+            if (active) renderStep();
+            return r;
+        };
+    }
+
+    var guideBtn = document.getElementById('nav-guide-btn');
+    if (guideBtn) guideBtn.addEventListener('click', startTour);
+
+    window.SylvaTour = { start: startTour, end: endTour };
+})();
+</script>
+
 </body>
 </html>
