@@ -2086,14 +2086,13 @@
                 </svg>
                 LinkedIn
             </a>
-            <a href="mailto:sylvagis.world@gmail.com"
-               title="E-posta: sylvagis.world@gmail.com"
+            <button type="button"
+               title="İletişim"
+               data-i18n-title="contact_btn_title"
+               onclick="openContactDialog()"
                class="footer-contact-btn" id="btn-gmail">
-                <svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13" style="flex-shrink:0;">
-                    <path d="M24 5.457v13.909c0 .904-.732 1.636-1.636 1.636h-3.819V11.73L12 16.64l-6.545-4.91v9.273H1.636A1.636 1.636 0 010 19.366V5.457c0-2.023 2.309-3.178 3.927-1.964L5.455 4.64 12 9.548l6.545-4.907 1.528-1.147C21.69 2.28 24 3.434 24 5.457z"/>
-                </svg>
-                Gmail
-            </a>
+                <span data-i18n="contact_btn_label">İletişim</span>
+            </button>
             <a href="#"
                target="_blank" rel="noopener noreferrer"
                title="Kullanım Kılavuzu (PDF)"
@@ -2118,12 +2117,14 @@
             border-radius: 5px;
             font-size: 0.75rem;
             font-weight: 600;
+            font-family: inherit;
             text-decoration: none;
             border: 1px solid rgba(255,255,255,0.35);
             color: #ffffff;
             background: rgba(255,255,255,0.12);
             transition: background 0.18s, border-color 0.18s;
             white-space: nowrap;
+            cursor: pointer;
         }
         .footer-contact-btn:hover {
             background: rgba(255,255,255,0.25);
@@ -2615,25 +2616,26 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
     });
 
     // 4. Uydu Görüntü Galerisi
+    // Checkbox işaretli   → galeri tamamen açık  (display:flex, opacity:1, etkileşimli)
+    // Checkbox işaretsiz  → galeri tamamen kapalı (display:none)  — ara durum yok
     document.getElementById('toggle-gallery').addEventListener('change', function() {
         var el = document.getElementById('map-gallery');
         if (!el) return;
-        var hasContent = el.innerHTML.trim().length > 0;
         if (this.checked) {
-            // Aktif: tam opak ve etkileşime açık
-            if (hasContent) el.style.display = 'flex';
-            el.style.opacity = '1';
-            el.style.pointerEvents = 'auto';
-        } else {
-            // Kapalı: içerik varsa yarı saydam göster (Info Box gibi),
-            // içerik yoksa tamamen gizle
+            var hasContent = el.innerHTML.trim().length > 0;
             if (hasContent) {
-                el.style.display = 'flex';
-                el.style.opacity = '0.45';
-                el.style.pointerEvents = 'none';
-            } else {
-                el.style.display = 'none';
+                el.style.display      = 'flex';
+                el.style.opacity      = '1';
+                el.style.pointerEvents = 'auto';
             }
+            // İçerik henüz yüklenmediyse checkbox işaretli kalır;
+            // sahne yüklenince renderGalleryFromScenes / fetchRgbGallery
+            // galeriyi açar.
+        } else {
+            // Tamamen kapat — opacity:0.45 yarı-görünür durumu yok
+            el.style.display      = 'none';
+            el.style.opacity      = '0';
+            el.style.pointerEvents = 'none';
         }
     });
 
@@ -2898,7 +2900,11 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
             } else {
                 galleryCb.disabled = false;
             }
-            if (galleryWrap) galleryWrap.style.opacity = isRestricted ? '0.4' : '1';
+            if (galleryWrap) {
+                  galleryWrap.style.opacity = isRestricted
+                      ? '0.4'
+                      : (galleryEl && galleryEl.innerHTML.trim().length > 0 ? '1' : '0.4');
+              }
         }
 
         // 🏘️ Arazi Kullanımı / 🏔️ Topografik Analizler seçiliyken Bilgi Kutusu
@@ -8309,7 +8315,7 @@ function selectRamp(name) {
         (function() {
 
             var selectedFormat = 'png';
-            var selectedScale  = 4;
+            var selectedScale  = 1; // WYSIWYG — her zaman ekran boyutunda yakalanır
 
             var overlay   = document.getElementById('export-modal-overlay');
             var btnOpen   = document.getElementById('btn-open-export');
@@ -8366,15 +8372,6 @@ function selectRamp(name) {
                     btn.classList.add('selected');
                     selectedFormat = btn.dataset.fmt;
                     pdfOptions.style.display = (selectedFormat === 'pdf') ? 'flex' : 'none';
-                });
-            });
-
-            // --- Kalite seçimi ---
-            document.querySelectorAll('.exp-quality-btn').forEach(function(btn) {
-                btn.addEventListener('click', function() {
-                    document.querySelectorAll('.exp-quality-btn').forEach(function(b){ b.classList.remove('selected'); });
-                    btn.classList.add('selected');
-                    selectedScale = parseInt(btn.dataset.scale);
                 });
             });
 
@@ -8809,21 +8806,68 @@ function selectRamp(name) {
             }
 
             // --- Markup SVG'yi canvas'a çiz (WYSIWYG — piksel-mükemmel konum) ---
-            // CSS transform (leaflet-zoom-animated panning offseti) de hesaba katılır;
-            // aksi takdirde vektör katmanlar kaymış görünür.
+            // Leaflet SVG katmanlarını canvas'a doğru konumda çizer.
+            //
+            // SORUN: Leaflet 1.x, SVG overlay'ini iki CSS transform ile konumlandırır:
+            //   • Dış <svg>: translate3d(b.min.x, b.min.y, 0)  → SVG konteyneri haritaya göre yerleşir
+            //   • İç <g>  : translate3d(-b.min.x, -b.min.y, 0) → yollar harita piksel koordinatında görünür
+            // SVG bir blob URL olarak <img> ile render edildiğinde tarayıcı CSS "translate3d"
+            // özelliğini yoksayar — sadece SVG "transform" *attribute* uygulanır.
+            // Sonuç: <g> compensasyonu çalışmaz, yollar ham SVG koordinatında kalır,
+            // dx = b.min.x (negatif) ile birleşince içerik SOLA kayar.
+            //
+            // ÇÖZÜM: SVG klonlanır; child elemanların style.transform'undaki translate3d değerleri
+            // SVG transform attribute'una dönüştürülür — blob render'da kesinlikle uygulanır.
+            // dx/dy getBoundingClientRect()'e göre hesaplanmaya devam eder (dış SVG CSS
+            // transform'u zaten bu hesaba yansıyor).
             function drawSVGOnCanvas(ctx, svgEl, mapEl, scale) {
                 return new Promise(function(resolve) {
-                    // Harita ve SVG'nin sayfadaki mutlak piksel konumlarını ölçüyoruz
                     var mapRect = mapEl.getBoundingClientRect();
                     var svgRect = svgEl.getBoundingClientRect();
-                    // SVG'nin haritaya göre milimetrik kayma (offset) miktarını hesaplıyoruz
-                    var dx = svgRect.left - mapRect.left;
-                    var dy = svgRect.top - mapRect.top;
-
-                    // Orijinal boyutları koruyoruz (zorla harita boyutuna eşitlemiyoruz)
+                    // Dış <svg>'nin getBoundingClientRect konumu CSS transform sonrası doğru pozisyonu
+                    // yansıtır — bu değeri dx/dy olarak kullanmaya devam ediyoruz.
+                    var dx    = svgRect.left - mapRect.left;
+                    var dy    = svgRect.top  - mapRect.top;
                     var drawW = svgRect.width;
                     var drawH = svgRect.height;
-                    var svgData = new XMLSerializer().serializeToString(svgEl);
+
+                    // CSS translate3d/translate değerini SVG transform string'ine çevirir.
+                    // Yalnızca translation bileşeni okunur; Leaflet scale > 1 yalnızca
+                    // zoom animasyonu sırasında oluşur ve export anında aktif değildir.
+                    function cssTranslateToSVGAttr(el) {
+                        var s = (el.style && (el.style.transform || el.style.webkitTransform)) || '';
+                        if (!s) return null;
+                        var m = s.match(/translate3d\(\s*(-?[\d.]+)px[\s,]+(-?[\d.]+)px/) ||
+                                s.match(/translate\(\s*(-?[\d.]+)px[\s,]+(-?[\d.]+)px/);
+                        if (!m) return null;
+                        return 'translate(' + m[1] + ',' + m[2] + ')';
+                    }
+
+                    // SVG'yi klonla; canlı DOM'u değiştirmiyoruz.
+                    var svgClone = svgEl.cloneNode(true);
+
+                    // Dış <svg>'nin CSS transform'unu kaldır — dx/dy'e zaten yansıdı.
+                    // Blob render'da zaten uygulanmıyor, temiz tutmak için silelim.
+                    svgClone.style.transform = '';
+                    svgClone.style.webkitTransform = '';
+
+                    // Tüm alt elemanların CSS translate'lerini SVG attribute'una çevir.
+                    // Bu sayede blob render'da <g> compensasyonu kesinlikle devreye girer.
+                    var children = svgClone.querySelectorAll('*');
+                    for (var ci = 0; ci < children.length; ci++) {
+                        var child = children[ci];
+                        var svgT  = cssTranslateToSVGAttr(child);
+                        if (svgT) {
+                            // Mevcut SVG transform attribute varsa yeni translate'i başa ekle
+                            // (SVG transform'lar sağdan sola uygulanır — önce eski, sonra yeni)
+                            var existing = child.getAttribute('transform') || '';
+                            child.setAttribute('transform', svgT + (existing ? ' ' + existing : ''));
+                            child.style.transform = '';
+                            child.style.webkitTransform = '';
+                        }
+                    }
+
+                    var svgData = new XMLSerializer().serializeToString(svgClone);
                     if (svgData.indexOf('xmlns=') === -1) {
                         svgData = svgData.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
                     }
@@ -8832,17 +8876,14 @@ function selectRamp(name) {
                     var img  = new Image();
 
                     img.onload = function() {
-                        // SVG'yi hesaplanan kesin koordinatlara çiz (Kayma ortadan kalkar)
                         ctx.drawImage(img, dx * scale, dy * scale, drawW * scale, drawH * scale);
                         URL.revokeObjectURL(url);
                         resolve();
                     };
-
                     img.onerror = function() {
                         URL.revokeObjectURL(url);
                         resolve();
                     };
-
                     img.src = url;
                 });
             }
@@ -8924,7 +8965,12 @@ function selectRamp(name) {
             btnStart.addEventListener('click', function() {
                 var filename = (document.getElementById('exp-filename').value.trim() || t('export_default_filename'));
                 var fmt      = selectedFormat;
-                var scale    = selectedScale;
+                // WYSIWYG: ekrandaki map boyutunu birebir yansıtmak için scale daima 1.
+                // html2canvas scale>1 ile çalışırken Leaflet tile'larını CSS pikselden
+                // fiziksel piksele dönüştürürken pane transform'larını yanlış uygular ve
+                // haritanın ekrandaki görünümünden farklı (büyütülmüş/kaymış) bir çıktı
+                // üretir. scale=1 → W×H piksel çıktı = ekranda görünen alan ile birebir.
+                var scale    = 1;
 
                 btnStart.disabled = true;
                 btnStart.innerHTML = '⏳ Hazırlanıyor…';
@@ -9209,15 +9255,10 @@ function selectRamp(name) {
                     <input type="text" id="exp-filename" value="SylvaGIS_Harita" data-i18n-placeholder="export_filename_placeholder" placeholder="Dosya adını giriniz…">
                 </div>
 
-                <!-- Kalite / Çözünürlük -->
-                <div>
-                    <div class="exp-section-label" data-i18n="export_quality_label">🔍 Çıktı Kalitesi</div>
-                    <div class="exp-quality-row">
-                        <button class="exp-quality-btn" data-scale="1"><span data-i18n="q_screen">Ekran</span><br><span style="font-size:0.7rem;font-weight:400">~96 DPI</span></button>
-                        <button class="exp-quality-btn" data-scale="2"><span data-i18n="q_high">Yüksek</span><br><span style="font-size:0.7rem;font-weight:400">~150 DPI</span></button>
-                        <button class="exp-quality-btn selected" data-scale="4"><span data-i18n="q_pro">Profesyonel</span><br><span style="font-size:0.7rem;font-weight:400">300 DPI</span></button>
-                        <button class="exp-quality-btn" data-scale="6"><span data-i18n="q_print">Baskı</span><br><span style="font-size:0.7rem;font-weight:400">600 DPI</span></button>
-                    </div>
+                <!-- WYSIWYG bilgi satırı -->
+                <div style="display:flex;align-items:center;gap:8px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:9px 12px;">
+                    <span style="font-size:1.1rem;">🖥️</span>
+                    <span data-i18n="export_wysiwyg_note" style="font-size:0.8rem;color:#1e40af;font-weight:600;line-height:1.4;">Harita ekrandaki boyut ve görünümüyle birebir dışa aktarılır (WYSIWYG).</span>
                 </div>
 
                 <!-- PDF kağıt boyutu (sadece PDF'te görünür) -->
@@ -9886,6 +9927,147 @@ function selectRamp(name) {
         </div>
     </div>
 </div>
+
+<!-- ===== 📧 İLETİŞİM KUTUSU ===== -->
+<div id="contact-modal-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.52); z-index:99998; align-items:center; justify-content:center;">
+    <div id="contact-dialog-box" style="background:#fff; border-radius:10px; padding:28px 24px 22px; width:400px; max-width:92vw; max-height:88vh; overflow-y:auto; box-shadow:0 12px 40px rgba(0,0,0,0.25); position:relative; box-sizing:border-box;">
+
+        <div style="text-align:center; margin-bottom:18px;">
+            <div style="font-size:1.5rem; font-weight:800; color:#1e3a8a; letter-spacing:-0.01em;">🌲 SylvaGIS</div>
+            <div style="width:40px; height:3px; border-radius:2px; background:linear-gradient(90deg,#1e3a8a 0%,#38bdf8 100%); margin:8px auto 12px;"></div>
+            <p id="contact-welcome-text" style="font-size:0.82rem; color:#64748b; margin:0;" data-i18n="contact_welcome">Bilgi, görüş ve önerilerinizi bizimle paylaşabilirsiniz.</p>
+        </div>
+
+        <div id="contact-form-alert" style="display:none; font-size:0.78rem; color:#b91c1c; background:#fee2e2; border:1px solid #fecaca; border-radius:5px; padding:8px 10px; margin-bottom:12px;"></div>
+
+        <div style="margin-bottom:12px;">
+            <label for="contact-name" style="font-size:0.82rem; font-weight:600; color:#64748b; display:block; margin-bottom:6px;" data-i18n="lbl_fullname">Ad Soyad</label>
+            <input type="text" id="contact-name" data-i18n-placeholder="ph_fullname" placeholder="Adınızı ve soyadınızı girin"
+                style="width:100%; padding:8px 10px; border:1px solid #cbd5e1; border-radius:5px; font-size:0.85rem; outline:none; box-sizing:border-box;">
+        </div>
+
+        <div style="margin-bottom:12px;">
+            <label for="contact-email" style="font-size:0.82rem; font-weight:600; color:#64748b; display:block; margin-bottom:6px;" data-i18n="lbl_email">E-posta Adresi</label>
+            <input type="email" id="contact-email" data-i18n-placeholder="ph_email" placeholder="eposta@ornek.com"
+                style="width:100%; padding:8px 10px; border:1px solid #cbd5e1; border-radius:5px; font-size:0.85rem; outline:none; box-sizing:border-box;">
+        </div>
+
+        <div style="margin-bottom:12px;">
+            <label for="contact-subject" style="font-size:0.82rem; font-weight:600; color:#64748b; display:block; margin-bottom:6px;" data-i18n="lbl_subject">Konu</label>
+            <input type="text" id="contact-subject" data-i18n-placeholder="ph_subject" placeholder="Konu başlığını girin"
+                style="width:100%; padding:8px 10px; border:1px solid #cbd5e1; border-radius:5px; font-size:0.85rem; outline:none; box-sizing:border-box;">
+        </div>
+
+        <div style="margin-bottom:16px;">
+            <label for="contact-message" style="font-size:0.82rem; font-weight:600; color:#64748b; display:block; margin-bottom:6px;" data-i18n="lbl_message">Açıklama / Mesaj</label>
+            <textarea id="contact-message" rows="4" data-i18n-placeholder="ph_message" placeholder="Mesajınızı buraya yazın…"
+                style="width:100%; padding:8px 10px; border:1px solid #cbd5e1; border-radius:5px; font-size:0.85rem; outline:none; box-sizing:border-box; resize:vertical; font-family:inherit;"></textarea>
+        </div>
+
+        <div style="display:flex; gap:8px; justify-content:flex-end;">
+            <button id="btn-contact-cancel" onclick="closeContactDialog()"
+                style="padding:8px 18px; border:1px solid #cbd5e1; border-radius:5px; cursor:pointer; background:#f1f5f9; font-size:0.85rem; color:#475569;" data-i18n="btn_cancel">
+                İptal
+            </button>
+            <button id="btn-contact-send" onclick="sendContactMessage()"
+                style="padding:8px 18px; background:#1e3a8a; color:#fff; border:none; border-radius:5px; cursor:pointer; font-weight:600; font-size:0.85rem;" data-i18n="btn_send">
+                📝 Gönder
+            </button>
+        </div>
+    </div>
+</div>
+
+<script>
+// ===== 📧 İLETİŞİM KUTUSU MANTIĞI =====
+function openContactDialog() {
+    var overlay = document.getElementById('contact-modal-overlay');
+    if (!overlay) return;
+    var alertBox = document.getElementById('contact-form-alert');
+    if (alertBox) alertBox.style.display = 'none';
+    overlay.style.display = 'flex';
+}
+
+function closeContactDialog() {
+    var overlay = document.getElementById('contact-modal-overlay');
+    if (overlay) overlay.style.display = 'none';
+}
+
+// Dış alana (overlay arka planına) tıklayınca kapat
+document.addEventListener('DOMContentLoaded', function() {
+    var overlay = document.getElementById('contact-modal-overlay');
+    if (overlay) {
+        overlay.addEventListener('mousedown', function(e) {
+            if (e.target === overlay) closeContactDialog();
+        });
+    }
+});
+
+function _contactShowError(msg) {
+    var alertBox = document.getElementById('contact-form-alert');
+    if (!alertBox) return;
+    alertBox.textContent = msg;
+    alertBox.style.display = 'block';
+}
+
+function sendContactMessage() {
+    var alertBox = document.getElementById('contact-form-alert');
+    if (alertBox) alertBox.style.display = 'none';
+
+    var nameEl    = document.getElementById('contact-name');
+    var emailEl   = document.getElementById('contact-email');
+    var subjectEl = document.getElementById('contact-subject');
+    var messageEl = document.getElementById('contact-message');
+    var sendBtn   = document.getElementById('btn-contact-send');
+
+    var name    = nameEl    ? nameEl.value.trim()    : '';
+    var email   = emailEl   ? emailEl.value.trim()   : '';
+    var subject = subjectEl ? subjectEl.value.trim() : '';
+    var message = messageEl ? messageEl.value.trim() : '';
+
+    if (!name) { _contactShowError(t('contact_err_name')); if (nameEl) nameEl.focus(); return; }
+
+    var emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!email || !emailRe.test(email)) { _contactShowError(t('contact_err_email')); if (emailEl) emailEl.focus(); return; }
+
+    if (!subject) { _contactShowError(t('contact_err_subject')); if (subjectEl) subjectEl.focus(); return; }
+    if (!message) { _contactShowError(t('contact_err_message')); if (messageEl) messageEl.focus(); return; }
+
+    // Gönderim, kullanıcının e-posta istemcisi (Gmail vb.) açılmadan doğrudan
+    // sunucu üzerinden sylvagis.world@gmail.com adresine gönderilir.
+    if (sendBtn) { sendBtn.disabled = true; sendBtn.style.opacity = '0.6'; }
+
+    fetch('http://127.0.0.1:5000/api/contact', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name, email: email, subject: subject, message: message })
+    })
+    .then(function(r) { return r.json().then(function(data) { return { ok: r.ok, data: data }; }); })
+    .then(function(res) {
+        if (sendBtn) { sendBtn.disabled = false; sendBtn.style.opacity = ''; }
+
+        if (!res.ok || !res.data || !res.data.success) {
+            _contactShowError(t('contact_err_server'));
+            return;
+        }
+
+        // Başarılı: kutuyu kapat (ana sayfaya dön), hiçbir harici uygulama açılmaz
+        closeContactDialog();
+        if (typeof sylvaAlert === 'function') {
+            sylvaAlert(t('contact_success'), 'success');
+        }
+
+        // Formu bir sonraki açılış için temizle
+        if (nameEl) nameEl.value = '';
+        if (emailEl) emailEl.value = '';
+        if (subjectEl) subjectEl.value = '';
+        if (messageEl) messageEl.value = '';
+    })
+    .catch(function() {
+        if (sendBtn) { sendBtn.disabled = false; sendBtn.style.opacity = ''; }
+        _contactShowError(t('contact_err_server'));
+    });
+}
+</script>
 
 <script>
 // ===== UYDU GALERİSİ YATAY KAYDIRMA =====
@@ -10772,6 +10954,15 @@ var SYLVA_TRANSLATIONS = {
     server_label: 'Server',
     chart_dl_title: '🖼️ Download Chart', lbl_format: 'Format', lbl_filename: 'File Name',
     btn_cancel: 'Cancel', btn_download: '⬇️ Download',
+    contact_btn_label: 'Contact', contact_btn_title: 'Contact Us',
+    contact_welcome: 'You can share your feedback, questions and suggestions with us.',
+    lbl_fullname: 'Full Name', lbl_email: 'Email Address', lbl_subject: 'Subject', lbl_message: 'Description / Message',
+    ph_fullname: 'Enter your full name', ph_email: 'your.email@example.com', ph_subject: 'What is this about?', ph_message: 'Write your message here…',
+    btn_send: '📝 Send',
+    contact_err_name: 'Please enter your full name.', contact_err_email: 'Please enter a valid email address.',
+    contact_err_subject: 'Please enter a subject.', contact_err_message: 'Please write your message.',
+    contact_success: 'Your message has been sent successfully. Thank you!',
+    contact_err_server: 'Message could not be sent. Please try again later.',
     file_grafik: 'Chart',
     file_analiz_sonuclari: 'Analysis_Results',
     export_default_filename: 'SylvaGIS_Map',
@@ -10810,6 +11001,7 @@ var SYLVA_TRANSLATIONS = {
     export_map_title: '🖨️ Export Map',
     export_format_label: '📁 Output Format',
     export_quality_label: '🔍 Output Quality',
+    export_wysiwyg_note: 'Map is exported exactly as seen on screen (WYSIWYG).',
     q_screen: 'Screen', q_high: 'High', q_pro: 'Professional', q_print: 'Print',
     export_pdf_size_label: '📐 Paper Size',
     pdf_size_a4l: 'A4 Landscape (297 × 210 mm)', pdf_size_a4p: 'A4 Portrait (210 × 297 mm)',
@@ -11057,6 +11249,15 @@ var SYLVA_TRANSLATIONS = {
     server_label: 'Sunucu',
     chart_dl_title: '🖼️ Grafiği İndir', lbl_format: 'Format', lbl_filename: 'Dosya Adı',
     btn_cancel: 'İptal', btn_download: '⬇️ İndir',
+    contact_btn_label: 'İletişim', contact_btn_title: 'İletişim',
+    contact_welcome: 'Bilgi, görüş ve önerilerinizi bizimle paylaşabilirsiniz.',
+    lbl_fullname: 'Ad Soyad', lbl_email: 'E-posta Adresi', lbl_subject: 'Konu', lbl_message: 'Açıklama / Mesaj',
+    ph_fullname: 'Adınızı ve soyadınızı girin', ph_email: 'eposta@ornek.com', ph_subject: 'Konu başlığını girin', ph_message: 'Mesajınızı buraya yazın…',
+    btn_send: '📝 Gönder',
+    contact_err_name: 'Lütfen ad ve soyadınızı girin.', contact_err_email: 'Lütfen geçerli bir e-posta adresi girin.',
+    contact_err_subject: 'Lütfen bir konu girin.', contact_err_message: 'Lütfen mesajınızı yazın.',
+    contact_success: 'Mesajınız başarıyla gönderildi. Teşekkür ederiz!',
+    contact_err_server: 'Mesaj gönderilemedi. Lütfen daha sonra tekrar deneyin.',
     file_grafik: 'Grafik',
     file_analiz_sonuclari: 'Analiz_Sonuclari',
     export_default_filename: 'SylvaGIS_Harita',
@@ -11095,6 +11296,7 @@ var SYLVA_TRANSLATIONS = {
     export_map_title: '🖨️ Harita Çıktısı Al',
     export_format_label: '📁 Çıktı Formatı',
     export_quality_label: '🔍 Çıktı Kalitesi',
+    export_wysiwyg_note: 'Harita ekrandaki boyut ve görünümüyle birebir dışa aktarılır (WYSIWYG).',
     q_screen: 'Ekran', q_high: 'Yüksek', q_pro: 'Profesyonel', q_print: 'Baskı',
     export_pdf_size_label: '📐 Kağıt Boyutu',
     pdf_size_a4l: 'A4 Yatay (297 × 210 mm)', pdf_size_a4p: 'A4 Dikey (210 × 297 mm)',
@@ -11338,6 +11540,15 @@ var SYLVA_TRANSLATIONS = {
     server_label: 'Server',
     chart_dl_title: '🖼️ Diagramm herunterladen', lbl_format: 'Format', lbl_filename: 'Dateiname',
     btn_cancel: 'Abbrechen', btn_download: '⬇️ Herunterladen',
+    contact_btn_label: 'Kontakt', contact_btn_title: 'Kontakt',
+    contact_welcome: 'Teilen Sie uns Ihr Feedback, Ihre Fragen und Vorschläge mit.',
+    lbl_fullname: 'Vollständiger Name', lbl_email: 'E-Mail-Adresse', lbl_subject: 'Betreff', lbl_message: 'Beschreibung / Nachricht',
+    ph_fullname: 'Geben Sie Ihren vollständigen Namen ein', ph_email: 'ihre.email@beispiel.com', ph_subject: 'Worum geht es?', ph_message: 'Schreiben Sie hier Ihre Nachricht…',
+    btn_send: '📝 Senden',
+    contact_err_name: 'Bitte geben Sie Ihren vollständigen Namen ein.', contact_err_email: 'Bitte geben Sie eine gültige E-Mail-Adresse ein.',
+    contact_err_subject: 'Bitte geben Sie einen Betreff ein.', contact_err_message: 'Bitte schreiben Sie Ihre Nachricht.',
+    contact_success: 'Ihre Nachricht wurde erfolgreich gesendet. Vielen Dank!',
+    contact_err_server: 'Nachricht konnte nicht gesendet werden. Bitte versuchen Sie es später erneut.',
     file_grafik: 'Diagramm',
     file_analiz_sonuclari: 'Analyse_Ergebnisse',
     export_default_filename: 'SylvaGIS_Karte',
@@ -11376,6 +11587,7 @@ var SYLVA_TRANSLATIONS = {
     export_map_title: '🖨️ Karte exportieren',
     export_format_label: '📁 Ausgabeformat',
     export_quality_label: '🔍 Ausgabequalität',
+    export_wysiwyg_note: 'Die Karte wird genau so exportiert, wie sie auf dem Bildschirm zu sehen ist (WYSIWYG).',
     q_screen: 'Bildschirm', q_high: 'Hoch', q_pro: 'Professionell', q_print: 'Druck',
     export_pdf_size_label: '📐 Papierformat',
     pdf_size_a4l: 'A4 Querformat (297 × 210 mm)', pdf_size_a4p: 'A4 Hochformat (210 × 297 mm)',
@@ -11619,6 +11831,15 @@ var SYLVA_TRANSLATIONS = {
     server_label: 'Serveur',
     chart_dl_title: '🖼️ Télécharger graphique', lbl_format: 'Format', lbl_filename: 'Nom de fichier',
     btn_cancel: 'Annuler', btn_download: '⬇️ Télécharger',
+    contact_btn_label: 'Contact', contact_btn_title: 'Nous contacter',
+    contact_welcome: "Partagez avec nous vos retours, questions et suggestions.",
+    lbl_fullname: 'Nom complet', lbl_email: 'Adresse e-mail', lbl_subject: 'Sujet', lbl_message: 'Description / Message',
+    ph_fullname: 'Entrez votre nom complet', ph_email: 'votre.email@exemple.com', ph_subject: "De quoi s'agit-il ?", ph_message: 'Écrivez votre message ici…',
+    btn_send: '📝 Envoyer',
+    contact_err_name: 'Veuillez entrer votre nom complet.', contact_err_email: 'Veuillez entrer une adresse e-mail valide.',
+    contact_err_subject: 'Veuillez entrer un sujet.', contact_err_message: 'Veuillez écrire votre message.',
+    contact_success: 'Votre message a été envoyé avec succès. Merci !',
+    contact_err_server: "Le message n'a pas pu être envoyé. Veuillez réessayer plus tard.",
     file_grafik: 'Graphique',
     file_analiz_sonuclari: 'Resultats_Analyse',
     export_default_filename: 'SylvaGIS_Carte',
@@ -11657,6 +11878,7 @@ var SYLVA_TRANSLATIONS = {
     export_map_title: '🖨️ Exporter la carte',
     export_format_label: '📁 Format de sortie',
     export_quality_label: '🔍 Qualité de sortie',
+    export_wysiwyg_note: 'La carte est exportée exactement telle qu\'elle apparaît à l\'écran (WYSIWYG).',
     q_screen: 'Écran', q_high: 'Élevée', q_pro: 'Professionnelle', q_print: 'Impression',
     export_pdf_size_label: '📐 Taille du papier',
     pdf_size_a4l: 'A4 Paysage (297 × 210 mm)', pdf_size_a4p: 'A4 Portrait (210 × 297 mm)',
@@ -11900,6 +12122,15 @@ var SYLVA_TRANSLATIONS = {
     server_label: 'Servidor',
     chart_dl_title: '🖼️ Descargar gráfico', lbl_format: 'Formato', lbl_filename: 'Nombre de archivo',
     btn_cancel: 'Cancelar', btn_download: '⬇️ Descargar',
+    contact_btn_label: 'Contacto', contact_btn_title: 'Contáctenos',
+    contact_welcome: 'Comparta sus comentarios, preguntas y sugerencias con nosotros.',
+    lbl_fullname: 'Nombre completo', lbl_email: 'Correo electrónico', lbl_subject: 'Asunto', lbl_message: 'Descripción / Mensaje',
+    ph_fullname: 'Ingrese su nombre completo', ph_email: 'su.correo@ejemplo.com', ph_subject: '¿De qué se trata?', ph_message: 'Escriba su mensaje aquí…',
+    btn_send: '📝 Enviar',
+    contact_err_name: 'Por favor ingrese su nombre completo.', contact_err_email: 'Por favor ingrese un correo electrónico válido.',
+    contact_err_subject: 'Por favor ingrese un asunto.', contact_err_message: 'Por favor escriba su mensaje.',
+    contact_success: '¡Su mensaje se ha enviado correctamente. Gracias!',
+    contact_err_server: 'No se pudo enviar el mensaje. Inténtelo de nuevo más tarde.',
     file_grafik: 'Grafico',
     file_analiz_sonuclari: 'Resultados_Analisis',
     export_default_filename: 'SylvaGIS_Mapa',
@@ -11938,6 +12169,7 @@ var SYLVA_TRANSLATIONS = {
     export_map_title: '🖨️ Exportar mapa',
     export_format_label: '📁 Formato de salida',
     export_quality_label: '🔍 Calidad de salida',
+    export_wysiwyg_note: 'El mapa se exporta exactamente como se ve en pantalla (WYSIWYG).',
     q_screen: 'Pantalla', q_high: 'Alta', q_pro: 'Profesional', q_print: 'Impresión',
     export_pdf_size_label: '📐 Tamaño de papel',
     pdf_size_a4l: 'A4 Horizontal (297 × 210 mm)', pdf_size_a4p: 'A4 Vertical (210 × 297 mm)',
@@ -12181,6 +12413,15 @@ var SYLVA_TRANSLATIONS = {
     server_label: 'الخادم',
     chart_dl_title: '🖼️ تحميل المخطط', lbl_format: 'الصيغة', lbl_filename: 'اسم الملف',
     btn_cancel: 'إلغاء', btn_download: '⬇️ تحميل',
+    contact_btn_label: 'اتصل بنا', contact_btn_title: 'اتصل بنا',
+    contact_welcome: 'يمكنكم مشاركة آرائكم واقتراحاتكم واستفساراتكم معنا.',
+    lbl_fullname: 'الاسم الكامل', lbl_email: 'البريد الإلكتروني', lbl_subject: 'الموضوع', lbl_message: 'الوصف / الرسالة',
+    ph_fullname: 'أدخل اسمك الكامل', ph_email: 'بريدك@مثال.com', ph_subject: 'ما هو الموضوع؟', ph_message: 'اكتب رسالتك هنا…',
+    btn_send: '📝 إرسال',
+    contact_err_name: 'يرجى إدخال اسمك الكامل.', contact_err_email: 'يرجى إدخال بريد إلكتروني صالح.',
+    contact_err_subject: 'يرجى إدخال موضوع.', contact_err_message: 'يرجى كتابة رسالتك.',
+    contact_success: 'تم إرسال رسالتك بنجاح. شكرًا لك!',
+    contact_err_server: 'تعذر إرسال الرسالة. يرجى المحاولة مرة أخرى لاحقًا.',
     file_grafik: 'رسم_بياني',
     file_analiz_sonuclari: 'نتائج_التحليل',
     export_default_filename: 'SylvaGIS_خريطة',
@@ -12219,6 +12460,7 @@ var SYLVA_TRANSLATIONS = {
     export_map_title: '🖨️ تصدير الخريطة',
     export_format_label: '📁 صيغة الإخراج',
     export_quality_label: '🔍 جودة الإخراج',
+    export_wysiwyg_note: 'يتم تصدير الخريطة بالضبط كما تظهر على الشاشة (WYSIWYG).',
     q_screen: 'شاشة', q_high: 'عالية', q_pro: 'احترافية', q_print: 'طباعة',
     export_pdf_size_label: '📐 حجم الورق',
     pdf_size_a4l: 'A4 أفقي (297 × 210 مم)', pdf_size_a4p: 'A4 عمودي (210 × 297 مم)',
@@ -12462,6 +12704,15 @@ var SYLVA_TRANSLATIONS = {
     server_label: 'سرور',
     chart_dl_title: '🖼️ دانلود نمودار', lbl_format: 'قالب', lbl_filename: 'نام فایل',
     btn_cancel: 'لغو', btn_download: '⬇️ دانلود',
+    contact_btn_label: 'تماس با ما', contact_btn_title: 'تماس با ما',
+    contact_welcome: 'نظرات، سوالات و پیشنهادات خود را با ما در میان بگذارید.',
+    lbl_fullname: 'نام و نام خانوادگی', lbl_email: 'آدرس ایمیل', lbl_subject: 'موضوع', lbl_message: 'توضیحات / پیام',
+    ph_fullname: 'نام و نام خانوادگی خود را وارد کنید', ph_email: 'ایمیل@نمونه.com', ph_subject: 'موضوع چیست؟', ph_message: 'پیام خود را اینجا بنویسید…',
+    btn_send: '📝 ارسال',
+    contact_err_name: 'لطفاً نام و نام خانوادگی خود را وارد کنید.', contact_err_email: 'لطفاً یک ایمیل معتبر وارد کنید.',
+    contact_err_subject: 'لطفاً موضوعی وارد کنید.', contact_err_message: 'لطفاً پیام خود را بنویسید.',
+    contact_success: 'پیام شما با موفقیت ارسال شد. متشکریم!',
+    contact_err_server: 'پیام ارسال نشد. لطفاً بعداً دوباره امتحان کنید.',
     file_grafik: 'نمودار',
     file_analiz_sonuclari: 'نتایج_تحلیل',
     export_default_filename: 'SylvaGIS_نقشه',
@@ -12500,6 +12751,7 @@ var SYLVA_TRANSLATIONS = {
     export_map_title: '🖨️ خروجی نقشه',
     export_format_label: '📁 قالب خروجی',
     export_quality_label: '🔍 کیفیت خروجی',
+    export_wysiwyg_note: 'نقشه دقیقاً همان‌طور که روی صفحه‌نمایش دیده می‌شود خروجی گرفته می‌شود (WYSIWYG).',
     q_screen: 'صفحه نمایش', q_high: 'بالا', q_pro: 'حرفه‌ای', q_print: 'چاپ',
     export_pdf_size_label: '📐 اندازه کاغذ',
     pdf_size_a4l: 'A4 افقی (297 × 210 میلی‌متر)', pdf_size_a4p: 'A4 عمودی (210 × 297 میلی‌متر)',
@@ -12743,6 +12995,15 @@ var SYLVA_TRANSLATIONS = {
     server_label: '服务器',
     chart_dl_title: '🖼️ 下载图表', lbl_format: '格式', lbl_filename: '文件名',
     btn_cancel: '取消', btn_download: '⬇️ 下载',
+    contact_btn_label: '联系我们', contact_btn_title: '联系我们',
+    contact_welcome: '欢迎向我们分享您的反馈、问题和建议。',
+    lbl_fullname: '姓名', lbl_email: '电子邮箱', lbl_subject: '主题', lbl_message: '描述 / 留言',
+    ph_fullname: '请输入您的姓名', ph_email: 'your.email@example.com', ph_subject: '请输入主题', ph_message: '请在此输入您的留言…',
+    btn_send: '📝 发送',
+    contact_err_name: '请输入您的姓名。', contact_err_email: '请输入有效的电子邮箱地址。',
+    contact_err_subject: '请输入主题。', contact_err_message: '请填写您的留言。',
+    contact_success: '您的消息已成功发送。谢谢！',
+    contact_err_server: '消息发送失败，请稍后重试。',
     file_grafik: '图表',
     file_analiz_sonuclari: '分析结果',
     export_default_filename: 'SylvaGIS_地图',
@@ -12781,6 +13042,7 @@ var SYLVA_TRANSLATIONS = {
     export_map_title: '🖨️ 导出地图',
     export_format_label: '📁 输出格式',
     export_quality_label: '🔍 输出质量',
+    export_wysiwyg_note: '地图将与屏幕显示完全一致地导出（WYSIWYG）。',
     q_screen: '屏幕', q_high: '高', q_pro: '专业', q_print: '打印',
     export_pdf_size_label: '📐 纸张尺寸',
     pdf_size_a4l: 'A4 横向 (297 × 210 mm)', pdf_size_a4p: 'A4 纵向 (210 × 297 mm)',
@@ -13024,6 +13286,15 @@ var SYLVA_TRANSLATIONS = {
     server_label: 'サーバー',
     chart_dl_title: '🖼️ チャートダウンロード', lbl_format: 'フォーマット', lbl_filename: 'ファイル名',
     btn_cancel: 'キャンセル', btn_download: '⬇️ ダウンロード',
+    contact_btn_label: 'お問い合わせ', contact_btn_title: 'お問い合わせ',
+    contact_welcome: 'ご意見、ご質問、ご提案をお寄せください。',
+    lbl_fullname: '氏名', lbl_email: 'メールアドレス', lbl_subject: '件名', lbl_message: '説明 / メッセージ',
+    ph_fullname: 'お名前を入力してください', ph_email: 'your.email@example.com', ph_subject: '件名を入力してください', ph_message: 'メッセージをここに入力してください…',
+    btn_send: '📝 送信',
+    contact_err_name: 'お名前を入力してください。', contact_err_email: '有効なメールアドレスを入力してください。',
+    contact_err_subject: '件名を入力してください。', contact_err_message: 'メッセージを入力してください。',
+    contact_success: 'メッセージが正常に送信されました。ありがとうございます！',
+    contact_err_server: 'メッセージを送信できませんでした。後でもう一度お試しください。',
     file_grafik: 'チャート',
     file_analiz_sonuclari: '分析結果',
     export_default_filename: 'SylvaGIS_地図',
@@ -13062,6 +13333,7 @@ var SYLVA_TRANSLATIONS = {
     export_map_title: '🖨️ 地図を出力',
     export_format_label: '📁 出力形式',
     export_quality_label: '🔍 出力品質',
+    export_wysiwyg_note: '地図は画面に表示されているとおりにエクスポートされます（WYSIWYG）。',
     q_screen: '画面', q_high: '高', q_pro: 'プロフェッショナル', q_print: '印刷',
     export_pdf_size_label: '📐 用紙サイズ',
     pdf_size_a4l: 'A4 横向き (297 × 210 mm)', pdf_size_a4p: 'A4 縦向き (210 × 297 mm)',
@@ -13305,6 +13577,15 @@ var SYLVA_TRANSLATIONS = {
     server_label: '서버',
     chart_dl_title: '🖼️ 차트 다운로드', lbl_format: '형식', lbl_filename: '파일 이름',
     btn_cancel: '취소', btn_download: '⬇️ 다운로드',
+    contact_btn_label: '문의하기', contact_btn_title: '문의하기',
+    contact_welcome: '의견, 질문 및 제안을 저희와 공유해 주세요.',
+    lbl_fullname: '성명', lbl_email: '이메일 주소', lbl_subject: '제목', lbl_message: '설명 / 메시지',
+    ph_fullname: '성명을 입력하세요', ph_email: 'example@example.com', ph_subject: '제목을 입력하세요', ph_message: '메시지를 여기에 작성하세요…',
+    btn_send: '📝 보내기',
+    contact_err_name: '성명을 입력해 주세요.', contact_err_email: '유효한 이메일 주소를 입력해 주세요.',
+    contact_err_subject: '제목을 입력해 주세요.', contact_err_message: '메시지를 작성해 주세요.',
+    contact_success: '메시지가 성공적으로 전송되었습니다. 감사합니다!',
+    contact_err_server: '메시지를 보낼 수 없습니다. 나중에 다시 시도해 주세요.',
     file_grafik: '차트',
     file_analiz_sonuclari: '분석결과',
     export_default_filename: 'SylvaGIS_지도',
@@ -13343,6 +13624,7 @@ var SYLVA_TRANSLATIONS = {
     export_map_title: '🖨️ 지도 내보내기',
     export_format_label: '📁 출력 형식',
     export_quality_label: '🔍 출력 품질',
+    export_wysiwyg_note: '지도는 화면에 보이는 그대로 내보내집니다（WYSIWYG）。',
     q_screen: '화면', q_high: '높음', q_pro: '전문가용', q_print: '인쇄',
     export_pdf_size_label: '📐 용지 크기',
     pdf_size_a4l: 'A4 가로 (297 × 210 mm)', pdf_size_a4p: 'A4 세로 (210 × 297 mm)',
@@ -13586,9 +13868,19 @@ var SYLVA_TRANSLATIONS = {
     server_label: 'सर्वर',
     chart_dl_title: '🖼️ चार्ट डाउनलोड', lbl_format: 'प्रारूप', lbl_filename: 'फ़ाइल नाम',
     btn_cancel: 'रद्द करें', btn_download: '⬇️ डाउनलोड',
+    contact_btn_label: 'संपर्क करें', contact_btn_title: 'हमसे संपर्क करें',
+    contact_welcome: 'अपनी प्रतिक्रिया, प्रश्न और सुझाव हमारे साथ साझा करें।',
+    lbl_fullname: 'पूरा नाम', lbl_email: 'ईमेल पता', lbl_subject: 'विषय', lbl_message: 'विवरण / संदेश',
+    ph_fullname: 'अपना पूरा नाम दर्ज करें', ph_email: 'aapka.email@udaharan.com', ph_subject: 'विषय दर्ज करें', ph_message: 'अपना संदेश यहाँ लिखें…',
+    btn_send: '📝 भेजें',
+    contact_err_name: 'कृपया अपना पूरा नाम दर्ज करें।', contact_err_email: 'कृपया एक मान्य ईमेल पता दर्ज करें।',
+    contact_err_subject: 'कृपया एक विषय दर्ज करें।', contact_err_message: 'कृपया अपना संदेश लिखें।',
+    contact_success: 'आपका संदेश सफलतापूर्वक भेज दिया गया है। धन्यवाद!',
+    contact_err_server: 'संदेश नहीं भेजा जा सका। कृपया बाद में पुनः प्रयास करें।',
     export_map_title: '🖨️ मानचित्र निर्यात करें',
     export_format_label: '📁 आउटपुट प्रारूप',
     export_quality_label: '🔍 आउटपुट गुणवत्ता',
+    export_wysiwyg_note: 'मानचित्र को स्क्रीन पर दिखाई देने वाले रूप में ही निर्यात किया जाता है (WYSIWYG)।',
     q_screen: 'स्क्रीन', q_high: 'उच्च', q_pro: 'व्यावसायिक', q_print: 'प्रिंट',
     export_pdf_size_label: '📐 कागज़ का आकार',
     pdf_size_a4l: 'A4 लैंडस्केप (297 × 210 mm)', pdf_size_a4p: 'A4 पोर्ट्रेट (210 × 297 mm)',
@@ -13839,9 +14131,19 @@ var SYLVA_TRANSLATIONS = {
     server_label: 'Server',
     chart_dl_title: '🖼️ Unduh Grafik', lbl_format: 'Format', lbl_filename: 'Nama File',
     btn_cancel: 'Batal', btn_download: '⬇️ Unduh',
+    contact_btn_label: 'Kontak', contact_btn_title: 'Hubungi Kami',
+    contact_welcome: 'Bagikan masukan, pertanyaan, dan saran Anda kepada kami.',
+    lbl_fullname: 'Nama Lengkap', lbl_email: 'Alamat Email', lbl_subject: 'Subjek', lbl_message: 'Deskripsi / Pesan',
+    ph_fullname: 'Masukkan nama lengkap Anda', ph_email: 'email.anda@contoh.com', ph_subject: 'Apa topiknya?', ph_message: 'Tulis pesan Anda di sini…',
+    btn_send: '📝 Kirim',
+    contact_err_name: 'Silakan masukkan nama lengkap Anda.', contact_err_email: 'Silakan masukkan alamat email yang valid.',
+    contact_err_subject: 'Silakan masukkan subjek.', contact_err_message: 'Silakan tulis pesan Anda.',
+    contact_success: 'Pesan Anda telah berhasil terkirim. Terima kasih!',
+    contact_err_server: 'Pesan tidak dapat dikirim. Silakan coba lagi nanti.',
     export_map_title: '🖨️ Ekspor Peta',
     export_format_label: '📁 Format Output',
     export_quality_label: '🔍 Kualitas Output',
+    export_wysiwyg_note: 'Peta diekspor persis seperti yang terlihat di layar (WYSIWYG).',
     q_screen: 'Layar', q_high: 'Tinggi', q_pro: 'Profesional', q_print: 'Cetak',
     export_pdf_size_label: '📐 Ukuran Kertas',
     pdf_size_a4l: 'A4 Lanskap (297 × 210 mm)', pdf_size_a4p: 'A4 Potret (210 × 297 mm)',
