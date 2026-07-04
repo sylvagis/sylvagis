@@ -857,6 +857,30 @@ tr.class-highlight-active {
             .mqb-lang-btn { font-size: 0.72rem; padding: 4px 8px; min-width: 90px !important; }
         }
 
+        /* ── Dikey (Portrait) mobil: LinkedIn gizle + hizalama düzeltmesi ── */
+        @media (max-width: 640px) and (orientation: portrait) {
+            #mobile-quick-bar a[title="LinkedIn"] { display: none !important; }
+            #mobile-quick-bar {
+                flex-wrap: nowrap;
+                overflow-x: auto;
+                scrollbar-width: none;
+                justify-content: flex-start;
+                align-items: center;
+            }
+            #mobile-quick-bar::-webkit-scrollbar { display: none; }
+            #mobile-quick-bar .mqb-icon-btn {
+                flex-shrink: 0;
+                padding: 5px 8px;
+                font-size: 0.73rem;
+                white-space: nowrap;
+            }
+            #mobile-quick-bar .mqb-lang-btn {
+                min-width: 95px !important;
+                flex-shrink: 0;
+                white-space: nowrap;
+            }
+        }
+
         /* ── Mobile Quick Bar CSS ──────────────────────────────── */
         #mobile-quick-bar {
             display: none;
@@ -1358,12 +1382,12 @@ tr.class-highlight-active {
         <!-- Rehber -->
         <button type="button" class="mqb-icon-btn" id="mqb-guide-btn"
             onclick="document.getElementById('nav-guide-btn') && document.getElementById('nav-guide-btn').click()">
-            ❓ <span data-i18n="nav_guide">Rehber</span>
+            <span data-i18n="nav_guide">Rehber</span>
         </button>
         <!-- Kullanıcı -->
         <button type="button" class="mqb-icon-btn" id="mqb-user-btn"
             onclick="sylvaOpenLogin && sylvaOpenLogin()">
-            👤 <span data-i18n="nav_login">Kullanıcı</span>
+            <span data-i18n="nav_login">Kullanıcı</span>
         </button>
     </div>
 
@@ -6206,30 +6230,32 @@ function selectRamp(name) {
                 ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
                 URL.revokeObjectURL(url);
 
-                // ── SylvaGIS grafik logosu — boş köşeye yarı şeffaf ─────────
+                // ── SylvaGIS grafik logosu — sol alt köşeye (yüksek çözünürlük, logo resmi) ──
                 (function() {
-                    var cW = canvas.width, sc = scale;
-                    var lTxt = 'SylvaGIS';
-                    ctx.save();
-                    ctx.font = 'bold ' + (8 * sc) + 'px Segoe UI, Arial, sans-serif';
-                    ctx.textAlign = 'right';
-                    var lMet = ctx.measureText(lTxt);
-                    var lPad = 4 * sc;
-                    var bW = lMet.width + lPad * 2;
-                    var bH = 14 * sc;
-                    // Grafik alanının sağ altı (tablo değil, sadece grafik bölümü)
-                    var bX = cW - lPad - bW;
-                    var bY = svgH * sc - lPad - bH;
-                    // Yarı şeffaf beyaz arka plan hap
-                    ctx.fillStyle = 'rgba(255,255,255,0.82)';
-                    ctx.beginPath();
-                    if (ctx.roundRect) ctx.roundRect(bX, bY, bW, bH, 3 * sc);
-                    else ctx.rect(bX, bY, bW, bH);
-                    ctx.fill();
-                    // Logo metni — lacivert, yarı şeffaf
-                    ctx.fillStyle = 'rgba(30,58,138,0.72)';
-                    ctx.fillText(lTxt, bX + bW - lPad, bY + bH * 0.76);
-                    ctx.restore();
+                    var sc    = scale;
+                    var lPadX = 8 * sc;
+                    var lPadY = 5 * sc;
+                    var logoH = 32 * sc;        // ekrandaki logonun 2× büyütülmüşü
+                    var bH    = logoH + lPadY * 2;
+                    var bX    = lPadX;
+                    var bY    = svgH * sc - lPadX - bH;
+                    var logoEl = document.querySelector('.logo-container img');
+                    if (logoEl && logoEl.complete && logoEl.naturalWidth > 0) {
+                        ctx.save();
+                        var aspect = logoEl.naturalWidth / logoEl.naturalHeight;
+                        var lH = logoH;
+                        var lW = lH * aspect;
+                        var bW = lW + lPadX * 2;
+                        ctx.fillStyle = 'rgba(255,255,255,0.82)';
+                        ctx.beginPath();
+                        if (ctx.roundRect) ctx.roundRect(bX, bY, bW, bH, 6 * sc);
+                        else ctx.rect(bX, bY, bW, bH);
+                        ctx.fill();
+                        ctx.imageSmoothingEnabled = true;
+                        ctx.imageSmoothingQuality = 'high';
+                        ctx.drawImage(logoEl, bX + lPadX, bY + lPadY, lW, lH);
+                        ctx.restore();
+                    }
                 })();
 
                 var mimeType = format === 'jpeg' ? 'image/jpeg' : 'image/png';
@@ -8945,7 +8971,20 @@ function selectRamp(name) {
                 progressLabel.textContent = 'Harita hazırlanıyor…';
             }
 
-            if (btnOpen)   btnOpen.addEventListener('click', openModal);
+            if (btnOpen) {
+                btnOpen.addEventListener('click', function() {
+                    // ── Giriş kontrolü: çıktı almak için kullanıcı girişi zorunlu ──
+                    if (!window._sylvaUserDone) {
+                        var msg = (typeof t === 'function')
+                            ? (t('export_login_required') || '🔒 Görsel çıktı almak için lütfen önce kullanıcı girişi yapın.')
+                            : '🔒 Görsel çıktı almak için lütfen önce kullanıcı girişi yapın.';
+                        if (typeof sylvaAlert === 'function') sylvaAlert(msg, 'warning');
+                        if (typeof window.sylvaOpenLogin === 'function') window.sylvaOpenLogin();
+                        return;
+                    }
+                    openModal();
+                });
+            }
             if (btnClose)  btnClose.addEventListener('click', closeModal);
             if (btnCancel) btnCancel.addEventListener('click', closeModal);
             overlay.addEventListener('click', function(e) {
@@ -9422,47 +9461,48 @@ function selectRamp(name) {
                         ctx.restore();
                     }
     
-                    // ── Sol alt köşe: SylvaGIS logosu ─────────────────────────────────────
+                    // ── Sol alt köşe: SylvaGIS logosu (metin yok, yalnızca logo resmi) ──────
                     // #sylvagis-watermark #map DOM'unun dışında (kardeş element) olduğu için
                     // html2canvas tarafından yakalanmaz. Logo tüm çıktı formatlarında (PNG /
                     // JPEG / PDF) tutarlı görünmesi için burada native olarak çizilir.
-                    // Stil: basemap üzerindeki DOM watermark'la birebir aynı (beyaz %65 yarı
-                    // saydam arka plan, 8 px yuvarlak köşe, kenarlık/accent yok).
                     (function() {
-                        var wmEl = document.getElementById('sylvagis-watermark');
-                        var wmPad = 8 * scale;   // köşeden iç boşluk
-                        var wmFS  = 11 * scale;
-                        var wmPadX = 9 * scale;
-                        var wmPadY = 4 * scale;
-                        var wmTxt = 'SylvaGIS';
-                        ctx.save();
-                        ctx.font = 'bold ' + wmFS + 'px Segoe UI, sans-serif';
-                        var wmMet = ctx.measureText(wmTxt);
-                        var wmW   = wmMet.width + wmPadX * 2;
-                        var wmH   = wmFS + wmPadY * 2;
-                        // Konumu DOM watermark'tan oku; görünmüyorsa sabit sol-alt köşeye yerleştir
+                        var wmEl   = document.getElementById('sylvagis-watermark');
+                        var wmPad  = 8 * scale;
+                        var wmPadX = 8 * scale;
+                        var wmPadY = 5 * scale;
+                        // Logo yüksekliği: ekrandaki nav logosunun 2× büyütülmüş hâli
+                        var logoH  = 32 * scale;
+                        var wmH    = logoH + wmPadY * 2;
+                        // Konum: DOM watermark solundan; yoksa sabit sol-alt köşe
                         var wmX, wmY;
                         if (wmEl && wmEl.getBoundingClientRect) {
                             var wr = wmEl.getBoundingClientRect();
                             var mr = document.getElementById('map').getBoundingClientRect();
                             wmX = (wr.left - mr.left) * scale;
-                            wmY = (wr.top  - mr.top)  * scale;
+                            wmY = mapEl.offsetHeight * scale - wmPad - wmH;
                         } else {
                             wmX = wmPad;
                             wmY = mapEl.offsetHeight * scale - wmPad - wmH;
                         }
-                        // Beyaz yarı saydam arka plan
-                        ctx.fillStyle = 'rgba(255,255,255,0.65)';
-                        ctx.beginPath();
-                        if (ctx.roundRect) ctx.roundRect(wmX, wmY, wmW, wmH, 8 * scale);
-                        else              ctx.rect(wmX, wmY, wmW, wmH);
-                        ctx.fill();
-                        // Metin
-                        ctx.fillStyle  = '#1e3a8a';
-                        ctx.textAlign  = 'left';
-                        ctx.font       = 'bold ' + wmFS + 'px Segoe UI, sans-serif';
-                        ctx.fillText(wmTxt, wmX + wmPadX, wmY + wmH - wmPadY - 1 * scale);
-                        ctx.restore();
+                        var logoEl = document.querySelector('.logo-container img');
+                        if (logoEl && logoEl.complete && logoEl.naturalWidth > 0) {
+                            ctx.save();
+                            var aspect = logoEl.naturalWidth / logoEl.naturalHeight;
+                            var lH  = logoH;
+                            var lW  = lH * aspect;
+                            var wmW = lW + wmPadX * 2;
+                            // Beyaz yarı saydam arka plan (köşe 8 px)
+                            ctx.fillStyle = 'rgba(255,255,255,0.82)';
+                            ctx.beginPath();
+                            if (ctx.roundRect) ctx.roundRect(wmX, wmY, wmW, wmH, 8 * scale);
+                            else              ctx.rect(wmX, wmY, wmW, wmH);
+                            ctx.fill();
+                            // Logo resmi — yüksek çözünürlüklü, metin yok
+                            ctx.imageSmoothingEnabled = true;
+                            ctx.imageSmoothingQuality = 'high';
+                            ctx.drawImage(logoEl, wmX + wmPadX, wmY + wmPadY, lW, lH);
+                            ctx.restore();
+                        }
                     })();
     
                     // Altlık harita atıf/kaynak bilgisi (sağ alt köşe) — html2canvas bu küçük
@@ -11750,6 +11790,8 @@ var SYLVA_TRANSLATIONS = {
     file_grafik: 'Chart',
     file_analiz_sonuclari: 'Analysis_Results',
     export_default_filename: 'SylvaGIS_Map',
+    export_login_required: '🔒 Please log in to download map exports.',
+    login_required_ui: '🔒 Please log in to use this feature.',
     markup_undo_title: 'Undo (Ctrl+Z)', markup_redo_title: 'Redo (Ctrl+Y)', markup_clear_title: 'Clear All',
     markup_pointer_title: 'Mouse Selection Tool — Select and Move Objects',
     col_class: 'Class', col_area: 'Area', col_class_name: 'Class Name', col_area_ha: 'Area (ha)',
@@ -12061,6 +12103,8 @@ var SYLVA_TRANSLATIONS = {
     file_grafik: 'Grafik',
     file_analiz_sonuclari: 'Analiz_Sonuclari',
     export_default_filename: 'SylvaGIS_Harita',
+    export_login_required: '🔒 Görsel çıktı almak için lütfen önce giriş yapın.',
+    login_required_ui: '🔒 Bu özelliği kullanmak için lütfen giriş yapın.',
     markup_undo_title: 'Geri Al (Ctrl+Z)', markup_redo_title: 'İleri Al (Ctrl+Y)', markup_clear_title: 'Tümünü Sil',
     markup_pointer_title: 'Fare Seçim Aracı — Nesne Seç ve Taşı',
     col_class: 'Sınıf', col_area: 'Alan', col_class_name: 'Sınıf Adı', col_area_ha: 'Alan (ha)',
@@ -12364,6 +12408,8 @@ var SYLVA_TRANSLATIONS = {
     file_grafik: 'Diagramm',
     file_analiz_sonuclari: 'Analyse_Ergebnisse',
     export_default_filename: 'SylvaGIS_Karte',
+    export_login_required: '🔒 Bitte melden Sie sich an, um Kartenexporte herunterzuladen.',
+    login_required_ui: '🔒 Bitte melden Sie sich an, um diese Funktion zu nutzen.',
     markup_undo_title: 'Rükgängig (Ctrl+Z)', markup_redo_title: 'Wiederholen (Ctrl+Y)', markup_clear_title: 'Alles löschen',
     markup_pointer_title: 'Mausauswahl-Werkzeug — Objekt auswählen und verschieben',
     col_class: 'Klasse', col_area: 'Fläche', col_class_name: 'Klassenname', col_area_ha: 'Fläche (ha)',
@@ -12667,6 +12713,8 @@ var SYLVA_TRANSLATIONS = {
     file_grafik: 'Graphique',
     file_analiz_sonuclari: 'Resultats_Analyse',
     export_default_filename: 'SylvaGIS_Carte',
+    export_login_required: '🔒 Veuillez vous connecter pour télécharger les exports de carte.',
+    login_required_ui: '🔒 Veuillez vous connecter pour utiliser cette fonctionnalité.',
     markup_undo_title: 'Annuler (Ctrl+Z)', markup_redo_title: 'Rétablir (Ctrl+Y)', markup_clear_title: 'Tout effacer',
     markup_pointer_title: 'Outil Sélection Souris — Sélectionner et déplacer un objet',
     col_class: 'Classe', col_area: 'Surface', col_class_name: 'Nom de classe', col_area_ha: 'Surface (ha)',
@@ -12970,6 +13018,8 @@ var SYLVA_TRANSLATIONS = {
     file_grafik: 'Grafico',
     file_analiz_sonuclari: 'Resultados_Analisis',
     export_default_filename: 'SylvaGIS_Mapa',
+    export_login_required: '🔒 Por favor, inicie sesión para descargar exportaciones de mapa.',
+    login_required_ui: '🔒 Por favor, inicie sesión para usar esta función.',
     markup_undo_title: 'Deshacer (Ctrl+Z)', markup_redo_title: 'Rehacer (Ctrl+Y)', markup_clear_title: 'Borrar todo',
     markup_pointer_title: 'Herramienta de selección de ratón — Seleccionar y mover objeto',
     col_class: 'Clase', col_area: 'Área', col_class_name: 'Nombre de clase', col_area_ha: 'Área (ha)',
@@ -13273,6 +13323,8 @@ var SYLVA_TRANSLATIONS = {
     file_grafik: 'رسم_بياني',
     file_analiz_sonuclari: 'نتائج_التحليل',
     export_default_filename: 'SylvaGIS_خريطة',
+    export_login_required: '🔒 يرجى تسجيل الدخول لتنزيل مخرجات الخريطة.',
+    login_required_ui: '🔒 يرجى تسجيل الدخول لاستخدام هذه الميزة.',
     markup_undo_title: 'تراجع (Ctrl+Z)', markup_redo_title: 'إعادة (Ctrl+Y)', markup_clear_title: 'مسح الكل',
     markup_pointer_title: 'أداة التحديد بالماوس — تحديد الكائن ونقله',
     col_class: 'الفئة', col_area: 'المساحة', col_class_name: 'اسم الفئة', col_area_ha: 'المساحة (ha)',
@@ -13576,6 +13628,8 @@ var SYLVA_TRANSLATIONS = {
     file_grafik: 'نمودار',
     file_analiz_sonuclari: 'نتایج_تحلیل',
     export_default_filename: 'SylvaGIS_نقشه',
+    export_login_required: '🔒 لطفاً برای دانلود خروجی نقشه وارد شوید.',
+    login_required_ui: '🔒 لطفاً برای استفاده از این قابلیت وارد شوید.',
     markup_undo_title: 'بازگشت (Ctrl+Z)', markup_redo_title: 'تکرار (Ctrl+Y)', markup_clear_title: 'پاک کردن همه',
     markup_pointer_title: 'ابزار انتخاب ماوس — انتخاب و جابجایی شیء',
     col_class: 'کلاس', col_area: 'مساحت', col_class_name: 'نام کلاس', col_area_ha: 'مساحت (ha)',
@@ -13879,6 +13933,8 @@ var SYLVA_TRANSLATIONS = {
     file_grafik: '图表',
     file_analiz_sonuclari: '分析结果',
     export_default_filename: 'SylvaGIS_地图',
+    export_login_required: '🔒 请登录以下载地图导出文件。',
+    login_required_ui: '🔒 请登录以使用此功能。',
     markup_undo_title: '撤销 (Ctrl+Z)', markup_redo_title: '重做 (Ctrl+Y)', markup_clear_title: '全部清除',
     markup_pointer_title: '鼠标选择工具 — 选择并移动对象',
     col_class: '类别', col_area: '面积', col_class_name: '类别名称', col_area_ha: '面积 (ha)',
@@ -14182,6 +14238,8 @@ var SYLVA_TRANSLATIONS = {
     file_grafik: 'チャート',
     file_analiz_sonuclari: '分析結果',
     export_default_filename: 'SylvaGIS_地図',
+    export_login_required: '🔒 マップのエクスポートをダウンロードするにはログインしてください。',
+    login_required_ui: '🔒 この機能を使用するにはログインしてください。',
     markup_undo_title: '元に戻す (Ctrl+Z)', markup_redo_title: 'やり直す (Ctrl+Y)', markup_clear_title: 'すべて消去',
     markup_pointer_title: 'マウス選択ツール — オブジェクトを選択して移動',
     col_class: 'クラス', col_area: '面積', col_class_name: 'クラス名', col_area_ha: '面積 (ha)',
@@ -14485,6 +14543,8 @@ var SYLVA_TRANSLATIONS = {
     file_grafik: '차트',
     file_analiz_sonuclari: '분석결과',
     export_default_filename: 'SylvaGIS_지도',
+    export_login_required: '🔒 지도 내보내기를 다운로드하려면 로그인하세요.',
+    login_required_ui: '🔒 이 기능을 사용하려면 로그인하세요.',
     markup_undo_title: '실행 취소 (Ctrl+Z)', markup_redo_title: '다시 실행 (Ctrl+Y)', markup_clear_title: '모두 지우기',
     markup_pointer_title: '마우스 선택 도구 — 객체 선택 및 이동',
     col_class: '클래스', col_area: '면적', col_class_name: '클래스 이름', col_area_ha: '면적 (ha)',
@@ -14800,6 +14860,8 @@ var SYLVA_TRANSLATIONS = {
     file_grafik: 'चार्ट',
     file_analiz_sonuclari: 'विश्लेषण_परिणाम',
     export_default_filename: 'SylvaGIS_मानचित्र',
+    export_login_required: '🔒 मानचित्र निर्यात डाउनलोड करने के लिए कृपया लॉग इन करें।',
+    login_required_ui: '🔒 इस सुविधा का उपयोग करने के लिए कृपया लॉग इन करें।',
     markup_undo_title: 'पूर्ववत करें (Ctrl+Z)', markup_redo_title: 'फिर करें (Ctrl+Y)', markup_clear_title: 'सब हटाएं',
     markup_pointer_title: 'माउस चयन उपकरण — वस्तु चुनें और स्थानांतरित करें',
     col_class: 'वर्ग', col_area: 'क्षेत्र', col_class_name: 'वर्ग नाम', col_area_ha: 'क्षेत्र (ha)',
@@ -15075,6 +15137,8 @@ var SYLVA_TRANSLATIONS = {
     file_grafik: 'Grafik',
     file_analiz_sonuclari: 'Hasil_Analisis',
     export_default_filename: 'SylvaGIS_Peta',
+    export_login_required: '🔒 Silakan masuk untuk mengunduh ekspor peta.',
+    login_required_ui: '🔒 Silakan masuk untuk menggunakan fitur ini.',
     markup_undo_title: 'Urungkan (Ctrl+Z)', markup_redo_title: 'Ulangi (Ctrl+Y)', markup_clear_title: 'Hapus Semua',
     markup_pointer_title: 'Alat Pilihan Mouse — Pilih dan Pindahkan Objek',
     col_class: 'Kelas', col_area: 'Area', col_class_name: 'Nama Kelas', col_area_ha: 'Area (ha)',
@@ -17353,6 +17417,87 @@ document.addEventListener('DOMContentLoaded',function(){
             if (e.key === 'Escape') closeFu();
         });
     });
+})();
+</script>
+
+
+<script>
+/* ══════════════════════════════════════════════════════════════
+   SylvaGIS — Global UI Blocker  (v2)
+   Sadece click/change engellenir; sayfa yüklenirken tetiklenmez.
+   Engellenen tıklamada "Before You Start" overlay gösterilir.
+   Serbest: LinkedIn · Dil seçimi · Kullanıcı Girişi butonu
+   ══════════════════════════════════════════════════════════════ */
+(function () {
+    'use strict';
+
+    // 2 sn throttle — aynı uyarı tekrar gösterilmez
+    var _lastWarnTime = 0;
+
+    /* ── Whitelist: bu elemanlar (ve tüm child'ları) serbest ── */
+    var WHITELISTED_IDS = {
+        'nav-login-btn':          true,
+        'mqb-user-btn':           true,
+        'sylva-login-overlay':    true,
+        'sylva-modal-overlay':    true,
+        'sylva-firstuse-overlay': true,
+        'sylva-welcome-screen':   true,
+        'lang-toggle-btn':        true,
+        'mqb-lang-toggle':        true,
+        'lang-dropdown-wrapper':  true,
+        'lang-dropdown':          true,
+        'mqb-lang-menu':          true
+    };
+
+    function isWhitelisted(el) {
+        if (!el || el === document || el === document.body) return false;
+
+        // ID kontrolü
+        if (el.id && WHITELISTED_IDS[el.id]) return true;
+
+        // Class kontrolü (dil ve LinkedIn butonları)
+        var cls = (typeof el.className === 'string') ? el.className : '';
+        if (cls.indexOf('mqb-lang-btn') !== -1 ||
+            cls.indexOf('lang-opt')     !== -1) return true;
+
+        // LinkedIn linkleri
+        if (el.tagName === 'A') {
+            var href = el.getAttribute('href') || '';
+            if (href.indexOf('linkedin') !== -1) return true;
+        }
+
+        // Üst elemana bak (child'lar da serbest olsun)
+        return isWhitelisted(el.parentElement);
+    }
+
+    function showFirstUse() {
+        var now = Date.now();
+        if (now - _lastWarnTime < 2000) return;
+        _lastWarnTime = now;
+
+        // "Before You Start" overlay'ini aç
+        var fu = document.getElementById('sylva-firstuse-overlay');
+        if (fu) {
+            fu.classList.add('active');
+            return;
+        }
+        // Fallback: sylvaAlert
+        var msg = '🔒 Bu özelliği kullanmak için lütfen giriş yapın.';
+        if (typeof t === 'function') msg = t('login_required_ui') || msg;
+        if (typeof sylvaAlert === 'function') sylvaAlert(msg, 'warning');
+    }
+
+    function blocker(e) {
+        if (window._sylvaUserDone === true) return;          // giriş yapıldı → serbest
+        if (isWhitelisted(e.target || e.srcElement)) return; // beyaz liste → serbest
+        e.preventDefault();
+        e.stopPropagation();
+        showFirstUse();
+    }
+
+    // Yalnızca click ve change — touchstart / input sayfa yüklenirken tetiklenir
+    document.addEventListener('click',  blocker, true);
+    document.addEventListener('change', blocker, true);
 })();
 </script>
 
