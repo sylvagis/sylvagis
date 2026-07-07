@@ -346,7 +346,7 @@ tr.class-highlight-active {
 
         /* Akordeon Menüler (Detaylar) */
         details { background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 5px; margin-bottom: 5px; }
-        summary { padding: 10px; font-weight: bold; cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; color: #1e3a8a; }
+        summary { padding: 10px; font-weight: bold; cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; color: #1e3a8a; touch-action: manipulation; -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none; }
         summary::-webkit-details-marker { display: none; }
         details[open] summary { border-bottom: 1px solid #e2e8f0; }
         .details-content { padding: 10px; display: flex; flex-direction: column; gap: 12px; }
@@ -1150,14 +1150,18 @@ tr.class-highlight-active {
             position: fixed;
             top: auto;
             left: 10px;
+            right: 10px;
             z-index: 9999;
             background: #fff;
             border: 1px solid #e2e8f0;
             border-radius: 8px;
             box-shadow: 0 8px 24px rgba(0,0,0,0.15);
             min-width: 190px;
-            max-height: 60dvh;
-            overflow-y: auto;
+            max-width: calc(100vw - 20px);
+            max-height: 55dvh;
+            overflow-y: scroll;
+            -webkit-overflow-scrolling: touch;
+            overscroll-behavior: contain;
             padding: 4px 0;
         }
 
@@ -1539,6 +1543,8 @@ tr.class-highlight-active {
             </div>
             <style>
                 .lang-opt {
+            touch-action: manipulation;
+            -webkit-tap-highlight-color: transparent;
                     padding: 7px 14px;
                     font-size: 0.85rem;
                     cursor: pointer;
@@ -1581,7 +1587,7 @@ tr.class-highlight-active {
     <div id="mobile-quick-bar">
         <!-- Dil seçimi -->
         <button type="button" class="mqb-lang-btn" id="mqb-lang-toggle"
-            onclick="document.getElementById('mqb-lang-menu').style.display=(document.getElementById('mqb-lang-menu').style.display==='none'||!document.getElementById('mqb-lang-menu').style.display)?'block':'none';event.stopPropagation();">
+            onclick="(function(btn,menu){var isHidden=(menu.style.display==='none'||!menu.style.display);if(isHidden){var r=btn.getBoundingClientRect();menu.style.top=(r.bottom+4)+'px';menu.style.left='10px';menu.style.display='block';var act=menu.querySelector('.lang-opt.active');if(act){act.scrollIntoView({block:'nearest'});}else{menu.scrollTop=0;}}else{menu.style.display='none';}event.stopPropagation();})(this,document.getElementById('mqb-lang-menu'));">
             <span id="mqb-flag">🇬🇧</span>
             <span id="mqb-label">English</span>
             <span style="font-size:0.6rem;opacity:0.7;">▼</span>
@@ -2024,7 +2030,18 @@ tr.class-highlight-active {
         det.classList.remove('sylva-anim-closed');
         det.open = true;
 
+        // Force layout reflow — iOS/Android may not recalculate immediately
+        void content.offsetHeight;
         var targetHeight = content.scrollHeight;
+        if (!targetHeight) {
+            // Fallback: measure via offsetHeight after forcing visibility
+            content.style.visibility = 'hidden';
+            content.style.height = 'auto';
+            targetHeight = content.offsetHeight;
+            content.style.height = '';
+            content.style.visibility = '';
+        }
+
         content.style.overflow = 'hidden';
 
         var anim = content.animate(
@@ -3711,6 +3728,8 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
                     // MQB'yi güncelle ve dili uygula
                     _syncMqbLang(val, flag, label);
                     if (typeof applySylvaLang === 'function') applySylvaLang(val);
+                    // Menüyü kapat
+                    mqbMenuEl.style.display = 'none';
                 });
             }
             // Başlangıç dilini uygula (sayfa yüklenince) — kayıtlı tercih varsa onunla,
@@ -10904,6 +10923,9 @@ function selectRamp(name) {
             document.getElementById('mobile-panel-overlay').classList.add('open');
             document.getElementById('hamburger-btn').classList.add('open');
             drawerOpen = true;
+            // Scroll to top when opening drawer
+            var dc = document.getElementById('mobile-drawer-content');
+            if (dc) dc.scrollTop = 0;
         };
 
         window.closeDrawer = function() {
@@ -10925,6 +10947,9 @@ function selectRamp(name) {
             document.querySelectorAll('.mobile-tab-panel').forEach(function(panel) {
                 panel.classList.toggle('active', panel.id === 'mobile-tab-' + tab);
             });
+            // Scroll drawer content to top when switching tabs
+            var dc = document.getElementById('mobile-drawer-content');
+            if (dc) dc.scrollTop = 0;
         }
 
         document.querySelectorAll('.mobile-tab-btn').forEach(function(btn) {
