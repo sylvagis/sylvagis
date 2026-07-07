@@ -1433,6 +1433,56 @@ tr.class-highlight-active {
 [dir="rtl"] .sylva-dp-text{border-radius:0 5px 5px 0;border-left:none;border-right:1px solid #cbd5e1;}
 [dir="rtl"] .sylva-dp-icon-btn{border-radius:5px 0 0 5px;border-right:none;border-left:1px solid #cbd5e1;}
 </style>
+
+<script>
+/* ── SylvaGIS Ses Motoru ─ Web Audio API sentezi (telifsiz) ─────── */
+window.sylvaSound = (function () {
+    var _ctx = null;
+    function ctx() {
+        if (!_ctx) {
+            try { _ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
+        }
+        // Safari / Chrome kullanıcı etkileşimi gerektiriyor — suspended ise resume et
+        if (_ctx && _ctx.state === 'suspended') { try { _ctx.resume(); } catch(e) {} }
+        return _ctx;
+    }
+    function tone(freq, start, dur, vol, type) {
+        var ac = ctx(); if (!ac) return;
+        var osc = ac.createOscillator();
+        var env = ac.createGain();
+        osc.connect(env); env.connect(ac.destination);
+        osc.type = type || 'sine';
+        osc.frequency.setValueAtTime(freq, ac.currentTime + start);
+        env.gain.setValueAtTime(0, ac.currentTime + start);
+        env.gain.linearRampToValueAtTime(vol || 0.22, ac.currentTime + start + 0.01);
+        env.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + start + dur);
+        osc.start(ac.currentTime + start);
+        osc.stop(ac.currentTime + start + dur + 0.06);
+    }
+    return function sylvaSound(type) {
+        try {
+            if (type === 'analysis') {
+                // Yükselen 3 nota: analiz tamamlandı (C5→E5→G5)
+                tone(523.25, 0.00, 0.28, 0.20);
+                tone(659.25, 0.16, 0.28, 0.20);
+                tone(783.99, 0.32, 0.50, 0.22);
+            } else if (type === 'download') {
+                // Hafif çift ping: ZIP bant indirme
+                tone(880.00, 0.00, 0.16, 0.18);
+                tone(1108.7, 0.11, 0.28, 0.18);
+            } else if (type === 'tiff') {
+                // Derin tek ping: GeoTIFF verisi
+                tone(440.00, 0.00, 0.18, 0.20);
+                tone(554.37, 0.12, 0.35, 0.18);
+            } else if (type === 'chart') {
+                // Yüksek ince ping: grafik indirme
+                tone(1046.5, 0.00, 0.12, 0.16);
+                tone(1318.5, 0.09, 0.22, 0.16);
+            }
+        } catch (e) { /* ses çalma hatası sessizce geçilir */ }
+    };
+})();
+</script>
 </head>
 <body>
     <!-- ANALİZ YÜKLEME OVERLAY -->
@@ -6836,7 +6886,9 @@ function selectRamp(name) {
                         }).then(function(w) {
                             return w.write(resultBlob).then(function() { return w; });
                         }).then(function(w) {
-                            return w.close();
+                            return w.close().then(function() {
+                                if (typeof sylvaSound === 'function') sylvaSound('chart');
+                            });
                         }).catch(function(e) {
                             if (e.name !== 'AbortError') _fallbackChartDownload(resultBlob, filename + ext);
                         });
@@ -6855,6 +6907,8 @@ function selectRamp(name) {
             a.download = filename;
             document.body.appendChild(a); a.click(); document.body.removeChild(a);
             setTimeout(function() { URL.revokeObjectURL(a.href); }, 2000);
+            // Grafik indirme sesi
+            if (typeof sylvaSound === 'function') sylvaSound('chart');
         }
 
         // ── Histogram → 7 bin → bar/pie SVG grafiği ─────────────────
@@ -7285,6 +7339,8 @@ function selectRamp(name) {
             wrap.className = '';
             wrap.innerHTML = currentChartType === 'bar' ? buildBarChartSVG(data) : buildPieChartSVG(data);
             if (tableWrap) tableWrap.innerHTML = buildStatsTableHTML(data);
+            // Analiz tamamlandı sesi
+            if (typeof sylvaSound === 'function') sylvaSound('analysis');
         }
 
         document.addEventListener('DOMContentLoaded', function () {
@@ -10683,7 +10739,7 @@ function selectRamp(name) {
                     window.showSaveFilePicker(opts)
                         .then(function(fh) { return fh.createWritable(); })
                         .then(function(w)  { return w.write(blob).then(function() { return w.close(); }); })
-                        .then(function()   { setProgress(100, '✅ ' + name + ' kaydedildi!'); setTimeout(closeModal, 1200); })
+                        .then(function()   { if (typeof sylvaSound === 'function') sylvaSound('download'); setProgress(100, '✅ ' + name + ' kaydedildi!'); setTimeout(closeModal, 1200); })
                         .catch(function(e) {
                             if (e.name === 'AbortError') return; // Kullanıcı iptal etti
                             _fallbackDownload(blob, name);
@@ -10701,6 +10757,8 @@ function selectRamp(name) {
                 a.click();
                 document.body.removeChild(a);
                 setTimeout(function() { URL.revokeObjectURL(url); }, 2000);
+                // İndirme başladı sesi
+                if (typeof sylvaSound === 'function') sylvaSound('download');
                 setProgress(100, '✅ İndirme başladı!');
                 setTimeout(closeModal, 1000);
             }
@@ -12078,6 +12136,8 @@ function downloadRawBands() {
         a.click();
         document.body.removeChild(a);
         setTimeout(function() { URL.revokeObjectURL(url); }, 4000);
+        // ZIP bant indirme sesi
+        if (typeof sylvaSound === 'function') sylvaSound('download');
 
         if (status) {
             status.style.color = '#065f46';
@@ -12255,6 +12315,8 @@ function executeGeoTiffDownload() {
             document.body.removeChild(a);
         } catch(e) {}
         setTimeout(function() { URL.revokeObjectURL(blobUrl); }, 4000);
+        // GeoTIFF indirme sesi
+        if (typeof sylvaSound === 'function') sylvaSound('tiff');
 
         if (btn) { btn.disabled = false; btn.textContent = t('gtiff_btn_download'); }
 
