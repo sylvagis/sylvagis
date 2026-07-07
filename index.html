@@ -1065,6 +1065,8 @@ tr.class-highlight-active {
                 scrollbar-width: none !important;
             }
             #mobile-quick-bar::-webkit-scrollbar { display: none !important; }
+        #mqb-user-menu > div:last-child:hover { background: #fef2f2; }
+        #mqb-user-profile-btn:active { opacity: 0.85; }
         }
 
         /* ── 9. Mobile toolbar: her zaman görünür ve çakışmasın ───── */
@@ -1433,56 +1435,6 @@ tr.class-highlight-active {
 [dir="rtl"] .sylva-dp-text{border-radius:0 5px 5px 0;border-left:none;border-right:1px solid #cbd5e1;}
 [dir="rtl"] .sylva-dp-icon-btn{border-radius:5px 0 0 5px;border-right:none;border-left:1px solid #cbd5e1;}
 </style>
-
-<script>
-/* ── SylvaGIS Ses Motoru ─ Web Audio API sentezi (telifsiz) ─────── */
-window.sylvaSound = (function () {
-    var _ctx = null;
-    function ctx() {
-        if (!_ctx) {
-            try { _ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
-        }
-        // Safari / Chrome kullanıcı etkileşimi gerektiriyor — suspended ise resume et
-        if (_ctx && _ctx.state === 'suspended') { try { _ctx.resume(); } catch(e) {} }
-        return _ctx;
-    }
-    function tone(freq, start, dur, vol, type) {
-        var ac = ctx(); if (!ac) return;
-        var osc = ac.createOscillator();
-        var env = ac.createGain();
-        osc.connect(env); env.connect(ac.destination);
-        osc.type = type || 'sine';
-        osc.frequency.setValueAtTime(freq, ac.currentTime + start);
-        env.gain.setValueAtTime(0, ac.currentTime + start);
-        env.gain.linearRampToValueAtTime(vol || 0.22, ac.currentTime + start + 0.01);
-        env.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + start + dur);
-        osc.start(ac.currentTime + start);
-        osc.stop(ac.currentTime + start + dur + 0.06);
-    }
-    return function sylvaSound(type) {
-        try {
-            if (type === 'analysis') {
-                // Yükselen 3 nota: analiz tamamlandı (C5→E5→G5)
-                tone(523.25, 0.00, 0.28, 0.20);
-                tone(659.25, 0.16, 0.28, 0.20);
-                tone(783.99, 0.32, 0.50, 0.22);
-            } else if (type === 'download') {
-                // Hafif çift ping: ZIP bant indirme
-                tone(880.00, 0.00, 0.16, 0.18);
-                tone(1108.7, 0.11, 0.28, 0.18);
-            } else if (type === 'tiff') {
-                // Derin tek ping: GeoTIFF verisi
-                tone(440.00, 0.00, 0.18, 0.20);
-                tone(554.37, 0.12, 0.35, 0.18);
-            } else if (type === 'chart') {
-                // Yüksek ince ping: grafik indirme
-                tone(1046.5, 0.00, 0.12, 0.16);
-                tone(1318.5, 0.09, 0.22, 0.16);
-            }
-        } catch (e) { /* ses çalma hatası sessizce geçilir */ }
-    };
-})();
-</script>
 </head>
 <body>
     <!-- ANALİZ YÜKLEME OVERLAY -->
@@ -1677,10 +1629,32 @@ window.sylvaSound = (function () {
             <span data-i18n="nav_guide">Rehber</span>
         </button>
         <!-- Kullanıcı -->
-        <button type="button" class="mqb-icon-btn" id="mqb-user-btn"
-            onclick="sylvaOpenLogin && sylvaOpenLogin()">
-            <span data-i18n="nav_login">Kullanıcı</span>
-        </button>
+        <div id="mqb-user-wrap" style="position:relative;display:flex;align-items:center;">
+            <!-- Çıkış yapılmış hâl: giriş butonu -->
+            <button type="button" class="mqb-icon-btn" id="mqb-login-btn"
+                onclick="sylvaOpenLogin && sylvaOpenLogin()">
+                <span data-i18n="nav_login">Kullanıcı</span>
+            </button>
+            <!-- Giriş yapılmış hâl: avatar + isim + dropdown -->
+            <button type="button" class="mqb-icon-btn mqb-user-profile-btn" id="mqb-user-profile-btn"
+                style="display:none;gap:4px;align-items:center;background:#1e3a8a;color:#fff;border-radius:8px;padding:4px 8px;"
+                onclick="(function(){var m=document.getElementById('mqb-user-menu');if(m)m.style.display=m.style.display==='block'?'none':'block';event.stopPropagation();})()">
+                <span id="mqb-avatar-initial" style="display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:#fff;color:#1e3a8a;font-weight:700;font-size:0.7rem;">K</span>
+                <span id="mqb-user-name-label" style="font-size:0.72rem;font-weight:600;max-width:64px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Ad</span>
+                <span style="font-size:0.58rem;opacity:0.8;">▼</span>
+            </button>
+            <!-- Dropdown menü -->
+            <div id="mqb-user-menu" style="display:none;position:fixed;bottom:56px;right:8px;background:#fff;border:1px solid #e2e8f0;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.18);min-width:200px;z-index:9999;overflow:hidden;animation:sylvaLoginIn .15s ease;">
+                <div style="padding:14px 16px 10px;border-bottom:1px solid #f1f5f9;">
+                    <div id="mqb-menu-name" style="font-weight:700;font-size:0.9rem;color:#1e3a8a;"></div>
+                    <div id="mqb-menu-meslek" style="font-size:0.78rem;color:#64748b;margin-top:2px;"></div>
+                    <div id="mqb-menu-ulke" style="font-size:0.74rem;color:#94a3b8;margin-top:1px;"></div>
+                </div>
+                <div onclick="sylvaLogout && sylvaLogout()" style="display:flex;align-items:center;gap:8px;padding:11px 16px;font-size:0.84rem;color:#ef4444;font-weight:600;cursor:pointer;transition:background .15s;">
+                    <span>🚪</span><span data-i18n="btn_logout">Oturumu Kapat</span>
+                </div>
+            </div>
+        </div>
     </div>
 
     <div class="main-container">
@@ -6886,9 +6860,7 @@ function selectRamp(name) {
                         }).then(function(w) {
                             return w.write(resultBlob).then(function() { return w; });
                         }).then(function(w) {
-                            return w.close().then(function() {
-                                if (typeof sylvaSound === 'function') sylvaSound('chart');
-                            });
+                            return w.close();
                         }).catch(function(e) {
                             if (e.name !== 'AbortError') _fallbackChartDownload(resultBlob, filename + ext);
                         });
@@ -6907,8 +6879,6 @@ function selectRamp(name) {
             a.download = filename;
             document.body.appendChild(a); a.click(); document.body.removeChild(a);
             setTimeout(function() { URL.revokeObjectURL(a.href); }, 2000);
-            // Grafik indirme sesi
-            if (typeof sylvaSound === 'function') sylvaSound('chart');
         }
 
         // ── Histogram → 7 bin → bar/pie SVG grafiği ─────────────────
@@ -7339,8 +7309,6 @@ function selectRamp(name) {
             wrap.className = '';
             wrap.innerHTML = currentChartType === 'bar' ? buildBarChartSVG(data) : buildPieChartSVG(data);
             if (tableWrap) tableWrap.innerHTML = buildStatsTableHTML(data);
-            // Analiz tamamlandı sesi
-            if (typeof sylvaSound === 'function') sylvaSound('analysis');
         }
 
         document.addEventListener('DOMContentLoaded', function () {
@@ -10739,7 +10707,7 @@ function selectRamp(name) {
                     window.showSaveFilePicker(opts)
                         .then(function(fh) { return fh.createWritable(); })
                         .then(function(w)  { return w.write(blob).then(function() { return w.close(); }); })
-                        .then(function()   { if (typeof sylvaSound === 'function') sylvaSound('download'); setProgress(100, '✅ ' + name + ' kaydedildi!'); setTimeout(closeModal, 1200); })
+                        .then(function()   { setProgress(100, '✅ ' + name + ' kaydedildi!'); setTimeout(closeModal, 1200); })
                         .catch(function(e) {
                             if (e.name === 'AbortError') return; // Kullanıcı iptal etti
                             _fallbackDownload(blob, name);
@@ -10757,8 +10725,6 @@ function selectRamp(name) {
                 a.click();
                 document.body.removeChild(a);
                 setTimeout(function() { URL.revokeObjectURL(url); }, 2000);
-                // İndirme başladı sesi
-                if (typeof sylvaSound === 'function') sylvaSound('download');
                 setProgress(100, '✅ İndirme başladı!');
                 setTimeout(closeModal, 1000);
             }
@@ -12136,8 +12102,6 @@ function downloadRawBands() {
         a.click();
         document.body.removeChild(a);
         setTimeout(function() { URL.revokeObjectURL(url); }, 4000);
-        // ZIP bant indirme sesi
-        if (typeof sylvaSound === 'function') sylvaSound('download');
 
         if (status) {
             status.style.color = '#065f46';
@@ -12315,8 +12279,6 @@ function executeGeoTiffDownload() {
             document.body.removeChild(a);
         } catch(e) {}
         setTimeout(function() { URL.revokeObjectURL(blobUrl); }, 4000);
-        // GeoTIFF indirme sesi
-        if (typeof sylvaSound === 'function') sylvaSound('tiff');
 
         if (btn) { btn.disabled = false; btn.textContent = t('gtiff_btn_download'); }
 
@@ -21311,6 +21273,23 @@ document.addEventListener('DOMContentLoaded',function(){
         if (menuName)  menuName.textContent  = user.name   || '';
         if (menuEmail) menuEmail.textContent = user.ulke   || '';
         if (menuProv)  menuProv.textContent  = user.meslek || '';
+
+        // ── Mobil quick-bar kullanıcı güncelleme ──
+        var mqbLogin   = document.getElementById('mqb-login-btn');
+        var mqbProfile = document.getElementById('mqb-user-profile-btn');
+        var mqbInitial = document.getElementById('mqb-avatar-initial');
+        var mqbLabel   = document.getElementById('mqb-user-name-label');
+        var mqbMName   = document.getElementById('mqb-menu-name');
+        var mqbMMeslek = document.getElementById('mqb-menu-meslek');
+        var mqbMUlke   = document.getElementById('mqb-menu-ulke');
+        if (mqbLogin)   mqbLogin.style.display   = 'none';
+        if (mqbProfile) mqbProfile.style.display = 'flex';
+        var ini = (user.firstName || user.name || 'U')[0].toUpperCase();
+        if (mqbInitial) mqbInitial.textContent = ini;
+        if (mqbLabel)   mqbLabel.textContent   = user.firstName || (user.name || '').split(' ')[0] || 'Ad';
+        if (mqbMName)   mqbMName.textContent   = user.name   || '';
+        if (mqbMMeslek) mqbMMeslek.textContent = user.meslek || '';
+        if (mqbMUlke)   mqbMUlke.textContent   = user.ulke   || '';
     }
 
     // ── Kullanıcı menüsü toggle ──────────────────────────────
@@ -21330,6 +21309,14 @@ document.addEventListener('DOMContentLoaded',function(){
         if (loginBtn) loginBtn.style.display = '';
         if (userDisp) userDisp.style.display = 'none';
         if (menu)     menu.style.display     = 'none';
+
+        // ── Mobil quick-bar sıfırla ──
+        var mqbLogin2   = document.getElementById('mqb-login-btn');
+        var mqbProfile2 = document.getElementById('mqb-user-profile-btn');
+        var mqbMenu2    = document.getElementById('mqb-user-menu');
+        if (mqbLogin2)   mqbLogin2.style.display   = '';
+        if (mqbProfile2) mqbProfile2.style.display = 'none';
+        if (mqbMenu2)    mqbMenu2.style.display     = 'none';
         var form = document.getElementById('sylva-reg-form');
         if (form) form.reset();
         var sf = document.getElementById('reg-student-field');
@@ -21374,6 +21361,10 @@ document.addEventListener('DOMContentLoaded',function(){
             var disp = document.getElementById('sylva-user-display');
             var menu = document.getElementById('sylva-user-menu');
             if (menu && disp && !disp.contains(e.target)) menu.style.display = 'none';
+            // Mobil menü kapat
+            var mqbWrap = document.getElementById('mqb-user-wrap');
+            var mqbMenu = document.getElementById('mqb-user-menu');
+            if (mqbMenu && mqbWrap && !mqbWrap.contains(e.target)) mqbMenu.style.display = 'none';
         });
     }
 
