@@ -485,6 +485,44 @@ def build_rgb_collection(ds, roi, max_cloud):
     return col
 
 
+def _mask_clouds(image, satellite):
+    """Bulut / bulut gölgesi / sirrus piksellerini updateMask() ile NoData
+    yaparak indeks hesaplamalarından (NDVI, NDWI, vb.) ve GeoTIFF
+    export'undan dışlar.
+
+    NEDEN GEREKLİ: Önceden koleksiyon sadece sahne bazlı bulutluluk
+    yüzdesine göre filtreleniyordu (CLOUDY_PIXEL_PERCENTAGE / CLOUD_COVER).
+    Bu filtre sahne genelinde %X bulut olan görüntüleri elese de, kalan
+    sahnenin İÇİNDEKİ tek tek bulut/gölge piksellerini maskelemiyordu.
+    Sonuç olarak export edilen GeoTIFF'te (örn. ArcMap'te açıldığında)
+    AOI içinde rastgele dağılmış küçük beyaz/boşluk pikselleri (bulut,
+    sirrus, kar/buz ve gölge pikselleri) görünüyordu. Bu fonksiyon her
+    görüntüye piksel bazlı bulut maskesi uygulayarak bu boşlukları önler.
+    """
+    if satellite in ('s2-l2a', 's2-l1c'):
+        # Sentinel-2 QA60: bit 10 = bulut (opak), bit 11 = sirrus
+        qa = image.select('QA60')
+        cloud_bit_mask = 1 << 10
+        cirrus_bit_mask = 1 << 11
+        mask = (qa.bitwiseAnd(cloud_bit_mask).eq(0)
+                  .And(qa.bitwiseAnd(cirrus_bit_mask).eq(0)))
+        return image.updateMask(mask)
+
+    if satellite in ('l89-l2', 'l7-l2', 'l45-l2', 'l45-l1'):
+        # Landsat Collection 2 Level-2 QA_PIXEL bitleri:
+        # bit1=Dilated Cloud, bit2=Cirrus, bit3=Cloud, bit4=Cloud Shadow
+        qa = image.select('QA_PIXEL')
+        mask = (qa.bitwiseAnd(1 << 1).eq(0)
+                  .And(qa.bitwiseAnd(1 << 2).eq(0))
+                  .And(qa.bitwiseAnd(1 << 3).eq(0))
+                  .And(qa.bitwiseAnd(1 << 4).eq(0)))
+        return image.updateMask(mask)
+
+    # Diğer koleksiyonlar (mss-l1, SAR, vb.) için uygun bir QA bandı
+    # bulunmadığından görüntü değiştirilmeden döndürülür.
+    return image
+
+
 def hex_to_rgb(hex_color):
     """'#rrggbb' → (r, g, b)"""
     h = hex_color.lstrip('#')
@@ -1179,6 +1217,13 @@ def build_result_image(data):
         b = {'nir': 'B8', 'red': 'B4', 'green': 'B3',
              'swir': 'B11', 'blue': 'B2', 'thermal': None}
         scale_factor = 1e-4
+
+    # 🩹 Piksel bazlı bulut/gölge/sirrus maskesi — sahne bazlı bulutluluk
+    # filtresi (yukarıda) TEK BAŞINA yeterli değildir; koleksiyondaki her
+    # görüntüye ayrı ayrı uygulanır ki hem tek sahne (scene_id) hem de
+    # medyan kompozit (median()) modunda export edilen GeoTIFF'te AOI
+    # içinde rastgele beyaz/boşluk (NoData) pikselleri kalmasın.
+    col = col.map(lambda img: _mask_clouds(img, satellite))
 
     # ── 2. Tarih filtresi veya belirli sahne ────────────────────
     if scene_id:
