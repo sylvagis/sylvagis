@@ -6606,23 +6606,27 @@ function selectRamp(name) {
         }
 
         // ── İstatistik tablosunu CSV olarak indirir ──────────────────
-        // NOT: Önceki sürüm ',' ayırıcı kullanıyordu. Türkçe/Almanca/Fransızca
-        // gibi birçok bölgesel Excel ayarında varsayılan liste ayırıcısı ','
-        // değil ';' olduğu için, dosya açıldığında Excel sütunları ayıramıyor
-        // ve "Sınıf;46.9%;1.226,4 ha" gibi TÜM veriyi TEK sütuna yazıyordu.
-        // Artık ';' ayırıcı + dosyanın en başına eklenen "sep=;" ipucuyla,
-        // hangi bölgesel ayar olursa olsun Excel/LibreOffice her zaman
-        // Sınıf / % / Alan sütunlarını ayrı sütunlar olarak açar. Ayrıca %
-        // ve Alan hücrelerindeki birim simgeleri (%, ha) sayısal içerikten
-        // ayrıştırılıp saf ondalık sayıya çevrilir, böylece Excel'de doğrudan
-        // sayı olarak sıralanabilir/toplanabilir.
+        // NOT: Önceki sürüm ',' (sonra ';') ayırıcı + UTF-8 BOM kullanıyordu.
+        // Sütunlar artık ayrılıyordu ama UTF-8+BOM yöntemi, Excel'in eski
+        // sürümlerinde (ve bazı Mac/LibreOffice kurulumlarında) BOM'u doğru
+        // algılamadığı için Arapça/Farsça/Urduca, Çince/Japonca/Korece,
+        // Hintçe/Bengalce, Kiril gibi Latin-dışı alfabelerde metinler bozuk
+        // karakterlere (mojibake) dönüşebiliyordu — PDF'te düzelttiğimiz
+        // sorunun CSV'deki mualdili. Çözüm: dosyayı TAB ile ayrılmış ve
+        // UTF-16LE (+ BOM) olarak kodluyoruz. Bu, Excel'in "Unicode Metin"
+        // biçimidir ve işletim sistemi/Excel sürümü/bölgesel ayar ne olursa
+        // olsun HER dili (RTL diller dahil) sütunlara doğru ayırarak ve
+        // harfi harfine doğru göstererek açar. Ayrıca % ve Alan
+        // hücrelerindeki birim simgeleri (%, ha) sayısal içerikten
+        // ayrıştırılıp saf ondalık sayıya çevrilir, böylece Excel'de
+        // doğrudan sayı olarak sıralanabilir/toplanabilir.
         function downloadCSV() {
             var tableEl = document.querySelector('#stats-chart-table table');
             if (!tableEl) { sylvaAlert(t('run_first'), 'info'); return; }
-            var DELIM = ';';
+            var DELIM = '\t';
 
             function cleanCellValue(raw, isHeaderRow) {
-                var txt = raw.trim();
+                var txt = raw.trim().replace(/[\t\r\n]+/g, ' ');
                 if (isHeaderRow) return txt;
                 var pctMatch = txt.match(/^(-?[\d.,]+)\s*%$/);
                 if (pctMatch) return pctMatch[1].replace(',', '.');
@@ -6642,14 +6646,22 @@ function selectRamp(name) {
                 section.rows.forEach(function(row) {
                     var cols = row.querySelectorAll('td, th');
                     var vals = Array.from(cols).map(function(c) {
-                        var val = cleanCellValue(c.innerText, section.isHeader);
-                        return '"' + val.replace(/"/g, '""') + '"';
+                        return cleanCellValue(c.innerText, section.isHeader);
                     });
                     csv.push(vals.join(DELIM));
                 });
             });
 
-            var blob = new Blob(['\uFEFFsep=' + DELIM + '\r\n' + csv.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+            // UTF-16LE + BOM: her dili Excel'de sorunsuz gösteren format.
+            var text = '\uFEFF' + csv.join('\r\n');
+            var bytes = new Uint8Array(text.length * 2);
+            for (var i = 0; i < text.length; i++) {
+                var code = text.charCodeAt(i);
+                bytes[i * 2] = code & 0xFF;
+                bytes[i * 2 + 1] = (code >> 8) & 0xFF;
+            }
+
+            var blob = new Blob([bytes], { type: 'text/csv;charset=utf-16le;' });
             var a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
             a.download = 'SylvaGIS_' + t('file_analiz_sonuclari') + '.csv';
