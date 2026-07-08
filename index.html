@@ -6605,37 +6605,40 @@ function selectRamp(name) {
                 + '</tr></thead><tbody>' + rows + '</tbody></table>';
         }
 
-        // ── İstatistik tablosunu CSV olarak indirir ──────────────────
-        // NOT: Önceki sürüm ',' (sonra ';') ayırıcı + UTF-8 BOM kullanıyordu.
-        // Sütunlar artık ayrılıyordu ama UTF-8+BOM yöntemi, Excel'in eski
-        // sürümlerinde (ve bazı Mac/LibreOffice kurulumlarında) BOM'u doğru
-        // algılamadığı için Arapça/Farsça/Urduca, Çince/Japonca/Korece,
-        // Hintçe/Bengalce, Kiril gibi Latin-dışı alfabelerde metinler bozuk
-        // karakterlere (mojibake) dönüşebiliyordu — PDF'te düzelttiğimiz
-        // sorunun CSV'deki mualdili. Çözüm: dosyayı TAB ile ayrılmış ve
-        // UTF-16LE (+ BOM) olarak kodluyoruz. Bu, Excel'in "Unicode Metin"
-        // biçimidir ve işletim sistemi/Excel sürümü/bölgesel ayar ne olursa
-        // olsun HER dili (RTL diller dahil) sütunlara doğru ayırarak ve
-        // harfi harfine doğru göstererek açar. Ayrıca % ve Alan
-        // hücrelerindeki birim simgeleri (%, ha) sayısal içerikten
-        // ayrıştırılıp saf ondalık sayıya çevrilir, böylece Excel'de
-        // doğrudan sayı olarak sıralanabilir/toplanabilir.
+        // ── İstatistik tablosunu Excel (.xlsx) olarak indirir ─────
+        // NOT: Daha önce TAB ayırmalı UTF-16LE ".csv" metni denendi, ama
+        // bazı Excel sürümleri/OS kombinasyonları düz metin dosyalarının
+        // karakter kodlamasını yine de yanlış tahmin edip çince/japonca/
+        // korece gibi diller için "mojibake" (bozuk karakter) üretmeye devam
+        // ediyordu — çünkü düz metin formatında kodlama tahmine dayalıdır.
+        // Kesin çözüm: artık GERÇEK bir .xlsx (Open XML) dosyası üretiyoruz.
+        // .xlsx bir ZIP içindeki XML'lerden oluşur ve XML her zaman UTF-8'dir;
+        // Excel bunu kodlama TAHMİN ETMEDEN, doğrudan yapısal olarak okur.
+        // Bu sayede hangi dil/alfabe olursa olsun (RTL diller dahil) metin
+        // %100 doğru görünür. Zaten yüklü olan JSZip kütüphanesiyle
+        // minimal ama geçerli bir .xlsx paketi oluşturuluyor.
+        function xmlEscape(s) {
+            return String(s).replace(/[&<>"']/g, function(ch) {
+                return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[ch];
+            });
+        }
+
         function downloadCSV() {
             var tableEl = document.querySelector('#stats-chart-table table');
             if (!tableEl) { sylvaAlert(t('run_first'), 'info'); return; }
-            var DELIM = '\t';
+            if (typeof JSZip === 'undefined') { sylvaAlert(t('err_jspdf') || 'JSZip library could not be loaded.', 'error'); return; }
 
             function cleanCellValue(raw, isHeaderRow) {
                 var txt = raw.trim().replace(/[\t\r\n]+/g, ' ');
-                if (isHeaderRow) return txt;
+                if (isHeaderRow) return { v: txt, n: false };
                 var pctMatch = txt.match(/^(-?[\d.,]+)\s*%$/);
-                if (pctMatch) return pctMatch[1].replace(',', '.');
+                if (pctMatch) return { v: pctMatch[1].replace(',', '.'), n: true };
                 var haMatch = txt.match(/^(-?[\d.,]+)\s*ha$/i);
-                if (haMatch) return haMatch[1].replace(/\./g, '').replace(',', '.');
-                return txt;
+                if (haMatch) return { v: haMatch[1].replace(/\./g, '').replace(',', '.'), n: true };
+                return { v: txt, n: false };
             }
 
-            var csv = [];
+            var rowsData = [];
             var theadRows = tableEl.querySelectorAll('thead tr');
             var bodyRows = tableEl.querySelectorAll('tbody tr');
             var sections = (theadRows.length || bodyRows.length)
@@ -6648,26 +6651,78 @@ function selectRamp(name) {
                     var vals = Array.from(cols).map(function(c) {
                         return cleanCellValue(c.innerText, section.isHeader);
                     });
-                    csv.push(vals.join(DELIM));
+                    rowsData.push(vals);
                 });
             });
 
-            // UTF-16LE + BOM: her dili Excel'de sorunsuz gösteren format.
-            var text = '\uFEFF' + csv.join('\r\n');
-            var bytes = new Uint8Array(text.length * 2);
-            for (var i = 0; i < text.length; i++) {
-                var code = text.charCodeAt(i);
-                bytes[i * 2] = code & 0xFF;
-                bytes[i * 2 + 1] = (code >> 8) & 0xFF;
+            function colLetter(idx) {
+                var s = '';
+                idx++;
+                while (idx > 0) {
+                    var rem = (idx - 1) % 26;
+                    s = String.fromCharCode(65 + rem) + s;
+                    idx = Math.floor((idx - 1) / 26);
+                }
+                return s;
             }
 
-            var blob = new Blob([bytes], { type: 'text/csv;charset=utf-16le;' });
-            var a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = 'SylvaGIS_' + t('file_analiz_sonuclari') + '.csv';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
+            var sheetRowsXml = rowsData.map(function(vals, rIdx) {
+                var cellsXml = vals.map(function(cell, cIdx) {
+                    var ref = colLetter(cIdx) + (rIdx + 1);
+                    if (cell.n && cell.v !== '' && !isNaN(Number(cell.v))) {
+                        return '<c r="' + ref + '"><v>' + Number(cell.v) + '</v></c>';
+                    }
+                    return '<c r="' + ref + '" t="inlineStr"><is><t xml:space="preserve">' + xmlEscape(cell.v) + '</t></is></c>';
+                }).join('');
+                return '<row r="' + (rIdx + 1) + '">' + cellsXml + '</row>';
+            }).join('');
+
+            var contentTypesXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+                '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+                '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+                '<Default Extension="xml" ContentType="application/xml"/>' +
+                '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+                '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
+                '</Types>';
+
+            var rootRelsXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+                '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+                '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>' +
+                '</Relationships>';
+
+            var workbookXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+                '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+                '<sheets><sheet name="' + xmlEscape((t('file_analiz_sonuclari') || 'Sonuclar').slice(0, 31)) + '" sheetId="1" r:id="rId1"/></sheets>' +
+                '</workbook>';
+
+            var workbookRelsXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+                '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+                '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>' +
+                '</Relationships>';
+
+            var sheetXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+                '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+                '<sheetData>' + sheetRowsXml + '</sheetData>' +
+                '</worksheet>';
+
+            var zip = new JSZip();
+            zip.file('[Content_Types].xml', contentTypesXml);
+            zip.folder('_rels').file('.rels', rootRelsXml);
+            var xl = zip.folder('xl');
+            xl.file('workbook.xml', workbookXml);
+            xl.folder('_rels').file('workbook.xml.rels', workbookRelsXml);
+            xl.folder('worksheets').file('sheet1.xml', sheetXml);
+
+            zip.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }).then(function(blob) {
+                var a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = 'SylvaGIS_' + t('file_analiz_sonuclari') + '.xlsx';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+            }).catch(function(err) {
+                sylvaAlert((t('err_jspdf') || 'Excel dosyası oluşturulamadı') + ': ' + err.message, 'error');
+            });
         }
 
         // ── İstatistik tablosunu PDF olarak indirir ───────────────
