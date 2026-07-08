@@ -5907,7 +5907,9 @@ function selectRamp(name) {
             if (hist) {
                 var classesForChart = presentDefs.map(function (d) {
                     var label = (d.key ? (t(d.key) || d.label) : d.label);
-                    return { min: d.code, max: d.code, name: label, color: d.color };
+                    // NOT: `key` alanı burada saklanır ki CSV/PDF dışa aktarımı
+                    // her dil için sınıf adını yeniden çevirebilsin (bkz. downloadCSV/downloadPDF).
+                    return { min: d.code, max: d.code, name: label, color: d.color, key: d.key };
                 });
                 var percentages = computeClassPercentagesFromHistogram(classesForChart, hist);
                 if (percentages) {
@@ -6605,47 +6607,193 @@ function selectRamp(name) {
                 + '</tr></thead><tbody>' + rows + '</tbody></table>';
         }
 
-        // ── İstatistik tablosunu CSV olarak indirir ──────────────────
-        function downloadCSV() {
-            var tableEl = document.querySelector('#stats-chart-table table');
-            if (!tableEl) { sylvaAlert(t('run_first'), 'info'); return; }
-            var rows = tableEl.querySelectorAll('tr');
-            var csv = [];
-            rows.forEach(function(row) {
-                var cols = row.querySelectorAll('td, th');
-                var vals = Array.from(cols).map(function(c) {
-                    return '"' + c.innerText.replace(/"/g, '""') + '"';
-                });
-                csv.push(vals.join(','));
-            });
-            var blob = new Blob(['\uFEFF' + csv.join('\n')], { type: 'text/csv;charset=utf-8;' });
-            var a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = 'SylvaGIS_' + t('file_analiz_sonuclari') + '.csv';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
+        // ── Bir sınıfın adını, belirtilen dile göre yeniden çevirir ──
+        // `key` alanı varsa (LULC sınıfları) o dildeki çeviri kullanılır;
+        // yoksa (kullanıcı tanımlı sınıflar) orijinal isim aynen korunur.
+        function getLocalizedClassName(c, lang) {
+            if (c && c.key) {
+                var T   = SYLVA_TRANSLATIONS[lang] || {};
+                var Ten = SYLVA_TRANSLATIONS['en']  || {};
+                return T[c.key] || Ten[c.key] || c.name;
+            }
+            return c ? c.name : '';
         }
 
-        // ── İstatistik tablosunu PDF olarak indirir (jsPDF-AutoTable) ─
+        // ── İstatistik verisini belirtilen dilde CSV metnine dönüştürür ──
+        // Sınıf/Yüzde/Alan HER ZAMAN 3 ayrı sütun olarak yazılır. Ayraç
+        // olarak ';' kullanılır: Türkçe/Avrupa yerel ayarlarında Excel'in
+        // varsayılan liste ayracı virgül değil noktalı virgüldür — ',' ile
+        // ayrılmış bir CSV bu yerel ayarlarda Excel'de TEK sütunda birleşik
+        // görünür (kullanıcının bildirdiği sorun budur). ';' kullanmak bu
+        // sorunu tüm yerel ayarlarda güvenilir biçimde çözer.
+        function buildStatsCSVForLang(data, lang) {
+            var savedLang = _sylvaLang;
+            _sylvaLang = lang;
+            var sep = ';';
+            function esc(v) { return '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"'; }
+            var lines = [];
+            lines.push([
+                esc(t('col_class_name', 'Class Name')),
+                esc(t('col_pct', '%')),
+                esc(t('col_area_ha', 'Area (ha)'))
+            ].join(sep));
+            data.classes.forEach(function(c, i) {
+                var pct  = data.percentages[i] || 0;
+                var ha   = (data.areaHa !== null && data.areaHa !== undefined) ? (data.areaHa * pct / 100) : null;
+                var name = getLocalizedClassName(c, lang);
+                var pctStr = pct.toFixed(1) + '%';
+                var haStr  = (ha !== null) ? ha.toLocaleString(lang, { maximumFractionDigits: 1 }) : '';
+                lines.push([esc(name), esc(pctStr), esc(haStr)].join(sep));
+            });
+            _sylvaLang = savedLang;
+            return '\uFEFF' + lines.join('\r\n');
+        }
+
+        // ── İstatistik tablosunu belirtilen dilde CSV olarak indirir ──
+        // Her desteklenen dil için ayrı bir CSV dosyası üretilip TEK bir
+        // ZIP arşivi olarak indirilir (verileri her dile göre yeni dosya).
+        function downloadCSV() {
+            if (!lastChartData || !lastChartData.classes || !lastChartData.classes.length) { sylvaAlert(t('run_first'), 'info'); return; }
+            if (typeof JSZip === 'undefined') { sylvaAlert(t('err_jszip', 'JSZip library could not be loaded.'), 'error'); return; }
+
+            var data = lastChartData;
+            var zip = new JSZip();
+            Object.keys(SYLVA_TRANSLATIONS).forEach(function(lang) {
+                var csvText  = buildStatsCSVForLang(data, lang);
+                var baseName = (SYLVA_TRANSLATIONS[lang] && SYLVA_TRANSLATIONS[lang].file_analiz_sonuclari) || 'Analysis_Results';
+                zip.file('SylvaGIS_' + baseName + '_' + lang + '.csv', csvText);
+            });
+            zip.generateAsync({ type: 'blob' }).then(function(blob) {
+                var a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = 'SylvaGIS_' + t('file_analiz_sonuclari') + '_AllLanguages.zip';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                setTimeout(function() { URL.revokeObjectURL(a.href); }, 2000);
+            }).catch(function() {
+                sylvaAlert(t('err_jszip', 'ZIP could not be created.'), 'error');
+            });
+        }
+
+        // ── Dışa aktarım için istatistik tablosunu belirtilen dilde HTML'e çevirir ──
+        // (Ekrandaki buildStatsTableHTML'den bağımsızdır; sınıf isimlerini `key`
+        // üzerinden hedef dile yeniden çevirir, ekran görünümünü etkilemez.)
+        function buildStatsTableHTMLForExport(data, lang) {
+            var rows = data.classes.map(function(c, i) {
+                var pct  = data.percentages[i] || 0;
+                var ha   = (data.areaHa !== null && data.areaHa !== undefined) ? (data.areaHa * pct / 100) : null;
+                var name = getLocalizedClassName(c, lang);
+                return '<tr>' +
+                    '<td style="padding:5px 7px;border-bottom:1px solid #e2e8f0;white-space:nowrap;">' +
+                        '<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:' + c.color + ';margin-right:5px;vertical-align:middle;"></span>' +
+                        escapeHtml(name) +
+                    '</td>' +
+                    '<td style="padding:5px 7px;border-bottom:1px solid #e2e8f0;text-align:right;white-space:nowrap;">' + pct.toFixed(1) + '%</td>' +
+                    '<td style="padding:5px 7px;border-bottom:1px solid #e2e8f0;text-align:right;white-space:nowrap;">' + (ha !== null ? ha.toLocaleString(lang, { maximumFractionDigits: 1 }) + ' ha' : '—') + '</td>' +
+                '</tr>';
+            }).join('');
+            return '<table style="width:100%;border-collapse:collapse;font-size:12px;">' +
+                '<thead><tr style="background:#1e3a8a;color:#fff;">' +
+                    '<th style="text-align:left;padding:6px 7px;white-space:nowrap;">' + escapeHtml(t('col_class_name', 'Class Name')) + '</th>' +
+                    '<th style="text-align:right;padding:6px 7px;white-space:nowrap;">' + escapeHtml(t('col_pct', '%')) + '</th>' +
+                    '<th style="text-align:right;padding:6px 7px;white-space:nowrap;">' + escapeHtml(t('col_area_ha', 'Area (ha)')) + '</th>' +
+                '</tr></thead><tbody>' + rows + '</tbody></table>';
+        }
+
+        // ── Belirtilen dilde tek bir PDF Blob'u üretir ────────────────
+        // ÖNEMLİ: metin doğrudan jsPDF'in dahili (Latin-only) fontlarıyla
+        // yazılmıyor — bunun yerine rapor önce gizli bir DOM konteynerinde
+        // gerçek tarayıcı fontlarıyla (Arapça/Çince/Korece/Tayca vb. dahil
+        // HER script için) render edilip html2canvas ile görüntüye
+        // dönüştürülüyor, ardından bu görüntü PDF'e gömülüyor. Böylece PDF
+        // çıktısı jsPDF'in Latin-only font sınırlamasından etkilenmeden
+        // HER dilde eksiksiz ve doğru görüntülenir.
+        function buildStatsPDFBlobForLang(data, lang) {
+            var savedLang = _sylvaLang;
+            _sylvaLang = lang;
+            var isRTL     = !!SYLVA_RTL[lang];
+            var titleText = t('pdf_report_title');
+            var dateText  = t('pdf_date_label') + ' ' + new Date().toLocaleDateString(lang);
+            var tableHTML = buildStatsTableHTMLForExport(data, lang);
+            _sylvaLang = savedLang;
+
+            var container = document.createElement('div');
+            container.style.position   = 'fixed';
+            container.style.left       = '-99999px';
+            container.style.top        = '0';
+            container.style.width      = '560px';
+            container.style.background = '#ffffff';
+            container.style.padding    = '18px';
+            container.style.boxSizing  = 'border-box';
+            container.style.fontFamily = "'Segoe UI', Arial, 'Noto Sans', 'Noto Sans Arabic', 'Noto Sans SC', 'Noto Sans Thai', sans-serif";
+            container.style.direction  = isRTL ? 'rtl' : 'ltr';
+            container.innerHTML =
+                '<div style="font-size:16px;font-weight:700;color:#1e3a8a;margin-bottom:4px;">' + escapeHtml(titleText) + '</div>' +
+                '<div style="font-size:11px;color:#666;margin-bottom:10px;">' + escapeHtml(dateText) + '</div>' +
+                tableHTML;
+            document.body.appendChild(container);
+
+            return html2canvas(container, { scale: 2, backgroundColor: '#ffffff' }).then(function(canvas) {
+                document.body.removeChild(container);
+                var jspdfLib        = window.jspdf || window.jsPDF;
+                var JsPDFConstructor = jspdfLib.jsPDF || jspdfLib;
+                var imgData = canvas.toDataURL('image/png');
+                var pxToMm  = 0.264583 / 2; // canvas scale=2 idi
+                var mmW = canvas.width  * pxToMm;
+                var mmH = canvas.height * pxToMm;
+                var margin = 10;
+                var pageW = Math.max(mmW + margin * 2, 1);
+                var pageH = Math.max(mmH + margin * 2, 1);
+                var doc = new JsPDFConstructor({ orientation: pageW > pageH ? 'landscape' : 'portrait', unit: 'mm', format: [pageW, pageH] });
+                doc.addImage(imgData, 'PNG', margin, margin, mmW, mmH);
+                doc.setProperties({ title: titleText, creator: 'SylvaGIS', subject: titleText });
+                return doc.output('blob');
+            }).catch(function(err) {
+                if (container.parentNode) document.body.removeChild(container);
+                throw err;
+            });
+        }
+
+        // ── İstatistik tablosunu PDF olarak indirir ───────────────────
+        // Her desteklenen dil için ayrı, tam Unicode destekli bir PDF
+        // üretilip TEK bir ZIP arşivi olarak indirilir.
         function downloadPDF() {
-            var tableEl = document.querySelector('#stats-chart-table table');
-            if (!tableEl) { sylvaAlert(t('run_first'), 'info'); return; }
+            if (!lastChartData || !lastChartData.classes || !lastChartData.classes.length) { sylvaAlert(t('run_first'), 'info'); return; }
             var jspdfLib = window.jspdf || window.jsPDF;
             if (!jspdfLib) { sylvaAlert(t('err_jspdf') || 'jsPDF library could not be loaded.', 'error'); return; }
-            var JsPDF = jspdfLib.jsPDF || jspdfLib;
-            var doc = new JsPDF();
-            doc.setFontSize(14);
-            doc.text(t('pdf_report_title'), 14, 16);
-            doc.setFontSize(9);
-            doc.setTextColor(100);
-            doc.text(t('pdf_date_label') + ' ' + new Date().toLocaleDateString(), 14, 23);
-            if (typeof doc.autoTable === 'function') {
-                doc.autoTable({ html: tableEl, startY: 28, styles: { fontSize: 8 }, headStyles: { fillColor: [30, 58, 138] } });
-            } else {
-                doc.text('autoTable eklentisi yüklenemedi.', 14, 35);
-            }
-            doc.save('SylvaGIS_' + t('file_analiz_raporu') + '.pdf');
+            if (typeof JSZip === 'undefined') { sylvaAlert(t('err_jszip', 'JSZip library could not be loaded.'), 'error'); return; }
+            if (typeof html2canvas === 'undefined') { sylvaAlert(t('err_jspdf') || 'html2canvas library could not be loaded.', 'error'); return; }
+
+            var data  = lastChartData;
+            var zip   = new JSZip();
+            var langs = Object.keys(SYLVA_TRANSLATIONS);
+
+            showSylvaLoading();
+            var chain = Promise.resolve();
+            langs.forEach(function(lang) {
+                chain = chain.then(function() {
+                    return buildStatsPDFBlobForLang(data, lang).then(function(blob) {
+                        var baseName = (SYLVA_TRANSLATIONS[lang] && SYLVA_TRANSLATIONS[lang].file_analiz_raporu) || 'Analysis_Report';
+                        zip.file('SylvaGIS_' + baseName + '_' + lang + '.pdf', blob);
+                    });
+                });
+            });
+            chain.then(function() {
+                return zip.generateAsync({ type: 'blob' });
+            }).then(function(blob) {
+                hideSylvaLoading();
+                var a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = 'SylvaGIS_' + t('file_analiz_raporu') + '_AllLanguages.zip';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                setTimeout(function() { URL.revokeObjectURL(a.href); }, 2000);
+            }).catch(function() {
+                hideSylvaLoading();
+                sylvaAlert(t('err_jspdf') || 'PDF export failed.', 'error');
+            });
         }
 
         // ── Grafik İndirme Diyaloğunu Açar ──────────────────────────
