@@ -4519,6 +4519,51 @@ function selectRamp(name) {
             return div.innerHTML;
         }
 
+        // ── Bildirim sesi (analiz bitti / dosya indi) ───────────
+        // Web Audio API ile anlık olarak üretilen, dışarıdan hiçbir ses
+        // dosyası indirmeyen ince bir "cıvıltı" sesi. Böylece tamamen
+        // telifsizdir (kod içinde üretilir, lisans gerektirmez). "analysis"
+        // türü analiz sonucu ekrana geldiğinde, "download" türü CSV/PDF
+        // dosyası indince çalınır. Tarayıcı ses politikası izin vermezse
+        // (örn. hiç kullanıcı etkileşimi olmadıysa) sessizce yok sayılır.
+        var _sylvaAudioCtx = null;
+        function _sylvaGetAudioCtx() {
+            try {
+                if (!_sylvaAudioCtx) {
+                    var AC = window.AudioContext || window.webkitAudioContext;
+                    if (!AC) return null;
+                    _sylvaAudioCtx = new AC();
+                }
+                return _sylvaAudioCtx;
+            } catch (e) { return null; }
+        }
+        function playSylvaChime(kind) {
+            try {
+                var ctx = _sylvaGetAudioCtx();
+                if (!ctx) return;
+                if (ctx.state === 'suspended') { ctx.resume().catch(function(){}); }
+                var now = ctx.currentTime;
+                // analiz: E5 → B5 (hafif yükselen), indirme: A5 → D6 (daha parlak)
+                var notes = (kind === 'download') ? [880.00, 1174.66] : [659.25, 987.77];
+                var noteDur = 0.11;
+                var gap = 0.09;
+                notes.forEach(function(freq, i) {
+                    var osc = ctx.createOscillator();
+                    var gainNode = ctx.createGain();
+                    osc.type = 'sine';
+                    osc.frequency.value = freq;
+                    var start = now + i * gap;
+                    gainNode.gain.setValueAtTime(0, start);
+                    gainNode.gain.linearRampToValueAtTime(0.12, start + 0.015);
+                    gainNode.gain.exponentialRampToValueAtTime(0.0001, start + noteDur);
+                    osc.connect(gainNode);
+                    gainNode.connect(ctx.destination);
+                    osc.start(start);
+                    osc.stop(start + noteDur + 0.02);
+                });
+            } catch (e) { /* sessiz politikalar vb. — yok say */ }
+        }
+
         // Bir GeoJSON feature'ında sınıflandırmaya uygun sayısal bir öznitelik arar
         var NUMERIC_PROPERTY_KEYS = ['value', 'val', 'deger', 'Deger', 'DEGER', 'NDVI', 'ndvi', 'class', 'siniflandirma'];
 
@@ -4667,6 +4712,7 @@ function selectRamp(name) {
                         var areaHa = null;
                         try { areaHa = turf.area(currentLayer.toGeoJSON()) / 10000; } catch (e) {}
                         renderStatsChart({ classes: classes, percentages: realPct, areaHa: areaHa });
+                        playSylvaChime('analysis');
                     }
                 }
             })
@@ -5914,6 +5960,7 @@ function selectRamp(name) {
                     var areaHa = null;
                     try { if (currentLayer) areaHa = turf.area(currentLayer.toGeoJSON()) / 10000; } catch (e) {}
                     renderStatsChart({ classes: classesForChart, percentages: percentages, areaHa: areaHa });
+                    playSylvaChime('analysis');
                 }
             }
         }
@@ -6628,13 +6675,31 @@ function selectRamp(name) {
             if (!tableEl) { sylvaAlert(t('run_first'), 'info'); return; }
             if (typeof JSZip === 'undefined') { sylvaAlert(t('err_jspdf') || 'JSZip library could not be loaded.', 'error'); return; }
 
+            // Sayı tanıma, hem "1.226,4" (TR: nokta=binlik, virgül=ondalık)
+            // hem de "12.5" (EN: nokta=ondalık) biçimlerini doğru yönetir:
+            // virgül varsa nokta binlik ayırıcı kabul edilip silinir; virgül
+            // yoksa nokta olduğu gibi ondalık ayracı olarak bırakılır.
+            function normalizeNumber(raw) {
+                if (raw.indexOf(',') !== -1) {
+                    return raw.replace(/\./g, '').replace(',', '.');
+                }
+                return raw;
+            }
+
             function cleanCellValue(raw, isHeaderRow) {
                 var txt = raw.trim().replace(/[\t\r\n]+/g, ' ');
                 if (isHeaderRow) return { v: txt, n: false };
                 var pctMatch = txt.match(/^(-?[\d.,]+)\s*%$/);
-                if (pctMatch) return { v: pctMatch[1].replace(',', '.'), n: true };
+                if (pctMatch) return { v: normalizeNumber(pctMatch[1]), n: true };
                 var haMatch = txt.match(/^(-?[\d.,]+)\s*ha$/i);
-                if (haMatch) return { v: haMatch[1].replace(/\./g, '').replace(',', '.'), n: true };
+                if (haMatch) return { v: normalizeNumber(haMatch[1]), n: true };
+                // Birim eki olmayan saf sayısal hücreler (ör. piksel sayısı)
+                // de Excel'de sayı olarak sıralanabilsin diye tanınır.
+                var plainMatch = txt.match(/^-?[\d.,]+$/);
+                if (plainMatch) {
+                    var normalized = normalizeNumber(txt);
+                    if (!isNaN(Number(normalized)) && normalized !== '') return { v: normalized, n: true };
+                }
                 return { v: txt, n: false };
             }
 
@@ -6690,9 +6755,20 @@ function selectRamp(name) {
                 '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>' +
                 '</Relationships>';
 
+            // Excel sayfa adı kuralları: [ ] : * ? / \ karakterleri yasak,
+            // 31 karakteri geçemez, tek tırnakla başlayıp bitemez, boş olamaz.
+            // Bunlara uymayan bir ad, Excel'in dosyayı "onarılması gerekiyor"
+            // uyarısıyla açmasına ya da reddetmesine yol açabilir.
+            function sanitizeSheetName(name) {
+                var cleaned = String(name || '').replace(/[\[\]:*?/\\]/g, ' ').trim();
+                cleaned = cleaned.slice(0, 31);
+                cleaned = cleaned.replace(/^'+/, '').replace(/'+$/, '');
+                return cleaned || 'Sonuclar';
+            }
+
             var workbookXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
                 '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
-                '<sheets><sheet name="' + xmlEscape((t('file_analiz_sonuclari') || 'Sonuclar').slice(0, 31)) + '" sheetId="1" r:id="rId1"/></sheets>' +
+                '<sheets><sheet name="' + xmlEscape(sanitizeSheetName(t('file_analiz_sonuclari') || 'Sonuclar')) + '" sheetId="1" r:id="rId1"/></sheets>' +
                 '</workbook>';
 
             var workbookRelsXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
@@ -6720,6 +6796,7 @@ function selectRamp(name) {
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
+                playSylvaChime('download');
             }).catch(function(err) {
                 sylvaAlert((t('err_jspdf') || 'Excel dosyası oluşturulamadı') + ': ' + err.message, 'error');
             });
@@ -6794,6 +6871,7 @@ function selectRamp(name) {
                     first = false;
                 }
                 doc.save('SylvaGIS_' + t('file_analiz_raporu') + '.pdf');
+                playSylvaChime('download');
             }).catch(function(err) {
                 if (document.body.contains(reportEl)) document.body.removeChild(reportEl);
                 sylvaAlert((t('err_jspdf') || 'PDF oluşturulamadı') + ': ' + err.message, 'error');
@@ -7080,6 +7158,7 @@ function selectRamp(name) {
             try { if (currentLayer) areaHa = turf.area(currentLayer.toGeoJSON()) / 10000; } catch(e) {}
             var percentages = bins.map(function(b) { return (b.count / totalCount) * 100; });
             renderStatsChart({ classes: bins, percentages: percentages, areaHa: areaHa });
+            playSylvaChime('analysis');
         }
 
         // ── GEE histogramından (stats.value) gerçek min/max/ortalama hesaplar ──
@@ -7363,6 +7442,7 @@ function selectRamp(name) {
             }
             var percentages = generateMockClassDistribution(classes, currentMockMeanValue);
             renderStatsChart({ classes: classes, percentages: percentages, areaHa: areaHa });
+            playSylvaChime('analysis');
         }
 
         function setChartType(type) {
