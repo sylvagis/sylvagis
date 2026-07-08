@@ -5295,40 +5295,6 @@ function selectRamp(name) {
             if (typeof _rgbGalleryReset === 'function') _rgbGalleryReset();
         }
 
-        // 🔔 Analiz sonucu ekrana geldiğinde çalınan kısa, telifsiz bildirim sesi.
-        // Web Audio API ile anlık olarak üretilir (dışarıdan hiçbir ses dosyası
-        // kullanılmaz), bu yüzden tamamen telifsizdir ve ekstra istek/indirme
-        // gerektirmez. Kullanıcı zip/tiff/grafik verilerini beklerken ekranı
-        // takip etmese bile analizin bittiğini kulağa hoş gelen kısa bir
-        // "tik" sesiyle fark eder.
-        function playAnalysisReadySound() {
-            try {
-                var AudioCtx = window.AudioContext || window.webkitAudioContext;
-                if (!AudioCtx) return;
-                if (!window._sylvaAudioCtx) window._sylvaAudioCtx = new AudioCtx();
-                var ctx = window._sylvaAudioCtx;
-                if (ctx.state === 'suspended') ctx.resume();
-
-                function tone(freq, startOffset, duration, peakGain) {
-                    var osc  = ctx.createOscillator();
-                    var gain = ctx.createGain();
-                    osc.type = 'sine';
-                    osc.frequency.value = freq;
-                    var t0 = ctx.currentTime + startOffset;
-                    gain.gain.setValueAtTime(0.0001, t0);
-                    gain.gain.linearRampToValueAtTime(peakGain, t0 + 0.008);
-                    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + duration);
-                    osc.connect(gain);
-                    gain.connect(ctx.destination);
-                    osc.start(t0);
-                    osc.stop(t0 + duration + 0.03);
-                }
-                // Kısa, hoş bir "tik" bildirimi: yükselen iki nota (beşli aralık)
-                tone(1046.5, 0,    0.11, 0.16); // C6
-                tone(1568.0, 0.07, 0.16, 0.13); // G6
-            } catch (e) { /* ses çalınamazsa sessizce yoksay */ }
-        }
-
         function runAnalysis() {
             // Kullanıcı Bilgileri formu doldurulmadan analiz başlatılamaz
             if (window._sylvaUserDone === false) {
@@ -5444,9 +5410,6 @@ function selectRamp(name) {
                     showNoDataModal(_TOAST_NO_DATA_MSG);
                     return;
                 }
-                // 🔔 Analiz sonucu (harita katmanı + istatistik/grafik verileri)
-                // ekrana gelmeye başlıyor — kullanıcıyı kısa bir "tik" sesiyle bilgilendir.
-                playAnalysisReadySound();
                 // Önceki GEE katmanını kaldır
                 if (_geeLayer) { map.removeLayer(_geeLayer); _geeLayer = null; }
                 // Yeni GEE tile katmanını ekle (crossOrigin: html2canvas tabanlı
