@@ -57,6 +57,44 @@ except Exception as e:
 # Last analysis parameters (GeoTIFF download için saklanır)
 _last_analyze_params = {}
 
+# ════════════════════════════════════════════════════════════════
+# 🛠️ BUG FİX ("Diğer Analizler" hep aynı değeri gösteriyordu):
+# reduceRegion() çağrıları TÜM analizler için sabit scale=30 kullanıyordu.
+# Bu, Sentinel/SRTM tabanlı analizler (NDVI, TOPO — 10-30 m çözünürlük)
+# için doğrudur, ama "Diğer Analizler" ailesindeki çoğu veri seti çok
+# daha kaba çözünürlüklüdür (SMAP ~9 km, CHIRPS ~5.5 km, Sentinel-5P
+# ~1.1 km, MODIS 500 m, GHSL ~1 km). scale=30 ile bu verileri sorgulamak
+# GEE'de sık sık getInfo() hatasına ya da anlamsız/null sonuca yol
+# açıyordu; bu hata da eskiden "except Exception: pass" ile sessizce
+# yutuluyordu — kullanıcı arayüzü de bu durumda HTML'deki STATİK
+# data-legend-min/max değerlerine geri düşüyor, dolayısıyla AOI/seçim
+# ne olursa olsun ekranda hep aynı sabit sayı görünüyordu.
+# Çözüm: her index için gerçek native çözünürlüğe yakın bir scale
+# tanımlanır ve reduceRegion çağrılarında kullanılır; ayrıca hata artık
+# sessizce yutulmaz (konsola loglanır) ki gerçek arıza görünür olsun.
+STATS_SCALE_BY_INDEX = {
+    'OA_CANOPY_HEIGHT': 30,     # GEDI ~25 m footprint
+    'OA_FOREST_CHANGE': 30,     # Hansen GFC 30 m
+    'OA_NPP':            500,   # MODIS MOD17A3HGF 500 m
+    'OA_TCD':             30,   # Hansen GFC 30 m
+    'OA_ET':              500,  # MODIS MOD16A2GF 500 m
+    'OA_CHIRPS':         5500,  # CHIRPS ~5.5 km
+    'OA_SSM':            9000,  # SMAP ~9 km
+    'OA_SR':              500,  # MODIS MOD09A1 500 m
+    'OA_NO2':            1113,  # Sentinel-5P ~1.1 km
+    'OA_SO2':            1113,
+    'OA_AOD':            1113,
+    'OA_CO':             1113,
+    'OA_NTL':             500,  # VIIRS DNB ~500 m
+    'OA_POP':             100,  # WorldPop 100 m
+    'OA_GHSL':           1000,  # GHSL ~1 km
+    'OA_ERM':              90,
+    'OA_FSA':              90,
+    'OA_LSA':              90,
+}
+def _stats_scale_for(index_name):
+    return STATS_SCALE_BY_INDEX.get(index_name, 30)
+
 # Arazi Kullanımı (LULC) ailesindeki analizler — bunlar statik/tek-katmanlı
 # veri setleridir; tarih aralığı veya bulutluluk filtresi kullanmazlar ve
 # her zaman AOI sınırlarına göre kesilir (clip).
@@ -1003,6 +1041,7 @@ def build_result_image(data):
         # En güncel yılın ham Npp bandı kullanılır (birim: 0.1 g C/m²/yıl,
         # dolgu/geçersiz değerler — >32700 — maskelenir).
         npp_latest = (ee.ImageCollection('MODIS/061/MOD17A3HGF')
+                      .filterBounds(roi)
                       .select('Npp')
                       .sort('system:time_start', False)
                       .first())
@@ -1162,6 +1201,7 @@ def build_result_image(data):
         # En güncel ayın 'avg_rad' (ortalama radyans) bandı kullanılır;
         # negatif/gürültü değerleri 0'a kırpılır.
         ntl_latest = (ee.ImageCollection('NOAA/VIIRS/DNB/MONTHLY_V1/VCMSLCFG')
+                      .filterBounds(roi)
                       .select('avg_rad')
                       .sort('system:time_start', False)
                       .first())
@@ -1935,34 +1975,52 @@ def analyze():
         final_display, roi, result, vis = build_result_image(data)
 
         # ── İstatistik ────────────────────────────────────────────
-        stats = result.reduceRegion(
-            reducer   = ee.Reducer.frequencyHistogram(),
-            geometry  = roi,
-            scale     = 30,
-            maxPixels = 1e9
-        ).getInfo()
+        # 🛠️ Her index kendi native çözünürlüğüne yakın bir scale ile
+        # sorgulanır (bkz. STATS_SCALE_BY_INDEX) — "Diğer Analizler"
+        # ailesindeki kaba çözünürlüklü veri setlerinde (SMAP, CHIRPS,
+        # Sentinel-5P, MODIS, GHSL...) sabit scale=30 kullanmak sessiz
+        # hatalara/hatalı sonuçlara yol açıyordu.
+        stats_scale = _stats_scale_for(data.get('index', 'NDVI'))
+
+        try:
+            stats = result.reduceRegion(
+                reducer     = ee.Reducer.frequencyHistogram(),
+                geometry    = roi,
+                scale       = stats_scale,
+                maxPixels   = 1e9,
+                bestEffort  = True,
+                tileScale   = 4,
+            ).getInfo()
+        except Exception as e:
+            print('❌ /api/analyze frequencyHistogram hatası (index=%s, scale=%s): %s'
+                  % (data.get('index'), stats_scale, e))
+            stats = {}
 
         real_minmax = {}
         try:
-            mm = result.reduceRegion(
-                reducer   = ee.Reducer.minMax(),
-                geometry  = roi,
-                scale     = 30,
-                maxPixels = 1e9
-            ).getInfo()
-            mn = result.reduceRegion(
-                reducer   = ee.Reducer.mean(),
-                geometry  = roi,
-                scale     = 30,
-                maxPixels = 1e9
+            # minMax + mean tek bir birleşik reducer'da hesaplanır — hem
+            # daha hızlı hem de tek bir hata noktası olur.
+            combined = result.reduceRegion(
+                reducer     = ee.Reducer.minMax().combine(
+                                  reducer2 = ee.Reducer.mean(), sharedInputs = True),
+                geometry    = roi,
+                scale       = stats_scale,
+                maxPixels   = 1e9,
+                bestEffort  = True,
+                tileScale   = 4,
             ).getInfo()
             real_minmax = {
-                'min':  mm.get('value_min'),
-                'max':  mm.get('value_max'),
-                'mean': mn.get('value')
+                'min':  combined.get('value_min'),
+                'max':  combined.get('value_max'),
+                'mean': combined.get('value_mean'),
             }
-        except Exception:
-            pass
+        except Exception as e:
+            # 🛠️ Artık hata sessizce yutulmuyor — sunucu logunda görünür
+            # olur, gerçek arıza (izin, projeksiyon, veri boşluğu vb.)
+            # kolayca teşhis edilebilir.
+            print('❌ /api/analyze realStats hatası (index=%s, scale=%s): %s'
+                  % (data.get('index'), stats_scale, e))
+            real_minmax = {}
 
         # ── Tile URL ─────────────────────────────────────────────
         map_id   = final_display.getMapId(vis)
