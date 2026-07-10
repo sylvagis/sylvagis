@@ -57,44 +57,6 @@ except Exception as e:
 # Last analysis parameters (GeoTIFF download için saklanır)
 _last_analyze_params = {}
 
-# ════════════════════════════════════════════════════════════════
-# 🛠️ BUG FİX ("Diğer Analizler" hep aynı değeri gösteriyordu):
-# reduceRegion() çağrıları TÜM analizler için sabit scale=30 kullanıyordu.
-# Bu, Sentinel/SRTM tabanlı analizler (NDVI, TOPO — 10-30 m çözünürlük)
-# için doğrudur, ama "Diğer Analizler" ailesindeki çoğu veri seti çok
-# daha kaba çözünürlüklüdür (SMAP ~9 km, CHIRPS ~5.5 km, Sentinel-5P
-# ~1.1 km, MODIS 500 m, GHSL ~1 km). scale=30 ile bu verileri sorgulamak
-# GEE'de sık sık getInfo() hatasına ya da anlamsız/null sonuca yol
-# açıyordu; bu hata da eskiden "except Exception: pass" ile sessizce
-# yutuluyordu — kullanıcı arayüzü de bu durumda HTML'deki STATİK
-# data-legend-min/max değerlerine geri düşüyor, dolayısıyla AOI/seçim
-# ne olursa olsun ekranda hep aynı sabit sayı görünüyordu.
-# Çözüm: her index için gerçek native çözünürlüğe yakın bir scale
-# tanımlanır ve reduceRegion çağrılarında kullanılır; ayrıca hata artık
-# sessizce yutulmaz (konsola loglanır) ki gerçek arıza görünür olsun.
-STATS_SCALE_BY_INDEX = {
-    'OA_CANOPY_HEIGHT': 30,     # GEDI ~25 m footprint
-    'OA_FOREST_CHANGE': 30,     # Hansen GFC 30 m
-    'OA_NPP':            500,   # MODIS MOD17A3HGF 500 m
-    'OA_TCD':             30,   # Hansen GFC 30 m
-    'OA_ET':              500,  # MODIS MOD16A2GF 500 m
-    'OA_CHIRPS':         5500,  # CHIRPS ~5.5 km
-    'OA_SSM':            9000,  # SMAP ~9 km
-    'OA_SR':              500,  # MODIS MOD09A1 500 m
-    'OA_NO2':            1113,  # Sentinel-5P ~1.1 km
-    'OA_SO2':            1113,
-    'OA_AOD':            1113,
-    'OA_CO':             1113,
-    'OA_NTL':             500,  # VIIRS DNB ~500 m
-    'OA_POP':             100,  # WorldPop 100 m
-    'OA_GHSL':           1000,  # GHSL ~1 km
-    'OA_ERM':              90,
-    'OA_FSA':              90,
-    'OA_LSA':              90,
-}
-def _stats_scale_for(index_name):
-    return STATS_SCALE_BY_INDEX.get(index_name, 30)
-
 # Arazi Kullanımı (LULC) ailesindeki analizler — bunlar statik/tek-katmanlı
 # veri setleridir; tarih aralığı veya bulutluluk filtresi kullanmazlar ve
 # her zaman AOI sınırlarına göre kesilir (clip).
@@ -109,32 +71,6 @@ LULC_FAMILY_INDICES = (
     'TOPO_HILLSHADE_MULTI', 'TOPO_SOLAR', 'TOPO_SHADOW',
     # SAR — zaman aralığı kullanır ama sahne galerisi gösterilmez
     'SAR',
-    # 🌳 Orman ve Ekosistem Dinamikleri ("Diğer Analizler") — bunlar da
-    # kendi bağımsız/statik GEE veri setlerini kullanır; tarih aralığı
-    # veya bulutluluk filtresi kullanmazlar ve her zaman AOI'ye göre
-    # kesilir (clip) — TOPO/LULC ailesiyle birebir aynı davranış.
-    'OA_CANOPY_HEIGHT', 'OA_FOREST_CHANGE', 'OA_NPP', 'OA_TCD',
-    # 🌦️ İklim ve Meteorolojik Gözlemler — bunlar da kendi bağımsız GEE
-    # veri setlerini (MODIS ET, CHIRPS yağış, SMAP toprak nemi, MODIS
-    # yüzey yansıması) kullanır; arayüzden tarih aralığı veya bulutluluk
-    # filtresi seçilmez ve sonuç her zaman AOI'ye göre kesilir (clip).
-    'OA_ET', 'OA_CHIRPS', 'OA_SSM', 'OA_SR',
-    # 🌫️ Atmosferik İzleme ve Hava Kalitesi — bunlar da kendi bağımsız GEE
-    # veri setlerini (Sentinel-5P TROPOMI) kullanır; arayüzden tarih
-    # aralığı veya bulutluluk filtresi seçilmez (son 90 günün ortalama
-    # kompoziti kullanılır) ve sonuç her zaman AOI'ye göre kesilir (clip).
-    'OA_NO2', 'OA_SO2', 'OA_AOD', 'OA_CO',
-    # 🏙️ Antropojenik Veri ve İnsan Etkisi — bunlar da kendi bağımsız GEE
-    # veri setlerini (VIIRS gece ışıkları, WorldPop nüfus, GHSL kentleşme
-    # derecesi) kullanır; tarih aralığı veya bulutluluk filtresi
-    # kullanmazlar ve her zaman AOI'ye göre kesilir (clip) — OA_ ailesiyle
-    # birebir aynı davranış.
-    'OA_NTL', 'OA_POP', 'OA_GHSL',
-    # ⚠️ Bileşik Risk ve Duyarlılık Modelleri — bunlar da kendi bağımsız
-    # GEE veri setlerini (DEM, yağış, toprak, arazi örtüsü) kullanır;
-    # tarih aralığı veya bulutluluk filtresi kullanmazlar ve her zaman
-    # AOI'ye göre kesilir (clip) — OA_ ailesiyle birebir aynı davranış.
-    'OA_ERM', 'OA_FSA', 'OA_LSA',
 )
 
 
@@ -179,7 +115,7 @@ def send_contact_message():
         return jsonify({'success': False, 'error': 'Geçersiz e-posta adresi.'}), 400
 
     smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'ssssssssssssssss'
+    smtp_pass = 'uezeqqsngmuwpxmu'
 
     body = (
         'SylvaGIS İletişim Formu üzerinden yeni bir mesaj gönderildi.\n\n'
@@ -990,446 +926,6 @@ def build_result_image(data):
         final_display = remapped_corine.clip(roi)
         return final_display, roi, result, vis
 
-    # ── 🌳 Orman ve Ekosistem Dinamikleri ("Diğer Analizler") ─────
-    # Bu dört analiz de LULC/TOPO gibi kendi bağımsız GEE veri setini
-    # kullanır; uydu/tarih/bulutluluk seçimi yoktur, sonuç her zaman
-    # AOI sınırlarına göre kesilir (clip).
-
-    if index == 'OA_CANOPY_HEIGHT':
-        # 🌲 Orman Örtüsü Yüksekliği — NASA GEDI L2A (aylık rasterize
-        # edilmiş nokta verisi, resmi GEE kataloğu). Kalite/degrade
-        # bayrakları ile filtrelenip AOI üzerinde ortalaması alınır
-        # (GEDI şeritler halinde seyrek örneklediği için tekil bir ay
-        # yerine tüm arşivin ortalaması kullanılır — daha iyi kapsama).
-        def _gedi_quality_mask(img):
-            return (img.updateMask(img.select('quality_flag').eq(1))
-                       .updateMask(img.select('degrade_flag').eq(0)))
-
-        gedi_col = (ee.ImageCollection('LARSE/GEDI/GEDI02_A_002_MONTHLY')
-                    .filterBounds(roi)
-                    .map(_gedi_quality_mask)
-                    .select('rh98'))
-        canopy = gedi_col.mean().rename('value')
-        vis    = {'min': 0, 'max': 50, 'palette': ['black', 'white']}
-        result = canopy
-        final_display = canopy.clip(roi)
-        return final_display, roi, result, vis
-
-    if index == 'OA_FOREST_CHANGE':
-        # 🌳 Küresel Orman Değişimi — Hansen Global Forest Change v1.13
-        # (UMD/GLAD, 2000-2025, 30 m). 3 sınıf üretilir:
-        #   0 = Orman (2000 yılı ağaç örtüsü ≥%10 ve kayıp/kazanım yok)
-        #   1 = Kayıp (2000-2025 arası orman kaybı)
-        #   2 = Kazanım (2000-2012 arası orman kazanımı)
-        gfc       = ee.Image('UMD/hansen/global_forest_change_2025_v1_13')
-        treecover = gfc.select('treecover2000')
-        loss      = gfc.select('loss')
-        gain      = gfc.select('gain')
-        forest_mask = treecover.gte(10).Or(loss).Or(gain)
-        classified  = (ee.Image(0)
-                       .where(loss, 1)
-                       .where(gain, 2)
-                       .updateMask(forest_mask)
-                       .rename('value'))
-        vis    = {'min': 0, 'max': 2, 'palette': ['397d49', 'e64c3c', '3ba55c']}
-        result = classified
-        final_display = classified.clip(roi)
-        return final_display, roi, result, vis
-
-    if index == 'OA_NPP':
-        # 🌿 Net Birincil Üretim — MODIS MOD17A3HGF V6.1 (yıllık, 500 m).
-        # En güncel yılın ham Npp bandı kullanılır (birim: 0.1 g C/m²/yıl,
-        # dolgu/geçersiz değerler — >32700 — maskelenir).
-        npp_latest = (ee.ImageCollection('MODIS/061/MOD17A3HGF')
-                      .filterBounds(roi)
-                      .select('Npp')
-                      .sort('system:time_start', False)
-                      .first())
-        npp = npp_latest.updateMask(npp_latest.lte(32700)).rename('value')
-        vis    = {'min': 0, 'max': 10000, 'palette': ['black', 'white']}
-        result = npp
-        final_display = npp.clip(roi)
-        return final_display, roi, result, vis
-
-    if index == 'OA_TCD':
-        # 🌴 Ağaç Örtüsü Yoğunluğu — Hansen GFC v1.13 treecover2000 bandı
-        # (yüzde olarak 0-100, 30 m, global).
-        gfc_tcd = ee.Image('UMD/hansen/global_forest_change_2025_v1_13')
-        tcd = gfc_tcd.select('treecover2000').rename('value')
-        vis    = {'min': 0, 'max': 100, 'palette': ['black', 'white']}
-        result = tcd
-        final_display = tcd.clip(roi)
-        return final_display, roi, result, vis
-
-    # ── 🌦️ İklim ve Meteorolojik Gözlemler ("Diğer Analizler") ──────
-    # Bu dört analiz de kendi bağımsız GEE veri setini kullanır; diğer
-    # OA_ analizleri gibi tarih/bulutluluk seçimi arayüzden yapılmaz —
-    # her biri kendi koleksiyonu için en güncel/anlamlı zaman penceresini
-    # sunucu tarafında otomatik seçer, sonuç AOI'ye göre kesilir (clip).
-
-    if index == 'OA_ET':
-        # 💧 Evapotranspirasyon — MODIS MOD16A2GF (8 günlük kompozit,
-        # 500 m). 'ET' bandı 0.1 mm/8gün ölçeğindedir; dolgu/geçersiz
-        # değerler (>32700) maskelenip günlük mm'ye çevrilir
-        # (0.1 mm/8gün → mm/gün: değer * 0.1 / 8).
-        et_latest = (ee.ImageCollection('MODIS/061/MOD16A2GF')
-                     .filterBounds(roi)
-                     .select('ET')
-                     .sort('system:time_start', False)
-                     .first())
-        et_mm_day = (et_latest.updateMask(et_latest.lte(32700))
-                     .multiply(0.1).divide(8)
-                     .rename('value'))
-        vis    = {'min': 0, 'max': 10, 'palette': ['black', '2166ac', '4393c3', '92c5de', 'ffffff']}
-        result = et_mm_day
-        final_display = et_mm_day.clip(roi)
-        return final_display, roi, result, vis
-
-    if index == 'OA_CHIRPS':
-        # 🌧️ İklim Tehlikeleri Grubu Kızılötesi Yağış (CHIRPS) — UCSB-CHG
-        # günlük yağış verisi (~5.5 km), son 30 günün toplamı (mm) alınır
-        # (aylık toplam yağışa yakın bir gösterge için).
-        today = datetime.date.today()
-        eff_end   = today.isoformat()
-        eff_start = (today - datetime.timedelta(days=30)).isoformat()
-        chirps_col = (ee.ImageCollection('UCSB-CHG/CHIRPS/DAILY')
-                      .filterBounds(roi)
-                      .filterDate(eff_start, eff_end)
-                      .select('precipitation'))
-        chirps_sum = chirps_col.sum().rename('value')
-        vis    = {'min': 0, 'max': 300, 'palette': ['ffffff', 'c6dbef', '6baed6', '2171b5', '08306b']}
-        result = chirps_sum
-        final_display = chirps_sum.clip(roi)
-        return final_display, roi, result, vis
-
-    if index == 'OA_SSM':
-        # 💦 Küresel Yüzey Toprak Nemi — NASA SMAP L3 (SPL3SMP_E, 9 km),
-        # 'soil_moisture_am' bandı (sabah geçişi, hacimsel nem oranı,
-        # m³/m³). En güncel ve bulutsuz (veri boşluğu olmayan) sahne
-        # bulunana kadar son 30 günlük ortalaması alınır.
-        today = datetime.date.today()
-        eff_end   = today.isoformat()
-        eff_start = (today - datetime.timedelta(days=30)).isoformat()
-        smap_col = (ee.ImageCollection('NASA/SMAP/SPL3SMP_E/005')
-                    .filterBounds(roi)
-                    .filterDate(eff_start, eff_end)
-                    .select('soil_moisture_am'))
-        ssm = smap_col.mean().rename('value')
-        vis    = {'min': 0, 'max': 0.5, 'palette': ['8c510a', 'd8b365', 'f6e8c3', 'c7eae5', '5ab4ac', '01665e']}
-        result = ssm
-        final_display = ssm.clip(roi)
-        return final_display, roi, result, vis
-
-    if index == 'OA_SR':
-        # ☀️ Yüzey Yansıması (Surface Reflectance) — MODIS MOD09A1 (8
-        # günlük kompozit, 500 m), kırmızı bant (sur_refl_b01, 0.0001
-        # ölçek faktörüyle 0-1 yansıma aralığına çevrilir).
-        sr_latest = (ee.ImageCollection('MODIS/061/MOD09A1')
-                     .filterBounds(roi)
-                     .select('sur_refl_b01')
-                     .sort('system:time_start', False)
-                     .first())
-        sr = sr_latest.multiply(0.0001).rename('value')
-        vis    = {'min': 0, 'max': 1, 'palette': ['black', 'white']}
-        result = sr
-        final_display = sr.clip(roi)
-        return final_display, roi, result, vis
-
-    # ── 🌫️ Atmosferik İzleme ve Hava Kalitesi ("Diğer Analizler") ──
-    # Bu dört analiz de Sentinel-5P TROPOMI (COPERNICUS/S5P) ürünlerini
-    # kullanır. Diğer OA_ analizleri gibi tarih/bulutluluk seçimi
-    # arayüzden yapılmaz; günlük geçiş yapan S5P'nin bulut/veri
-    # boşluklarını kapatmak için sabit bir "son 90 gün" ortalama
-    # kompoziti alınır ve sonuç AOI'ye göre kesilir (clip).
-    def _s5p_recent_mean(collection_id, band_name, days=90):
-        today = datetime.date.today()
-        eff_end   = today.isoformat()
-        eff_start = (today - datetime.timedelta(days=days)).isoformat()
-        col = (ee.ImageCollection(collection_id)
-               .filterBounds(roi)
-               .filterDate(eff_start, eff_end)
-               .select(band_name))
-        return col.mean()
-
-    if index == 'OA_NO2':
-        # 🟤 Azot Dioksit Emisyonu — Sentinel-5P TROPOMI (OFFL), troposferik
-        # NO2 kolon yoğunluğu (mol/m²).
-        no2 = _s5p_recent_mean('COPERNICUS/S5P/OFFL/L3_NO2',
-                                'tropospheric_NO2_column_number_density').rename('value')
-        vis    = {'min': 0, 'max': 0.0002, 'palette': ['black', '2166ac', '762a83', 'd6604d', 'ffff33']}
-        result = no2
-        final_display = no2.clip(roi)
-        return final_display, roi, result, vis
-
-    if index == 'OA_SO2':
-        # 🟡 Kükürt Dioksit Emisyonu — Sentinel-5P TROPOMI (OFFL), toplam
-        # kolon yoğunluğu (mol/m²).
-        so2 = _s5p_recent_mean('COPERNICUS/S5P/OFFL/L3_SO2',
-                                'SO2_column_number_density').rename('value')
-        vis    = {'min': 0, 'max': 0.0005, 'palette': ['black', '2166ac', '762a83', 'd6604d', 'ffff33']}
-        result = so2
-        final_display = so2.clip(roi)
-        return final_display, roi, result, vis
-
-    if index == 'OA_AOD':
-        # 🌫️ Aerosol Optik Derinliği (AOD / AI) — Sentinel-5P TROPOMI
-        # (OFFL), Absorbe Edici Aerosol İndeksi (UV Aerosol Index, birimsiz).
-        aod = _s5p_recent_mean('COPERNICUS/S5P/OFFL/L3_AER_AI',
-                                'absorbing_aerosol_index').rename('value')
-        vis    = {'min': 0, 'max': 1, 'palette': ['2166ac', 'white', 'b2182b']}
-        result = aod
-        final_display = aod.clip(roi)
-        return final_display, roi, result, vis
-
-    if index == 'OA_CO':
-        # ⚫ Karbon Monoksit İzleme (CO) — Sentinel-5P TROPOMI (OFFL),
-        # toplam kolon yoğunluğu (mol/m²).
-        co = _s5p_recent_mean('COPERNICUS/S5P/OFFL/L3_CO',
-                               'CO_column_number_density').rename('value')
-        vis    = {'min': 0, 'max': 0.05, 'palette': ['black', '2166ac', '762a83', 'd6604d', 'ffff33']}
-        result = co
-        final_display = co.clip(roi)
-        return final_display, roi, result, vis
-
-    # ── 🏙️ Antropojenik Veri ve İnsan Etkisi ("Diğer Analizler") ──
-    # Bu üç analiz de OA_CANOPY_HEIGHT/OA_TCD ailesi gibi kendi bağımsız
-    # GEE veri setini kullanır; uydu/tarih/bulutluluk seçimi yoktur,
-    # sonuç her zaman AOI sınırlarına göre kesilir (clip).
-
-    if index == 'OA_NTL':
-        # 🌃 Gece Işıkları — NOAA VIIRS DNB Aylık Kompozit (bulutsuz, ~500 m).
-        # En güncel ayın 'avg_rad' (ortalama radyans) bandı kullanılır;
-        # negatif/gürültü değerleri 0'a kırpılır.
-        ntl_latest = (ee.ImageCollection('NOAA/VIIRS/DNB/MONTHLY_V1/VCMSLCFG')
-                      .filterBounds(roi)
-                      .select('avg_rad')
-                      .sort('system:time_start', False)
-                      .first())
-        ntl = ntl_latest.max(0).rename('value')
-        vis    = {'min': 0, 'max': 63, 'palette': ['000000', '4d4d00', 'ffff00', 'ffffff']}
-        result = ntl
-        final_display = ntl.clip(roi)
-        return final_display, roi, result, vis
-
-    if index == 'OA_POP':
-        # 👥 Mekansal Nüfus Yoğunluğu — WorldPop Global Project Population
-        # Count (100 m, yıllık, piksel başına kişi sayısı). Koleksiyondaki
-        # en güncel yılın görüntüsü kullanılır.
-        pop_col = (ee.ImageCollection('WorldPop/GP/100m/pop')
-                   .filterBounds(roi)
-                   .sort('system:time_start', False))
-        pop = pop_col.first().rename('value')
-        vis    = {'min': 0, 'max': 1000, 'palette': ['000000', '9c1313', 'ff6d00', 'ffe066', 'ffffff']}
-        result = pop
-        final_display = pop.clip(roi)
-        return final_display, roi, result, vis
-
-    if index == 'OA_GHSL':
-        # 🏙️ Küresel İnsan Yerleşim Katmanı — GHS-SMOD (Kentleşme Derecesi,
-        # Degree of Urbanisation), en güncel epoch, ~1 km. Orijinal kodlar
-        # (10,11,12,13,21,22,23,30) sıralı 1-8'e yeniden kodlanır — LULC
-        # ailesindeki diğer analizlerle tutarlı, küçük/ardışık bir aralık.
-        smod_codes = [10, 11, 12, 13, 21, 22, 23, 30]
-        smod_palette = [
-            '3d5e8c',  # 1  Su
-            'e0f3f8',  # 2  Çok Düşük Yoğunluklu Kırsal
-            'abd9e9',  # 3  Düşük Yoğunluklu Kırsal
-            'fee090',  # 4  Kırsal Kümelenme
-            'fdae61',  # 5  Banliyö / Kent Çevresi
-            'f46d43',  # 6  Yarı-Yoğun Kentsel Küme
-            'd73027',  # 7  Yoğun Kentsel Küme
-            'a50026',  # 8  Kent Merkezi
-        ]
-        smod_img = (ee.ImageCollection('JRC/GHSL/P2023A/GHS_SMOD')
-                    .sort('system:time_start', False)
-                    .first()
-                    .select('smod_code'))
-        remapped_smod = smod_img.remap(smod_codes, list(range(1, len(smod_codes) + 1))).rename('value')
-        vis    = {'min': 1, 'max': len(smod_codes), 'palette': smod_palette}
-        result = remapped_smod
-        final_display = remapped_smod.clip(roi)
-        return final_display, roi, result, vis
-
-    # ── ⚠️ Bileşik Risk ve Duyarlılık Modelleri ──────────────────────
-    # Erozyon Riski (ERM/RUSLE), Sel Duyarlılığı (FSA) ve Heyelan
-    # Duyarlılığı (LSA) — bu üç model de LULC/TOPO/OA ailesi gibi
-    # kendi bağımsız GEE veri setlerini (DEM, yağış, toprak, arazi
-    # örtüsü) kullanır; uydu/tarih/bulutluluk seçimi YOKTUR, sonuç her
-    # zaman AOI'ye göre kesilir (clip). Üretilen "value" bandı sürekli
-    # (continuous) bir risk indeksidir ve haritada TOPO ailesiyle
-    # birebir aynı dinamik germe (_dynamic_stretch_vis) mantığıyla
-    # gösterilir; "Lejantı Uygula" (classBreaks / özel palet) desteği
-    # de TOPO ailesiyle aynı şekilde uygulanır (bkz. aşağıdaki blok).
-    if index in ('OA_ERM', 'OA_FSA', 'OA_LSA'):
-        import math as _math
-
-        _risk_dem      = ee.Image('USGS/SRTMGL1_003').select('elevation')
-        _risk_terrain  = ee.Terrain.products(_risk_dem)
-        _risk_slope    = _risk_terrain.select('slope')          # derece
-        _risk_slope_rad = _risk_slope.multiply(_math.pi / 180)
-
-        # Akış birikimi vekisi — TOPO_FLOWACC/TOPO_STI ile birebir aynı
-        # yaklaşım: düşük eğim + düşük rakım = vadi tabanı/su toplama alanı.
-        _acc_proxy = (ee.Image(90).subtract(_risk_slope.clamp(0, 90))
-                      .max(ee.Image(1.0)))
-
-        # TWI (Topoğrafik Islanma İndeksi) — TOPO_TWI ile aynı formül.
-        _tan_slope = _risk_slope_rad.tan().max(ee.Image(0.001))
-        _twi       = _acc_proxy.log().subtract(_tan_slope.log())
-
-        # Dere/vadi tabanı maskesi — TOPO_STREAM ile aynı yaklaşım.
-        _focal_mean  = _risk_dem.focalMean(radius=200, units='meters')
-        _tpi_small   = _risk_dem.subtract(_focal_mean)
-        _stream_mask = _risk_slope.lt(5).And(_tpi_small.lt(0))
-
-        # Dereye/vadi tabanına Öklid mesafesi (metre) — 5 km yarıçapa kadar
-        # hesaplanır; yarıçap dışında kalan (maskelenmemiş) pikseller en
-        # uzak (5000 m) değere sabitlenir.
-        _dist_to_stream = (_stream_mask.distance(ee.Kernel.euclidean(5000, 'meters'))
-                            .unmask(5000))
-
-        # Pürüzlülük (Roughness) — TOPO_ROUGHNESS ile aynı yaklaşım.
-        _focal_max = _risk_dem.focalMax(radius=300, units='meters')
-        _focal_min = _risk_dem.focalMin(radius=300, units='meters')
-        _roughness = _focal_max.subtract(_focal_min)
-
-        # NDVI — MODIS MOD13Q1 (250 m), son 1 yılın medyanı. Uydu/tarih
-        # seçimi kullanıcıya sunulmadığından LULC bloğundaki gibi
-        # sabit/güncel bir 365 günlük aralık kullanılır.
-        _today      = datetime.date.today()
-        _ndvi_end   = _today.isoformat()
-        _ndvi_start = (_today - datetime.timedelta(days=365)).isoformat()
-        _ndvi = (ee.ImageCollection('MODIS/061/MOD13Q1')
-                 .select('NDVI')
-                 .filterBounds(roi)
-                 .filterDate(_ndvi_start, _ndvi_end)
-                 .median()
-                 .multiply(0.0001)
-                 .clamp(-0.2, 0.9))
-
-        # Yıllık yağış — CHIRPS Pentad, son 3 yılın ortalaması (mm/yıl).
-        _precip_start = (_today - datetime.timedelta(days=3 * 365)).isoformat()
-        _annual_precip = (ee.ImageCollection('UCSB-CHG/CHIRPS/PENTAD')
-                           .select('precipitation')
-                           .filterBounds(roi)
-                           .filterDate(_precip_start, _ndvi_end)
-                           .sum()
-                           .divide(3.0))
-
-        if index == 'OA_ERM':
-            # ── Erozyon Riski Modeli (RUSLE: A = R × K × LS × C × P) ──
-            # R — Yağış Erozivite Faktörü (Renard & Freimund 1994, metrik
-            # yaklaşık formül): R = 0.0483 × P^1.61  (P: mm/yıl)
-            r_factor = _annual_precip.max(1).pow(1.61).multiply(0.0483)
-
-            # K — Toprak Erodibilite Faktörü: OpenLandMap USDA doku sınıfı
-            # (0 cm derinlik) kodları, standart erodibilite nomogramı
-            # ortalama literatür değerleriyle yeniden kodlanır.
-            texture  = ee.Image('OpenLandMap/SOL/SOL_TEXTURE-CLASS_USDA-TT_M/v02').select('b0')
-            k_codes  = list(range(1, 13))
-            k_values = [0.22, 0.24, 0.20, 0.30, 0.32, 0.20, 0.30, 0.38, 0.13, 0.41, 0.04, 0.02]
-            k_factor = texture.remap(k_codes, k_values, 0.25)
-
-            # LS — Eğim Uzunluğu-Dikliği Faktörü (Moore ve ark. 1991):
-            # LS = (birikim×30/22.13)^0.4 × (sin(eğim)/0.0896)^1.3
-            ls_factor = (_acc_proxy.multiply(30).divide(22.13).pow(0.4)
-                         .multiply(_risk_slope_rad.sin().divide(0.0896).pow(1.3)))
-
-            # C — Bitki Örtüsü/Yönetim Faktörü (Van der Knijff ve ark. 2000):
-            # C = exp(−2 × NDVI / (1 − NDVI))
-            ndvi_c   = _ndvi.clamp(-0.2, 0.89)
-            c_factor = (ndvi_c.multiply(-2)
-                        .divide(ee.Image(1).subtract(ndvi_c))).exp()
-
-            # P — Koruma Uygulaması Faktörü: arazi ölçeğinde veri
-            # bulunmadığından sabit 1 (koruma önlemi yok varsayımı) alınır.
-            result = (r_factor.multiply(k_factor).multiply(ls_factor)
-                      .multiply(c_factor).rename('value'))
-            vis = {'min': 0, 'max': 500, 'palette': ['1a9850', 'fee08b', 'd73027']}
-            _dyn_scale = 90
-
-        elif index == 'OA_FSA':
-            # ── Sel Duyarlılık Analizi — Çok Kriterli Ağırlıklı Örtüşüm ──
-            # TWI %30 · Eğim-tersi %20 · Dereye Yakınlık %20 · Yağış %15 ·
-            # Yapılaşma/Geçirimsiz Yüzey %15
-            twi_n     = _twi.unitScale(0, 15).clamp(0, 1)
-            slope_inv = ee.Image(1).subtract(_risk_slope.unitScale(0, 60).clamp(0, 1))
-            dist_inv  = ee.Image(1).subtract(_dist_to_stream.unitScale(0, 2000).clamp(0, 1))
-            precip_n  = _annual_precip.unitScale(0, 3000).clamp(0, 1)
-
-            built = (ee.ImageCollection('GOOGLE/DYNAMICWORLD/V1')
-                     .filterBounds(roi)
-                     .filterDate(_ndvi_start, _ndvi_end)
-                     .select('built')
-                     .mean()
-                     .unmask(0)
-                     .clamp(0, 1))
-
-            result = (twi_n.multiply(0.30)
-                      .add(slope_inv.multiply(0.20))
-                      .add(dist_inv.multiply(0.20))
-                      .add(precip_n.multiply(0.15))
-                      .add(built.multiply(0.15))
-                      .multiply(100)
-                      .rename('value'))
-            vis = {'min': 0, 'max': 100, 'palette': ['f7fbff', '6baed6', '08306b']}
-            _dyn_scale = 90
-
-        else:  # OA_LSA
-            # ── Heyelan Duyarlılık Analizi — Çok Kriterli Ağırlıklı Örtüşüm ──
-            # Eğim %35 · Pürüzlülük %20 · TWI %15 ·
-            # Bitki Örtüsü Eksikliği %15 · Dereye/Vadi Tabanına Yakınlık %15
-            slope_n  = _risk_slope.unitScale(0, 60).clamp(0, 1)
-            rough_n  = _roughness.unitScale(0, 150).clamp(0, 1)
-            twi_n    = _twi.unitScale(0, 15).clamp(0, 1)
-            veg_inv  = ee.Image(1).subtract(_ndvi.unitScale(-0.2, 0.9).clamp(0, 1))
-            dist_inv = ee.Image(1).subtract(_dist_to_stream.unitScale(0, 1000).clamp(0, 1))
-
-            result = (slope_n.multiply(0.35)
-                      .add(rough_n.multiply(0.20))
-                      .add(twi_n.multiply(0.15))
-                      .add(veg_inv.multiply(0.15))
-                      .add(dist_inv.multiply(0.15))
-                      .multiply(100)
-                      .rename('value'))
-            vis = {'min': 0, 'max': 100, 'palette': ['ffffb2', 'fd8d3c', 'bd0026']}
-            _dyn_scale = 90
-
-        # 🛠️ AOI'nin gerçek veri dağılımına göre dinamik germe (bkz.
-        # _dynamic_stretch_vis() docstring'i) — TOPO ailesiyle birebir
-        # aynı mantık; sabit palet min/max'ı yalnızca germe hesaplanamazsa
-        # (ör. AOI'de veri yoksa) devreye giren bir "fallback" değeridir.
-        vis = _dynamic_stretch_vis(result, roi, _dyn_scale, vis)
-
-        # 🛠️ "Lejantı Uygula" (classBreaks) ve özel renk paleti/min/max
-        # desteği — TOPO ailesindeki mantıkla birebir aynı, böylece bu
-        # risk modelleri de kullanıcı tanımlı sınıflandırma/renk ile
-        # görüntülenebilir.
-        custom_palette = data.get('palette')
-        custom_min     = data.get('min')
-        custom_max     = data.get('max')
-
-        if class_breaks and isinstance(class_breaks, list) and len(class_breaks) > 0:
-            classified_img, classified_vis = build_classified_image(result, class_breaks)
-            if classified_img is not None:
-                display_result = classified_img
-                vis = classified_vis
-            else:
-                display_result = result
-        elif custom_palette and isinstance(custom_palette, list) and len(custom_palette):
-            display_result = result
-            vis = dict(vis)
-            vis['palette'] = [str(c).lstrip('#') for c in custom_palette]
-            if custom_min is not None:
-                vis['min'] = float(custom_min)
-            if custom_max is not None:
-                vis['max'] = float(custom_max)
-        else:
-            display_result = result
-
-        final_display = display_result.clip(roi)
-        return final_display, roi, result, vis
-
     # ── Topografik Analizler (DEM ailesi) ────────────────────────
     _TOPO_KEYS = (
         'TOPO', 'TOPO_DEM', 'TOPO_SLOPE', 'TOPO_ASPECT', 'TOPO_HILLSHADE',
@@ -1975,52 +1471,34 @@ def analyze():
         final_display, roi, result, vis = build_result_image(data)
 
         # ── İstatistik ────────────────────────────────────────────
-        # 🛠️ Her index kendi native çözünürlüğüne yakın bir scale ile
-        # sorgulanır (bkz. STATS_SCALE_BY_INDEX) — "Diğer Analizler"
-        # ailesindeki kaba çözünürlüklü veri setlerinde (SMAP, CHIRPS,
-        # Sentinel-5P, MODIS, GHSL...) sabit scale=30 kullanmak sessiz
-        # hatalara/hatalı sonuçlara yol açıyordu.
-        stats_scale = _stats_scale_for(data.get('index', 'NDVI'))
-
-        try:
-            stats = result.reduceRegion(
-                reducer     = ee.Reducer.frequencyHistogram(),
-                geometry    = roi,
-                scale       = stats_scale,
-                maxPixels   = 1e9,
-                bestEffort  = True,
-                tileScale   = 4,
-            ).getInfo()
-        except Exception as e:
-            print('❌ /api/analyze frequencyHistogram hatası (index=%s, scale=%s): %s'
-                  % (data.get('index'), stats_scale, e))
-            stats = {}
+        stats = result.reduceRegion(
+            reducer   = ee.Reducer.frequencyHistogram(),
+            geometry  = roi,
+            scale     = 30,
+            maxPixels = 1e9
+        ).getInfo()
 
         real_minmax = {}
         try:
-            # minMax + mean tek bir birleşik reducer'da hesaplanır — hem
-            # daha hızlı hem de tek bir hata noktası olur.
-            combined = result.reduceRegion(
-                reducer     = ee.Reducer.minMax().combine(
-                                  reducer2 = ee.Reducer.mean(), sharedInputs = True),
-                geometry    = roi,
-                scale       = stats_scale,
-                maxPixels   = 1e9,
-                bestEffort  = True,
-                tileScale   = 4,
+            mm = result.reduceRegion(
+                reducer   = ee.Reducer.minMax(),
+                geometry  = roi,
+                scale     = 30,
+                maxPixels = 1e9
+            ).getInfo()
+            mn = result.reduceRegion(
+                reducer   = ee.Reducer.mean(),
+                geometry  = roi,
+                scale     = 30,
+                maxPixels = 1e9
             ).getInfo()
             real_minmax = {
-                'min':  combined.get('value_min'),
-                'max':  combined.get('value_max'),
-                'mean': combined.get('value_mean'),
+                'min':  mm.get('value_min'),
+                'max':  mm.get('value_max'),
+                'mean': mn.get('value')
             }
-        except Exception as e:
-            # 🛠️ Artık hata sessizce yutulmuyor — sunucu logunda görünür
-            # olur, gerçek arıza (izin, projeksiyon, veri boşluğu vb.)
-            # kolayca teşhis edilebilir.
-            print('❌ /api/analyze realStats hatası (index=%s, scale=%s): %s'
-                  % (data.get('index'), stats_scale, e))
-            real_minmax = {}
+        except Exception:
+            pass
 
         # ── Tile URL ─────────────────────────────────────────────
         map_id   = final_display.getMapId(vis)
@@ -2933,7 +2411,7 @@ SYLVA_OWNER_EMAIL = 'sylvagis.world@gmail.com'
 
 def _send_registration_email(ad, soyad, email, meslek, ulke):
     smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'ssssssssssssssss'
+    smtp_pass = 'uezeqqsngmuwpxmu'
 
     msg = MIMEMultipart('alternative')
     msg['Subject'] = f'[SylvaGIS] Yeni Kayıt — {ad} {soyad}'
