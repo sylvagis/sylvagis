@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="tr">
 <head>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <script>
         // 🌐 Bazı UI bileşenleri (ör. sınıflandırma satırları) sayfa daha
         // yüklenirken, asıl çok dilli sözlük (SYLVA_TRANSLATIONS/applySylvaLang,
@@ -14,8 +15,7 @@
         // NOT: API_BASE her zaman (koşulsuz) set edilmelidir — t() stub bloğunun
         // dışında tanımlanmazsa, t() daha önce yüklenmiş olduğunda API_BASE
         // undefined kalır ve tüm fetch() çağrıları bozulur.
-        window.API_BASE = (typeof location !== 'undefined' && location.protocol === 'file:')
-    ? 'http://127.0.0.1:5000' : 'https://sylvagis.onrender.com';
+        window.API_BASE = '/sylva-api';
 
         if (typeof window.t !== 'function') {
             window.t = function(key, fallback) { return fallback || key; };
@@ -2013,8 +2013,8 @@ tr.class-highlight-active {
                     <div id="raw-bands-groups-container" style="display:none; flex-direction:column; gap:10px;"></div>
 
                     <div id="raw-bands-actions" style="display:none; gap:6px; align-items:center;">
-                        <button type="button" id="btn-raw-bands-select-all" class="btn-tool" style="flex:1; font-size:0.72rem; padding:6px 4px;"data-i18n="raw_select_all">☑ Tüm Bantları Seç</button>
-                        <button type="button" id="btn-raw-bands-select-none" class="btn-tool" style="flex:1; font-size:0.72rem; padding:6px 4px;"data-i18n="raw_select_none">☐ Tüm Seçimi Kaldır</button>
+                        <button type="button" id="btn-raw-bands-select-all" class="btn-tool" style="flex:1; font-size:0.72rem; padding:6px 4px;" data-i18n="raw_select_all">☑ Tüm Bantları Seç</button>
+                        <button type="button" id="btn-raw-bands-select-none" class="btn-tool" style="flex:1; font-size:0.72rem; padding:6px 4px;" data-i18n="raw_select_none">☐ Tüm Seçimi Kaldır</button>
                     </div>
 
                     <div id="raw-bands-count-info" style="display:none; font-size:0.72rem; font-weight:600; color:#1e3a8a;">0 bands selected</div>
@@ -2036,7 +2036,7 @@ tr.class-highlight-active {
                         </div>
                     </div>
 
-                    <button type="button" id="btn-raw-bands-download" class="btn-primary" style="display:none; background-color:#0f766e;" onclick="downloadRawBands()"data-i18n="raw_dl_btn">📥 Seçili Bantları İndir (ZIP)</button>
+                    <button type="button" id="btn-raw-bands-download" class="btn-primary" style="display:none; background-color:#0f766e;" onclick="downloadRawBands()" data-i18n="raw_dl_btn">📥 Seçili Bantları İndir (ZIP)</button>
 
                     <div id="raw-bands-status" style="display:none; font-size:0.78rem; border-radius:5px; padding:8px; word-break:break-word;"></div>
                 </div>
@@ -3606,48 +3606,6 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
             box.style.display = (cb.checked && box.innerHTML.trim()) ? 'block' : 'none';
         }
 
-        // 🛠️ BUG FİX ("Diğer Analizler" seçilince harita hep NDVI/varsayılan
-        // katmanı gösteriyordu):
-        // getSelectedAnalysisMeta() üç ayrı seçim grubunu ÖNCELİK SIRASIYLA
-        // kontrol ediyor: 1) Uydu Görüntüsü Galerisi radyoları, 2) İndeks
-        // checkbox'ları (NDVI, NDWI, ...), 3) sylva-module radyoları (LULC,
-        // TOPO, DEM ve "Diğer Analizler" -> OA_*). Bu üç grup ayrı ayrı
-        // "change" listener'ları ile birbirini temizliyordu (bir gruptan
-        // seçim yapılınca diğer ikisi elle sıfırlanıyordu). Sorun: bu
-        // senkronizasyon, o listener'lar sayfa ilk yüklenirken doğru sırayla
-        // ve hatasız çalıştığı sürece güvenilirdi. Herhangi bir nedenle bu
-        // senkronizasyon atlanırsa, ÖNCEDEN başka bir grupta işaretli kalmış
-        // bir eleman (ör. daha önce çalıştırılmış NDVI checkbox'ı) öncelik
-        // sırası gereği hep kazanıyor — kullanıcı "Diğer Analizler"den yeni
-        // bir seçim yapıp Çalıştır'a bassa bile getSelectedAnalysisMeta()
-        // hâlâ eski NDVI meta'sını döndürüyor, backend'e index:'NDVI' gidiyor
-        // ve harita hiç değişmiyormuş gibi görünüyordu.
-        //
-        // Çözüm: TEK bir merkezi "change" dinleyicisi document üzerinde
-        // (capture aşamasında, olay delegasyonuyla) tanımlanır. Bu üç
-        // gruptan HANGİSİNDE olursa olsun bir eleman işaretlenince, diğer
-        // İKİ grubun işaretli elemanları HER ZAMAN ve KOŞULSUZ temizlenir.
-        // Delegasyon kullanıldığı için bu artık tüm sayfa boyunca aynı anda
-        // en fazla bir analiz seçim grubunun işaretli kalmasını garanti eder.
-        document.addEventListener('change', function (e) {
-            var el = e.target;
-            if (!el || (el.type !== 'radio' && el.type !== 'checkbox')) return;
-            var isGoruntu = el.classList && el.classList.contains('uydu-goruntu-radio');
-            var isAnaliz  = el.classList && el.classList.contains('uydu-analiz-checkbox');
-            var isSylva   = el.name === 'sylva-module';
-            if (!isGoruntu && !isAnaliz && !isSylva) return;
-            if (!el.checked) return;
-            if (!isGoruntu) {
-                document.querySelectorAll('.uydu-goruntu-radio:checked').forEach(function (o) { if (o !== el) o.checked = false; });
-            }
-            if (!isAnaliz) {
-                document.querySelectorAll('.uydu-analiz-checkbox:checked').forEach(function (o) { if (o !== el) o.checked = false; });
-            }
-            if (!isSylva) {
-                document.querySelectorAll('input[name="sylva-module"]:checked').forEach(function (o) { if (o !== el) o.checked = false; });
-            }
-        }, true);
-
         (function () {
             var sensorRadios = document.querySelectorAll('.uydu-sensor-radio');
             var analizCheckboxes = document.querySelectorAll('.uydu-analiz-checkbox');
@@ -5106,25 +5064,7 @@ function selectRamp(name) {
 
             _setLegendHTML(legendBox, html);
 
-            // 🛠️ BUG FİX ("Diğer Analizler" başlık değişiyor ama lejant
-            // sayıları hep aynı kalıyordu):
-            // Bu blok SADECE dil değişimi sırasında (window._sylvaLangChanging)
-            // önceki GERÇEK AOI istatistiklerinin (applyRealStatsToLegendUI
-            // tarafından yazılmış min/max) çeviri yüzünden kaybolmamasını
-            // sağlamak için tasarlanmıştı — yukarıdaki yorumda da öyle
-            // açıklanıyor. Ama koşul hiç kontrol edilmiyordu: renderAnalysisLegend()
-            // her çağrıldığında (yani KULLANICI FARKLI BİR ANALİZ SEÇİP
-            // ÇALIŞTIRDIĞINDA da) az önce html içine yeni yazılan doğru
-            // meta.legendMin/legendMax (o analize özgü statik varsayılan
-            // aralık, ör. NO2 için "0"/"0.0002") hemen üstüne, bir ÖNCEKİ
-            // analizden kalma eski sayılarla EZİLİYORDU. Sonuç: başlık her
-            // seferinde doğru güncelleniyordu (html'in geri kalanı yeniden
-            // kuruluyor) ama min/max etiketleri hep ilk gerçek AOI
-            // istatistiği hesaplanan analizin sayılarında donuk kalıyordu.
-            // Artık bu restore SADECE gerçekten dil değişimi sırasında çalışır;
-            // yeni bir analiz seçildiğinde legend-min/max her zaman o analizin
-            // kendi (statik ya da backend'den gelen gerçek) değerlerini gösterir.
-            if (window._sylvaLangChanging && _ral_savedMin !== null && _ral_savedMin !== '') {
+            if (_ral_savedMin !== null && _ral_savedMin !== '') {
                 var _ral_newMin = legendBox.querySelector('.legend-min-label');
                 var _ral_newMax = legendBox.querySelector('.legend-max-label');
                 if (_ral_newMin) _ral_newMin.textContent = _ral_savedMin;
