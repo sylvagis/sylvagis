@@ -41,9 +41,19 @@ GEE_SERVICE_ACCOUNT_KEY   = os.environ.get('GEE_SERVICE_ACCOUNT_KEY', '')
 
 try:
     if GEE_SERVICE_ACCOUNT_EMAIL and GEE_SERVICE_ACCOUNT_KEY:
-        credentials = ee.ServiceAccountCredentials(
-            GEE_SERVICE_ACCOUNT_EMAIL, GEE_SERVICE_ACCOUNT_KEY
-        )
+        # GEE_SERVICE_ACCOUNT_KEY bir dosya yolu OLABİLİR (eski VM kurulumu)
+        # ya da doğrudan JSON key içeriği OLABİLİR (Replit secrets — dosya
+        # sistemine yazmadan ortam değişkeni olarak saklanır). İkisini de
+        # destekle: JSON gibi görünüyorsa key_data, değilse key_file kullan.
+        _key_value = GEE_SERVICE_ACCOUNT_KEY.strip()
+        if _key_value.startswith('{'):
+            credentials = ee.ServiceAccountCredentials(
+                GEE_SERVICE_ACCOUNT_EMAIL, key_data=_key_value
+            )
+        else:
+            credentials = ee.ServiceAccountCredentials(
+                GEE_SERVICE_ACCOUNT_EMAIL, key_file=_key_value
+            )
         ee.Initialize(credentials, project='sylvagis')
         print('✅ GEE Service Account ile başlatıldı:', GEE_SERVICE_ACCOUNT_EMAIL)
     else:
@@ -138,7 +148,7 @@ LULC_FAMILY_INDICES = (
 )
 
 
-@app.route('/api/ping', methods=['GET'])
+@app.route('/sylva-api/api/ping', methods=['GET'])
 def ping():
     return jsonify({'ok': True, 'version': 'zip-export-v2-tiling'})
 
@@ -159,7 +169,7 @@ def ping():
 CONTACT_RECEIVER_EMAIL = 'sylvagis.world@gmail.com'
 
 
-@app.route('/api/contact', methods=['POST'])
+@app.route('/sylva-api/api/contact', methods=['POST'])
 def send_contact_message():
     import smtplib
     from email.mime.text import MIMEText
@@ -1931,7 +1941,7 @@ def _rgb_scene_metadata(data, roi, image, ds):
     return meta
 
 
-@app.route('/api/analyze', methods=['POST'])
+@app.route('/sylva-api/api/analyze', methods=['POST'])
 def analyze():
     global _last_analyze_params
     try:
@@ -2081,7 +2091,7 @@ def analyze():
         return jsonify({'success': False, 'error': str(e)})
 
 
-@app.route('/api/highlight-class', methods=['POST'])
+@app.route('/sylva-api/api/highlight-class', methods=['POST'])
 def highlight_class():
     """
     Lejant/grafik/tablodaki bir sınıfa tıklandığında, o sınıfa ait alanları
@@ -2119,7 +2129,7 @@ def highlight_class():
         return jsonify({'success': False, 'error': str(e)})
 
 
-@app.route('/api/download-geotiff', methods=['POST'])
+@app.route('/sylva-api/api/download-geotiff', methods=['POST'])
 def download_geotiff():
     """
     Son analizin GeoTIFF dosyasını sunucu üzerinden indirir ve doğrudan
@@ -2293,7 +2303,7 @@ def download_geotiff():
         return jsonify({'success': False, 'error': err})
 
 
-@app.route('/api/raw-bands', methods=['POST'])
+@app.route('/sylva-api/api/raw-bands', methods=['POST'])
 def raw_bands():
     """
     📡 Ham Veri (Bantlar) — seçilen uydu görüntüsü veri setine ait TÜM
@@ -2603,7 +2613,7 @@ def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata
             shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-@app.route('/api/download-raw-bands', methods=['POST'])
+@app.route('/sylva-api/api/download-raw-bands', methods=['POST'])
 def download_raw_bands():
     """
     📡 Ham Veri (Bantlar) — Uydu Görüntüsü Galerisi'nden seçilmiş sahnenin
@@ -2789,7 +2799,7 @@ def download_raw_bands():
         return jsonify({'success': False, 'error': err})
 
 
-@app.route('/api/rgb-scenes', methods=['POST'])
+@app.route('/sylva-api/api/rgb-scenes', methods=['POST'])
 def rgb_scenes():
     """
     🛰️ Uydu Görüntüsü Galerisi — AOI/tarih/bulutluluk kriterlerine uyan
@@ -2867,7 +2877,7 @@ def rgb_scenes():
         return jsonify({'success': False, 'error': str(e)})
 
 
-@app.route('/api/get-scenes', methods=['POST'])
+@app.route('/sylva-api/api/get-scenes', methods=['POST'])
 def get_scenes():
     try:
         data       = request.json
@@ -2984,7 +2994,7 @@ def _send_registration_email(ad, soyad, email, meslek, ulke):
         raise
 
 
-@app.route('/api/register', methods=['POST'])
+@app.route('/sylva-api/api/register', methods=['POST'])
 def register_user():
     try:
         data   = request.get_json(silent=True) or {}
