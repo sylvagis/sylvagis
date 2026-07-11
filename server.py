@@ -188,8 +188,10 @@ def send_contact_message():
     if not email_re.match(email):
         return jsonify({'success': False, 'error': 'Geçersiz e-posta adresi.'}), 400
 
-    smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'ssssssssssssssss'
+    smtp_user = os.environ.get('SYLVA_SMTP_USER', CONTACT_RECEIVER_EMAIL)
+    smtp_pass = os.environ.get('SYLVA_SMTP_PASS', '')
+    if not smtp_pass:
+        return jsonify({'success': False, 'error': 'SYLVA_SMTP_PASS ortam değişkeni tanımlı değil.'}), 500
 
     body = (
         'SylvaGIS İletişim Formu üzerinden yeni bir mesaj gönderildi.\n\n'
@@ -2942,8 +2944,10 @@ from email.mime.multipart import MIMEMultipart
 SYLVA_OWNER_EMAIL = 'sylvagis.world@gmail.com'
 
 def _send_registration_email(ad, soyad, email, meslek, ulke):
-    smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'ssssssssssssssss'
+    smtp_user = os.environ.get('SYLVA_SMTP_USER', SYLVA_OWNER_EMAIL)
+    smtp_pass = os.environ.get('SYLVA_SMTP_PASS', '')
+    if not smtp_pass:
+        raise RuntimeError('SYLVA_SMTP_PASS ortam değişkeni tanımlı değil.')
 
     msg = MIMEMultipart('alternative')
     msg['Subject'] = f'[SylvaGIS] Yeni Kayıt — {ad} {soyad}'
