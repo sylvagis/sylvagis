@@ -19,6 +19,30 @@
             ? 'http://localhost:5000/sylva-api'
             : '/sylva-api';
 
+        // 🛠️ BUG FİX: Tüm fetch(...).then(r => r.json()) çağrıları, sunucudan
+        // JSON yerine bir HTML hata sayfası döndüğünde (örn. yanlış URL/port,
+        // 404, 500, ya da bir proxy/hosting'in kendi hata sayfası) doğrudan
+        // r.json() çağırıyordu. Bu durumda tarayıcı HTML'i JSON gibi parse
+        // etmeye çalışıp "Unexpected token 'T', "The page c"... is not valid
+        // JSON" gibi anlaşılmaz bir hata fırlatıyordu — kullanıcı gerçek
+        // nedeni (yanlış API_BASE, server çalışmıyor, yanlış port/host vs.)
+        // hiç göremiyordu. window.parseJsonResponse(r) artık önce içerik
+        // tipini/HTTP durumunu kontrol ediyor; JSON değilse anlaşılır bir
+        // hata (URL + HTTP status + yanıtın ilk parçası) fırlatıyor.
+        window.parseJsonResponse = function (r) {
+            var ct = r.headers.get('content-type') || '';
+            if (ct.indexOf('application/json') === -1) {
+                return r.text().then(function (bodyText) {
+                    var snippet = (bodyText || '').slice(0, 120).replace(/\s+/g, ' ').trim();
+                    throw new Error(
+                        'API ' + r.url + ' JSON döndürmedi (HTTP ' + r.status + '). ' +
+                        'Muhtemelen bu adres Flask sunucusuna ulaşmıyor. Yanıt: "' + snippet + '..."'
+                    );
+                });
+            }
+            return r.json();
+        };
+
         if (typeof window.t !== 'function') {
             window.t = function(key, fallback) { return fallback || key; };
         }
@@ -4328,7 +4352,7 @@ function selectRamp(name) {
                     max:       maxVal
                 })
             })
-            .then(function(r) { return r.json(); })
+            .then(window.parseJsonResponse)
             .then(function(data) {
                 if (!data.success) { hideSylvaLoading(); return; }
                 if (_geeLayer) { map.removeLayer(_geeLayer); _geeLayer = null; }
@@ -4766,7 +4790,7 @@ function selectRamp(name) {
                     classBreaks: classBreaks
                 })
             })
-            .then(function(r) { return r.json(); })
+            .then(window.parseJsonResponse)
             .then(function(data) {
                 if (!data.success) { hideSylvaLoading(); return; }
                 if (_geeLayer) { map.removeLayer(_geeLayer); _geeLayer = null; }
@@ -5519,7 +5543,7 @@ function selectRamp(name) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(analyzePayload)
             })
-            .then(function(r) { return r.json(); })
+            .then(window.parseJsonResponse)
             .then(function(data) {
                 if (runBtn) { runBtn.disabled = false; runBtn.textContent = t('run_analysis'); }
                 if (loadingOverlay) loadingOverlay.classList.remove('active');
@@ -6499,7 +6523,7 @@ function selectRamp(name) {
                     cloudCover: cloudCover || 20
                 })
             })
-            .then(function(r) { return r.json(); })
+            .then(window.parseJsonResponse)
             .then(function(data) {
                 if (!data.success || !data.scenes || !data.scenes.length) {
                     galleryEl.innerHTML = '';
@@ -6579,7 +6603,7 @@ function selectRamp(name) {
                     })()
                 })
             })
-            .then(function(r) { return r.json(); })
+            .then(window.parseJsonResponse)
             .then(function(data) {
                 if (!data.success) { hideSylvaLoading(); showNoDataModal(_TOAST_NO_DATA_MSG); return; }
                 // Geciken yanıt: kullanıcı yeni bir analiz başlattıysa bu sahne sonucunu yoksay
@@ -6690,7 +6714,7 @@ function selectRamp(name) {
                     maxCloud:  cloudSliderEl ? parseInt(cloudSliderEl.value, 10) : 100
                 })
             })
-            .then(function(r) { return r.json(); })
+            .then(window.parseJsonResponse)
             .then(function(data) {
                 if (runBtn) { runBtn.disabled = false; runBtn.textContent = t('run_analysis'); }
                 hideSylvaLoading();
@@ -6825,7 +6849,7 @@ function selectRamp(name) {
                     sceneId:   sceneId
                 })
             })
-            .then(function(r) { return r.json(); })
+            .then(window.parseJsonResponse)
             .then(function(data) {
                 if (!data.success) { hideSylvaLoading(); showNoDataModal(_TOAST_NO_DATA_MSG); return; }
 
@@ -7688,7 +7712,7 @@ function selectRamp(name) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             })
-            .then(function (r) { return r.json(); })
+            .then(window.parseJsonResponse)
             .then(function (data) {
                 // Kullanıcı vurgulama isteği yanıtı gelmeden önce seçimi
                 // değiştirmiş/kaldırmışsa (idx artık eski), sonucu uygulama.
@@ -12111,7 +12135,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 body: JSON.stringify(formData)
             });
 
-            var result = await response.json();
+            var result = await window.parseJsonResponse(response);
 
             if (result.success) {
                 closeContactDialog();
@@ -12306,7 +12330,7 @@ function fetchRawBandsCatalog(datasetKey) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ dataset: datasetKey })
     })
-    .then(function(r) { return r.json(); })
+    .then(window.parseJsonResponse)
     .then(function(data) {
         if (!data.success) {
             if (container) container.innerHTML = '<div style="font-size:0.72rem;color:#991b1b;">❌ ' + escapeHtml(data.error || 'Bant kataloğu alınamadı.') + '</div>';
@@ -23250,4 +23274,3 @@ document.addEventListener('DOMContentLoaded',function(){
 
 </body>
 </html>
-
