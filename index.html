@@ -5106,7 +5106,25 @@ function selectRamp(name) {
 
             _setLegendHTML(legendBox, html);
 
-            if (_ral_savedMin !== null && _ral_savedMin !== '') {
+            // 🛠️ BUG FİX ("Diğer Analizler" başlık değişiyor ama lejant
+            // sayıları hep aynı kalıyordu):
+            // Bu blok SADECE dil değişimi sırasında (window._sylvaLangChanging)
+            // önceki GERÇEK AOI istatistiklerinin (applyRealStatsToLegendUI
+            // tarafından yazılmış min/max) çeviri yüzünden kaybolmamasını
+            // sağlamak için tasarlanmıştı — yukarıdaki yorumda da öyle
+            // açıklanıyor. Ama koşul hiç kontrol edilmiyordu: renderAnalysisLegend()
+            // her çağrıldığında (yani KULLANICI FARKLI BİR ANALİZ SEÇİP
+            // ÇALIŞTIRDIĞINDA da) az önce html içine yeni yazılan doğru
+            // meta.legendMin/legendMax (o analize özgü statik varsayılan
+            // aralık, ör. NO2 için "0"/"0.0002") hemen üstüne, bir ÖNCEKİ
+            // analizden kalma eski sayılarla EZİLİYORDU. Sonuç: başlık her
+            // seferinde doğru güncelleniyordu (html'in geri kalanı yeniden
+            // kuruluyor) ama min/max etiketleri hep ilk gerçek AOI
+            // istatistiği hesaplanan analizin sayılarında donuk kalıyordu.
+            // Artık bu restore SADECE gerçekten dil değişimi sırasında çalışır;
+            // yeni bir analiz seçildiğinde legend-min/max her zaman o analizin
+            // kendi (statik ya da backend'den gelen gerçek) değerlerini gösterir.
+            if (window._sylvaLangChanging && _ral_savedMin !== null && _ral_savedMin !== '') {
                 var _ral_newMin = legendBox.querySelector('.legend-min-label');
                 var _ral_newMax = legendBox.querySelector('.legend-max-label');
                 if (_ral_newMin) _ral_newMin.textContent = _ral_savedMin;
