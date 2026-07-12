@@ -1345,6 +1345,35 @@ def build_result_image(data):
             result  = vci.rename('value')
         vis = {'min': 0, 'max': 1, 'palette': ['black', 'white']}
 
+    elif index == 'YRI':
+        # 🔥 Yangın Risk İndeksi (Fire Risk Index) — kompozit bir skor.
+        # Üç bileşeni birleştirir:
+        #   1) Kuraklık/nem stresi  -> NDMI'nin tersi (düşük nem = yüksek risk)
+        #   2) Yakıt yükü           -> NDVI (yoğun/kuru bitki örtüsü = yanıcı madde)
+        #   3) Isı stresi           -> LST (varsa; sıcak yüzey = yüksek risk)
+        # Sonuç 0 (düşük risk) ile 1 (yüksek risk) arasında normalize edilir.
+        ndvi = image.normalizedDifference([b['nir'], b['red']])
+        fuel = ndvi.add(1).divide(2).clamp(0, 1)              # 0-1 (yoğun bitki örtüsü)
+
+        ndmi     = image.normalizedDifference([b['nir'], b['swir']])
+        dryness  = ee.Image(1).subtract(
+            ndmi.add(1).divide(2)
+        ).clamp(0, 1)                                          # 0-1 (düşük nem = yüksek değer)
+
+        if b['thermal']:
+            thermal = image.select(b['thermal'])
+            lst_c   = thermal.multiply(0.00341802).add(149.0).subtract(273.15)
+            heat    = lst_c.subtract(10).divide(40).clamp(0, 1)  # 10-50°C → 0-1 (sıcak = yüksek risk)
+            result  = (dryness.multiply(0.4)
+                       .add(fuel.multiply(0.3))
+                       .add(heat.multiply(0.3))
+                       .rename('value'))
+        else:
+            result = (dryness.multiply(0.5)
+                      .add(fuel.multiply(0.5))
+                      .rename('value'))
+        vis = {'min': 0, 'max': 1, 'palette': ['black', 'white']}
+
     else:
         result = image.normalizedDifference([b['nir'], b['red']]).rename('value')
         vis    = {'min': -0.2, 'max': 0.9, 'palette': ['black', 'white']}
