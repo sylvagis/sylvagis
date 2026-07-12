@@ -1345,7 +1345,7 @@ def build_result_image(data):
             result  = vci.rename('value')
         vis = {'min': 0, 'max': 1, 'palette': ['black', 'white']}
 
-    elif index == 'YRI':
+    elif index == 'FRI':
         # 🔥 Yangın Risk İndeksi (Fire Risk Index) — kompozit bir skor.
         # Üç bileşeni birleştirir:
         #   1) Kuraklık/nem stresi  -> NDMI'nin tersi (düşük nem = yüksek risk)
