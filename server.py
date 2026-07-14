@@ -1010,13 +1010,32 @@ def build_result_image(data, for_export=False):
         import math as _math
 
         # ── DEM kaynağı seç ──────────────────────────────────────
+        # 🛠️ BUG FİX (NoData kareler / boş piksel sorunu):
+        # ALOS ve Copernicus DEM'leri parçalı (tile-based) ImageCollection'lardır.
+        # filterBounds(roi).mosaic() çağrısı, AOI'yi kapsayan tile'ları birleştirir;
+        # ancak tile sınırlarında veya kapsama açığı olan bölgelerde (ör. Kuzey kutbu
+        # yakını, bazı adalarda Copernicus eksik kareler bırakır) mozaikte NoData
+        # pikseller kalabilir. Bu pikseller eğim (slope), TPI, eğrilik vb. türev
+        # analizlerde zincir boyunca boşluk olarak yayılır — haritada "kare kare
+        # boşluk" ya da istatistiğin None dönmesi bu yüzden oluşur.
+        #
+        # ÇÖZÜM: mosaic() sonrası .unmask(srtm_fallback) ile açıkta kalan her
+        # NoData pikseli SRTM verisiyle doldurulur. SRTM global kapsama sahiptir
+        # (60°G–60°K) ve bu tür boşlukları kapatmak için en sağlıklı alternatiftir.
+        # NASADEM zaten tek görüntü olduğu için boşluk sorunu yaşamaz.
+        _srtm_fallback = ee.Image('USGS/SRTMGL1_003').select('elevation')
+
         dem_source = data.get('demSource', 'SRTM')
         if dem_source == 'ALOS':
             dem = (ee.ImageCollection('JAXA/ALOS/AW3D30/V3_2')
                    .filterBounds(roi).mosaic().select('DSM').rename('elevation'))
+            # Tile sınırlarındaki / kapsama dışı NoData pikselleri SRTM ile doldur
+            dem = dem.unmask(_srtm_fallback)
         elif dem_source == 'Copernicus':
             dem = (ee.ImageCollection('COPERNICUS/DEM/GLO30')
                    .filterBounds(roi).mosaic().select('DEM').rename('elevation'))
+            # Tile sınırlarındaki / kapsama dışı NoData pikselleri SRTM ile doldur
+            dem = dem.unmask(_srtm_fallback)
         elif dem_source == 'NASADEM':
             dem = ee.Image('NASA/NASADEM_HGT/001').select('elevation')
         else:  # SRTM (varsayılan)
@@ -1605,12 +1624,21 @@ def analyze():
         final_display, roi, result, vis = build_result_image(data)
 
         # ── İstatistik ────────────────────────────────────────────
+        # 🛠️ BUG FİX (NoData piksel / büyük AOI istatistik sorunu):
+        # bestEffort=True eklendi. Olmadan: AOI büyük olduğunda veya bazı
+        # piksellerde veri olmadığında (örn. eğim indirildiğinde bazı kareler
+        # boş çıkıyordu) maxPixels limiti aşılınca GEE hata fırlatır ve stats
+        # tamamen None döner. bestEffort=True ile GEE, gerekirse çözünürlüğü
+        # otomatik düşürür ama hesabı DAIMA tamamlar. NoData (maskeli) pikseller
+        # GEE'nin reduceRegion'unda zaten otomatik olarak dışlanır; yani
+        # istatistikler her zaman yalnızca geçerli/dolu piksellerden hesaplanır.
         stats = _call_with_retry(
             lambda: result.reduceRegion(
-                reducer   = ee.Reducer.frequencyHistogram(),
-                geometry  = roi,
-                scale     = 30,
-                maxPixels = 1e9
+                reducer    = ee.Reducer.frequencyHistogram(),
+                geometry   = roi,
+                scale      = 30,
+                maxPixels  = 1e9,
+                bestEffort = True,
             ).getInfo()
         )
 
@@ -1627,10 +1655,11 @@ def analyze():
             )
             mm = _call_with_retry(
                 lambda: result.reduceRegion(
-                    reducer   = combined_reducer,
-                    geometry  = roi,
-                    scale     = 30,
-                    maxPixels = 1e9
+                    reducer    = combined_reducer,
+                    geometry   = roi,
+                    scale      = 30,
+                    maxPixels  = 1e9,
+                    bestEffort = True,
                 ).getInfo()
             )
             real_minmax = {
