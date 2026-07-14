@@ -11669,7 +11669,7 @@ function selectRamp(name) {
         <div id="geotiff-status" style="display:none; font-size:0.82rem; color:#1e3a8a; margin-bottom:12px; padding:8px; background:#eff6ff; border-radius:5px; border:1px solid #bfdbfe;"></div>
 
         <div style="display:flex; gap:8px; justify-content:flex-end;">
-            <button id="btn-geotiff-cancel" onclick="document.getElementById('geotiff-download-modal').style.display='none'"
+            <button id="btn-geotiff-cancel" onclick="cancelGeoTiffDownload()"
                 style="padding:8px 18px; border:1px solid #cbd5e1; border-radius:5px; cursor:pointer; background:#f1f5f9; font-size:0.85rem; color:#475569;" data-i18n="btn_cancel">
                 İptal
             </button>
@@ -12371,6 +12371,16 @@ function downloadRawBands() {
 
 // ===== GeoTIFF İNDİRME FONKSİYONLARI =====
 
+// 🛠️ BUG FİX (iptal butonu aktif değildi / hiçbir şey yapmıyordu):
+// İndirme sırasında sunucuya giden fetch() isteğini gerçekten durdurmak
+// için bir AbortController referansı burada tutulur. Önceden "İptal"
+// butonu yalnızca pencereyi gizliyordu — arka planda indirme isteği
+// SESSİZCE devam ediyordu (kullanıcı fark etmese de sunucu kaynak
+// tüketmeye devam ediyordu ve pencere yeniden açıldığında eski istek
+// hâlâ sürüyor olabiliyordu). Şimdi cancelGeoTiffDownload() bu
+// controller'ı abort() ederek isteği GERÇEKTEN sonlandırıyor.
+var _geotiffAbortController = null;
+
 function openGeoTiffDownloadDialog() {
     var modal = document.getElementById('geotiff-download-modal');
     var status = document.getElementById('geotiff-status');
@@ -12378,6 +12388,9 @@ function openGeoTiffDownloadDialog() {
     status.style.display = 'none';
     status.textContent = '';
     if (btn) { btn.disabled = false; btn.textContent = t('gtiff_btn_download'); }
+    // Pencere her açıldığında olası eski/kalıntı bir AbortController referansı
+    // temizlenir — yeni indirme her zaman TEMİZ bir controller ile başlar.
+    _geotiffAbortController = null;
     // Pencere her açıldığında, alt kısımdaki yanıp sönen "SylvaGIS"
     // göstergesi kapalı başlangıç durumuna sıfırlanır.
     var dialogBox = document.getElementById('geotiff-dialog-box');
@@ -12453,8 +12466,16 @@ function executeGeoTiffDownload() {
     status.innerHTML     = '⏳ ' + t('gtiff_status_wait') +
         '<span style="font-size:0.78rem;color:#64748b;display:block;margin-top:4px;">' + t('gtiff_status_wait_sub') + '</span>';
     if (btn) { btn.disabled = true; btn.textContent = t('gtiff_btn_preparing'); }
+    // 🛠️ BUG FİX: "İptal" butonu artık indirme SIRASINDA da aktif/tıklanabilir
+    // bırakılıyor — kullanıcının indirmeyi gerçekten durdurabilmesi için bu
+    // gerekli. (Önceden burada devre dışı bırakılıyordu, bu yüzden buton
+    // görünüşte "hiçbir işe yaramıyor" gibi duruyordu.)
     var cancelBtn = document.getElementById('btn-geotiff-cancel');
-    if (cancelBtn) cancelBtn.disabled = true;
+    if (cancelBtn) cancelBtn.disabled = false;
+
+    // Bu isteğe özel yeni bir AbortController — cancelGeoTiffDownload()
+    // çağrıldığında fetch() isteği gerçekten iptal edilebilsin diye.
+    _geotiffAbortController = new AbortController();
 
     var _dlClipMode = (document.getElementById('viewMode') || {}).value || 'clip';
 
@@ -12469,6 +12490,7 @@ function executeGeoTiffDownload() {
     if (_dlClipMode === 'clip' && !_gtiffRoi) {
         if (btn) { btn.disabled = false; btn.textContent = t('gtiff_btn_download'); }
         if (cancelBtn) cancelBtn.disabled = false;
+        _geotiffAbortController = null;
         status.style.color   = '#991b1b';
         status.style.background = '#fee2e2';
         status.style.borderColor = '#fca5a5';
@@ -12485,6 +12507,8 @@ function executeGeoTiffDownload() {
     fetch(API_BASE + '/api/download-geotiff', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        // İptal butonuna basılınca bu isteğin GERÇEKTEN durdurulabilmesi için:
+        signal: _geotiffAbortController.signal,
         body: JSON.stringify({
             filename: filename,
             scale: scale,
@@ -12526,6 +12550,8 @@ function executeGeoTiffDownload() {
         setTimeout(function() { URL.revokeObjectURL(blobUrl); }, 4000);
 
         if (btn) { btn.disabled = false; btn.textContent = t('gtiff_btn_download'); }
+        // İstek tamamlandı — artık iptal edilecek aktif bir istek yok.
+        _geotiffAbortController = null;
 
         // İndirme tamamlandı: yanıp sönen animasyonu durdur, pencereyi otomatik
         // kapat ve kullanıcıyı doğrudan ana harita ekranına döndür — kullanıcı
@@ -12544,6 +12570,15 @@ function executeGeoTiffDownload() {
         status.innerHTML = '';
     })
     .catch(function(err) {
+        // 🛠️ BUG FİX: kullanıcı "İptal" butonuna bastığında fetch() isteği
+        // AbortError ile reddedilir — bu durumda bir "hata" göstermek yanlış
+        // olur; cancelGeoTiffDownload() zaten arayüzü (pencere, durum mesajı,
+        // buton metni) sıfırlamış olduğundan burada sessizce çıkıyoruz.
+        if (err && err.name === 'AbortError') {
+            _geotiffAbortController = null;
+            return;
+        }
+        _geotiffAbortController = null;
         status.style.color      = '#991b1b';
         status.style.background = '#fee2e2';
         status.style.borderColor = '#fca5a5';
@@ -12557,6 +12592,30 @@ function executeGeoTiffDownload() {
         var cancelBtnErr = document.getElementById('btn-geotiff-cancel');
         if (cancelBtnErr) cancelBtnErr.disabled = false;
     });
+}
+
+function cancelGeoTiffDownload() {
+    // 🛠️ BUG FİX (İptal butonu şimdiye kadar hiçbir şey yapmıyordu / aktif
+    // değildi): İndirme sürüyorsa, aktif AbortController üzerinden fetch()
+    // isteğini GERÇEKTEN durdur — sunucuya giden istek anında iptal edilir
+    // (sunucu tarafında da bağlantı kesintisi olarak algılanır). İndirme
+    // sürmüyorsa (controller yoksa) yalnızca pencereyi kapatır.
+    if (_geotiffAbortController) {
+        _geotiffAbortController.abort();
+        _geotiffAbortController = null;
+    }
+
+    var status     = document.getElementById('geotiff-status');
+    var btn        = document.getElementById('btn-geotiff-execute');
+    var dialogBox  = document.getElementById('geotiff-dialog-box');
+    var modal      = document.getElementById('geotiff-download-modal');
+    var cancelBtn  = document.getElementById('btn-geotiff-cancel');
+
+    if (dialogBox) dialogBox.classList.remove('downloading');
+    if (btn) { btn.disabled = false; btn.textContent = t('gtiff_btn_download'); }
+    if (cancelBtn) cancelBtn.disabled = false;
+    if (status) { status.style.display = 'none'; status.innerHTML = ''; }
+    if (modal) modal.style.display = 'none';
 }
 
 
