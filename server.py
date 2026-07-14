@@ -4,6 +4,7 @@ import io
 import os
 import math
 import shutil
+import signal
 import zipfile
 import tempfile
 import datetime
@@ -119,7 +120,7 @@ def send_contact_message():
         return jsonify({'success': False, 'error': 'Geçersiz e-posta adresi.'}), 400
 
     smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'nvapfudkaieuvvga'
+    smtp_pass = 'aaaaaaaaaaaaaaaa'
 
     body = (
         'SylvaGIS İletişim Formu üzerinden yeni bir mesaj gönderildi.\n\n'
@@ -2444,7 +2445,7 @@ SYLVA_OWNER_EMAIL = 'sylvagis.world@gmail.com'
 
 def _send_registration_email(ad, soyad, email, meslek, ulke):
     smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'nvapfudkaieuvvga'
+    smtp_pass = 'aaaaaaaaaaaaaaaa'
 
     msg = MIMEMultipart('alternative')
     msg['Subject'] = f'[SylvaGIS] Yeni Kayıt — {ad} {soyad}'
@@ -2725,6 +2726,16 @@ def _build_shapefile_zip(polygon_list, name, file_crs):
 # Frontend bu URL'yi window.open() ile yeni sekmede açar → indirir.
 # ════════════════════════════════════════════════════════════════
 
+class _VectorTimeoutError(Exception):
+    """reduceToVectors()/getDownloadURL() çok uzun sürdüğünde kontrollü olarak
+    devreye giren zaman aşımı sinyali (bkz. download_vector içindeki SIGALRM)."""
+    pass
+
+
+def _vector_timeout_handler(signum, frame):
+    raise _VectorTimeoutError('vector-timeout')
+
+
 @app.route('/api/download-vector', methods=['POST'])
 def download_vector():
     """
@@ -2737,13 +2748,42 @@ def download_vector():
 
     Desteklenen formatlar: shp (ZIP), kml, kmz
     Ölçek: Sentinel-2 → 10 m  |  Landsat → 30 m  (uydu tipine göre otomatik)
+
+    🛠️ BUG FİX ("🗂️ Veriyi Vektör İndir" → tarayıcıda "Failed to fetch"):
+    NDVI/EVI gibi SÜREKLİ (continuous) indekslerde komşu pikseller sınıf
+    eşiğini sık sık geçer; bu da reduceToVectors() çağrısında binlerce
+    "tuz-biber" (tek piksellik) mikro poligon üretir. FeatureCollection.
+    getDownloadURL() -- Image.getDownloadURL()'den farklı olarak -- bu
+    poligonları İSTEK SIRASINDA (senkron) hesaplar; bu da dakikalarca
+    sürebilir. Bu süre gunicorn'un worker zaman aşımını (ör. 120 sn) aşarsa
+    worker sinyalle öldürülür, tarayıcıya HİÇBİR yanıt gönderilmez ve
+    fetch() düz bir bağlantı kopması olarak "Failed to fetch" gösterir —
+    hatanın gerçek nedeni (zaman aşımı) kullanıcıya hiç yansımaz.
+    Çözüm iki parçalıdır:
+      a) Vektörleştirmeden önce 3x3 çoğunluk (mod) filtresiyle gürültü
+         (salt-and-pepper) temizlenir → poligon sayısı ve süre ciddi
+         şekilde azalır. Bu SADECE vektör çıktısını etkiler; raster
+         (GeoTIFF) indirmesi bu adımı hiç görmez ve öncekiyle birebir
+         aynı ham/sınıflandırılmamış piksel değerlerini indirmeye devam
+         eder (kullanıcı isteği: raster davranışı değişmesin).
+      b) SIGALRM ile yumuşak bir sunucu-içi zaman aşımı eklenir; worker
+         sert şekilde öldürülmeden ÖNCE istek burada iptal edilir ve
+         tarayıcıya "Failed to fetch" yerine anlaşılır, eyleme geçirilebilir
+         bir JSON hata mesajı döner (AOI'yi küçültün / sınıf sayısını
+         azaltın önerisiyle).
     """
+    old_alarm_handler = None
     try:
         req          = request.json or {}
         fmt          = req.get('format', 'shp').lower()
         filename     = (req.get('filename') or 'SylvaGIS_Vektor').strip() or 'SylvaGIS_Vektor'
         clip_mode    = req.get('clipMode', 'clip')
         fresh_roi    = req.get('roi')
+        # ÖNEMLİ: classBreaks HER ZAMAN istekten (frontend'in o an ekranda
+        # gösterdiği sınıflandırma satırlarından) öncelikli okunur; böylece
+        # kullanıcı NDVI'yi kendi belirlediği aralıklara göre sınıflandırıp
+        # "Veriyi Vektör İndir" dediğinde vektör TAM OLARAK o sınıflandırmaya
+        # göre üretilir (sunucudaki eski/son analiz sınıflandırması değil).
         class_breaks = req.get('classBreaks') or _last_analyze_params.get('classBreaks')
 
         if not (_last_analyze_params.get('roi') or fresh_roi):
@@ -2757,23 +2797,43 @@ def download_vector():
         if fresh_roi:  data['roi']      = fresh_roi
         if clip_mode:  data['clipMode'] = clip_mode
 
+        # Sert gunicorn zaman aşımından (ör. 120 sn) ÖNCE kontrollü iptal.
+        # Yalnızca Unix ana thread'inde desteklenir (Windows'ta SIGALRM yok);
+        # yoksa sessizce atlanır ve eski davranış (gunicorn'un kendi zaman
+        # aşımı) geçerli olur.
+        if hasattr(signal, 'SIGALRM'):
+            old_alarm_handler = signal.signal(signal.SIGALRM, _vector_timeout_handler)
+            signal.alarm(100)
+
         # Uydu tipine göre ölçek: Sentinel-2 → 10 m, Landsat → 30 m
         satellite = data.get('satellite', '')
         scale     = 10 if satellite.startswith('s2') else 30
 
         safe_name = re.sub(r'[^\w\-]', '_', filename)[:60]
 
-        # 1. Sınıflandırılmış GEE görüntüsü
+        # 1. Sınıflandırılmış GEE görüntüsü (raster indirmeyle BİREBİR aynı
+        #    sınıflandırma mantığı — bkz. build_classified_image; kullanıcının
+        #    UI'da ayarladığı class_breaks burada da kullanılır).
         _, roi_geom, result, _ = build_result_image(data)
         classified, _          = build_classified_image(result, class_breaks)
         if classified is None:
             return jsonify({'success': False,
                             'error': 'Sınıflandırma görüntüsü oluşturulamadı. Sınıf aralıklarını kontrol edin.'})
 
+        # 1b. Vektörleştirmeden ÖNCE gürültü temizliği (SADECE vektör çıktısı
+        #     için — raster/GeoTIFF indirmesi hâlâ `classified`/ham sonucu
+        #     bu adımdan geçirmeden kullanır, davranışı önceki gibi kalır).
+        #     NDVI gibi sürekli indekslerde komşu pikseller sınıf eşiğini sık
+        #     sık geçtiği için reduceToVectors binlerce tek-piksellik mikro
+        #     poligon üretebilir; 3x3 çoğunluk (mod) filtresi bu "tuz-biber"
+        #     gürültüyü gerçek sınıf sınırlarını bozmadan temizler ve
+        #     vektörleştirmeyi hem hızlandırır hem de zaman aşımını önler.
+        classified_for_vector = classified.focalMode(1, 'square', 'pixels').updateMask(classified.mask())
+
         # 2. Raster → Vektör  (GEE sunucusunda, bant pikselleri poligona indirgenir)
         #    labelProperty: her poligona "hangi sınıf kodu" geldiğini yazar (1, 2, 3 …)
         #    bestEffort=True: çok büyük AOI'lerde GEE otomatik ölçeği artırır
-        vector_fc = classified.reduceToVectors(
+        vector_fc = classified_for_vector.reduceToVectors(
             geometry     = roi_geom,
             scale        = scale,
             geometryType = 'polygon',
@@ -2820,10 +2880,28 @@ def download_vector():
         print('✅ GEE vektör URL: {} — {}'.format(fmt.upper(), download_url[:100]))
         return jsonify({'success': True, 'url': download_url, 'filename': dl_name})
 
+    except _VectorTimeoutError:
+        # Gunicorn worker sert bir şekilde öldürülmeden ÖNCE burada kontrollü
+        # olarak durduruldu — tarayıcı artık anlamsız "Failed to fetch" yerine
+        # eyleme geçirilebilir bir mesaj görür.
+        print('⏱️ Vektör oluşturma zaman aşımına uğradı (100 sn) — AOI/sınıflandırma çok karmaşık.')
+        return jsonify({'success': False, 'error': (
+            'Vektör oluşturma çok uzun sürdü. Seçilen çalışma alanı (AOI) veya sınıflandırma '
+            '(özellikle NDVI gibi sürekli indekslerde çok sayıda küçük sınıf sınırı) çok fazla '
+            'poligon üretiyor olabilir. Lütfen AOI\'yi küçültün, sınıf sayısını azaltın ya da '
+            'daha geniş sınıf aralıkları kullanıp tekrar deneyin.'
+        )})
     except Exception as e:
         traceback.print_exc()
         err = str(e).strip() or 'Bilinmeyen hata — sunucu konsoluna bakın.'
         return jsonify({'success': False, 'error': err})
+    finally:
+        # SIGALRM'i her koşulda iptal et/eski haline getir — aksi halde bu
+        # istek bittikten SONRA (bir sonraki isteğin ortasında) alarm patlar.
+        if hasattr(signal, 'SIGALRM'):
+            signal.alarm(0)
+            if old_alarm_handler is not None:
+                signal.signal(signal.SIGALRM, old_alarm_handler)
 
 
 if __name__ == '__main__':
