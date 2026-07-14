@@ -1123,9 +1123,26 @@ def build_result_image(data, for_export=False):
             vis = {'min': 0, 'max': 150, 'palette': ['black', 'white']}
 
         elif index in ('TOPO_CURVATURE', 'TOPO_PLAN_CURV', 'TOPO_PROFILE_CURV'):
-            # Eğrilik yaklaşımı: Laplacian konvolüsyon operatörü
+            # 🛠️ BUG FİX (yoğun beyaz "tuz-biber" beneği — özellikle düz/az
+            # eğimli alanlarda yoğunlaşan gürültü): Laplacian (2. türev)
+            # operatörü YÜKSEK GEÇİRGEN bir filtredir; ham DEM üzerinde
+            # doğrudan uygulandığında HER pikseldeki kuantizasyon
+            # gürültüsünü (SRTM'nin ~1 m dikey çözünürlüğünden kaynaklanan
+            # basamaklanma) orantısızca büyütür. Dik/kıvrımlı arazide
+            # gerçek eğrilik sinyali bu gürültüyü bastırır, ama düz
+            # ovalarda gerçek eğrilik ≈ 0 olduğundan kuantizasyon
+            # gürültüsü BASKIN hale gelir ve germe (stretch) sonrası
+            # rastgele beyaz/siyah benek deseni olarak görünür — az önce
+            # gönderdiğiniz görüntüdeki sorun tam olarak budur.
+            #
+            # ÇÖZÜM: Laplacian'ı ham dem yerine, önce hafif bir odak-
+            # ortalama ile pürüzsüzleştirilmiş DEM üzerinde uyguluyoruz.
+            # 60 m yarıçap (~2 piksel @ 30 m), piksel bazlı kuantizasyon
+            # gürültüsünü büyük ölçüde elerken gerçek yerel eğrilik
+            # özelliklerini (kıvrımlar, sırtlar, vadiler) korur.
+            dem_smooth = dem.focalMean(radius=60, units='meters')
             kernel = ee.Kernel.laplacian8(normalize=False)
-            result = dem.convolve(kernel).rename('value')
+            result = dem_smooth.convolve(kernel).rename('value')
             vis = {'min': -30, 'max': 30, 'palette': ['black', 'white']}
 
         # ── Hidrolojik Analizler ──────────────────────────────────
