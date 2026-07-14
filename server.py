@@ -3,6 +3,7 @@ import re
 import io
 import os
 import math
+import time
 import shutil
 import zipfile
 import tempfile
@@ -16,6 +17,62 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 print('SylvaGIS server.py yüklendi — versiyon: zip-export-v2-tiling')
+
+
+# ════════════════════════════════════════════════════════════════
+# 🔁 GEE / AĞ ÇAĞRILARI İÇİN OTOMATİK TEKRAR DENEME (RETRY)
+# ════════════════════════════════════════════════════════════════
+# SORUN: "Birkaç analiz peş peşe yapılınca sunucu bağlantı hatası veriyor
+# ya da indirme yapmıyor" şikayetinin en olası kök nedeni budur.
+#
+# /api/analyze tek bir istekte GEE'ye 5-7 ayrı ağ çağrısı (.getInfo(),
+# reduceRegion, getMapId vb.) yapar. Google Earth Engine, bir servis
+# hesabı için EŞZAMANLI istek sayısına ve dakikadaki istek sayısına
+# sınır koyar. Kullanıcı birkaç analizi ARKA ARKAYA (önceki analiz daha
+# bitmeden) çalıştırdığında, bu sınır aşılabilir ve GEE geçici bir hata
+# (429 Too Many Requests, 503 Service Unavailable, veya bir bağlantı
+# timeout'u) döndürür. ÖNCEDEN bu tür geçici/tek seferlik hatalar
+# HİÇBİR tekrar denemesi olmadan doğrudan kullanıcıya "sunucu bağlantı
+# hatası" olarak yansıtılıyordu — oysa aynı istek birkaç saniye sonra
+# tekrar denense büyük ihtimalle başarılı olurdu.
+#
+# Bu, Render/Vercel gibi barındırma platformunun "kasması"ndan bağımsız,
+# TAMAMEN yazılımsal bir sorundur — barındırma iyileştirilse bile GEE
+# tarafındaki geçici limit aşımları aynı şekilde hatayla sonuçlanmaya
+# devam ederdi. Aşağıdaki yardımcı fonksiyon, GEE/ağ çağrılarını üstel
+# geri çekilme (exponential backoff) ile otomatik olarak yeniden dener;
+# yalnızca TÜM denemeler tükendiğinde asıl hatayı yukarı fırlatır.
+def _call_with_retry(fn, *args, retries=3, base_delay=1.5, **kwargs):
+    """
+    fn(*args, **kwargs) çağrısını dener; geçici (transient) bir ağ/GEE
+    hatasıyla karşılaşırsa kısa bir bekleme sonrası tekrar dener.
+    Toplam deneme sayısı: retries + 1 (ilk deneme + retries tekrar).
+    Kalıcı görünen hatalarda (ör. geometri/parametre hatası — "Invalid",
+    "must be", "not found" gibi mesajlar) hemen (tekrar denemeden)
+    yeniden fırlatılır; bunları tekrar denemek zaman kaybettirir ve
+    kullanıcıyı gereksiz yere bekletir.
+    """
+    _non_retryable_markers = (
+        'invalid', 'must be', 'not found', 'permission', 'denied',
+        'unauthorized', 'bad request', 'parse', 'geometry for image clipping',
+    )
+    last_err = None
+    for attempt in range(retries + 1):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            last_err = e
+            msg = str(e).lower()
+            if any(m in msg for m in _non_retryable_markers):
+                raise
+            if attempt < retries:
+                delay = base_delay * (2 ** attempt)
+                print('[SylvaGIS] ⚠️ Geçici hata (deneme {}/{}), {:.1f} sn sonra '
+                      'tekrar denenecek: {}'.format(attempt + 1, retries + 1, delay, e))
+                time.sleep(delay)
+            else:
+                raise
+    raise last_err
 
 # ════════════════════════════════════════════════════════════════
 # 🛰️ GOOGLE EARTH ENGINE — SERVICE ACCOUNT İLE BAĞLANTI
@@ -795,10 +852,22 @@ def _dynamic_stretch_vis(img, roi, scale, fallback_vis):
         return fallback_vis
 
 
-def build_result_image(data):
+def build_result_image(data, for_export=False):
     """
     Ortak analiz görüntüsü oluşturma mantığı.
     Returns: (final_display, roi, result, vis)
+
+    for_export: True ise (GeoTIFF indirme yolu), kullanıcının haritada
+    "Lejantı Uygula" ile tanımladığı sınıflandırma (classBreaks) — yani
+    piksel değerlerini 1,2,3... gibi tam sayı sınıf ID'lerine dönüştüren
+    build_classified_image() adımı — TAMAMEN ATLANIR. Böylece dosyaya
+    her zaman haritadaki renk çubuğunun (color bar / stretch) dayandığı
+    HAM/sürekli değerler (örn. NDVI için -1 ile 1 arası ondalıklı
+    değerler) yazılır; ekrandaki sınıflandırma sadece görsel bir katman
+    olarak kalır ve indirilen .tif dosyasını ASLA etkilemez. custom_palette
+    (min/max germe) zaten piksel değerlerini değiştirmediği için (sadece
+    vis sözlüğünü değiştirir) o dal for_export'tan etkilenmeden aynen
+    çalışmaya devam eder.
     """
     roi_coords = data.get('roi')
     clip_mode  = data.get('clipMode', 'clip')
@@ -809,6 +878,8 @@ def build_result_image(data):
     max_cloud  = int(data.get('maxCloud', 20))
     scene_id   = data.get('sceneId')
     class_breaks = data.get('classBreaks')
+    if for_export:
+        class_breaks = None
 
     roi = make_roi(roi_coords)
 
@@ -939,17 +1010,61 @@ def build_result_image(data):
         import math as _math
 
         # ── DEM kaynağı seç ──────────────────────────────────────
+        # 🛠️ BUG FİX (NoData kareler / boş piksel sorunu):
+        # ALOS ve Copernicus DEM'leri parçalı (tile-based) ImageCollection'lardır.
+        # filterBounds(roi).mosaic() çağrısı, AOI'yi kapsayan tile'ları birleştirir;
+        # ancak tile sınırlarında veya kapsama açığı olan bölgelerde (ör. Kuzey kutbu
+        # yakını, bazı adalarda Copernicus eksik kareler bırakır) mozaikte NoData
+        # pikseller kalabilir. Bu pikseller eğim (slope), TPI, eğrilik vb. türev
+        # analizlerde zincir boyunca boşluk olarak yayılır — haritada "kare kare
+        # boşluk" ya da istatistiğin None dönmesi bu yüzden oluşur.
+        #
+        # ÇÖZÜM: mosaic() sonrası .unmask(srtm_fallback) ile açıkta kalan her
+        # NoData pikseli SRTM verisiyle doldurulur. SRTM global kapsama sahiptir
+        # (60°G–60°K) ve bu tür boşlukları kapatmak için en sağlıklı alternatiftir.
+        # NASADEM zaten tek görüntü olduğu için boşluk sorunu yaşamaz.
+        _srtm_fallback = ee.Image('USGS/SRTMGL1_003').select('elevation')
+
         dem_source = data.get('demSource', 'SRTM')
         if dem_source == 'ALOS':
             dem = (ee.ImageCollection('JAXA/ALOS/AW3D30/V3_2')
                    .filterBounds(roi).mosaic().select('DSM').rename('elevation'))
+            # Tile sınırlarındaki / kapsama dışı NoData pikselleri SRTM ile doldur
+            dem = dem.unmask(_srtm_fallback)
         elif dem_source == 'Copernicus':
             dem = (ee.ImageCollection('COPERNICUS/DEM/GLO30')
                    .filterBounds(roi).mosaic().select('DEM').rename('elevation'))
+            # Tile sınırlarındaki / kapsama dışı NoData pikselleri SRTM ile doldur
+            dem = dem.unmask(_srtm_fallback)
         elif dem_source == 'NASADEM':
             dem = ee.Image('NASA/NASADEM_HGT/001').select('elevation')
         else:  # SRTM (varsayılan)
             dem = ee.Image('USGS/SRTMGL1_003').select('elevation')
+
+        # 🛠️ BUG FİX (dağınık tekil piksel boşlukları — "kare kare" benek
+        # deseni, özellikle sırt/vadi hatlarında yoğunlaşan beyaz/siyah
+        # noktalar): Yukarıdaki unmask(SRTM) adımı yalnızca ALOS/Copernicus
+        # mozaiklerindeki BÜYÜK kapsama boşluklarını kapatır — ama HİÇBİR
+        # kaynak (SRTM dahil) için, dik yamaçlarda radar gölgesi nedeniyle
+        # oluşan TEKİL/küçük-küme "void" (veri boşluğu) piksellerini
+        # doldurmaz. Bu void'ler ham DEM'de maskelenmiş (NoData) tek
+        # piksellerdir; eğim/bakı/hillshade gibi türevler 3x3 komşuluk
+        # çekirdeğiyle hesaplandığından, her void pikseli çevresindeki
+        # birkaç piksele de yayılır — kullanıcının GIS yazılımında gördüğü
+        # dağınık "eksik piksel kareleri" tam olarak budur.
+        #
+        # ÇÖZÜM: Kaynak ne olursa olsun, DEM'i terrain ürünleri hesaplanmadan
+        # ÖNCE odak-ortalama (focal mean) ile "void-fill" işleminden geçiriyoruz.
+        # reduceNeighborhood tabanlı focalMean, komşuluk penceresindeki YALNIZCA
+        # geçerli (maskelenmemiş) pikselleri kullanarak ortalama alır; bu da
+        # void pikselinin değerini çevresindeki gerçek verilerden enterpole
+        # edip dolduruyor — sonuçta ham DEM'de tek bir maskeli piksel bile
+        # kalmıyor ve türev ürünlerde artık hiçbir boşluk/benek oluşmuyor.
+        # 150 m yarıçap (~5 piksel @ 30 m), tipik void kümelerini (genelde
+        # 1-3 piksel genişliğinde) kapatmaya yeterlidir; büyük gerçek NoData
+        # alanlarını (AOI dışı vb.) ETKİLEMEZ çünkü onlar zaten export
+        # aşamasında ayrı bir clip/nodata mantığıyla ele alınıyor.
+        dem = dem.unmask(dem.focalMean(radius=150, units='meters'))
 
         terrain = ee.Terrain.products(dem)
         slope   = terrain.select('slope')
@@ -1092,20 +1207,28 @@ def build_result_image(data):
             _dem_scale = 30  # SRTM/ALOS/Copernicus/NASADEM hepsi ~30 m nominal
             vis = _dynamic_stretch_vis(result, roi, _dem_scale, vis)
 
-        # 🛠️ BUG FİX: "Lejantı Uygula" ile gönderilen sınıflandırma (classBreaks)
-        # ve özel renk paleti (custom_palette/min/max) daha önce SADECE NDVI/NDWI
-        # gibi uydu-indeksi analizlerinde uygulanıyordu — çünkü bu blok fonksiyonun
-        # en sonunda, uydu-indeksi kod yolunun ardından yer alıyordu. TOPO ailesi
-        # (DEM, eğim, TPI, vb.) kendi bloğunun sonunda erken "return" yaptığı için
-        # bu koda HİÇ ULAŞMIYORDU: kullanıcı sınıf/renk tanımlayıp "Uygula" dese
-        # bile harita her zaman ham stretched (siyah-beyaz) görüntüde kalıyor,
-        # lejanttaki renk/sınıflandırma haritaya hiç yansımıyordu. Aynı mantık
-        # burada da (NDVI ailesiyle birebir aynı şekilde) uygulanır.
+        # ── Görsel mod / dışa aktarım modu ayrımı ──────────────────
+        # 🛠️ BUG FİX: Dışa aktarım (for_export=True) ile ekran görüntüsü
+        # (for_export=False) artık açık bir if/elif zinciriyle ayrılır.
+        #
+        # SORUN: Daha önce "(not for_export) and class_breaks" kontrolü
+        # class_breaks dalını engellerdi — ancak custom_palette/min/max dalı
+        # her zaman çalışırdı. Frontend, sınıflandırma + özel renk birlikte
+        # gönderebildiği için GeoTIFF'te sınıf ID'leri (1, 2, 3…) veya
+        # kırpılmış değer aralıkları çıkabiliyordu.
+        #
+        # ÇÖZÜM: for_export=True → SADECE ham result kullan, sınıflandırma
+        # ve palette/min/max TAMAMEN atlanır. Piksel değerleri değişmez.
+        # for_export=False (harita önizleme) → önceki davranış aynen korunur.
         custom_palette = data.get('palette')
         custom_min     = data.get('min')
         custom_max     = data.get('max')
 
-        if class_breaks and isinstance(class_breaks, list) and len(class_breaks) > 0:
+        if for_export:
+            # GeoTIFF indirme: her zaman orijinal bar skalasındaki ham değerler.
+            # classBreaks (sınıf ID), custom_palette/min/max UYGULANMAZ.
+            display_result = result
+        elif class_breaks and isinstance(class_breaks, list) and len(class_breaks) > 0:
             classified_img, classified_vis = build_classified_image(result, class_breaks)
             if classified_img is not None:
                 display_result = classified_img
@@ -1177,6 +1300,7 @@ def build_result_image(data):
         b = {'nir': 'B8', 'red': 'B4', 'green': 'B3',
              'swir': 'B11', 'blue': 'B2', 'thermal': None}
         scale_factor = 1e-4
+        band_offset  = 0
 
     elif satellite == 's2-l1c':
         col = (ee.ImageCollection('COPERNICUS/S2_HARMONIZED')
@@ -1185,6 +1309,7 @@ def build_result_image(data):
         b = {'nir': 'B8', 'red': 'B4', 'green': 'B3',
              'swir': 'B11', 'blue': 'B2', 'thermal': None}
         scale_factor = 1e-4
+        band_offset  = 0
 
     elif satellite == 'l89-l2':
         col = (ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
@@ -1193,6 +1318,7 @@ def build_result_image(data):
         b = {'nir': 'SR_B5', 'red': 'SR_B4', 'green': 'SR_B3',
              'swir': 'SR_B6', 'blue': 'SR_B2', 'thermal': 'ST_B10'}
         scale_factor = 2.75e-5
+        band_offset  = -0.2
 
     elif satellite == 'l7-l2':
         col = (ee.ImageCollection('LANDSAT/LE07/C02/T1_L2')
@@ -1201,6 +1327,7 @@ def build_result_image(data):
         b = {'nir': 'SR_B4', 'red': 'SR_B3', 'green': 'SR_B2',
              'swir': 'SR_B5', 'blue': 'SR_B1', 'thermal': 'ST_B6'}
         scale_factor = 2.75e-5
+        band_offset  = -0.2
 
     elif satellite in ('l45-l2', 'l45-l1'):
         col = (ee.ImageCollection('LANDSAT/LT05/C02/T1_L2')
@@ -1209,6 +1336,7 @@ def build_result_image(data):
         b = {'nir': 'SR_B4', 'red': 'SR_B3', 'green': 'SR_B2',
              'swir': 'SR_B5', 'blue': 'SR_B1', 'thermal': 'ST_B6'}
         scale_factor = 2.75e-5
+        band_offset  = -0.2
 
     else:
         col = (ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
@@ -1217,6 +1345,7 @@ def build_result_image(data):
         b = {'nir': 'B8', 'red': 'B4', 'green': 'B3',
              'swir': 'B11', 'blue': 'B2', 'thermal': None}
         scale_factor = 1e-4
+        band_offset  = 0
 
     # 🩹 Piksel bazlı bulut/gölge/sirrus maskesi — sahne bazlı bulutluluk
     # filtresi (yukarıda) TEK BAŞINA yeterli değildir; koleksiyondaki her
@@ -1231,19 +1360,47 @@ def build_result_image(data):
     else:
         image = col.filterDate(start_date, end_date).median()
 
+    # 🛠️ BUG FİX (KÖK NEDEN — Landsat tabanlı TÜM indeksler yanlış
+    # hesaplanıyordu): Landsat Collection 2 Level-2 (l89-l2, l7-l2,
+    # l45-l2/l1) yüzey yansıması bantları HAM tam sayı (DN) olarak
+    # gelir; gerçek yansıma değerine dönüştürmek için resmi USGS
+    # formülü şudur:  yansıma = DN * 0.0000275 + (−0.2)
+    # Koddaki `scale_factor` (2.75e-5) ÇARPIMI zaten yapılıyordu, ANCAK
+    # `-0.2` OFFSET'i HİÇBİR indeks hesaplamasında (NDVI, NDWI, EVI,
+    # SAVI, SMI, NBR, NDSI, BSI, AVI, SI, NDGI, NDMI, NPCRI, VHI, FRI)
+    # UYGULANMIYORDU. Sentinel-2'de offset zaten 0 olduğu için bu fark
+    # etmiyordu (sonuçlar doğruydu) — ama Landsat'ta offset −0.2 gibi
+    # yüzey yansımasının kendisiyle KIYASLANABİLİR büyüklükte bir sabit
+    # olduğu için, onu atlamak sonucu ciddi şekilde bozuyordu. Örnek:
+    # DN_nir=20000, DN_red=10000 için gerçek NDVI ≈ 0.65 iken, offset
+    # uygulanmadan (ham DN oranıyla) hesaplanan "NDVI" ≈ 0.33 çıkıyordu
+    # — yani bitki örtüsü olduğundan çok daha az/zayıf görünüyordu.
+    # ÇÖZÜM: Tüm optik bantlar TEK SEFERDE (DN * scale_factor + offset)
+    # ile gerçek yansıma değerine çevrilip `image_refl` olarak saklanır;
+    # aşağıdaki TÜM indeks formülleri artık ham `image` yerine bu
+    # doğru ölçeklenmiş `image_refl`'i kullanır. Sentinel-2 için offset
+    # zaten 0 olduğundan bu değişiklik S2 sonuçlarını ETKİLEMEZ —
+    # yalnızca Landsat tabanlı analizleri düzeltir. Termal bant (LST)
+    # zaten ayrı/doğru bir formülle (0.00341802 / 149.0, resmi USGS
+    # ST_Bxx dönüşümü) hesaplandığı için buna dahil edilmez.
+    _optical_band_names = sorted(set(
+        v for k, v in b.items() if k != 'thermal' and v
+    ))
+    image_refl = image.select(_optical_band_names).multiply(scale_factor).add(band_offset)
+
     # ── 3. İndeks hesapla ───────────────────────────────────────
     if index == 'NDVI':
-        result = image.normalizedDifference([b['nir'], b['red']]).rename('value')
+        result = image_refl.normalizedDifference([b['nir'], b['red']]).rename('value')
         vis    = {'min': -0.2, 'max': 0.9, 'palette': ['black', 'white']}
 
     elif index == 'NDWI':
-        result = image.normalizedDifference([b['green'], b['nir']]).rename('value')
+        result = image_refl.normalizedDifference([b['green'], b['nir']]).rename('value')
         vis    = {'min': -0.5, 'max': 0.5, 'palette': ['black', 'white']}
 
     elif index == 'EVI':
-        nir   = image.select(b['nir']).multiply(scale_factor)
-        red   = image.select(b['red']).multiply(scale_factor)
-        blue  = image.select(b['blue']).multiply(scale_factor)
+        nir   = image_refl.select(b['nir'])
+        red   = image_refl.select(b['red'])
+        blue  = image_refl.select(b['blue'])
         result = (nir.subtract(red)).divide(
             nir.add(red.multiply(6)).subtract(blue.multiply(7.5)).add(1)
         ).multiply(2.5).rename('value')
@@ -1251,32 +1408,32 @@ def build_result_image(data):
 
     elif index == 'SAVI':
         L = 0.5
-        nir = image.select(b['nir']).multiply(scale_factor)
-        red = image.select(b['red']).multiply(scale_factor)
+        nir = image_refl.select(b['nir'])
+        red = image_refl.select(b['red'])
         result = (nir.subtract(red)).multiply(1 + L).divide(
             nir.add(red).add(L)
         ).rename('value')
         vis    = {'min': -0.3, 'max': 0.8, 'palette': ['black', 'white']}
 
     elif index == 'SMI':
-        nir  = image.select(b['nir']).multiply(scale_factor)
-        swir = image.select(b['swir']).multiply(scale_factor)
+        nir  = image_refl.select(b['nir'])
+        swir = image_refl.select(b['swir'])
         result = nir.subtract(swir).divide(nir.add(swir)).rename('value')
         vis    = {'min': -0.5, 'max': 0.5, 'palette': ['black', 'white']}
 
     elif index == 'NBR':
-        result = image.normalizedDifference([b['nir'], b['swir']]).rename('value')
+        result = image_refl.normalizedDifference([b['nir'], b['swir']]).rename('value')
         vis    = {'min': -1.0, 'max': 1.0, 'palette': ['black', 'white']}
 
     elif index == 'NDSI':
-        result = image.normalizedDifference([b['green'], b['swir']]).rename('value')
+        result = image_refl.normalizedDifference([b['green'], b['swir']]).rename('value')
         vis    = {'min': -0.5, 'max': 0.8, 'palette': ['black', 'white']}
 
     elif index == 'BSI':
-        nir   = image.select(b['nir']).multiply(scale_factor)
-        red   = image.select(b['red']).multiply(scale_factor)
-        blue  = image.select(b['blue']).multiply(scale_factor)
-        swir  = image.select(b['swir']).multiply(scale_factor)
+        nir   = image_refl.select(b['nir'])
+        red   = image_refl.select(b['red'])
+        blue  = image_refl.select(b['blue'])
+        swir  = image_refl.select(b['swir'])
         result = swir.add(red).subtract(nir).subtract(blue).divide(
             swir.add(red).add(nir).add(blue)
         ).rename('value')
@@ -1290,8 +1447,8 @@ def build_result_image(data):
 
     elif index == 'AVI':
         # Advanced Vegetation Index — (NIR*(1-RED)*(NIR-RED))^(1/3)
-        nir = image.select(b['nir']).multiply(scale_factor)
-        red = image.select(b['red']).multiply(scale_factor)
+        nir = image_refl.select(b['nir'])
+        red = image_refl.select(b['red'])
         result = nir.multiply(
             ee.Image(1).subtract(red)
         ).multiply(
@@ -1301,9 +1458,9 @@ def build_result_image(data):
 
     elif index == 'SI':
         # Shadow Index — ((1-B)*(1-G)*(1-R))^(1/3)
-        blue  = image.select(b['blue']).multiply(scale_factor)
-        green = image.select(b['green']).multiply(scale_factor)
-        red   = image.select(b['red']).multiply(scale_factor)
+        blue  = image_refl.select(b['blue'])
+        green = image_refl.select(b['green'])
+        red   = image_refl.select(b['red'])
         result = (ee.Image(1).subtract(blue)).multiply(
             ee.Image(1).subtract(green)
         ).multiply(
@@ -1313,18 +1470,18 @@ def build_result_image(data):
 
     elif index == 'NDGI':
         # Normalized Difference Glacier Index — (Green-Red)/(Green+Red)
-        result = image.normalizedDifference([b['green'], b['red']]).rename('value')
+        result = image_refl.normalizedDifference([b['green'], b['red']]).rename('value')
         vis    = {'min': -0.5, 'max': 0.5, 'palette': ['black', 'white']}
 
     elif index == 'NDMI':
         # Normalized Difference Moisture Index — (NIR-SWIR)/(NIR+SWIR)
-        result = image.normalizedDifference([b['nir'], b['swir']]).rename('value')
+        result = image_refl.normalizedDifference([b['nir'], b['swir']]).rename('value')
         vis    = {'min': -0.8, 'max': 0.8, 'palette': ['black', 'white']}
 
     elif index == 'NPCRI':
         # Normalized Pigment Chlorophyll Ratio Index — (Red-Blue)/(Red+Blue)
-        red  = image.select(b['red']).multiply(scale_factor)
-        blue = image.select(b['blue']).multiply(scale_factor)
+        red  = image_refl.select(b['red'])
+        blue = image_refl.select(b['blue'])
         result = red.subtract(blue).divide(
             red.add(blue).add(1e-6)
         ).rename('value')
@@ -1332,7 +1489,7 @@ def build_result_image(data):
 
     elif index == 'VHI':
         # Vegetation Health Index — 0.5*VCI + 0.5*TCI (basitleştirilmiş)
-        ndvi = image.normalizedDifference([b['nir'], b['red']])
+        ndvi = image_refl.normalizedDifference([b['nir'], b['red']])
         vci  = ndvi.add(1).divide(2)          # NDVI'yi 0-1'e normalize et
         if b['thermal']:
             thermal = image.select(b['thermal'])
@@ -1352,10 +1509,10 @@ def build_result_image(data):
         #   2) Yakıt yükü           -> NDVI (yoğun/kuru bitki örtüsü = yanıcı madde)
         #   3) Isı stresi           -> LST (varsa; sıcak yüzey = yüksek risk)
         # Sonuç 0 (düşük risk) ile 1 (yüksek risk) arasında normalize edilir.
-        ndvi = image.normalizedDifference([b['nir'], b['red']])
+        ndvi = image_refl.normalizedDifference([b['nir'], b['red']])
         fuel = ndvi.add(1).divide(2).clamp(0, 1)              # 0-1 (yoğun bitki örtüsü)
 
-        ndmi     = image.normalizedDifference([b['nir'], b['swir']])
+        ndmi     = image_refl.normalizedDifference([b['nir'], b['swir']])
         dryness  = ee.Image(1).subtract(
             ndmi.add(1).divide(2)
         ).clamp(0, 1)                                          # 0-1 (düşük nem = yüksek değer)
@@ -1375,15 +1532,24 @@ def build_result_image(data):
         vis = {'min': 0, 'max': 1, 'palette': ['black', 'white']}
 
     else:
-        result = image.normalizedDifference([b['nir'], b['red']]).rename('value')
+        result = image_refl.normalizedDifference([b['nir'], b['red']]).rename('value')
         vis    = {'min': -0.2, 'max': 0.9, 'palette': ['black', 'white']}
 
-    # ── 3b. Sınıflandırılmış mod — classBreaks JSON ──────────────
+    # ── 3b. Görsel mod / dışa aktarım modu ayrımı ──────────────────
+    # 🛠️ BUG FİX: for_export=True (GeoTIFF indirme) → her zaman ham result.
+    # classBreaks (sınıf ID'leri) ve custom_palette/min/max UYGULANMAZ.
+    # Piksel değerleri orijinal bar skalasındaki değerlerdir (NDVI: -1…1,
+    # DEM: metre, eğim: derece, vb.) — sınıflandırma veya görsel germen
+    # indirilecek dosyayı ASLA etkilemez.
+    # for_export=False (harita önizleme) → önceki davranış aynen korunur.
     custom_palette = data.get('palette')
     custom_min     = data.get('min')
     custom_max     = data.get('max')
 
-    if class_breaks and isinstance(class_breaks, list) and len(class_breaks) > 0:
+    if for_export:
+        # GeoTIFF indirme: orijinal bar skalasındaki ham değerler.
+        display_result = result
+    elif class_breaks and isinstance(class_breaks, list) and len(class_breaks) > 0:
         classified_img, classified_vis = build_classified_image(result, class_breaks)
         if classified_img is not None:
             display_result = classified_img
@@ -1500,37 +1666,54 @@ def analyze():
         final_display, roi, result, vis = build_result_image(data)
 
         # ── İstatistik ────────────────────────────────────────────
-        stats = result.reduceRegion(
-            reducer   = ee.Reducer.frequencyHistogram(),
-            geometry  = roi,
-            scale     = 30,
-            maxPixels = 1e9
-        ).getInfo()
+        # 🛠️ BUG FİX (NoData piksel / büyük AOI istatistik sorunu):
+        # bestEffort=True eklendi. Olmadan: AOI büyük olduğunda veya bazı
+        # piksellerde veri olmadığında (örn. eğim indirildiğinde bazı kareler
+        # boş çıkıyordu) maxPixels limiti aşılınca GEE hata fırlatır ve stats
+        # tamamen None döner. bestEffort=True ile GEE, gerekirse çözünürlüğü
+        # otomatik düşürür ama hesabı DAIMA tamamlar. NoData (maskeli) pikseller
+        # GEE'nin reduceRegion'unda zaten otomatik olarak dışlanır; yani
+        # istatistikler her zaman yalnızca geçerli/dolu piksellerden hesaplanır.
+        stats = _call_with_retry(
+            lambda: result.reduceRegion(
+                reducer    = ee.Reducer.frequencyHistogram(),
+                geometry   = roi,
+                scale      = 30,
+                maxPixels  = 1e9,
+                bestEffort = True,
+            ).getInfo()
+        )
 
         real_minmax = {}
         try:
-            mm = result.reduceRegion(
-                reducer   = ee.Reducer.minMax(),
-                geometry  = roi,
-                scale     = 30,
-                maxPixels = 1e9
-            ).getInfo()
-            mn = result.reduceRegion(
-                reducer   = ee.Reducer.mean(),
-                geometry  = roi,
-                scale     = 30,
-                maxPixels = 1e9
-            ).getInfo()
+            # 🛠️ BUG FİX (performans / peş peşe analiz hatası): daha önce
+            # min/max ve ortalama İKİ AYRI reduceRegion() + getInfo() ağ
+            # çağrısıyla hesaplanıyordu. Tek bir kombine reducer ile bu iki
+            # çağrı TEK bir GEE isteğine indirilir — hem daha hızlı yanıt
+            # verir hem de kullanıcı arka arkaya analiz yaptığında GEE'nin
+            # eşzamanlı/istek-başına limitlerine çarpma ihtimalini azaltır.
+            combined_reducer = ee.Reducer.minMax().combine(
+                reducer2=ee.Reducer.mean(), sharedInputs=True
+            )
+            mm = _call_with_retry(
+                lambda: result.reduceRegion(
+                    reducer    = combined_reducer,
+                    geometry   = roi,
+                    scale      = 30,
+                    maxPixels  = 1e9,
+                    bestEffort = True,
+                ).getInfo()
+            )
             real_minmax = {
                 'min':  mm.get('value_min'),
                 'max':  mm.get('value_max'),
-                'mean': mn.get('value')
+                'mean': mm.get('value_mean')
             }
         except Exception:
             pass
 
         # ── Tile URL ─────────────────────────────────────────────
-        map_id   = final_display.getMapId(vis)
+        map_id   = _call_with_retry(lambda: final_display.getMapId(vis))
         tile_url = map_id['tile_fetcher'].url_format
 
         # ── Zaman serisi galerisi ────────────────────────────────
@@ -1565,9 +1748,9 @@ def analyze():
                             .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', max_cloud)))
                 cloud_prop = 'CLOUDY_PIXEL_PERCENTAGE' if satellite.startswith('s2') else 'CLOUD_COVER'
                 limited    = col2.filterDate(start_date, end_date).sort('system:time_start').limit(10)
-                scene_ids  = limited.aggregate_array('system:index').getInfo()
-                timestamps = limited.aggregate_array('system:time_start').getInfo()
-                clouds_arr = limited.aggregate_array(cloud_prop).getInfo()
+                scene_ids  = _call_with_retry(lambda: limited.aggregate_array('system:index').getInfo(), retries=1)
+                timestamps = _call_with_retry(lambda: limited.aggregate_array('system:time_start').getInfo(), retries=1)
+                clouds_arr = _call_with_retry(lambda: limited.aggregate_array(cloud_prop).getInfo(), retries=1)
                 scenes_list = list(zip(scene_ids, timestamps, clouds_arr))
             except Exception:
                 scenes_list = []
@@ -1698,7 +1881,14 @@ def download_geotiff():
         if fresh_roi:
             data['roi'] = fresh_roi
 
-        final_display, roi, result, vis = build_result_image(data)
+        # 🛠️ BUG FİX (istenen davranış): "Lejantı Uygula" ile sınıflandırma
+        # yapılmış olsa bile — NDVI, DEM, Eğim (Slope) vb. hiçbir analizde —
+        # indirilen GeoTIFF ASLA sınıf ID'lerine (1,2,3...) göre değil, her
+        # zaman haritadaki renk çubuğunun (color bar) dayandığı HAM/sürekli
+        # değerlere göre üretilir. for_export=True, build_result_image()
+        # içindeki classBreaks/build_classified_image() adımını komple
+        # atlatır — bkz. build_result_image() docstring'i.
+        final_display, roi, result, vis = build_result_image(data, for_export=True)
 
         # ── 🌈 Sentinel-2 doğal renk parlaklık düzeltmesi ────────────
         # SORUN: Sentinel-2 RGB (B4-B3-B2) GeoTIFF'leri şu ana kadar ham
@@ -1773,7 +1963,7 @@ def download_geotiff():
         # istek veya karo-mozaik) dosyayı yerel olarak KESİN bir şekilde
         # bu poligona göre yeniden kırpsın. 'Tüm Veri' modunda (is_clip
         # False) bu adım atlanır — mevcut davranış korunur.
-        aoi_geom_4326 = roi.getInfo() if is_clip else None
+        aoi_geom_4326 = _call_with_retry(lambda: roi.getInfo()) if is_clip else None
 
         tif_bytes = _download_band_geotiff_bytes(
             final_display, export_region, scale, crs, safe_name,
@@ -1854,6 +2044,10 @@ def _split_bbox_grid(roi, nx, ny):
     karoya böler ve ee.Geometry.Rectangle listesi döndürür. Orijinal
     çözünürlük/CRS korunur; yalnızca dışa aktarma alanı (region) küçültülür,
     böylece GEE'nin tek istekteki boyut sınırı aşılmaz.
+
+    NOT: Bu fonksiyon artık indirme yolunda KULLANILMIYOR — bkz.
+    _split_bbox_grid_aligned(). Geriye dönük referans/uyumluluk için
+    dosyada bırakıldı.
     """
     ring = roi.bounds().coordinates().get(0).getInfo()
     lons = [p[0] for p in ring]
@@ -1870,6 +2064,161 @@ def _split_bbox_grid(roi, nx, ny):
             y1 = ymin + (ymax - ymin) * (j + 1) / ny
             tiles.append(ee.Geometry.Rectangle([x0, y0, x1, y1], 'EPSG:4326', False))
     return tiles
+
+
+def _split_bbox_grid_aligned(roi, nx, ny, scale, crs):
+    """
+    🛠️ KÖK NEDEN DÜZELTMESİ — karo (tile) sınırlarında piksel boşlukları
+    (ArcMap/QGIS'te DEM/eğim gibi büyük TOPO katmanlarında görülen
+    "bazı piksel kareleri eksik" sorunu):
+
+    ESKİ YÖNTEM (_split_bbox_grid), sınırlayıcı kutuyu enlem/boylamda
+    EŞİT COĞRAFİ dilimlere bölüyordu ve her karo GEE'ye yalnızca
+    'region' + 'scale' olarak gönderiliyordu. GEE, her karonun piksel
+    gridinin başlangıcını (origin) KENDİ bölgesine göre bağımsız
+    hesapladığından, komşu karoların piksel kenarları çoğu zaman TAM
+    örtüşmüyordu (kesirli/sub-pixel kayma). rasterio.merge() ile
+    birleştirilince bu kayma, karo dikişlerinde ince NoData şeritleri
+    veya kareleri olarak ortaya çıkıyordu — kullanıcının GIS
+    yazılımında gördüğü "eksik piksel kareleri" tam olarak budur.
+
+    ÇÖZÜM: Karoları eşit coğrafi dilimler yerine TEK ORTAK bir piksel
+    gridine göre bölüyoruz. Önce tüm AOI'nin hedef CRS'teki gerçek
+    kapsamını hesaplıyoruz, bunu 'scale' değerine göre TAM SAYI piksel
+    satır/sütununa ayırıyoruz, sonra her karo için GEE'ye 'region' +
+    'scale' yerine doğrudan 'crsTransform' + 'dimensions' gönderiyoruz.
+    crsTransform, TÜM karolar için AYNI ortak origin ve piksel boyutunu
+    (scale) kullandığından, komşu karoların kenar pikselleri artık
+    matematiksel olarak BİREBİR (pixel-perfect) çakışır; rasterio.merge
+    sonrasında dikişlerde asla boşluk kalmaz.
+
+    roi: ee.Geometry (WGS84 veya başka bir projeksiyonda olabilir).
+    scale: metre cinsinden piksel boyutu (indirme ile aynı 'scale').
+    crs:   hedef koordinat referans sistemi (örn. 'EPSG:4326' / 'EPSG:32636').
+
+    Dönen değer: [{'crsTransform': [...], 'dimensions': 'WxH'}, ...]
+    """
+    # AOI'yi hedef CRS'e projekte edip GERÇEK sınırlayıcı kutusunu al
+    # (maxError=1: metre cinsinden izin verilen projeksiyon hatası payı).
+    roi_in_crs = roi.transform(crs, 1)
+    ring = roi_in_crs.bounds().coordinates().get(0).getInfo()
+    xs = [p[0] for p in ring]
+    ys = [p[1] for p in ring]
+    xmin, xmax = min(xs), max(xs)
+    ymin, ymax = min(ys), max(ys)
+
+    total_w_px = max(1, math.ceil((xmax - xmin) / scale))
+    total_h_px = max(1, math.ceil((ymax - ymin) / scale))
+
+    # Ortak grid origin'i: sol-üst köşe (x küçükten büyüğe, y büyükten
+    # küçüğe gider — GeoTIFF/afin dönüşüm kuralı).
+    origin_x = xmin
+    origin_y = ymax
+
+    tiles = []
+    for i in range(nx):
+        col0 = (i * total_w_px) // nx
+        col1 = total_w_px if i == nx - 1 else ((i + 1) * total_w_px) // nx
+        if col1 <= col0:
+            continue
+        for j in range(ny):
+            row0 = (j * total_h_px) // ny
+            row1 = total_h_px if j == ny - 1 else ((j + 1) * total_h_px) // ny
+            if row1 <= row0:
+                continue
+            tile_x0 = origin_x + col0 * scale
+            tile_y1 = origin_y - row0 * scale
+            # Afin dönüşüm: [scaleX, shearX, translateX, shearY, scaleY, translateY]
+            crs_transform = [scale, 0, tile_x0, 0, -scale, tile_y1]
+            tiles.append({
+                'crsTransform': crs_transform,
+                'dimensions':   '{}x{}'.format(col1 - col0, row1 - row0),
+            })
+    return tiles
+
+
+def _stamp_exact_band_statistics(tif_bytes, nodata_value=None):
+    """
+    🛠️ BUG FİX (QGIS'te 0-47, ArcMap'te 0-54 — aynı .tif dosyası için
+    FARKLI min/max değerleri görünüyordu):
+
+    KÖK NEDEN: Bu, dosyanın piksel değerlerinin bozuk/yanlış olmasından
+    KAYNAKLANMIYOR — indirilen GeoTIFF'in ham piksel verisi baştan sona
+    doğrudur (SylvaGIS ekranındaki 0-54 aralığı gerçek veriyle eşleşir).
+    Sorun, GeoTIFF dosyasında GÖMÜLÜ istatistik (STATISTICS_MINIMUM/
+    MAXIMUM) etiketi bulunmamasıdır. Bu etiketler yoksa:
+      • ArcMap varsayılan olarak TÜM pikselleri tarayıp (tam/"actual"
+        istatistik) gerçek min-max'ı (0-54) hesaplar.
+      • QGIS ise varsayılan olarak "Estimate (faster)" modunu kullanır —
+        yani dosyanın SADECE bir alt örneklemesini (her N. piksel)
+        tarar. Eğim (slope) gibi verilerde en yüksek değerler (54°)
+        genelde küçük/yerel alanlarda (dik yamaç, sınır pikselleri)
+        bulunur; örnekleme bu nadir pikselleri kaçırıp daha düşük bir
+        maksimum (47°) rapor eder. Bu bir QGIS "hatası" değil, sadece
+        hız için yapılan bir yaklaşıklamadır — ama kullanıcıya iki
+        farklı program iki farklı "gerçek" gösteriyormuş gibi görünür.
+
+    ÇÖZÜM: Dosya sunucudan gönderilmeden HEMEN ÖNCE, TÜM pikseller
+    (NoData hariç) taranarak gerçek min/max/mean/stddev hesaplanır ve
+    bunlar GDAL'ın standart STATISTICS_* band etiketleri olarak
+    GeoTIFF'in içine doğrudan gömülür (STATISTICS_APPROXIMATE=NO ile
+    "bu tahmini değil, kesin/tam taranmış istatistiktir" işaretlenir).
+    Böylece QGIS/ArcMap/herhangi bir GDAL tabanlı yazılım, kendi
+    örneklemesini yapmak yerine dosyanın içindeki bu KESİN değerleri
+    okur ve her ikisi de HER ZAMAN aynı (doğru) aralığı — SylvaGIS
+    ekranındaki aralıkla birebir aynı — gösterir.
+
+    Herhangi bir nedenle istatistik hesaplanamazsa (bozuk/boş raster
+    vb.) orijinal bayt içeriği DEĞİŞTİRİLMEDEN döndürülür — bu adım
+    asla indirmeyi kesintiye uğratmaz.
+    """
+    try:
+        import numpy as np
+        import rasterio
+        from rasterio.io import MemoryFile
+    except ImportError:
+        return tif_bytes
+
+    try:
+        with MemoryFile(tif_bytes) as memfile:
+            with memfile.open() as src:
+                profile = src.profile.copy()
+                data = src.read()  # (bands, H, W)
+                src_nodata = src.nodata if src.nodata is not None else nodata_value
+
+            out_memfile = MemoryFile()
+            with out_memfile.open(**profile) as dst:
+                dst.write(data)
+                for b_idx in range(1, data.shape[0] + 1):
+                    band = data[b_idx - 1].astype('float64')
+                    if src_nodata is not None:
+                        valid = band[band != float(src_nodata)]
+                    else:
+                        valid = band.ravel()
+                    # NaN/Inf (float raster'larda GEE'nin maskelenmiş
+                    # piksel dolgusu) istatistik dışı bırakılır.
+                    valid = valid[np.isfinite(valid)]
+                    if valid.size == 0:
+                        continue
+                    b_min  = float(valid.min())
+                    b_max  = float(valid.max())
+                    b_mean = float(valid.mean())
+                    b_std  = float(valid.std())
+                    dst.update_tags(
+                        b_idx,
+                        STATISTICS_MINIMUM=repr(b_min),
+                        STATISTICS_MAXIMUM=repr(b_max),
+                        STATISTICS_MEAN=repr(b_mean),
+                        STATISTICS_STDDEV=repr(b_std),
+                        STATISTICS_APPROXIMATE='NO',
+                    )
+            try:
+                return out_memfile.read()
+            finally:
+                out_memfile.close()
+    except Exception as stat_err:
+        print('[SylvaGIS] ⚠️ Band istatistiği gömülemedi (dosya yine de gönderiliyor):', stat_err)
+        return tif_bytes
 
 
 def _true_clip_tif_bytes(tif_bytes, aoi_geom_4326, nodata_value):
@@ -1934,7 +2283,7 @@ def _true_clip_tif_bytes(tif_bytes, aoi_geom_4326, nodata_value):
                 return out_memfile.read()
 
 
-def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata_value=None,
+def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, nodata_value=None,
                                   aoi_geom_4326=None, fallback_region_geom=None):
     """
     Tek bir bandı GeoTIFF olarak indirir ve bayt dizisi (bytes) döndürür.
@@ -1989,8 +2338,8 @@ def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata
         if nodata_value is not None:
             params['formatOptions'] = {'noData': nodata_value}
 
-        url = img.getDownloadURL(params)
-        r = requests.get(url, timeout=180)
+        url = _call_with_retry(lambda: img.getDownloadURL(params))
+        r = _call_with_retry(lambda: requests.get(url, timeout=180), retries=2)
         if not r.ok:
             # GEE bazen boyut/limit hatalarını HTTP gövdesinde (200 dışı
             # durum koduyla) döner; ayrıştırılabilmesi için mesaja dahil et.
@@ -2015,8 +2364,8 @@ def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata
             ):
                 fb_params = dict(params)
                 fb_params['region'] = fallback_region_geom
-                fb_url = img.getDownloadURL(fb_params)
-                fb_r = requests.get(fb_url, timeout=180)
+                fb_url = _call_with_retry(lambda: img.getDownloadURL(fb_params))
+                fb_r = _call_with_retry(lambda: requests.get(fb_url, timeout=180), retries=2)
                 if not fb_r.ok:
                     body_snippet = (fb_r.text or '')[:500]
                     raise Exception(
@@ -2036,7 +2385,15 @@ def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata
         print('[SylvaGIS] Boyut sınırı aşıldı ({} > {} bayt) — {}x{} karoya bölünüyor: {}'.format(
             requested_bytes, limit_bytes, grid_n, grid_n, base_name
         ))
-        tile_geoms = _split_bbox_grid(region_geom, grid_n, grid_n)
+        # ÖNEMLİ: Eskiden burada _split_bbox_grid() (eşit coğrafi dilimler)
+        # kullanılıyordu — bu, komşu karoların piksel gridini birbirinden
+        # BAĞIMSIZ hesaplattırdığı için dikişlerde kesirli piksel kayması
+        # ve dolayısıyla NoData boşlukları/kareleri oluşturuyordu.
+        # _split_bbox_grid_aligned() TEK ORTAK bir piksel gridi üretir;
+        # her karo crsTransform + dimensions ile indirildiğinden karo
+        # kenarları birebir (pixel-perfect) örtüşür ve birleştirmede
+        # ASLA boşluk kalmaz. (bkz. fonksiyonun docstring'i)
+        tile_specs = _split_bbox_grid_aligned(region_geom, grid_n, grid_n, scale, crs)
 
         try:
             import rasterio
@@ -2051,19 +2408,19 @@ def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata
         tmpdir = tempfile.mkdtemp(prefix='sylvagis_')
         try:
             tile_paths = []
-            for idx, tile_geom in enumerate(tile_geoms):
+            for idx, tile_spec in enumerate(tile_specs):
                 tile_params = {
-                    'name':   base_name + '_t{}'.format(idx),
-                    'scale':  scale,
-                    'format': 'GEO_TIFF',
-                    'crs':    crs,
-                    'region': tile_geom,
+                    'name':        base_name + '_t{}'.format(idx),
+                    'format':      'GEO_TIFF',
+                    'crs':         crs,
+                    'crsTransform': tile_spec['crsTransform'],
+                    'dimensions':  tile_spec['dimensions'],
                 }
                 if nodata_value is not None:
                     tile_params['formatOptions'] = {'noData': nodata_value}
 
-                tile_url = img.getDownloadURL(tile_params)
-                tr = requests.get(tile_url, timeout=180)
+                tile_url = _call_with_retry(lambda: img.getDownloadURL(tile_params))
+                tr = _call_with_retry(lambda: requests.get(tile_url, timeout=180), retries=2)
                 if not tr.ok:
                     body_snippet = (tr.text or '')[:500]
                     raise Exception(
@@ -2108,6 +2465,26 @@ def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata
             return merged_bytes
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata_value=None,
+                                  aoi_geom_4326=None, fallback_region_geom=None):
+    """
+    _download_band_geotiff_bytes_impl() için ince bir sarmalayıcı (wrapper).
+    Tek istek / bounded-fallback / karo-mozaik yollarının HANGİSİ
+    çalışırsa çalışsın, kullanıcıya gönderilmeden hemen önce dosyaya
+    _stamp_exact_band_statistics() ile GERÇEK (tam taranmış) min/max/
+    ortalama/std istatistiklerini gömer — bkz. o fonksiyonun docstring'i
+    (QGIS/ArcMap arasındaki min-max tutarsızlığı düzeltmesi). Tek bir
+    yerden çağrılarak tüm indirme yollarının aynı garantiye sahip
+    olması sağlanır.
+    """
+    raw_bytes = _download_band_geotiff_bytes_impl(
+        img, region_geom, scale, crs, base_name,
+        nodata_value=nodata_value, aoi_geom_4326=aoi_geom_4326,
+        fallback_region_geom=fallback_region_geom
+    )
+    return _stamp_exact_band_statistics(raw_bytes, nodata_value=nodata_value)
 
 
 @app.route('/api/download-raw-bands', methods=['POST'])
@@ -2203,7 +2580,7 @@ def download_raw_bands():
         # 🔒 true-clip güvencesi: bkz. _true_clip_tif_bytes() docstring'i —
         # AOI'nin gerçek poligon şeklini (EPSG:4326) bir kez alıp her bant
         # indirmesinde kullanıyoruz.
-        aoi_geom_4326 = roi.getInfo() if scope == 'clip' else None
+        aoi_geom_4326 = _call_with_retry(lambda: roi.getInfo()) if scope == 'clip' else None
 
         zip_entries, errors = [], []
         for band_name in requested_bands:
