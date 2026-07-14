@@ -7,6 +7,7 @@ import shutil
 import zipfile
 import tempfile
 import datetime
+import uuid
 import traceback
 import urllib.parse
 import requests
@@ -56,6 +57,9 @@ except Exception as e:
 
 # Last analysis parameters (GeoTIFF download için saklanır)
 _last_analyze_params = {}
+
+# Geçici vektör dosyaları — token → {data, mimetype, filename, expires}
+_vector_temp = {}
 
 # Arazi Kullanımı (LULC) ailesindeki analizler — bunlar statik/tek-katmanlı
 # veri setleridir; tarih aralığı veya bulutluluk filtresi kullanmazlar ve
@@ -2511,6 +2515,316 @@ def register_user():
     except Exception as ex:
         traceback.print_exc()
         return jsonify({'ok': False, 'error': str(ex)}), 500
+
+
+# ════════════════════════════════════════════════════════════════
+# 🗺️ VEKTÖR İNDİRME — SHP / KML / KMZ
+#    Sınıflandırılmış raster analiz sonucunu vektöre dönüştürür.
+#    - SHP: ArcMap/QGIS'te açılabilir, öznitelik tablosuyla birlikte
+#    - KML/KMZ: Google Earth Pro'da 3D topografya ile çakıştırılabilir
+# ════════════════════════════════════════════════════════════════
+
+def _xml_escape(text):
+    return str(text).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;').replace('"','&quot;')
+
+
+def _hex_to_kml_color(hex_color, alpha='99'):
+    """#RRGGBB → KML aabbggrr formatı"""
+    h = hex_color.lstrip('#')
+    if len(h) == 3:
+        h = ''.join(c * 2 for c in h)
+    if len(h) != 6:
+        h = '888888'
+    r, g, b = h[0:2], h[2:4], h[4:6]
+    return alpha + b + g + r
+
+
+def _polygon_rings_to_kml(geom):
+    """shapely Polygon/MultiPolygon → KML koordinat stringleri"""
+    from shapely.geometry import MultiPolygon, Polygon
+
+    def ring_coords(ring):
+        return ' '.join('{},{},0'.format(x, y) for x, y in ring.coords)
+
+    def poly_kml(poly):
+        parts = ['<Polygon><tessellate>1</tessellate>']
+        parts.append('<outerBoundaryIs><LinearRing><coordinates>')
+        parts.append(ring_coords(poly.exterior))
+        parts.append('</coordinates></LinearRing></outerBoundaryIs>')
+        for interior in poly.interiors:
+            parts.append('<innerBoundaryIs><LinearRing><coordinates>')
+            parts.append(ring_coords(interior))
+            parts.append('</coordinates></LinearRing></innerBoundaryIs>')
+        parts.append('</Polygon>')
+        return ''.join(parts)
+
+    if isinstance(geom, MultiPolygon):
+        parts = ['<MultiGeometry>']
+        for p in geom.geoms:
+            parts.append(poly_kml(p))
+        parts.append('</MultiGeometry>')
+        return ''.join(parts)
+    elif isinstance(geom, Polygon):
+        return poly_kml(geom)
+    return ''
+
+
+def _build_kml_bytes(polygon_list, doc_name):
+    """Poligon listesinden UTF-8 KML baytları üret."""
+    try:
+        from shapely.geometry import shape as sh_shape
+    except ImportError:
+        raise Exception('KML üretimi için shapely gerekli: pip install shapely')
+
+    lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<kml xmlns="http://www.opengis.net/kml/2.2">',
+        '<Document>',
+        '<name>{}</name>'.format(_xml_escape(doc_name)),
+    ]
+
+    # Stil tanımları (her sınıf için bir kez)
+    seen = set()
+    for p in polygon_list:
+        sid = 'cls{}'.format(p['class_id'])
+        if sid in seen:
+            continue
+        seen.add(sid)
+        fill   = _hex_to_kml_color(p.get('color', '#888888'), alpha='99')
+        border = _hex_to_kml_color(p.get('color', '#888888'), alpha='ff')
+        lines += [
+            '<Style id="{}">'.format(sid),
+            '  <LineStyle><color>{}</color><width>1</width></LineStyle>'.format(border),
+            '  <PolyStyle><color>{}</color></PolyStyle>'.format(fill),
+            '</Style>',
+        ]
+
+    for p in polygon_list:
+        try:
+            geom     = sh_shape(p['geometry'])
+            kml_geom = _polygon_rings_to_kml(geom)
+        except Exception:
+            continue
+        if not kml_geom:
+            continue
+        lines += [
+            '<Placemark>',
+            '  <name>{}</name>'.format(_xml_escape(p['label'])),
+            '  <styleUrl>#{}</styleUrl>'.format('cls{}'.format(p['class_id'])),
+            '  <description>Sınıf: {} | Min: {} | Max: {}</description>'.format(
+                _xml_escape(p['label']), p['min'], p['max']),
+            kml_geom,
+            '</Placemark>',
+        ]
+
+    lines += ['</Document>', '</kml>']
+    return '\n'.join(lines).encode('utf-8')
+
+
+def _build_shapefile_zip(polygon_list, name, file_crs):
+    """Polygon listesinden Shapefile ZIP (SHP+SHX+DBF+PRJ) baytları üret."""
+    crs_wkt = (file_crs.to_wkt() if file_crs else
+               'GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563]],'
+               'PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]]')
+    crs_str = file_crs.to_string() if file_crs else 'EPSG:4326'
+
+    # Yöntem 1: fiona
+    try:
+        import fiona
+        schema = {
+            'geometry': 'Polygon',
+            'properties': {
+                'class_id': 'int',
+                'label':    'str',
+                'color':    'str',
+                'val_min':  'float',
+                'val_max':  'float',
+            }
+        }
+        buf = io.BytesIO()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            shp_path = os.path.join(tmpdir, name + '.shp')
+            with fiona.open(shp_path, 'w', driver='ESRI Shapefile',
+                            schema=schema, crs=crs_str) as dst:
+                for p in polygon_list:
+                    dst.write({
+                        'geometry':   p['geometry'],
+                        'properties': {
+                            'class_id': p['class_id'],
+                            'label':    p['label'][:80],
+                            'color':    p['color'],
+                            'val_min':  float(p['min']),
+                            'val_max':  float(p['max']),
+                        }
+                    })
+            with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+                for ext in ('shp', 'shx', 'dbf', 'prj', 'cpg'):
+                    fp = os.path.join(tmpdir, name + '.' + ext)
+                    if os.path.exists(fp):
+                        zf.write(fp, name + '.' + ext)
+        return buf.getvalue()
+    except ImportError:
+        pass
+
+    # Yöntem 2: pyshp (shapefile)
+    try:
+        import shapefile as pyshp
+        from shapely.geometry import shape as sh_shape, MultiPolygon, Polygon
+
+        def poly_rings(geom):
+            rings = []
+            def add_poly(p):
+                rings.append([[x, y] for x, y in p.exterior.coords])
+                for h in p.interiors:
+                    rings.append([[x, y] for x, y in h.coords])
+            if isinstance(geom, MultiPolygon):
+                for g in geom.geoms: add_poly(g)
+            elif isinstance(geom, Polygon):
+                add_poly(geom)
+            return rings
+
+        buf = io.BytesIO()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            w = pyshp.Writer(os.path.join(tmpdir, name), shapeType=pyshp.POLYGON)
+            w.field('class_id', 'N')
+            w.field('label',    'C', size=80)
+            w.field('color',    'C', size=10)
+            w.field('val_min',  'F', decimal=4)
+            w.field('val_max',  'F', decimal=4)
+            for p in polygon_list:
+                try:
+                    rings = poly_rings(sh_shape(p['geometry']))
+                    w.poly(rings)
+                    w.record(p['class_id'], p['label'][:80], p['color'],
+                             float(p['min']), float(p['max']))
+                except Exception:
+                    pass
+            w.close()
+            with open(os.path.join(tmpdir, name + '.prj'), 'w') as pf:
+                pf.write(crs_wkt)
+            with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+                for ext in ('shp', 'shx', 'dbf', 'prj'):
+                    fp = os.path.join(tmpdir, name + '.' + ext)
+                    if os.path.exists(fp): zf.write(fp, name + '.' + ext)
+        return buf.getvalue()
+    except ImportError:
+        pass
+
+    raise Exception(
+        'Shapefile için "fiona" veya "pyshp" gerekli. '
+        'Sunucuda şunu çalıştırın: pip install fiona  veya  pip install pyshp'
+    )
+
+
+
+# ════════════════════════════════════════════════════════════════
+# 🗺️  VEKTÖR İNDİRME  —  GEE Native (reduceToVectors + getDownloadURL)
+#
+# Sunucuya raster indirmez; GEE'nin kendi vektörleştirme motoru
+# çalışır ve doğrudan imzalı bir Google Cloud Storage URL'si döner.
+# Frontend bu URL'yi window.open() ile yeni sekmede açar → indirir.
+# ════════════════════════════════════════════════════════════════
+
+@app.route('/api/download-vector', methods=['POST'])
+def download_vector():
+    """
+    Adımlar:
+      1. Son analizin parametrelerinden sınıflandırılmış ee.Image oluşturulur.
+      2. image.reduceToVectors() ile GEE tarafında raster → poligon dönüşümü yapılır.
+      3. Her sınıfa Sinif_Adi / Sinif_Renk / Val_Min / Val_Max öznitelikleri eklenir.
+      4. featureCollection.getDownloadURL() ile imzalı GCS URL üretilir.
+      5. URL JSON olarak frontend'e döndürülür; sunucuda dosya kalmaz.
+
+    Desteklenen formatlar: shp (ZIP), kml, kmz
+    Ölçek: Sentinel-2 → 10 m  |  Landsat → 30 m  (uydu tipine göre otomatik)
+    """
+    try:
+        req          = request.json or {}
+        fmt          = req.get('format', 'shp').lower()
+        filename     = (req.get('filename') or 'SylvaGIS_Vektor').strip() or 'SylvaGIS_Vektor'
+        clip_mode    = req.get('clipMode', 'clip')
+        fresh_roi    = req.get('roi')
+        class_breaks = req.get('classBreaks') or _last_analyze_params.get('classBreaks')
+
+        if not (_last_analyze_params.get('roi') or fresh_roi):
+            return jsonify({'success': False, 'error': 'Önce bir uydu analizi çalıştırın.'})
+        if not class_breaks:
+            return jsonify({'success': False,
+                            'error': 'Sınıflandırma verisi bulunamadı. '
+                                     'Lütfen önce Classified modda analiz çalıştırın.'})
+
+        data = dict(_last_analyze_params)
+        if fresh_roi:  data['roi']      = fresh_roi
+        if clip_mode:  data['clipMode'] = clip_mode
+
+        # Uydu tipine göre ölçek: Sentinel-2 → 10 m, Landsat → 30 m
+        satellite = data.get('satellite', '')
+        scale     = 10 if satellite.startswith('s2') else 30
+
+        safe_name = re.sub(r'[^\w\-]', '_', filename)[:60]
+
+        # 1. Sınıflandırılmış GEE görüntüsü
+        _, roi_geom, result, _ = build_result_image(data)
+        classified, _          = build_classified_image(result, class_breaks)
+        if classified is None:
+            return jsonify({'success': False,
+                            'error': 'Sınıflandırma görüntüsü oluşturulamadı. Sınıf aralıklarını kontrol edin.'})
+
+        # 2. Raster → Vektör  (GEE sunucusunda, bant pikselleri poligona indirgenir)
+        #    labelProperty: her poligona "hangi sınıf kodu" geldiğini yazar (1, 2, 3 …)
+        #    bestEffort=True: çok büyük AOI'lerde GEE otomatik ölçeği artırır
+        vector_fc = classified.reduceToVectors(
+            geometry     = roi_geom,
+            scale        = scale,
+            geometryType = 'polygon',
+            eightConnected = False,          # 4-bağlantılı (daha az ince poligon)
+            labelProperty  = 'Sinif_Kodu',   # piksel değeri → özellik adı
+            maxPixels      = 1e13,
+            bestEffort     = True,
+        )
+
+        # 3. Her sınıf poligonuna ek öznitelik ekle (Sinif_Adi, Sinif_Renk, Val_Min, Val_Max)
+        sorted_breaks  = sorted(class_breaks, key=lambda c: c['min'])
+        cls_label_dict = ee.Dictionary({str(i+1): (cls.get('label') or cls.get('name') or 'Sinif_{}'.format(i+1))
+                                        for i, cls in enumerate(sorted_breaks)})
+        cls_color_dict = ee.Dictionary({str(i+1): cls.get('color', '#888888')
+                                        for i, cls in enumerate(sorted_breaks)})
+        cls_min_dict   = ee.Dictionary({str(i+1): float(cls.get('min', 0))
+                                        for i, cls in enumerate(sorted_breaks)})
+        cls_max_dict   = ee.Dictionary({str(i+1): float(cls.get('max', 0))
+                                        for i, cls in enumerate(sorted_breaks)})
+
+        def enrich_feature(feature):
+            # Sınıf kodu → sözlük anahtarı ('1', '2', ...)
+            key = ee.Number(feature.get('Sinif_Kodu')).toInt().format('%d')
+            return feature.set({
+                'Sinif_Adi':  cls_label_dict.get(key, 'Bilinmeyen'),
+                'Sinif_Renk': cls_color_dict.get(key, '#888888'),
+                'Val_Min':    ee.Number(cls_min_dict.get(key, ee.Number(0))),
+                'Val_Max':    ee.Number(cls_max_dict.get(key, ee.Number(0))),
+            })
+
+        vector_fc = vector_fc.map(enrich_feature)
+
+        # 4. GEE imzalı indirme URL'si üret  (GCS → doğrudan indirilir)
+        #    GEE getDownloadURL filetype değerleri: 'shp', 'kml', 'kmz', 'csv', 'geojson'
+        gee_format = {'shp': 'shp', 'kml': 'kml', 'kmz': 'kmz'}.get(fmt, 'shp')
+        dl_ext     = {'shp': 'zip', 'kml': 'kml', 'kmz': 'kmz'}.get(fmt, 'zip')
+        dl_name    = '{}.{}'.format(safe_name, dl_ext)
+
+        download_url = vector_fc.getDownloadURL(
+            filetype = gee_format,
+            filename = safe_name,
+        )
+
+        print('✅ GEE vektör URL: {} — {}'.format(fmt.upper(), download_url[:100]))
+        return jsonify({'success': True, 'url': download_url, 'filename': dl_name})
+
+    except Exception as e:
+        traceback.print_exc()
+        err = str(e).strip() or 'Bilinmeyen hata — sunucu konsoluna bakın.'
+        return jsonify({'success': False, 'error': err})
+
 
 if __name__ == '__main__':
     # NOT: Bu satır sadece yerel (local) geliştirme/test içindir.
