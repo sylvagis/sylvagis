@@ -2005,7 +2005,25 @@ def download_geotiff():
         # clip(roi) ile maskelendiği için burada yalnızca o maskeyi GeoTIFF'e
         # gerçek NoData olarak yazdırmak yeterlidir — bu davranış Sentinel ve
         # Landsat dahil TÜM veri setleri için AYNIdır.
-        nodata_value = 0 if is_clip else None
+        #
+        # 🛠️ KÖK NEDEN DÜZELTMESİ (DEM'de deniz kıyısında, NDVI'de 0'a yakın
+        # alanlarda, Slope'ta İSE NEREDEYSE HER YERDE görülen "boş kareler"):
+        # NoData sentinel'i önceden 0 idi. Ancak 0, BİRÇOK katmanda GERÇEK
+        # ve geçerli bir değer: DEM'de deniz seviyesi (kıyı şeridi) 0 m'dir,
+        # NDVI/NDWI gibi indekslerde 0 son derece yaygın bir ara değerdir,
+        # ve en çarpıcısı — Slope'ta 0° (dümdüz arazi) HER YERDE karşımıza
+        # çıkabilir. GeoTIFF'e "NoData = 0" etiketi yazılınca, ArcMap/QGIS
+        # o değere sahip HER piksel bazlı gerçek veriyi de boş/şeffaf
+        # gösteriyordu — kullanıcının bildirdiği "DEM'de kıyıda, NDVI'de
+        # 0 civarında, Slope'ta ise tüm alanda kare kare boşluk" deseni
+        # BİREBİR bu çakışmayla açıklanıyor.
+        #
+        # ÇÖZÜM: NoData sentinel'i olarak, bu katmanların hiçbirinde
+        # (elevation, slope [0-90°], NDVI/NDWI vb. [-1, 1], reflectance
+        # [0-1]) asla gerçekten oluşamayacak -9999 değeri kullanılıyor.
+        # Bu, raster verilerinde yaygın kabul görmüş standart bir NoData
+        # kuralıdır (ör. USGS/ESRI ürünlerinde de kullanılır).
+        nodata_value = -9999 if is_clip else None
 
         # 🔒 true-clip güvencesi: GEE'nin clip()/unmask() zincirinin ötesinde,
         # AOI'nin GERÇEK poligon şeklini (EPSG:4326) de gönderiyoruz ki
@@ -2668,10 +2686,18 @@ def download_raw_bands():
                 base_name = re.sub(r'[^A-Za-z0-9_\-\.]+', '_', base_name)
 
                 # 'clip' kapsamında AOI dışında kalan pikseller GERÇEK bir
-                # NoData değeri (0) olarak yazılır — bu olmadan GEE, maskeyi
+                # NoData değeri olarak yazılır — bu olmadan GEE, maskeyi
                 # NoData etiketi olmadan dolgu değeriyle yazar ve dosya CBS
                 # yazılımında düz bir dikdörtgen (bounding box) gibi görünür.
-                nodata_value = 0 if scope == 'clip' else None
+                #
+                # 🛠️ KÖK NEDEN DÜZELTMESİ: sentinel olarak eskiden 0
+                # kullanılıyordu, ama ham bant değerleri (reflectance,
+                # DN vb.) çoğunlukla 0'ı GERÇEK bir değer olarak içerebilir
+                # (ör. su/gölge pikselleri, karanlık yüzeyler). Bu da
+                # GERÇEK veri içeren pikselleri GIS yazılımında yanlışlıkla
+                # boş gösteriyordu. -9999, bu bantların hiçbirinde
+                # gerçekten oluşamayacak standart bir NoData sentinelidir.
+                nodata_value = -9999 if scope == 'clip' else None
 
                 tif_bytes = _download_band_geotiff_bytes(
                     export_img, export_region, native_scale, native_crs, base_name,
