@@ -1041,30 +1041,21 @@ def build_result_image(data, for_export=False):
         else:  # SRTM (varsayılan)
             dem = ee.Image('USGS/SRTMGL1_003').select('elevation')
 
-        # 🛠️ BUG FİX (dağınık tekil piksel boşlukları — "kare kare" benek
-        # deseni, özellikle sırt/vadi hatlarında yoğunlaşan beyaz/siyah
-        # noktalar): Yukarıdaki unmask(SRTM) adımı yalnızca ALOS/Copernicus
-        # mozaiklerindeki BÜYÜK kapsama boşluklarını kapatır — ama HİÇBİR
-        # kaynak (SRTM dahil) için, dik yamaçlarda radar gölgesi nedeniyle
-        # oluşan TEKİL/küçük-küme "void" (veri boşluğu) piksellerini
-        # doldurmaz. Bu void'ler ham DEM'de maskelenmiş (NoData) tek
-        # piksellerdir; eğim/bakı/hillshade gibi türevler 3x3 komşuluk
-        # çekirdeğiyle hesaplandığından, her void pikseli çevresindeki
-        # birkaç piksele de yayılır — kullanıcının GIS yazılımında gördüğü
-        # dağınık "eksik piksel kareleri" tam olarak budur.
+        # 🛠️ BUG FİX (beyaz nokta / spike artifact sorunu):
+        # SRTM ve ALOS radar interferometrisinde, kentsel yapılar, dik kayalıklar
+        # veya radar gölgesi/layover bölgelerinde izole tek-piksel yükseklik
+        # sıçramaları (spike) oluşur. ee.Terrain.products() bu pikseldeki rakımı
+        # komşularıyla karşılaştırarak eğim hesapladığı için spike pikseller
+        # gerçekçi olmayan çok yüksek eğim değerleri üretir — haritada ve
+        # indirilen GeoTIFF'te beyaz nokta olarak görünür.
         #
-        # ÇÖZÜM: Kaynak ne olursa olsun, DEM'i terrain ürünleri hesaplanmadan
-        # ÖNCE odak-ortalama (focal mean) ile "void-fill" işleminden geçiriyoruz.
-        # reduceNeighborhood tabanlı focalMean, komşuluk penceresindeki YALNIZCA
-        # geçerli (maskelenmemiş) pikselleri kullanarak ortalama alır; bu da
-        # void pikselinin değerini çevresindeki gerçek verilerden enterpole
-        # edip dolduruyor — sonuçta ham DEM'de tek bir maskeli piksel bile
-        # kalmıyor ve türev ürünlerde artık hiçbir boşluk/benek oluşmuyor.
-        # 150 m yarıçap (~5 piksel @ 30 m), tipik void kümelerini (genelde
-        # 1-3 piksel genişliğinde) kapatmaya yeterlidir; büyük gerçek NoData
-        # alanlarını (AOI dışı vb.) ETKİLEMEZ çünkü onlar zaten export
-        # aşamasında ayrı bir clip/nodata mantığıyla ele alınıyor.
-        dem = dem.unmask(dem.focalMean(radius=150, units='meters'))
+        # Çözüm: 3×3 medyan filtresi (focal_median, yarıçap=1 piksel) DEM'i
+        # terrain hesabından ÖNCE temizler. Medyan, ortalamadan farklı olarak
+        # spike değeri komşu medyana çektiği için gerçek yükseltim değerleri
+        # korunurken izole spike'lar bastırılır. Bu işlem SRTM için ~30 m,
+        # ALOS/Copernicus için ~30 m ölçeğinde çalışır; tüm büyük topoğrafik
+        # yapılar (vadiler, sırtlar, yamaçlar) değişmeden kalır.
+        dem = dem.focal_median(radius=1, kernelType='square', iterations=1)
 
         terrain = ee.Terrain.products(dem)
         slope   = terrain.select('slope')
@@ -1951,11 +1942,27 @@ def download_geotiff():
         # pikseller, "region" parametresinin yalnızca dikdörtgen bir kapsama
         # alanı (bounding box) tanımlaması nedeniyle GERÇEK bir NoData
         # değeri olarak işaretlenmezse, indirilen GeoTIFF ArcGIS/QGIS'te AOI
-        # poligonu yerine düz bir dikdörtgen gibi görünür. final_display zaten
-        # clip(roi) ile maskelendiği için burada yalnızca o maskeyi GeoTIFF'e
-        # gerçek NoData olarak yazdırmak yeterlidir — bu davranış Sentinel ve
-        # Landsat dahil TÜM veri setleri için AYNIdır.
-        nodata_value = 0 if is_clip else None
+        # poligonu yerine düz bir dikdörtgen gibi görünür.
+        #
+        # 🛠️ BUG FİX (🌈 Stretched modda kare kare eksik piksel sorunu):
+        # Önceki kod her zaman nodata_value=0 kullanıyordu. SORUN: 0, NDVI,
+        # eğim, DEM gibi sürekli/float verilerde GEÇERLİ bir değerdir (ör.
+        # kentsel alanlarda NDVI≈0, düz arazide eğim=0, deniz seviyesinde DEM=0).
+        # GEE img.unmask(0) ile bulut/maske boşluklarını 0'a doldurur; ardından
+        # formatOptions.noData=0 da TÜM 0-değerli pikselleri NoData sayar —
+        # yani gerçek 0-değerli pikseller de CBS yazılımında (QGIS/ArcMap)
+        # eksik kare olarak görünürdü. Stretch modunda kullanıcı bu değer
+        # aralığına odaklandığı için sorun daha belirgin çıkıyordu.
+        #
+        # ÇÖZÜM: Float veri için geçerli hiçbir veri aralığının dışında
+        # olan -9999 kullanılır. Yalnızca Byte dönüşümü yapılmış S2 RGB
+        # (0-255 aralığı) için 0 korunur — çünkü Byte tipinde -9999 sığmaz.
+        is_rgb_byte = (data.get('index') == 'RGB'
+                       and data.get('satellite') in ('s2-l1c', 's2-l2a'))
+        if is_clip:
+            nodata_value = 0 if is_rgb_byte else -9999
+        else:
+            nodata_value = None
 
         # 🔒 true-clip güvencesi: GEE'nin clip()/unmask() zincirinin ötesinde,
         # AOI'nin GERÇEK poligon şeklini (EPSG:4326) de gönderiyoruz ki
@@ -2044,10 +2051,6 @@ def _split_bbox_grid(roi, nx, ny):
     karoya böler ve ee.Geometry.Rectangle listesi döndürür. Orijinal
     çözünürlük/CRS korunur; yalnızca dışa aktarma alanı (region) küçültülür,
     böylece GEE'nin tek istekteki boyut sınırı aşılmaz.
-
-    NOT: Bu fonksiyon artık indirme yolunda KULLANILMIYOR — bkz.
-    _split_bbox_grid_aligned(). Geriye dönük referans/uyumluluk için
-    dosyada bırakıldı.
     """
     ring = roi.bounds().coordinates().get(0).getInfo()
     lons = [p[0] for p in ring]
@@ -2063,77 +2066,6 @@ def _split_bbox_grid(roi, nx, ny):
             y0 = ymin + (ymax - ymin) * j / ny
             y1 = ymin + (ymax - ymin) * (j + 1) / ny
             tiles.append(ee.Geometry.Rectangle([x0, y0, x1, y1], 'EPSG:4326', False))
-    return tiles
-
-
-def _split_bbox_grid_aligned(roi, nx, ny, scale, crs):
-    """
-    🛠️ KÖK NEDEN DÜZELTMESİ — karo (tile) sınırlarında piksel boşlukları
-    (ArcMap/QGIS'te DEM/eğim gibi büyük TOPO katmanlarında görülen
-    "bazı piksel kareleri eksik" sorunu):
-
-    ESKİ YÖNTEM (_split_bbox_grid), sınırlayıcı kutuyu enlem/boylamda
-    EŞİT COĞRAFİ dilimlere bölüyordu ve her karo GEE'ye yalnızca
-    'region' + 'scale' olarak gönderiliyordu. GEE, her karonun piksel
-    gridinin başlangıcını (origin) KENDİ bölgesine göre bağımsız
-    hesapladığından, komşu karoların piksel kenarları çoğu zaman TAM
-    örtüşmüyordu (kesirli/sub-pixel kayma). rasterio.merge() ile
-    birleştirilince bu kayma, karo dikişlerinde ince NoData şeritleri
-    veya kareleri olarak ortaya çıkıyordu — kullanıcının GIS
-    yazılımında gördüğü "eksik piksel kareleri" tam olarak budur.
-
-    ÇÖZÜM: Karoları eşit coğrafi dilimler yerine TEK ORTAK bir piksel
-    gridine göre bölüyoruz. Önce tüm AOI'nin hedef CRS'teki gerçek
-    kapsamını hesaplıyoruz, bunu 'scale' değerine göre TAM SAYI piksel
-    satır/sütununa ayırıyoruz, sonra her karo için GEE'ye 'region' +
-    'scale' yerine doğrudan 'crsTransform' + 'dimensions' gönderiyoruz.
-    crsTransform, TÜM karolar için AYNI ortak origin ve piksel boyutunu
-    (scale) kullandığından, komşu karoların kenar pikselleri artık
-    matematiksel olarak BİREBİR (pixel-perfect) çakışır; rasterio.merge
-    sonrasında dikişlerde asla boşluk kalmaz.
-
-    roi: ee.Geometry (WGS84 veya başka bir projeksiyonda olabilir).
-    scale: metre cinsinden piksel boyutu (indirme ile aynı 'scale').
-    crs:   hedef koordinat referans sistemi (örn. 'EPSG:4326' / 'EPSG:32636').
-
-    Dönen değer: [{'crsTransform': [...], 'dimensions': 'WxH'}, ...]
-    """
-    # AOI'yi hedef CRS'e projekte edip GERÇEK sınırlayıcı kutusunu al
-    # (maxError=1: metre cinsinden izin verilen projeksiyon hatası payı).
-    roi_in_crs = roi.transform(crs, 1)
-    ring = roi_in_crs.bounds().coordinates().get(0).getInfo()
-    xs = [p[0] for p in ring]
-    ys = [p[1] for p in ring]
-    xmin, xmax = min(xs), max(xs)
-    ymin, ymax = min(ys), max(ys)
-
-    total_w_px = max(1, math.ceil((xmax - xmin) / scale))
-    total_h_px = max(1, math.ceil((ymax - ymin) / scale))
-
-    # Ortak grid origin'i: sol-üst köşe (x küçükten büyüğe, y büyükten
-    # küçüğe gider — GeoTIFF/afin dönüşüm kuralı).
-    origin_x = xmin
-    origin_y = ymax
-
-    tiles = []
-    for i in range(nx):
-        col0 = (i * total_w_px) // nx
-        col1 = total_w_px if i == nx - 1 else ((i + 1) * total_w_px) // nx
-        if col1 <= col0:
-            continue
-        for j in range(ny):
-            row0 = (j * total_h_px) // ny
-            row1 = total_h_px if j == ny - 1 else ((j + 1) * total_h_px) // ny
-            if row1 <= row0:
-                continue
-            tile_x0 = origin_x + col0 * scale
-            tile_y1 = origin_y - row0 * scale
-            # Afin dönüşüm: [scaleX, shearX, translateX, shearY, scaleY, translateY]
-            crs_transform = [scale, 0, tile_x0, 0, -scale, tile_y1]
-            tiles.append({
-                'crsTransform': crs_transform,
-                'dimensions':   '{}x{}'.format(col1 - col0, row1 - row0),
-            })
     return tiles
 
 
@@ -2385,15 +2317,7 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
         print('[SylvaGIS] Boyut sınırı aşıldı ({} > {} bayt) — {}x{} karoya bölünüyor: {}'.format(
             requested_bytes, limit_bytes, grid_n, grid_n, base_name
         ))
-        # ÖNEMLİ: Eskiden burada _split_bbox_grid() (eşit coğrafi dilimler)
-        # kullanılıyordu — bu, komşu karoların piksel gridini birbirinden
-        # BAĞIMSIZ hesaplattırdığı için dikişlerde kesirli piksel kayması
-        # ve dolayısıyla NoData boşlukları/kareleri oluşturuyordu.
-        # _split_bbox_grid_aligned() TEK ORTAK bir piksel gridi üretir;
-        # her karo crsTransform + dimensions ile indirildiğinden karo
-        # kenarları birebir (pixel-perfect) örtüşür ve birleştirmede
-        # ASLA boşluk kalmaz. (bkz. fonksiyonun docstring'i)
-        tile_specs = _split_bbox_grid_aligned(region_geom, grid_n, grid_n, scale, crs)
+        tile_geoms = _split_bbox_grid(region_geom, grid_n, grid_n)
 
         try:
             import rasterio
@@ -2408,13 +2332,13 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
         tmpdir = tempfile.mkdtemp(prefix='sylvagis_')
         try:
             tile_paths = []
-            for idx, tile_spec in enumerate(tile_specs):
+            for idx, tile_geom in enumerate(tile_geoms):
                 tile_params = {
-                    'name':        base_name + '_t{}'.format(idx),
-                    'format':      'GEO_TIFF',
-                    'crs':         crs,
-                    'crsTransform': tile_spec['crsTransform'],
-                    'dimensions':  tile_spec['dimensions'],
+                    'name':   base_name + '_t{}'.format(idx),
+                    'scale':  scale,
+                    'format': 'GEO_TIFF',
+                    'crs':    crs,
+                    'region': tile_geom,
                 }
                 if nodata_value is not None:
                     tile_params['formatOptions'] = {'noData': nodata_value}
@@ -2618,10 +2542,16 @@ def download_raw_bands():
                 base_name = re.sub(r'[^A-Za-z0-9_\-\.]+', '_', base_name)
 
                 # 'clip' kapsamında AOI dışında kalan pikseller GERÇEK bir
-                # NoData değeri (0) olarak yazılır — bu olmadan GEE, maskeyi
+                # NoData değeri olarak yazılır — bu olmadan GEE, maskeyi
                 # NoData etiketi olmadan dolgu değeriyle yazar ve dosya CBS
                 # yazılımında düz bir dikdörtgen (bounding box) gibi görünür.
-                nodata_value = 0 if scope == 'clip' else None
+                #
+                # 🛠️ BUG FİX: Float bantlar (SR_B*, DN_B*, NDVI vb.) için
+                # -9999 kullanılır; 0, birçok bant için geçerli bir değerdir
+                # ve 0-nodata karışıklığı CBS yazılımında kare kare eksik
+                # piksel olarak görünürdü. Ham bantlar ağırlıklı olarak
+                # float/int veri taşıdığından -9999 her zaman güvenlidir.
+                nodata_value = -9999 if scope == 'clip' else None
 
                 tif_bytes = _download_band_geotiff_bytes(
                     export_img, export_region, native_scale, native_crs, base_name,
