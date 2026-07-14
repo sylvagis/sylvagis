@@ -2019,6 +2019,10 @@ def _split_bbox_grid(roi, nx, ny):
     karoya böler ve ee.Geometry.Rectangle listesi döndürür. Orijinal
     çözünürlük/CRS korunur; yalnızca dışa aktarma alanı (region) küçültülür,
     böylece GEE'nin tek istekteki boyut sınırı aşılmaz.
+
+    NOT: Bu fonksiyon artık indirme yolunda KULLANILMIYOR — bkz.
+    _split_bbox_grid_aligned(). Geriye dönük referans/uyumluluk için
+    dosyada bırakıldı.
     """
     ring = roi.bounds().coordinates().get(0).getInfo()
     lons = [p[0] for p in ring]
@@ -2034,6 +2038,77 @@ def _split_bbox_grid(roi, nx, ny):
             y0 = ymin + (ymax - ymin) * j / ny
             y1 = ymin + (ymax - ymin) * (j + 1) / ny
             tiles.append(ee.Geometry.Rectangle([x0, y0, x1, y1], 'EPSG:4326', False))
+    return tiles
+
+
+def _split_bbox_grid_aligned(roi, nx, ny, scale, crs):
+    """
+    🛠️ KÖK NEDEN DÜZELTMESİ — karo (tile) sınırlarında piksel boşlukları
+    (ArcMap/QGIS'te DEM/eğim gibi büyük TOPO katmanlarında görülen
+    "bazı piksel kareleri eksik" sorunu):
+
+    ESKİ YÖNTEM (_split_bbox_grid), sınırlayıcı kutuyu enlem/boylamda
+    EŞİT COĞRAFİ dilimlere bölüyordu ve her karo GEE'ye yalnızca
+    'region' + 'scale' olarak gönderiliyordu. GEE, her karonun piksel
+    gridinin başlangıcını (origin) KENDİ bölgesine göre bağımsız
+    hesapladığından, komşu karoların piksel kenarları çoğu zaman TAM
+    örtüşmüyordu (kesirli/sub-pixel kayma). rasterio.merge() ile
+    birleştirilince bu kayma, karo dikişlerinde ince NoData şeritleri
+    veya kareleri olarak ortaya çıkıyordu — kullanıcının GIS
+    yazılımında gördüğü "eksik piksel kareleri" tam olarak budur.
+
+    ÇÖZÜM: Karoları eşit coğrafi dilimler yerine TEK ORTAK bir piksel
+    gridine göre bölüyoruz. Önce tüm AOI'nin hedef CRS'teki gerçek
+    kapsamını hesaplıyoruz, bunu 'scale' değerine göre TAM SAYI piksel
+    satır/sütununa ayırıyoruz, sonra her karo için GEE'ye 'region' +
+    'scale' yerine doğrudan 'crsTransform' + 'dimensions' gönderiyoruz.
+    crsTransform, TÜM karolar için AYNI ortak origin ve piksel boyutunu
+    (scale) kullandığından, komşu karoların kenar pikselleri artık
+    matematiksel olarak BİREBİR (pixel-perfect) çakışır; rasterio.merge
+    sonrasında dikişlerde asla boşluk kalmaz.
+
+    roi: ee.Geometry (WGS84 veya başka bir projeksiyonda olabilir).
+    scale: metre cinsinden piksel boyutu (indirme ile aynı 'scale').
+    crs:   hedef koordinat referans sistemi (örn. 'EPSG:4326' / 'EPSG:32636').
+
+    Dönen değer: [{'crsTransform': [...], 'dimensions': 'WxH'}, ...]
+    """
+    # AOI'yi hedef CRS'e projekte edip GERÇEK sınırlayıcı kutusunu al
+    # (maxError=1: metre cinsinden izin verilen projeksiyon hatası payı).
+    roi_in_crs = roi.transform(crs, 1)
+    ring = roi_in_crs.bounds().coordinates().get(0).getInfo()
+    xs = [p[0] for p in ring]
+    ys = [p[1] for p in ring]
+    xmin, xmax = min(xs), max(xs)
+    ymin, ymax = min(ys), max(ys)
+
+    total_w_px = max(1, math.ceil((xmax - xmin) / scale))
+    total_h_px = max(1, math.ceil((ymax - ymin) / scale))
+
+    # Ortak grid origin'i: sol-üst köşe (x küçükten büyüğe, y büyükten
+    # küçüğe gider — GeoTIFF/afin dönüşüm kuralı).
+    origin_x = xmin
+    origin_y = ymax
+
+    tiles = []
+    for i in range(nx):
+        col0 = (i * total_w_px) // nx
+        col1 = total_w_px if i == nx - 1 else ((i + 1) * total_w_px) // nx
+        if col1 <= col0:
+            continue
+        for j in range(ny):
+            row0 = (j * total_h_px) // ny
+            row1 = total_h_px if j == ny - 1 else ((j + 1) * total_h_px) // ny
+            if row1 <= row0:
+                continue
+            tile_x0 = origin_x + col0 * scale
+            tile_y1 = origin_y - row0 * scale
+            # Afin dönüşüm: [scaleX, shearX, translateX, shearY, scaleY, translateY]
+            crs_transform = [scale, 0, tile_x0, 0, -scale, tile_y1]
+            tiles.append({
+                'crsTransform': crs_transform,
+                'dimensions':   '{}x{}'.format(col1 - col0, row1 - row0),
+            })
     return tiles
 
 
@@ -2285,7 +2360,15 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
         print('[SylvaGIS] Boyut sınırı aşıldı ({} > {} bayt) — {}x{} karoya bölünüyor: {}'.format(
             requested_bytes, limit_bytes, grid_n, grid_n, base_name
         ))
-        tile_geoms = _split_bbox_grid(region_geom, grid_n, grid_n)
+        # ÖNEMLİ: Eskiden burada _split_bbox_grid() (eşit coğrafi dilimler)
+        # kullanılıyordu — bu, komşu karoların piksel gridini birbirinden
+        # BAĞIMSIZ hesaplattırdığı için dikişlerde kesirli piksel kayması
+        # ve dolayısıyla NoData boşlukları/kareleri oluşturuyordu.
+        # _split_bbox_grid_aligned() TEK ORTAK bir piksel gridi üretir;
+        # her karo crsTransform + dimensions ile indirildiğinden karo
+        # kenarları birebir (pixel-perfect) örtüşür ve birleştirmede
+        # ASLA boşluk kalmaz. (bkz. fonksiyonun docstring'i)
+        tile_specs = _split_bbox_grid_aligned(region_geom, grid_n, grid_n, scale, crs)
 
         try:
             import rasterio
@@ -2300,13 +2383,13 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
         tmpdir = tempfile.mkdtemp(prefix='sylvagis_')
         try:
             tile_paths = []
-            for idx, tile_geom in enumerate(tile_geoms):
+            for idx, tile_spec in enumerate(tile_specs):
                 tile_params = {
-                    'name':   base_name + '_t{}'.format(idx),
-                    'scale':  scale,
-                    'format': 'GEO_TIFF',
-                    'crs':    crs,
-                    'region': tile_geom,
+                    'name':        base_name + '_t{}'.format(idx),
+                    'format':      'GEO_TIFF',
+                    'crs':         crs,
+                    'crsTransform': tile_spec['crsTransform'],
+                    'dimensions':  tile_spec['dimensions'],
                 }
                 if nodata_value is not None:
                     tile_params['formatOptions'] = {'noData': nodata_value}
