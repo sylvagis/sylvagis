@@ -3,6 +3,7 @@ import re
 import io
 import os
 import math
+import time
 import shutil
 import zipfile
 import tempfile
@@ -16,6 +17,62 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 print('SylvaGIS server.py yüklendi — versiyon: zip-export-v2-tiling')
+
+
+# ════════════════════════════════════════════════════════════════
+# 🔁 GEE / AĞ ÇAĞRILARI İÇİN OTOMATİK TEKRAR DENEME (RETRY)
+# ════════════════════════════════════════════════════════════════
+# SORUN: "Birkaç analiz peş peşe yapılınca sunucu bağlantı hatası veriyor
+# ya da indirme yapmıyor" şikayetinin en olası kök nedeni budur.
+#
+# /api/analyze tek bir istekte GEE'ye 5-7 ayrı ağ çağrısı (.getInfo(),
+# reduceRegion, getMapId vb.) yapar. Google Earth Engine, bir servis
+# hesabı için EŞZAMANLI istek sayısına ve dakikadaki istek sayısına
+# sınır koyar. Kullanıcı birkaç analizi ARKA ARKAYA (önceki analiz daha
+# bitmeden) çalıştırdığında, bu sınır aşılabilir ve GEE geçici bir hata
+# (429 Too Many Requests, 503 Service Unavailable, veya bir bağlantı
+# timeout'u) döndürür. ÖNCEDEN bu tür geçici/tek seferlik hatalar
+# HİÇBİR tekrar denemesi olmadan doğrudan kullanıcıya "sunucu bağlantı
+# hatası" olarak yansıtılıyordu — oysa aynı istek birkaç saniye sonra
+# tekrar denense büyük ihtimalle başarılı olurdu.
+#
+# Bu, Render/Vercel gibi barındırma platformunun "kasması"ndan bağımsız,
+# TAMAMEN yazılımsal bir sorundur — barındırma iyileştirilse bile GEE
+# tarafındaki geçici limit aşımları aynı şekilde hatayla sonuçlanmaya
+# devam ederdi. Aşağıdaki yardımcı fonksiyon, GEE/ağ çağrılarını üstel
+# geri çekilme (exponential backoff) ile otomatik olarak yeniden dener;
+# yalnızca TÜM denemeler tükendiğinde asıl hatayı yukarı fırlatır.
+def _call_with_retry(fn, *args, retries=3, base_delay=1.5, **kwargs):
+    """
+    fn(*args, **kwargs) çağrısını dener; geçici (transient) bir ağ/GEE
+    hatasıyla karşılaşırsa kısa bir bekleme sonrası tekrar dener.
+    Toplam deneme sayısı: retries + 1 (ilk deneme + retries tekrar).
+    Kalıcı görünen hatalarda (ör. geometri/parametre hatası — "Invalid",
+    "must be", "not found" gibi mesajlar) hemen (tekrar denemeden)
+    yeniden fırlatılır; bunları tekrar denemek zaman kaybettirir ve
+    kullanıcıyı gereksiz yere bekletir.
+    """
+    _non_retryable_markers = (
+        'invalid', 'must be', 'not found', 'permission', 'denied',
+        'unauthorized', 'bad request', 'parse', 'geometry for image clipping',
+    )
+    last_err = None
+    for attempt in range(retries + 1):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            last_err = e
+            msg = str(e).lower()
+            if any(m in msg for m in _non_retryable_markers):
+                raise
+            if attempt < retries:
+                delay = base_delay * (2 ** attempt)
+                print('[SylvaGIS] ⚠️ Geçici hata (deneme {}/{}), {:.1f} sn sonra '
+                      'tekrar denenecek: {}'.format(attempt + 1, retries + 1, delay, e))
+                time.sleep(delay)
+            else:
+                raise
+    raise last_err
 
 # ════════════════════════════════════════════════════════════════
 # 🛰️ GOOGLE EARTH ENGINE — SERVICE ACCOUNT İLE BAĞLANTI
@@ -795,10 +852,22 @@ def _dynamic_stretch_vis(img, roi, scale, fallback_vis):
         return fallback_vis
 
 
-def build_result_image(data):
+def build_result_image(data, for_export=False):
     """
     Ortak analiz görüntüsü oluşturma mantığı.
     Returns: (final_display, roi, result, vis)
+
+    for_export: True ise (GeoTIFF indirme yolu), kullanıcının haritada
+    "Lejantı Uygula" ile tanımladığı sınıflandırma (classBreaks) — yani
+    piksel değerlerini 1,2,3... gibi tam sayı sınıf ID'lerine dönüştüren
+    build_classified_image() adımı — TAMAMEN ATLANIR. Böylece dosyaya
+    her zaman haritadaki renk çubuğunun (color bar / stretch) dayandığı
+    HAM/sürekli değerler (örn. NDVI için -1 ile 1 arası ondalıklı
+    değerler) yazılır; ekrandaki sınıflandırma sadece görsel bir katman
+    olarak kalır ve indirilen .tif dosyasını ASLA etkilemez. custom_palette
+    (min/max germe) zaten piksel değerlerini değiştirmediği için (sadece
+    vis sözlüğünü değiştirir) o dal for_export'tan etkilenmeden aynen
+    çalışmaya devam eder.
     """
     roi_coords = data.get('roi')
     clip_mode  = data.get('clipMode', 'clip')
@@ -809,6 +878,8 @@ def build_result_image(data):
     max_cloud  = int(data.get('maxCloud', 20))
     scene_id   = data.get('sceneId')
     class_breaks = data.get('classBreaks')
+    if for_export:
+        class_breaks = None
 
     roi = make_roi(roi_coords)
 
@@ -1105,7 +1176,7 @@ def build_result_image(data):
         custom_min     = data.get('min')
         custom_max     = data.get('max')
 
-        if class_breaks and isinstance(class_breaks, list) and len(class_breaks) > 0:
+        if (not for_export) and class_breaks and isinstance(class_breaks, list) and len(class_breaks) > 0:
             classified_img, classified_vis = build_classified_image(result, class_breaks)
             if classified_img is not None:
                 display_result = classified_img
@@ -1383,7 +1454,7 @@ def build_result_image(data):
     custom_min     = data.get('min')
     custom_max     = data.get('max')
 
-    if class_breaks and isinstance(class_breaks, list) and len(class_breaks) > 0:
+    if (not for_export) and class_breaks and isinstance(class_breaks, list) and len(class_breaks) > 0:
         classified_img, classified_vis = build_classified_image(result, class_breaks)
         if classified_img is not None:
             display_result = classified_img
@@ -1500,37 +1571,44 @@ def analyze():
         final_display, roi, result, vis = build_result_image(data)
 
         # ── İstatistik ────────────────────────────────────────────
-        stats = result.reduceRegion(
-            reducer   = ee.Reducer.frequencyHistogram(),
-            geometry  = roi,
-            scale     = 30,
-            maxPixels = 1e9
-        ).getInfo()
+        stats = _call_with_retry(
+            lambda: result.reduceRegion(
+                reducer   = ee.Reducer.frequencyHistogram(),
+                geometry  = roi,
+                scale     = 30,
+                maxPixels = 1e9
+            ).getInfo()
+        )
 
         real_minmax = {}
         try:
-            mm = result.reduceRegion(
-                reducer   = ee.Reducer.minMax(),
-                geometry  = roi,
-                scale     = 30,
-                maxPixels = 1e9
-            ).getInfo()
-            mn = result.reduceRegion(
-                reducer   = ee.Reducer.mean(),
-                geometry  = roi,
-                scale     = 30,
-                maxPixels = 1e9
-            ).getInfo()
+            # 🛠️ BUG FİX (performans / peş peşe analiz hatası): daha önce
+            # min/max ve ortalama İKİ AYRI reduceRegion() + getInfo() ağ
+            # çağrısıyla hesaplanıyordu. Tek bir kombine reducer ile bu iki
+            # çağrı TEK bir GEE isteğine indirilir — hem daha hızlı yanıt
+            # verir hem de kullanıcı arka arkaya analiz yaptığında GEE'nin
+            # eşzamanlı/istek-başına limitlerine çarpma ihtimalini azaltır.
+            combined_reducer = ee.Reducer.minMax().combine(
+                reducer2=ee.Reducer.mean(), sharedInputs=True
+            )
+            mm = _call_with_retry(
+                lambda: result.reduceRegion(
+                    reducer   = combined_reducer,
+                    geometry  = roi,
+                    scale     = 30,
+                    maxPixels = 1e9
+                ).getInfo()
+            )
             real_minmax = {
                 'min':  mm.get('value_min'),
                 'max':  mm.get('value_max'),
-                'mean': mn.get('value')
+                'mean': mm.get('value_mean')
             }
         except Exception:
             pass
 
         # ── Tile URL ─────────────────────────────────────────────
-        map_id   = final_display.getMapId(vis)
+        map_id   = _call_with_retry(lambda: final_display.getMapId(vis))
         tile_url = map_id['tile_fetcher'].url_format
 
         # ── Zaman serisi galerisi ────────────────────────────────
@@ -1565,9 +1643,9 @@ def analyze():
                             .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', max_cloud)))
                 cloud_prop = 'CLOUDY_PIXEL_PERCENTAGE' if satellite.startswith('s2') else 'CLOUD_COVER'
                 limited    = col2.filterDate(start_date, end_date).sort('system:time_start').limit(10)
-                scene_ids  = limited.aggregate_array('system:index').getInfo()
-                timestamps = limited.aggregate_array('system:time_start').getInfo()
-                clouds_arr = limited.aggregate_array(cloud_prop).getInfo()
+                scene_ids  = _call_with_retry(lambda: limited.aggregate_array('system:index').getInfo(), retries=1)
+                timestamps = _call_with_retry(lambda: limited.aggregate_array('system:time_start').getInfo(), retries=1)
+                clouds_arr = _call_with_retry(lambda: limited.aggregate_array(cloud_prop).getInfo(), retries=1)
                 scenes_list = list(zip(scene_ids, timestamps, clouds_arr))
             except Exception:
                 scenes_list = []
@@ -1698,7 +1776,14 @@ def download_geotiff():
         if fresh_roi:
             data['roi'] = fresh_roi
 
-        final_display, roi, result, vis = build_result_image(data)
+        # 🛠️ BUG FİX (istenen davranış): "Lejantı Uygula" ile sınıflandırma
+        # yapılmış olsa bile — NDVI, DEM, Eğim (Slope) vb. hiçbir analizde —
+        # indirilen GeoTIFF ASLA sınıf ID'lerine (1,2,3...) göre değil, her
+        # zaman haritadaki renk çubuğunun (color bar) dayandığı HAM/sürekli
+        # değerlere göre üretilir. for_export=True, build_result_image()
+        # içindeki classBreaks/build_classified_image() adımını komple
+        # atlatır — bkz. build_result_image() docstring'i.
+        final_display, roi, result, vis = build_result_image(data, for_export=True)
 
         # ── 🌈 Sentinel-2 doğal renk parlaklık düzeltmesi ────────────
         # SORUN: Sentinel-2 RGB (B4-B3-B2) GeoTIFF'leri şu ana kadar ham
@@ -1773,7 +1858,7 @@ def download_geotiff():
         # istek veya karo-mozaik) dosyayı yerel olarak KESİN bir şekilde
         # bu poligona göre yeniden kırpsın. 'Tüm Veri' modunda (is_clip
         # False) bu adım atlanır — mevcut davranış korunur.
-        aoi_geom_4326 = roi.getInfo() if is_clip else None
+        aoi_geom_4326 = _call_with_retry(lambda: roi.getInfo()) if is_clip else None
 
         tif_bytes = _download_band_geotiff_bytes(
             final_display, export_region, scale, crs, safe_name,
@@ -1872,6 +1957,90 @@ def _split_bbox_grid(roi, nx, ny):
     return tiles
 
 
+def _stamp_exact_band_statistics(tif_bytes, nodata_value=None):
+    """
+    🛠️ BUG FİX (QGIS'te 0-47, ArcMap'te 0-54 — aynı .tif dosyası için
+    FARKLI min/max değerleri görünüyordu):
+
+    KÖK NEDEN: Bu, dosyanın piksel değerlerinin bozuk/yanlış olmasından
+    KAYNAKLANMIYOR — indirilen GeoTIFF'in ham piksel verisi baştan sona
+    doğrudur (SylvaGIS ekranındaki 0-54 aralığı gerçek veriyle eşleşir).
+    Sorun, GeoTIFF dosyasında GÖMÜLÜ istatistik (STATISTICS_MINIMUM/
+    MAXIMUM) etiketi bulunmamasıdır. Bu etiketler yoksa:
+      • ArcMap varsayılan olarak TÜM pikselleri tarayıp (tam/"actual"
+        istatistik) gerçek min-max'ı (0-54) hesaplar.
+      • QGIS ise varsayılan olarak "Estimate (faster)" modunu kullanır —
+        yani dosyanın SADECE bir alt örneklemesini (her N. piksel)
+        tarar. Eğim (slope) gibi verilerde en yüksek değerler (54°)
+        genelde küçük/yerel alanlarda (dik yamaç, sınır pikselleri)
+        bulunur; örnekleme bu nadir pikselleri kaçırıp daha düşük bir
+        maksimum (47°) rapor eder. Bu bir QGIS "hatası" değil, sadece
+        hız için yapılan bir yaklaşıklamadır — ama kullanıcıya iki
+        farklı program iki farklı "gerçek" gösteriyormuş gibi görünür.
+
+    ÇÖZÜM: Dosya sunucudan gönderilmeden HEMEN ÖNCE, TÜM pikseller
+    (NoData hariç) taranarak gerçek min/max/mean/stddev hesaplanır ve
+    bunlar GDAL'ın standart STATISTICS_* band etiketleri olarak
+    GeoTIFF'in içine doğrudan gömülür (STATISTICS_APPROXIMATE=NO ile
+    "bu tahmini değil, kesin/tam taranmış istatistiktir" işaretlenir).
+    Böylece QGIS/ArcMap/herhangi bir GDAL tabanlı yazılım, kendi
+    örneklemesini yapmak yerine dosyanın içindeki bu KESİN değerleri
+    okur ve her ikisi de HER ZAMAN aynı (doğru) aralığı — SylvaGIS
+    ekranındaki aralıkla birebir aynı — gösterir.
+
+    Herhangi bir nedenle istatistik hesaplanamazsa (bozuk/boş raster
+    vb.) orijinal bayt içeriği DEĞİŞTİRİLMEDEN döndürülür — bu adım
+    asla indirmeyi kesintiye uğratmaz.
+    """
+    try:
+        import numpy as np
+        import rasterio
+        from rasterio.io import MemoryFile
+    except ImportError:
+        return tif_bytes
+
+    try:
+        with MemoryFile(tif_bytes) as memfile:
+            with memfile.open() as src:
+                profile = src.profile.copy()
+                data = src.read()  # (bands, H, W)
+                src_nodata = src.nodata if src.nodata is not None else nodata_value
+
+            out_memfile = MemoryFile()
+            with out_memfile.open(**profile) as dst:
+                dst.write(data)
+                for b_idx in range(1, data.shape[0] + 1):
+                    band = data[b_idx - 1].astype('float64')
+                    if src_nodata is not None:
+                        valid = band[band != float(src_nodata)]
+                    else:
+                        valid = band.ravel()
+                    # NaN/Inf (float raster'larda GEE'nin maskelenmiş
+                    # piksel dolgusu) istatistik dışı bırakılır.
+                    valid = valid[np.isfinite(valid)]
+                    if valid.size == 0:
+                        continue
+                    b_min  = float(valid.min())
+                    b_max  = float(valid.max())
+                    b_mean = float(valid.mean())
+                    b_std  = float(valid.std())
+                    dst.update_tags(
+                        b_idx,
+                        STATISTICS_MINIMUM=repr(b_min),
+                        STATISTICS_MAXIMUM=repr(b_max),
+                        STATISTICS_MEAN=repr(b_mean),
+                        STATISTICS_STDDEV=repr(b_std),
+                        STATISTICS_APPROXIMATE='NO',
+                    )
+            try:
+                return out_memfile.read()
+            finally:
+                out_memfile.close()
+    except Exception as stat_err:
+        print('[SylvaGIS] ⚠️ Band istatistiği gömülemedi (dosya yine de gönderiliyor):', stat_err)
+        return tif_bytes
+
+
 def _true_clip_tif_bytes(tif_bytes, aoi_geom_4326, nodata_value):
     """
     🔒 KESİN / GEE'DEN BAĞIMSIZ YEREL KIRPMA ("true clip").
@@ -1934,7 +2103,7 @@ def _true_clip_tif_bytes(tif_bytes, aoi_geom_4326, nodata_value):
                 return out_memfile.read()
 
 
-def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata_value=None,
+def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, nodata_value=None,
                                   aoi_geom_4326=None, fallback_region_geom=None):
     """
     Tek bir bandı GeoTIFF olarak indirir ve bayt dizisi (bytes) döndürür.
@@ -1989,8 +2158,8 @@ def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata
         if nodata_value is not None:
             params['formatOptions'] = {'noData': nodata_value}
 
-        url = img.getDownloadURL(params)
-        r = requests.get(url, timeout=180)
+        url = _call_with_retry(lambda: img.getDownloadURL(params))
+        r = _call_with_retry(lambda: requests.get(url, timeout=180), retries=2)
         if not r.ok:
             # GEE bazen boyut/limit hatalarını HTTP gövdesinde (200 dışı
             # durum koduyla) döner; ayrıştırılabilmesi için mesaja dahil et.
@@ -2015,8 +2184,8 @@ def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata
             ):
                 fb_params = dict(params)
                 fb_params['region'] = fallback_region_geom
-                fb_url = img.getDownloadURL(fb_params)
-                fb_r = requests.get(fb_url, timeout=180)
+                fb_url = _call_with_retry(lambda: img.getDownloadURL(fb_params))
+                fb_r = _call_with_retry(lambda: requests.get(fb_url, timeout=180), retries=2)
                 if not fb_r.ok:
                     body_snippet = (fb_r.text or '')[:500]
                     raise Exception(
@@ -2062,8 +2231,8 @@ def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata
                 if nodata_value is not None:
                     tile_params['formatOptions'] = {'noData': nodata_value}
 
-                tile_url = img.getDownloadURL(tile_params)
-                tr = requests.get(tile_url, timeout=180)
+                tile_url = _call_with_retry(lambda: img.getDownloadURL(tile_params))
+                tr = _call_with_retry(lambda: requests.get(tile_url, timeout=180), retries=2)
                 if not tr.ok:
                     body_snippet = (tr.text or '')[:500]
                     raise Exception(
@@ -2108,6 +2277,26 @@ def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata
             return merged_bytes
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata_value=None,
+                                  aoi_geom_4326=None, fallback_region_geom=None):
+    """
+    _download_band_geotiff_bytes_impl() için ince bir sarmalayıcı (wrapper).
+    Tek istek / bounded-fallback / karo-mozaik yollarının HANGİSİ
+    çalışırsa çalışsın, kullanıcıya gönderilmeden hemen önce dosyaya
+    _stamp_exact_band_statistics() ile GERÇEK (tam taranmış) min/max/
+    ortalama/std istatistiklerini gömer — bkz. o fonksiyonun docstring'i
+    (QGIS/ArcMap arasındaki min-max tutarsızlığı düzeltmesi). Tek bir
+    yerden çağrılarak tüm indirme yollarının aynı garantiye sahip
+    olması sağlanır.
+    """
+    raw_bytes = _download_band_geotiff_bytes_impl(
+        img, region_geom, scale, crs, base_name,
+        nodata_value=nodata_value, aoi_geom_4326=aoi_geom_4326,
+        fallback_region_geom=fallback_region_geom
+    )
+    return _stamp_exact_band_statistics(raw_bytes, nodata_value=nodata_value)
 
 
 @app.route('/api/download-raw-bands', methods=['POST'])
@@ -2203,7 +2392,7 @@ def download_raw_bands():
         # 🔒 true-clip güvencesi: bkz. _true_clip_tif_bytes() docstring'i —
         # AOI'nin gerçek poligon şeklini (EPSG:4326) bir kez alıp her bant
         # indirmesinde kullanıyoruz.
-        aoi_geom_4326 = roi.getInfo() if scope == 'clip' else None
+        aoi_geom_4326 = _call_with_retry(lambda: roi.getInfo()) if scope == 'clip' else None
 
         zip_entries, errors = [], []
         for band_name in requested_bands:
