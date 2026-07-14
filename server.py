@@ -1182,20 +1182,28 @@ def build_result_image(data, for_export=False):
             _dem_scale = 30  # SRTM/ALOS/Copernicus/NASADEM hepsi ~30 m nominal
             vis = _dynamic_stretch_vis(result, roi, _dem_scale, vis)
 
-        # 🛠️ BUG FİX: "Lejantı Uygula" ile gönderilen sınıflandırma (classBreaks)
-        # ve özel renk paleti (custom_palette/min/max) daha önce SADECE NDVI/NDWI
-        # gibi uydu-indeksi analizlerinde uygulanıyordu — çünkü bu blok fonksiyonun
-        # en sonunda, uydu-indeksi kod yolunun ardından yer alıyordu. TOPO ailesi
-        # (DEM, eğim, TPI, vb.) kendi bloğunun sonunda erken "return" yaptığı için
-        # bu koda HİÇ ULAŞMIYORDU: kullanıcı sınıf/renk tanımlayıp "Uygula" dese
-        # bile harita her zaman ham stretched (siyah-beyaz) görüntüde kalıyor,
-        # lejanttaki renk/sınıflandırma haritaya hiç yansımıyordu. Aynı mantık
-        # burada da (NDVI ailesiyle birebir aynı şekilde) uygulanır.
+        # ── Görsel mod / dışa aktarım modu ayrımı ──────────────────
+        # 🛠️ BUG FİX: Dışa aktarım (for_export=True) ile ekran görüntüsü
+        # (for_export=False) artık açık bir if/elif zinciriyle ayrılır.
+        #
+        # SORUN: Daha önce "(not for_export) and class_breaks" kontrolü
+        # class_breaks dalını engellerdi — ancak custom_palette/min/max dalı
+        # her zaman çalışırdı. Frontend, sınıflandırma + özel renk birlikte
+        # gönderebildiği için GeoTIFF'te sınıf ID'leri (1, 2, 3…) veya
+        # kırpılmış değer aralıkları çıkabiliyordu.
+        #
+        # ÇÖZÜM: for_export=True → SADECE ham result kullan, sınıflandırma
+        # ve palette/min/max TAMAMEN atlanır. Piksel değerleri değişmez.
+        # for_export=False (harita önizleme) → önceki davranış aynen korunur.
         custom_palette = data.get('palette')
         custom_min     = data.get('min')
         custom_max     = data.get('max')
 
-        if (not for_export) and class_breaks and isinstance(class_breaks, list) and len(class_breaks) > 0:
+        if for_export:
+            # GeoTIFF indirme: her zaman orijinal bar skalasındaki ham değerler.
+            # classBreaks (sınıf ID), custom_palette/min/max UYGULANMAZ.
+            display_result = result
+        elif class_breaks and isinstance(class_breaks, list) and len(class_breaks) > 0:
             classified_img, classified_vis = build_classified_image(result, class_breaks)
             if classified_img is not None:
                 display_result = classified_img
@@ -1502,12 +1510,21 @@ def build_result_image(data, for_export=False):
         result = image_refl.normalizedDifference([b['nir'], b['red']]).rename('value')
         vis    = {'min': -0.2, 'max': 0.9, 'palette': ['black', 'white']}
 
-    # ── 3b. Sınıflandırılmış mod — classBreaks JSON ──────────────
+    # ── 3b. Görsel mod / dışa aktarım modu ayrımı ──────────────────
+    # 🛠️ BUG FİX: for_export=True (GeoTIFF indirme) → her zaman ham result.
+    # classBreaks (sınıf ID'leri) ve custom_palette/min/max UYGULANMAZ.
+    # Piksel değerleri orijinal bar skalasındaki değerlerdir (NDVI: -1…1,
+    # DEM: metre, eğim: derece, vb.) — sınıflandırma veya görsel germen
+    # indirilecek dosyayı ASLA etkilemez.
+    # for_export=False (harita önizleme) → önceki davranış aynen korunur.
     custom_palette = data.get('palette')
     custom_min     = data.get('min')
     custom_max     = data.get('max')
 
-    if (not for_export) and class_breaks and isinstance(class_breaks, list) and len(class_breaks) > 0:
+    if for_export:
+        # GeoTIFF indirme: orijinal bar skalasındaki ham değerler.
+        display_result = result
+    elif class_breaks and isinstance(class_breaks, list) and len(class_breaks) > 0:
         classified_img, classified_vis = build_classified_image(result, class_breaks)
         if classified_img is not None:
             display_result = classified_img
