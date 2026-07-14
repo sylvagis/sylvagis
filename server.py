@@ -1248,6 +1248,7 @@ def build_result_image(data, for_export=False):
         b = {'nir': 'B8', 'red': 'B4', 'green': 'B3',
              'swir': 'B11', 'blue': 'B2', 'thermal': None}
         scale_factor = 1e-4
+        band_offset  = 0
 
     elif satellite == 's2-l1c':
         col = (ee.ImageCollection('COPERNICUS/S2_HARMONIZED')
@@ -1256,6 +1257,7 @@ def build_result_image(data, for_export=False):
         b = {'nir': 'B8', 'red': 'B4', 'green': 'B3',
              'swir': 'B11', 'blue': 'B2', 'thermal': None}
         scale_factor = 1e-4
+        band_offset  = 0
 
     elif satellite == 'l89-l2':
         col = (ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
@@ -1264,6 +1266,7 @@ def build_result_image(data, for_export=False):
         b = {'nir': 'SR_B5', 'red': 'SR_B4', 'green': 'SR_B3',
              'swir': 'SR_B6', 'blue': 'SR_B2', 'thermal': 'ST_B10'}
         scale_factor = 2.75e-5
+        band_offset  = -0.2
 
     elif satellite == 'l7-l2':
         col = (ee.ImageCollection('LANDSAT/LE07/C02/T1_L2')
@@ -1272,6 +1275,7 @@ def build_result_image(data, for_export=False):
         b = {'nir': 'SR_B4', 'red': 'SR_B3', 'green': 'SR_B2',
              'swir': 'SR_B5', 'blue': 'SR_B1', 'thermal': 'ST_B6'}
         scale_factor = 2.75e-5
+        band_offset  = -0.2
 
     elif satellite in ('l45-l2', 'l45-l1'):
         col = (ee.ImageCollection('LANDSAT/LT05/C02/T1_L2')
@@ -1280,6 +1284,7 @@ def build_result_image(data, for_export=False):
         b = {'nir': 'SR_B4', 'red': 'SR_B3', 'green': 'SR_B2',
              'swir': 'SR_B5', 'blue': 'SR_B1', 'thermal': 'ST_B6'}
         scale_factor = 2.75e-5
+        band_offset  = -0.2
 
     else:
         col = (ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
@@ -1288,6 +1293,7 @@ def build_result_image(data, for_export=False):
         b = {'nir': 'B8', 'red': 'B4', 'green': 'B3',
              'swir': 'B11', 'blue': 'B2', 'thermal': None}
         scale_factor = 1e-4
+        band_offset  = 0
 
     # 🩹 Piksel bazlı bulut/gölge/sirrus maskesi — sahne bazlı bulutluluk
     # filtresi (yukarıda) TEK BAŞINA yeterli değildir; koleksiyondaki her
@@ -1302,19 +1308,47 @@ def build_result_image(data, for_export=False):
     else:
         image = col.filterDate(start_date, end_date).median()
 
+    # 🛠️ BUG FİX (KÖK NEDEN — Landsat tabanlı TÜM indeksler yanlış
+    # hesaplanıyordu): Landsat Collection 2 Level-2 (l89-l2, l7-l2,
+    # l45-l2/l1) yüzey yansıması bantları HAM tam sayı (DN) olarak
+    # gelir; gerçek yansıma değerine dönüştürmek için resmi USGS
+    # formülü şudur:  yansıma = DN * 0.0000275 + (−0.2)
+    # Koddaki `scale_factor` (2.75e-5) ÇARPIMI zaten yapılıyordu, ANCAK
+    # `-0.2` OFFSET'i HİÇBİR indeks hesaplamasında (NDVI, NDWI, EVI,
+    # SAVI, SMI, NBR, NDSI, BSI, AVI, SI, NDGI, NDMI, NPCRI, VHI, FRI)
+    # UYGULANMIYORDU. Sentinel-2'de offset zaten 0 olduğu için bu fark
+    # etmiyordu (sonuçlar doğruydu) — ama Landsat'ta offset −0.2 gibi
+    # yüzey yansımasının kendisiyle KIYASLANABİLİR büyüklükte bir sabit
+    # olduğu için, onu atlamak sonucu ciddi şekilde bozuyordu. Örnek:
+    # DN_nir=20000, DN_red=10000 için gerçek NDVI ≈ 0.65 iken, offset
+    # uygulanmadan (ham DN oranıyla) hesaplanan "NDVI" ≈ 0.33 çıkıyordu
+    # — yani bitki örtüsü olduğundan çok daha az/zayıf görünüyordu.
+    # ÇÖZÜM: Tüm optik bantlar TEK SEFERDE (DN * scale_factor + offset)
+    # ile gerçek yansıma değerine çevrilip `image_refl` olarak saklanır;
+    # aşağıdaki TÜM indeks formülleri artık ham `image` yerine bu
+    # doğru ölçeklenmiş `image_refl`'i kullanır. Sentinel-2 için offset
+    # zaten 0 olduğundan bu değişiklik S2 sonuçlarını ETKİLEMEZ —
+    # yalnızca Landsat tabanlı analizleri düzeltir. Termal bant (LST)
+    # zaten ayrı/doğru bir formülle (0.00341802 / 149.0, resmi USGS
+    # ST_Bxx dönüşümü) hesaplandığı için buna dahil edilmez.
+    _optical_band_names = sorted(set(
+        v for k, v in b.items() if k != 'thermal' and v
+    ))
+    image_refl = image.select(_optical_band_names).multiply(scale_factor).add(band_offset)
+
     # ── 3. İndeks hesapla ───────────────────────────────────────
     if index == 'NDVI':
-        result = image.normalizedDifference([b['nir'], b['red']]).rename('value')
+        result = image_refl.normalizedDifference([b['nir'], b['red']]).rename('value')
         vis    = {'min': -0.2, 'max': 0.9, 'palette': ['black', 'white']}
 
     elif index == 'NDWI':
-        result = image.normalizedDifference([b['green'], b['nir']]).rename('value')
+        result = image_refl.normalizedDifference([b['green'], b['nir']]).rename('value')
         vis    = {'min': -0.5, 'max': 0.5, 'palette': ['black', 'white']}
 
     elif index == 'EVI':
-        nir   = image.select(b['nir']).multiply(scale_factor)
-        red   = image.select(b['red']).multiply(scale_factor)
-        blue  = image.select(b['blue']).multiply(scale_factor)
+        nir   = image_refl.select(b['nir'])
+        red   = image_refl.select(b['red'])
+        blue  = image_refl.select(b['blue'])
         result = (nir.subtract(red)).divide(
             nir.add(red.multiply(6)).subtract(blue.multiply(7.5)).add(1)
         ).multiply(2.5).rename('value')
@@ -1322,32 +1356,32 @@ def build_result_image(data, for_export=False):
 
     elif index == 'SAVI':
         L = 0.5
-        nir = image.select(b['nir']).multiply(scale_factor)
-        red = image.select(b['red']).multiply(scale_factor)
+        nir = image_refl.select(b['nir'])
+        red = image_refl.select(b['red'])
         result = (nir.subtract(red)).multiply(1 + L).divide(
             nir.add(red).add(L)
         ).rename('value')
         vis    = {'min': -0.3, 'max': 0.8, 'palette': ['black', 'white']}
 
     elif index == 'SMI':
-        nir  = image.select(b['nir']).multiply(scale_factor)
-        swir = image.select(b['swir']).multiply(scale_factor)
+        nir  = image_refl.select(b['nir'])
+        swir = image_refl.select(b['swir'])
         result = nir.subtract(swir).divide(nir.add(swir)).rename('value')
         vis    = {'min': -0.5, 'max': 0.5, 'palette': ['black', 'white']}
 
     elif index == 'NBR':
-        result = image.normalizedDifference([b['nir'], b['swir']]).rename('value')
+        result = image_refl.normalizedDifference([b['nir'], b['swir']]).rename('value')
         vis    = {'min': -1.0, 'max': 1.0, 'palette': ['black', 'white']}
 
     elif index == 'NDSI':
-        result = image.normalizedDifference([b['green'], b['swir']]).rename('value')
+        result = image_refl.normalizedDifference([b['green'], b['swir']]).rename('value')
         vis    = {'min': -0.5, 'max': 0.8, 'palette': ['black', 'white']}
 
     elif index == 'BSI':
-        nir   = image.select(b['nir']).multiply(scale_factor)
-        red   = image.select(b['red']).multiply(scale_factor)
-        blue  = image.select(b['blue']).multiply(scale_factor)
-        swir  = image.select(b['swir']).multiply(scale_factor)
+        nir   = image_refl.select(b['nir'])
+        red   = image_refl.select(b['red'])
+        blue  = image_refl.select(b['blue'])
+        swir  = image_refl.select(b['swir'])
         result = swir.add(red).subtract(nir).subtract(blue).divide(
             swir.add(red).add(nir).add(blue)
         ).rename('value')
@@ -1361,8 +1395,8 @@ def build_result_image(data, for_export=False):
 
     elif index == 'AVI':
         # Advanced Vegetation Index — (NIR*(1-RED)*(NIR-RED))^(1/3)
-        nir = image.select(b['nir']).multiply(scale_factor)
-        red = image.select(b['red']).multiply(scale_factor)
+        nir = image_refl.select(b['nir'])
+        red = image_refl.select(b['red'])
         result = nir.multiply(
             ee.Image(1).subtract(red)
         ).multiply(
@@ -1372,9 +1406,9 @@ def build_result_image(data, for_export=False):
 
     elif index == 'SI':
         # Shadow Index — ((1-B)*(1-G)*(1-R))^(1/3)
-        blue  = image.select(b['blue']).multiply(scale_factor)
-        green = image.select(b['green']).multiply(scale_factor)
-        red   = image.select(b['red']).multiply(scale_factor)
+        blue  = image_refl.select(b['blue'])
+        green = image_refl.select(b['green'])
+        red   = image_refl.select(b['red'])
         result = (ee.Image(1).subtract(blue)).multiply(
             ee.Image(1).subtract(green)
         ).multiply(
@@ -1384,18 +1418,18 @@ def build_result_image(data, for_export=False):
 
     elif index == 'NDGI':
         # Normalized Difference Glacier Index — (Green-Red)/(Green+Red)
-        result = image.normalizedDifference([b['green'], b['red']]).rename('value')
+        result = image_refl.normalizedDifference([b['green'], b['red']]).rename('value')
         vis    = {'min': -0.5, 'max': 0.5, 'palette': ['black', 'white']}
 
     elif index == 'NDMI':
         # Normalized Difference Moisture Index — (NIR-SWIR)/(NIR+SWIR)
-        result = image.normalizedDifference([b['nir'], b['swir']]).rename('value')
+        result = image_refl.normalizedDifference([b['nir'], b['swir']]).rename('value')
         vis    = {'min': -0.8, 'max': 0.8, 'palette': ['black', 'white']}
 
     elif index == 'NPCRI':
         # Normalized Pigment Chlorophyll Ratio Index — (Red-Blue)/(Red+Blue)
-        red  = image.select(b['red']).multiply(scale_factor)
-        blue = image.select(b['blue']).multiply(scale_factor)
+        red  = image_refl.select(b['red'])
+        blue = image_refl.select(b['blue'])
         result = red.subtract(blue).divide(
             red.add(blue).add(1e-6)
         ).rename('value')
@@ -1403,7 +1437,7 @@ def build_result_image(data, for_export=False):
 
     elif index == 'VHI':
         # Vegetation Health Index — 0.5*VCI + 0.5*TCI (basitleştirilmiş)
-        ndvi = image.normalizedDifference([b['nir'], b['red']])
+        ndvi = image_refl.normalizedDifference([b['nir'], b['red']])
         vci  = ndvi.add(1).divide(2)          # NDVI'yi 0-1'e normalize et
         if b['thermal']:
             thermal = image.select(b['thermal'])
@@ -1423,10 +1457,10 @@ def build_result_image(data, for_export=False):
         #   2) Yakıt yükü           -> NDVI (yoğun/kuru bitki örtüsü = yanıcı madde)
         #   3) Isı stresi           -> LST (varsa; sıcak yüzey = yüksek risk)
         # Sonuç 0 (düşük risk) ile 1 (yüksek risk) arasında normalize edilir.
-        ndvi = image.normalizedDifference([b['nir'], b['red']])
+        ndvi = image_refl.normalizedDifference([b['nir'], b['red']])
         fuel = ndvi.add(1).divide(2).clamp(0, 1)              # 0-1 (yoğun bitki örtüsü)
 
-        ndmi     = image.normalizedDifference([b['nir'], b['swir']])
+        ndmi     = image_refl.normalizedDifference([b['nir'], b['swir']])
         dryness  = ee.Image(1).subtract(
             ndmi.add(1).divide(2)
         ).clamp(0, 1)                                          # 0-1 (düşük nem = yüksek değer)
@@ -1446,7 +1480,7 @@ def build_result_image(data, for_export=False):
         vis = {'min': 0, 'max': 1, 'palette': ['black', 'white']}
 
     else:
-        result = image.normalizedDifference([b['nir'], b['red']]).rename('value')
+        result = image_refl.normalizedDifference([b['nir'], b['red']]).rename('value')
         vis    = {'min': -0.2, 'max': 0.9, 'palette': ['black', 'white']}
 
     # ── 3b. Sınıflandırılmış mod — classBreaks JSON ──────────────
