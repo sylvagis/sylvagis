@@ -1049,17 +1049,26 @@ def build_result_image(data, for_export=False):
         # gerçekçi olmayan çok yüksek eğim değerleri üretir — haritada ve
         # indirilen GeoTIFF'te beyaz nokta olarak görünür.
         #
-        # Çözüm: 3×3 medyan filtresi (focal_median, yarıçap=1 piksel) DEM'i
-        # terrain hesabından ÖNCE temizler. Medyan, ortalamadan farklı olarak
-        # spike değeri komşu medyana çektiği için gerçek yükseltim değerleri
-        # korunurken izole spike'lar bastırılır. Bu işlem SRTM için ~30 m,
-        # ALOS/Copernicus için ~30 m ölçeğinde çalışır; tüm büyük topoğrafik
-        # yapılar (vadiler, sırtlar, yamaçlar) değişmeden kalır.
-        dem = dem.focal_median(radius=1, kernelType='square', iterations=1)
+        # ÖNCEKI HATA: focal_median() (alt çizgi) GEE Python API'de YOK;
+        # doğru isim focalMedian() (camelCase) — bkz. focalMean/focalMax/focalMin
+        # kullanımları. alt-çizgi sürümü sessizce orijinal imgeyi döndürüyordu,
+        # yani filtre hiç uygulanmıyordu.
+        #
+        # Çözüm: focalMedian(radius=90, units='meters', iterations=2) DEM'i
+        # terrain hesabından ÖNCE temizler. 90 m = SRTM/ALOS/Copernicus'un
+        # ~30 m çözünürlüğünde 3 piksellik bir pencere. iterations=2 ile
+        # 2-3 piksel genişliğindeki spike'lar da bastırılır. Tüm büyük
+        # topoğrafik yapılar (vadiler, sırtlar, yamaçlar) değişmeden kalır.
+        dem = dem.focalMedian(radius=90, units='meters', iterations=2)
 
         terrain = ee.Terrain.products(dem)
         slope   = terrain.select('slope')
         aspect  = terrain.select('aspect')
+
+        # Eğim fiziksel sınırlarla kırp (90°'yi geçemez, spike'lardan kalan
+        # artık değerleri bastırır). Diğer terrain ürünleri kendi bloklarında
+        # kırpılır; slope tüm analizlerde kullanıldığı için burada yapılır.
+        slope = slope.clamp(0, 89)
 
         # ── Temel Topografik Analizler ────────────────────────────
         if index in ('TOPO', 'TOPO_DEM'):
