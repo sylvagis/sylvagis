@@ -1441,6 +1441,26 @@ tr.class-highlight-active {
 .sylva-dp-icon-btn:hover{background:#eff6ff;border-color:#93c5fd;}
 [dir="rtl"] .sylva-dp-text{border-radius:0 5px 5px 0;border-left:none;border-right:1px solid #cbd5e1;}
 [dir="rtl"] .sylva-dp-icon-btn{border-radius:5px 0 0 5px;border-right:none;border-left:1px solid #cbd5e1;}
+
+/* Çalışma alanı renk seçici - açılır pencere (varsayılan gizli) */
+.ws-palette-popup{
+    display:none;
+    position:absolute;
+    top:calc(100% + 6px);
+    left:0;
+    z-index:9999;
+    background:#fff;
+    border:1px solid #cbd5e1;
+    border-radius:6px;
+    padding:6px;
+    box-shadow:0 6px 16px rgba(0,0,0,0.18);
+    width:150px;
+    flex-wrap:wrap;
+    gap:3px;
+}
+.ws-palette-popup.open{
+    display:flex;
+}
 </style>
 </head>
 <body>
@@ -2334,24 +2354,22 @@ tr.class-highlight-active {
     <div class="option-item" id="ws-color-settings-box" style="grid-column:span 2; margin-top:6px; border-top:1px solid #e2e8f0; padding-top:8px; display:none; flex-direction:column; gap:8px;">
         <div style="font-size:0.8rem; font-weight:600; color:#475569;" data-i18n="ws_colors">🎨 Çalışma Alanı Renkleri</div>
 
-        <!-- Dış Kenar Rengi -->
-        <div style="display:flex; flex-direction:column; gap:4px;">
-            <label style="display:flex; align-items:center; gap:6px; font-size:0.78rem; color:#64748b; cursor:pointer; user-select:none;">
+        <div style="display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
+            <!-- Dış Kenar Rengi -->
+            <div style="display:flex; align-items:center; gap:6px; position:relative;">
                 <input type="checkbox" id="ws-stroke-active" checked>
-                <span data-i18n="ws_stroke_lbl">Dış Kenar Rengi</span>
-                <span id="ws-stroke-preview" style="display:inline-block;width:14px;height:14px;border-radius:2px;border:2px solid #3b82f6;background:transparent;flex-shrink:0;"></span>
-            </label>
-            <div id="ws-stroke-palette" style="display:flex; flex-wrap:wrap; gap:3px;"></div>
-        </div>
+                <span style="font-size:0.78rem; color:#64748b; user-select:none;" data-i18n="ws_stroke_lbl">Dış Kenar Rengi</span>
+                <div id="ws-stroke-swatch" title="Renk seç" style="width:20px;height:20px;border-radius:4px;border:2px solid #3b82f6;background:transparent;cursor:pointer;flex-shrink:0;"></div>
+                <div id="ws-stroke-palette" class="ws-palette-popup"></div>
+            </div>
 
-        <!-- İç Dolgu Rengi -->
-        <div style="display:flex; flex-direction:column; gap:4px;">
-            <label style="display:flex; align-items:center; gap:6px; font-size:0.78rem; color:#64748b; cursor:pointer; user-select:none;">
+            <!-- İç Dolgu Rengi -->
+            <div style="display:flex; align-items:center; gap:6px; position:relative;">
                 <input type="checkbox" id="ws-fill-active">
-                <span data-i18n="ws_fill_lbl">İç Dolgu Rengi</span>
-                <span id="ws-fill-preview" style="display:inline-block;width:14px;height:14px;border-radius:2px;border:1px solid #cbd5e1;background:#cbd5e1;flex-shrink:0;"></span>
-            </label>
-            <div id="ws-fill-palette" style="display:flex; flex-wrap:wrap; gap:3px;"></div>
+                <span style="font-size:0.78rem; color:#64748b; user-select:none;" data-i18n="ws_fill_lbl">İç Dolgu Rengi</span>
+                <div id="ws-fill-swatch" title="Renk seç" style="width:20px;height:20px;border-radius:4px;border:1px solid #cbd5e1;background:#cbd5e1;cursor:pointer;flex-shrink:0;"></div>
+                <div id="ws-fill-palette" class="ws-palette-popup"></div>
+            </div>
         </div>
     </div>
 
@@ -3357,40 +3375,60 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
             } catch(e) {}
         };
 
-        function buildPalette(containerId, previewId, getActive, setColor, getColor) {
-            var container = document.getElementById(containerId);
-            var preview   = document.getElementById(previewId);
-            if (!container) return;
+        function buildPalette(paletteId, swatchId, mode, getColor, setColor) {
+            var popup  = document.getElementById(paletteId);
+            var swatch = document.getElementById(swatchId);
+            if (!popup || !swatch) return;
+
+            function paintSwatch(hex) {
+                swatch.style.borderColor = hex;
+                swatch.style.background  = (mode === 'stroke') ? 'transparent' : hex;
+            }
+
             WS_COLORS.forEach(function(hex) {
                 var sw = document.createElement('div');
                 sw.setAttribute('data-color', hex);
                 sw.style.cssText = 'width:18px;height:18px;border-radius:3px;cursor:pointer;border:2px solid ' +
                     (hex === getColor() ? '#1e3a8a' : 'transparent') + ';background:' + hex + ';flex-shrink:0;';
-                sw.addEventListener('click', function() {
-                    container.querySelectorAll('div').forEach(function(s) { s.style.borderColor = 'transparent'; });
+                sw.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    popup.querySelectorAll('div').forEach(function(s) { s.style.borderColor = 'transparent'; });
                     sw.style.borderColor = '#1e3a8a';
                     setColor(hex);
-                    if (preview) { preview.style.background = hex; preview.style.borderColor = hex; }
+                    paintSwatch(hex);
                     window._applyWorkspaceStyle();
+                    popup.classList.remove('open');
                 });
-                container.appendChild(sw);
+                popup.appendChild(sw);
             });
-            // Initial preview colour
-            if (preview) { preview.style.background = getColor(); preview.style.borderColor = getColor(); }
+
+            // Başlangıç renk kutusu
+            paintSwatch(getColor());
+
+            // Kutuya basınca palet açılır/kapanır
+            swatch.addEventListener('click', function(e) {
+                e.stopPropagation();
+                var willOpen = !popup.classList.contains('open');
+                document.querySelectorAll('.ws-palette-popup').forEach(function(p) { p.classList.remove('open'); });
+                if (willOpen) popup.classList.add('open');
+            });
         }
 
         buildPalette(
-            'ws-stroke-palette', 'ws-stroke-preview',
-            function() { return window._wsStrokeActive; },
-            function(c) { window._wsStrokeColor = c; },
-            function()  { return window._wsStrokeColor; }
+            'ws-stroke-palette', 'ws-stroke-swatch', 'stroke',
+            function()  { return window._wsStrokeColor; },
+            function(c) { window._wsStrokeColor = c; }
         );
         buildPalette(
-            'ws-fill-palette', 'ws-fill-preview',
-            function() { return window._wsFillActive; },
-            function(c) { window._wsFillColor = c; },
-            function()  { return window._wsFillColor; }
+            'ws-fill-palette', 'ws-fill-swatch', 'fill',
+            function()  { return window._wsFillColor; },
+            function(c) { window._wsFillColor = c; }
         );
+
+        // Dışarı tıklanınca açık paletleri kapat
+        document.addEventListener('click', function() {
+            document.querySelectorAll('.ws-palette-popup').forEach(function(p) { p.classList.remove('open'); });
+        });
 
         var strokeChk = document.getElementById('ws-stroke-active');
         var fillChk   = document.getElementById('ws-fill-active');
@@ -24962,7 +25000,7 @@ document.addEventListener('DOMContentLoaded',function(){
         }},
 
         // Step 7 — Topographic Analyses (new)
-        { id: 'topography',        tab: 'analiz', scrollBlock: 'start', sel: function () {
+        { id: 'topography',        tab: 'analiz', autoScroll: true, scrollBlock: 'start', sel: function () {
             var d = document.querySelectorAll('details.main-module-details');
             return d[3] ? [d[3].querySelector('summary') || d[3]] : [];
         }, before: function () {
