@@ -114,6 +114,21 @@ except Exception as e:
 # Last analysis parameters (GeoTIFF download için saklanır)
 _last_analyze_params = {}
 
+# ════════════════════════════════════════════════════════════════
+# 🌐 SON ANALİZİN GERÇEK/DOĞAL KOORDİNAT SİSTEMİ (CRS)
+# ════════════════════════════════════════════════════════════════
+# SORUN: "📥 Veriyi İndir (GeoTIFF)" penceresindeki CRS seçici her zaman
+# WGS 84 / EPSG:4326'da açılıyordu — oysa verinin kendi doğal/native CRS'i
+# (örn. Sentinel-2/Landsat bantları çoğunlukla UTM projeksiyonundadır)
+# genellikle farklıdır ve kullanıcı hangi UTM diliminde olduğunu bilemez.
+# /api/analyze her çalıştığında burada son analizin GERÇEK CRS'i saklanır;
+# hem /api/analyze yanıtında ('nativeCrs') doğrudan istemciye bildirilir
+# (istemci CRS seçicisini buna göre otomatik ön-seçer) hem de
+# /api/download-geotiff istemci hiçbir CRS göndermezse GÜVENLİ bir
+# varsayılan (sabit EPSG:4326 yerine) olarak kullanılır. Kullanıcı yine de
+# isterse seçiciden WGS 84'e veya başka bir EPSG koduna geri dönebilir.
+_last_analyze_native_crs = None
+
 # Arazi Kullanımı (LULC) ailesindeki analizler — bunlar statik/tek-katmanlı
 # veri setleridir; tarih aralığı veya bulutluluk filtresi kullanmazlar ve
 # her zaman AOI sınırlarına göre kesilir (clip).
@@ -172,7 +187,7 @@ def send_contact_message():
         return jsonify({'success': False, 'error': 'Geçersiz e-posta adresi.'}), 400
 
     smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'ksfnkvwcutrawcih'
+    smtp_pass = 'asdasadasddasdasds'
 
     body = (
         'SylvaGIS İletişim Formu üzerinden yeni bir mesaj gönderildi.\n\n'
@@ -1704,16 +1719,44 @@ def analyze():
 
             meta = _rgb_scene_metadata(data, roi, image, ds)
 
+            # Bu sahnenin gerçek/doğal CRS'i (_rgb_scene_metadata zaten
+            # image.projection() üzerinden sorgulamıştı) — GeoTIFF indirme
+            # penceresinin CRS seçicisini otomatik ön-seçmek için saklanır.
+            global _last_analyze_native_crs
+            if meta.get('crs'):
+                _last_analyze_native_crs = meta['crs']
+
             return jsonify({
                 'success':  True,
                 'tileUrl':  tile_url,
                 'index':    'RGB',
                 'meta':     meta,
+                'nativeCrs': meta.get('crs'),
                 'visMin':   vis.get('min'),
                 'visMax':   vis.get('max'),
             })
 
         final_display, roi, result, vis = build_result_image(data)
+
+        # ── 🌐 Gerçek/doğal CRS tespiti ─────────────────────────────
+        # "result" (henüz clip/vis uygulanmamış ham analiz görüntüsü) hangi
+        # projeksiyonda üretildiyse (Sentinel-2/Landsat bantları çoğunlukla
+        # ilgili UTM diliminde, bazı DEM/SAR kaynakları farklı olabilir)
+        # burada sorgulanır. Bu değer GeoTIFF indirme penceresindeki CRS
+        # seçicisini WGS 84 yerine verinin kendi CRS'ine otomatik ön-seçmek
+        # için kullanılır; sorgu başarısız olursa (bazı çok-bantlı/karma
+        # görüntülerde farklı bantlar farklı CRS'te olabilir) sessizce None
+        # bırakılır ve istemci tarafında WGS 84'e düşülür.
+        global _last_analyze_native_crs
+        native_crs = None
+        try:
+            native_crs = _call_with_retry(
+                lambda: result.projection().crs().getInfo(), retries=1
+            )
+        except Exception:
+            native_crs = None
+        if native_crs:
+            _last_analyze_native_crs = native_crs
 
         # ── İstatistik ────────────────────────────────────────────
         # 🛠️ BUG FİX (NoData piksel / büyük AOI istatistik sorunu):
@@ -1814,7 +1857,8 @@ def analyze():
             'index':     data.get('index', 'NDVI'),
             'visMin':    vis.get('min'),
             'visMax':    vis.get('max'),
-            'visPalette': vis.get('palette', [])
+            'visPalette': vis.get('palette', []),
+            'nativeCrs': native_crs
         })
 
     except Exception as e:
@@ -1911,12 +1955,20 @@ def download_geotiff():
 
         filename = (req_data.get('filename') or 'SylvaGIS_export').strip() or 'SylvaGIS_export'
         scale    = int(req_data.get('scale', 30))
-        crs      = req_data.get('crs', 'EPSG:4326').strip()
+        # 🌐 İstemci bir CRS göndermezse (ör. eski/farklı bir istemci veya
+        # doğrudan API çağrısı), sabit "EPSG:4326" yerine son analizin
+        # KENDİ gerçek/doğal CRS'ine düşülür — böylece veri hangi UTM
+        # diliminde/projeksiyondaysa indirilen GeoTIFF de o CRS'te gelir.
+        # Normal akışta zaten istemci (index.html) CRS seçicisini
+        # nativeCrs'e göre otomatik ön-seçip gönderir; bu yalnızca bir
+        # güvenlik ağıdır. Kullanıcı seçiciden farklı bir CRS seçtiyse o
+        # değer (req_data.get('crs')) her zaman önceliklidir.
+        crs = (req_data.get('crs') or _last_analyze_native_crs or 'EPSG:4326').strip()
 
         # Güvenlik: Yalnızca EPSG:NNNNN formatına izin ver
         import re as _re
         if not _re.match(r'^EPSG:\d+$', crs, _re.IGNORECASE):
-            crs = 'EPSG:4326'
+            crs = _last_analyze_native_crs if (_last_analyze_native_crs and _re.match(r'^EPSG:\d+$', _last_analyze_native_crs, _re.IGNORECASE)) else 'EPSG:4326'
         crs = crs.upper()
 
         # Son analiz parametrelerini kullan
@@ -2893,7 +2945,7 @@ SYLVA_OWNER_EMAIL = 'sylvagis.world@gmail.com'
 
 def _send_registration_email(ad, soyad, email, meslek, ulke):
     smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'ksfnkvwcutrawcih'
+    smtp_pass = 'asdasdasdsdasdd'
 
     msg = MIMEMultipart('alternative')
     msg['Subject'] = f'[SylvaGIS] Yeni Kayıt — {ad} {soyad}'
