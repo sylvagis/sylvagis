@@ -172,7 +172,7 @@ def send_contact_message():
         return jsonify({'success': False, 'error': 'Geçersiz e-posta adresi.'}), 400
 
     smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'aaaaaaaaaaaaaa'
+    smtp_pass = 'ksfnkvwcutrawcih'
 
     body = (
         'SylvaGIS İletişim Formu üzerinden yeni bir mesaj gönderildi.\n\n'
@@ -1705,13 +1705,12 @@ def analyze():
             meta = _rgb_scene_metadata(data, roi, image, ds)
 
             return jsonify({
-                'success':    True,
-                'tileUrl':    tile_url,
-                'index':      'RGB',
-                'meta':       meta,
-                'native_crs': meta.get('crs'),   # verinin gerçek projeksiyon CRS'i
-                'visMin':     vis.get('min'),
-                'visMax':     vis.get('max'),
+                'success':  True,
+                'tileUrl':  tile_url,
+                'index':    'RGB',
+                'meta':     meta,
+                'visMin':   vis.get('min'),
+                'visMax':   vis.get('max'),
             })
 
         final_display, roi, result, vis = build_result_image(data)
@@ -1806,25 +1805,16 @@ def analyze():
             except Exception:
                 scenes_list = []
 
-        # Verinin gerçek (native) koordinat sistemini GEE'den oku.
-        # result.projection() — hesaplama değil yalnızca metadata sorgusu olduğundan hızlıdır.
-        _native_crs = None
-        try:
-            _native_crs = result.projection().crs().getInfo()
-        except Exception:
-            pass
-
         return jsonify({
-            'success':    True,
-            'tileUrl':    tile_url,
-            'stats':      stats,
-            'realStats':  real_minmax,
-            'scenes':     scenes_list,
-            'index':      data.get('index', 'NDVI'),
-            'visMin':     vis.get('min'),
-            'visMax':     vis.get('max'),
-            'visPalette': vis.get('palette', []),
-            'native_crs': _native_crs,  # verinin gerçek projeksiyon CRS'i
+            'success':   True,
+            'tileUrl':   tile_url,
+            'stats':     stats,
+            'realStats': real_minmax,
+            'scenes':    scenes_list,
+            'index':     data.get('index', 'NDVI'),
+            'visMin':    vis.get('min'),
+            'visMax':    vis.get('max'),
+            'visPalette': vis.get('palette', [])
         })
 
     except Exception as e:
@@ -2903,7 +2893,7 @@ SYLVA_OWNER_EMAIL = 'sylvagis.world@gmail.com'
 
 def _send_registration_email(ad, soyad, email, meslek, ulke):
     smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'aaaaaaaaaaaaaaaaaa'
+    smtp_pass = 'ksfnkvwcutrawcih'
 
     msg = MIMEMultipart('alternative')
     msg['Subject'] = f'[SylvaGIS] Yeni Kayıt — {ad} {soyad}'
