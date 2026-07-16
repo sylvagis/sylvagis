@@ -172,7 +172,7 @@ def send_contact_message():
         return jsonify({'success': False, 'error': 'Geçersiz e-posta adresi.'}), 400
 
     smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'ksfnkvwcutrawcih'
+    smtp_pass = 'aaaaaaaaaaaaaaaa'
 
     body = (
         'SylvaGIS İletişim Formu üzerinden yeni bir mesaj gönderildi.\n\n'
@@ -1762,21 +1762,6 @@ def analyze():
         except Exception:
             pass
 
-        # ── TOPO: AOI'de veri yoksa erken dön ────────────────────
-        # real_minmax başarıyla hesaplandı ama min=None/max=None ise AOI'de
-        # geçerli piksel yok — seçilen DEM kaynağı bu bölgeyi kapsamıyor.
-        _cur_index = data.get('index', 'NDVI')
-        _is_topo   = _cur_index == 'TOPO' or _cur_index.startswith('TOPO_')
-        if (_is_topo
-                and 'min' in real_minmax
-                and real_minmax.get('min') is None
-                and real_minmax.get('max') is None):
-            return jsonify({
-                'success':   False,
-                'errorCode': 'no_dem_data',
-                'error':     'no_dem_data',
-            })
-
         # ── Tile URL ─────────────────────────────────────────────
         map_id   = _call_with_retry(lambda: final_display.getMapId(vis))
         tile_url = map_id['tile_fetcher'].url_format
@@ -2908,7 +2893,7 @@ SYLVA_OWNER_EMAIL = 'sylvagis.world@gmail.com'
 
 def _send_registration_email(ad, soyad, email, meslek, ulke):
     smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'ksfnkvwcutrawcih'
+    smtp_pass = 'aaaaaaaaaaaaaaaa'
 
     msg = MIMEMultipart('alternative')
     msg['Subject'] = f'[SylvaGIS] Yeni Kayıt — {ad} {soyad}'
