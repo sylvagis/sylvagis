@@ -5312,7 +5312,6 @@ function selectRamp(name) {
         var _analysisGeneration = 0;
         var _lastAnalysisROI = null;    // Son analizin AOI geometrisi — syncLegend için hafızada tutulur
         var _lastAnalysisParams = {};   // Son analizin tam parametreleri (satellite, dates, demSource…)
-        var _lastNativeCrs = null;      // Son analizde tespit edilen verinin gerçek (native) CRS'i — GeoTIFF dialogunda otomatik seçim için
         // Galeriden seçilen sahnenin GEE system:index'i. null ise "tarih aralığı medyanı"
         // kullanılır. Sınıflandırma/Stretched senkronizasyonu sırasında bu ID korunarak
         // gönderilir; aksi halde renk/aralık değişince sahne sessizce medyana döner.
@@ -5535,8 +5534,6 @@ function selectRamp(name) {
                 // export'un tile'ları yakalayabilmesi için gerekli)
                 _geeLayer = L.tileLayer(data.tileUrl, { opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane' }).addTo(map);
                 _applyGeeLayerClipMode(clipMode);
-                // 🌐 Native CRS'i sakla — GeoTIFF indirme dialogunda otomatik seçim için
-                if (data.native_crs) { _lastNativeCrs = data.native_crs; }
                 // Analiz sonucu gösterilince Çalışma Alanı checkbox'ını otomatik işaretle
                 (function() {
                     var _wsCb = document.getElementById('toggle-workspace-opacity');
@@ -6639,10 +6636,6 @@ function selectRamp(name) {
                 }
 
                 renderRgbLegend(data.meta || {}, dsInfo);
-
-                // 🌐 Native CRS'i sakla — GeoTIFF indirme dialogunda otomatik seçim için
-                if (data.native_crs) { _lastNativeCrs = data.native_crs; }
-                else if (data.meta && data.meta.crs) { _lastNativeCrs = data.meta.crs; }
 
                 // 📡 Ham Veri (Bantlar) panelini, yeni seçilen sahneye göre güncelle
                 onRawBandsSceneSelected(sceneId, meta, dsInfo, data.meta || {});
@@ -12503,49 +12496,6 @@ function openGeoTiffDownloadDialog() {
         var _gtHide = !!(_gtMeta && (isLulcAnalysis(_gtMeta.analysisName) || isTopoAnalysis(_gtMeta.analysisName)));
         scaleWrap.style.display = _gtHide ? 'none' : '';
     }
-    // 🌐 Koordinat Sistemi otomatik seçimi:
-    // Son analizde tespit edilen native CRS varsa dropdown'da otomatik seç.
-    // Modal her açıldığında önce önceki oturumdan dinamik eklenen seçeneği
-    // temizle, ardından gerekirse yeni native seçeneği ekle/seç.
-    var crsSelect = document.getElementById('geotiff-crs');
-    if (crsSelect) {
-        // Daha önce dinamik eklenen "auto-native" seçeneğini temizle
-        var _prevNative = crsSelect.querySelector('option[data-auto-native]');
-        if (_prevNative) _prevNative.parentNode.removeChild(_prevNative);
-
-        var _nativeCrs = (_lastNativeCrs || '').trim().toUpperCase();
-        if (_nativeCrs && _nativeCrs !== 'EPSG:4326') {
-            // Dropdown'da bu EPSG zaten var mı?
-            var _foundOpt = null;
-            for (var _oi = 0; _oi < crsSelect.options.length; _oi++) {
-                if (crsSelect.options[_oi].value.toUpperCase() === _nativeCrs) {
-                    _foundOpt = crsSelect.options[_oi];
-                    break;
-                }
-            }
-            if (_foundOpt) {
-                crsSelect.value = _foundOpt.value;
-            } else {
-                // Listede yoksa — ilk optgroup'un başına "Native CRS" seçeneği ekle
-                var _nativeOpt = document.createElement('option');
-                _nativeOpt.value = _nativeCrs;
-                _nativeOpt.setAttribute('data-auto-native', 'true');
-                _nativeOpt.textContent = _nativeCrs + ' ' + t('gtiff_native_crs_label', '(verinin orijinal CRS\'i)');
-                var _firstGrp = crsSelect.querySelector('optgroup');
-                if (_firstGrp) {
-                    _firstGrp.insertBefore(_nativeOpt, _firstGrp.firstChild);
-                } else {
-                    crsSelect.insertBefore(_nativeOpt, crsSelect.firstChild);
-                }
-                crsSelect.value = _nativeCrs;
-            }
-        } else {
-            // Native CRS yok ya da zaten EPSG:4326 — standart varsayılanı seç
-            crsSelect.value = 'EPSG:4326';
-        }
-        onGeoTiffCrsChange();
-    }
-
     modal.style.display = 'flex';
 }
 
