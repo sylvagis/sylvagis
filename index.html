@@ -2932,6 +2932,23 @@ tr.class-highlight-active {
         var HOME_VIEW = { center: [20.0, 0.0], zoom: 2 };
         var map = L.map('map', { zoomControl: false }).setView(HOME_VIEW.center, HOME_VIEW.zoom);
 
+        // 🛠️ BUG FİX (Analiz sonucu/rasteri ekranda görünmüyor):
+        // Leaflet'te vektör katmanlar (Polygon/Rectangle/KML çalışma alanı
+        // çizimi) varsayılan olarak 'overlayPane' (z-index 400) içinde,
+        // GEE analiz rasteri ise L.tileLayer ile 'tilePane' (z-index 200)
+        // içinde render edilir. 'overlayPane' HER ZAMAN 'tilePane'in
+        // üstünde olduğundan, Çalışma Alanı çiziminin dolgusu (fillOpacity)
+        // aktifse (örn. KML/Poligon/Dikdörtgen çizimlerinde varsayılan
+        // 0.3–0.6 dolgu) analiz rasterinin üzerini kaplayıp onu görünmez
+        // hale getiriyordu — legend/grafik/tablo dolu geliyor ama harita
+        // üzerinde raster hiç görünmüyordu. Çözüm: GEE analiz katmanı ve
+        // sınıf vurgulama katmanı için overlayPane'den DAHA YÜKSEK z-index'e
+        // sahip özel bir pane oluşturup rasteri hep en üstte tutuyoruz.
+        map.createPane('geeAnalysisPane');
+        map.getPane('geeAnalysisPane').style.zIndex = 450;
+        map.getPane('geeAnalysisPane').style.pointerEvents = 'none';
+
+
         // 2. Basemap katman tanımları — 11 seçenek
         var BASEMAP_CONFIGS = {
             'google-labels':  null, // layerGroup: satellite(lyrs=s) + English labels(lyrs=h) — aşağıda oluşturuluyor
@@ -4336,7 +4353,7 @@ function selectRamp(name) {
             .then(function(data) {
                 if (!data.success) { hideSylvaLoading(); return; }
                 if (_geeLayer) { map.removeLayer(_geeLayer); _geeLayer = null; }
-                _geeLayer = L.tileLayer(data.tileUrl, { opacity: 1, zIndex: 10, crossOrigin: true }).addTo(map);
+                _geeLayer = L.tileLayer(data.tileUrl, { opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane' }).addTo(map);
                 _applyGeeLayerClipMode(_clipMode);
                 // Renklendirilmiş yeni veri haritada hazır olup tamamen ekrana
                 // yansıdığında (tüm karolar yüklenince) yükleme ekranı kapanır.
@@ -4737,7 +4754,7 @@ function selectRamp(name) {
             .then(function(data) {
                 if (!data.success) { hideSylvaLoading(); return; }
                 if (_geeLayer) { map.removeLayer(_geeLayer); _geeLayer = null; }
-                _geeLayer = L.tileLayer(data.tileUrl, { opacity: 1, zIndex: 10, crossOrigin: true }).addTo(map);
+                _geeLayer = L.tileLayer(data.tileUrl, { opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane' }).addTo(map);
                 _applyGeeLayerClipMode(_clipMode);
                 // Renklendirilmiş yeni veri haritada hazır olup tamamen ekrana
                 // yansıdığında (tüm karolar yüklenince) yükleme ekranı kapanır.
@@ -5508,14 +5525,14 @@ function selectRamp(name) {
                 if (isTopoAnalysis(meta.analysisName) &&
                     (!data.realStats || data.realStats.min === null || data.realStats.min === undefined ||
                      data.realStats.max === null || data.realStats.max === undefined)) {
-                    showNoDataModal('İstediğiniz DEM veri kaynağında çalışma alanınıza göre veri bulunamadı. Lütfen veri kaynağını değiştirin.');
+                    showNoDataModal(t('topo_dem_no_data_warning'));
                     return;
                 }
                 // Önceki GEE katmanını kaldır
                 if (_geeLayer) { map.removeLayer(_geeLayer); _geeLayer = null; }
                 // Yeni GEE tile katmanını ekle (crossOrigin: html2canvas tabanlı
                 // export'un tile'ları yakalayabilmesi için gerekli)
-                _geeLayer = L.tileLayer(data.tileUrl, { opacity: 1, zIndex: 10, crossOrigin: true }).addTo(map);
+                _geeLayer = L.tileLayer(data.tileUrl, { opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane' }).addTo(map);
                 _applyGeeLayerClipMode(clipMode);
                 // Analiz sonucu gösterilince Çalışma Alanı checkbox'ını otomatik işaretle
                 (function() {
@@ -6355,7 +6372,7 @@ function selectRamp(name) {
                 if (_analysisGeneration !== _sceneGen) { hideSylvaLoading(); return; }
                 // Harita katmanını güncelle
                 if (_geeLayer) { map.removeLayer(_geeLayer); _geeLayer = null; }
-                _geeLayer = L.tileLayer(data.tileUrl, { opacity: 1, zIndex: 10, crossOrigin: true }).addTo(map);
+                _geeLayer = L.tileLayer(data.tileUrl, { opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane' }).addTo(map);
                 _applyGeeLayerClipMode(_sceneClipMode);
                 // Yeni görüntü haritada tamamen görünür hale gelince (tüm karolar
                 // yüklenince) yükleme ekranı otomatik olarak kapanır.
@@ -6600,7 +6617,7 @@ function selectRamp(name) {
 
                 // Önceki katmanı kaldır, yeni gerçek renk katmanını ekle
                 if (_geeLayer) { map.removeLayer(_geeLayer); _geeLayer = null; }
-                _geeLayer = L.tileLayer(data.tileUrl, { opacity: 1, zIndex: 10, crossOrigin: true }).addTo(map);
+                _geeLayer = L.tileLayer(data.tileUrl, { opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane' }).addTo(map);
                 _applyGeeLayerClipMode(_rgbClipMode);
                 _hideLoadingWhenTileReady(_geeLayer);
 
@@ -7456,7 +7473,7 @@ function selectRamp(name) {
                     return;
                 }
                 if (_classHighlightLayer) { try { map.removeLayer(_classHighlightLayer); } catch (e) {} }
-                _classHighlightLayer = L.tileLayer(data.tileUrl, { opacity: 0.95, zIndex: 20, crossOrigin: true }).addTo(map);
+                _classHighlightLayer = L.tileLayer(data.tileUrl, { opacity: 0.95, zIndex: 20, crossOrigin: true, pane: 'geeAnalysisPane' }).addTo(map);
             })
             .catch(function (err) {
                 if (_classHighlightIndex === idx) _classHighlightIndex = null;
@@ -12912,7 +12929,7 @@ function cancelGeoTiffDownload() {
 // SylvaGIS — Global i18n System (17 languages, no reload)
 // ============================================================
 var SYLVA_TRANSLATIONS = {
-  en: { welcome_title: 'Welcome to SylvaGIS', welcome_sub: 'Forest Analysis & Remote Sensing Platform', nav_guide: '❓ Guide', nav_guide_short: 'Guide', nav_login: '👤 User Login',
+  en: { welcome_title: 'Welcome to SylvaGIS', welcome_sub: 'Forest Analysis & Remote Sensing Platform', nav_guide: '❓ Guide', nav_guide_short: 'Guide', nav_login: '👤 User Login', topo_dem_no_data_warning: 'The selected DEM data source has no data for your study area. Please change the data source.',
     login_title: 'Sign in to your account', login_sub: 'Choose Google, Apple or Microsoft',
     login_google: 'Continue with Google', login_apple: 'Continue with Apple', login_microsoft: 'Continue with Microsoft',
     login_remember: 'Remember Me', btn_logout: 'Sign Out',
@@ -13259,7 +13276,7 @@ var SYLVA_TRANSLATIONS = {
     aria_end_date: 'End date',
     aria_start_date: 'Start date',
   },
-  uz: { welcome_title: 'SylvaGIS-ga xush kelibsiz', welcome_sub: 'Oʻrmon tahlili va masofadan zondlash platformasi', nav_guide: '❓ Qoʻllanma', nav_guide_short: 'Qoʻllanma', nav_login: '👤 Foydalanuvchi kirishi',
+  uz: { welcome_title: 'SylvaGIS-ga xush kelibsiz', welcome_sub: 'Oʻrmon tahlili va masofadan zondlash platformasi', nav_guide: '❓ Qoʻllanma', nav_guide_short: 'Qoʻllanma', nav_login: '👤 Foydalanuvchi kirishi', topo_dem_no_data_warning: 'Tanlangan DEM manbasida ish hududingiz uchun ma\'lumot topilmadi. Iltimos, manbani almashtiring.',
     login_title: 'Hisobingizga kiring', login_sub: 'Google, Apple yoki Microsoft-ni tanlang',
     login_google: 'Google bilan davom etish', login_apple: 'Apple bilan davom etish', login_microsoft: 'Microsoft bilan davom etish',
     login_remember: 'Meni eslab qol', btn_logout: 'Chiqish',
@@ -13600,7 +13617,7 @@ var SYLVA_TRANSLATIONS = {
     aria_end_date: 'Tugash sanasi',
     aria_start_date: 'Boshlanish sanasi',
   },
-  el: { welcome_title: 'Καλώς ήρθατε στο SylvaGIS', welcome_sub: 'Πλατφόρμα Δασικής Ανάλυσης & Τηλεπισκόπησης', nav_guide: '❓ Οδηγός', nav_guide_short: 'Οδηγός', nav_login: '👤 Σύνδεση Χρήστη',
+  el: { welcome_title: 'Καλώς ήρθατε στο SylvaGIS', welcome_sub: 'Πλατφόρμα Δασικής Ανάλυσης & Τηλεπισκόπησης', nav_guide: '❓ Οδηγός', nav_guide_short: 'Οδηγός', nav_login: '👤 Σύνδεση Χρήστη', topo_dem_no_data_warning: 'Δεν βρέθηκαν δεδομένα για την περιοχή μελέτης σας στην επιλεγμένη πηγή DEM. Παρακαλώ αλλάξτε την πηγή δεδομένων.',
     login_title: 'Συνδεθείτε στον λογαριασμό σας', login_sub: 'Επιλέξτε Google, Apple ή Microsoft',
     login_google: 'Συνέχεια με Google', login_apple: 'Συνέχεια με Apple', login_microsoft: 'Συνέχεια με Microsoft',
     login_remember: 'Να με θυμάσαι', btn_logout: 'Αποσύνδεση',
@@ -13947,7 +13964,7 @@ var SYLVA_TRANSLATIONS = {
     aria_end_date: 'Ημερομηνία λήξης',
     aria_start_date: 'Ημερομηνία έναρξης',
   },
-  bg: { welcome_title: 'Добре дошли в SylvaGIS', welcome_sub: 'Платформа за горски анализ и дистанционно наблюдение', nav_guide: '❓ Ръководство', nav_guide_short: 'Ръководство', nav_login: '👤 Вход на потребител',
+  bg: { welcome_title: 'Добре дошли в SylvaGIS', welcome_sub: 'Платформа за горски анализ и дистанционно наблюдение', nav_guide: '❓ Ръководство', nav_guide_short: 'Ръководство', nav_login: '👤 Вход на потребител', topo_dem_no_data_warning: 'В избрания източник на DEM няма данни за вашата работна зона. Моля, сменете източника на данни.',
     login_title: 'Влезте в своя акаунт', login_sub: 'Изберете Google, Apple или Microsoft',
     login_google: 'Продължи с Google', login_apple: 'Продължи с Apple', login_microsoft: 'Продължи с Microsoft',
     login_remember: 'Запомни ме', btn_logout: 'Изход',
@@ -14294,7 +14311,7 @@ var SYLVA_TRANSLATIONS = {
     aria_end_date: 'Крайна дата',
     aria_start_date: 'Начална дата',
   },
-  tr: { welcome_title: 'SylvaGIS\'e Hoş Geldiniz', welcome_sub: 'Orman Analizi ve Uzaktan Algılama Platformu', nav_guide: '❓ Rehber', nav_guide_short: 'Kılavuz', nav_login: '👤 Kullanıcı Girişi',
+  tr: { welcome_title: 'SylvaGIS\'e Hoş Geldiniz', welcome_sub: 'Orman Analizi ve Uzaktan Algılama Platformu', nav_guide: '❓ Rehber', nav_guide_short: 'Kılavuz', nav_login: '👤 Kullanıcı Girişi', topo_dem_no_data_warning: 'İstediğiniz DEM veri kaynağında çalışma alanınıza göre veri bulunamadı. Lütfen veri kaynağını değiştirin.',
     login_title: 'Hesabınızla Giriş Yapın', login_sub: 'Google, Apple veya Microsoft hesabınızı seçin',
     login_google: 'Google ile devam et', login_apple: 'Apple ile devam et', login_microsoft: 'Microsoft ile devam et',
     login_remember: 'Beni Hatırla', btn_logout: 'Oturumu Kapat',
@@ -14637,7 +14654,7 @@ var SYLVA_TRANSLATIONS = {
     aria_end_date: 'Bitiş tarihi',
     aria_start_date: 'Başlangıç tarihi',
   },
-  az: { welcome_title: 'SylvaGIS-ə Xoş Gəlmisiniz', welcome_sub: 'Meşə Təhlili və Məsafədən Zondlama Platforması', nav_guide: '❓ Bələdçi', nav_guide_short: 'Bələdçi', nav_login: '👤 İstifadəçi Girişi',
+  az: { welcome_title: 'SylvaGIS-ə Xoş Gəlmisiniz', welcome_sub: 'Meşə Təhlili və Məsafədən Zondlama Platforması', nav_guide: '❓ Bələdçi', nav_guide_short: 'Bələdçi', nav_login: '👤 İstifadəçi Girişi', topo_dem_no_data_warning: 'Seçdiyiniz DEM mənbəyində iş sahəniz üçün məlumat tapılmadı. Zəhmət olmasa məlumat mənbəyini dəyişdirin.',
     login_title: 'Hesabınızla Daxil Olun', login_sub: 'Google, Apple və ya Microsoft hesabınızı seçin',
     login_google: 'Google ilə davam et', login_apple: 'Apple ilə davam et', login_microsoft: 'Microsoft ilə davam et',
     login_remember: 'Məni Xatırla', btn_logout: 'Oturumu Bağla',
@@ -14980,7 +14997,7 @@ var SYLVA_TRANSLATIONS = {
     aria_end_date: 'Bitmə tarixi',
     aria_start_date: 'Başlanğıc tarixi',
   },
-  hu: { welcome_title: 'Üdvözöljük a SylvaGIS-ben', welcome_sub: 'Erdőelemzési és Távérzékelési Platform', nav_guide: '❓ Útmutató', nav_guide_short: 'Útmutató', nav_login: '👤 Bejelentkezés',
+  hu: { welcome_title: 'Üdvözöljük a SylvaGIS-ben', welcome_sub: 'Erdőelemzési és Távérzékelési Platform', nav_guide: '❓ Útmutató', nav_guide_short: 'Útmutató', nav_login: '👤 Bejelentkezés', topo_dem_no_data_warning: 'A kiválasztott DEM adatforrásban nincs adat a munkaterületére. Kérjük, változtassa meg az adatforrást.',
     login_title: 'Jelentkezzen be fiókjával', login_sub: 'Válassza ki Google, Apple vagy Microsoft fiókját',
     login_google: 'Folytatás Google-lal', login_apple: 'Folytatás Apple-lel', login_microsoft: 'Folytatás Microsofttal',
     login_remember: 'Emlékezz rám', btn_logout: 'Kijelentkezés',
@@ -15323,7 +15340,7 @@ var SYLVA_TRANSLATIONS = {
     aria_end_date: 'Befejező dátum',
     aria_start_date: 'Kezdő dátum',
   },
-  kk: { welcome_title: 'SylvaGIS-ке қош келдіңіз', welcome_sub: 'Орман талдауы және қашықтан зондтау платформасы', nav_guide: '❓ Нұсқаулық', nav_guide_short: 'Нұсқаулық', nav_login: '👤 Кіру',
+  kk: { welcome_title: 'SylvaGIS-ке қош келдіңіз', welcome_sub: 'Орман талдауы және қашықтан зондтау платформасы', nav_guide: '❓ Нұсқаулық', nav_guide_short: 'Нұсқаулық', nav_login: '👤 Кіру', topo_dem_no_data_warning: 'Таңдалған DEM дереккөзінде жұмыс аймағыңыз үшін деректер табылмады. Дереккөзді өзгертіңіз.',
     login_title: 'Тіркелгіңізге кіріңіз', login_sub: 'Google, Apple немесе Microsoft таңдаңыз',
     login_google: 'Google арқылы жалғастыру', login_apple: 'Apple арқылы жалғастыру', login_microsoft: 'Microsoft арқылы жалғастыру',
     login_remember: 'Мені есте сақта', btn_logout: 'Шығу',
@@ -15664,7 +15681,7 @@ var SYLVA_TRANSLATIONS = {
     aria_end_date: 'Аяқталу күні',
     aria_start_date: 'Басталу күні',
   },
-  de: { welcome_title: 'Willkommen bei SylvaGIS', welcome_sub: 'Waldanalyse- und Fernerkundungsplattform', nav_guide: '❓ Hilfe', nav_guide_short: 'Handbuch', nav_login: '👤 Anmelden',
+  de: { welcome_title: 'Willkommen bei SylvaGIS', welcome_sub: 'Waldanalyse- und Fernerkundungsplattform', nav_guide: '❓ Hilfe', nav_guide_short: 'Handbuch', nav_login: '👤 Anmelden', topo_dem_no_data_warning: 'Für die gewählte DEM-Datenquelle liegen keine Daten für Ihr Arbeitsgebiet vor. Bitte wechseln Sie die Datenquelle.',
     sidebar_title: 'Arbeitsbereich & Datenauswahl',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ Polygon', btn_polygon_short: 'Polygon', btn_rectangle: '▭ Rechteck',
@@ -16012,7 +16029,7 @@ var SYLVA_TRANSLATIONS = {
     aria_end_date: 'Enddatum',
     aria_start_date: 'Startdatum',
   },
-  fr: { welcome_title: 'Bienvenue sur SylvaGIS', welcome_sub: 'Plateforme d\'analyse forestière et de télédétection', nav_guide: '❓ Guide', nav_guide_short: 'Manuel', nav_login: '👤 Connexion',
+  fr: { welcome_title: 'Bienvenue sur SylvaGIS', welcome_sub: 'Plateforme d\'analyse forestière et de télédétection', nav_guide: '❓ Guide', nav_guide_short: 'Manuel', nav_login: '👤 Connexion', topo_dem_no_data_warning: 'Aucune donnée disponible pour votre zone d\'étude dans la source DEM sélectionnée. Veuillez changer de source de données.',
     sidebar_title: 'Espace de travail & Sélection de données',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ Polygone', btn_polygon_short: 'Polygone', btn_rectangle: '▭ Rectangle',
@@ -16360,7 +16377,7 @@ var SYLVA_TRANSLATIONS = {
     aria_end_date: 'Date de fin',
     aria_start_date: 'Date de début',
   },
-  es: { welcome_title: 'Bienvenido a SylvaGIS', welcome_sub: 'Plataforma de Análisis Forestal y Teledetección', nav_guide: '❓ Guía', nav_guide_short: 'Manual', nav_login: '👤 Iniciar sesión',
+  es: { welcome_title: 'Bienvenido a SylvaGIS', welcome_sub: 'Plataforma de Análisis Forestal y Teledetección', nav_guide: '❓ Guía', nav_guide_short: 'Manual', nav_login: '👤 Iniciar sesión', topo_dem_no_data_warning: 'No se encontraron datos para su área de trabajo en la fuente DEM seleccionada. Por favor, cambie la fuente de datos.',
     sidebar_title: 'Área de trabajo & Selección de datos',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ Polígono', btn_polygon_short: 'Polígono', btn_rectangle: '▭ Rectángulo',
@@ -16708,7 +16725,7 @@ var SYLVA_TRANSLATIONS = {
     aria_end_date: 'Fecha de fin',
     aria_start_date: 'Fecha de inicio',
   },
-  pt: { welcome_title: 'Bem-vindo ao SylvaGIS', welcome_sub: 'Plataforma de Análise Florestal e Sensoriamento Remoto', nav_guide: '❓ Guia', nav_guide_short: 'Guia', nav_login: '👤 Iniciar sessão',
+  pt: { welcome_title: 'Bem-vindo ao SylvaGIS', welcome_sub: 'Plataforma de Análise Florestal e Sensoriamento Remoto', nav_guide: '❓ Guia', nav_guide_short: 'Guia', nav_login: '👤 Iniciar sessão', topo_dem_no_data_warning: 'Não foram encontrados dados para a sua área de trabalho na fonte DEM selecionada. Por favor, altere a fonte de dados.',
     sidebar_title: 'Área de trabalho & Seleção de dados',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ Polígono', btn_polygon_short: 'Polígono', btn_rectangle: '▭ Retângulo',
@@ -17056,7 +17073,7 @@ var SYLVA_TRANSLATIONS = {
     aria_end_date: 'Data de término',
     aria_start_date: 'Data de início',
   },
-  ar: { welcome_title: 'مرحبًا بك في SylvaGIS', welcome_sub: 'منصة تحليل الغابات والاستشعار عن بعد', nav_guide: '❓ دليل', nav_guide_short: 'دليل', nav_login: '👤 تسجيل الدخول',
+  ar: { welcome_title: 'مرحبًا بك في SylvaGIS', welcome_sub: 'منصة تحليل الغابات والاستشعار عن بعد', nav_guide: '❓ دليل', nav_guide_short: 'دليل', nav_login: '👤 تسجيل الدخول', topo_dem_no_data_warning: 'لا توجد بيانات لمنطقة عملك في مصدر بيانات DEM المحدد. يرجى تغيير مصدر البيانات.',
     sidebar_title: 'منطقة العمل واختيار البيانات',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ مضلع', btn_polygon_short: 'مضلع', btn_rectangle: '▭ مستطيل',
@@ -17404,7 +17421,7 @@ var SYLVA_TRANSLATIONS = {
     aria_end_date: 'تاريخ الانتهاء',
     aria_start_date: 'تاريخ البدء',
   },
-  fa: { welcome_title: 'به SylvaGIS خوش آمدید', welcome_sub: 'پلتفرم تحلیل جنگل و سنجش از دور', nav_guide: '❓ راهنما', nav_guide_short: 'راهنما', nav_login: '👤 ورود کاربر',
+  fa: { welcome_title: 'به SylvaGIS خوش آمدید', welcome_sub: 'پلتفرم تحلیل جنگل و سنجش از دور', nav_guide: '❓ راهنما', nav_guide_short: 'راهنما', nav_login: '👤 ورود کاربر', topo_dem_no_data_warning: 'در منبع DEM انتخابی، داده‌ای برای محدوده کاری شما یافت نشد. لطفاً منبع داده را تغییر دهید.',
     sidebar_title: 'فضای کاری و انتخاب داده',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ چندضلعی', btn_polygon_short: 'چندضلعی', btn_rectangle: '▭ مستطیل',
@@ -17752,7 +17769,7 @@ var SYLVA_TRANSLATIONS = {
     aria_end_date: 'تاریخ پایان',
     aria_start_date: 'تاریخ شروع',
   },
-  zh: { welcome_title: '欢迎使用 SylvaGIS', welcome_sub: '森林分析与遥感平台', nav_guide: '❓ 指南', nav_guide_short: '手册', nav_login: '👤 用户登录',
+  zh: { welcome_title: '欢迎使用 SylvaGIS', welcome_sub: '森林分析与遥感平台', nav_guide: '❓ 指南', nav_guide_short: '手册', nav_login: '👤 用户登录', topo_dem_no_data_warning: '所选DEM数据源中未找到您工作区域的数据。请更换数据源。',
     sidebar_title: '工作区与数据选择',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ 多边形', btn_polygon_short: '多边形', btn_rectangle: '▭ 矩形',
@@ -18100,7 +18117,7 @@ var SYLVA_TRANSLATIONS = {
     aria_end_date: '结束日期',
     aria_start_date: '开始日期',
   },
-  ja: { welcome_title: 'SylvaGISへようこそ', welcome_sub: '森林解析・リモートセンシングプラットフォーム', nav_guide: '❓ ガイド', nav_guide_short: 'マニュアル', nav_login: '👤 ログイン',
+  ja: { welcome_title: 'SylvaGISへようこそ', welcome_sub: '森林解析・リモートセンシングプラットフォーム', nav_guide: '❓ ガイド', nav_guide_short: 'マニュアル', nav_login: '👤 ログイン', topo_dem_no_data_warning: '選択したDEMデータソースには作業範囲のデータがありません。データソースを変更してください。',
     sidebar_title: 'ワークスペース＆データ選択',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ ポリゴン', btn_polygon_short: 'ポリゴン', btn_rectangle: '▭ 長方形',
@@ -18448,7 +18465,7 @@ var SYLVA_TRANSLATIONS = {
     aria_end_date: '終了日',
     aria_start_date: '開始日',
   },
-  ko: { welcome_title: 'SylvaGIS에 오신 것을 환영합니다', welcome_sub: '산림 분석 및 원격 탐사 플랫폼', nav_guide: '❓ 가이드', nav_guide_short: '매뉴얼', nav_login: '👤 사용자 로그인',
+  ko: { welcome_title: 'SylvaGIS에 오신 것을 환영합니다', welcome_sub: '산림 분석 및 원격 탐사 플랫폼', nav_guide: '❓ 가이드', nav_guide_short: '매뉴얼', nav_login: '👤 사용자 로그인', topo_dem_no_data_warning: '선택한 DEM 데이터 소스에 작업 영역에 대한 데이터가 없습니다. 데이터 소스를 변경해 주세요.',
     sidebar_title: '작업 공간 및 데이터 선택',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ 다각형', btn_polygon_short: '다각형', btn_rectangle: '▭ 직사각형',
@@ -18796,7 +18813,7 @@ var SYLVA_TRANSLATIONS = {
     aria_end_date: '종료일',
     aria_start_date: '시작일',
   },
-  hi: { welcome_title: 'SylvaGIS में आपका स्वागत है', welcome_sub: 'वन विश्लेषण और रिमोट सेंसिंग प्लेटफ़ॉर्म', nav_guide: '❓ मार्गदर्शिका', nav_guide_short: 'मैनुअल', nav_login: '👤 उपयोगकर्ता लॉगिन',
+  hi: { welcome_title: 'SylvaGIS में आपका स्वागत है', welcome_sub: 'वन विश्लेषण और रिमोट सेंसिंग प्लेटफ़ॉर्म', nav_guide: '❓ मार्गदर्शिका', nav_guide_short: 'मैनुअल', nav_login: '👤 उपयोगकर्ता लॉगिन', topo_dem_no_data_warning: 'चयनित DEM डेटा स्रोत में आपके कार्य क्षेत्र के लिए डेटा उपलब्ध नहीं है। कृपया डेटा स्रोत बदलें।',
     sidebar_title: 'कार्यक्षेत्र और डेटा चयन',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ बहुभुज', btn_polygon_short: 'बहुभुज', btn_rectangle: '▭ आयत',
@@ -19144,7 +19161,7 @@ var SYLVA_TRANSLATIONS = {
     aria_end_date: 'समाप्ति तिथि',
     aria_start_date: 'प्रारंभ तिथि',
   },
-  id: { welcome_title: 'Selamat Datang di SylvaGIS', welcome_sub: 'Platform Analisis Hutan & Penginderaan Jauh', nav_guide: '❓ Panduan', nav_guide_short: 'Manual', nav_login: '👤 Masuk',
+  id: { welcome_title: 'Selamat Datang di SylvaGIS', welcome_sub: 'Platform Analisis Hutan & Penginderaan Jauh', nav_guide: '❓ Panduan', nav_guide_short: 'Manual', nav_login: '👤 Masuk', topo_dem_no_data_warning: 'Tidak ditemukan data untuk area kerja Anda pada sumber DEM yang dipilih. Silakan ganti sumber data.',
     sidebar_title: 'Ruang Kerja & Pemilihan Data',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ Poligon', btn_polygon_short: 'Poligon', btn_rectangle: '▭ Persegi Panjang',
@@ -19492,7 +19509,7 @@ var SYLVA_TRANSLATIONS = {
     aria_end_date: 'Tanggal selesai',
     aria_start_date: 'Tanggal mulai',
   },
-  ru: { welcome_title: 'Добро пожаловать в SylvaGIS', welcome_sub: 'Платформа анализа лесов и дистанционного зондирования', nav_guide: '❓ Гид', nav_guide_short: 'Руководство', nav_login: '👤 Вход пользователя',
+  ru: { welcome_title: 'Добро пожаловать в SylvaGIS', welcome_sub: 'Платформа анализа лесов и дистанционного зондирования', nav_guide: '❓ Гид', nav_guide_short: 'Руководство', nav_login: '👤 Вход пользователя', topo_dem_no_data_warning: 'В выбранном источнике DEM нет данных для вашей рабочей области. Пожалуйста, смените источник данных.',
     login_title: 'Войдите в свою учётную запись', login_sub: 'Выберите Google, Apple или Microsoft',
     login_google: 'Продолжить с Google', login_apple: 'Продолжить с Apple', login_microsoft: 'Продолжить с Microsoft',
     login_remember: 'Запомнить меня', btn_logout: 'Выйти',
@@ -19839,7 +19856,7 @@ var SYLVA_TRANSLATIONS = {
     aria_end_date: 'Дата окончания',
     aria_start_date: 'Дата начала',
   },
-  th: { welcome_title: 'ยินดีต้อนรับสู่ SylvaGIS', welcome_sub: 'แพลตฟอร์มวิเคราะห์ป่าไม้และการสำรวจระยะไกล', nav_guide: '❓ คู่มือ', nav_guide_short: 'คู่มือ', nav_login: '👤 เข้าสู่ระบบ',
+  th: { welcome_title: 'ยินดีต้อนรับสู่ SylvaGIS', welcome_sub: 'แพลตฟอร์มวิเคราะห์ป่าไม้และการสำรวจระยะไกล', nav_guide: '❓ คู่มือ', nav_guide_short: 'คู่มือ', nav_login: '👤 เข้าสู่ระบบ', topo_dem_no_data_warning: 'ไม่พบข้อมูลสำหรับพื้นที่ศึกษาของคุณในแหล่งข้อมูล DEM ที่เลือก กรุณาเปลี่ยนแหล่งข้อมูล',
     login_title: 'เข้าสู่บัญชีของคุณ', login_sub: 'เลือก Google, Apple หรือ Microsoft',
     login_google: 'ดำเนินการต่อด้วย Google', login_apple: 'ดำเนินการต่อด้วย Apple', login_microsoft: 'ดำเนินการต่อด้วย Microsoft',
     login_remember: 'จดจำฉัน', btn_logout: 'ออกจากระบบ',
@@ -20180,7 +20197,7 @@ var SYLVA_TRANSLATIONS = {
     aria_end_date: 'วันที่สิ้นสุด',
     aria_start_date: 'วันที่เริ่มต้น',
   },
-  bn: { welcome_title: 'SylvaGIS-এ স্বাগতম', welcome_sub: 'বন বিশ্লেষণ ও দূর অনুধাবন প্ল্যাটফর্ম', nav_guide: '❓ গাইড', nav_guide_short: 'গাইড', nav_login: '👤 ব্যবহারকারী লগইন',
+  bn: { welcome_title: 'SylvaGIS-এ স্বাগতম', welcome_sub: 'বন বিশ্লেষণ ও দূর অনুধাবন প্ল্যাটফর্ম', nav_guide: '❓ গাইড', nav_guide_short: 'গাইড', nav_login: '👤 ব্যবহারকারী লগইন', topo_dem_no_data_warning: 'নির্বাচিত DEM ডেটা উৎসে আপনার কার্যক্ষেত্রের জন্য কোনো ডেটা পাওয়া যায়নি। অনুগ্রহ করে ডেটা উৎস পরিবর্তন করুন।',
     login_title: 'আপনার অ্যাকাউন্টে সাইন ইন করুন', login_sub: 'Google, Apple বা Microsoft বেছে নিন',
     login_google: 'Google দিয়ে চালিয়ে যান', login_apple: 'Apple দিয়ে চালিয়ে যান', login_microsoft: 'Microsoft দিয়ে চালিয়ে যান',
     login_remember: 'আমাকে মনে রাখুন', btn_logout: 'সাইন আউট',
@@ -20527,7 +20544,7 @@ var SYLVA_TRANSLATIONS = {
     aria_end_date: 'শেষের তারিখ',
     aria_start_date: 'শুরুর তারিখ',
   },
-  vi: { welcome_title: 'Chào mừng đến với SylvaGIS', welcome_sub: 'Nền tảng Phân tích Rừng & Viễn thám', nav_guide: '❓ Hướng dẫn', nav_guide_short: 'Cẩm nang', nav_login: '👤 Đăng nhập',
+  vi: { welcome_title: 'Chào mừng đến với SylvaGIS', welcome_sub: 'Nền tảng Phân tích Rừng & Viễn thám', nav_guide: '❓ Hướng dẫn', nav_guide_short: 'Cẩm nang', nav_login: '👤 Đăng nhập', topo_dem_no_data_warning: 'Không tìm thấy dữ liệu cho khu vực nghiên cứu của bạn trong nguồn DEM đã chọn. Vui lòng đổi nguồn dữ liệu.',
     sidebar_title: 'Không gian làm việc & Chọn dữ liệu',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ Đa giác', btn_polygon_short: 'Đa giác', btn_rectangle: '▭ Hình chữ nhật',
@@ -20876,7 +20893,7 @@ var SYLVA_TRANSLATIONS = {
     aria_start_date: 'Ngày bắt đầu',
   },
 
-  ur: { welcome_title: 'SylvaGIS میں خوش آمدید', welcome_sub: 'جنگلاتی تجزیہ اور ریموٹ سینسنگ پلیٹ فارم', nav_guide: '❓ رہنما', nav_guide_short: 'رہنما', nav_login: '👤 صارف لاگ ان',
+  ur: { welcome_title: 'SylvaGIS میں خوش آمدید', welcome_sub: 'جنگلاتی تجزیہ اور ریموٹ سینسنگ پلیٹ فارم', nav_guide: '❓ رہنما', nav_guide_short: 'رہنما', nav_login: '👤 صارف لاگ ان', topo_dem_no_data_warning: 'منتخب کردہ DEM ڈیٹا ماخذ میں آپ کے کام کے علاقے کے لیے کوئی ڈیٹا نہیں ملا۔ براہ کرم ڈیٹا ماخذ تبدیل کریں۔',
     login_title: 'اپنے اکاؤنٹ میں سائن ان کریں', login_sub: 'گوگل، ایپل یا مائیکروسافٹ کا انتخاب کریں',
     login_google: 'گوگل سے جاری رکھیں', login_apple: 'ایپل سے جاری رکھیں', login_microsoft: 'مائیکروسافٹ سے جاری رکھیں',
     login_remember: 'مجھے یاد رکھیں', btn_logout: 'سائن آؤٹ',
@@ -21227,7 +21244,7 @@ var SYLVA_TRANSLATIONS = {
     aria_end_date: 'اختتام کی تاریخ',
     aria_start_date: 'شروع کی تاریخ',
   },
-  pl: { welcome_title: 'Witamy w SylvaGIS', welcome_sub: 'Platforma Analizy Lasów i Teledetekcji', nav_guide: '❓ Przewodnik', nav_guide_short: 'Pomoc', nav_login: '👤 Logowanie',
+  pl: { welcome_title: 'Witamy w SylvaGIS', welcome_sub: 'Platforma Analizy Lasów i Teledetekcji', nav_guide: '❓ Przewodnik', nav_guide_short: 'Pomoc', nav_login: '👤 Logowanie', topo_dem_no_data_warning: 'W wybranym źródle DEM brak danych dla Twojego obszaru roboczego. Proszę zmienić źródło danych.',
     login_title: 'Zaloguj się do swojego konta', login_sub: 'Wybierz Google, Apple lub Microsoft',
     login_google: 'Kontynuuj z Google', login_apple: 'Kontynuuj z Apple', login_microsoft: 'Kontynuuj z Microsoft',
     login_remember: 'Zapamiętaj mnie', btn_logout: 'Wyloguj',
@@ -21567,7 +21584,7 @@ var SYLVA_TRANSLATIONS = {
     aria_end_date: 'Data zakończenia',
     aria_start_date: 'Data rozpoczęcia',
   },
-  ms: { welcome_title: 'Selamat Datang ke SylvaGIS', welcome_sub: 'Platform Analisis Hutan & Penderiaan Jauh', nav_guide: '❓ Panduan', nav_guide_short: 'Panduan', nav_login: '👤 Log Masuk Pengguna',
+  ms: { welcome_title: 'Selamat Datang ke SylvaGIS', welcome_sub: 'Platform Analisis Hutan & Penderiaan Jauh', nav_guide: '❓ Panduan', nav_guide_short: 'Panduan', nav_login: '👤 Log Masuk Pengguna', topo_dem_no_data_warning: 'Tiada data ditemui untuk kawasan kerja anda dalam sumber DEM yang dipilih. Sila tukar sumber data.',
     login_title: 'Log masuk ke akaun anda', login_sub: 'Pilih Google, Apple atau Microsoft',
     login_google: 'Teruskan dengan Google', login_apple: 'Teruskan dengan Apple', login_microsoft: 'Teruskan dengan Microsoft',
     login_remember: 'Ingat Saya', btn_logout: 'Log Keluar',
@@ -21914,7 +21931,7 @@ var SYLVA_TRANSLATIONS = {
     aria_end_date: 'Tarikh tamat',
     aria_start_date: 'Tarikh mula',
   },
-  ky: { welcome_title: 'SylvaGIS-ке кош келдиңиз', welcome_sub: 'Токой талдоо жана алыстан зондтоо платформасы', nav_guide: '❓ Колдонмо', nav_guide_short: 'Колдонмо', nav_login: '👤 Кирүү',
+  ky: { welcome_title: 'SylvaGIS-ке кош келдиңиз', welcome_sub: 'Токой талдоо жана алыстан зондтоо платформасы', nav_guide: '❓ Колдонмо', nav_guide_short: 'Колдонмо', nav_login: '👤 Кирүү', topo_dem_no_data_warning: 'Тандалган DEM булагында жумуш аймагыңыз үчүн маалымат табылган жок. Маалымат булагын алмаштырыңыз.',
       login_title: 'Аккаунтуңузга кириңиз', login_sub: 'Google, Apple же Microsoft тандаңыз',
       login_google: 'Google аркылуу уланта бер', login_apple: 'Apple аркылуу уланта бер', login_microsoft: 'Microsoft аркылуу уланта бер',
       login_remember: 'Мени эсте сакта', btn_logout: 'Чыгуу',
@@ -22255,7 +22272,7 @@ var SYLVA_TRANSLATIONS = {
     aria_end_date: 'Аяктоо күнү',
     aria_start_date: 'Башталуу күнү',
     },
-  mn: { welcome_title: 'SylvaGIS-д тавтай морилно уу', welcome_sub: 'Ойн шинжилгээ ба алсын зондын платформ', nav_guide: '❓ Гарын авлага', nav_guide_short: 'Гарын авлага', nav_login: '👤 Хэрэглэгч нэвтрэх',
+  mn: { welcome_title: 'SylvaGIS-д тавтай морилно уу', welcome_sub: 'Ойн шинжилгээ ба алсын зондын платформ', nav_guide: '❓ Гарын авлага', nav_guide_short: 'Гарын авлага', nav_login: '👤 Хэрэглэгч нэвтрэх', topo_dem_no_data_warning: 'Сонгосон DEM эх сурвалжид таны судалгааны талбайн мэдээлэл олдсонгүй. Эх сурвалжийг өөрчилнө үү.',
     login_title: 'Бүртгэлдээ нэвтрэх', login_sub: 'Google, Apple эсвэл Microsoft сонгоно уу',
     login_google: 'Google-ээр үргэлжлүүлэх', login_apple: 'Apple-ээр үргэлжлүүлэх', login_microsoft: 'Microsoft-ээр үргэлжлүүлэх',
     login_remember: 'Намайг санах', btn_logout: 'Гарах',
@@ -22562,7 +22579,7 @@ var SYLVA_TRANSLATIONS = {
     aria_start_date: 'Эхлэх огноо',
   },
 
-  ka: { welcome_title: 'მოგესალმებით SylvaGIS-ში', welcome_sub: 'ტყის ანალიზისა და დისტანციური ზონდირების პლატფორმა', nav_guide: '❓ სახელმძღვანელო', nav_guide_short: 'სახელმძღვანელო', nav_login: '👤 შესვლა',
+  ka: { welcome_title: 'მოგესალმებით SylvaGIS-ში', welcome_sub: 'ტყის ანალიზისა და დისტანციური ზონდირების პლატფორმა', nav_guide: '❓ სახელმძღვანელო', nav_guide_short: 'სახელმძღვანელო', nav_login: '👤 შესვლა', topo_dem_no_data_warning: 'შერჩეულ DEM მონაცემთა წყაროში თქვენი სამუშაო არეალისთვის მონაცემები ვერ მოიძებნა. გთხოვთ, შეცვალოთ მონაცემთა წყარო.',
       login_title: 'შედით თქვენს ანგარიშში', login_sub: 'აირჩიეთ Google, Apple ან Microsoft',
       login_google: 'გაგრძელება Google-ით', login_apple: 'გაგრძელება Apple-ით', login_microsoft: 'გაგრძელება Microsoft-ით',
       login_remember: 'დამიმახსოვრე', btn_logout: 'გასვლა',
@@ -22887,7 +22904,7 @@ var SYLVA_TRANSLATIONS = {
     aria_end_date: 'დასრულების თარიღი',
     aria_start_date: 'დაწყების თარიღი',
   },
-  it: { welcome_title: 'Benvenuto in SylvaGIS', welcome_sub: 'Piattaforma di Analisi Forestale e Telerilevamento', nav_guide: '❓ Guida', nav_guide_short: 'Guida', nav_login: '👤 Accesso Utente',
+  it: { welcome_title: 'Benvenuto in SylvaGIS', welcome_sub: 'Piattaforma di Analisi Forestale e Telerilevamento', nav_guide: '❓ Guida', nav_guide_short: 'Guida', nav_login: '👤 Accesso Utente', topo_dem_no_data_warning: 'Nessun dato trovato per la tua area di studio nella fonte DEM selezionata. Cambia la fonte dei dati.',
     login_title: 'Accedi al tuo account', login_sub: 'Scegli Google, Apple o Microsoft',
     login_google: 'Continua con Google', login_apple: 'Continua con Apple', login_microsoft: 'Continua con Microsoft',
     login_remember: 'Ricordami', btn_logout: 'Esci',
