@@ -1705,32 +1705,16 @@ def analyze():
             meta = _rgb_scene_metadata(data, roi, image, ds)
 
             return jsonify({
-                'success':  True,
-                'tileUrl':  tile_url,
-                'index':    'RGB',
-                'meta':     meta,
-                'visMin':   vis.get('min'),
-                'visMax':   vis.get('max'),
+                'success':    True,
+                'tileUrl':    tile_url,
+                'index':      'RGB',
+                'meta':       meta,
+                'native_crs': meta.get('crs'),   # verinin gerçek projeksiyon CRS'i
+                'visMin':     vis.get('min'),
+                'visMax':     vis.get('max'),
             })
 
         final_display, roi, result, vis = build_result_image(data)
-
-        # 🌐 Native/Gerçek CRS: GeoTIFF indirme penceresindeki CRS seçicisinin
-        # HER analizde sabit "WGS 84 - EPSG:4326" olarak açılmaması için,
-        # görüntünün gerçek (native) koordinat referans sistemi burada
-        # GEE'den sorgulanıp yanıtla birlikte frontend'e gönderilir. Frontend
-        # bu değeri, indirme penceresi açıldığında seçiciye otomatik ayarlar;
-        # kullanıcı isterse yine başka bir CRS seçip öyle indirebilir —
-        # burada yalnızca "önerilen/varsayılan seçim" belirleniyor, indirme
-        # akışı hâlâ tamamen esnek kalıyor.
-        native_crs = None
-        try:
-            native_crs = result.projection().crs().getInfo()
-        except Exception:
-            try:
-                native_crs = final_display.projection().crs().getInfo()
-            except Exception:
-                native_crs = None
 
         # ── İstatistik ────────────────────────────────────────────
         # 🛠️ BUG FİX (NoData piksel / büyük AOI istatistik sorunu):
@@ -1822,17 +1806,25 @@ def analyze():
             except Exception:
                 scenes_list = []
 
+        # Verinin gerçek (native) koordinat sistemini GEE'den oku.
+        # result.projection() — hesaplama değil yalnızca metadata sorgusu olduğundan hızlıdır.
+        _native_crs = None
+        try:
+            _native_crs = result.projection().crs().getInfo()
+        except Exception:
+            pass
+
         return jsonify({
-            'success':   True,
-            'tileUrl':   tile_url,
-            'stats':     stats,
-            'realStats': real_minmax,
-            'scenes':    scenes_list,
-            'index':     data.get('index', 'NDVI'),
-            'visMin':    vis.get('min'),
-            'visMax':    vis.get('max'),
+            'success':    True,
+            'tileUrl':    tile_url,
+            'stats':      stats,
+            'realStats':  real_minmax,
+            'scenes':     scenes_list,
+            'index':      data.get('index', 'NDVI'),
+            'visMin':     vis.get('min'),
+            'visMax':     vis.get('max'),
             'visPalette': vis.get('palette', []),
-            'crs':       native_crs
+            'native_crs': _native_crs,  # verinin gerçek projeksiyon CRS'i
         })
 
     except Exception as e:
