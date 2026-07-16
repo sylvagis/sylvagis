@@ -5493,11 +5493,22 @@ function selectRamp(name) {
                 // Geciken yanıt: kullanıcı yeni bir analiz başlattıysa bu yanıtı yoksay
                 if (_analysisGeneration !== _runGen) return;
                 if (!data.success) {
-                    if (data.errorCode === 'no_dem_data') {
-                        showNoDataModal('Seçtiğiniz DEM veri kaynağında çalışma alanınıza göre veri bulunamadı. Lütfen farklı bir DEM veri kaynağı seçerek tekrar deneyiniz.');
-                    } else {
-                        showNoDataModal(_TOAST_NO_DATA_MSG);
-                    }
+                    showNoDataModal(_TOAST_NO_DATA_MSG);
+                    return;
+                }
+                // 🛠️ Topografik (DEM) analizlerde bazı DEM kaynakları (örn. ALOS,
+                // Copernicus, NASADEM) çalışma alanını kapsamayabilir. Bu durumda
+                // ekrana boyanacak raster piksel gelmez ama backend yine de
+                // success:true ve sabit/varsayılan bir vis min-max ile döner —
+                // böylece lejant sanki analiz başarılıymış gibi sabit bir
+                // aralık (ör. "0–60") gösterirdi. Gerçek veri olup olmadığını
+                // realStats.min/realStats.max üzerinden kontrol ediyoruz: ikisi
+                // de yoksa (null/undefined) o AOI için seçilen DEM kaynağında
+                // veri yok demektir — lejant/katman çizilmeden kullanıcıyı uyar.
+                if (isTopoAnalysis(meta.analysisName) &&
+                    (!data.realStats || data.realStats.min === null || data.realStats.min === undefined ||
+                     data.realStats.max === null || data.realStats.max === undefined)) {
+                    showNoDataModal('İstediğiniz DEM veri kaynağında çalışma alanınıza göre veri bulunamadı. Lütfen veri kaynağını değiştirin.');
                     return;
                 }
                 // Önceki GEE katmanını kaldır
