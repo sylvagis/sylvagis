@@ -5312,6 +5312,7 @@ function selectRamp(name) {
         var _analysisGeneration = 0;
         var _lastAnalysisROI = null;    // Son analizin AOI geometrisi — syncLegend için hafızada tutulur
         var _lastAnalysisParams = {};   // Son analizin tam parametreleri (satellite, dates, demSource…)
+        var _lastNativeCrs = null;      // Son analizde tespit edilen verinin gerçek (native) CRS'i — GeoTIFF dialogunda otomatik seçim için
         // Galeriden seçilen sahnenin GEE system:index'i. null ise "tarih aralığı medyanı"
         // kullanılır. Sınıflandırma/Stretched senkronizasyonu sırasında bu ID korunarak
         // gönderilir; aksi halde renk/aralık değişince sahne sessizce medyana döner.
@@ -5534,6 +5535,8 @@ function selectRamp(name) {
                 // export'un tile'ları yakalayabilmesi için gerekli)
                 _geeLayer = L.tileLayer(data.tileUrl, { opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane' }).addTo(map);
                 _applyGeeLayerClipMode(clipMode);
+                // 🌐 Native CRS'i sakla — GeoTIFF indirme dialogunda otomatik seçim için
+                if (data.native_crs) { _lastNativeCrs = data.native_crs; }
                 // Analiz sonucu gösterilince Çalışma Alanı checkbox'ını otomatik işaretle
                 (function() {
                     var _wsCb = document.getElementById('toggle-workspace-opacity');
@@ -5645,11 +5648,6 @@ function selectRamp(name) {
                 // Dil değişince lejant yenilenebilmesi için son analiz meta + stats'ı sakla
                 window._lastAnalyzeMeta = meta;
                 if (window._lastAnalyzeMeta) window._lastAnalyzeMeta._lastStats = (data && data.stats) || null;
-                // 🌐 Bu analizin GERÇEK (native) koordinat referans sistemi —
-                // backend tarafından GEE'den sorgulanıp döndürülür. GeoTIFF
-                // indirme penceresi açıldığında CRS seçicisi buna göre
-                // otomatik ayarlanır (sabit EPSG:4326 yerine).
-                window._lastKnownCrs = (data && data.crs) || null;
                 _ensureDefaultVisibility();
             })
             .catch(function(err) {
@@ -6642,6 +6640,10 @@ function selectRamp(name) {
 
                 renderRgbLegend(data.meta || {}, dsInfo);
 
+                // 🌐 Native CRS'i sakla — GeoTIFF indirme dialogunda otomatik seçim için
+                if (data.native_crs) { _lastNativeCrs = data.native_crs; }
+                else if (data.meta && data.meta.crs) { _lastNativeCrs = data.meta.crs; }
+
                 // 📡 Ham Veri (Bantlar) panelini, yeni seçilen sahneye göre güncelle
                 onRawBandsSceneSelected(sceneId, meta, dsInfo, data.meta || {});
                 _ensureDefaultVisibility();
@@ -6656,9 +6658,6 @@ function selectRamp(name) {
         var _lastRgbLegendArgs = null;
         function renderRgbLegend(scMeta, dsInfo) {
             _lastRgbLegendArgs = { scMeta: scMeta, dsInfo: dsInfo };
-            // 🌐 RGB sahnesinin GERÇEK (native) CRS'i — GeoTIFF indirme
-            // penceresi bu sahne için açıldığında seçiciyi otomatik buna göre ayarlar.
-            window._lastKnownCrs = scMeta.crs || null;
             var legendBox = document.getElementById('map-legend-box');
             if (!legendBox) return;
 
@@ -11679,7 +11678,7 @@ function selectRamp(name) {
             <label for="geotiff-crs" style="font-size:0.82rem; font-weight:600; color:#64748b; display:block; margin-bottom:6px;" data-i18n="gtiff_lbl_crs">🌐 Koordinat Sistemi (CRS)</label>
             <select id="geotiff-crs" onchange="onGeoTiffCrsChange()" style="width:100%; padding:8px 10px; border:1px solid #cbd5e1; border-radius:5px; font-size:0.85rem; outline:none; background:#fff;">
                 <optgroup data-i18n-label="gtiff_grp_geo" label="Coğrafi (derece)">
-                    <option value="EPSG:4326" data-i18n="gtiff_crs_wgs84">WGS 84 — EPSG:4326</option>
+                    <option value="EPSG:4326" selected data-i18n="gtiff_crs_wgs84">WGS 84 — EPSG:4326 (varsayılan)</option>
                 </optgroup>
                 <optgroup data-i18n-label="gtiff_grp_proj" label="Projeksiyon">
                     <option value="EPSG:3857">Web Mercator — EPSG:3857</option>
@@ -12504,42 +12503,49 @@ function openGeoTiffDownloadDialog() {
         var _gtHide = !!(_gtMeta && (isLulcAnalysis(_gtMeta.analysisName) || isTopoAnalysis(_gtMeta.analysisName)));
         scaleWrap.style.display = _gtHide ? 'none' : '';
     }
-    // 🌐 Koordinat Sistemi (CRS) seçiciyi, sabit EPSG:4326 yerine, en son
-    // çalıştırılan analizin/görüntünün GERÇEK (native) CRS'ine göre otomatik
-    // ayarla. Kullanıcı yine de listeden veya "Manuel EPSG kodu girin…"
-    // seçeneğiyle başka bir CRS seçip öyle indirebilir — burada yalnızca
-    // pencere her açıldığında en doğru/anlamlı varsayılan seçim yapılıyor.
-    (function() {
-        var crsSel = document.getElementById('geotiff-crs');
-        var crsWrap = document.getElementById('geotiff-crs-custom-wrap');
-        var crsCustomInput = document.getElementById('geotiff-crs-custom');
-        if (!crsSel) return;
-        var nativeCrs = window._lastKnownCrs ? String(window._lastKnownCrs).toUpperCase() : null;
-        if (!nativeCrs) {
-            // Bilinen bir native CRS yoksa (ör. henüz analiz çalıştırılmadı)
-            // listedeki ilk seçeneğe (WGS 84 — EPSG:4326) düş.
-            crsSel.selectedIndex = 0;
-            if (crsWrap) crsWrap.style.display = 'none';
-            return;
-        }
-        var matched = false;
-        for (var i = 0; i < crsSel.options.length; i++) {
-            if (crsSel.options[i].value.toUpperCase() === nativeCrs) {
-                crsSel.selectedIndex = i;
-                matched = true;
-                break;
+    // 🌐 Koordinat Sistemi otomatik seçimi:
+    // Son analizde tespit edilen native CRS varsa dropdown'da otomatik seç.
+    // Modal her açıldığında önce önceki oturumdan dinamik eklenen seçeneği
+    // temizle, ardından gerekirse yeni native seçeneği ekle/seç.
+    var crsSelect = document.getElementById('geotiff-crs');
+    if (crsSelect) {
+        // Daha önce dinamik eklenen "auto-native" seçeneğini temizle
+        var _prevNative = crsSelect.querySelector('option[data-auto-native]');
+        if (_prevNative) _prevNative.parentNode.removeChild(_prevNative);
+
+        var _nativeCrs = (_lastNativeCrs || '').trim().toUpperCase();
+        if (_nativeCrs && _nativeCrs !== 'EPSG:4326') {
+            // Dropdown'da bu EPSG zaten var mı?
+            var _foundOpt = null;
+            for (var _oi = 0; _oi < crsSelect.options.length; _oi++) {
+                if (crsSelect.options[_oi].value.toUpperCase() === _nativeCrs) {
+                    _foundOpt = crsSelect.options[_oi];
+                    break;
+                }
             }
-        }
-        if (matched) {
-            if (crsWrap) crsWrap.style.display = 'none';
+            if (_foundOpt) {
+                crsSelect.value = _foundOpt.value;
+            } else {
+                // Listede yoksa — ilk optgroup'un başına "Native CRS" seçeneği ekle
+                var _nativeOpt = document.createElement('option');
+                _nativeOpt.value = _nativeCrs;
+                _nativeOpt.setAttribute('data-auto-native', 'true');
+                _nativeOpt.textContent = _nativeCrs + ' ' + t('gtiff_native_crs_label', '(verinin orijinal CRS\'i)');
+                var _firstGrp = crsSelect.querySelector('optgroup');
+                if (_firstGrp) {
+                    _firstGrp.insertBefore(_nativeOpt, _firstGrp.firstChild);
+                } else {
+                    crsSelect.insertBefore(_nativeOpt, crsSelect.firstChild);
+                }
+                crsSelect.value = _nativeCrs;
+            }
         } else {
-            // Listede olmayan bir CRS (ör. UTM 39N dışı özel bir EPSG kodu) —
-            // "Manuel EPSG kodu girin…" seçeneğine geçip alanı önceden doldur.
-            crsSel.value = 'custom';
-            if (crsCustomInput) crsCustomInput.value = nativeCrs;
-            if (crsWrap) crsWrap.style.display = 'block';
+            // Native CRS yok ya da zaten EPSG:4326 — standart varsayılanı seç
+            crsSelect.value = 'EPSG:4326';
         }
-    })();
+        onGeoTiffCrsChange();
+    }
+
     modal.style.display = 'flex';
 }
 
@@ -13092,7 +13098,7 @@ var SYLVA_TRANSLATIONS = {
     gtiff_scale_250: '250 m — Very Low (very large areas)',
     gtiff_lbl_crs: '🌐 Coordinate System (CRS)',
     gtiff_grp_geo: 'Geographic (degrees)',
-    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326',
+    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326 (default)',
     gtiff_grp_proj: 'Projection',
     gtiff_grp_national: 'National',
     gtiff_grp_manual: 'Manual Entry',
@@ -13439,7 +13445,7 @@ var SYLVA_TRANSLATIONS = {
     gtiff_scale_250: '250 m — Juda past (juda katta hududlar)',
     gtiff_lbl_crs: '🌐 Koordinata tizimi (CRS)',
     gtiff_grp_geo: 'Geografik (gradus)',
-    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326',
+    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326 (standart)',
     gtiff_grp_proj: 'Proyeksiya',
     gtiff_grp_national: 'Milliy',
     gtiff_grp_manual: 'Qoʻlda kiritish',
@@ -13780,7 +13786,7 @@ var SYLVA_TRANSLATIONS = {
     gtiff_scale_250: '250 μ. — Πολύ Χαμηλή (πολύ μεγάλες περιοχές)',
     gtiff_lbl_crs: '🌐 Σύστημα Συντεταγμένων (CRS)',
     gtiff_grp_geo: 'Γεωγραφικό (μοίρες)',
-    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326',
+    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326 (προεπιλογή)',
     gtiff_grp_proj: 'Προβολή',
     gtiff_grp_national: 'Εθνικό',
     gtiff_grp_manual: 'Χειροκίνητη Εισαγωγή',
@@ -14127,7 +14133,7 @@ var SYLVA_TRANSLATIONS = {
     gtiff_scale_250: '250 м — много ниска (много големи площи)',
     gtiff_lbl_crs: '🌐 Координатна система (CRS)',
     gtiff_grp_geo: 'Географска (градуси)',
-    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326',
+    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326 (по подразбиране)',
     gtiff_grp_proj: 'Проекция',
     gtiff_grp_national: 'Национална',
     gtiff_grp_manual: 'Ръчно въвеждане',
@@ -14474,7 +14480,7 @@ var SYLVA_TRANSLATIONS = {
     gtiff_scale_250: '250 m — Çok Düşük (çok büyük alanlar)',
     gtiff_lbl_crs: '🌐 Koordinat Sistemi (CRS)',
     gtiff_grp_geo: 'Coğrafi (derece)',
-    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326',
+    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326 (varsayılan)',
     gtiff_grp_proj: 'Projeksiyon',
     gtiff_grp_national: 'Ulusal',
     gtiff_grp_manual: 'Manuel Giriş',
@@ -14817,7 +14823,7 @@ var SYLVA_TRANSLATIONS = {
     gtiff_scale_250: '250 m — Çox Aşağı (çox böyük sahələr)',
     gtiff_lbl_crs: '🌐 Koordinat Sistemi (CRS)',
     gtiff_grp_geo: 'Coğrafi (dərəcə)',
-    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326',
+    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326 (defolt)',
     gtiff_grp_proj: 'Proyeksiya',
     gtiff_grp_national: 'Milli',
     gtiff_grp_manual: 'Manual Giriş',
@@ -15160,7 +15166,7 @@ var SYLVA_TRANSLATIONS = {
     gtiff_scale_250: '250 m — Nagyon Alacsony (nagyon nagy területek)',
     gtiff_lbl_crs: '🌐 Koordináta-rendszer (CRS)',
     gtiff_grp_geo: 'Földrajzi (fok)',
-    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326',
+    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326 (alapértelmezett)',
     gtiff_grp_proj: 'Projekció',
     gtiff_grp_national: 'Nemzeti',
     gtiff_grp_manual: 'Manuális Bevitel',
@@ -15502,7 +15508,7 @@ var SYLVA_TRANSLATIONS = {
     gtiff_scale_250: '250 м — Өте төмен (өте үлкен аймақтар)',
     gtiff_lbl_crs: '🌐 Координаттар жүйесі (CRS)',
     gtiff_grp_geo: 'Географиялық (градус)',
-    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326',
+    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326 (әдепкі)',
     gtiff_grp_proj: 'Проекция',
     gtiff_grp_national: 'Ұлттық',
     gtiff_grp_manual: 'Қолмен енгізу',
@@ -15840,7 +15846,7 @@ var SYLVA_TRANSLATIONS = {
     gtiff_scale_250: '250 m — Sehr niedrig (sehr große Gebiete)',
     gtiff_lbl_crs: '🌐 Koordinatensystem (CRS)',
     gtiff_grp_geo: 'Geografisch (Grad)',
-    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326',
+    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326 (Standard)',
     gtiff_grp_proj: 'Projektion',
     gtiff_grp_national: 'National',
     gtiff_grp_manual: 'Manuelle Eingabe',
@@ -16188,7 +16194,7 @@ var SYLVA_TRANSLATIONS = {
     gtiff_scale_250: '250 m — Très faible (très grandes zones)',
     gtiff_lbl_crs: '🌐 Système de coordonnées (CRS)',
     gtiff_grp_geo: 'Géographique (degrés)',
-    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326',
+    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326 (par défaut)',
     gtiff_grp_proj: 'Projection',
     gtiff_grp_national: 'National',
     gtiff_grp_manual: 'Saisie manuelle',
@@ -16536,7 +16542,7 @@ var SYLVA_TRANSLATIONS = {
     gtiff_scale_250: '250 m — Muy baja (áreas muy grandes)',
     gtiff_lbl_crs: '🌐 Sistema de coordenadas (CRS)',
     gtiff_grp_geo: 'Geográfico (grados)',
-    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326',
+    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326 (predeterminado)',
     gtiff_grp_proj: 'Proyección',
     gtiff_grp_national: 'Nacional',
     gtiff_grp_manual: 'Entrada manual',
@@ -16884,7 +16890,7 @@ var SYLVA_TRANSLATIONS = {
     gtiff_scale_250: '250 m — Muito baixa (áreas muito grandes)',
     gtiff_lbl_crs: '🌐 Sistema de coordenadas (CRS)',
     gtiff_grp_geo: 'Geográfico (graus)',
-    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326',
+    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326 (predefinido)',
     gtiff_grp_proj: 'Projeção',
     gtiff_grp_national: 'Nacional',
     gtiff_grp_manual: 'Introdução manual',
@@ -17232,7 +17238,7 @@ var SYLVA_TRANSLATIONS = {
     gtiff_scale_250: '250 م — منخفضة جداً (مناطق كبيرة جداً)',
     gtiff_lbl_crs: '🌐 نظام الإحداثيات (CRS)',
     gtiff_grp_geo: 'جغرافي (درجات)',
-    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326',
+    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326 (افتراضي)',
     gtiff_grp_proj: 'إسقاط',
     gtiff_grp_national: 'وطني',
     gtiff_grp_manual: 'إدخال يدوي',
@@ -17580,7 +17586,7 @@ var SYLVA_TRANSLATIONS = {
     gtiff_scale_250: '250 م — بسیار پایین (مناطق بسیار بزرگ)',
     gtiff_lbl_crs: '🌐 سیستم مختصات (CRS)',
     gtiff_grp_geo: 'جغرافیایی (درجه)',
-    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326',
+    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326 (پیش‌فرض)',
     gtiff_grp_proj: 'تصویر',
     gtiff_grp_national: 'ملی',
     gtiff_grp_manual: 'ورود دستی',
@@ -17928,7 +17934,7 @@ var SYLVA_TRANSLATIONS = {
     gtiff_scale_250: '250 m — 极低（超大区域）',
     gtiff_lbl_crs: '🌐 坐标系统 (CRS)',
     gtiff_grp_geo: '地理坐标（度）',
-    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326',
+    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326（默认）',
     gtiff_grp_proj: '投影',
     gtiff_grp_national: '国家',
     gtiff_grp_manual: '手动输入',
@@ -18276,7 +18282,7 @@ var SYLVA_TRANSLATIONS = {
     gtiff_scale_250: '250 m — 非常に低い（非常に広域）',
     gtiff_lbl_crs: '🌐 座標系 (CRS)',
     gtiff_grp_geo: '地理座標（度）',
-    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326',
+    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326（デフォルト）',
     gtiff_grp_proj: '投影座標',
     gtiff_grp_national: '国家',
     gtiff_grp_manual: '手動入力',
@@ -18624,7 +18630,7 @@ var SYLVA_TRANSLATIONS = {
     gtiff_scale_250: '250 m — 매우 낮음 (매우 넓은 지역)',
     gtiff_lbl_crs: '🌐 좌표 시스템 (CRS)',
     gtiff_grp_geo: '지리 좌표 (도)',
-    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326',
+    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326 (기본값)',
     gtiff_grp_proj: '투영',
     gtiff_grp_national: '국가',
     gtiff_grp_manual: '수동 입력',
@@ -19170,7 +19176,7 @@ var SYLVA_TRANSLATIONS = {
     gtiff_scale_250: '250 मी — बहुत कम (बहुत बड़े क्षेत्रों के लिए)',
     gtiff_lbl_crs: '🌐 समन्वय प्रणाली (CRS)',
     gtiff_grp_geo: 'भौगोलिक (डिग्री)',
-    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326',
+    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326 (डिफ़ॉल्ट)',
     gtiff_grp_proj: 'प्रोजेक्शन',
     gtiff_grp_national: 'राष्ट्रीय',
     gtiff_grp_manual: 'मैन्युअल प्रविष्टि',
@@ -19518,7 +19524,7 @@ var SYLVA_TRANSLATIONS = {
     gtiff_scale_250: '250 m — Sangat Rendah (area sangat luas)',
     gtiff_lbl_crs: '🌐 Sistem Koordinat (CRS)',
     gtiff_grp_geo: 'Geografis (derajat)',
-    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326',
+    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326 (default)',
     gtiff_grp_proj: 'Proyeksi',
     gtiff_grp_national: 'Nasional',
     gtiff_grp_manual: 'Entri Manual',
@@ -19672,7 +19678,7 @@ var SYLVA_TRANSLATIONS = {
     gtiff_scale_250: '250 м — очень низкое (очень большие площади)',
     gtiff_lbl_crs: '🌐 Система координат (CRS)',
     gtiff_grp_geo: 'Географическая (градусы)',
-    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326',
+    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326 (по умолчанию)',
     gtiff_grp_proj: 'Проекция',
     gtiff_grp_national: 'Национальная',
     gtiff_grp_manual: 'Ручной ввод',
@@ -20019,7 +20025,7 @@ var SYLVA_TRANSLATIONS = {
     gtiff_scale_250: '250 ม. — ต่ำมาก (พื้นที่ขนาดใหญ่มาก)',
     gtiff_lbl_crs: '🌐 ระบบพิกัด (CRS)',
     gtiff_grp_geo: 'ภูมิศาสตร์ (องศา)',
-    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326',
+    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326 (ค่าเริ่มต้น)',
     gtiff_grp_proj: 'การฉาย',
     gtiff_grp_national: 'ระดับชาติ',
     gtiff_grp_manual: 'ป้อนด้วยตนเอง',
@@ -20360,7 +20366,7 @@ var SYLVA_TRANSLATIONS = {
     gtiff_scale_250: '২৫০ মি — অতি নিম্ন (অতি বড় এলাকা)',
     gtiff_lbl_crs: '🌐 স্থানাঙ্ক পদ্ধতি (CRS)',
     gtiff_grp_geo: 'ভৌগোলিক (ডিগ্রি)',
-    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326',
+    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326 (ডিফল্ট)',
     gtiff_grp_proj: 'প্রক্ষেপণ',
     gtiff_grp_national: 'জাতীয়',
     gtiff_grp_manual: 'ম্যানুয়াল এন্ট্রি',
@@ -20901,7 +20907,7 @@ var SYLVA_TRANSLATIONS = {
     gtiff_scale_250: '250 m — Rất thấp (khu vực rất lớn)',
     gtiff_lbl_crs: '🌐 Hệ tọa độ (CRS)',
     gtiff_grp_geo: 'Địa lý (độ)',
-    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326',
+    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326 (mặc định)',
     gtiff_grp_proj: 'Phép chiếu',
     gtiff_grp_national: 'Quốc gia',
     gtiff_grp_manual: 'Nhập thủ công',
@@ -21255,7 +21261,7 @@ var SYLVA_TRANSLATIONS = {
     gtiff_grp_proj: 'پروجیکشن',
     gtiff_grp_national: 'قومی',
     gtiff_grp_manual: 'دستی اندراج',
-    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326',
+    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326 (پہلے سے طے شدہ)',
     gtiff_crs_custom_opt: 'EPSG کوڈ دستی درج کریں…',
     gtiff_lbl_epsg: 'EPSG کوڈ (مثلاً: EPSG:32637)',
     gtiff_epsg_hint: 'GEE کے معاون ایک درست EPSG کوڈ درج کریں۔ غلط کوڈ سرور خرابی کا سبب بنے گا۔',
@@ -21409,7 +21415,7 @@ var SYLVA_TRANSLATIONS = {
     gtiff_scale_250: '250 m — bardzo niska (bardzo duże obszary)',
     gtiff_lbl_crs: '🌐 Układ współrzędnych (CRS)',
     gtiff_grp_geo: 'Geograficzny (stopnie)',
-    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326',
+    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326 (domyślny)',
     gtiff_grp_proj: 'Odwzorowanie',
     gtiff_grp_national: 'Krajowy',
     gtiff_grp_manual: 'Wprowadzanie ręczne',
@@ -21747,7 +21753,7 @@ var SYLVA_TRANSLATIONS = {
     gtiff_scale_250: '250 m — Sangat Rendah (kawasan sangat luas)',
     gtiff_lbl_crs: '🌐 Sistem Koordinat (CRS)',
     gtiff_grp_geo: 'Geografi (darjah)',
-    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326',
+    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326 (lalai)',
     gtiff_grp_proj: 'Unjuran',
     gtiff_grp_national: 'Kebangsaan',
     gtiff_grp_manual: 'Kemasukan Manual',
@@ -22093,7 +22099,7 @@ var SYLVA_TRANSLATIONS = {
       gtiff_scale_250: '250 м — Өтө төмөн (өтө чоң аймактар)',
       gtiff_lbl_crs: '🌐 Координаталар системасы (CRS)',
       gtiff_grp_geo: 'Географиялык (даража)',
-      gtiff_crs_wgs84: 'WGS 84 — EPSG:4326',
+      gtiff_crs_wgs84: 'WGS 84 — EPSG:4326 (демейки)',
       gtiff_grp_proj: 'Проекция',
       gtiff_grp_national: 'Улуттук',
       gtiff_grp_manual: 'Кол менен киргизүү',
@@ -22431,7 +22437,7 @@ var SYLVA_TRANSLATIONS = {
     gtiff_scale_100: '100 м — Бага нарийвчлал (том газар нутаг)',
     gtiff_scale_250: '250 м — Маш бага (маш том газар нутаг)',
     gtiff_lbl_crs: '🌐 Координатын систем (CRS)',
-    gtiff_grp_geo: 'Газарзүйн (градус)', gtiff_crs_wgs84: 'WGS 84 — EPSG:4326',
+    gtiff_grp_geo: 'Газарзүйн (градус)', gtiff_crs_wgs84: 'WGS 84 — EPSG:4326 (өгөгдмөл)',
     gtiff_grp_proj: 'Проекц', gtiff_grp_national: 'Үндэсний', gtiff_grp_manual: 'Гараар оруулах',
     gtiff_crs_custom_opt: 'EPSG кодыг гараар оруулах…',
     gtiff_lbl_epsg: 'EPSG код (жишээ нь: EPSG:32637)',
@@ -22741,7 +22747,7 @@ var SYLVA_TRANSLATIONS = {
       gtiff_scale_250: '250 მ — ძალიან დაბალი (ძალიან დიდი ტერიტორიები)',
       gtiff_lbl_crs: '🌐 კოორდინატთა სისტემა (CRS)',
       gtiff_grp_geo: 'გეოგრაფიული (გრადუსი)',
-      gtiff_crs_wgs84: 'WGS 84 — EPSG:4326',
+      gtiff_crs_wgs84: 'WGS 84 — EPSG:4326 (ნაგულისხმევი)',
       gtiff_grp_proj: 'პროექცია',
       gtiff_grp_national: 'ეროვნული',
       gtiff_grp_manual: 'ხელით შეყვანა',
@@ -23067,7 +23073,7 @@ var SYLVA_TRANSLATIONS = {
     gtiff_scale_250: '250 m — Molto Bassa (aree molto grandi)',
     gtiff_lbl_crs: '🌐 Sistema di Coordinate (CRS)',
     gtiff_grp_geo: 'Geografico (gradi)',
-    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326',
+    gtiff_crs_wgs84: 'WGS 84 — EPSG:4326 (predefinito)',
     gtiff_grp_proj: 'Proiezione',
     gtiff_grp_national: 'Nazionale',
     gtiff_grp_manual: 'Inserimento Manuale',
