@@ -172,7 +172,7 @@ def send_contact_message():
         return jsonify({'success': False, 'error': 'Geçersiz e-posta adresi.'}), 400
 
     smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'ksfnkvwcutrawcih'
+    smtp_pass = 'aaaaaaaaaaaaaa'
 
     body = (
         'SylvaGIS İletişim Formu üzerinden yeni bir mesaj gönderildi.\n\n'
@@ -1715,6 +1715,23 @@ def analyze():
 
         final_display, roi, result, vis = build_result_image(data)
 
+        # 🌐 Native/Gerçek CRS: GeoTIFF indirme penceresindeki CRS seçicisinin
+        # HER analizde sabit "WGS 84 - EPSG:4326" olarak açılmaması için,
+        # görüntünün gerçek (native) koordinat referans sistemi burada
+        # GEE'den sorgulanıp yanıtla birlikte frontend'e gönderilir. Frontend
+        # bu değeri, indirme penceresi açıldığında seçiciye otomatik ayarlar;
+        # kullanıcı isterse yine başka bir CRS seçip öyle indirebilir —
+        # burada yalnızca "önerilen/varsayılan seçim" belirleniyor, indirme
+        # akışı hâlâ tamamen esnek kalıyor.
+        native_crs = None
+        try:
+            native_crs = result.projection().crs().getInfo()
+        except Exception:
+            try:
+                native_crs = final_display.projection().crs().getInfo()
+            except Exception:
+                native_crs = None
+
         # ── İstatistik ────────────────────────────────────────────
         # 🛠️ BUG FİX (NoData piksel / büyük AOI istatistik sorunu):
         # bestEffort=True eklendi. Olmadan: AOI büyük olduğunda veya bazı
@@ -1814,7 +1831,8 @@ def analyze():
             'index':     data.get('index', 'NDVI'),
             'visMin':    vis.get('min'),
             'visMax':    vis.get('max'),
-            'visPalette': vis.get('palette', [])
+            'visPalette': vis.get('palette', []),
+            'crs':       native_crs
         })
 
     except Exception as e:
@@ -2893,7 +2911,7 @@ SYLVA_OWNER_EMAIL = 'sylvagis.world@gmail.com'
 
 def _send_registration_email(ad, soyad, email, meslek, ulke):
     smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'ksfnkvwcutrawcih'
+    smtp_pass = 'aaaaaaaaaaaaaaaaaa'
 
     msg = MIMEMultipart('alternative')
     msg['Subject'] = f'[SylvaGIS] Yeni Kayıt — {ad} {soyad}'
