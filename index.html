@@ -12496,7 +12496,77 @@ function openGeoTiffDownloadDialog() {
         var _gtHide = !!(_gtMeta && (isLulcAnalysis(_gtMeta.analysisName) || isTopoAnalysis(_gtMeta.analysisName)));
         scaleWrap.style.display = _gtHide ? 'none' : '';
     }
+    // 🌐 Koordinat Sistemi (CRS): her açılışta, çalışma alanının gerçek
+    // konumuna göre doğru UTM dilimi otomatik seçilir (bkz. _applyAutoDetectedCrs).
+    _applyAutoDetectedCrs();
     modal.style.display = 'flex';
+}
+
+// 🌐 Koordinat Sistemi (CRS) otomatik tespiti
+// SORUN: "Koordinat Sistemi" seçici her zaman WGS 84 (EPSG:4326) ile açılıyordu.
+// Oysa NDVI/NDWI gibi bant tabanlı analizlerde veri genellikle UTM dilimi
+// (Zone) tabanlı bir projeksiyonla üretilir/işlenir ve kullanıcının, çalışma
+// alanının hangi UTM diliminde olduğunu bilmesi beklenemez. ÇÖZÜM: Pencere
+// her açıldığında, aktif Çalışma Alanı'nın (AOI) merkez koordinatından
+// otomatik olarak doğru UTM EPSG kodu hesaplanır ve seçici bu değerle
+// başlatılır. Kullanıcı isterse elle tekrar WGS 84 — EPSG:4326'ya
+// dönebilir; bu sadece varsayılan/otomatik ilk değeri belirler.
+function _computeUtmEpsgFromLonLat(lon, lat) {
+    var zone = Math.floor((lon + 180) / 6) + 1;
+    if (zone < 1) zone = 1;
+    if (zone > 60) zone = 60;
+    var base = (lat >= 0) ? 32600 : 32700; // Kuzey / Güney yarımküre
+    return 'EPSG:' + (base + zone);
+}
+
+// Aktif Çalışma Alanı'nın (AOI) merkez koordinatını [lon, lat] olarak döndürür.
+// AOI yoksa haritanın o anki merkezine düşer.
+function _getRoiCentroidLonLat() {
+    try {
+        if (typeof currentLayer !== 'undefined' && currentLayer && typeof currentLayer.toGeoJSON === 'function') {
+            var gj = currentLayer.toGeoJSON();
+            if (typeof turf !== 'undefined' && turf.centroid && gj) {
+                var c = turf.centroid(gj);
+                if (c && c.geometry && c.geometry.coordinates) {
+                    return c.geometry.coordinates;
+                }
+            }
+            if (typeof currentLayer.getBounds === 'function') {
+                var b = currentLayer.getBounds();
+                var cc = b.getCenter();
+                return [cc.lng, cc.lat];
+            }
+        }
+    } catch (e) {}
+    try {
+        var mc = map.getCenter();
+        return [mc.lng, mc.lat];
+    } catch (e2) {}
+    return [0, 0];
+}
+
+// Koordinat Sistemi seçicisini, o anki Çalışma Alanı'nın gerçek konumuna
+// (UTM dilimine) göre otomatik ayarlar. Listede karşılığı yoksa "Özel EPSG"
+// alanına otomatik olarak doldurulur.
+function _applyAutoDetectedCrs() {
+    var sel = document.getElementById('geotiff-crs');
+    var customInput = document.getElementById('geotiff-crs-custom');
+    if (!sel) return;
+    var ll = _getRoiCentroidLonLat();
+    var epsg = _computeUtmEpsgFromLonLat(ll[0], ll[1]);
+    var found = false;
+    for (var i = 0; i < sel.options.length; i++) {
+        if (sel.options[i].value === epsg) {
+            sel.value = epsg;
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        sel.value = 'custom';
+        if (customInput) customInput.value = epsg;
+    }
+    onGeoTiffCrsChange();
 }
 
 function onGeoTiffCrsChange() {
