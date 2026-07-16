@@ -4352,6 +4352,7 @@ function selectRamp(name) {
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (!data.success) { hideSylvaLoading(); return; }
+                if (data.nativeCrs) _lastAnalyzeNativeCrs = data.nativeCrs;
                 if (_geeLayer) { map.removeLayer(_geeLayer); _geeLayer = null; }
                 _geeLayer = L.tileLayer(data.tileUrl, { opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane' }).addTo(map);
                 _applyGeeLayerClipMode(_clipMode);
@@ -4753,6 +4754,7 @@ function selectRamp(name) {
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (!data.success) { hideSylvaLoading(); return; }
+                if (data.nativeCrs) _lastAnalyzeNativeCrs = data.nativeCrs;
                 if (_geeLayer) { map.removeLayer(_geeLayer); _geeLayer = null; }
                 _geeLayer = L.tileLayer(data.tileUrl, { opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane' }).addTo(map);
                 _applyGeeLayerClipMode(_clipMode);
@@ -5307,6 +5309,14 @@ function selectRamp(name) {
 
         // "🚀 Analizi Çalıştır" butonu
         var _geeLayer = null; // Haritaya eklenen GEE tile katmanı (bir öncekini kaldırmak için)
+
+        // 🌐 Son çalıştırılan analizin/sahnenin GERÇEK/DOĞAL koordinat sistemi
+        // (ör. "EPSG:32637" gibi bir UTM dilimi). /api/analyze yanıtındaki
+        // 'nativeCrs' (veya RGB galerisi için data.meta.crs) alanından
+        // güncellenir. "📥 Veriyi İndir (GeoTIFF)" penceresi açıldığında CRS
+        // seçicisini sabit WGS 84 yerine bu değere otomatik ön-seçmek için
+        // kullanılır — kullanıcı isterse yine de seçiciden değiştirebilir.
+        var _lastAnalyzeNativeCrs = null;
         // Yarış koşulu koruması: her yeni analiz başlatılınca artar;
         // geciken eski fetch yanıtları jenerasyon uyuşmazsa UI'ı ezmez.
         var _analysisGeneration = 0;
@@ -5528,6 +5538,7 @@ function selectRamp(name) {
                     showNoDataModal(t('topo_dem_no_data_warning'));
                     return;
                 }
+                if (data.nativeCrs) _lastAnalyzeNativeCrs = data.nativeCrs;
                 // Önceki GEE katmanını kaldır
                 if (_geeLayer) { map.removeLayer(_geeLayer); _geeLayer = null; }
                 // Yeni GEE tile katmanını ekle (crossOrigin: html2canvas tabanlı
@@ -6368,6 +6379,7 @@ function selectRamp(name) {
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (!data.success) { hideSylvaLoading(); showNoDataModal(_TOAST_NO_DATA_MSG); return; }
+                if (data.nativeCrs) _lastAnalyzeNativeCrs = data.nativeCrs;
                 // Geciken yanıt: kullanıcı yeni bir analiz başlattıysa bu sahne sonucunu yoksay
                 if (_analysisGeneration !== _sceneGen) { hideSylvaLoading(); return; }
                 // Harita katmanını güncelle
@@ -6614,6 +6626,9 @@ function selectRamp(name) {
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (!data.success) { hideSylvaLoading(); showNoDataModal(_TOAST_NO_DATA_MSG); return; }
+                if (data.nativeCrs || (data.meta && data.meta.crs)) {
+                    _lastAnalyzeNativeCrs = data.nativeCrs || data.meta.crs;
+                }
 
                 // Önceki katmanı kaldır, yeni gerçek renk katmanını ekle
                 if (_geeLayer) { map.removeLayer(_geeLayer); _geeLayer = null; }
@@ -12496,75 +12511,47 @@ function openGeoTiffDownloadDialog() {
         var _gtHide = !!(_gtMeta && (isLulcAnalysis(_gtMeta.analysisName) || isTopoAnalysis(_gtMeta.analysisName)));
         scaleWrap.style.display = _gtHide ? 'none' : '';
     }
-    // 🌐 Koordinat Sistemi (CRS): her açılışta, çalışma alanının gerçek
-    // konumuna göre doğru UTM dilimi otomatik seçilir (bkz. _applyAutoDetectedCrs).
-    _applyAutoDetectedCrs();
+    // 🌐 Koordinat Sistemi (CRS): sabit "WGS 84" yerine, son çalıştırılan
+    // analizin/sahnenin KENDİ gerçek/doğal CRS'i (_lastAnalyzeNativeCrs,
+    // örn. "EPSG:32637" bir UTM dilimi) ön-seçili gelir — çünkü insanlar
+    // hangi alanın hangi UTM dilimine düştüğünü bilemez ve indirilen
+    // GeoTIFF, haritadaki/analizdeki veriyle aynı projeksiyonda olmalıdır.
+    // Kullanıcı isterse seçiciden yine WGS 84'e veya başka bir EPSG koduna
+    // dönebilir — bu yalnızca akıllı bir varsayılan, bir kısıtlama değil.
+    _applyNativeCrsDefault();
     modal.style.display = 'flex';
 }
 
-// 🌐 Koordinat Sistemi (CRS) otomatik tespiti
-// SORUN: "Koordinat Sistemi" seçici her zaman WGS 84 (EPSG:4326) ile açılıyordu.
-// Oysa NDVI/NDWI gibi bant tabanlı analizlerde veri genellikle UTM dilimi
-// (Zone) tabanlı bir projeksiyonla üretilir/işlenir ve kullanıcının, çalışma
-// alanının hangi UTM diliminde olduğunu bilmesi beklenemez. ÇÖZÜM: Pencere
-// her açıldığında, aktif Çalışma Alanı'nın (AOI) merkez koordinatından
-// otomatik olarak doğru UTM EPSG kodu hesaplanır ve seçici bu değerle
-// başlatılır. Kullanıcı isterse elle tekrar WGS 84 — EPSG:4326'ya
-// dönebilir; bu sadece varsayılan/otomatik ilk değeri belirler.
-function _computeUtmEpsgFromLonLat(lon, lat) {
-    var zone = Math.floor((lon + 180) / 6) + 1;
-    if (zone < 1) zone = 1;
-    if (zone > 60) zone = 60;
-    var base = (lat >= 0) ? 32600 : 32700; // Kuzey / Güney yarımküre
-    return 'EPSG:' + (base + zone);
-}
-
-// Aktif Çalışma Alanı'nın (AOI) merkez koordinatını [lon, lat] olarak döndürür.
-// AOI yoksa haritanın o anki merkezine düşer.
-function _getRoiCentroidLonLat() {
-    try {
-        if (typeof currentLayer !== 'undefined' && currentLayer && typeof currentLayer.toGeoJSON === 'function') {
-            var gj = currentLayer.toGeoJSON();
-            if (typeof turf !== 'undefined' && turf.centroid && gj) {
-                var c = turf.centroid(gj);
-                if (c && c.geometry && c.geometry.coordinates) {
-                    return c.geometry.coordinates;
-                }
-            }
-            if (typeof currentLayer.getBounds === 'function') {
-                var b = currentLayer.getBounds();
-                var cc = b.getCenter();
-                return [cc.lng, cc.lat];
-            }
-        }
-    } catch (e) {}
-    try {
-        var mc = map.getCenter();
-        return [mc.lng, mc.lat];
-    } catch (e2) {}
-    return [0, 0];
-}
-
-// Koordinat Sistemi seçicisini, o anki Çalışma Alanı'nın gerçek konumuna
-// (UTM dilimine) göre otomatik ayarlar. Listede karşılığı yoksa "Özel EPSG"
-// alanına otomatik olarak doldurulur.
-function _applyAutoDetectedCrs() {
+function _applyNativeCrsDefault() {
     var sel = document.getElementById('geotiff-crs');
-    var customInput = document.getElementById('geotiff-crs-custom');
     if (!sel) return;
-    var ll = _getRoiCentroidLonLat();
-    var epsg = _computeUtmEpsgFromLonLat(ll[0], ll[1]);
-    var found = false;
+    var native = _lastAnalyzeNativeCrs;
+    if (!native) {
+        // Bilinen bir gerçek CRS yoksa (henüz analiz çalıştırılmadıysa)
+        // güvenli/nötr varsayılan olan WGS 84'te kalınır.
+        sel.value = 'EPSG:4326';
+        onGeoTiffCrsChange();
+        return;
+    }
+    native = native.trim().toUpperCase();
+    // Listede zaten bu EPSG kodu için bir seçenek var mı? (WGS84, Web
+    // Mercator, UTM dilimleri, TUREF vb.) Varsa doğrudan onu seçili yap.
+    var matched = false;
     for (var i = 0; i < sel.options.length; i++) {
-        if (sel.options[i].value === epsg) {
-            sel.value = epsg;
-            found = true;
+        if ((sel.options[i].value || '').toUpperCase() === native) {
+            sel.selectedIndex = i;
+            matched = true;
             break;
         }
     }
-    if (!found) {
+    if (!matched) {
+        // Listede olmayan bir EPSG kodu (örn. nadir bir yerel/bölgesel
+        // projeksiyon) → "Manuel EPSG kodu girin…" seçeneğine geçilip
+        // metin kutusu doğrudan bu kodla dolduruluyor; kullanıcı hiçbir
+        // şey yazmak zorunda kalmadan doğru CRS ile indirebilir.
         sel.value = 'custom';
-        if (customInput) customInput.value = epsg;
+        var customInput = document.getElementById('geotiff-crs-custom');
+        if (customInput) customInput.value = native;
     }
     onGeoTiffCrsChange();
 }
