@@ -17,6 +17,31 @@
         window.API_BASE = (typeof location !== 'undefined' && location.protocol === 'file:')
     ? 'http://127.0.0.1:5000' : 'https://sylvagis.onrender.com';
 
+        // ── 🔑 GEE Endpoint Koruma Tokeni ────────────────────────────────
+        // Sunucu artik @require_api_token ile korunan GEE endpoint'lerinde
+        // X-Sylva-Token basligini zorunlu kilar.
+        //
+        // Render ortaminda SYLVA_API_TOKEN env var'i set edilmisse buradaki
+        // degerle eslemesi gerekir. Token uretmek icin:
+        //   python -c "import secrets; print(secrets.token_hex(32))"
+        // Uretilen degeri hem Render > Environment Variables'a (SYLVA_API_TOKEN)
+        // hem de asagidaki window.SYLVA_API_TOKEN alanina yazin.
+        //
+        // Bu token kaynak kodunda gorunur oldugu icin sonsuz koruma saglamaz —
+        // ama botu/otomasyonu engeller ve CORS ile birlikte kasitli kota
+        // kotüye kullanimini onemli olcude zorlaştirir.
+        window.SYLVA_API_TOKEN = '6225d0f240f7279e1470e77f62563d87125525692e34feb6c353efa925782136';  // API token
+
+        // Tum GEE fetch() cagrilarinda kullanilacak standart baslik seti.
+        // 'Content-Type' + gizli API token'ini tek noktadan yonetir.
+        window._geeHeaders = function() {
+            var h = { 'Content-Type': 'application/json' };
+            if (window.SYLVA_API_TOKEN) {
+                h['X-Sylva-Token'] = window.SYLVA_API_TOKEN;
+            }
+            return h;
+        };
+
         if (typeof window.t !== 'function') {
             window.t = function(key, fallback) { return fallback || key; };
         }
@@ -4547,7 +4572,7 @@ function selectRamp(name) {
 
             fetch(API_BASE + '/api/analyze', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: _geeHeaders(),
                 body: JSON.stringify({
                     roi:       _roi,
                     clipMode:  _clipMode,
@@ -4948,7 +4973,7 @@ function selectRamp(name) {
 
             fetch(API_BASE + '/api/analyze', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: _geeHeaders(),
                 body: JSON.stringify({
                     roi:         _roiCls,
                     clipMode:    _clipMode,
@@ -5724,7 +5749,7 @@ function selectRamp(name) {
 
             fetch(API_BASE + '/api/analyze', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: _geeHeaders(),
                 body: JSON.stringify(analyzePayload)
             })
             .then(function(r) { return r.json(); })
@@ -6501,7 +6526,7 @@ function selectRamp(name) {
 
             fetch(API_BASE + '/api/get-scenes', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: _geeHeaders(),
                 body: JSON.stringify({
                     roi: roiCoords,
                     startDate: startDate,
@@ -6572,7 +6597,7 @@ function selectRamp(name) {
 
             fetch(API_BASE + '/api/analyze', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: _geeHeaders(),
                 body: JSON.stringify({
                     roi:       _roi,
                     clipMode:  _sceneClipMode,
@@ -6693,7 +6718,7 @@ function selectRamp(name) {
 
             fetch(API_BASE + '/api/rgb-scenes', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: _geeHeaders(),
                 body: JSON.stringify({
                     roi:       _roi,
                     startDate: startInput ? startInput.value : '',
@@ -6825,7 +6850,7 @@ function selectRamp(name) {
 
             fetch(API_BASE + '/api/analyze', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: _geeHeaders(),
                 body: JSON.stringify({
                     roi:       _roi,
                     clipMode:  _rgbClipMode,
@@ -7689,7 +7714,7 @@ function selectRamp(name) {
 
             fetch(API_BASE + '/api/highlight-class', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: _geeHeaders(),
                 body: JSON.stringify(payload)
             })
             .then(function (r) { return r.json(); })
@@ -12363,7 +12388,7 @@ document.addEventListener('DOMContentLoaded', function() {
         try {
             var response = await fetch(API_BASE + '/api/contact', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: _geeHeaders(),
                 body: JSON.stringify(formData)
             });
 
@@ -12559,7 +12584,7 @@ function fetchRawBandsCatalog(datasetKey) {
 
     fetch(API_BASE + '/api/raw-bands', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: _geeHeaders(),
         body: JSON.stringify({ dataset: datasetKey })
     })
     .then(function(r) { return r.json(); })
@@ -12842,7 +12867,7 @@ function downloadRawBands() {
 
     fetch(API_BASE + '/api/download-raw-bands', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: _geeHeaders(),
         body: JSON.stringify({
             roi:      _roi,
             dataset:  _rawBandsState.datasetKey,
@@ -13159,7 +13184,7 @@ function executeGeoTiffDownload() {
 
     fetch(API_BASE + '/api/download-geotiff', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: _geeHeaders(),
         // İptal butonuna basılınca bu isteğin GERÇEKTEN durdurulabilmesi için:
         signal: _geotiffAbortController.signal,
         body: JSON.stringify({
@@ -29452,7 +29477,7 @@ function executeVectorDownload() {
 
     fetch((window.API_BASE || '') + '/api/vector-download', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: _geeHeaders(),
         body: JSON.stringify(body)
     })
     .then(function(res) {
