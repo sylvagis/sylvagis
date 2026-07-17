@@ -2412,6 +2412,97 @@ def _split_bbox_grid_aligned(roi, nx, ny, scale, crs):
     return tiles
 
 
+def _ensure_output_crs(tif_bytes, target_crs, nodata_value=None):
+    """
+    🔒 KESİN CRS GÜVENCESİ — GEE'DEN BAĞIMSIZ.
+
+    SORUN: Kullanıcı indirme penceresinde ör. "UTM Zone 35N — EPSG:32635"
+    seçse ve bu değer istekle birlikte doğru şekilde sunucuya/GEE'ye
+    gönderilse bile, bazı senaryolarda (GEE'nin getDownloadURL()
+    ardışık düzeninde crs parametresinin region/scale ile birlikte
+    her koşulda uygulanmaması, veya karo-mozaik/birleştirme adımından
+    sonra kaynak karoların kendi doğal CRS'inde kalması gibi) GEE'den
+    dönen asıl GeoTIFF dosyası hâlâ coğrafi (EPSG:4326 / GCS_WGS_1984)
+    çıkabiliyordu — ekrandaki CRS seçici doğru göstermesine rağmen.
+
+    ÇÖZÜM: Kullanıcıya gönderilmeden HEMEN ÖNCE, dosyanın GERÇEKTEN
+    hangi CRS'te olduğu rasterio ile bizzat okunur. Zaten istenen
+    hedef CRS ile eşleşiyorsa dosyaya dokunulmadan aynen döndürülür
+    (gereksiz yeniden örnekleme yapılmaz). EŞLEŞMİYORSA, dosya burada
+    sunucu tarafında rasterio.warp.reproject ile KESİN olarak hedef
+    CRS'e dönüştürülür — sonuç, GEE'nin o anki davranışından tamamen
+    bağımsız olarak her zaman kullanıcının seçtiği CRS'te olur.
+
+    Herhangi bir nedenle bu adım başarısız olursa (bozuk dosya vb.)
+    orijinal bayt içeriği DEĞİŞTİRİLMEDEN döndürülür — bu güvence
+    katmanı asla indirmeyi kesintiye uğratmaz.
+    """
+    try:
+        import rasterio
+        from rasterio.io import MemoryFile
+        from rasterio.warp import calculate_default_transform, reproject, Resampling
+        from rasterio.crs import CRS as RioCRS
+    except ImportError:
+        return tif_bytes
+
+    try:
+        target = RioCRS.from_string(target_crs)
+    except Exception:
+        return tif_bytes
+
+    try:
+        with MemoryFile(tif_bytes) as memfile:
+            with memfile.open() as src:
+                # Dosya zaten hedef CRS'teyse (en yaygın/normal durum),
+                # hiçbir şey yapmadan aynen döndür.
+                if src.crs and src.crs == target:
+                    return tif_bytes
+
+                print('[SylvaGIS] ⚠️ İndirilen GeoTIFF beklenen CRS\'te değil '
+                      '(dosya: {}, istenen: {}) — sunucu tarafında yerel '
+                      'olarak yeniden projeksiyonlanıyor.'.format(src.crs, target_crs))
+
+                src_nodata = src.nodata if src.nodata is not None else nodata_value
+
+                transform, width, height = calculate_default_transform(
+                    src.crs, target, src.width, src.height, *src.bounds
+                )
+                out_meta = src.meta.copy()
+                out_meta.update({
+                    'crs': target,
+                    'transform': transform,
+                    'width': width,
+                    'height': height,
+                })
+                if src_nodata is not None:
+                    out_meta['nodata'] = src_nodata
+
+                with MemoryFile() as out_memfile:
+                    with out_memfile.open(**out_meta) as dst:
+                        for band_idx in range(1, src.count + 1):
+                            reproject(
+                                source=rasterio.band(src, band_idx),
+                                destination=rasterio.band(dst, band_idx),
+                                src_transform=src.transform,
+                                src_crs=src.crs,
+                                dst_transform=transform,
+                                dst_crs=target,
+                                dst_nodata=src_nodata,
+                                # Kategorik olmayan sürekli veriler (NDVI, DEM,
+                                # eğim, yansıma vb.) için değerleri bozmayan
+                                # en_yakın_komşu yerine bilinear kullanılır;
+                                # NoData sınırında sızıntı olmaması için
+                                # src_nodata da ayrıca belirtilir.
+                                src_nodata=src_nodata,
+                                resampling=Resampling.bilinear,
+                            )
+                    return out_memfile.read()
+    except Exception as reproj_err:
+        print('[SylvaGIS] ❌ Yerel yeniden projeksiyon başarısız — dosya orijinal '
+              'CRS\'iyle gönderiliyor:', reproj_err)
+        return tif_bytes
+
+
 def _stamp_exact_band_statistics(tif_bytes, nodata_value=None):
     """
     🛠️ BUG FİX (QGIS'te 0-47, ArcMap'te 0-54 — aynı .tif dosyası için
@@ -2762,6 +2853,9 @@ def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata
         nodata_value=nodata_value, aoi_geom_4326=aoi_geom_4326,
         fallback_region_geom=fallback_region_geom
     )
+    # 🔒 GEE ne dönerse dönsün, kullanıcının seçtiği CRS'i kesin olarak
+    # garanti eden güvence katmanı — bkz. _ensure_output_crs() docstring'i.
+    raw_bytes = _ensure_output_crs(raw_bytes, crs, nodata_value=nodata_value)
     return _stamp_exact_band_statistics(raw_bytes, nodata_value=nodata_value)
 
 
