@@ -580,9 +580,10 @@ def _mask_clouds(image, satellite):
                   .And(qa.bitwiseAnd(cirrus_bit_mask).eq(0)))
         return image.updateMask(mask)
 
-    if satellite in ('l89-l2', 'l7-l2', 'l45-l2', 'l45-l1'):
-        # Landsat Collection 2 Level-2 QA_PIXEL bitleri:
+    if satellite in ('l89-l2', 'l7-l2', 'l45-l2', 'l45-l1', 'l89-l1', 'l7-l1'):
+        # Landsat Collection 2 (L1 ve L2) QA_PIXEL bitleri:
         # bit1=Dilated Cloud, bit2=Cirrus, bit3=Cloud, bit4=Cloud Shadow
+        # Not: QA_PIXEL bandı hem L1 (TOA) hem L2 (SR) ürünlerinde mevcuttur.
         qa = image.select('QA_PIXEL')
         mask = (qa.bitwiseAnd(1 << 1).eq(0)
                   .And(qa.bitwiseAnd(1 << 2).eq(0))
@@ -1370,7 +1371,7 @@ def build_result_image(data, for_export=False):
         scale_factor = 2.75e-5
         band_offset  = -0.2
 
-    elif satellite in ('l45-l2', 'l45-l1'):
+    elif satellite == 'l45-l2':
         col = (ee.ImageCollection('LANDSAT/LT05/C02/T1_L2')
                .filterBounds(roi)
                .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
@@ -1378,6 +1379,55 @@ def build_result_image(data, for_export=False):
              'swir': 'SR_B5', 'blue': 'SR_B1', 'thermal': 'ST_B6'}
         scale_factor = 2.75e-5
         band_offset  = -0.2
+
+    elif satellite == 'l89-l1':
+        # Landsat 8-9 Collection 2 Level-1 TOA (bant adlarında SR_ öneki YOK)
+        col = (ee.ImageCollection('LANDSAT/LC08/C02/T1_TOA')
+               .filterBounds(roi)
+               .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
+        col = col.merge(ee.ImageCollection('LANDSAT/LC09/C02/T1_TOA')
+                        .filterBounds(roi)
+                        .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
+        b = {'nir': 'B5', 'red': 'B4', 'green': 'B3',
+             'swir': 'B6', 'blue': 'B2', 'thermal': 'B10'}
+        scale_factor = 1
+        band_offset  = 0
+
+    elif satellite == 'l7-l1':
+        # Landsat 7 Collection 2 Level-1 TOA
+        col = (ee.ImageCollection('LANDSAT/LE07/C02/T1_TOA')
+               .filterBounds(roi)
+               .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
+        b = {'nir': 'B4', 'red': 'B3', 'green': 'B2',
+             'swir': 'B5', 'blue': 'B1', 'thermal': 'B6_VCID_1'}
+        scale_factor = 1
+        band_offset  = 0
+
+    elif satellite == 'l45-l1':
+        # Landsat 4-5 Collection 2 Level-1 TOA
+        col = (ee.ImageCollection('LANDSAT/LT05/C02/T1_TOA')
+               .filterBounds(roi)
+               .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
+        col = col.merge(ee.ImageCollection('LANDSAT/LT04/C02/T1_TOA')
+                        .filterBounds(roi)
+                        .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
+        b = {'nir': 'B4', 'red': 'B3', 'green': 'B2',
+             'swir': 'B5', 'blue': 'B1', 'thermal': 'B6'}
+        scale_factor = 1
+        band_offset  = 0
+
+    elif satellite == 'mss-l1':
+        # Landsat 1-5 MSS — gerçek mavi ve SWIR bantları yoktur; bunları
+        # None bırakarak SWIR gerektiren indekslerin GEE'den hata almasına
+        # izin verilir (sessiz hata yerine açık hata mesajı).
+        col = (ee.ImageCollection('LANDSAT/LM05/C02/T1').filterBounds(roi))
+        for _mss_id in ('LANDSAT/LM04/C02/T1', 'LANDSAT/LM03/C02/T1',
+                         'LANDSAT/LM02/C02/T1', 'LANDSAT/LM01/C02/T1'):
+            col = col.merge(ee.ImageCollection(_mss_id).filterBounds(roi))
+        b = {'nir': 'B3', 'red': 'B2', 'green': 'B1',
+             'swir': None, 'blue': None, 'thermal': None}
+        scale_factor = 1
+        band_offset  = 0
 
     else:
         col = (ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
@@ -1689,7 +1739,7 @@ def _rgb_scene_metadata(data, roi, image, ds):
 
 @app.route('/api/analyze', methods=['POST'])
 def analyze():
-    global _last_analyze_params
+    global _last_analyze_params, _last_analyze_native_crs
     try:
         data = request.json
         _last_analyze_params = dict(data) if data else {}
@@ -1722,7 +1772,6 @@ def analyze():
             # Bu sahnenin gerçek/doğal CRS'i (_rgb_scene_metadata zaten
             # image.projection() üzerinden sorgulamıştı) — GeoTIFF indirme
             # penceresinin CRS seçicisini otomatik ön-seçmek için saklanır.
-            global _last_analyze_native_crs
             if meta.get('crs'):
                 _last_analyze_native_crs = meta['crs']
 
@@ -1747,7 +1796,6 @@ def analyze():
         # için kullanılır; sorgu başarısız olursa (bazı çok-bantlı/karma
         # görüntülerde farklı bantlar farklı CRS'te olabilir) sessizce None
         # bırakılır ve istemci tarafında WGS 84'e düşülür.
-        global _last_analyze_native_crs
         native_crs = None
         try:
             native_crs = _call_with_retry(
@@ -1831,10 +1879,33 @@ def analyze():
                     col2 = (ee.ImageCollection('COPERNICUS/S2_HARMONIZED')
                             .filterBounds(roi_geo)
                             .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', max_cloud)))
-                elif satellite in ('l89-l2', 'l89-l1'):
+                elif satellite == 'l89-l2':
                     col2 = (ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
                             .filterBounds(roi_geo)
                             .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
+                elif satellite == 'l89-l1':
+                    col2 = (ee.ImageCollection('LANDSAT/LC08/C02/T1_TOA')
+                            .filterBounds(roi_geo)
+                            .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
+                elif satellite == 'l7-l2':
+                    col2 = (ee.ImageCollection('LANDSAT/LE07/C02/T1_L2')
+                            .filterBounds(roi_geo)
+                            .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
+                elif satellite == 'l7-l1':
+                    col2 = (ee.ImageCollection('LANDSAT/LE07/C02/T1_TOA')
+                            .filterBounds(roi_geo)
+                            .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
+                elif satellite in ('l45-l2',):
+                    col2 = (ee.ImageCollection('LANDSAT/LT05/C02/T1_L2')
+                            .filterBounds(roi_geo)
+                            .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
+                elif satellite == 'l45-l1':
+                    col2 = (ee.ImageCollection('LANDSAT/LT05/C02/T1_TOA')
+                            .filterBounds(roi_geo)
+                            .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
+                elif satellite == 'mss-l1':
+                    col2 = (ee.ImageCollection('LANDSAT/LM05/C02/T1')
+                            .filterBounds(roi_geo))
                 else:
                     col2 = (ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
                             .filterBounds(roi_geo)
@@ -2431,6 +2502,9 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
     Sonuç her koşulda TEK bir .tif dosyasının bayt içeriğidir; true-clip
     adımı (varsa) bu birleştirilmiş/tekli sonucun ÜZERİNE uygulanır.
     """
+    # params burada başlatılır; except bloğunun fallback dalında NameError
+    # oluşmaması için try bloğu öncesinde tanımlanır.
+    params = {}
     try:
         # ÖNEMLİ / KÖK NEDEN DÜZELTMESİ: formatOptions.noData yalnızca
         # GeoTIFF üst bilgisinde (metadata) "bu değer NoData'dır" etiketini
@@ -2889,24 +2963,59 @@ def get_scenes():
         max_cloud  = int(data.get('cloudCover', 10))
         satellite  = data.get('satellite', 's2-l2a')
 
-        if satellite in ('s2-l2a', 's2-l1c'):
+        if satellite == 's2-l2a':
             col = (ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
                    .filterBounds(roi)
                    .filterDate(start_date, end_date)
                    .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', max_cloud)))
             cloud_prop = 'CLOUDY_PIXEL_PERCENTAGE'
-        elif satellite in ('l89-l2', 'l89-l1'):
+        elif satellite == 's2-l1c':
+            col = (ee.ImageCollection('COPERNICUS/S2_HARMONIZED')
+                   .filterBounds(roi)
+                   .filterDate(start_date, end_date)
+                   .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', max_cloud)))
+            cloud_prop = 'CLOUDY_PIXEL_PERCENTAGE'
+        elif satellite == 'l89-l2':
             col = (ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
                    .filterBounds(roi)
                    .filterDate(start_date, end_date)
                    .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
             cloud_prop = 'CLOUD_COVER'
-        elif satellite in ('l7-l2', 'l7-l1'):
+        elif satellite == 'l89-l1':
+            col = (ee.ImageCollection('LANDSAT/LC08/C02/T1_TOA')
+                   .filterBounds(roi)
+                   .filterDate(start_date, end_date)
+                   .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
+            cloud_prop = 'CLOUD_COVER'
+        elif satellite == 'l7-l2':
             col = (ee.ImageCollection('LANDSAT/LE07/C02/T1_L2')
                    .filterBounds(roi)
                    .filterDate(start_date, end_date)
                    .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
             cloud_prop = 'CLOUD_COVER'
+        elif satellite == 'l7-l1':
+            col = (ee.ImageCollection('LANDSAT/LE07/C02/T1_TOA')
+                   .filterBounds(roi)
+                   .filterDate(start_date, end_date)
+                   .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
+            cloud_prop = 'CLOUD_COVER'
+        elif satellite == 'l45-l2':
+            col = (ee.ImageCollection('LANDSAT/LT05/C02/T1_L2')
+                   .filterBounds(roi)
+                   .filterDate(start_date, end_date)
+                   .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
+            cloud_prop = 'CLOUD_COVER'
+        elif satellite == 'l45-l1':
+            col = (ee.ImageCollection('LANDSAT/LT05/C02/T1_TOA')
+                   .filterBounds(roi)
+                   .filterDate(start_date, end_date)
+                   .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
+            cloud_prop = 'CLOUD_COVER'
+        elif satellite == 'mss-l1':
+            col = (ee.ImageCollection('LANDSAT/LM05/C02/T1')
+                   .filterBounds(roi)
+                   .filterDate(start_date, end_date))
+            cloud_prop = None
         else:
             col = (ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
                    .filterBounds(roi)
@@ -2918,7 +3027,10 @@ def get_scenes():
 
         scene_ids  = limited.aggregate_array('system:index').getInfo()
         timestamps = limited.aggregate_array('system:time_start').getInfo()
-        clouds     = limited.aggregate_array(cloud_prop).getInfo()
+        if cloud_prop:
+            clouds = limited.aggregate_array(cloud_prop).getInfo()
+        else:
+            clouds = [None] * len(scene_ids)
 
         scenes = list(zip(scene_ids, timestamps, clouds))
         return jsonify({'success': True, 'scenes': scenes})
