@@ -2146,33 +2146,43 @@ def download_geotiff():
         if is_lulc:
             index_key = data.get('index')
             labels = LULC_CLASS_LABELS.get(index_key, {})
-            qml_bytes = _generate_lulc_qml_bytes(index_key, vis, class_labels=labels)
-            clr_bytes = _generate_lulc_clr_bytes(index_key, vis, class_labels=labels)
+            qml_bytes     = _generate_lulc_qml_bytes(index_key, vis, class_labels=labels)
+            clr_bytes     = _generate_lulc_clr_bytes(index_key, vis, class_labels=labels)
+            aux_xml_bytes = _generate_lulc_aux_xml_bytes(index_key, vis, class_labels=labels)
 
             zip_buf = io.BytesIO()
             with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
                 zf.writestr('{}.tif'.format(safe_name), tif_bytes)
                 zf.writestr('{}.qml'.format(safe_name), qml_bytes)
                 zf.writestr('{}.clr'.format(safe_name), clr_bytes)
+                # ArcMap bu dosyayı .tif ile aynı klasörde bulduğunda
+                # sınıf adları + renklerini OTOMATİK olarak okur.
+                # Dosya adı mutlaka "{isim}.tif.aux.xml" olmalıdır.
+                zf.writestr('{}.tif.aux.xml'.format(safe_name), aux_xml_bytes)
                 # Kullanıcıya rehberlik için kısa bir README
                 readme = (
                     'SylvaGIS — Arazi Kullanımı Dışa Aktarma\n'
                     '==========================================\n\n'
-                    'Bu ZIP dosyası üç dosya içerir:\n\n'
-                    '  {name}.tif   — GeoTIFF raster (sınıf renk tablosu gömülü)\n'
-                    '  {name}.qml   — QGIS stili (sınıf renkleri + isimleri)\n'
-                    '  {name}.clr   — ESRI renk dosyası (ArcMap / ArcGIS Pro)\n\n'
+                    'Bu ZIP dosyası şu dosyaları içerir:\n\n'
+                    '  {name}.tif          — GeoTIFF raster (renk tablosu gömülü)\n'
+                    '  {name}.tif.aux.xml  — GDAL yardımcı meta veri (ArcMap için)\n'
+                    '  {name}.qml          — QGIS stili (sınıf renkleri + isimleri)\n'
+                    '  {name}.clr          — ESRI renk dosyası (ek referans)\n\n'
+                    'TÜM DOSYALARI AYNI KLASÖRE ÇIKARIN.\n\n'
                     'QGIS Kullanımı:\n'
                     '  .tif dosyasını QGIS\'e sürükleyin. .qml dosyası aynı\n'
                     '  klasörde olduğu için sınıf renkleri ve isimleri\n'
                     '  lejanda OTOMATİK olarak yüklenir.\n\n'
-                    'ArcMap / ArcGIS Pro Kullanımı:\n'
-                    '  1. .tif ve .clr dosyalarını AYNI klasöre koyun.\n'
+                    'ArcMap Kullanımı:\n'
+                    '  1. ZIP\'i çıkarın — TÜM dosyalar aynı klasörde olsun.\n'
                     '  2. .tif dosyasını ArcMap\'e ekleyin.\n'
-                    '  3. Katman özellikleri → Semboloji → Benzersiz Değerler\n'
-                    '     yolunu izleyin (renk tablosu otomatik okunur).\n'
-                    '  NOT: ArcGIS Pro "Paletted" raster sembolojisi ile\n'
-                    '  renk tablosunu doğrudan tanır.\n'
+                    '  3. .tif.aux.xml dosyası sayesinde ArcMap sınıf adlarını\n'
+                    '     ve renklerini OTOMATİK olarak tanır ve uygular.\n'
+                    '     (Katman özellikleri → Semboloji → Unique Values)\n\n'
+                    'ArcGIS Pro Kullanımı:\n'
+                    '  1. ZIP\'i çıkarın — TÜM dosyalar aynı klasörde olsun.\n'
+                    '  2. .tif dosyasını ArcGIS Pro\'ya ekleyin.\n'
+                    '  3. Symbology → Unique Values ile sınıf adları otomatik gelir.\n'
                 ).format(name=safe_name)
                 zf.writestr('OKUYUN.txt', readme.encode('utf-8'))
 
@@ -2651,6 +2661,107 @@ def _generate_lulc_clr_bytes(index, vis, class_labels=None):
             v=stored_val, r=rgba[0], g=rgba[1], b=rgba[2], lbl=label
         ))
     return '\n'.join(lines).encode('utf-8')
+
+
+def _generate_lulc_aux_xml_bytes(index, vis, class_labels=None):
+    """
+    GDAL PAM (Persistent Auxiliary Metadata) .aux.xml dosyası üretir.
+
+    ArcMap ve QGIS, bir GeoTIFF ile AYNI klasörde "{isim}.tif.aux.xml"
+    dosyası bulduğunda bunu OTOMATİK olarak okur. Bu dosya içinde:
+      - ColorTable   : GDAL renk tablosu (palette modu için renk bilgisi)
+      - GDALRasterAttributeTable : Sınıf değerleri + adları + RGBA sütunları
+
+    ArcMap bu RAT sayesinde "Classified" / "Unique Values" sembolojisini
+    sınıf ADLARI ve doğru renklerle otomatik gösterir; kullanıcının
+    Semboloji sekmesinde hiçbir şey yapmasına gerek kalmaz.
+
+    GDAL alan tip (Type) kodları:  0=Integer, 1=Real, 2=String
+    GDAL alan kullanım (Usage) kodları:
+        0=Generic, 1=PixelCount, 2=Name, 3=Min, 4=Max, 5=MinMax,
+        6=Red, 7=Green, 8=Blue, 9=Alpha
+    """
+    palette = vis.get('palette') or []
+    vmin = int(vis.get('min', 0))
+
+    if class_labels is None:
+        class_labels = {}
+
+    # ── ColorTable (0 → şeffaf NoData dahil) ────────────────────────────
+    color_entries = ['    <Entry c1="0" c2="0" c3="0" c4="0"/>']   # 0 = NoData
+    for i, color in enumerate(palette):
+        rgba = _hex_to_rgba(color)
+        color_entries.append(
+            '    <Entry c1="{r}" c2="{g}" c3="{b}" c4="{a}"/>'.format(
+                r=rgba[0], g=rgba[1], b=rgba[2], a=rgba[3]
+            )
+        )
+
+    # ── Raster Attribute Table (RAT) satırları ───────────────────────────
+    rat_rows = []
+    for i, color in enumerate(palette):
+        stored_val = i + 1
+        val = vmin + i
+        label = class_labels.get(stored_val) or class_labels.get(val) or str(stored_val)
+        # XML özel karakterlerini kaçır
+        label = label.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
+        rgba = _hex_to_rgba(color)
+        rat_rows.append(
+            '      <Row index="{idx}">'
+            '<F>{v}</F><F>{lbl}</F><F>{r}</F><F>{g}</F><F>{b}</F><F>{a}</F>'
+            '</Row>'.format(
+                idx=i, v=stored_val, lbl=label,
+                r=rgba[0], g=rgba[1], b=rgba[2], a=rgba[3]
+            )
+        )
+
+    xml = (
+        '<PAMDataset>\n'
+        '  <PAMRasterBand band="1">\n'
+        '    <ColorInterp>Palette</ColorInterp>\n'
+        '    <ColorTable>\n'
+        '{color_table}\n'
+        '    </ColorTable>\n'
+        '    <GDALRasterAttributeTable tableType="thematic">\n'
+        '      <FieldDefn index="0">\n'
+        '        <Name>VALUE</Name>\n'
+        '        <Type>0</Type>\n'
+        '        <Usage>5</Usage>\n'
+        '      </FieldDefn>\n'
+        '      <FieldDefn index="1">\n'
+        '        <Name>CLASS_NAME</Name>\n'
+        '        <Type>2</Type>\n'
+        '        <Usage>2</Usage>\n'
+        '      </FieldDefn>\n'
+        '      <FieldDefn index="2">\n'
+        '        <Name>Red</Name>\n'
+        '        <Type>0</Type>\n'
+        '        <Usage>6</Usage>\n'
+        '      </FieldDefn>\n'
+        '      <FieldDefn index="3">\n'
+        '        <Name>Green</Name>\n'
+        '        <Type>0</Type>\n'
+        '        <Usage>7</Usage>\n'
+        '      </FieldDefn>\n'
+        '      <FieldDefn index="4">\n'
+        '        <Name>Blue</Name>\n'
+        '        <Type>0</Type>\n'
+        '        <Usage>8</Usage>\n'
+        '      </FieldDefn>\n'
+        '      <FieldDefn index="5">\n'
+        '        <Name>Alpha</Name>\n'
+        '        <Type>0</Type>\n'
+        '        <Usage>9</Usage>\n'
+        '      </FieldDefn>\n'
+        '{rat_rows}\n'
+        '    </GDALRasterAttributeTable>\n'
+        '  </PAMRasterBand>\n'
+        '</PAMDataset>\n'
+    ).format(
+        color_table='\n'.join(color_entries),
+        rat_rows='\n'.join(rat_rows),
+    )
+    return xml.encode('utf-8')
 
 
 def _stamp_classified_colormap(tif_bytes, vis, nodata_value=None):
