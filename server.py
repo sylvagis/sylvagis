@@ -10,12 +10,26 @@ import tempfile
 import datetime
 import traceback
 import urllib.parse
+import functools
 import requests
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app)
+
+# ════════════════════════════════════════════════════════════════
+# 🔒 CORS — Sadece izin verilen origin'lerden gelen isteklere izin ver
+# ════════════════════════════════════════════════════════════════
+# CORS(app) — sınırsız açık bırakmak, herhangi bir web sitesinin
+# tarayıcı üzerinden API'yi çağırmasına izin verir.
+# Üretim URL'si + yerel geliştirme adresleri listeye eklenmiştir.
+_ALLOWED_ORIGINS = [
+    'https://sylvagis.onrender.com',
+    'http://localhost:5000',
+    'http://127.0.0.1:5000',
+]
+CORS(app, origins=_ALLOWED_ORIGINS, supports_credentials=False)
+
 print('SylvaGIS server.py yüklendi — versiyon: zip-export-v2-tiling')
 
 
@@ -110,6 +124,44 @@ try:
         print('⚠️  GEE kişisel hesap ile başlatıldı (yerel geliştirme modu).')
 except Exception as e:
     print('❌ GEE başlatılamadı:', e)
+
+# ════════════════════════════════════════════════════════════════
+# 🔑 GEE ENDPOINT KORUMASI — Paylaşılan API Token
+# ════════════════════════════════════════════════════════════════
+# SORUN: /api/analyze, /api/download-geotiff, /api/rgb-scenes vb.
+# endpoint'leri tamamen açık — URL'yi bilen herkes GEE kotasını
+# sınırsız tüketebilir.
+#
+# ÇÖZÜM: Sunucu ortam değişkeninde (SYLVA_API_TOKEN) güçlü bir
+# rastgele token saklanır. Frontend her GEE isteğinde bu token'ı
+# 'X-Sylva-Token' başlığıyla gönderir; sunucu doğrular.
+#
+# Token üretmek için terminalde:
+#   python -c "import secrets; print(secrets.token_hex(32))"
+# Üretilen değeri Render → Environment Variables'a SYLVA_API_TOKEN
+# adıyla ekleyin. Aynı değeri index.html'deki SYLVA_API_TOKEN
+# sabitine yazın (bkz. HTML tarafındaki yorum).
+#
+# ÖNEMLİ: SYLVA_API_TOKEN tanımlanmamışsa (boşsa) koruma DEVRE
+# DIŞI kalır ve bir uyarı basılır. Üretim ortamında mutlaka set edin.
+SYLVA_API_TOKEN = os.environ.get('SYLVA_API_TOKEN', '')
+if not SYLVA_API_TOKEN:
+    print('⚠️  SYLVA_API_TOKEN tanımlı değil — GEE endpoint\'leri '
+          'herkese açık! Üretimde mutlaka bir token belirleyin.')
+
+def require_api_token(f):
+    """GEE endpoint\'lerini SYLVA_API_TOKEN ile korur.
+    Token tanımlıysa, eksik veya yanlış token'lı istekleri 401 ile reddeder.
+    Token tanımlı değilse devre dışı kalır (geliştirme modu)."""
+    @functools.wraps(f)
+    def _decorated(*args, **kwargs):
+        if SYLVA_API_TOKEN:
+            incoming = request.headers.get('X-Sylva-Token', '').strip()
+            if not incoming or incoming != SYLVA_API_TOKEN:
+                return jsonify({'success': False,
+                                'error': 'Yetkisiz erişim.'}), 401
+        return f(*args, **kwargs)
+    return _decorated
 
 # Last analysis parameters (GeoTIFF download için saklanır)
 _last_analyze_params = {}
@@ -1779,6 +1831,7 @@ def _rgb_scene_metadata(data, roi, image, ds):
 
 
 @app.route('/api/analyze', methods=['POST'])
+@require_api_token
 def analyze():
     global _last_analyze_params, _last_analyze_native_crs
     try:
@@ -2021,6 +2074,7 @@ def analyze():
 
 
 @app.route('/api/highlight-class', methods=['POST'])
+@require_api_token
 def highlight_class():
     """
     Lejant/grafik/tablodaki bir sınıfa tıklandığında, o sınıfa ait alanları
@@ -2059,6 +2113,7 @@ def highlight_class():
 
 
 @app.route('/api/download-geotiff', methods=['POST'])
+@require_api_token
 def download_geotiff():
     """
     Son analizin GeoTIFF dosyasını sunucu üzerinden indirir ve doğrudan
@@ -2266,6 +2321,7 @@ def download_geotiff():
 
 
 @app.route('/api/raw-bands', methods=['POST'])
+@require_api_token
 def raw_bands():
     """
     📡 Ham Veri (Bantlar) — seçilen uydu görüntüsü veri setine ait TÜM
@@ -2860,6 +2916,7 @@ def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata
 
 
 @app.route('/api/download-raw-bands', methods=['POST'])
+@require_api_token
 def download_raw_bands():
     """
     📡 Ham Veri (Bantlar) — Uydu Görüntüsü Galerisi'nden seçilmiş sahnenin
@@ -3054,6 +3111,7 @@ def download_raw_bands():
 
 
 @app.route('/api/rgb-scenes', methods=['POST'])
+@require_api_token
 def rgb_scenes():
     """
     🛰️ Uydu Görüntüsü Galerisi — AOI/tarih/bulutluluk kriterlerine uyan
@@ -3132,6 +3190,7 @@ def rgb_scenes():
 
 
 @app.route('/api/get-scenes', methods=['POST'])
+@require_api_token
 def get_scenes():
     try:
         data       = request.json
@@ -3495,6 +3554,7 @@ def _geojson_to_features(geom):
 # Format: 'kml', 'kmz', 'shp' (SHP → ZIP arşivi)
 # ════════════════════════════════════════════════════════════════
 @app.route('/api/vector-download', methods=['POST'])
+@require_api_token
 def vector_download():
     req_data = request.get_json(silent=True) or {}
 
