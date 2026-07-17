@@ -12757,13 +12757,58 @@ function openGeoTiffDownloadDialog() {
     modal.style.display = 'flex';
 }
 
+// 🛠️ BUG FİX (CRS seçici bazen yine WGS 84 geliyordu — sunucu tarafı
+// bağımlılığı): Sunucudaki nativeCrs hesabı Google Earth Engine'e 1-2 ayrı
+// ağ çağrısı gerektiriyor (görüntü projeksiyonu okuma + başarısız olursa
+// AOI merkezinden UTM hesaplama). İkinci adım bazen (geçici GEE/ağ
+// gecikmesi, timeout vb.) sessizce başarısız oluyor ve backend hatayı
+// yutup nativeCrs'i null/EPSG:4326 olarak dönüyordu — bu da indirme
+// penceresinin WGS 84'te kalmasına yol açıyordu.
+//
+// ÇÖZÜM: Aynı "boylam/enlemden UTM dilimi" hesabını burada, TARAYICIDA,
+// saf matematikle (GEE'ye hiç gitmeden) tekrar yapıyoruz. AOI'nin
+// ekrandaki sınırlayıcı kutusunun (bounding box) merkezini kullanıyoruz —
+// bu, sunucunun GEE üzerinden yaptığı hesapla birebir aynı formüldür
+// (standart UTM dilimi formülü) ve ASLA ağ hatasına bağlı olarak
+// başarısız olmaz. Sunucudan gerçek/native bir CRS geldiyse (ör. bir
+// sahnenin kendi UTM dilimi, WGS84'ten FARKLI bir değer) o zaten
+// kullanılır — bu istemci tarafı hesap yalnızca sunucu null/WGS84
+// döndürdüğünde devreye giren bir GÜVENCE katmanıdır.
+function _utmEpsgFromLonLat(lon, lat) {
+    var zone = Math.floor((lon + 180) / 6) + 1;
+    zone = Math.max(1, Math.min(60, zone));
+    var zoneStr = (zone < 10 ? '0' : '') + zone;
+    return (lat >= 0 ? 'EPSG:326' : 'EPSG:327') + zoneStr;
+}
+
+function _clientSideNativeCrsFallback() {
+    try {
+        if (!currentLayer || typeof currentLayer.getBounds !== 'function') return null;
+        var b = currentLayer.getBounds();
+        if (!b || !b.isValid || !b.isValid()) return null;
+        var c = b.getCenter();
+        if (!c || typeof c.lng !== 'number' || typeof c.lat !== 'number') return null;
+        return _utmEpsgFromLonLat(c.lng, c.lat);
+    } catch (e) {
+        return null;
+    }
+}
+
 function _applyNativeCrsDefault() {
     var sel = document.getElementById('geotiff-crs');
     if (!sel) return;
     var native = window._lastAnalyzeNativeCrs;
+    // Sunucudan gerçek bir native CRS gelmediyse (null) VEYA sunucu
+    // WGS84/coğrafi döndürdüyse (GEE tarafındaki UTM tespiti başarısız
+    // olmuş olabilir), aktif AOI varsa istemci tarafı UTM hesabına
+    // güvenle geçilir — bkz. yukarıdaki açıklama.
+    if (!native || native.trim().toUpperCase() === 'EPSG:4326') {
+        var fallback = _clientSideNativeCrsFallback();
+        if (fallback) native = fallback;
+    }
     if (!native) {
-        // Bilinen bir gerçek CRS yoksa (henüz analiz çalıştırılmadıysa)
-        // güvenli/nötr varsayılan olan WGS 84'te kalınır.
+        // Ne sunucudan ne de istemciden bir CRS elde edilemedi (ör. henüz
+        // hiçbir AOI/analiz yok) — güvenli/nötr varsayılan WGS 84'te kalınır.
         sel.value = 'EPSG:4326';
         onGeoTiffCrsChange();
         return;
