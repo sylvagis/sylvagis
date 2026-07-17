@@ -12027,26 +12027,94 @@ function selectRamp(name) {
     #vector-dialog-box.downloading #vdl-bottom-indicator { display:block; }
     #vdl-bottom-indicator-text {
         display:flex; align-items:center; justify-content:center;
-        animation: sylva-pulse-modal 1.6s ease-in-out infinite;
         user-select:none;
     }
     #vdl-bottom-indicator-text img {
-        height:48px; width:auto; display:block;
+        height:54px; width:auto; display:block;
+        animation: vdl-logo-blink 0.85s ease-in-out infinite;
+    }
+    @keyframes vdl-logo-blink {
+        0%,100% { opacity:1; filter:drop-shadow(0 0 0px #0d9488); }
+        50%     { opacity:0.22; filter:drop-shadow(0 0 10px #0d9488); }
     }
     #vdl-bottom-indicator-sub {
-        font-size:0.7rem; color:#64748b; margin-top:4px; line-height:1.4;
+        font-size:0.73rem; color:#0d9488; margin-top:6px; line-height:1.4;
+        font-weight:700; letter-spacing:0.03em;
     }
+    #vdl-progress-index {
+        font-size:0.68rem; color:#64748b; margin-top:2px; text-align:center;
+    }
+    #vdl-analysis-badge {
+        display:inline-flex; align-items:center; gap:5px;
+        background:#f0fdfa; border:1px solid #99f6e4; border-radius:20px;
+        padding:3px 11px; font-size:0.73rem; font-weight:700;
+        color:#0d9488; margin-bottom:12px; max-width:100%; overflow:hidden;
+        text-overflow:ellipsis; white-space:nowrap;
+    }
+    .vdl-source-tabs { display:flex; gap:6px; margin-bottom:14px; }
+    .vdl-source-tab {
+        flex:1; padding:7px 6px; border:1.5px solid #cbd5e1; border-radius:7px;
+        background:#f8fafc; font-size:0.78rem; font-weight:600; color:#64748b;
+        cursor:pointer; text-align:center; transition:all 0.15s; user-select:none;
+        line-height:1.3;
+    }
+    .vdl-source-tab.active { border-color:#0d9488; background:#f0fdfa; color:#0d9488; }
+    .vdl-source-tab:hover:not(.active) { border-color:#94a3b8; background:#f1f5f9; }
+    #vdl-coord-section {
+        background:#f8fafc; border:1px solid #e2e8f0; border-radius:7px;
+        padding:10px 12px; margin-bottom:14px;
+    }
+    .vdl-coord-row { display:flex; gap:8px; margin-bottom:6px; }
+    .vdl-coord-row:last-child { margin-bottom:0; }
+    .vdl-coord-field { flex:1; }
+    .vdl-coord-field label {
+        font-size:0.67rem; font-weight:600; color:#94a3b8;
+        display:block; margin-bottom:2px; text-transform:uppercase;
+    }
+    .vdl-coord-field input {
+        width:100%; padding:5px 7px; border:1px solid #cbd5e1; border-radius:4px;
+        font-size:0.79rem; outline:none; box-sizing:border-box; color:#1e3a8a;
+        font-family:monospace;
+    }
+    .vdl-coord-field input:focus { border-color:#0d9488; }
 </style>
 <div id="vector-download-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.52); z-index:99998; align-items:center; justify-content:center;">
     <div id="vector-dialog-box">
-        <h3 style="color:#0d9488; margin-bottom:6px; font-size:1rem;" data-i18n="vdl_title">📥 Vektör Veri İndir</h3>
-        <p style="font-size:0.78rem; color:#64748b; margin-bottom:16px;" data-i18n="vdl_desc">Çalışma alanı geometrisi seçilen formatta dışa aktarılır.</p>
+        <!-- Başlık -->
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
+            <h3 style="color:#0d9488; margin:0; font-size:1rem;" data-i18n="vdl_title">📥 Vektör Veri İndir</h3>
+            <button onclick="closeVectorDownloadDialog()" style="background:none;border:none;cursor:pointer;color:#94a3b8;font-size:1.1rem;padding:0 2px;" title="Kapat">✕</button>
+        </div>
 
+        <!-- Aktif analiz rozeti -->
+        <div id="vdl-analysis-badge" style="display:none;">🛰️ <span id="vdl-analysis-badge-text">—</span></div>
+
+        <!-- ── Veri Kaynağı Sekmeleri ── -->
+        <div class="vdl-source-tabs">
+            <button class="vdl-source-tab active" id="vdl-tab-analysis" onclick="selectVdlSource('analysis')">
+                🛰️ Analiz Sonucu
+                <div style="font-size:0.65rem;font-weight:500;margin-top:2px;opacity:0.8;">Sınıflandırılmış Veri</div>
+            </button>
+            <button class="vdl-source-tab" id="vdl-tab-workspace" onclick="selectVdlSource('workspace')">
+                📐 Çalışma Alanı
+                <div style="font-size:0.65rem;font-weight:500;margin-top:2px;opacity:0.8;">Çizilen Geometri</div>
+            </button>
+        </div>
+
+        <!-- Analiz tipi bilgisi (analiz sekmesinde görünür) -->
+        <div id="vdl-analysis-info" style="background:#f0fdfa;border:1px solid #99f6e4;border-radius:7px;padding:9px 12px;margin-bottom:14px;font-size:0.78rem;color:#0f766e;">
+            <div style="font-weight:700;margin-bottom:3px;">📊 <span id="vdl-info-type">—</span></div>
+            <div style="color:#64748b;font-size:0.72rem;" id="vdl-info-desc">Son analiz sonucu sınıflandırılmış raster → poligon vektörüne dönüştürülür.</div>
+        </div>
+        <div id="vdl-workspace-info" style="display:none;background:#eff6ff;border:1px solid #bfdbfe;border-radius:7px;padding:9px 12px;margin-bottom:14px;font-size:0.78rem;color:#1d4ed8;">
+            📐 Haritada çizilen AOI geometrisi aynen dışa aktarılır.
+        </div>
+
+        <!-- Format Seçimi -->
         <div style="margin-bottom:14px;">
             <label style="font-size:0.82rem; font-weight:600; color:#64748b; display:block; margin-bottom:8px;" data-i18n="vdl_format_label">Format Seçin</label>
             <div style="display:flex; gap:8px;">
                 <button class="vdl-format-btn selected" id="vdl-fmt-kml" onclick="selectVdlFormat('kml')">
-                    <!-- KML: dikey meridyenli küre -->
                     <svg width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block;margin:0 auto 2px;">
                         <circle cx="11" cy="11" r="9.5" stroke="currentColor" stroke-width="1.4"/>
                         <ellipse cx="11" cy="11" rx="4.5" ry="9.5" stroke="currentColor" stroke-width="1.1"/>
@@ -12056,7 +12124,6 @@ function selectRamp(name) {
                     </svg>KML
                 </button>
                 <button class="vdl-format-btn" id="vdl-fmt-kmz" onclick="selectVdlFormat('kmz')">
-                    <!-- KMZ: yatay enlem çizgili küre -->
                     <svg width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block;margin:0 auto 2px;">
                         <circle cx="11" cy="11" r="9.5" stroke="currentColor" stroke-width="1.4"/>
                         <ellipse cx="11" cy="11" rx="9.5" ry="4.5" stroke="currentColor" stroke-width="1.1"/>
@@ -12066,7 +12133,6 @@ function selectRamp(name) {
                     </svg>KMZ
                 </button>
                 <button class="vdl-format-btn" id="vdl-fmt-shp" onclick="selectVdlFormat('shp')">
-                    <!-- SHP: çapraz grid küre -->
                     <svg width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block;margin:0 auto 2px;">
                         <circle cx="11" cy="11" r="9.5" stroke="currentColor" stroke-width="1.4"/>
                         <ellipse cx="11" cy="11" rx="9.5" ry="4.5" stroke="currentColor" stroke-width="1.1"/>
@@ -12078,13 +12144,32 @@ function selectRamp(name) {
             </div>
         </div>
 
-        <div style="margin-bottom:18px;">
+        <!-- Dosya Adı -->
+        <div style="margin-bottom:14px;">
             <label for="vdl-filename" style="font-size:0.82rem; font-weight:600; color:#64748b; display:block; margin-bottom:6px;" data-i18n="lbl_filename">Dosya Adı</label>
             <input type="text" id="vdl-filename" value="SylvaGIS_vector"
                 style="width:100%; padding:8px 10px; border:1px solid #cbd5e1; border-radius:5px; font-size:0.85rem; outline:none; box-sizing:border-box;">
         </div>
 
-        <!-- ── Koordinat Sistemi Seçici ── -->
+        <!-- Koordinat Düzenleme -->
+        <div style="margin-bottom:6px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                <label style="font-size:0.82rem; font-weight:600; color:#64748b;">📍 Alan Koordinatları (WGS 84)</label>
+                <button onclick="vdlResetCoords()" style="font-size:0.7rem;color:#0d9488;background:none;border:none;cursor:pointer;padding:0;" title="AOI sınırlarına sıfırla">↺ Sıfırla</button>
+            </div>
+            <div id="vdl-coord-section">
+                <div class="vdl-coord-row">
+                    <div class="vdl-coord-field"><label>Kuzey (max lat)</label><input type="number" id="vdl-coord-north" step="0.0001" placeholder="40.0000"></div>
+                    <div class="vdl-coord-field"><label>Güney (min lat)</label><input type="number" id="vdl-coord-south" step="0.0001" placeholder="39.0000"></div>
+                </div>
+                <div class="vdl-coord-row">
+                    <div class="vdl-coord-field"><label>Batı (min lon)</label><input type="number" id="vdl-coord-west" step="0.0001" placeholder="32.0000"></div>
+                    <div class="vdl-coord-field"><label>Doğu (max lon)</label><input type="number" id="vdl-coord-east" step="0.0001" placeholder="33.0000"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Koordinat Sistemi Seçici -->
         <div style="margin-bottom:14px;">
             <label for="vdl-crs" style="font-size:0.82rem; font-weight:600; color:#64748b; display:block; margin-bottom:6px;" data-i18n="gtiff_lbl_crs">🌐 Koordinat Sistemi (CRS)</label>
             <select id="vdl-crs" onchange="onVdlCrsChange()" style="width:100%; padding:8px 10px; border:1px solid #cbd5e1; border-radius:5px; font-size:0.85rem; outline:none; background:#fff;">
@@ -12149,9 +12234,13 @@ function selectRamp(name) {
                 data-i18n="btn_download">⬇️ İndir</button>
         </div>
 
+        <!-- Yanip sönen SylvaGIS logosu + indirme göstergesi -->
         <div id="vdl-bottom-indicator">
-            <div id="vdl-bottom-indicator-text"><img id="vdl-logo-img" src="" alt="SylvaGIS" style="height:48px;width:auto;display:block;"></div>
-            <div id="vdl-bottom-indicator-sub" data-i18n="vdl_preparing">Vektör dosyası hazırlanıyor…</div>
+            <div id="vdl-bottom-indicator-text">
+                <img id="vdl-logo-img" src="" alt="SylvaGIS" style="height:54px;width:auto;display:block;">
+            </div>
+            <div id="vdl-bottom-indicator-sub">⏳ Vektör analizi hazırlanıyor…</div>
+            <div id="vdl-progress-index"></div>
         </div>
     </div>
 </div>
@@ -28533,28 +28622,104 @@ function sylvaPdfCardsHTML() {
 
 <script>
 // ===== VEKTÖR İNDİRME DİYALOĞU FONKSİYONLARI =====
+// ── Vektör İndirme Modal ── Durum değişkenleri
 var _vdlSelectedFormat = 'kml';
+var _vdlSelectedSource = 'analysis'; // 'analysis' | 'workspace'
+
+function _vdlGetAnalysisLabel() {
+    var meta = (typeof window._lastAnalyzeMeta !== 'undefined') ? window._lastAnalyzeMeta : null;
+    if (!meta && typeof getSelectedAnalysisMeta === 'function') meta = getSelectedAnalysisMeta();
+    if (!meta) return null;
+    var name = meta.analysisName || 'Analiz';
+    var sensor = meta.sensorLabel || '';
+    return sensor ? (name + ' \u2014 ' + sensor) : name;
+}
+
+function _vdlGetAnalysisCategory(name) {
+    if (!name) return 'Analiz';
+    var n = name.toUpperCase();
+    if (n.startsWith('LULC')) return 'Arazi Kullan\u0131m\u0131 (Land Use)';
+    if (n.startsWith('TOPO')) return 'Topografik Analiz';
+    return 'S\u0131n\u0131fland\u0131r\u0131lm\u0131\u015f Uydu Analizi';
+}
+
+function vdlResetCoords() {
+    try {
+        var layer = window._workspaceLayer;
+        if (!layer || !layer.getBounds) return;
+        var b = layer.getBounds();
+        var n = document.getElementById('vdl-coord-north');
+        var s = document.getElementById('vdl-coord-south');
+        var w = document.getElementById('vdl-coord-west');
+        var e = document.getElementById('vdl-coord-east');
+        if (n) n.value = b.getNorth().toFixed(6);
+        if (s) s.value = b.getSouth().toFixed(6);
+        if (w) w.value = b.getWest().toFixed(6);
+        if (e) e.value = b.getEast().toFixed(6);
+    } catch(err) {}
+}
+
+function selectVdlSource(src) {
+    _vdlSelectedSource = src;
+    ['analysis', 'workspace'].forEach(function(s) {
+        var tab = document.getElementById('vdl-tab-' + s);
+        if (tab) {
+            if (s === src) tab.classList.add('active');
+            else tab.classList.remove('active');
+        }
+    });
+    var ai = document.getElementById('vdl-analysis-info');
+    var wi = document.getElementById('vdl-workspace-info');
+    if (ai) ai.style.display = (src === 'analysis') ? '' : 'none';
+    if (wi) wi.style.display = (src === 'workspace') ? '' : 'none';
+    var fnInput = document.getElementById('vdl-filename');
+    if (fnInput && !fnInput._userEdited) {
+        var lbl = _vdlGetAnalysisLabel();
+        fnInput.value = 'SylvaGIS_' + (lbl ? lbl.split(' \u2014')[0].replace(/[^\w]/g,'_') : (src==='analysis'?'analiz':'calisma_alani'));
+    }
+}
 
 function openVectorDownloadDialog() {
-    // Reuse the navbar logo already embedded in the page
     var navLogo = document.querySelector('.logo-container img');
     var indLogo = document.getElementById('vdl-logo-img');
     if (navLogo && indLogo) indLogo.src = navLogo.src;
     var modal = document.getElementById('vector-download-modal');
     if (!modal) return;
-    // Reset state
+
     var status = document.getElementById('vdl-status');
     var box = document.getElementById('vector-dialog-box');
     if (status) { status.style.display = 'none'; status.textContent = ''; }
     if (box) box.classList.remove('downloading');
     var btn = document.getElementById('vdl-btn-download');
-    if (btn) { btn.disabled = false; btn.innerHTML = (typeof t === 'function' ? t('btn_download') : '⬇️ İndir'); }
-    // Default filename
+    if (btn) { btn.disabled = false; btn.innerHTML = '\u2b07\ufe0f \u0130ndir'; }
+
+    var lbl = _vdlGetAnalysisLabel();
+    var badge = document.getElementById('vdl-analysis-badge');
+    var badgeTxt = document.getElementById('vdl-analysis-badge-text');
+    var infoType = document.getElementById('vdl-info-type');
+    var infoDesc = document.getElementById('vdl-info-desc');
+    if (lbl) {
+        if (badge) badge.style.display = 'inline-flex';
+        if (badgeTxt) badgeTxt.textContent = lbl;
+        var cat = _vdlGetAnalysisCategory(lbl.split(' \u2014')[0].trim());
+        if (infoType) infoType.textContent = cat + ': ' + lbl;
+        if (infoDesc) infoDesc.textContent = 'S\u0131n\u0131fland\u0131r\u0131lm\u0131\u015f raster \u2192 poligon vekt\u00f6r\u00fcne d\u00f6n\u00fc\u015ft\u00fcr\u00fcl\u00fcr. (KML/KMZ: Google Earth, SHP: ArcGIS/QGIS)';
+        selectVdlSource('analysis');
+    } else {
+        if (badge) badge.style.display = 'none';
+        if (infoType) infoType.textContent = 'Hen\u00fcz analiz yap\u0131lmad\u0131';
+        if (infoDesc) infoDesc.textContent = 'Analiz sekmesini kullanmak i\u00e7in \u00f6nce haritada bir analiz \u00e7al\u0131\u015ft\u0131r\u0131n. \u00c7al\u0131\u015fma Alan\u0131 sekmesiyle AOI geometrisini indirebilirsiniz.';
+        selectVdlSource('workspace');
+    }
+
+    vdlResetCoords();
+
     var fnInput = document.getElementById('vdl-filename');
-    if (fnInput && !fnInput._userEdited) fnInput.value = 'SylvaGIS_' + (typeof t === 'function' ? t('file_vector') : 'vector');
+    if (fnInput && !fnInput._userEdited) {
+        fnInput.value = 'SylvaGIS_' + (lbl ? lbl.split(' \u2014')[0].replace(/[^\w]/g,'_') : 'vector');
+    }
     modal.style.display = 'flex';
 }
-
 function onVdlCrsChange() {
     var sel = document.getElementById('vdl-crs');
     var wrap = document.getElementById('vdl-crs-custom-wrap');
@@ -28581,18 +28746,33 @@ function selectVdlFormat(fmt) {
 
 function executeVectorDownload() {
     var fmt = _vdlSelectedFormat;
+    var src = _vdlSelectedSource || 'analysis';
     var fnInput = document.getElementById('vdl-filename');
-    var filename = (fnInput ? fnInput.value.trim() : '') || ('SylvaGIS_' + (typeof t === 'function' ? t('file_vector') : 'vector'));
+    var filename = (fnInput ? fnInput.value.trim() : '') || 'SylvaGIS_vector';
     var btn = document.getElementById('vdl-btn-download');
     var status = document.getElementById('vdl-status');
     var box = document.getElementById('vector-dialog-box');
+    var progressEl = document.getElementById('vdl-progress-index');
+    var subEl = document.getElementById('vdl-bottom-indicator-sub');
 
-    // Show blink indicator
+    // Yanipmayan logo + yukleme gostergesi
     if (box) box.classList.add('downloading');
-    if (btn) { btn.disabled = true; btn.innerHTML = '⏳…'; }
+    if (btn) { btn.disabled = true; btn.innerHTML = '\u23f3\u2026'; }
     if (status) { status.style.display = 'none'; }
 
-    // Collect workspace geometry
+    var lbl = _vdlGetAnalysisLabel();
+    var steps = (src === 'analysis')
+        ? ['\u23f3 GEE analizi yeniden hesaplan\u0131yor\u2026', '\ud83d\udd04 Raster \u2192 poligon d\u00f6n\u00fc\u015f\u00fcm\u00fc\u2026', '\ud83d\udce6 ' + fmt.toUpperCase() + ' dosyas\u0131 paketleniyor\u2026']
+        : ['\ud83d\udcd0 \u00c7al\u0131\u015fma alan\u0131 geometrisi haz\u0131rlan\u0131yor\u2026', '\ud83d\udce6 ' + fmt.toUpperCase() + ' dosyas\u0131 paketleniyor\u2026'];
+    var stepIdx = 0;
+    if (subEl) subEl.textContent = steps[0];
+    if (progressEl) progressEl.textContent = lbl ? ('\ud83d\udef0\ufe0f Analiz indeksi: ' + lbl) : '';
+    var _stepInterval = setInterval(function() {
+        stepIdx = (stepIdx + 1) % steps.length;
+        if (subEl) subEl.textContent = steps[stepIdx];
+    }, 2800);
+
+    // Calisma alani geometrisi
     var geomGeoJSON = null;
     try {
         if (window._workspaceLayer) {
@@ -28600,6 +28780,26 @@ function executeVectorDownload() {
         }
     } catch(e) {}
 
+    // Koordinat duzenlemeleri — kullanici degistirdiyse ROI guncelle
+    var north = parseFloat((document.getElementById('vdl-coord-north') || {}).value);
+    var south = parseFloat((document.getElementById('vdl-coord-south') || {}).value);
+    var west  = parseFloat((document.getElementById('vdl-coord-west')  || {}).value);
+    var east  = parseFloat((document.getElementById('vdl-coord-east')  || {}).value);
+    var hasCoords = !isNaN(north) && !isNaN(south) && !isNaN(west) && !isNaN(east)
+                    && (north !== south) && (west !== east);
+    if (hasCoords) {
+        var bboxGeom = {
+            type: 'Feature',
+            geometry: {
+                type: 'Polygon',
+                coordinates: [[[west,south],[east,south],[east,north],[west,north],[west,south]]]
+            },
+            properties: {}
+        };
+        geomGeoJSON = JSON.stringify(bboxGeom);
+    }
+
+    // CRS
     var crsSel = document.getElementById('vdl-crs');
     var crs = 'EPSG:4326';
     if (crsSel) {
@@ -28610,7 +28810,8 @@ function executeVectorDownload() {
             crs = crsSel.value;
         }
     }
-    var body = { format: fmt, filename: filename, crs: crs };
+
+    var body = { format: fmt, filename: filename, crs: crs, dataSource: src };
     if (geomGeoJSON) body.geometry = geomGeoJSON;
 
     fetch((window.API_BASE || '') + '/api/vector-download', {
@@ -28619,40 +28820,64 @@ function executeVectorDownload() {
         body: JSON.stringify(body)
     })
     .then(function(res) {
+        clearInterval(_stepInterval);
         if (!res.ok) return res.json().then(function(e) { throw new Error(e.error || res.statusText); });
         return res.blob();
     })
     .then(function(blob) {
-        var ext = fmt === 'shp' ? '.zip' : ('.' + fmt);
-        var a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = filename + ext;
-        document.body.appendChild(a);
-        a.click();
-        setTimeout(function() { URL.revokeObjectURL(a.href); document.body.removeChild(a); }, 3000);
-        closeVectorDownloadDialog();
+        var ext = (fmt === 'shp') ? '_shp.zip' : ('.' + fmt);
+        var finalName = filename + ext;
+
+        // showSaveFilePicker: kullanici kaydetme klasorunu secer (desteklenen tarayicilarda)
+        if (window.showSaveFilePicker) {
+            var extMap = {
+                kml: [{ description: 'KML File', accept: { 'application/vnd.google-earth.kml+xml': ['.kml'] } }],
+                kmz: [{ description: 'KMZ File', accept: { 'application/vnd.google-earth.kmz': ['.kmz'] } }],
+                shp: [{ description: 'ZIP Archive', accept: { 'application/zip': ['.zip'] } }]
+            };
+            window.showSaveFilePicker({ suggestedName: finalName, types: extMap[fmt] || [] })
+                .then(function(fh) { return fh.createWritable(); })
+                .then(function(w) { return w.write(blob).then(function() { return w; }); })
+                .then(function(w) { return w.close(); })
+                .then(function() { closeVectorDownloadDialog(); })
+                .catch(function(e) {
+                    if (e.name !== 'AbortError') {
+                        var a = document.createElement('a');
+                        a.href = URL.createObjectURL(blob); a.download = finalName;
+                        document.body.appendChild(a); a.click();
+                        setTimeout(function() { URL.revokeObjectURL(a.href); document.body.removeChild(a); }, 3000);
+                    }
+                    closeVectorDownloadDialog();
+                });
+        } else {
+            // Klasik indirme
+            var a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = finalName;
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(function() { URL.revokeObjectURL(a.href); document.body.removeChild(a); }, 3000);
+            closeVectorDownloadDialog();
+        }
     })
     .catch(function(err) {
+        clearInterval(_stepInterval);
         if (box) box.classList.remove('downloading');
-        if (btn) { btn.disabled = false; btn.innerHTML = (typeof t === 'function' ? t('btn_download') : '⬇️ İndir'); }
+        if (btn) { btn.disabled = false; btn.innerHTML = '\u2b07\ufe0f \u0130ndir'; }
         if (status) {
             status.style.display = 'block';
             status.style.color = '#991b1b';
             status.style.background = '#fee2e2';
             status.style.border = '1px solid #fca5a5';
-            var _t = (typeof t === 'function') ? t : function(k){ return k; };
-            var errMsg = (err && err.message) ? err.message : '';
-            // "Failed to fetch" → network/server error in current language
+            var errMsg = (err && err.message) ? err.message : 'Bilinmeyen hata';
             var isFetch = errMsg.toLowerCase().indexOf('failed to fetch') !== -1 ||
                           errMsg.toLowerCase().indexOf('networkerror') !== -1 ||
                           errMsg.toLowerCase().indexOf('load failed') !== -1;
-            var mainMsg = isFetch ? '' : (errMsg || _t('gtiff_err_unknown'));
-            status.innerHTML = '❌ ' + _t('gtiff_err_prefix') + (mainMsg ? mainMsg + '<br>' : '') +
-                '<span style="font-size:0.78rem;color:#64748b;">' + _t('gtiff_err_server') + '</span>';
+            var mainMsg = isFetch ? 'Sunucuya ba\u011flan\u0131lamad\u0131.' : errMsg;
+            status.innerHTML = '\u274c ' + mainMsg + '<br><span style="font-size:0.75rem;color:#64748b;">Sunucu yan\u0131t vermiyor olabilir ya da GEE kotas\u0131 a\u015f\u0131lm\u0131\u015f olabilir.</span>';
         }
     });
 }
-
 // Close on overlay click
 (function() {
     var modal = document.getElementById('vector-download-modal');
