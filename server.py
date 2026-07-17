@@ -927,7 +927,7 @@ def build_result_image(data, for_export=False):
         # Mekansal Sınırlandırma: LULC sonucu her zaman AOI'ye göre kesilir
         # (clipMode ne olursa olsun) — global/geniş ölçekli yansıtma yapılmaz.
         final_display = dw.clip(roi)
-        return final_display, roi, result, vis
+        return final_display, roi, result, vis, None
 
     if index == 'LULC_ESA':
         # 🏘️ Arazi Kullanımı — ESA WorldCover v200 (10 m global, 11 sınıf).
@@ -946,7 +946,7 @@ def build_result_image(data, for_export=False):
         result = remapped
         # Mekansal Sınırlandırma: LULC ailesinde her zaman AOI'ye göre kesilir.
         final_display = remapped.clip(roi)
-        return final_display, roi, result, vis
+        return final_display, roi, result, vis, None
 
     if index == 'LULC_MODIS':
         # 🏘️ Arazi Kullanımı — MODIS MCD12Q1 (500 m, IGBP sınıflandırması, 17 sınıf).
@@ -980,7 +980,7 @@ def build_result_image(data, for_export=False):
         vis    = {'min': 1, 'max': 17, 'palette': modis_palette}
         result = remapped_modis
         final_display = remapped_modis.clip(roi)
-        return final_display, roi, result, vis
+        return final_display, roi, result, vis, None
 
     if index == 'LULC_CORINE':
         # 🏘️ Arazi Kullanımı — CORINE Land Cover 2018 (100 m, Avrupa/Türkiye).
@@ -1011,7 +1011,7 @@ def build_result_image(data, for_export=False):
         vis    = {'min': 1, 'max': len(corine_codes), 'palette': corine_palette}
         result = remapped_corine
         final_display = remapped_corine.clip(roi)
-        return final_display, roi, result, vis
+        return final_display, roi, result, vis, None
 
     # ── Topografik Analizler (DEM ailesi) ────────────────────────
     _TOPO_KEYS = (
@@ -1290,7 +1290,7 @@ def build_result_image(data, for_export=False):
             display_result = result
 
         final_display = display_result.clip(roi) if clip_mode == 'clip' else display_result
-        return final_display, roi, result, vis
+        return final_display, roi, result, vis, None
 
     if index == 'RGB':
         # 🛰️ Uydu Görüntüsü Galerisi — gerçek renk (veya en yakın kompozit)
@@ -1316,23 +1316,26 @@ def build_result_image(data, for_export=False):
         result = disp
         vis = {'bands': ['red', 'green', 'blue'], 'min': ds['visMin'], 'max': ds['visMax']}
         final_display = disp.clip(roi) if clip_mode == 'clip' else disp
-        return final_display, roi, result, vis
+        return final_display, roi, result, vis, None
 
     if index == 'SAR':
         # Sentinel-1 GRD — VV polarizasyonu (taşkın / biyokütle izleme)
-        sar = (ee.ImageCollection('COPERNICUS/S1_GRD')
+        _sar_col = (ee.ImageCollection('COPERNICUS/S1_GRD')
                .filterBounds(roi)
                .filterDate(start_date, end_date)
                .filter(ee.Filter.eq('instrumentMode', 'IW'))
                .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VV'))
-               .select('VV')
-               .mean()
-               .rename('value'))
+               .select('VV'))
+        sar = _sar_col.mean().rename('value')
         vis    = {'min': -25, 'max': 0,
                   'palette': ['black', 'white']}
         result = sar
         final_display = sar.clip(roi) if clip_mode == 'clip' else sar
-        return final_display, roi, result, vis
+        # 🛠️ BUG FİX: .mean() de median() gibi çıktı projeksiyonunu EPSG:4326'ya
+        # sıfırlar — gerçek/native CRS'i reduce edilmeden ÖNCEki tek bir
+        # sahneden (_sar_col.first()) okuyoruz.
+        _crs_probe_img = _sar_col.first()
+        return final_display, roi, result, vis, _crs_probe_img
 
     # ── 1. Uydu koleksiyonunu ve bant adlarını seç ──────────────
     if satellite == 's2-l2a':
@@ -1448,8 +1451,20 @@ def build_result_image(data, for_export=False):
     # ── 2. Tarih filtresi veya belirli sahne ────────────────────
     if scene_id:
         image = col.filter(ee.Filter.eq('system:index', scene_id)).first()
+        _crs_probe_img = image
     else:
         image = col.filterDate(start_date, end_date).median()
+        # 🛠️ BUG FİX (KÖK NEDEN — CRS seçici HER ZAMAN "WGS 84" gösteriyordu):
+        # ee.ImageCollection.median() (ve mean()/mosaic() gibi diğer reducer'lar)
+        # çıktı görüntünün projeksiyonunu, kaynak sahnelerin gerçek UTM dilimi
+        # ne olursa olsun HER ZAMAN varsayılan/unbounded EPSG:4326'ya sıfırlar.
+        # Bu yüzden "result.projection()" üzerinden CRS okumak, verinin gerçek
+        # native CRS'inden BAĞIMSIZ olarak daima "EPSG:4326" döndürüyordu.
+        # ÇÖZÜM: Gerçek/native CRS'i, henüz reduce EDİLMEMİŞ kaynak
+        # koleksiyondaki TEK bir görüntüden (_crs_probe_img) okuyoruz — aynı
+        # AOI'yi kapsayan sahneler normalde aynı UTM diliminde olduğundan bu,
+        # medyan kompozitin gerçek/native CRS'ini doğru şekilde temsil eder.
+        _crs_probe_img = col.filterDate(start_date, end_date).first()
 
     # 🛠️ BUG FİX (NDVI/LST/NDWI vb. TÜM uydu indekslerinde dağınık
     # beyaz/siyah piksel boşlukları — DEM void-fill ile AYNI kök neden
@@ -1687,7 +1702,7 @@ def build_result_image(data, for_export=False):
     else:
         final_display = display_result
 
-    return final_display, roi, result, vis
+    return final_display, roi, result, vis, _crs_probe_img
 
 
 def _rgb_scene_metadata(data, roi, image, ds):
@@ -1763,7 +1778,7 @@ def analyze():
             else:
                 image = col.filterDate(data.get('startDate'), data.get('endDate')).sort('system:time_start', False).first()
 
-            final_display, roi, result, vis = build_result_image(data)
+            final_display, roi, result, vis, _unused_crs_probe = build_result_image(data)
             map_id = final_display.getMapId(vis)
             tile_url = map_id['tile_fetcher'].url_format
 
@@ -1785,21 +1800,29 @@ def analyze():
                 'visMax':   vis.get('max'),
             })
 
-        final_display, roi, result, vis = build_result_image(data)
+        final_display, roi, result, vis, crs_probe_img = build_result_image(data)
 
         # ── 🌐 Gerçek/doğal CRS tespiti ─────────────────────────────
-        # "result" (henüz clip/vis uygulanmamış ham analiz görüntüsü) hangi
-        # projeksiyonda üretildiyse (Sentinel-2/Landsat bantları çoğunlukla
-        # ilgili UTM diliminde, bazı DEM/SAR kaynakları farklı olabilir)
-        # burada sorgulanır. Bu değer GeoTIFF indirme penceresindeki CRS
-        # seçicisini WGS 84 yerine verinin kendi CRS'ine otomatik ön-seçmek
-        # için kullanılır; sorgu başarısız olursa (bazı çok-bantlı/karma
-        # görüntülerde farklı bantlar farklı CRS'te olabilir) sessizce None
-        # bırakılır ve istemci tarafında WGS 84'e düşülür.
+        # 🛠️ BUG FİX (KÖK NEDEN — CRS seçici HER ZAMAN "WGS 84" gösteriyordu):
+        # "result" (NDVI/NDWI/EVI/SAR vb. — clip/vis uygulanmamış ham analiz
+        # görüntüsü) çoğu zaman median()/mean() gibi bir REDUCER'ın çıktısıdır;
+        # GEE bu tür reducer'ların çıktı projeksiyonunu, kaynak sahnelerin
+        # gerçek UTM dilimi ne olursa olsun HER ZAMAN varsayılan/unbounded
+        # EPSG:4326'ya sıfırlar. Bu yüzden "result.projection()" üzerinden CRS
+        # okumak daima "EPSG:4326" döndürüyordu — verinin gerçek native CRS'i
+        # (örn. UTM Zone 36N) ne olursa olsun.
+        # ÇÖZÜM: build_result_image() artık ayrıca reduce EDİLMEMİŞ, tek bir
+        # kaynak görüntüyü (crs_probe_img) döndürüyor — CRS'i doğrudan ORADAN
+        # okuyoruz. Bu görüntü None ise (örn. LULC/TOPO gibi zaten kendi
+        # doğal/statik CRS'inde olan veri setleri) "result" üzerinden okumaya
+        # geri dönülür — bu durumda result zaten reduce edilmemiştir/doğru
+        # CRS'i taşır. Sorgu başarısız olursa sessizce None bırakılır ve
+        # istemci tarafında güvenli varsayılan olan WGS 84'e düşülür.
         native_crs = None
         try:
+            _crs_source = crs_probe_img if crs_probe_img is not None else result
             native_crs = _call_with_retry(
-                lambda: result.projection().crs().getInfo(), retries=1
+                lambda: _crs_source.projection().crs().getInfo(), retries=1
             )
         except Exception:
             native_crs = None
@@ -1956,7 +1979,7 @@ def highlight_class():
         # Ham (sınıflandırılmadan önceki) değer görüntüsü — result — hem LULC
         # sınıf kodlarını hem de sürekli indeks değerlerini içerir; build_result_image
         # zaten /api/analyze ile birebir aynı ROI/parametre işleme mantığını uygular.
-        final_display, roi, result, vis = build_result_image(data)
+        final_display, roi, result, vis, _unused_crs_probe = build_result_image(data)
 
         highlight_mask = result.gte(ee.Number(class_min)).And(result.lte(ee.Number(class_max)))
 
@@ -2061,7 +2084,7 @@ def download_geotiff():
         # değerlere göre üretilir. for_export=True, build_result_image()
         # içindeki classBreaks/build_classified_image() adımını komple
         # atlatır — bkz. build_result_image() docstring'i.
-        final_display, roi, result, vis = build_result_image(data, for_export=True)
+        final_display, roi, result, vis, _unused_crs_probe = build_result_image(data, for_export=True)
 
         # ── 🌈 Sentinel-2 doğal renk parlaklık düzeltmesi ────────────
         # SORUN: Sentinel-2 RGB (B4-B3-B2) GeoTIFF'leri şu ana kadar ham
