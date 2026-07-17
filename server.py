@@ -604,6 +604,32 @@ def hex_to_rgb(hex_color):
     return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
 
 
+# ════════════════════════════════════════════════════════════════
+# 🌐 KOORDİNAT/BOYLAM-ENLEM'DEN OTOMATİK UTM DİLİMİ (PROJEKSİYON) HESABI
+# ════════════════════════════════════════════════════════════════
+# SORUN: Bazı veri setleri (Dynamic World LULC, ESA WorldCover, SRTM/
+# NASADEM/ALOS DEM vb.) Earth Engine'de zaten coğrafi (EPSG:4326,
+# derece bazlı) sistemde saklanır — yani bu veriler için "gerçek native
+# CRS" GERÇEKTEN WGS 84'tür. Ancak raster indirme/analiz iş akışında
+# (alan, mesafe, piksel boyutu hesapları) coğrafi/derece tabanlı bir
+# sistem YANLIŞ/pratik değildir — enlem arttıkça 1 derecelik piksel
+# boyutunun gerçek metre karşılığı değişir. Bu yüzden CBS'de pratik/
+# doğru yaklaşım, coğrafi CRS yerine HER ZAMAN alanın gerçekte
+# düştüğü UTM dilimini (metre bazlı, projeksiyonlu bir sistem)
+# kullanmaktır. Bu fonksiyon, AOI'nin merkez boylam/enleminden standart
+# UTM dilim formülüyle doğru EPSG kodunu hesaplar (WGS84 datumlu UTM
+# North: 326xx, South: 327xx).
+def _utm_epsg_from_lonlat(lon, lat):
+    """Boylam/enlemden en uygun UTM dilimi EPSG kodunu ('EPSG:326xx' /
+    'EPSG:327xx') döndürür. UPS bölgeleri (kutup uçları, |lat|>84) için
+    en yakın UTM dilimine düşülür — nadiren kullanılan bir kenar durumdur."""
+    zone = int((float(lon) + 180.0) / 6.0) + 1
+    zone = max(1, min(60, zone))
+    if float(lat) >= 0:
+        return 'EPSG:' + str(32600 + zone)   # UTM Kuzey (N)
+    return 'EPSG:' + str(32700 + zone)       # UTM Güney (S)
+
+
 def _strip_z(coords):
     """
     GeoJSON koordinat dizisindeki üçüncü (Z / yükseklik) bileşeni varsa temizler.
@@ -1787,15 +1813,27 @@ def analyze():
             # Bu sahnenin gerçek/doğal CRS'i (_rgb_scene_metadata zaten
             # image.projection() üzerinden sorgulamıştı) — GeoTIFF indirme
             # penceresinin CRS seçicisini otomatik ön-seçmek için saklanır.
-            if meta.get('crs'):
-                _last_analyze_native_crs = meta['crs']
+            # meta['crs'] (Görüntü Bilgileri panelinde gösterilen gerçek
+            # sensör CRS'i) OLDUĞU GİBİ bırakılır; yalnızca indirme
+            # varsayılanı (download_native_crs) için, coğrafi (EPSG:4326)
+            # çıkması durumunda AOI merkezinden UTM dilimine yükseltilir —
+            # bkz. yukarıdaki "PROJEKSİYON ÖNCELİĞİ" açıklaması.
+            download_native_crs = meta.get('crs')
+            if not download_native_crs or download_native_crs.strip().upper() == 'EPSG:4326':
+                try:
+                    centroid = roi.centroid(maxError=100).coordinates().getInfo()
+                    download_native_crs = _utm_epsg_from_lonlat(centroid[0], centroid[1])
+                except Exception:
+                    pass
+            if download_native_crs:
+                _last_analyze_native_crs = download_native_crs
 
             return jsonify({
                 'success':  True,
                 'tileUrl':  tile_url,
                 'index':    'RGB',
                 'meta':     meta,
-                'nativeCrs': meta.get('crs'),
+                'nativeCrs': download_native_crs,
                 'visMin':   vis.get('min'),
                 'visMax':   vis.get('max'),
             })
@@ -1826,6 +1864,25 @@ def analyze():
             )
         except Exception:
             native_crs = None
+
+        # 🌐 PROJEKSİYON ÖNCELİĞİ: Bazı veri setleri (LULC/Dynamic World,
+        # ESA WorldCover, SRTM/NASADEM/ALOS DEM vb.) Earth Engine'de zaten
+        # coğrafi (EPSG:4326) sistemde saklanır — yani tespit edilen "gerçek
+        # native CRS" GERÇEKTEN budur. Ancak indirilen rasterin CBS'de pratik
+        # kullanımı (alan/mesafe/piksel boyutu hesapları) için coğrafi/derece
+        # sistemi yerine HER ZAMAN metre bazlı, projeksiyonlu bir sistem
+        # tercih edilir. Bu yüzden tespit edilen CRS coğrafi (EPSG:4326)
+        # çıkarsa — ya da hiç tespit edilemezse — AOI'nin gerçek konumuna
+        # (merkez boylam/enlemine) göre doğru UTM dilimi otomatik hesaplanıp
+        # onun yerine kullanılır. Böylece indirme penceresi asla coğrafi bir
+        # sistemle açılmaz; kullanıcı yine de dilerse elle WGS 84'e dönebilir.
+        if not native_crs or native_crs.strip().upper() == 'EPSG:4326':
+            try:
+                centroid = roi.centroid(maxError=100).coordinates().getInfo()
+                native_crs = _utm_epsg_from_lonlat(centroid[0], centroid[1])
+            except Exception:
+                pass
+
         if native_crs:
             _last_analyze_native_crs = native_crs
 
