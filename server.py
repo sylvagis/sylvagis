@@ -1862,8 +1862,10 @@ def analyze():
             native_crs = _call_with_retry(
                 lambda: _crs_source.projection().crs().getInfo(), retries=1
             )
-        except Exception:
+        except Exception as _crs_err:
             native_crs = None
+            print('[SylvaGIS] ⚠️ nativeCrs doğrudan projeksiyon okuması başarısız '
+                  '(WGS84 geri dönüşüne geçiliyor, UTM merkez hesabı denenecek): {}'.format(_crs_err))
 
         # 🌐 PROJEKSİYON ÖNCELİĞİ: Bazı veri setleri (LULC/Dynamic World,
         # ESA WorldCover, SRTM/NASADEM/ALOS DEM vb.) Earth Engine'de zaten
@@ -1880,8 +1882,10 @@ def analyze():
             try:
                 centroid = roi.centroid(maxError=100).coordinates().getInfo()
                 native_crs = _utm_epsg_from_lonlat(centroid[0], centroid[1])
-            except Exception:
-                pass
+            except Exception as _centroid_err:
+                print('[SylvaGIS] ❌ UTM merkez hesabı da başarısız oldu — nativeCrs '
+                      'null/WGS84 olarak dönecek (istemci taraflı UTM yedeği devreye '
+                      'girecek): {}'.format(_centroid_err))
 
         if native_crs:
             _last_analyze_native_crs = native_crs
