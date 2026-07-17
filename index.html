@@ -1184,6 +1184,23 @@ tr.class-highlight-active {
         }
 
 
+
+        /* ====== UTM GRID ETİKET STİLİ ====== */
+        .utm-grid-label {
+            background: rgba(255,255,255,0.80);
+            color: #1e3a8a;
+            font-weight: 700;
+            font-size: 11px;
+            padding: 1px 4px;
+            border-radius: 3px;
+            border: 1px solid rgba(30,58,138,0.35);
+            white-space: nowrap;
+            pointer-events: none !important;
+            line-height: 1.3;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+        }
+        .utm-grid-label span { display:block; }
+
         /* ====== CETVEL (RULER) STİLLERİ ====== */
         .ruler-container {
             position: relative;
@@ -2251,9 +2268,14 @@ tr.class-highlight-active {
         <span data-i18n="side_buttons">Yan Tuşlar</span>
     </label>
 
-    <label class="option-item" style="grid-column: span 2;">
+    <label class="option-item">
         <input type="checkbox" id="toggle-rulers" checked>
         <span data-i18n="ruler_lbl">Cetvel</span>
+    </label>
+
+    <label class="option-item">
+        <input type="checkbox" id="toggle-utm-grid">
+        <span data-i18n="utm_grid">UTM Grid</span>
     </label>
 
     <label class="option-item" style="grid-column: span 2; margin-top:2px;">
@@ -3367,7 +3389,163 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
         }, 50);
     });
 
-    // ── Çalışma Alanı Renk Ayarları ──────────────────────────────────────
+
+    // ─── 8. UTM Grid ────────────────────────────────────────────────────────
+    // Harita üzerinde UTM dilim çizgilerini ve etiketleri çizer.
+    // Tamamen istemci taraflı hesaplanır; GEE gerektirmez.
+    // Zoom/pan olaylarında otomatik yenilenir.
+    (function () {
+        var _utmLayer   = null;
+        var _utmActive  = false;
+
+        // UTM bant harfleri (I ve O atlanır)
+        var UTM_BANDS = 'CDEFGHJKLMNPQRSTUVWX'; // 20 harf, C=-80 … X=72
+
+        function _utmZoneNum(lon) {
+            var z = Math.floor((lon + 180) / 6) + 1;
+            return Math.min(60, Math.max(1, z));
+        }
+
+        function _redraw() {
+            if (!_utmActive || typeof map === 'undefined' || !map) return;
+
+            if (!_utmLayer) {
+                _utmLayer = L.layerGroup().addTo(map);
+            } else {
+                _utmLayer.clearLayers();
+            }
+
+            var bounds  = map.getBounds();
+            var zoom    = map.getZoom();
+
+            // UTM geçerlilik aralığı: 80°S – 84°N
+            var sLat = Math.max(bounds.getSouth(), -80);
+            var nLat = Math.min(bounds.getNorth(),  84);
+            var wLon = Math.max(bounds.getWest(), -180);
+            var eLon = Math.min(bounds.getEast(),  180);
+
+            if (sLat >= nLat) return;
+
+            // Çizgi stili
+            var lw  = zoom >= 8 ? 2.0 : zoom >= 5 ? 1.6 : 1.2;
+            var lOp = zoom >= 7 ? 0.85 : 0.70;
+            var lineOpts = {
+                color: '#1e3a8a', weight: lw, opacity: lOp,
+                dashArray: '6,3', interactive: false
+            };
+
+            // Font boyutu zoom'a göre
+            var fs = zoom >= 8 ? 12 : zoom >= 6 ? 11 : zoom >= 4 ? 10 : 9;
+            var showLabels = zoom >= 2;
+
+            // ── Boylam meridyenleri (her 6° → bir UTM dilim sınırı) ──────
+            var startLon = Math.floor(wLon / 6) * 6;
+            for (var lon = startLon; lon <= eLon + 0.01; lon += 6) {
+                if (lon < -180.01 || lon > 180.01) continue;
+                var cLon = Math.max(-180, Math.min(180, lon));
+                L.polyline([[sLat, cLon], [nLat, cLon]], lineOpts).addTo(_utmLayer);
+
+                if (!showLabels) continue;
+                // Etiket: dilim numarası merkez boylamına göre
+                var midLon = lon + 3;
+                if (midLon > eLon + 3) continue;
+                var zNum = _utmZoneNum(midLon);
+
+                // Kuzey etiketi
+                if (nLat > 0 && sLat < 84) {
+                    var lLatN = Math.min(nLat - 0.5, Math.max(0.5, (nLat + Math.max(sLat, 0)) / 2));
+                    L.marker([lLatN, midLon], {
+                        icon: L.divIcon({
+                            className: 'utm-grid-label',
+                            html: '<span style="font-size:' + fs + 'px">' + zNum + 'N</span>',
+                            iconSize: null, iconAnchor: [18, 9]
+                        }),
+                        interactive: false, keyboard: false
+                    }).addTo(_utmLayer);
+                }
+                // Güney etiketi
+                if (sLat < 0 && nLat > -80) {
+                    var lLatS = Math.max(sLat + 0.5, Math.min(-0.5, (sLat + Math.min(nLat, 0)) / 2));
+                    L.marker([lLatS, midLon], {
+                        icon: L.divIcon({
+                            className: 'utm-grid-label',
+                            html: '<span style="font-size:' + fs + 'px">' + zNum + 'S</span>',
+                            iconSize: null, iconAnchor: [18, 9]
+                        }),
+                        interactive: false, keyboard: false
+                    }).addTo(_utmLayer);
+                }
+            }
+
+            // ── Enlem bant sınırları (her 8°; X bandı 72-84) ────────────
+            var latBands = [-80,-72,-64,-56,-48,-40,-32,-24,-16,-8,0,8,16,24,32,40,48,56,64,72,84];
+            latBands.forEach(function (lat) {
+                if (lat < sLat - 0.5 || lat > nLat + 0.5) return;
+                L.polyline([[lat, Math.max(wLon,-180)], [lat, Math.min(eLon,180)]], lineOpts)
+                 .addTo(_utmLayer);
+            });
+        }
+
+        window._utmGridShow = function () {
+            _utmActive = true;
+            _redraw();
+            if (typeof map !== 'undefined' && map) {
+                map.on('zoomend moveend', _redraw);
+            }
+        };
+
+        window._utmGridHide = function () {
+            _utmActive = false;
+            if (typeof map !== 'undefined' && map) {
+                map.off('zoomend moveend', _redraw);
+            }
+            if (_utmLayer) _utmLayer.clearLayers();
+        };
+
+        // Checkbox event listener
+        var _utmCb = document.getElementById('toggle-utm-grid');
+        if (_utmCb) {
+            _utmCb.addEventListener('change', function () {
+                if (this.checked) window._utmGridShow();
+                else              window._utmGridHide();
+            });
+        }
+
+        // Export entegrasyonu: leaflet-image fallback yolunda canvas'a çiz
+        var _origDraw = window._utmGridDrawOnCanvas;
+        window._utmGridDrawOnCanvas = function (ctx, mapEl, scale) {
+            if (!_utmActive || typeof map === 'undefined' || !map) return;
+            var bounds = map.getBounds();
+            var sLat = Math.max(bounds.getSouth(),-80), nLat = Math.min(bounds.getNorth(),84);
+            var wLon = Math.max(bounds.getWest(),-180), eLon = Math.min(bounds.getEast(),180);
+            if (sLat >= nLat) return;
+            ctx.save();
+            ctx.strokeStyle = 'rgba(30,58,138,0.55)';
+            ctx.lineWidth = 1 * scale;
+            ctx.setLineDash([5*scale, 5*scale]);
+            function latlonToCanvas(lat, lon) {
+                var p = map.latLngToContainerPoint([lat, lon]);
+                return { x: p.x * scale, y: p.y * scale };
+            }
+            var startLon2 = Math.floor(wLon / 6) * 6;
+            for (var lon2 = startLon2; lon2 <= eLon + 0.01; lon2 += 6) {
+                var cL = Math.max(-180, Math.min(180, lon2));
+                var p1 = latlonToCanvas(sLat, cL), p2 = latlonToCanvas(nLat, cL);
+                ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
+            }
+            var latBands2 = [-80,-72,-64,-56,-48,-40,-32,-24,-16,-8,0,8,16,24,32,40,48,56,64,72,84];
+            latBands2.forEach(function(lat) {
+                if (lat < sLat-0.5 || lat > nLat+0.5) return;
+                var pa = latlonToCanvas(lat, Math.max(wLon,-180));
+                var pb = latlonToCanvas(lat, Math.min(eLon,180));
+                ctx.beginPath(); ctx.moveTo(pa.x, pa.y); ctx.lineTo(pb.x, pb.y); ctx.stroke();
+            });
+            ctx.restore();
+        };
+
+    })();
+
+    // ─── Çalışma Alanı Renk Ayarları ─────────────────────────────────────
     (function() {
         var WS_COLORS = [
             '#3b82f6','#1e3a8a','#06b6d4','#0891b2',
@@ -10609,6 +10787,11 @@ function selectRamp(name) {
                  }
             }
 
+            // --- UTM Grid: leaflet-image fallback yolunda canvas'a çiz ---
+            if (typeof window._utmGridDrawOnCanvas === 'function') {
+                try { window._utmGridDrawOnCanvas(ctx, mapEl, scale); } catch(e) {}
+            }
+
             // --- Markup SVG'yi canvas'a çiz (WYSIWYG — piksel-mükemmel konum) ---
             // Leaflet SVG katmanlarını canvas'a doğru konumda çizer.
             //
@@ -13096,7 +13279,7 @@ var SYLVA_TRANSLATIONS = {
     map_layout: 'Map Layout',
     north_arrow: 'North Arrow', scale_bar: 'Scale Bar',
     sat_gallery: 'Satellite Image Gallery', legend_lbl: 'Legend',
-    info_box: 'Info Box', side_buttons: 'Side Buttons', ruler_lbl: 'Ruler', ruler_guides_hide: 'Hide guide lines', ruler_guides_show: 'Show guide lines', ruler_guides_toggle: 'Hide/Show guide lines',
+    info_box: 'Info Box', side_buttons: 'Side Buttons', ruler_lbl: 'Ruler', ruler_guides_hide: 'Hide guide lines', ruler_guides_show: 'Show guide lines', ruler_guides_toggle: 'Hide/Show guide lines', utm_grid: 'UTM Grid',
     data_transparency: 'Data Transparency', basemap_transparency: 'Basemap Transparency',
     ws_colors: '🎨 Workspace Colors',
     legend_sym: 'Legend & Symbology',     class_word: 'Class', lbl_stretched: 'Stretched', lbl_classified: 'Classified', lbl_selected_color: 'Selected:',
@@ -13443,7 +13626,7 @@ var SYLVA_TRANSLATIONS = {
     map_layout: 'Xarita tuzilishi',
     north_arrow: 'Shimol koʻrsatkichi', scale_bar: 'Masshtab chizigʻi',
     sat_gallery: 'Sputnik tasvirlari galereyasi', legend_lbl: 'Legenda',
-    info_box: 'Maʼlumot oynasi', side_buttons: 'Yon tugmalar', ruler_lbl: 'Chizgʻich', ruler_guides_hide: 'Yoʻriqchi chiziqlarni yashirish', ruler_guides_show: 'Yoʻriqchi chiziqlarni koʻrsatish', ruler_guides_toggle: 'Yoʻriqchi chiziqlarni yashirish/koʻrsatish',
+    info_box: 'Maʼlumot oynasi', side_buttons: 'Yon tugmalar', ruler_lbl: 'Chizgʻich', ruler_guides_hide: 'Yoʻriqchi chiziqlarni yashirish', ruler_guides_show: 'Yoʻriqchi chiziqlarni koʻrsatish', ruler_guides_toggle: 'Yoʻriqchi chiziqlarni yashirish/koʻrsatish', utm_grid: 'UTM Tor',
     data_transparency: 'Maʼlumot shaffofligi', basemap_transparency: 'Asosiy xarita shaffofligi',
     ws_colors: '🎨 Ish maydoni ranglari',
     legend_sym: 'Legenda va belgilar',     class_word: 'Sinf', lbl_stretched: 'Choʻzilgan', lbl_classified: 'Tasniflangan', lbl_selected_color: 'Tanlangan:',
@@ -13784,7 +13967,7 @@ var SYLVA_TRANSLATIONS = {
     map_layout: 'Διάταξη Χάρτη',
     north_arrow: 'Βέλος Βορρά', scale_bar: 'Κλίμακα',
     sat_gallery: 'Συλλογή Δορυφορικών Εικόνων', legend_lbl: 'Υπόμνημα',
-    info_box: 'Πλαίσιο Πληροφοριών', side_buttons: 'Πλευρικά Κουμπιά', ruler_lbl: 'Χάρακας', ruler_guides_hide: 'Απόκρυψη γραμμών οδηγών', ruler_guides_show: 'Εμφάνιση γραμμών οδηγών', ruler_guides_toggle: 'Απόκρυψη/Εμφάνιση γραμμών οδηγών',
+    info_box: 'Πλαίσιο Πληροφοριών', side_buttons: 'Πλευρικά Κουμπιά', ruler_lbl: 'Χάρακας', ruler_guides_hide: 'Απόκρυψη γραμμών οδηγών', ruler_guides_show: 'Εμφάνιση γραμμών οδηγών', ruler_guides_toggle: 'Απόκρυψη/Εμφάνιση γραμμών οδηγών', utm_grid: 'UTM Πλέγμα',
     data_transparency: 'Διαφάνεια Δεδομένων', basemap_transparency: 'Διαφάνεια Βασικού Χάρτη',
     ws_colors: '🎨 Χρώματα Χώρου Εργασίας',
     legend_sym: 'Υπόμνημα & Συμβολισμός',     class_word: 'Κλάση', lbl_stretched: 'Διατεταμένο', lbl_classified: 'Ταξινομημένο', lbl_selected_color: 'Επιλεγμένο:',
@@ -14131,7 +14314,7 @@ var SYLVA_TRANSLATIONS = {
     map_layout: 'Оформление на картата',
     north_arrow: 'Стрелка на север', scale_bar: 'Скала (мащабна линийка)',
     sat_gallery: 'Галерия със сателитни изображения', legend_lbl: 'Легенда',
-    info_box: 'Информационен прозорец', side_buttons: 'Странични бутони', ruler_lbl: 'Линийка', ruler_guides_hide: 'Скрий водачите', ruler_guides_show: 'Покажи водачите', ruler_guides_toggle: 'Скрий/покажи водачите',
+    info_box: 'Информационен прозорец', side_buttons: 'Странични бутони', ruler_lbl: 'Линийка', ruler_guides_hide: 'Скрий водачите', ruler_guides_show: 'Покажи водачите', ruler_guides_toggle: 'Скрий/покажи водачите', utm_grid: 'UTM Мрежа',
     data_transparency: 'Прозрачност на данните', basemap_transparency: 'Прозрачност на базовата карта',
     ws_colors: '🎨 Цветове на работната област',
     legend_sym: 'Легенда и символика',     class_word: 'Клас', lbl_stretched: 'Разтеглено', lbl_classified: 'Класифицирано', lbl_selected_color: 'Избрано:',
@@ -14478,7 +14661,7 @@ var SYLVA_TRANSLATIONS = {
     map_layout: 'Harita Düzeni',
     north_arrow: 'Kuzey Oku', scale_bar: 'Ölçek Çubuğu',
     sat_gallery: 'Uydu Görüntü Galerisi', legend_lbl: 'Lejant',
-    info_box: 'Bilgi Kutusu', side_buttons: 'Yan Tuşlar', ruler_lbl: 'Cetvel', ruler_guides_hide: 'Kılavuz çizgilerini gizle', ruler_guides_show: 'Kılavuz çizgilerini göster', ruler_guides_toggle: 'Kılavuz çizgilerini gizle/göster',
+    info_box: 'Bilgi Kutusu', side_buttons: 'Yan Tuşlar', ruler_lbl: 'Cetvel', ruler_guides_hide: 'Kılavuz çizgilerini gizle', ruler_guides_show: 'Kılavuz çizgilerini göster', ruler_guides_toggle: 'Kılavuz çizgilerini gizle/göster', utm_grid: 'UTM Grid',
     data_transparency: 'Veri Şeffaflığı', basemap_transparency: 'Basemap Şeffaflığı',
     ws_colors: '🎨 Çalışma Alanı Renkleri',
     legend_sym: 'Lejant ve Semboloji',     class_word: 'Sınıf', lbl_stretched: 'Gerili', lbl_classified: 'Sınıflandırılmış', lbl_selected_color: 'Seçili:',
@@ -14821,7 +15004,7 @@ var SYLVA_TRANSLATIONS = {
     map_layout: 'Xəritə Tərtibatı',
     north_arrow: 'Şimal Oxu', scale_bar: 'Miqyas Zolağı',
     sat_gallery: 'Peyk Görüntü Qalereyası', legend_lbl: 'Leqend',
-    info_box: 'Məlumat Qutusu', side_buttons: 'Yan Düymələr', ruler_lbl: 'Xətkeş', ruler_guides_hide: 'Bələdçi xətlərini gizlət', ruler_guides_show: 'Bələdçi xətlərini göstər', ruler_guides_toggle: 'Bələdçi xətlərini gizlət/göstər',
+    info_box: 'Məlumat Qutusu', side_buttons: 'Yan Düymələr', ruler_lbl: 'Xətkeş', ruler_guides_hide: 'Bələdçi xətlərini gizlət', ruler_guides_show: 'Bələdçi xətlərini göstər', ruler_guides_toggle: 'Bələdçi xətlərini gizlət/göstər', utm_grid: 'UTM Şəbəkə',
     data_transparency: 'Məlumat Şəffaflığı', basemap_transparency: 'Basemap Şəffaflığı',
     ws_colors: '🎨 İş Sahəsi Rəngləri',
     legend_sym: 'Leqend və Simvolika',     class_word: 'Sinif', lbl_stretched: 'Uzadılmış', lbl_classified: 'Təsnif edilmiş', lbl_selected_color: 'Seçilmiş:',
@@ -15164,7 +15347,7 @@ var SYLVA_TRANSLATIONS = {
     map_layout: 'Térkép Elrendezés',
     north_arrow: 'Északi Nyíl', scale_bar: 'Méretarány Vonalka',
     sat_gallery: 'Műholdkép Galéria', legend_lbl: 'Jelmagyarázat',
-    info_box: 'Információs Doboz', side_buttons: 'Oldalsó Gombok', ruler_lbl: 'Vonalzó', ruler_guides_hide: 'Segédvonalak elrejtése', ruler_guides_show: 'Segédvonalak megjelenítése', ruler_guides_toggle: 'Segédvonalak elrejtése/megjelenítése',
+    info_box: 'Információs Doboz', side_buttons: 'Oldalsó Gombok', ruler_lbl: 'Vonalzó', ruler_guides_hide: 'Segédvonalak elrejtése', ruler_guides_show: 'Segédvonalak megjelenítése', ruler_guides_toggle: 'Segédvonalak elrejtése/megjelenítése', utm_grid: 'UTM Rács',
     data_transparency: 'Adat Átláthatóság', basemap_transparency: 'Alaptérkép Átláthatóság',
     ws_colors: '🎨 Munkaterület Színei',
     legend_sym: 'Jelmagyarázat és Szimbológia',     class_word: 'Osztály', lbl_stretched: 'Nyújtott', lbl_classified: 'Osztályozott', lbl_selected_color: 'Kiválasztott:',
@@ -15506,7 +15689,7 @@ var SYLVA_TRANSLATIONS = {
     map_layout: 'Карта орналасуы',
     north_arrow: 'Солтүстік көрсеткіш', scale_bar: 'Масштаб сызғышы',
     sat_gallery: 'Жерсерік суреттер галереясы', legend_lbl: 'Легенда',
-    info_box: 'Ақпарат жолағы', side_buttons: 'Бүйір түймелері', ruler_lbl: 'Сызғыш', ruler_guides_hide: 'Бағыттаушы сызықтарды жасыру', ruler_guides_show: 'Бағыттаушы сызықтарды көрсету', ruler_guides_toggle: 'Бағыттаушы сызықтарды жасыру/көрсету',
+    info_box: 'Ақпарат жолағы', side_buttons: 'Бүйір түймелері', ruler_lbl: 'Сызғыш', ruler_guides_hide: 'Бағыттаушы сызықтарды жасыру', ruler_guides_show: 'Бағыттаушы сызықтарды көрсету', ruler_guides_toggle: 'Бағыттаушы сызықтарды жасыру/көрсету', utm_grid: 'UTM Торы',
     data_transparency: 'Деректер мөлдірлігі', basemap_transparency: 'Базалық карта мөлдірлігі',
     ws_colors: '🎨 Жұмыс кеңістігінің түстері',
     legend_sym: 'Легенда және символика', class_word: 'Класс', lbl_stretched: 'Созылған', lbl_classified: 'Жіктелген', lbl_selected_color: 'Таңдалған:',
@@ -15832,7 +16015,7 @@ var SYLVA_TRANSLATIONS = {
     map_layout: 'Kartenlayout',
     north_arrow: 'Nordpfeil', scale_bar: 'Maßstabsleiste',
     sat_gallery: 'Satellitenbild-Galerie', legend_lbl: 'Legende',
-    info_box: 'Infobox', side_buttons: 'Seitenschaltflächen', ruler_lbl: 'Lineal', ruler_guides_hide: 'Hilfslinien ausblenden', ruler_guides_show: 'Hilfslinien einblenden', ruler_guides_toggle: 'Hilfslinien ein-/ausblenden',
+    info_box: 'Infobox', side_buttons: 'Seitenschaltflächen', ruler_lbl: 'Lineal', ruler_guides_hide: 'Hilfslinien ausblenden', ruler_guides_show: 'Hilfslinien einblenden', ruler_guides_toggle: 'Hilfslinien ein-/ausblenden', utm_grid: 'UTM-Gitter',
     data_transparency: 'Datentransparenz', basemap_transparency: 'Basemap-Transparenz',
     ws_colors: '🎨 Arbeitsbereichsfarben',
     legend_sym: 'Legende & Symbolik',     class_word: 'Klasse', lbl_stretched: 'Gestreckt', lbl_classified: 'Klassifiziert', lbl_selected_color: 'Ausgewählt:',
@@ -16180,7 +16363,7 @@ var SYLVA_TRANSLATIONS = {
     map_layout: 'Mise en page carte',
     north_arrow: 'Flèche Nord', scale_bar: 'Barre d\'échelle',
     sat_gallery: 'Galerie images satellites', legend_lbl: 'Légende',
-    info_box: 'Boîte info', side_buttons: 'Boutons latéraux', ruler_lbl: 'Règle', ruler_guides_hide: 'Masquer les lignes de repère', ruler_guides_show: 'Afficher les lignes de repère', ruler_guides_toggle: 'Afficher/Masquer les lignes de repère',
+    info_box: 'Boîte info', side_buttons: 'Boutons latéraux', ruler_lbl: 'Règle', ruler_guides_hide: 'Masquer les lignes de repère', ruler_guides_show: 'Afficher les lignes de repère', ruler_guides_toggle: 'Afficher/Masquer les lignes de repère', utm_grid: 'Grille UTM',
     data_transparency: 'Transparence données', basemap_transparency: 'Transparence fond de carte',
     ws_colors: '🎨 Couleurs espace de travail',
     legend_sym: 'Légende & Symbologie',     class_word: 'Classe', lbl_stretched: 'Étiré', lbl_classified: 'Classifié', lbl_selected_color: 'Sélectionné :',
@@ -16528,7 +16711,7 @@ var SYLVA_TRANSLATIONS = {
     map_layout: 'Diseño del mapa',
     north_arrow: 'Flecha Norte', scale_bar: 'Barra de escala',
     sat_gallery: 'Galería de imágenes satelitales', legend_lbl: 'Leyenda',
-    info_box: 'Cuadro de info', side_buttons: 'Botones laterales', ruler_lbl: 'Regla', ruler_guides_hide: 'Ocultar líneas guía', ruler_guides_show: 'Mostrar líneas guía', ruler_guides_toggle: 'Mostrar/Ocultar líneas guía',
+    info_box: 'Cuadro de info', side_buttons: 'Botones laterales', ruler_lbl: 'Regla', ruler_guides_hide: 'Ocultar líneas guía', ruler_guides_show: 'Mostrar líneas guía', ruler_guides_toggle: 'Mostrar/Ocultar líneas guía', utm_grid: 'Cuadrícula UTM',
     data_transparency: 'Transparencia de datos', basemap_transparency: 'Transparencia del mapa base',
     ws_colors: '🎨 Colores del área de trabajo',
     legend_sym: 'Leyenda & Simbología',     class_word: 'Clase', lbl_stretched: 'Estirado', lbl_classified: 'Clasificado', lbl_selected_color: 'Seleccionado:',
@@ -16876,7 +17059,7 @@ var SYLVA_TRANSLATIONS = {
     map_layout: 'Layout do mapa',
     north_arrow: 'Seta Norte', scale_bar: 'Barra de escala',
     sat_gallery: 'Galeria de imagens de satélite', legend_lbl: 'Legenda',
-    info_box: 'Caixa de informação', side_buttons: 'Botões laterais', ruler_lbl: 'Régua', ruler_guides_hide: 'Ocultar linhas-guia', ruler_guides_show: 'Mostrar linhas-guia', ruler_guides_toggle: 'Mostrar/Ocultar linhas-guia',
+    info_box: 'Caixa de informação', side_buttons: 'Botões laterais', ruler_lbl: 'Régua', ruler_guides_hide: 'Ocultar linhas-guia', ruler_guides_show: 'Mostrar linhas-guia', ruler_guides_toggle: 'Mostrar/Ocultar linhas-guia', utm_grid: 'Grade UTM',
     data_transparency: 'Transparência dos dados', basemap_transparency: 'Transparência do mapa base',
     ws_colors: '🎨 Cores da área de trabalho',
     legend_sym: 'Legenda & Simbologia',     class_word: 'Classe', lbl_stretched: 'Esticado', lbl_classified: 'Classificado', lbl_selected_color: 'Selecionado:',
@@ -17224,7 +17407,7 @@ var SYLVA_TRANSLATIONS = {
     map_layout: 'تخطيط الخريطة',
     north_arrow: 'سهم الشمال', scale_bar: 'مقياس الرسم',
     sat_gallery: 'معرض الصور الفضائية', legend_lbl: 'دليل الألوان',
-    info_box: 'مربع المعلومات', side_buttons: 'الأزرار الجانبية', ruler_lbl: 'المسطرة', ruler_guides_hide: 'إخفاء خطوط الإرشاد', ruler_guides_show: 'إظهار خطوط الإرشاد', ruler_guides_toggle: 'إظهار/إخفاء خطوط الإرشاد',
+    info_box: 'مربع المعلومات', side_buttons: 'الأزرار الجانبية', ruler_lbl: 'المسطرة', ruler_guides_hide: 'إخفاء خطوط الإرشاد', ruler_guides_show: 'إظهار خطوط الإرشاد', ruler_guides_toggle: 'إظهار/إخفاء خطوط الإرشاد', utm_grid: 'شبكة UTM',
     data_transparency: 'شفافية البيانات', basemap_transparency: 'شفافية الخريطة الأساسية',
     ws_colors: '🎨 ألوان منطقة العمل',
     legend_sym: 'الأسطورة والرمزية',     class_word: 'فئة', lbl_stretched: 'ممتد', lbl_classified: 'مصنف', lbl_selected_color: 'محدد:',
@@ -17572,7 +17755,7 @@ var SYLVA_TRANSLATIONS = {
     map_layout: 'طرح‌بندی نقشه',
     north_arrow: 'فلش شمال', scale_bar: 'مقیاس نقشه',
     sat_gallery: 'گالری تصاویر ماهواره‌ای', legend_lbl: 'راهنمای رنگ',
-    info_box: 'جعبه اطلاعات', side_buttons: 'دکمه‌های جانبی', ruler_lbl: 'خط‌کش', ruler_guides_hide: 'پنهان کردن خطوط راهنما', ruler_guides_show: 'نمایش خطوط راهنما', ruler_guides_toggle: 'نمایش/پنهان خطوط راهنما',
+    info_box: 'جعبه اطلاعات', side_buttons: 'دکمه‌های جانبی', ruler_lbl: 'خط‌کش', ruler_guides_hide: 'پنهان کردن خطوط راهنما', ruler_guides_show: 'نمایش خطوط راهنما', ruler_guides_toggle: 'نمایش/پنهان خطوط راهنما', utm_grid: 'شبکه UTM',
     data_transparency: 'شفافیت داده', basemap_transparency: 'شفافیت نقشه پایه',
     ws_colors: '🎨 رنگ‌های فضای کاری',
     legend_sym: 'راهنما و نمادشناسی', class_type: 'نوع دسته‌بندی',
@@ -17920,7 +18103,7 @@ var SYLVA_TRANSLATIONS = {
     map_layout: '地图布局',
     north_arrow: '北向箭头', scale_bar: '比例尺',
     sat_gallery: '卫星图像库', legend_lbl: '图例',
-    info_box: '信息框', side_buttons: '侧边按钮', ruler_lbl: '标尺', ruler_guides_hide: '隐藏参考线', ruler_guides_show: '显示参考线', ruler_guides_toggle: '显示/隐藏参考线',
+    info_box: '信息框', side_buttons: '侧边按钮', ruler_lbl: '标尺', ruler_guides_hide: '隐藏参考线', ruler_guides_show: '显示参考线', ruler_guides_toggle: '显示/隐藏参考线', utm_grid: 'UTM 网格',
     data_transparency: '数据透明度', basemap_transparency: '底图透明度',
     ws_colors: '🎨 工作区颜色',
     legend_sym: '图例与符号',     class_word: '类', lbl_stretched: '拉伸', lbl_classified: '分类', lbl_selected_color: '已选：',
@@ -18268,7 +18451,7 @@ var SYLVA_TRANSLATIONS = {
     map_layout: 'マップレイアウト',
     north_arrow: '北矢印', scale_bar: 'スケールバー',
     sat_gallery: '衛星画像ギャラリー', legend_lbl: '凡例',
-    info_box: '情報ボックス', side_buttons: 'サイドボタン', ruler_lbl: 'ルーラー', ruler_guides_hide: 'ガイドラインを非表示', ruler_guides_show: 'ガイドラインを表示', ruler_guides_toggle: 'ガイドラインの表示/非表示',
+    info_box: '情報ボックス', side_buttons: 'サイドボタン', ruler_lbl: 'ルーラー', ruler_guides_hide: 'ガイドラインを非表示', ruler_guides_show: 'ガイドラインを表示', ruler_guides_toggle: 'ガイドラインの表示/非表示', utm_grid: 'UTM グリッド',
     data_transparency: 'データ透過度', basemap_transparency: '背景図透過度',
     ws_colors: '🎨 ワークスペースの色',
     legend_sym: '凡例とシンボル',     class_word: 'クラス', lbl_stretched: 'ストレッチ', lbl_classified: '分類', lbl_selected_color: '選択中：',
@@ -18616,7 +18799,7 @@ var SYLVA_TRANSLATIONS = {
     map_layout: '지도 레이아웃',
     north_arrow: '북쪽 화살표', scale_bar: '스케일 바',
     sat_gallery: '위성 이미지 갤러리', legend_lbl: '범례',
-    info_box: '정보 상자', side_buttons: '사이드 버튼', ruler_lbl: '눈금자', ruler_guides_hide: '안내선 숨기기', ruler_guides_show: '안내선 표시', ruler_guides_toggle: '안내선 표시/숨기기',
+    info_box: '정보 상자', side_buttons: '사이드 버튼', ruler_lbl: '눈금자', ruler_guides_hide: '안내선 숨기기', ruler_guides_show: '안내선 표시', ruler_guides_toggle: '안내선 표시/숨기기', utm_grid: 'UTM 격자',
     data_transparency: '데이터 투명도', basemap_transparency: '기본지도 투명도',
     ws_colors: '🎨 작업 공간 색상',
     legend_sym: '범례 및 기호',     class_word: '클래스', lbl_stretched: '스트레치', lbl_classified: '분류', lbl_selected_color: '선택됨:',
@@ -18964,7 +19147,7 @@ var SYLVA_TRANSLATIONS = {
     map_layout: 'मानचित्र लेआउट',
     north_arrow: 'उत्तर तीर', scale_bar: 'स्केल बार',
     sat_gallery: 'उपग्रह छवि गैलरी', legend_lbl: 'किंवदंती',
-    info_box: 'सूचना बॉक्स', side_buttons: 'साइड बटन', ruler_lbl: 'शासक', ruler_guides_hide: 'गाइड लाइनें छिपाएँ', ruler_guides_show: 'गाइड लाइनें दिखाएँ', ruler_guides_toggle: 'गाइड लाइनें दिखाएँ/छिपाएँ',
+    info_box: 'सूचना बॉक्स', side_buttons: 'साइड बटन', ruler_lbl: 'शासक', ruler_guides_hide: 'गाइड लाइनें छिपाएँ', ruler_guides_show: 'गाइड लाइनें दिखाएँ', ruler_guides_toggle: 'गाइड लाइनें दिखाएँ/छिपाएँ', utm_grid: 'UTM ग्रिड',
     data_transparency: 'डेटा पारदर्शिता', basemap_transparency: 'बेसमैप पारदर्शिता',
     ws_colors: '🎨 कार्यक्षेत्र रंग',
     legend_sym: 'किंवदंती और प्रतीकविज्ञान',     class_word: 'वर्ग', lbl_stretched: 'स्ट्रेच्ड', lbl_classified: 'वर्गीकृत', lbl_selected_color: 'चयनित:',
@@ -19312,7 +19495,7 @@ var SYLVA_TRANSLATIONS = {
     map_layout: 'Tata Letak Peta',
     north_arrow: 'Panah Utara', scale_bar: 'Skala Peta',
     sat_gallery: 'Galeri Citra Satelit', legend_lbl: 'Legenda',
-    info_box: 'Kotak Info', side_buttons: 'Tombol Samping', ruler_lbl: 'Penggaris', ruler_guides_hide: 'Sembunyikan garis panduan', ruler_guides_show: 'Tampilkan garis panduan', ruler_guides_toggle: 'Tampilkan/Sembunyikan garis panduan',
+    info_box: 'Kotak Info', side_buttons: 'Tombol Samping', ruler_lbl: 'Penggaris', ruler_guides_hide: 'Sembunyikan garis panduan', ruler_guides_show: 'Tampilkan garis panduan', ruler_guides_toggle: 'Tampilkan/Sembunyikan garis panduan', utm_grid: 'Grid UTM',
     data_transparency: 'Transparansi Data', basemap_transparency: 'Transparansi Peta Dasar',
     ws_colors: '🎨 Warna Ruang Kerja',
     legend_sym: 'Legenda & Simbologi', class_type: 'Tipe Klasifikasi',
@@ -19676,7 +19859,7 @@ var SYLVA_TRANSLATIONS = {
     map_layout: 'Компоновка карты',
     north_arrow: 'Стрелка севера', scale_bar: 'Масштабная линейка',
     sat_gallery: 'Галерея спутниковых снимков', legend_lbl: 'Легенда',
-    info_box: 'Информационное окно', side_buttons: 'Боковые кнопки', ruler_lbl: 'Линейка', ruler_guides_hide: 'Скрыть направляющие', ruler_guides_show: 'Показать направляющие', ruler_guides_toggle: 'Скрыть/показать направляющие',
+    info_box: 'Информационное окно', side_buttons: 'Боковые кнопки', ruler_lbl: 'Линейка', ruler_guides_hide: 'Скрыть направляющие', ruler_guides_show: 'Показать направляющие', ruler_guides_toggle: 'Скрыть/показать направляющие', utm_grid: 'Сетка UTM',
     data_transparency: 'Прозрачность данных', basemap_transparency: 'Прозрачность базовой карты',
     ws_colors: '🎨 Цвета рабочей области',
     legend_sym: 'Легенда и символика',     class_word: 'Класс', lbl_stretched: 'Растянуто', lbl_classified: 'Классифицировано', lbl_selected_color: 'Выбрано:',
@@ -20023,7 +20206,7 @@ var SYLVA_TRANSLATIONS = {
     north_arrow: 'ลูกศรเหนือ', scale_bar: 'แถบมาตราส่วน',
     sat_gallery: 'แกลเลอรีภาพดาวเทียม', legend_lbl: 'คำอธิบายแผนที่',
     info_box: 'กล่องข้อมูล', side_buttons: 'ปุ่มด้านข้าง', ruler_lbl: 'ไม้บรรทัด',
-    ruler_guides_hide: 'ซ่อนเส้นนำทาง', ruler_guides_show: 'แสดงเส้นนำทาง', ruler_guides_toggle: 'ซ่อน/แสดงเส้นนำทาง',
+    ruler_guides_hide: 'ซ่อนเส้นนำทาง', ruler_guides_show: 'แสดงเส้นนำทาง', ruler_guides_toggle: 'ซ่อน/แสดงเส้นนำทาง', utm_grid: 'ตาราง UTM',
     data_transparency: 'ความโปร่งใสของข้อมูล', basemap_transparency: 'ความโปร่งใสของแผนที่ฐาน',
     ws_colors: '🎨 สีพื้นที่ทำงาน',
     legend_sym: 'คำอธิบายแผนที่ & สัญลักษณ์', class_word: 'ประเภท', lbl_stretched: 'ยืด', lbl_classified: 'จำแนกประเภท', lbl_selected_color: 'เลือก:',
@@ -20364,7 +20547,7 @@ var SYLVA_TRANSLATIONS = {
     map_layout: 'মানচিত্র বিন্যাস',
     north_arrow: 'উত্তর দিক নির্দেশক তীর', scale_bar: 'স্কেল বার',
     sat_gallery: 'স্যাটেলাইট চিত্র গ্যালারি', legend_lbl: 'সূচক',
-    info_box: 'তথ্য বাক্স', side_buttons: 'পার্শ্ব বোতাম', ruler_lbl: 'রুলার', ruler_guides_hide: 'গাইড লাইন লুকান', ruler_guides_show: 'গাইড লাইন দেখান', ruler_guides_toggle: 'গাইড লাইন দেখান/লুকান',
+    info_box: 'তথ্য বাক্স', side_buttons: 'পার্শ্ব বোতাম', ruler_lbl: 'রুলার', ruler_guides_hide: 'গাইড লাইন লুকান', ruler_guides_show: 'গাইড লাইন দেখান', ruler_guides_toggle: 'গাইড লাইন দেখান/লুকান', utm_grid: 'UTM গ্রিড',
     data_transparency: 'ডেটা স্বচ্ছতা', basemap_transparency: 'বেসম্যাপ স্বচ্ছতা',
     ws_colors: '🎨 কর্মক্ষেত্রের রং',
     legend_sym: 'সূচক ও প্রতীক',     class_word: 'শ্রেণি', lbl_stretched: 'প্রসারিত', lbl_classified: 'শ্রেণিবদ্ধ', lbl_selected_color: 'নির্বাচিত:',
@@ -20695,7 +20878,7 @@ var SYLVA_TRANSLATIONS = {
     map_layout: 'Bố cục bản đồ',
     north_arrow: 'Mũi tên chỉ Bắc', scale_bar: 'Thanh tỷ lệ',
     sat_gallery: 'Thư viện ảnh vệ tinh', legend_lbl: 'Chú giải',
-    info_box: 'Hộp thông tin', side_buttons: 'Nút bên cạnh', ruler_lbl: 'Thước đo', ruler_guides_hide: 'Ẩn đường gióng', ruler_guides_show: 'Hiện đường gióng', ruler_guides_toggle: 'Hiện/Ẩn đường gióng',
+    info_box: 'Hộp thông tin', side_buttons: 'Nút bên cạnh', ruler_lbl: 'Thước đo', ruler_guides_hide: 'Ẩn đường gióng', ruler_guides_show: 'Hiện đường gióng', ruler_guides_toggle: 'Hiện/Ẩn đường gióng', utm_grid: 'Lưới UTM',
     data_transparency: 'Độ trong suốt dữ liệu', basemap_transparency: 'Độ trong suốt nền bản đồ',
     ws_colors: '🎨 Màu không gian làm việc',
     legend_sym: 'Chú giải & Ký hiệu', class_type: 'Loại phân loại',
@@ -21062,7 +21245,7 @@ var SYLVA_TRANSLATIONS = {
     north_arrow: 'شمال کا تیر', scale_bar: 'پیمانہ بار',
     sat_gallery: 'سیٹلائٹ تصویری گیلری', legend_lbl: 'وضاحتی خانہ',
     info_box: 'معلوماتی خانہ', side_buttons: 'سائیڈ بٹن',
-    ruler_lbl: 'حکمران', ruler_guides_hide: 'رہنما لکیریں چھپائیں', ruler_guides_show: 'رہنما لکیریں دکھائیں', ruler_guides_toggle: 'رہنما لکیریں چھپائیں/دکھائیں',
+    ruler_lbl: 'حکمران', ruler_guides_hide: 'رہنما لکیریں چھپائیں', ruler_guides_show: 'رہنما لکیریں دکھائیں', ruler_guides_toggle: 'رہنما لکیریں چھپائیں/دکھائیں', utm_grid: 'UTM گرڈ',
     data_transparency: 'ڈیٹا شفافیت', basemap_transparency: 'بیس میپ شفافیت',
     ws_colors: '🎨 کام کی جگہ کے رنگ',
     legend_sym: 'وضاحتی خانہ اور علامات', class_word: 'درجہ', lbl_stretched: 'پھیلا ہوا', lbl_classified: 'درجہ بند', lbl_selected_color: 'منتخب:',
@@ -21413,7 +21596,7 @@ var SYLVA_TRANSLATIONS = {
     north_arrow: 'Strzałka północna', scale_bar: 'Podziałka',
     sat_gallery: 'Galeria obrazów satelitarnych', legend_lbl: 'Legenda',
     info_box: 'Okno informacyjne', side_buttons: 'Boczne przyciski', ruler_lbl: 'Linijka',
-    ruler_guides_hide: 'Ukryj linie pomocnicze', ruler_guides_show: 'Pokaż linie pomocnicze', ruler_guides_toggle: 'Ukryj/Pokaż linie pomocnicze',
+    ruler_guides_hide: 'Ukryj linie pomocnicze', ruler_guides_show: 'Pokaż linie pomocnicze', ruler_guides_toggle: 'Ukryj/Pokaż linie pomocnicze', utm_grid: 'Siatka UTM',
     data_transparency: 'Przezroczystość danych', basemap_transparency: 'Przezroczystość mapy bazowej',
     ws_colors: '🎨 Kolory obszaru roboczego',
     legend_sym: 'Legenda i symbologia', class_word: 'Klasa', lbl_stretched: 'Rozciągnięty', lbl_classified: 'Klasyfikowany', lbl_selected_color: 'Wybrany:',
@@ -21751,7 +21934,7 @@ var SYLVA_TRANSLATIONS = {
     map_layout: 'Reka Letak Peta',
     north_arrow: 'Anak Panah Utara', scale_bar: 'Bar Skala',
     sat_gallery: 'Galeri Imej Satelit', legend_lbl: 'Legenda',
-    info_box: 'Kotak Info', side_buttons: 'Butang Sisi', ruler_lbl: 'Pembaris', ruler_guides_hide: 'Sembunyikan garis panduan', ruler_guides_show: 'Tunjukkan garis panduan', ruler_guides_toggle: 'Sembunyi/Tunjuk garis panduan',
+    info_box: 'Kotak Info', side_buttons: 'Butang Sisi', ruler_lbl: 'Pembaris', ruler_guides_hide: 'Sembunyikan garis panduan', ruler_guides_show: 'Tunjukkan garis panduan', ruler_guides_toggle: 'Sembunyi/Tunjuk garis panduan', utm_grid: 'Grid UTM',
     data_transparency: 'Ketelusan Data', basemap_transparency: 'Ketelusan Peta Asas',
     ws_colors: '🎨 Warna Ruang Kerja',
     legend_sym: 'Legenda & Simbologi',     class_word: 'Kelas', lbl_stretched: 'Diregang', lbl_classified: 'Diklasifikasikan', lbl_selected_color: 'Dipilih:',
@@ -22097,7 +22280,7 @@ var SYLVA_TRANSLATIONS = {
       map_layout: 'Карта жайгашуусу',
       north_arrow: 'Түндүк жебеси', scale_bar: 'Масштаб сызгычы',
       sat_gallery: 'Спутник сүрөттөр галереясы', legend_lbl: 'Легенда',
-      info_box: 'Маалымат кутучасы', side_buttons: 'Капталдык баскычтар', ruler_lbl: 'Сызгыч', ruler_guides_hide: 'Жол баштоочу сызыктарды жашыр', ruler_guides_show: 'Жол баштоочу сызыктарды көрсөт', ruler_guides_toggle: 'Жол баштоочу сызыктарды жашыр/көрсөт',
+      info_box: 'Маалымат кутучасы', side_buttons: 'Капталдык баскычтар', ruler_lbl: 'Сызгыч', ruler_guides_hide: 'Жол баштоочу сызыктарды жашыр', ruler_guides_show: 'Жол баштоочу сызыктарды көрсөт', ruler_guides_toggle: 'Жол баштоочу сызыктарды жашыр/көрсөт', utm_grid: 'UTM Тору',
       data_transparency: 'Маалымат өткөрүмдүүлүгү', basemap_transparency: 'Базалык карта өткөрүмдүүлүгү',
       ws_colors: '🎨 Жумуш мейкиндигинин түстөрү',
       legend_sym: 'Легенда жана символика', class_word: 'Класс', lbl_stretched: 'Созулган', lbl_classified: 'Классификацияланган', lbl_selected_color: 'Тандалган:',
@@ -22439,7 +22622,7 @@ var SYLVA_TRANSLATIONS = {
     north_arrow: 'Хойд зааж сум', scale_bar: 'Масштабын шугам',
     sat_gallery: 'Хиймэл дагуулын зургийн галерей', legend_lbl: 'Тайлбар',
     info_box: 'Мэдээллийн хайрцаг', side_buttons: 'Хажуугийн товчлуурууд', ruler_lbl: 'Линейк',
-    ruler_guides_hide: 'Зааварчилгааны шугамыг нуух', ruler_guides_show: 'Зааварчилгааны шугамыг харуулах', ruler_guides_toggle: 'Зааварчилгааны шугамыг нуух/харуулах',
+    ruler_guides_hide: 'Зааварчилгааны шугамыг нуух', ruler_guides_show: 'Зааварчилгааны шугамыг харуулах', ruler_guides_toggle: 'Зааварчилгааны шугамыг нуух/харуулах', utm_grid: 'UTM Торлог',
     data_transparency: 'Өгөгдлийн тунгалаг байдал', basemap_transparency: 'Суурь зургийн тунгалаг байдал',
     ws_colors: '🎨 Ажлын орчны өнгөнүүд',
     legend_sym: 'Тайлбар & Тэмдэглэгээ', class_word: 'Анги', lbl_stretched: 'Сунгасан', lbl_classified: 'Ангилсан', lbl_selected_color: 'Сонгосон:',
@@ -22745,7 +22928,7 @@ var SYLVA_TRANSLATIONS = {
       map_layout: 'რუკის განლაგება',
       north_arrow: 'ჩრდილოეთის ისარი', scale_bar: 'მასშტაბის ზოლი',
       sat_gallery: 'სატელიტური გამოსახულებების გალერეა', legend_lbl: 'ლეგენდა',
-      info_box: 'საინფორმაციო ყუთი', side_buttons: 'გვერდითი ღილაკები', ruler_lbl: 'სახაზავი', ruler_guides_hide: 'მართვის ხაზების დამალვა', ruler_guides_show: 'მართვის ხაზების ჩვენება', ruler_guides_toggle: 'მართვის ხაზების ჩვენება/დამალვა',
+      info_box: 'საინფორმაციო ყუთი', side_buttons: 'გვერდითი ღილაკები', ruler_lbl: 'სახაზავი', ruler_guides_hide: 'მართვის ხაზების დამალვა', ruler_guides_show: 'მართვის ხაზების ჩვენება', ruler_guides_toggle: 'მართვის ხაზების ჩვენება/დამალვა', utm_grid: 'UTM ბადე',
       data_transparency: 'მონაცემების გამჭვირვალობა', basemap_transparency: 'საბაზო რუკის გამჭვირვალობა',
       ws_colors: '🎨 სამუშაო სივრცის ფერები',
       legend_sym: 'ლეგენდა და სიმბოლიკა', class_word: 'კლასი', lbl_stretched: 'გაჭიმული', lbl_classified: 'კლასიფიცირებული', lbl_selected_color: 'არჩეული:',
@@ -23071,7 +23254,7 @@ var SYLVA_TRANSLATIONS = {
     north_arrow: 'Freccia del Nord', scale_bar: 'Barra di Scala',
     sat_gallery: 'Galleria Immagini Satellitari', legend_lbl: 'Legenda',
     info_box: 'Riquadro Informazioni', side_buttons: 'Pulsanti Laterali', ruler_lbl: 'Righello',
-    ruler_guides_hide: 'Nascondi guide', ruler_guides_show: 'Mostra guide', ruler_guides_toggle: 'Mostra/Nascondi guide',
+    ruler_guides_hide: 'Nascondi guide', ruler_guides_show: 'Mostra guide', ruler_guides_toggle: 'Mostra/Nascondi guide', utm_grid: 'Griglia UTM',
     data_transparency: 'Trasparenza Dati', basemap_transparency: 'Trasparenza Mappa di Base',
     ws_colors: '🎨 Colori Area di Lavoro',
     legend_sym: 'Legenda e Simbologia', class_word: 'Classe', lbl_stretched: 'Stesa', lbl_classified: 'Classificata', lbl_selected_color: 'Selezionato:',
