@@ -872,17 +872,27 @@ def build_result_image(data, for_export=False):
     Ortak analiz görüntüsü oluşturma mantığı.
     Returns: (final_display, roi, result, vis)
 
-    for_export: True ise (GeoTIFF indirme yolu), kullanıcının haritada
-    "Lejantı Uygula" ile tanımladığı sınıflandırma (classBreaks) — yani
-    piksel değerlerini 1,2,3... gibi tam sayı sınıf ID'lerine dönüştüren
-    build_classified_image() adımı — TAMAMEN ATLANIR. Böylece dosyaya
-    her zaman haritadaki renk çubuğunun (color bar / stretch) dayandığı
-    HAM/sürekli değerler (örn. NDVI için -1 ile 1 arası ondalıklı
-    değerler) yazılır; ekrandaki sınıflandırma sadece görsel bir katman
-    olarak kalır ve indirilen .tif dosyasını ASLA etkilemez. custom_palette
-    (min/max germe) zaten piksel değerlerini değiştirmediği için (sadece
-    vis sözlüğünü değiştirir) o dal for_export'tan etkilenmeden aynen
-    çalışmaya devam eder.
+    for_export: True ise (GeoTIFF indirme yolu, VE kullanıcı "Lejantı
+    Uygula" ile bir sınıflandırma yapmadıysa), kullanıcının haritada
+    tanımlayabileceği sınıflandırma (classBreaks) — yani piksel değerlerini
+    1,2,3... gibi tam sayı sınıf ID'lerine dönüştüren build_classified_image()
+    adımı — ATLANIR ve dosyaya haritadaki renk çubuğunun (color bar /
+    stretch) dayandığı HAM/sürekli değerler (örn. NDVI için -1 ile 1 arası
+    ondalıklı değerler) yazılır; bu, ham veriyi başka bir GIS/istatistik
+    aracında ileri analiz için kullanmak isteyenler içindir.
+
+    🛠️ GÜNCELLEME: /api/download-geotiff artık classBreaks MEVCUTSA
+    for_export=False ile çağırır — yani kullanıcı ekranda "Lejantı Uygula"
+    ile bir sınıflandırma yaptıysa, indirilen dosya da HAM değerler yerine
+    o sınıflandırmayı (1..N sınıf ID + vis['palette']) kullanır; ardından
+    /api/download-geotiff bu sınıf paletini _stamp_classified_colormap() ile
+    doğrudan GeoTIFF'in içine bir GDAL renk tablosu olarak gömer. Böylece
+    ArcMap/QGIS'te dosya, ekranda görülenle BİREBİR aynı renklerde açılır.
+    classBreaks YOKSA (kullanıcı ham/sürekli veriyi analiz için istiyorsa)
+    eski davranış (raw/sürekli değerler) aynen korunur. custom_palette
+    (min/max germe) piksel değerlerini hiç değiştirmediği için (yalnızca
+    vis sözlüğünü değiştirir) bu davranıştan etkilenmeden aynen çalışmaya
+    devam eder.
     """
     roi_coords = data.get('roi')
     clip_mode  = data.get('clipMode', 'clip')
@@ -1989,14 +1999,26 @@ def download_geotiff():
         if fresh_roi:
             data['roi'] = fresh_roi
 
-        # 🛠️ BUG FİX (istenen davranış): "Lejantı Uygula" ile sınıflandırma
-        # yapılmış olsa bile — NDVI, DEM, Eğim (Slope) vb. hiçbir analizde —
-        # indirilen GeoTIFF ASLA sınıf ID'lerine (1,2,3...) göre değil, her
-        # zaman haritadaki renk çubuğunun (color bar) dayandığı HAM/sürekli
-        # değerlere göre üretilir. for_export=True, build_result_image()
-        # içindeki classBreaks/build_classified_image() adımını komple
-        # atlatır — bkz. build_result_image() docstring'i.
-        final_display, roi, result, vis = build_result_image(data, for_export=True)
+        # 🛠️ BUG FİX (İKİNCİ SORUN — bu sefer NDVI/NDWI vb. indekslerde):
+        # "Lejantı Uygula" ile ekranda sınıflandırma yapılmışsa (classBreaks
+        # gönderilmişse), kullanıcı indirilen GeoTIFF'in de EKRANDAKİYLE
+        # AYNI sınıflara ve renklere sahip olmasını istiyor. build_result_image()
+        # içindeki for_export=True her zaman classBreaks'i atlayıp HAM/sürekli
+        # değerleri (ör. NDVI -1..1) döndürüyordu; bu da ArcMap/QGIS'te
+        # varsayılan gri tonlamalı (Singleband Gray, min-max germe) bir
+        # görünüme yol açıyordu — kullanıcının bildirdiği "siyah-beyaz bar"
+        # görünümü budur.
+        #
+        # ÇÖZÜM: classBreaks mevcutsa for_export=False ile çağır (yani
+        # sınıflandırma adımı ATLANMASIN) — böylece final_display, ekrandaki
+        # gibi 1..N tamsayı sınıf ID'lerinden oluşur ve vis['palette'] de
+        # kullanıcının sınıflandırma renklerini içerir. classBreaks yoksa
+        # (kullanıcı ham/sürekli veriyi analiz için indirmek istiyorsa)
+        # eski davranış (for_export=True, ham değerler) aynen korunur.
+        class_breaks_requested = bool(data.get('classBreaks'))
+        final_display, roi, result, vis = build_result_image(
+            data, for_export=not class_breaks_requested
+        )
 
         # ── 🌈 Sentinel-2 doğal renk parlaklık düzeltmesi ────────────
         # SORUN: Sentinel-2 RGB (B4-B3-B2) GeoTIFF'leri şu ana kadar ham
@@ -2097,11 +2119,16 @@ def download_geotiff():
             fallback_region_geom=roi.bounds(maxError=100)
         )
 
-        # 🎨 Arazi Kullanımı (LULC) ailesi: ekranda/lejantta görülen sınıf
-        # renklerinin AYNISINI indirilen .tif dosyasının içine (GDAL renk
-        # tablosu olarak) göm — bkz. _stamp_lulc_colormap() docstring'i.
-        if data.get('index') in LULC_COLORMAP_INDICES:
-            tif_bytes = _stamp_lulc_colormap(tif_bytes, vis, nodata_value=nodata_value)
+        # 🎨 Renk tablosunu göm — şu iki durumdan HERHANGİ biri geçerliyse:
+        #   1) Arazi Kullanımı (LULC) ailesi — her zaman kendi sabit paleti.
+        #   2) Kullanıcı "Lejantı Uygula" ile manuel sınıflandırma yaptıysa
+        #      (classBreaks) — final_display zaten 1..N sınıf ID'lerinden
+        #      oluşur ve vis['palette'] kullanıcının seçtiği renkleri içerir.
+        # Her iki durumda da final_display tam sayı sınıf kodlarından oluşur;
+        # bu yüzden AYNI gömme fonksiyonu (_stamp_classified_colormap)
+        # güvenle kullanılabilir — bkz. fonksiyonun docstring'i.
+        if data.get('index') in LULC_COLORMAP_INDICES or class_breaks_requested:
+            tif_bytes = _stamp_classified_colormap(tif_bytes, vis, nodata_value=nodata_value)
 
         resp = Response(tif_bytes, mimetype='image/tiff')
         resp.headers['Content-Disposition'] = 'attachment; filename="{}.tif"'.format(safe_name)
@@ -2360,42 +2387,45 @@ def _stamp_exact_band_statistics(tif_bytes, nodata_value=None):
 LULC_COLORMAP_INDICES = ('LULC', 'LULC_ESA', 'LULC_MODIS', 'LULC_CORINE')
 
 
-def _stamp_lulc_colormap(tif_bytes, vis, nodata_value=None):
+def _stamp_classified_colormap(tif_bytes, vis, nodata_value=None):
     """
-    🎨 BUG FİX (Arazi Kullanımı / LULC indirmelerinde ekranda görülen sınıf
-    renkleri, indirilen .tif dosyasında KAYBOLUYORDU — ArcMap/QGIS'te
-    yalnızca gri/siyah tonlarda, sadece sayısal (1,2,3...) sınıf kodlarından
-    oluşan bir raster görünüyordu ve kullanıcı hangi rengin/numaranın hangi
-    arazi sınıfına karşılık geldiğini bilemiyordu):
+    🎨 BUG FİX (Sınıflandırılmış indirmelerde — hem Arazi Kullanımı/LULC
+    ailesinde hem de "Lejantı Uygula" ile manuel sınıflandırılan NDVI/NDWI
+    vb. indekslerde — ekranda görülen sınıf renkleri, indirilen .tif
+    dosyasında KAYBOLUYORDU. ArcMap/QGIS'te dosya açıldığında yalnızca
+    varsayılan gri tonlamalı (Singleband Gray, min-max germe) bir görünüm
+    çıkıyor, kullanıcı hangi rengin/numaranın hangi sınıfa karşılık
+    geldiğini anlayamıyordu):
 
-    KÖK NEDEN: GEE'den indirilen GeoTIFF, doğru şekilde tek bantlı HAM SINIF
-    KODLARINI (Dynamic World için 0-8, ESA WorldCover/MODIS/CORINE için
-    1..N) içerir — bu değer kendisi zaten doğrudur ve DEĞİŞTİRİLMEMELİDİR.
-    Ancak dosyanın içine "hangi sınıf kodu hangi renge karşılık gelir"
-    bilgisini taşıyan bir RENK TABLOSU (color table / palette) HİÇ
-    gömülmüyordu. SylvaGIS ekranındaki renkler yalnızca GEE tile
-    servisinin (harita önizlemesi) 'vis.palette' parametresiyle SADECE
+    KÖK NEDEN: GEE'den indirilen GeoTIFF, doğru şekilde tek bantlı tamsayı
+    SINIF KODLARINI içerir (LULC ailesinde 0-8/1..N; manuel sınıflandırmada
+    build_classified_image()'ın ürettiği 1..N) — bu değerler doğrudur ve
+    DEĞİŞTİRİLMEMELİDİR. Ancak dosyanın içine "hangi sınıf kodu hangi renge
+    karşılık gelir" bilgisini taşıyan bir RENK TABLOSU (color table /
+    palette) HİÇ gömülmüyordu. SylvaGIS ekranındaki renkler yalnızca GEE
+    tile servisinin (harita önizlemesi) 'vis.palette' parametresiyle SADECE
     İSTEMCİ (client) tarafında canlandırılıyordu — indirilen dosyanın
     kendisi bu bilgiyi hiç içermiyordu. Bir GeoTIFF'te renk tablosu yoksa
-    ArcMap/QGIS ham sayısal değerleri varsayılan gri tonlamalı (stretch)
-    bir sembolojiyle gösterir — kullanıcının bildirdiği sorun tam olarak
-    budur.
+    ArcMap/QGIS ham sayısal değerleri varsayılan gri tonlamalı bir
+    sembolojiyle gösterir — kullanıcının bildirdiği sorun tam olarak budur.
 
-    ÇÖZÜM: LULC ailesindeki her indirmede (Dynamic World, ESA WorldCover,
-    MODIS, CORINE), ekranda/lejantta kullanılan AYNI vis['palette'] (hex
-    renk listesi) GeoTIFF'in içine standart bir GDAL renk tablosu
-    (PHOTOMETRIC=PALETTE) olarak gömülür. Bu, GeoTIFF formatının resmi bir
-    özelliğidir (ör. ESRI'nin kendi arazi kullanımı ürünlerinde de aynı
-    yöntem kullanılır) — ArcMap ve QGIS dosyayı AÇAR AÇILMAZ bunu otomatik
-    okur ve haritada görülenle BİREBİR aynı renklerle gösterir; kullanıcının
-    kendi başına renklendirme/sınıflandırma yapmasına gerek kalmaz.
+    ÇÖZÜM: Aşağıdaki İKİ durumda da — (1) LULC ailesi (Dynamic World, ESA
+    WorldCover, MODIS, CORINE) ve (2) kullanıcının "Lejantı Uygula" ile
+    tanımladığı herhangi bir sınıflandırma (NDVI, NDWI, LST, Slope, vb.) —
+    ekranda/lejantta kullanılan AYNI vis['palette'] (hex renk listesi)
+    GeoTIFF'in içine standart bir GDAL renk tablosu (PHOTOMETRIC=PALETTE)
+    olarak gömülür. Bu, GeoTIFF formatının resmi bir özelliğidir — ArcMap
+    ve QGIS dosyayı AÇAR AÇILMAZ bunu otomatik okur ve haritada görülenle
+    BİREBİR aynı renklerle gösterir; kullanıcının kendi başına
+    renklendirme/sınıflandırma yapmasına gerek kalmaz.
 
     NOT (veri tipi / NoData kayması): GDAL renk tablosu yalnızca Byte
     (0-255) veya UInt16 bantlarda desteklenir. LULC ailesindeki en yüksek
-    sınıf sayısı (CORINE, 44 sınıf) bu aralığa rahatça sığar. NoData için
-    0 değeri ayrılır ve TÜM sınıf kodları +1 kaydırılarak yeniden yazılır
+    sınıf sayısı (CORINE, 44 sınıf) ve manuel sınıflandırmadaki (genelde
+    <20 sınıf) tüm senaryolar bu aralığa rahatça sığar. NoData için 0
+    değeri ayrılır ve TÜM sınıf kodları +1 kaydırılarak yeniden yazılır
     (örn. Dynamic World'ün orijinal 0-8 kodu dosyada 1-9 olarak saklanır) —
-    böylece "0 = veri yok" ile "sınıf kodu 0 = Su" ASLA karışmaz. Bu kaydırma
+    böylece "0 = veri yok" ile "sınıf kodu 0" ASLA karışmaz. Bu kaydırma
     yalnızca dosyadaki tamsayı etiketleri ilgilendirir; renk/görsel sonuç
     kullanıcı için ekrandakiyle birebir aynıdır.
 
@@ -2436,13 +2466,18 @@ def _stamp_lulc_colormap(tif_bytes, vis, nodata_value=None):
         else:
             valid_mask = np.isfinite(arr)
 
-        # Sınıf kodu = (orijinal değer - vmin) + 1  →  1..len(palette)
-        # (0, aşağıdaki renk tablosunda NoData/şeffaf olarak ayrılmıştır.)
-        class_idx = np.rint(arr - vmin).astype('int64') + 1
-        class_idx = np.clip(class_idx, 1, len(palette))
+        # Sınıf kodu = (orijinal değer - vmin)  →  0-tabanlı palet indeksi.
+        # NOT: Manuel sınıflandırmada (classBreaks) hiçbir aralığa uymayan
+        # pikseller build_classified_image() içinde 0 değerinde kalabilir
+        # (vis['min'] burada 1'dir) — bu pikseller GERÇEK bir sınıf değil,
+        # bu yüzden aralık dışına düşen (0-tabanlı indeks < 0 veya ≥ palet
+        # uzunluğu) pikseller de — src_nodata'dan bağımsız olarak — NoData
+        # sayılır; aksi halde yanlışlıkla 1. sınıfın rengine boyanırlardı.
+        class_idx0 = np.rint(arr - vmin).astype('int64')
+        valid_mask = valid_mask & (class_idx0 >= 0) & (class_idx0 < len(palette))
 
         out = np.zeros(arr.shape, dtype='uint8')
-        out[valid_mask] = class_idx[valid_mask].astype('uint8')
+        out[valid_mask] = (class_idx0[valid_mask] + 1).astype('uint8')
 
         profile.update({
             'driver':      'GTiff',
