@@ -187,7 +187,7 @@ def send_contact_message():
         return jsonify({'success': False, 'error': 'Geçersiz e-posta adresi.'}), 400
 
     smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'aaaaaaaaaaaaaaaa'
+    smtp_pass = 'ksfnkvwcutrawcih'
 
     body = (
         'SylvaGIS İletişim Formu üzerinden yeni bir mesaj gönderildi.\n\n'
@@ -872,27 +872,17 @@ def build_result_image(data, for_export=False):
     Ortak analiz görüntüsü oluşturma mantığı.
     Returns: (final_display, roi, result, vis)
 
-    for_export: True ise (GeoTIFF indirme yolu, VE kullanıcı "Lejantı
-    Uygula" ile bir sınıflandırma yapmadıysa), kullanıcının haritada
-    tanımlayabileceği sınıflandırma (classBreaks) — yani piksel değerlerini
-    1,2,3... gibi tam sayı sınıf ID'lerine dönüştüren build_classified_image()
-    adımı — ATLANIR ve dosyaya haritadaki renk çubuğunun (color bar /
-    stretch) dayandığı HAM/sürekli değerler (örn. NDVI için -1 ile 1 arası
-    ondalıklı değerler) yazılır; bu, ham veriyi başka bir GIS/istatistik
-    aracında ileri analiz için kullanmak isteyenler içindir.
-
-    🛠️ GÜNCELLEME: /api/download-geotiff artık classBreaks MEVCUTSA
-    for_export=False ile çağırır — yani kullanıcı ekranda "Lejantı Uygula"
-    ile bir sınıflandırma yaptıysa, indirilen dosya da HAM değerler yerine
-    o sınıflandırmayı (1..N sınıf ID + vis['palette']) kullanır; ardından
-    /api/download-geotiff bu sınıf paletini _stamp_classified_colormap() ile
-    doğrudan GeoTIFF'in içine bir GDAL renk tablosu olarak gömer. Böylece
-    ArcMap/QGIS'te dosya, ekranda görülenle BİREBİR aynı renklerde açılır.
-    classBreaks YOKSA (kullanıcı ham/sürekli veriyi analiz için istiyorsa)
-    eski davranış (raw/sürekli değerler) aynen korunur. custom_palette
-    (min/max germe) piksel değerlerini hiç değiştirmediği için (yalnızca
-    vis sözlüğünü değiştirir) bu davranıştan etkilenmeden aynen çalışmaya
-    devam eder.
+    for_export: True ise (GeoTIFF indirme yolu), kullanıcının haritada
+    "Lejantı Uygula" ile tanımladığı sınıflandırma (classBreaks) — yani
+    piksel değerlerini 1,2,3... gibi tam sayı sınıf ID'lerine dönüştüren
+    build_classified_image() adımı — TAMAMEN ATLANIR. Böylece dosyaya
+    her zaman haritadaki renk çubuğunun (color bar / stretch) dayandığı
+    HAM/sürekli değerler (örn. NDVI için -1 ile 1 arası ondalıklı
+    değerler) yazılır; ekrandaki sınıflandırma sadece görsel bir katman
+    olarak kalır ve indirilen .tif dosyasını ASLA etkilemez. custom_palette
+    (min/max germe) zaten piksel değerlerini değiştirmediği için (sadece
+    vis sözlüğünü değiştirir) o dal for_export'tan etkilenmeden aynen
+    çalışmaya devam eder.
     """
     roi_coords = data.get('roi')
     clip_mode  = data.get('clipMode', 'clip')
@@ -1757,13 +1747,7 @@ def analyze():
         # için kullanılır; sorgu başarısız olursa (bazı çok-bantlı/karma
         # görüntülerde farklı bantlar farklı CRS'te olabilir) sessizce None
         # bırakılır ve istemci tarafında WGS 84'e düşülür.
-        # (NOT: 'global _last_analyze_native_crs' bildirimi bu fonksiyonun
-        # başındaki RGB dalında zaten yapıldı; Python'da bir fonksiyon
-        # içinde aynı isim için 'global' yalnızca BİR kez ve — ilgili isme
-        # yapılan İLK atamadan ÖNCE görünmelidir, aksi halde "assigned to
-        # before global declaration" sözdizimi hatası oluşur. Bu yüzden
-        # burada tekrar 'global' yazılmıyor; üstteki bildirim tüm fonksiyon
-        # için geçerlidir.)
+        global _last_analyze_native_crs
         native_crs = None
         try:
             native_crs = _call_with_retry(
@@ -1999,26 +1983,14 @@ def download_geotiff():
         if fresh_roi:
             data['roi'] = fresh_roi
 
-        # 🛠️ BUG FİX (İKİNCİ SORUN — bu sefer NDVI/NDWI vb. indekslerde):
-        # "Lejantı Uygula" ile ekranda sınıflandırma yapılmışsa (classBreaks
-        # gönderilmişse), kullanıcı indirilen GeoTIFF'in de EKRANDAKİYLE
-        # AYNI sınıflara ve renklere sahip olmasını istiyor. build_result_image()
-        # içindeki for_export=True her zaman classBreaks'i atlayıp HAM/sürekli
-        # değerleri (ör. NDVI -1..1) döndürüyordu; bu da ArcMap/QGIS'te
-        # varsayılan gri tonlamalı (Singleband Gray, min-max germe) bir
-        # görünüme yol açıyordu — kullanıcının bildirdiği "siyah-beyaz bar"
-        # görünümü budur.
-        #
-        # ÇÖZÜM: classBreaks mevcutsa for_export=False ile çağır (yani
-        # sınıflandırma adımı ATLANMASIN) — böylece final_display, ekrandaki
-        # gibi 1..N tamsayı sınıf ID'lerinden oluşur ve vis['palette'] de
-        # kullanıcının sınıflandırma renklerini içerir. classBreaks yoksa
-        # (kullanıcı ham/sürekli veriyi analiz için indirmek istiyorsa)
-        # eski davranış (for_export=True, ham değerler) aynen korunur.
-        class_breaks_requested = bool(data.get('classBreaks'))
-        final_display, roi, result, vis = build_result_image(
-            data, for_export=not class_breaks_requested
-        )
+        # 🛠️ BUG FİX (istenen davranış): "Lejantı Uygula" ile sınıflandırma
+        # yapılmış olsa bile — NDVI, DEM, Eğim (Slope) vb. hiçbir analizde —
+        # indirilen GeoTIFF ASLA sınıf ID'lerine (1,2,3...) göre değil, her
+        # zaman haritadaki renk çubuğunun (color bar) dayandığı HAM/sürekli
+        # değerlere göre üretilir. for_export=True, build_result_image()
+        # içindeki classBreaks/build_classified_image() adımını komple
+        # atlatır — bkz. build_result_image() docstring'i.
+        final_display, roi, result, vis = build_result_image(data, for_export=True)
 
         # ── 🌈 Sentinel-2 doğal renk parlaklık düzeltmesi ────────────
         # SORUN: Sentinel-2 RGB (B4-B3-B2) GeoTIFF'leri şu ana kadar ham
@@ -2118,79 +2090,6 @@ def download_geotiff():
             nodata_value=nodata_value, aoi_geom_4326=aoi_geom_4326,
             fallback_region_geom=roi.bounds(maxError=100)
         )
-
-        # 🎨 Renk tablosunu göm — şu iki durumdan HERHANGİ biri geçerliyse:
-        #   1) Arazi Kullanımı (LULC) ailesi — her zaman kendi sabit paleti.
-        #   2) Kullanıcı "Lejantı Uygula" ile manuel sınıflandırma yaptıysa
-        #      (classBreaks) — final_display zaten 1..N sınıf ID'lerinden
-        #      oluşur ve vis['palette'] kullanıcının seçtiği renkleri içerir.
-        # Her iki durumda da final_display tam sayı sınıf kodlarından oluşur;
-        # bu yüzden AYNI gömme fonksiyonu (_stamp_classified_colormap)
-        # güvenle kullanılabilir — bkz. fonksiyonun docstring'i.
-        is_lulc = data.get('index') in LULC_COLORMAP_INDICES
-        if is_lulc or class_breaks_requested:
-            tif_bytes = _stamp_classified_colormap(tif_bytes, vis, nodata_value=nodata_value)
-
-        # ── 🗜️ LULC: TIFF + QGIS .qml + ArcMap .clr → ZIP olarak teslim ──
-        # NEDEN ZIP?
-        # (1) QGIS .qml: QGIS, .tif ile AYNI klasörde aynı temel adda .qml
-        #     bulduğunda bunu OTOMATİK yükler. Sınıf renkleri VE isimleri
-        #     lejanda anında yansır; kullanıcının el ile renklendirme
-        #     yapmasına hiç gerek kalmaz.
-        # (2) .clr: ArcMap ve QGIS'in her iki sürümünde de tanınan basit
-        #     metin renk dosyasıdır. Hem rengi hem sınıf adını içerir.
-        # (3) GDAL renk tablosu (write_colormap) yalnızca RGBA saklar —
-        #     sınıf ADLARI standart GeoTIFF formatında desteklenmez. Ayrı
-        #     stil dosyaları bu eksiği kapatır.
-        # Diğer indeksler (NDVI, NDWI, TOPO vb.) değişmeden .tif döner.
-        if is_lulc:
-            index_key = data.get('index')
-            labels = LULC_CLASS_LABELS.get(index_key, {})
-            qml_bytes     = _generate_lulc_qml_bytes(index_key, vis, class_labels=labels)
-            clr_bytes     = _generate_lulc_clr_bytes(index_key, vis, class_labels=labels)
-            aux_xml_bytes = _generate_lulc_aux_xml_bytes(index_key, vis, class_labels=labels)
-
-            zip_buf = io.BytesIO()
-            with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-                zf.writestr('{}.tif'.format(safe_name), tif_bytes)
-                zf.writestr('{}.qml'.format(safe_name), qml_bytes)
-                zf.writestr('{}.clr'.format(safe_name), clr_bytes)
-                # ArcMap bu dosyayı .tif ile aynı klasörde bulduğunda
-                # sınıf adları + renklerini OTOMATİK olarak okur.
-                # Dosya adı mutlaka "{isim}.tif.aux.xml" olmalıdır.
-                zf.writestr('{}.tif.aux.xml'.format(safe_name), aux_xml_bytes)
-                # Kullanıcıya rehberlik için kısa bir README
-                readme = (
-                    'SylvaGIS — Arazi Kullanımı Dışa Aktarma\n'
-                    '==========================================\n\n'
-                    'Bu ZIP dosyası şu dosyaları içerir:\n\n'
-                    '  {name}.tif          — GeoTIFF raster (renk tablosu gömülü)\n'
-                    '  {name}.tif.aux.xml  — GDAL yardımcı meta veri (ArcMap için)\n'
-                    '  {name}.qml          — QGIS stili (sınıf renkleri + isimleri)\n'
-                    '  {name}.clr          — ESRI renk dosyası (ek referans)\n\n'
-                    'TÜM DOSYALARI AYNI KLASÖRE ÇIKARIN.\n\n'
-                    'QGIS Kullanımı:\n'
-                    '  .tif dosyasını QGIS\'e sürükleyin. .qml dosyası aynı\n'
-                    '  klasörde olduğu için sınıf renkleri ve isimleri\n'
-                    '  lejanda OTOMATİK olarak yüklenir.\n\n'
-                    'ArcMap Kullanımı:\n'
-                    '  1. ZIP\'i çıkarın — TÜM dosyalar aynı klasörde olsun.\n'
-                    '  2. .tif dosyasını ArcMap\'e ekleyin.\n'
-                    '  3. .tif.aux.xml dosyası sayesinde ArcMap sınıf adlarını\n'
-                    '     ve renklerini OTOMATİK olarak tanır ve uygular.\n'
-                    '     (Katman özellikleri → Semboloji → Unique Values)\n\n'
-                    'ArcGIS Pro Kullanımı:\n'
-                    '  1. ZIP\'i çıkarın — TÜM dosyalar aynı klasörde olsun.\n'
-                    '  2. .tif dosyasını ArcGIS Pro\'ya ekleyin.\n'
-                    '  3. Symbology → Unique Values ile sınıf adları otomatik gelir.\n'
-                ).format(name=safe_name)
-                zf.writestr('OKUYUN.txt', readme.encode('utf-8'))
-
-            zip_bytes = zip_buf.getvalue()
-            resp = Response(zip_bytes, mimetype='application/zip')
-            resp.headers['Content-Disposition'] = 'attachment; filename="{}_LandUse.zip"'.format(safe_name)
-            resp.headers['Content-Length'] = str(len(zip_bytes))
-            return resp
 
         resp = Response(tif_bytes, mimetype='image/tiff')
         resp.headers['Content-Disposition'] = 'attachment; filename="{}.tif"'.format(safe_name)
@@ -2439,412 +2338,6 @@ def _stamp_exact_band_statistics(tif_bytes, nodata_value=None):
                 out_memfile.close()
     except Exception as stat_err:
         print('[SylvaGIS] ⚠️ Band istatistiği gömülemedi (dosya yine de gönderiliyor):', stat_err)
-        return tif_bytes
-
-
-# 🏘️ Arazi Kullanımı (LULC) indirmelerinde renk tablosu gömülecek indeksler.
-# NOT: LULC_FAMILY_INDICES içindeki TOPO/SAR grubu buna dahil DEĞİLDİR —
-# onlar sürekli (continuous) değerler taşır, sınıflandırılmış kategori
-# değil; bu yüzden onlara renk tablosu uygulanmaz.
-LULC_COLORMAP_INDICES = ('LULC', 'LULC_ESA', 'LULC_MODIS', 'LULC_CORINE')
-
-# ════════════════════════════════════════════════════════════════
-# 🏷️ ARAZI KULLANIMI SINIF ETİKETLERİ
-# Her LULC indeksi için {sıra_no (1-tabanlı): 'Sınıf Adı'} eşlemesi.
-# Bu etiketler hem QGIS .qml stili hem de ArcMap .clr dosyasına yazılır;
-# böylece dosya açıldığında lejant sınıf numaraları yerine sınıf adlarını gösterir.
-# ════════════════════════════════════════════════════════════════
-LULC_CLASS_LABELS = {
-    # Google Dynamic World V1 — 9 sınıf (orijinal indeks 0-8, dosyada 1-9)
-    'LULC': {
-        1: 'Su',
-        2: 'Ağaçlar',
-        3: 'Çayır / Otlak',
-        4: 'Sular Altı Bitki',
-        5: 'Tarım Alanı',
-        6: 'Çalılık / Fırçalık',
-        7: 'Yapay / Kentsel Alan',
-        8: 'Çıplak Toprak',
-        9: 'Kar ve Buz',
-    },
-    # ESA WorldCover v200 — 11 sınıf (orijinal kodlar 10-100, dosyada 1-11)
-    'LULC_ESA': {
-        1:  'Ağaç Örtüsü',
-        2:  'Çalılık',
-        3:  'Çayırlık',
-        4:  'Tarım Alanı',
-        5:  'Yapay / Kentsel Alan',
-        6:  'Seyrek / Çıplak Alan',
-        7:  'Kar ve Buz',
-        8:  'Kalıcı Su Kütlesi',
-        9:  'Sulak Alan (Otsu)',
-        10: 'Mangrov',
-        11: 'Yosun ve Liken',
-    },
-    # MODIS MCD12Q1 IGBP — 17 sınıf (orijinal 1-17, dosyada 1-17)
-    'LULC_MODIS': {
-        1:  'Herdemyeşil İbreli Orman',
-        2:  'Herdemyeşil Geniş Yapraklı Orman',
-        3:  'Yaprak Döken İbreli Orman',
-        4:  'Yaprak Döken Geniş Yapraklı Orman',
-        5:  'Karışık Ormanlar',
-        6:  'Kapalı Çalılık',
-        7:  'Açık Çalılık',
-        8:  'Odunlu Savana',
-        9:  'Savana',
-        10: 'Çayır / Otlak',
-        11: 'Kalıcı Sulak Alan',
-        12: 'Tarım Alanı',
-        13: 'Kentsel / Yapay Alan',
-        14: 'Tarım-Doğal Mozaik',
-        15: 'Kar ve Buz',
-        16: 'Çıplak Toprak / Seyrek Örtü',
-        17: 'Su Kütlesi',
-    },
-    # CORINE Land Cover 2018 — 44 sınıf (orijinal 3-basamaklı kodlar, dosyada 1-44)
-    'LULC_CORINE': {
-        1:  'Sürekli Kentsel Doku',
-        2:  'Süreksiz Kentsel Doku',
-        3:  'Endüstriyel ve Ticari Birimler',
-        4:  'Yol ve Demiryolu Ağları',
-        5:  'Liman Alanları',
-        6:  'Hava Alanları',
-        7:  'Maden Ocakları',
-        8:  'Döküm Sahaları',
-        9:  'Şantiye Alanları',
-        10: 'Kentsel Yeşil Alanlar',
-        11: 'Spor ve Eğlence Tesisleri',
-        12: 'Kuru Tarım Alanları',
-        13: 'Kalıcı Sulanan Araziler',
-        14: 'Pirinç Tarlaları',
-        15: 'Bağlar',
-        16: 'Meyve Bahçeleri',
-        17: 'Zeytin Bahçeleri',
-        18: 'Çayır ve Meralar',
-        19: 'Yıllık Bitkilerle Karışık Tarım',
-        20: 'Karmaşık Tarım Arazileri',
-        21: 'Tarım-Doğa Mozaiği',
-        22: 'Tarım-Ormanlık Alanlar',
-        23: 'Geniş Yapraklı Orman',
-        24: 'İbreli Orman',
-        25: 'Karışık Orman',
-        26: 'Doğal Çayırlar',
-        27: 'Turbalık / Bataklık Otlak',
-        28: 'Skarlar ve Bitkisiz Kaya Yüzeyleri',
-        29: 'Geçiş Orman-Çalılık Alanları',
-        30: 'Sahil Kumları',
-        31: 'Kaya Yüzeyleri',
-        32: 'Seyrek Bitki Örtüsü',
-        33: 'Yanmış Alanlar',
-        34: 'Buzullar ve Kalıcı Kar',
-        35: 'İç Su Bataklıkları',
-        36: 'Turbalıklar',
-        37: 'Tuzlalar',
-        38: 'Tuzlu Bataklıklar',
-        39: 'Kıyı Bataklıkları',
-        40: 'Akarsu Yatakları',
-        41: 'Su Kütleleri',
-        42: 'Kıyı Lagünleri',
-        43: 'Haliçler',
-        44: 'Deniz ve Okyanus',
-    },
-}
-
-
-def _hex_to_rgba(h):
-    """Hex renk kodunu (3 veya 6 hane, # opsiyonel) RGBA demetine çevirir."""
-    h = str(h).lstrip('#')
-    if len(h) == 3:
-        h = ''.join(ch * 2 for ch in h)
-    r = int(h[0:2], 16)
-    g = int(h[2:4], 16)
-    b = int(h[4:6], 16)
-    return (r, g, b, 255)
-
-
-def _generate_lulc_qml_bytes(index, vis, class_labels=None):
-    """
-    Verilen LULC indeksi için QGIS .qml stil dosyası içeriğini üretir.
-
-    QGIS, bir .tif dosyasıyla AYNI klasörde aynı temel ada sahip bir .qml
-    dosyası bulduğunda bunu OTOMATİK olarak yükler. Böylece kullanıcı
-    dosyayı açar açmaz ekrandaki sınıflandırma ve renkler (sınıf isimleriyle
-    birlikte) lejanta yansır; el ile stil tanımlaması gerekmez.
-
-    Desteklenen format: QGIS 3.x paletted raster renderer stili.
-    """
-    palette = vis.get('palette') or []
-    vmin = int(vis.get('min', 0))
-
-    if class_labels is None:
-        class_labels = {}
-
-    entries = []
-    for i, color in enumerate(palette):
-        val = vmin + i          # orijinal piksel değeri (ör. 0-8 Dynamic World)
-        stored_val = i + 1      # dosyada saklanan değer (1-tabanlı, 0=NoData)
-        label = class_labels.get(stored_val) or class_labels.get(val) or str(stored_val)
-        rgba = _hex_to_rgba(color)
-        hex_color = '#{:02x}{:02x}{:02x}'.format(rgba[0], rgba[1], rgba[2])
-        entries.append(
-            '        <paletteEntry value="{v}" color="{c}" label="{lbl}" alpha="255"/>'.format(
-                v=stored_val, c=hex_color, lbl=label
-            )
-        )
-
-    entries_xml = '\n'.join(entries)
-    qml = (
-        '<!DOCTYPE qgis PUBLIC \'http://mrcc.com/qgis.dtd\' \'SYSTEM\'>\n'
-        '<qgis version="3.16" styleCategories="AllStyleCategories">\n'
-        '  <flags>\n'
-        '    <Identifiable>1</Identifiable>\n'
-        '    <Removable>1</Removable>\n'
-        '    <Searchable>1</Searchable>\n'
-        '  </flags>\n'
-        '  <pipe>\n'
-        '    <provider>\n'
-        '      <resampling enabled="false" maxOversampling="2" '
-        'zoomedOutResamplingMethod="nearestNeighbour" '
-        'zoomedInResamplingMethod="nearestNeighbour"/>\n'
-        '    </provider>\n'
-        '    <rasterrenderer type="paletted" opacity="1" alphaBand="-1" band="1" '
-        'nodataColor="">\n'
-        '      <rasterTransparency/>\n'
-        '      <minMaxOrigin>\n'
-        '        <limits>None</limits>\n'
-        '        <extent>WholeRaster</extent>\n'
-        '        <statAccuracy>Estimated</statAccuracy>\n'
-        '        <cumulativeCutLower>0.02</cumulativeCutLower>\n'
-        '        <cumulativeCutUpper>0.98</cumulativeCutUpper>\n'
-        '        <stdDevFactor>2</stdDevFactor>\n'
-        '      </minMaxOrigin>\n'
-        '      <colorPalette>\n'
-        '{entries}\n'
-        '      </colorPalette>\n'
-        '      <colorramp type="randomcolors" name="[source]"/>\n'
-        '    </rasterrenderer>\n'
-        '    <brightnesscontrast brightness="0" contrast="0" gamma="1"/>\n'
-        '    <huesaturation colorizeGreen="128" colorizeBlue="128" '
-        'colorizeRed="255" colorizeOn="0" colorizeStrength="100" '
-        'grayscaleMode="0" saturation="0"/>\n'
-        '    <rasterresampler maxOversampling="2"/>\n'
-        '    <resamplingStage>resampleFirst</resamplingStage>\n'
-        '  </pipe>\n'
-        '  <blendMode>0</blendMode>\n'
-        '</qgis>\n'
-    ).format(entries=entries_xml)
-    return qml.encode('utf-8')
-
-
-def _generate_lulc_clr_bytes(index, vis, class_labels=None):
-    """
-    Verilen LULC indeksi için ESRI uyumlu .clr renk dosyası içeriğini üretir.
-
-    Format:  <değer> <R> <G> <B> <sınıf_adı>
-    ArcMap bu dosyayı ilişkili GeoTIFF ile aynı klasörde aynı temel adla
-    bulduğunda otomatik uygular. QGIS de bu formatı destekler.
-    0 (NoData) satırı şeffaf olarak eklenir.
-    """
-    palette = vis.get('palette') or []
-    vmin = int(vis.get('min', 0))
-
-    if class_labels is None:
-        class_labels = {}
-
-    lines = ['0 0 0 0 NoData']
-    for i, color in enumerate(palette):
-        stored_val = i + 1
-        val = vmin + i
-        label = class_labels.get(stored_val) or class_labels.get(val) or str(stored_val)
-        rgba = _hex_to_rgba(color)
-        lines.append('{v} {r} {g} {b} {lbl}'.format(
-            v=stored_val, r=rgba[0], g=rgba[1], b=rgba[2], lbl=label
-        ))
-    return '\n'.join(lines).encode('utf-8')
-
-
-def _generate_lulc_aux_xml_bytes(index, vis, class_labels=None):
-    """
-    GDAL PAM (Persistent Auxiliary Metadata) .aux.xml dosyası üretir.
-
-    ArcMap ve QGIS, bir GeoTIFF ile AYNI klasörde "{isim}.tif.aux.xml"
-    dosyası bulduğunda bunu OTOMATİK olarak okur. Bu dosya içinde:
-      - ColorTable   : GDAL renk tablosu (palette modu için renk bilgisi)
-      - GDALRasterAttributeTable : Sınıf değerleri + adları + RGBA sütunları
-
-    ArcMap bu RAT sayesinde "Classified" / "Unique Values" sembolojisini
-    sınıf ADLARI ve doğru renklerle otomatik gösterir; kullanıcının
-    Semboloji sekmesinde hiçbir şey yapmasına gerek kalmaz.
-
-    GDAL alan tip (Type) kodları:  0=Integer, 1=Real, 2=String
-    GDAL alan kullanım (Usage) kodları:
-        0=Generic, 1=PixelCount, 2=Name, 3=Min, 4=Max, 5=MinMax,
-        6=Red, 7=Green, 8=Blue, 9=Alpha
-    """
-    palette = vis.get('palette') or []
-    vmin = int(vis.get('min', 0))
-
-    if class_labels is None:
-        class_labels = {}
-
-    # ── ColorTable (0 → şeffaf NoData dahil) ────────────────────────────
-    color_entries = ['    <Entry c1="0" c2="0" c3="0" c4="0"/>']   # 0 = NoData
-    for i, color in enumerate(palette):
-        rgba = _hex_to_rgba(color)
-        color_entries.append(
-            '    <Entry c1="{r}" c2="{g}" c3="{b}" c4="{a}"/>'.format(
-                r=rgba[0], g=rgba[1], b=rgba[2], a=rgba[3]
-            )
-        )
-
-    # ── Raster Attribute Table (RAT) satırları ───────────────────────────
-    rat_rows = []
-    for i, color in enumerate(palette):
-        stored_val = i + 1
-        val = vmin + i
-        label = class_labels.get(stored_val) or class_labels.get(val) or str(stored_val)
-        # XML özel karakterlerini kaçır
-        label = label.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
-        rgba = _hex_to_rgba(color)
-        rat_rows.append(
-            '      <Row index="{idx}">'
-            '<F>{v}</F><F>{lbl}</F><F>{r}</F><F>{g}</F><F>{b}</F><F>{a}</F>'
-            '</Row>'.format(
-                idx=i, v=stored_val, lbl=label,
-                r=rgba[0], g=rgba[1], b=rgba[2], a=rgba[3]
-            )
-        )
-
-    xml = (
-        '<PAMDataset>\n'
-        '  <PAMRasterBand band="1">\n'
-        '    <ColorInterp>Palette</ColorInterp>\n'
-        '    <ColorTable>\n'
-        '{color_table}\n'
-        '    </ColorTable>\n'
-        '    <GDALRasterAttributeTable tableType="thematic">\n'
-        '      <FieldDefn index="0">\n'
-        '        <Name>VALUE</Name>\n'
-        '        <Type>0</Type>\n'
-        '        <Usage>5</Usage>\n'
-        '      </FieldDefn>\n'
-        '      <FieldDefn index="1">\n'
-        '        <Name>CLASS_NAME</Name>\n'
-        '        <Type>2</Type>\n'
-        '        <Usage>2</Usage>\n'
-        '      </FieldDefn>\n'
-        '      <FieldDefn index="2">\n'
-        '        <Name>Red</Name>\n'
-        '        <Type>0</Type>\n'
-        '        <Usage>6</Usage>\n'
-        '      </FieldDefn>\n'
-        '      <FieldDefn index="3">\n'
-        '        <Name>Green</Name>\n'
-        '        <Type>0</Type>\n'
-        '        <Usage>7</Usage>\n'
-        '      </FieldDefn>\n'
-        '      <FieldDefn index="4">\n'
-        '        <Name>Blue</Name>\n'
-        '        <Type>0</Type>\n'
-        '        <Usage>8</Usage>\n'
-        '      </FieldDefn>\n'
-        '      <FieldDefn index="5">\n'
-        '        <Name>Alpha</Name>\n'
-        '        <Type>0</Type>\n'
-        '        <Usage>9</Usage>\n'
-        '      </FieldDefn>\n'
-        '{rat_rows}\n'
-        '    </GDALRasterAttributeTable>\n'
-        '  </PAMRasterBand>\n'
-        '</PAMDataset>\n'
-    ).format(
-        color_table='\n'.join(color_entries),
-        rat_rows='\n'.join(rat_rows),
-    )
-    return xml.encode('utf-8')
-
-
-def _stamp_classified_colormap(tif_bytes, vis, nodata_value=None):
-    """
-    🎨 LULC/sınıflandırılmış raster GeoTIFF'e GDAL renk tablosu (PHOTOMETRIC=PALETTE)
-    gömer.
-
-    Piksel değerleri 1..N olarak yeniden yazılır (0 = NoData). Renk tablosu
-    GeoTIFF'in içine gömülür; QGIS ve ArcMap dosyayı açar açmaz bu tabloyu
-    otomatik okur ve renkli gösterir.
-
-    ÖNEMLİ DÜZELTME: Orijinal GEE profilinden gelen compress, tiled,
-    blockxsize, blockysize, interleave ve predictor gibi tüm çelişen
-    ayarlar temizlenir. Sadece PALETTE tipine uyumlu LZW sıkıştırma
-    kullanılır. Bu temizlik yapılmadığında bazı QGIS/ArcMap sürümleri
-    PHOTOMETRIC=PALETTE etiketini görmezden gelerek dosyayı gri tonlamalı
-    (Singleband Gray) olarak açıyordu.
-
-    Herhangi bir nedenle başarısız olursa orijinal bayt içeriği
-    değiştirilmeden döndürülür — indirme ASLA kesintiye uğramaz.
-    """
-    try:
-        import numpy as np
-        import rasterio
-        from rasterio.io import MemoryFile
-    except ImportError:
-        return tif_bytes
-
-    try:
-        palette = vis.get('palette') or []
-        if not palette:
-            return tif_bytes
-        vmin = float(vis.get('min', 0))
-
-        with MemoryFile(tif_bytes) as memfile:
-            with memfile.open() as src:
-                arr = src.read(1).astype('float64')
-                src_nodata = src.nodata if src.nodata is not None else nodata_value
-                crs       = src.crs
-                transform = src.transform
-
-        if src_nodata is not None:
-            valid_mask = ~np.isclose(arr, float(src_nodata))
-        else:
-            valid_mask = np.isfinite(arr)
-
-        # Sınıf kodu = (orijinal değer - vmin)  →  0-tabanlı palet indeksi.
-        class_idx0 = np.rint(arr - vmin).astype('int64')
-        valid_mask = valid_mask & (class_idx0 >= 0) & (class_idx0 < len(palette))
-
-        out = np.zeros(arr.shape, dtype='uint8')
-        out[valid_mask] = (class_idx0[valid_mask] + 1).astype('uint8')
-
-        # Yeni profil — SADECE PALETTE TİPİYLE UYUMLU ayarlar.
-        # Orijinal profildeki compress/tiled/blockxsize/blockysize/interleave/
-        # predictor gibi tüm ayarlar kasıtlı olarak ATILIR; çakışma olmasın.
-        new_profile = {
-            'driver':      'GTiff',
-            'dtype':       'uint8',
-            'count':       1,
-            'width':       arr.shape[1],
-            'height':      arr.shape[0],
-            'crs':         crs,
-            'transform':   transform,
-            'nodata':      0,
-            'photometric': 'palette',
-            'compress':    'lzw',   # LZW, PALETTE tipiyle evrensel uyumlu
-        }
-
-        colormap = {0: (0, 0, 0, 0)}
-        for i, color in enumerate(palette, start=1):
-            colormap[i] = _hex_to_rgba(color)
-
-        out_memfile = MemoryFile()
-        with out_memfile.open(**new_profile) as dst:
-            dst.write(out, 1)
-            dst.write_colormap(1, colormap)
-        try:
-            return out_memfile.read()
-        finally:
-            out_memfile.close()
-    except Exception as cmap_err:
-        print('[SylvaGIS] ⚠️ LULC renk tablosu gömülemedi (dosya yine de gönderiliyor):', cmap_err)
         return tif_bytes
 
 
@@ -3452,7 +2945,7 @@ SYLVA_OWNER_EMAIL = 'sylvagis.world@gmail.com'
 
 def _send_registration_email(ad, soyad, email, meslek, ulke):
     smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'aaaaaaaaaaaaaaaa'
+    smtp_pass = 'ksfnkvwcutrawcih'
 
     msg = MIMEMultipart('alternative')
     msg['Subject'] = f'[SylvaGIS] Yeni Kayıt — {ad} {soyad}'
