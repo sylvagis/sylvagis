@@ -146,6 +146,199 @@ LULC_FAMILY_INDICES = (
 )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# LULC Semboloji Veritabanı
+# Her LULC indeksi için piksel değeri → (hex_renk, Türkçe etiket, İngilizce etiket)
+# Bu veriler GeoTIFF'e ColorTable + Raster Attribute Table (RAT) olarak gömülür;
+# ArcMap/QGIS açıldığında otomatik renklendirilmiş ve etiketli görünür.
+# ─────────────────────────────────────────────────────────────────────────────
+_LULC_SYMBOLOGY = {
+    # Google Dynamic World V1 — 9 sınıf, değer aralığı 0-8
+    'LULC': {
+        0: ('#419bdf', 'Su',             'Water'),
+        1: ('#397d49', 'Ağaç',           'Trees'),
+        2: ('#88b053', 'Çayır',          'Grass'),
+        3: ('#7a87c6', 'Sazlık/Sulak',   'Flooded Vegetation'),
+        4: ('#e49635', 'Tarım',          'Crops'),
+        5: ('#dfc35a', 'Çalı-Maki',      'Shrub & Scrub'),
+        6: ('#c4281b', 'Yapay',          'Built Area'),
+        7: ('#a59b8f', 'Çıplak Toprak',  'Bare Ground'),
+        8: ('#b39fe1', 'Kar/Buz',        'Snow & Ice'),
+    },
+    # ESA WorldCover v200 — 11 sınıf, remapped 1-11
+    'LULC_ESA': {
+        1:  ('#006400', 'Ağaç Örtüsü',    'Tree Cover'),
+        2:  ('#ffbb22', 'Çalılık',        'Shrubland'),
+        3:  ('#ffff4c', 'Çayır',          'Grassland'),
+        4:  ('#f096ff', 'Tarım',          'Cropland'),
+        5:  ('#fa0000', 'Yapay',          'Built-up'),
+        6:  ('#b4b4b4', 'Seyrek Örtü',    'Bare/Sparse Vegetation'),
+        7:  ('#f0f0f0', 'Kar/Buz',        'Snow and Ice'),
+        8:  ('#0064c8', 'Su',             'Permanent Water'),
+        9:  ('#0096a0', 'Bataklık',       'Herbaceous Wetland'),
+        10: ('#00cf75', 'Mangrov',         'Mangroves'),
+        11: ('#fae6a0', 'Yosun/Liken',    'Moss and Lichen'),
+    },
+    # MODIS MCD12Q1 IGBP — 17 sınıf, remapped 1-17
+    'LULC_MODIS': {
+        1:  ('#05450a', 'Herdemyeşil İbreli Orman',     'Evergreen Needleleaf Forest'),
+        2:  ('#086a10', 'Herdemyeşil Geniş Yapraklı',   'Evergreen Broadleaf Forest'),
+        3:  ('#54a708', 'Yaprak Döken İbreli',           'Deciduous Needleleaf Forest'),
+        4:  ('#78d203', 'Yaprak Döken Geniş Yapraklı',  'Deciduous Broadleaf Forest'),
+        5:  ('#009900', 'Karışık Orman',                 'Mixed Forests'),
+        6:  ('#c6b044', 'Kapalı Çalılık',               'Closed Shrublands'),
+        7:  ('#dcd159', 'Açık Çalılık',                 'Open Shrublands'),
+        8:  ('#dade48', 'Odunlu Savana',                 'Woody Savannas'),
+        9:  ('#fbff13', 'Savana',                        'Savannas'),
+        10: ('#b6ff05', 'Çayır/Otlak',                  'Grasslands'),
+        11: ('#27ff87', 'Sulak Alan',                    'Permanent Wetlands'),
+        12: ('#c24f44', 'Tarım',                         'Croplands'),
+        13: ('#a5a5a5', 'Kentsel/Yapay',                 'Urban and Built-up'),
+        14: ('#ff6d4c', 'Tarım-Doğal Mozaik',            'Cropland/Natural Veg. Mosaic'),
+        15: ('#69fff8', 'Kar/Buz',                       'Snow and Ice'),
+        16: ('#f9ffa4', 'Çıplak/Seyrek',                'Barren'),
+        17: ('#1c0dff', 'Su',                            'Water Bodies'),
+    },
+    # CORINE Land Cover 2018 — 44 sınıf, remapped 1-44
+    'LULC_CORINE': {
+        1:  ('#e6004d', 'Sürekli Kentsel Doku',          'Continuous Urban Fabric'),
+        2:  ('#ff0000', 'Süreksiz Kentsel Doku',         'Discontinuous Urban Fabric'),
+        3:  ('#cc4df2', 'Endüstriyel/Ticari Alan',       'Industrial or Commercial Units'),
+        4:  ('#cc0000', 'Karayolu/Demiryolu',            'Road and Rail Networks'),
+        5:  ('#e6cccc', 'Liman',                         'Port Areas'),
+        6:  ('#e6cce6', 'Havalimanı',                    'Airports'),
+        7:  ('#a600cc', 'Maden/İnşaat Sahası',           'Mineral Extraction Sites'),
+        8:  ('#a64d00', 'Çöp/Döküm Sahası',              'Dump Sites'),
+        9:  ('#ff4dff', 'İnşaat Sahası',                 'Construction Sites'),
+        10: ('#ffa6ff', 'Kent Yeşil Alanı',              'Green Urban Areas'),
+        11: ('#ffe6ff', 'Spor/Dinlence Tesisi',          'Sport and Leisure Facilities'),
+        12: ('#ffffa8', 'Tarla Bitkileri',               'Non-irrigated Arable Land'),
+        13: ('#ffff00', 'Kalıcı Sulanan Arazi',          'Permanently Irrigated Land'),
+        14: ('#e6e600', 'Çeltik Tarlaları',              'Rice Fields'),
+        15: ('#e68000', 'Bağ',                           'Vineyards'),
+        16: ('#f2a64d', 'Meyve Bahçesi',                 'Fruit Trees and Berry Plantations'),
+        17: ('#e6a600', 'Zeytin Bahçesi',                'Olive Groves'),
+        18: ('#e6e64d', 'Çayır/Mera',                   'Pastures'),
+        19: ('#ffe6a6', 'Tarım-Doğal Mozaik',            'Annual Crops with Permanent Crops'),
+        20: ('#ffe64d', 'Karmaşık Tarım',                'Complex Cultivation Patterns'),
+        21: ('#e6cc4d', 'Tarım+Doğal Alan',              'Land principally occupied by agriculture'),
+        22: ('#f2cca6', 'Tarım-Ormanlık',               'Agro-forestry Areas'),
+        23: ('#80ff00', 'Geniş Yapraklı Orman',          'Broad-leaved Forest'),
+        24: ('#00a600', 'İbreli Orman',                  'Coniferous Forest'),
+        25: ('#4dff00', 'Karışık Orman',                 'Mixed Forest'),
+        26: ('#ccf24d', 'Doğal Çayır',                  'Natural Grasslands'),
+        27: ('#a6ff80', 'Fundalık',                      'Moors and Heathland'),
+        28: ('#a6e64d', 'Sklerofil Bitki',               'Sclerophyllous Vegetation'),
+        29: ('#a6f200', 'Geçici Orman-Çalı',             'Transitional Woodland-Shrub'),
+        30: ('#e6e6e6', 'Plaj/Kum/Kumul',               'Beaches, Dunes, Sands'),
+        31: ('#cccccc', 'Çıplak Kayalık',               'Bare Rocks'),
+        32: ('#ccffcc', 'Seyrek Bitki',                  'Sparsely Vegetated Areas'),
+        33: ('#000000', 'Yanmış Alan',                   'Burnt Areas'),
+        34: ('#a6e6cc', 'Buzul/Kar',                     'Glaciers and Perpetual Snow'),
+        35: ('#a6a6ff', 'İç Bataklık',                   'Inland Marshes'),
+        36: ('#4d4dff', 'Turbalık',                      'Peat Bogs'),
+        37: ('#ccccff', 'Deniz Kıyısı Bataklığı',        'Salt Marshes'),
+        38: ('#e6e6ff', 'Tuzluk',                        'Salines'),
+        39: ('#a6a6e6', 'Kıyı Lagünü',                   'Intertidal Flats'),
+        40: ('#00ccf2', 'Su Koridoru',                   'Water Courses'),
+        41: ('#80f2e6', 'Göl',                           'Water Bodies'),
+        42: ('#00ffa6', 'Kıyı Lagünü',                   'Coastal Lagoons'),
+        43: ('#a6ffe6', 'Haliç',                         'Estuaries'),
+        44: ('#e6f2ff', 'Deniz/Okyanus',                 'Sea and Ocean'),
+    },
+}
+
+
+def _hex_to_rgb(hex_color):
+    """'#RRGGBB' veya 'RRGGBB' hex rengi → (R, G, B) int tuple'a çevirir."""
+    h = hex_color.lstrip('#')
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def _inject_lulc_symbology(tif_bytes, index):
+    """
+    LULC GeoTIFF baytlarına ColorTable ve Raster Attribute Table (RAT) gömer.
+
+    ColorTable (rasterio): ArcMap/QGIS'te otomatik 'Unique Values' renk sembolojisi.
+    RAT (GDAL):            'Value', 'Class_TR', 'Class_EN' sütunları; ArcMap
+                           Label alanı buradan üretilir (sayı yerine sınıf adı).
+
+    Her iki adım da try/except içinde; kütüphane eksikse ham bytes döner.
+    """
+    symb = _LULC_SYMBOLOGY.get(index)
+    if not symb:
+        return tif_bytes
+
+    # ── Adım 1: ColorTable (rasterio) ────────────────────────────────────────
+    try:
+        import rasterio
+        from rasterio.io import MemoryFile
+
+        colormap = {val: (*_hex_to_rgb(hx), 255) for val, (hx, _tr, _en) in symb.items()}
+
+        with MemoryFile(tif_bytes) as mf:
+            with mf.open() as src:
+                meta = src.meta.copy()
+                meta.update({'dtype': 'uint8', 'driver': 'GTiff'})
+                raw = src.read().astype('uint8')
+
+            with MemoryFile() as out_mf:
+                with out_mf.open(**meta) as dst:
+                    dst.write(raw)
+                    try:
+                        dst.write_colormap(1, colormap)
+                    except Exception:
+                        pass  # colormap yazılamazsa devam et
+                tif_bytes = out_mf.read()
+    except Exception:
+        pass  # rasterio yoksa orijinal bytes ile devam
+
+    # ── Adım 2: RAT (GDAL Python bindings) ───────────────────────────────────
+    try:
+        from osgeo import gdal
+        import tempfile
+        import os as _os
+
+        with tempfile.NamedTemporaryFile(suffix='.tif', delete=False) as tmp:
+            tmp.write(tif_bytes)
+            tmp_path = tmp.name
+
+        ds = gdal.Open(tmp_path, gdal.GA_Update)
+        if ds is not None:
+            band = ds.GetRasterBand(1)
+
+            rat = gdal.RasterAttributeTable()
+            rat.CreateColumn('Value',    gdal.GFT_Integer, gdal.GFU_MinMax)
+            rat.CreateColumn('Class_TR', gdal.GFT_String,  gdal.GFU_Name)
+            rat.CreateColumn('Class_EN', gdal.GFT_String,  gdal.GFU_Generic)
+            rat.CreateColumn('Red',      gdal.GFT_Integer, gdal.GFU_Red)
+            rat.CreateColumn('Green',    gdal.GFT_Integer, gdal.GFU_Green)
+            rat.CreateColumn('Blue',     gdal.GFT_Integer, gdal.GFU_Blue)
+
+            for row_i, (val, (hx, label_tr, label_en)) in enumerate(sorted(symb.items())):
+                r, g, b = _hex_to_rgb(hx)
+                rat.SetValueAsInt(row_i, 0, val)
+                rat.SetValueAsString(row_i, 1, label_tr)
+                rat.SetValueAsString(row_i, 2, label_en)
+                rat.SetValueAsInt(row_i, 3, r)
+                rat.SetValueAsInt(row_i, 4, g)
+                rat.SetValueAsInt(row_i, 5, b)
+
+            band.SetDefaultRAT(rat)
+            band.SetDescription('Land_Use_Class')
+            ds.FlushCache()
+            ds = None  # dataset'i kapat
+
+            with open(tmp_path, 'rb') as f:
+                tif_bytes = f.read()
+
+        _os.unlink(tmp_path)
+    except Exception:
+        pass  # GDAL yoksa ColorTable ile yetinilir
+
+    return tif_bytes
+
+
 @app.route('/api/ping', methods=['GET'])
 def ping():
     return jsonify({'ok': True, 'version': 'zip-export-v2-tiling'})
@@ -2246,6 +2439,15 @@ def download_geotiff():
             fallback_region_geom=roi.bounds(maxError=100)
         )
 
+        # ── LULC: ColorTable + RAT (sınıf renkleri ve etiketleri) ─────────
+        # Arazi kullanım sınıflandırması indirildiyse GeoTIFF'e renk paleti
+        # (ColorTable) ve sınıf isimlerini içeren Raster Attribute Table (RAT)
+        # gömer. Bu sayede ArcMap/QGIS açıldığında sayı yerine "Ağaç", "Mera"
+        # gibi etiketler görünür ve renklendirme otomatik uygulanır.
+        _dl_index = data.get('index', '')
+        if _dl_index in ('LULC', 'LULC_ESA', 'LULC_MODIS', 'LULC_CORINE'):
+            tif_bytes = _inject_lulc_symbology(tif_bytes, _dl_index)
+
         resp = Response(tif_bytes, mimetype='image/tiff')
         resp.headers['Content-Disposition'] = 'attachment; filename="{}.tif"'.format(safe_name)
         resp.headers['Content-Length'] = str(len(tif_bytes))
@@ -3306,312 +3508,6 @@ def register_user():
     except Exception as ex:
         traceback.print_exc()
         return jsonify({'ok': False, 'error': str(ex)}), 500
-
-
-# ════════════════════════════════════════════════════════════════
-# 📐 VEKTÖR İNDİRME — KML / KMZ / SHP yardımcı fonksiyonları
-# ════════════════════════════════════════════════════════════════
-
-def _features_to_kml(features, name='SylvaGIS_vector'):
-    """GeoJSON feature listesini KML baytlarına dönüştürür (harici kütüphane gerektirmez)."""
-    import xml.sax.saxutils as sax
-    lines = [
-        '<?xml version="1.0" encoding="UTF-8"?>',
-        '<kml xmlns="http://www.opengis.net/kml/2.2">',
-        '<Document>',
-        f'  <name>{sax.escape(name)}</name>',
-    ]
-
-    def _coords_str(ring):
-        return ' '.join(f'{lon},{lat},0' for lon, lat in ring)
-
-    for i, feat in enumerate(features, start=1):
-        props = feat.get('properties') or {}
-        geom  = feat.get('geometry') or {}
-        gtype = geom.get('type', '')
-        coords = geom.get('coordinates', [])
-
-        # Placemark adı: class_value → sınıf, yoksa class_name, yoksa numara
-        label = (props.get('class_name') or props.get('label') or
-                 props.get('class_value') or props.get('first') or str(i))
-        color_hex = (props.get('color') or 'ffffffff')
-        # KML renk formatı: aabbggrr (alpha, blue, green, red)
-        def _hex_to_kml(h):
-            h = h.lstrip('#')
-            if len(h) == 6:
-                r, g, b = h[0:2], h[2:4], h[4:6]
-                return f'ff{b}{g}{r}'
-            return 'ffffffff'
-        kml_color = _hex_to_kml(color_hex)
-
-        lines.append(f'  <Placemark>')
-        lines.append(f'    <name>{sax.escape(str(label))}</name>')
-        lines.append(f'    <Style><PolyStyle><color>{kml_color}</color><outline>1</outline></PolyStyle></Style>')
-
-        # ExtendedData (tüm özellikler)
-        if props:
-            lines.append('    <ExtendedData>')
-            for k, v in props.items():
-                lines.append(f'      <Data name="{sax.escape(str(k))}"><value>{sax.escape(str(v))}</value></Data>')
-            lines.append('    </ExtendedData>')
-
-        if gtype == 'Polygon':
-            lines.append('    <Polygon>')
-            if coords:
-                lines.append('      <outerBoundaryIs><LinearRing><coordinates>')
-                lines.append('        ' + _coords_str(coords[0]))
-                lines.append('      </coordinates></LinearRing></outerBoundaryIs>')
-                for inner in coords[1:]:
-                    lines.append('      <innerBoundaryIs><LinearRing><coordinates>')
-                    lines.append('        ' + _coords_str(inner))
-                    lines.append('      </coordinates></LinearRing></innerBoundaryIs>')
-            lines.append('    </Polygon>')
-        elif gtype == 'MultiPolygon':
-            lines.append('    <MultiGeometry>')
-            for poly_coords in coords:
-                lines.append('      <Polygon>')
-                if poly_coords:
-                    lines.append('        <outerBoundaryIs><LinearRing><coordinates>')
-                    lines.append('          ' + _coords_str(poly_coords[0]))
-                    lines.append('        </coordinates></LinearRing></outerBoundaryIs>')
-                    for inner in poly_coords[1:]:
-                        lines.append('        <innerBoundaryIs><LinearRing><coordinates>')
-                        lines.append('          ' + _coords_str(inner))
-                        lines.append('        </coordinates></LinearRing></innerBoundaryIs>')
-                lines.append('      </Polygon>')
-            lines.append('    </MultiGeometry>')
-        elif gtype == 'Point':
-            if coords and len(coords) >= 2:
-                lines.append(f'    <Point><coordinates>{coords[0]},{coords[1]},0</coordinates></Point>')
-        elif gtype == 'LineString':
-            lines.append('    <LineString><coordinates>')
-            lines.append('      ' + _coords_str(coords))
-            lines.append('    </coordinates></LineString>')
-
-        lines.append('  </Placemark>')
-
-    lines += ['</Document>', '</kml>']
-    return '\n'.join(lines).encode('utf-8')
-
-
-def _features_to_shp_zip(features, name='SylvaGIS_vector'):
-    """GeoJSON feature listesini SHP (shapefile) ZIP arşivine dönüştürür.
-    Önce pyshp (shapefile) dener; yoksa GeoJSON'u .zip içine koyar."""
-    try:
-        import shapefile as shp  # pyshp
-        import io as _io
-
-        shp_buf  = _io.BytesIO()
-        shx_buf  = _io.BytesIO()
-        dbf_buf  = _io.BytesIO()
-
-        w = shp.Writer(shp=shp_buf, shx=shx_buf, dbf=dbf_buf)
-        w.autoBalance = 1
-        w.field('CLASS_VAL', 'C', 40)
-        w.field('CLASS_NAME', 'C', 80)
-        w.field('COLOR', 'C', 10)
-
-        def _flat_ring(ring):
-            return [list(pt) for pt in ring]
-
-        for feat in features:
-            props = feat.get('properties') or {}
-            geom  = feat.get('geometry') or {}
-            gtype = geom.get('type', '')
-            coords = geom.get('coordinates', [])
-
-            cv   = str(props.get('class_value') or props.get('first') or props.get('label') or '')
-            cn   = str(props.get('class_name') or props.get('label') or cv)
-            col  = str(props.get('color') or '')
-
-            if gtype == 'Polygon':
-                parts = [_flat_ring(r) for r in coords]
-                w.poly(parts)
-                w.record(cv, cn, col)
-            elif gtype == 'MultiPolygon':
-                all_parts = []
-                for poly in coords:
-                    all_parts.extend([_flat_ring(r) for r in poly])
-                w.poly(all_parts)
-                w.record(cv, cn, col)
-            elif gtype == 'Point':
-                if coords and len(coords) >= 2:
-                    w.point(coords[0], coords[1])
-                    w.record(cv, cn, col)
-            elif gtype == 'LineString':
-                w.line([_flat_ring(coords)])
-                w.record(cv, cn, col)
-
-        w.close()
-
-        # PRJ içeriği (WGS84 / EPSG:4326)
-        prj_wkt = ('GEOGCS["GCS_WGS_1984",'
-                   'DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]],'
-                   'PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]')
-
-        zip_buf = io.BytesIO()
-        with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as z:
-            z.writestr(f'{name}.shp', shp_buf.getvalue())
-            z.writestr(f'{name}.shx', shx_buf.getvalue())
-            z.writestr(f'{name}.dbf', dbf_buf.getvalue())
-            z.writestr(f'{name}.prj', prj_wkt)
-        zip_buf.seek(0)
-        return zip_buf.read()
-
-    except ImportError:
-        # pyshp yok — GeoJSON olarak paketle
-        import json as _json
-        fc = _json.dumps({'type': 'FeatureCollection', 'features': features}, ensure_ascii=False).encode('utf-8')
-        zip_buf = io.BytesIO()
-        with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as z:
-            z.writestr(f'{name}.geojson', fc)
-        zip_buf.seek(0)
-        return zip_buf.read()
-
-
-def _geojson_to_features(geom):
-    """Tekil bir GeoJSON geometrisini ya da FeatureCollection'ı feature listesine çevirir."""
-    import json as _json
-    if isinstance(geom, str):
-        geom = _json.loads(geom)
-    gtype = geom.get('type', '')
-    if gtype == 'FeatureCollection':
-        return geom.get('features', [])
-    if gtype == 'Feature':
-        return [geom]
-    # Ham geometri → sarmal Feature'a çevir
-    return [{'type': 'Feature', 'geometry': geom, 'properties': {}}]
-
-
-# ════════════════════════════════════════════════════════════════
-# 📥 /api/vector-download — Raster → Vektör dışa aktarımı
-# ════════════════════════════════════════════════════════════════
-# Üç veri kaynağını destekler:
-#   'workspace'  — Kullanıcının çizdiği AOI geometrisi olduğu gibi
-#   'analysis'   — Son çalıştırılan uydu/topografik analizin sınıflandırılmış
-#                  raster görüntüsü GEE reduceToVectors() ile vektöre çevrilir
-#   'landuse'    — Son arazi kullanımı (LULC) analizinin sınıflandırılmış sonucu
-#
-# Format: 'kml', 'kmz', 'shp' (SHP → ZIP arşivi)
-# ════════════════════════════════════════════════════════════════
-@app.route('/api/vector-download', methods=['POST'])
-def vector_download():
-    req_data = request.get_json(silent=True) or {}
-
-    fmt         = (req_data.get('format') or 'kml').strip().lower()
-    filename    = (req_data.get('filename') or 'SylvaGIS_vector').strip() or 'SylvaGIS_vector'
-    crs         = (req_data.get('crs') or 'EPSG:4326').strip() or 'EPSG:4326'
-    data_source = (req_data.get('dataSource') or 'workspace').strip()
-    geom_json   = req_data.get('geometry')
-
-    # Güvenli dosya adı
-    import re as _re2
-    safe_name = _re2.sub(r'[^\w\-.]', '_', filename)[:80] or 'SylvaGIS_vector'
-
-    try:
-        # ── 1. Çalışma alanı geometrisi ───────────────────────────────
-        if data_source == 'workspace':
-            if not geom_json:
-                return jsonify({'error': 'Çalışma alanı geometrisi bulunamadı. Haritada bir alan çizin.'}), 400
-            import json as _json
-            geom = _json.loads(geom_json) if isinstance(geom_json, str) else geom_json
-            features = _geojson_to_features(geom)
-
-        # ── 2. Analiz sonucunu vektörize et ───────────────────────────
-        else:
-            if not _last_analyze_params:
-                return jsonify({'error': 'Henüz bir analiz yapılmadı. Önce haritada bir analiz çalıştırın.'}), 400
-
-            data = dict(_last_analyze_params)
-
-            # Vektörizasyon için sınıflandırılmış görüntüyü al
-            try:
-                final_display, roi, result, vis, _ = _call_with_retry(
-                    build_result_image, data, for_export=False  # sınıf renkleri korunur
-                )
-            except Exception as e:
-                traceback.print_exc()
-                return jsonify({'error': f'Analiz yeniden hesaplanamadı: {str(e)}'}), 500
-
-            # Ölçek: çok küçük ölçek → çok fazla piksel → timeout
-            # Güvenli alt sınır: analiz tipine göre otomatik seç
-            index = data.get('index', 'NDVI')
-            if index in ('LULC', 'LULC_ESA'):
-                vec_scale = 100   # Dynamic World / ESA 10 m → 100 m güvenli
-            elif index.startswith('TOPO'):
-                vec_scale = 90    # SRTM 30 m → 90 m güvenli
-            elif index == 'LULC_MODIS':
-                vec_scale = 500
-            else:
-                vec_scale = 300   # Uydu indeksleri (NDVI vb.) → 300 m
-
-            print(f'[SylvaGIS] Vektörizasyon başlatılıyor: index={index} scale={vec_scale}')
-            try:
-                # reduceToVectors: pikselleri poligona çevir
-                # NOT: GEE reduceToVectors, görüntünün İLK bandını segment/etiket
-                # bandı olarak kullanır; reducer ise KALAN bant(lar) üzerinde
-                # çalışır. final_display tek bantlı olduğunda reducer'ın işleyeceği
-                # bant kalmıyor ve "Need 1+1 bands for Reducer.first, image has 1"
-                # hatası oluşuyor. Çözüm: aynı bandı bir kez daha ekleyip görüntüyü
-                # 2 bantlı hale getirmek (1. bant = etiketleme, 2. bant = reducer girdisi).
-                _vec_src = final_display.int()
-                _vec_input = _vec_src.addBands(_vec_src.rename('_reduce_val'))
-                vec_fc = _call_with_retry(
-                    lambda: _vec_input.reduceToVectors(
-                        reducer=ee.Reducer.first(),
-                        geometry=roi.bounds(),
-                        scale=vec_scale,
-                        maxPixels=1e8,
-                        geometryType='polygon',
-                        eightConnected=False,
-                        labelProperty='class_value',
-                        crs=crs if crs.upper().startswith('EPSG:') else 'EPSG:4326',
-                    ).limit(4000)
-                )
-                fc_info = _call_with_retry(lambda: vec_fc.getInfo())
-                features = fc_info.get('features', []) if fc_info else []
-            except Exception as e:
-                traceback.print_exc()
-                return jsonify({'error': f'Vektöre dönüştürme başarısız: {str(e)}'}), 500
-
-            if not features:
-                return jsonify({'error': 'Vektör geometri üretilemedi. Alan çok küçük ya da veri yok olabilir.'}), 400
-
-            print(f'[SylvaGIS] Vektörizasyon tamamlandı: {len(features)} özellik')
-
-        # ── 3. Formatla ve gönder ──────────────────────────────────────
-        if fmt == 'kml':
-            body = _features_to_kml(features, safe_name)
-            return Response(body, headers={
-                'Content-Type': 'application/vnd.google-earth.kml+xml; charset=utf-8',
-                'Content-Disposition': f'attachment; filename="{safe_name}.kml"',
-            })
-
-        elif fmt == 'kmz':
-            kml_bytes = _features_to_kml(features, safe_name)
-            buf = io.BytesIO()
-            with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
-                z.writestr(f'{safe_name}.kml', kml_bytes)
-            buf.seek(0)
-            return Response(buf.read(), headers={
-                'Content-Type': 'application/vnd.google-earth.kmz',
-                'Content-Disposition': f'attachment; filename="{safe_name}.kmz"',
-            })
-
-        elif fmt == 'shp':
-            zip_bytes = _features_to_shp_zip(features, safe_name)
-            return Response(zip_bytes, headers={
-                'Content-Type': 'application/zip',
-                'Content-Disposition': f'attachment; filename="{safe_name}_shp.zip"',
-            })
-
-        else:
-            return jsonify({'error': f'Bilinmeyen format: {fmt}'}), 400
-
-    except Exception as ex:
-        traceback.print_exc()
-        return jsonify({'error': str(ex)}), 500
-
 
 if __name__ == '__main__':
     # NOT: Bu satır sadece yerel (local) geliştirme/test içindir.
