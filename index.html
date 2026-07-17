@@ -12740,11 +12740,11 @@ function openGeoTiffDownloadDialog() {
     // "Piksel Çözünürlüğü" seçeneği gizlenir — bu analizler zaten kendi
     // doğal/sabit çözünürlükleriyle dışa aktarılır, kullanıcıya bu alanı
     // göstermek kafa karıştırıcı olur.
-    var _gtMeta = (typeof getSelectedAnalysisMeta === 'function') ? getSelectedAnalysisMeta() : null;
-    var _gtIsLulcOrTopo = !!(_gtMeta && (isLulcAnalysis(_gtMeta.analysisName) || isTopoAnalysis(_gtMeta.analysisName)));
     var scaleWrap = document.getElementById('geotiff-scale-wrap');
     if (scaleWrap) {
-        scaleWrap.style.display = _gtIsLulcOrTopo ? 'none' : '';
+        var _gtMeta = (typeof getSelectedAnalysisMeta === 'function') ? getSelectedAnalysisMeta() : null;
+        var _gtHide = !!(_gtMeta && (isLulcAnalysis(_gtMeta.analysisName) || isTopoAnalysis(_gtMeta.analysisName)));
+        scaleWrap.style.display = _gtHide ? 'none' : '';
     }
     // 🌐 Koordinat Sistemi (CRS): sabit "WGS 84" yerine, son çalıştırılan
     // analizin/sahnenin KENDİ gerçek/doğal CRS'i (window._lastAnalyzeNativeCrs,
@@ -12753,13 +12753,7 @@ function openGeoTiffDownloadDialog() {
     // GeoTIFF, haritadaki/analizdeki veriyle aynı projeksiyonda olmalıdır.
     // Kullanıcı isterse seçiciden yine WGS 84'e veya başka bir EPSG koduna
     // dönebilir — bu yalnızca akıllı bir varsayılan, bir kısıtlama değil.
-    //
-    // 🏘️🏔️ İSTİSNA — Arazi Kullanımı (LULC) ve Topografik (TOPO) analizleri:
-    // Bu analizler için indirme penceresi HER ZAMAN WGS 84 (EPSG:4326) ile
-    // açılır; UTM dilimi otomatik ÖN-SEÇİLMEZ. Kullanıcı isterse yine de
-    // elle bir UTM dilimi seçebilir — bu yalnızca ilk açılıştaki varsayılanı
-    // değiştirir, bir kısıtlama getirmez.
-    _applyNativeCrsDefault(_gtIsLulcOrTopo);
+    _applyNativeCrsDefault();
     modal.style.display = 'flex';
 }
 
@@ -12800,16 +12794,9 @@ function _clientSideNativeCrsFallback() {
     }
 }
 
-function _applyNativeCrsDefault(forceWgs84) {
+function _applyNativeCrsDefault() {
     var sel = document.getElementById('geotiff-crs');
     if (!sel) return;
-    // 🏘️🏔️ LULC/TOPO analizleri: UTM ön-seçimi tamamen atlanır, pencere
-    // her zaman WGS 84 ile açılır (kullanıcı isterse elle değiştirebilir).
-    if (forceWgs84) {
-        sel.value = 'EPSG:4326';
-        onGeoTiffCrsChange();
-        return;
-    }
     var native = window._lastAnalyzeNativeCrs;
     // Sunucudan gerçek bir native CRS gelmediyse (null) VEYA sunucu
     // WGS84/coğrafi döndürdüyse (GEE tarafındaki UTM tespiti başarısız
