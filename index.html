@@ -2740,7 +2740,8 @@ tr.class-highlight-active {
 
             <div style="margin-top: auto; display: flex; flex-direction: column; gap: 10px;">
                 <hr style="border:none; border-top:1px solid #1e3a8a; opacity:0.18; margin:0;">
-                <button class="btn-tool" id="btn-geotiff-download" onclick="openGeoTiffDownloadDialog()" style="background-color: #f8fafc; border-color: #1e3a8a; color: #1e3a8a;" data-i18n="btn_geotiff">📥 Veriyi İndir (GeoTIFF)</button>
+                <button class="btn-tool" id="btn-geotiff-download" onclick="openGeoTiffDownloadDialog()" style="background-color: #f8fafc; border-color: #1e3a8a; color: #1e3a8a;" data-i18n="btn_geotiff">📥 Veriyi Raster İndir (GeoTIFF)</button>
+                <button class="btn-tool" id="btn-vector-download" onclick="openVectorDownloadDialog()" style="background-color: #0d9488; border-color: #0d9488; color: #fff;" data-i18n="btn_vector">📥 Veriyi Vektör İndir</button>
                 <button class="btn-primary" id="btn-open-export" style="background-color: #10b981;" data-i18n="btn_export">🖨️ Görsel Çıktı Al (PNG / JPEG / PDF)</button>
             </div>
         </div><!-- /panel-content -->
@@ -11995,6 +11996,88 @@ function selectRamp(name) {
     </div>
 </div>
 
+
+<!-- ===== VEKTÖR İNDİRME DİYALOĞU ===== -->
+<style>
+    #vector-dialog-box {
+        background:#fff; border-radius:10px; padding:28px 24px 20px;
+        width:380px; max-width:92vw; max-height:88vh; overflow-y:auto;
+        box-shadow:0 12px 40px rgba(0,0,0,0.25); position:relative;
+        box-sizing:border-box;
+    }
+    .vdl-format-btn {
+        flex:1; border:2px solid #cbd5e1; border-radius:8px;
+        padding:12px 6px 8px; cursor:pointer; background:#f8fafc;
+        font-size:0.85rem; font-weight:600; color:#1e3a8a;
+        text-align:center; transition:border-color 0.15s, background 0.15s;
+        display:flex; flex-direction:column; align-items:center; gap:4px;
+        user-select:none;
+    }
+    .vdl-format-btn.selected {
+        border-color:#0d9488; background:#f0fdfa; color:#0d9488;
+    }
+    .vdl-format-btn:hover:not(.selected) {
+        border-color:#94a3b8; background:#f1f5f9;
+    }
+    .vdl-format-emoji { font-size:1.4rem; line-height:1; }
+    #vdl-bottom-indicator {
+        display:none; text-align:center; margin-top:14px; padding-top:12px;
+        border-top:1px solid #e2e8f0;
+    }
+    #vector-dialog-box.downloading #vdl-bottom-indicator { display:block; }
+    #vdl-bottom-indicator-text {
+        font-size: 1.15rem; font-weight: 800; color: #0d9488;
+        letter-spacing: 0.03em; user-select: none;
+        animation: sylva-pulse-modal 1.6s ease-in-out infinite;
+    }
+    #vdl-bottom-indicator-sub {
+        font-size:0.7rem; color:#64748b; margin-top:4px; line-height:1.4;
+    }
+</style>
+<div id="vector-download-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.52); z-index:99998; align-items:center; justify-content:center;">
+    <div id="vector-dialog-box">
+        <h3 style="color:#0d9488; margin-bottom:6px; font-size:1rem;" data-i18n="vdl_title">📥 Vektör Veri İndir</h3>
+        <p style="font-size:0.78rem; color:#64748b; margin-bottom:16px;" data-i18n="vdl_desc">Çalışma alanı geometrisi seçilen formatta dışa aktarılır.</p>
+
+        <div style="margin-bottom:14px;">
+            <label style="font-size:0.82rem; font-weight:600; color:#64748b; display:block; margin-bottom:8px;" data-i18n="vdl_format_label">Format Seçin</label>
+            <div style="display:flex; gap:8px;">
+                <button class="vdl-format-btn selected" id="vdl-fmt-kml" onclick="selectVdlFormat('kml')">
+                    <span class="vdl-format-emoji">🗺️</span>KML
+                </button>
+                <button class="vdl-format-btn" id="vdl-fmt-kmz" onclick="selectVdlFormat('kmz')">
+                    <span class="vdl-format-emoji">📦</span>KMZ
+                </button>
+                <button class="vdl-format-btn" id="vdl-fmt-shp" onclick="selectVdlFormat('shp')">
+                    <span class="vdl-format-emoji">📐</span>SHP
+                </button>
+            </div>
+        </div>
+
+        <div style="margin-bottom:18px;">
+            <label for="vdl-filename" style="font-size:0.82rem; font-weight:600; color:#64748b; display:block; margin-bottom:6px;" data-i18n="lbl_filename">Dosya Adı</label>
+            <input type="text" id="vdl-filename" value="SylvaGIS_vector"
+                style="width:100%; padding:8px 10px; border:1px solid #cbd5e1; border-radius:5px; font-size:0.85rem; outline:none; box-sizing:border-box;">
+        </div>
+
+        <div id="vdl-status" style="display:none; font-size:0.8rem; padding:8px 10px; border-radius:5px; margin-bottom:12px;"></div>
+
+        <div style="display:flex; gap:8px;">
+            <button id="vdl-btn-download" onclick="executeVectorDownload()"
+                style="flex:1; background:#0d9488; color:#fff; border:none; border-radius:6px; padding:10px; font-size:0.88rem; font-weight:600; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:6px;"
+                data-i18n="btn_download">⬇️ İndir</button>
+            <button onclick="closeVectorDownloadDialog()"
+                style="flex:1; background:#f1f5f9; color:#475569; border:1px solid #cbd5e1; border-radius:6px; padding:10px; font-size:0.88rem; font-weight:600; cursor:pointer;"
+                data-i18n="btn_cancel">İptal</button>
+        </div>
+
+        <div id="vdl-bottom-indicator">
+            <div id="vdl-bottom-indicator-text">🌿 SylvaGIS</div>
+            <div id="vdl-bottom-indicator-sub" data-i18n="vdl_preparing">Vektör dosyası hazırlanıyor…</div>
+        </div>
+    </div>
+</div>
+
 <!-- ===== 📧 İLETİŞİM KUTUSU ===== -->
 <div id="contact-modal-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.52); z-index:99998; align-items:center; justify-content:center;">
     <div id="contact-dialog-box" style="background:#fff; border-radius:10px; padding:28px 24px 22px; width:400px; max-width:92vw; max-height:88vh; overflow-y:auto; box-shadow:0 12px 40px rgba(0,0,0,0.25); position:relative; box-sizing:border-box;">
@@ -13358,7 +13441,12 @@ var SYLVA_TRANSLATIONS = {
     color_selection: 'Color Selection', choose_color: 'Choose Color',
     data_charts: 'Data Charts', bar_chart: '📊 Bar Chart', pie_chart: '🥧 Pie Chart',
     btn_image: '🖼️ Image', btn_csv: '📥 Download CSV', btn_pdf: '📄 Download PDF',
-    btn_geotiff: '📥 Download Data (GeoTIFF)',
+    btn_geotiff: '📥 Download Raster Data (GeoTIFF)',
+    btn_vector: '📥 Download Vector Data',
+    vdl_title: '📥 Download Vector Data',
+    vdl_desc: 'Export workspace geometry as a vector file for use in GIS software.',
+    vdl_format_label: 'Select Format',
+    vdl_preparing: 'Vector file is being prepared…',
     btn_export: '🖨️ Export Image (PNG / JPEG / PDF)',
     mobile_data: 'Data', mobile_analysis: 'Analysis', mobile_draw: 'Draw', mobile_output: 'Output',
     server_label: 'Server',
@@ -13705,7 +13793,12 @@ var SYLVA_TRANSLATIONS = {
     color_selection: 'Rang tanlash', choose_color: 'Rangni tanlang',
     data_charts: 'Maʼlumot diagrammalari', bar_chart: '📊 Ustunli diagramma', pie_chart: '🥧 Doiraviy diagramma',
     btn_image: '🖼️ Rasm', btn_csv: '📥 CSV yuklab olish', btn_pdf: '📄 PDF yuklab olish',
-    btn_geotiff: '📥 Maʼlumotni yuklab olish (GeoTIFF)',
+    btn_geotiff: '📥 Raster maʼlumotni yuklab olish (GeoTIFF)',
+    btn_vector: '📥 Vektor maʼlumotlarni yuklab olish',
+    vdl_title: '📥 Vektor maʼlumotlarni yuklab olish',
+    vdl_desc: 'Ish maydoni geometriyasini vektor fayl sifatida eksport qiling.',
+    vdl_format_label: 'Format tanlang',
+    vdl_preparing: 'Vektor fayl tayyorlanmoqda…',
     btn_export: '🖨️ Rasmni eksport qilish (PNG / JPEG / PDF)',
     mobile_data: 'Maʼlumot', mobile_analysis: 'Tahlil', mobile_draw: 'Chizish', mobile_output: 'Chiqish',
     server_label: 'Server',
@@ -14046,7 +14139,12 @@ var SYLVA_TRANSLATIONS = {
     color_selection: 'Επιλογή Χρώματος', choose_color: 'Επιλέξτε Χρώμα',
     data_charts: 'Γραφήματα Δεδομένων', bar_chart: '📊 Ραβδόγραμμα', pie_chart: '🥧 Κυκλικό Διάγραμμα',
     btn_image: '🖼️ Εικόνα', btn_csv: '📥 Λήψη CSV', btn_pdf: '📄 Λήψη PDF',
-    btn_geotiff: '📥 Λήψη Δεδομένων (GeoTIFF)',
+    btn_geotiff: '📥 Λήψη Raster Δεδομένων (GeoTIFF)',
+    btn_vector: '📥 Λήψη Διανυσματικών Δεδομένων',
+    vdl_title: '📥 Λήψη Διανυσματικών Δεδομένων',
+    vdl_desc: 'Εξαγωγή γεωμετρίας χώρου εργασίας ως διανυσματικό αρχείο.',
+    vdl_format_label: 'Επιλογή Μορφής',
+    vdl_preparing: 'Το διανυσματικό αρχείο ετοιμάζεται…',
     btn_export: '🖨️ Εξαγωγή Εικόνας (PNG / JPEG / PDF)',
     mobile_data: 'Δεδομένα', mobile_analysis: 'Ανάλυση', mobile_draw: 'Σχεδίαση', mobile_output: 'Έξοδος',
     server_label: 'Διακομιστής',
@@ -14393,7 +14491,12 @@ var SYLVA_TRANSLATIONS = {
     color_selection: 'Избор на цвят', choose_color: 'Изберете цвят',
     data_charts: 'Диаграми на данните', bar_chart: '📊 Стълбовидна диаграма', pie_chart: '🥧 Кръгова диаграма',
     btn_image: '🖼️ Изображение', btn_csv: '📥 Изтегли CSV', btn_pdf: '📄 Изтегли PDF',
-    btn_geotiff: '📥 Изтегли данни (GeoTIFF)',
+    btn_geotiff: '📥 Изтегли растерни данни (GeoTIFF)',
+    btn_vector: '📥 Изтегли векторни данни',
+    vdl_title: '📥 Изтегли векторни данни',
+    vdl_desc: 'Експортирайте геометрията на работната зона като векторен файл.',
+    vdl_format_label: 'Изберете формат',
+    vdl_preparing: 'Векторният файл се подготвя…',
     btn_export: '🖨️ Експорт на изображение (PNG / JPEG / PDF)',
     mobile_data: 'Данни', mobile_analysis: 'Анализ', mobile_draw: 'Рисуване', mobile_output: 'Извеждане',
     server_label: 'Сървър',
@@ -14740,7 +14843,12 @@ var SYLVA_TRANSLATIONS = {
     color_selection: 'Renk Seçimi', choose_color: 'Renk Seç',
     data_charts: 'Veri Grafikleri', bar_chart: '📊 Sütun Grafik', pie_chart: '🥧 Pasta Grafik',
     btn_image: '🖼️ Görsel', btn_csv: '📥 CSV İndir', btn_pdf: '📄 PDF İndir',
-    btn_geotiff: '📥 Veriyi İndir (GeoTIFF)',
+    btn_geotiff: '📥 Veriyi Raster İndir (GeoTIFF)',
+    btn_vector: '📥 Veriyi Vektör İndir',
+    vdl_title: '📥 Vektör Veri İndir',
+    vdl_desc: 'Çalışma alanı geometrisi seçilen formatta dışa aktarılır.',
+    vdl_format_label: 'Format Seçin',
+    vdl_preparing: 'Vektör dosyası hazırlanıyor…',
     btn_export: '🖨️ Görsel Çıktı Al (PNG / JPEG / PDF)',
     mobile_data: 'Veri', mobile_analysis: 'Analiz', mobile_draw: 'Çizim', mobile_output: 'Çıktı',
     server_label: 'Sunucu',
@@ -15083,7 +15191,12 @@ var SYLVA_TRANSLATIONS = {
     color_selection: 'Rəng Seçimi', choose_color: 'Rəng Seç',
     data_charts: 'Məlumat Qrafikləri', bar_chart: '📊 Sütun Qrafik', pie_chart: '🥧 Dairəvi Qrafik',
     btn_image: '🖼️ Şəkil', btn_csv: '📥 CSV Yüklə', btn_pdf: '📄 PDF Yüklə',
-    btn_geotiff: '📥 Məlumatı Yüklə (GeoTIFF)',
+    btn_geotiff: '📥 Raster Məlumatı Yüklə (GeoTIFF)',
+    btn_vector: '📥 Vektor Məlumatı Yüklə',
+    vdl_title: '📥 Vektor Məlumatı Yüklə',
+    vdl_desc: 'İş sahəsi həndəsəsini vektor faylı kimi ixrac edin.',
+    vdl_format_label: 'Format Seçin',
+    vdl_preparing: 'Vektor fayl hazırlanır…',
     btn_export: '🖨️ Görüntü Çıxışı Al (PNG / JPEG / PDF)',
     mobile_data: 'Məlumat', mobile_analysis: 'Təhlil', mobile_draw: 'Çəkim', mobile_output: 'Çıxış',
     server_label: 'Server',
@@ -15426,7 +15539,12 @@ var SYLVA_TRANSLATIONS = {
     color_selection: 'Színválasztás', choose_color: 'Szín Kiválasztása',
     data_charts: 'Adatdiagramok', bar_chart: '📊 Oszlopdiagram', pie_chart: '🥧 Kördiagram',
     btn_image: '🖼️ Kép', btn_csv: '📥 CSV Letöltés', btn_pdf: '📄 PDF Letöltés',
-    btn_geotiff: '📥 Adat Letöltése (GeoTIFF)',
+    btn_geotiff: '📥 Raszteres Adat Letöltése (GeoTIFF)',
+    btn_vector: '📥 Vektoros Adat Letöltése',
+    vdl_title: '📥 Vektoros Adat Letöltése',
+    vdl_desc: 'A munkaterület geometriájának exportálása vektoros fájlként.',
+    vdl_format_label: 'Formátum kiválasztása',
+    vdl_preparing: 'A vektoros fájl előkészítése folyamatban…',
     btn_export: '🖨️ Kép Exportálása (PNG / JPEG / PDF)',
     mobile_data: 'Adat', mobile_analysis: 'Elemzés', mobile_draw: 'Rajzolás', mobile_output: 'Kimenet',
     server_label: 'Szerver',
@@ -15768,7 +15886,12 @@ var SYLVA_TRANSLATIONS = {
     color_selection: 'Түс таңдау', choose_color: 'Түс таңдаңыз',
     data_charts: 'Деректер диаграммалары', bar_chart: '📊 Бағаналы диаграмма', pie_chart: '🥧 Дөңгелек диаграмма',
     btn_image: '🖼️ Сурет', btn_csv: '📥 CSV жүктеу', btn_pdf: '📄 PDF жүктеу',
-    btn_geotiff: '📥 Деректерді жүктеу (GeoTIFF)',
+    btn_geotiff: '📥 Растр деректерді жүктеу (GeoTIFF)',
+    btn_vector: '📥 Векторлық деректерді жүктеу',
+    vdl_title: '📥 Векторлық деректерді жүктеу',
+    vdl_desc: 'Жұмыс аймағы геометриясын векторлық файл ретінде экспорттаңыз.',
+    vdl_format_label: 'Формат таңдаңыз',
+    vdl_preparing: 'Векторлық файл дайындалуда…',
     btn_export: '🖨️ Суретті экспорттау (PNG / JPEG / PDF)',
     mobile_data: 'Деректер', mobile_analysis: 'Талдау', mobile_draw: 'Сурет салу', mobile_output: 'Шығыс',
     server_label: 'Сервер',
@@ -16094,7 +16217,12 @@ var SYLVA_TRANSLATIONS = {
     color_selection: 'Farbauswahl', choose_color: 'Farbe wählen',
     data_charts: 'Diagramme', bar_chart: '📊 Säulendiagramm', pie_chart: '🥧 Tortendiagramm',
     btn_image: '🖼️ Bild', btn_csv: '📥 CSV herunterladen', btn_pdf: '📄 PDF herunterladen',
-    btn_geotiff: '📥 Daten herunterladen (GeoTIFF)',
+    btn_geotiff: '📥 Rasterdaten herunterladen (GeoTIFF)',
+    btn_vector: '📥 Vektordaten herunterladen',
+    vdl_title: '📥 Vektordaten herunterladen',
+    vdl_desc: 'Arbeitsbereichsgeometrie als Vektordatei exportieren.',
+    vdl_format_label: 'Format auswählen',
+    vdl_preparing: 'Vektordatei wird vorbereitet…',
     btn_export: '🖨️ Bild exportieren (PNG / JPEG / PDF)',
     mobile_data: 'Daten', mobile_analysis: 'Analyse', mobile_draw: 'Zeichnen', mobile_output: 'Ausgabe',
     // ── Benutzerinformation Modal ──────────────────────────────────────────────
@@ -16442,7 +16570,12 @@ var SYLVA_TRANSLATIONS = {
     color_selection: 'Sélection couleur', choose_color: 'Choisir une couleur',
     data_charts: 'Graphiques de données', bar_chart: '📊 Histogramme', pie_chart: '🥧 Diagramme circulaire',
     btn_image: '🖼️ Image', btn_csv: '📥 Télécharger CSV', btn_pdf: '📄 Télécharger PDF',
-    btn_geotiff: '📥 Télécharger données (GeoTIFF)',
+    btn_geotiff: '📥 Télécharger données raster (GeoTIFF)',
+    btn_vector: '📥 Télécharger données vectorielles',
+    vdl_title: '📥 Télécharger données vectorielles',
+    vdl_desc: 'Exporter la géométrie de l'espace de travail en fichier vectoriel.',
+    vdl_format_label: 'Sélectionner le format',
+    vdl_preparing: 'Le fichier vectoriel est en cours de préparation…',
     btn_export: '🖨️ Exporter image (PNG / JPEG / PDF)',
     mobile_data: 'Données', mobile_analysis: 'Analyse', mobile_draw: 'Dessiner', mobile_output: 'Sortie',
     // ── Modal informations utilisateur ────────────────────────────────────────
@@ -16790,7 +16923,12 @@ var SYLVA_TRANSLATIONS = {
     color_selection: 'Selección de color', choose_color: 'Elegir color',
     data_charts: 'Gráficos de datos', bar_chart: '📊 Gráfico de barras', pie_chart: '🥧 Gráfico circular',
     btn_image: '🖼️ Imagen', btn_csv: '📥 Descargar CSV', btn_pdf: '📄 Descargar PDF',
-    btn_geotiff: '📥 Descargar datos (GeoTIFF)',
+    btn_geotiff: '📥 Descargar datos raster (GeoTIFF)',
+    btn_vector: '📥 Descargar datos vectoriales',
+    vdl_title: '📥 Descargar datos vectoriales',
+    vdl_desc: 'Exportar la geometría del área de trabajo como archivo vectorial.',
+    vdl_format_label: 'Seleccionar formato',
+    vdl_preparing: 'Se está preparando el archivo vectorial…',
     btn_export: '🖨️ Exportar imagen (PNG / JPEG / PDF)',
     mobile_data: 'Datos', mobile_analysis: 'Análisis', mobile_draw: 'Dibujar', mobile_output: 'Salida',
     // ── Modal información de usuario ──────────────────────────────────────────
@@ -17138,7 +17276,12 @@ var SYLVA_TRANSLATIONS = {
     color_selection: 'Seleção de cor', choose_color: 'Escolher cor',
     data_charts: 'Gráficos de dados', bar_chart: '📊 Gráfico de barras', pie_chart: '🥧 Gráfico circular',
     btn_image: '🖼️ Imagem', btn_csv: '📥 Descarregar CSV', btn_pdf: '📄 Descarregar PDF',
-    btn_geotiff: '📥 Descarregar dados (GeoTIFF)',
+    btn_geotiff: '📥 Descarregar dados raster (GeoTIFF)',
+    btn_vector: '📥 Descarregar dados vetoriais',
+    vdl_title: '📥 Descarregar dados vetoriais',
+    vdl_desc: 'Exportar a geometria da área de trabalho como ficheiro vetorial.',
+    vdl_format_label: 'Selecionar formato',
+    vdl_preparing: 'O ficheiro vetorial está a ser preparado…',
     btn_export: '🖨️ Exportar imagem (PNG / JPEG / PDF)',
     mobile_data: 'Dados', mobile_analysis: 'Análise', mobile_draw: 'Desenhar', mobile_output: 'Saída',
     // ── Modal de informação do utilizador ──────────────────────────────────────
@@ -17486,7 +17629,12 @@ var SYLVA_TRANSLATIONS = {
     color_selection: 'اختيار اللون', choose_color: 'اختر لوناً',
     data_charts: 'مخططات البيانات', bar_chart: '📊 مخطط أعمدة', pie_chart: '🥧 مخطط دائري',
     btn_image: '🖼️ صورة', btn_csv: '📥 تحميل CSV', btn_pdf: '📄 تحميل PDF',
-    btn_geotiff: '📥 تحميل البيانات (GeoTIFF)',
+    btn_geotiff: '📥 تحميل البيانات النقطية (GeoTIFF)',
+    btn_vector: '📥 تحميل البيانات المتجهة',
+    vdl_title: '📥 تحميل البيانات المتجهة',
+    vdl_desc: 'تصدير هندسة مساحة العمل كملف متجه.',
+    vdl_format_label: 'اختر الصيغة',
+    vdl_preparing: 'جارٍ إعداد الملف المتجه…',
     btn_export: '🖨️ تصدير صورة (PNG / JPEG / PDF)',
     mobile_data: 'بيانات', mobile_analysis: 'تحليل', mobile_draw: 'رسم', mobile_output: 'إخراج',
     // ── نموذج معلومات المستخدم ──────────────────────────────────────────────────
@@ -17834,7 +17982,12 @@ var SYLVA_TRANSLATIONS = {
     color_selection: 'انتخاب رنگ', choose_color: 'انتخاب رنگ',
     data_charts: 'نمودارهای داده', bar_chart: '📊 نمودار میله‌ای', pie_chart: '🥧 نمودار دایره‌ای',
     btn_image: '🖼️ تصویر', btn_csv: '📥 دانلود CSV', btn_pdf: '📄 دانلود PDF',
-    btn_geotiff: '📥 دانلود داده (GeoTIFF)',
+    btn_geotiff: '📥 دانلود داده رستر (GeoTIFF)',
+    btn_vector: '📥 دانلود داده وکتور',
+    vdl_title: '📥 دانلود داده وکتوری',
+    vdl_desc: 'هندسه محیط کار را به‌عنوان فایل وکتور خروجی بگیرید.',
+    vdl_format_label: 'انتخاب فرمت',
+    vdl_preparing: 'فایل وکتور در حال آماده‌سازی…',
     btn_export: '🖨️ خروجی تصویر (PNG / JPEG / PDF)',
     mobile_data: 'داده', mobile_analysis: 'تحلیل', mobile_draw: 'رسم', mobile_output: 'خروجی',
     // ── نمایش اطلاعات کاربر ────────────────────────────────────────────────────────
@@ -18182,7 +18335,12 @@ var SYLVA_TRANSLATIONS = {
     color_selection: '颜色选择', choose_color: '选择颜色',
     data_charts: '数据图表', bar_chart: '📊 柱状图', pie_chart: '🥧 饼图',
     btn_image: '🖼️ 图像', btn_csv: '📥 下载 CSV', btn_pdf: '📄 下载 PDF',
-    btn_geotiff: '📥 下载数据 (GeoTIFF)',
+    btn_geotiff: '📥 下载栅格数据 (GeoTIFF)',
+    btn_vector: '📥 下载矢量数据',
+    vdl_title: '📥 下载矢量数据',
+    vdl_desc: '将工作区几何图形导出为矢量文件。',
+    vdl_format_label: '选择格式',
+    vdl_preparing: '矢量文件准备中…',
     btn_export: '🖨️ 导出图像 (PNG / JPEG / PDF)',
     mobile_data: '数据', mobile_analysis: '分析', mobile_draw: '绘图', mobile_output: '输出',
     // ── 用户信息弹窗 ──────────────────────────────────────────────────────────
@@ -18530,7 +18688,12 @@ var SYLVA_TRANSLATIONS = {
     color_selection: '色選択', choose_color: '色を選択',
     data_charts: 'データチャート', bar_chart: '📊 棒グラフ', pie_chart: '🥧 円グラフ',
     btn_image: '🖼️ 画像', btn_csv: '📥 CSVダウンロード', btn_pdf: '📄 PDFダウンロード',
-    btn_geotiff: '📥 データダウンロード (GeoTIFF)',
+    btn_geotiff: '📥 ラスターデータダウンロード (GeoTIFF)',
+    btn_vector: '📥 ベクターデータダウンロード',
+    vdl_title: '📥 ベクターデータをダウンロード',
+    vdl_desc: 'ワークスペースのジオメトリをベクターファイルとして書き出します。',
+    vdl_format_label: 'フォーマット選択',
+    vdl_preparing: 'ベクターファイルを準備中…',
     btn_export: '🖨️ 画像エクスポート (PNG / JPEG / PDF)',
     mobile_data: 'データ', mobile_analysis: '解析', mobile_draw: '描画', mobile_output: '出力',
     // ── ユーザー情報モーダル ──────────────────────────────────────────────────
@@ -18878,7 +19041,12 @@ var SYLVA_TRANSLATIONS = {
     color_selection: '색상 선택', choose_color: '색상 선택',
     data_charts: '데이터 차트', bar_chart: '📊 막대 차트', pie_chart: '🥧 파이 차트',
     btn_image: '🖼️ 이미지', btn_csv: '📥 CSV 다운로드', btn_pdf: '📄 PDF 다운로드',
-    btn_geotiff: '📥 데이터 다운로드 (GeoTIFF)',
+    btn_geotiff: '📥 래스터 데이터 다운로드 (GeoTIFF)',
+    btn_vector: '📥 벡터 데이터 다운로드',
+    vdl_title: '📥 벡터 데이터 다운로드',
+    vdl_desc: '작업 공간 지오메트리를 벡터 파일로 내보냅니다.',
+    vdl_format_label: '형식 선택',
+    vdl_preparing: '벡터 파일 준비 중…',
     btn_export: '🖨️ 이미지 내보내기 (PNG / JPEG / PDF)',
     mobile_data: '데이터', mobile_analysis: '분석', mobile_draw: '그리기', mobile_output: '출력',
     // ── 사용자 정보 모달 ──────────────────────────────────────────────────────
@@ -19226,7 +19394,12 @@ var SYLVA_TRANSLATIONS = {
     color_selection: 'रंग चयन', choose_color: 'रंग चुनें',
     data_charts: 'डेटा चार्ट', bar_chart: '📊 बार चार्ट', pie_chart: '🥧 पाई चार्ट',
     btn_image: '🖼️ छवि', btn_csv: '📥 CSV डाउनलोड', btn_pdf: '📄 PDF डाउनलोड',
-    btn_geotiff: '📥 डेटा डाउनलोड (GeoTIFF)',
+    btn_geotiff: '📥 रास्टर डेटा डाउनलोड (GeoTIFF)',
+    btn_vector: '📥 वेक्टर डेटा डाउनलोड',
+    vdl_title: '📥 वेक्टर डेटा डाउनलोड करें',
+    vdl_desc: 'कार्यक्षेत्र ज्यामिति को वेक्टर फ़ाइल के रूप में निर्यात करें।',
+    vdl_format_label: 'प्रारूप चुनें',
+    vdl_preparing: 'वेक्टर फ़ाइल तैयार हो रही है…',
     btn_export: '🖨️ छवि निर्यात (PNG / JPEG / PDF)',
     mobile_data: 'डेटा', mobile_analysis: 'विश्लेषण', mobile_draw: 'आरेखण', mobile_output: 'आउटपुट',
     // ── उपयोगकर्ता जानकारी मॉडल ──────────────────────────────────────────────
@@ -19574,7 +19747,12 @@ var SYLVA_TRANSLATIONS = {
     color_selection: 'Pilihan Warna', choose_color: 'Pilih Warna',
     data_charts: 'Grafik Data', bar_chart: '📊 Grafik Batang', pie_chart: '🥧 Grafik Pai',
     btn_image: '🖼️ Gambar', btn_csv: '📥 Unduh CSV', btn_pdf: '📄 Unduh PDF',
-    btn_geotiff: '📥 Unduh Data (GeoTIFF)',
+    btn_geotiff: '📥 Unduh Data Raster (GeoTIFF)',
+    btn_vector: '📥 Unduh Data Vektor',
+    vdl_title: '📥 Unduh Data Vektor',
+    vdl_desc: 'Ekspor geometri ruang kerja sebagai file vektor.',
+    vdl_format_label: 'Pilih Format',
+    vdl_preparing: 'File vektor sedang disiapkan…',
     btn_export: '🖨️ Ekspor Gambar (PNG / JPEG / PDF)',
     mobile_data: 'Data', mobile_analysis: 'Analisis', mobile_draw: 'Gambar', mobile_output: 'Keluaran',
     // ── Modal Informasi Pengguna ──────────────────────────────────────────────
@@ -19938,7 +20116,12 @@ var SYLVA_TRANSLATIONS = {
     color_selection: 'Выбор цвета', choose_color: 'Выбрать цвет',
     data_charts: 'Диаграммы данных', bar_chart: '📊 Столбчатая диаграмма', pie_chart: '🥧 Круговая диаграмма',
     btn_image: '🖼️ Изображение', btn_csv: '📥 Скачать CSV', btn_pdf: '📄 Скачать PDF',
-    btn_geotiff: '📥 Скачать данные (GeoTIFF)',
+    btn_geotiff: '📥 Скачать растровые данные (GeoTIFF)',
+    btn_vector: '📥 Скачать векторные данные',
+    vdl_title: '📥 Скачать векторные данные',
+    vdl_desc: 'Экспорт геометрии рабочей области в векторный файл.',
+    vdl_format_label: 'Выберите формат',
+    vdl_preparing: 'Векторный файл подготавливается…',
     btn_export: '🖨️ Экспорт изображения (PNG / JPEG / PDF)',
     mobile_data: 'Данные', mobile_analysis: 'Анализ', mobile_draw: 'Рисование', mobile_output: 'Вывод',
     server_label: 'Сервер',
@@ -20285,7 +20468,12 @@ var SYLVA_TRANSLATIONS = {
     color_selection: 'การเลือกสี', choose_color: 'เลือกสี',
     data_charts: 'กราฟข้อมูล', bar_chart: '📊 กราฟแท่ง', pie_chart: '🥧 กราฟวงกลม',
     btn_image: '🖼️ รูปภาพ', btn_csv: '📥 ดาวน์โหลด CSV', btn_pdf: '📄 ดาวน์โหลด PDF',
-    btn_geotiff: '📥 ดาวน์โหลดข้อมูล (GeoTIFF)',
+    btn_geotiff: '📥 ดาวน์โหลดข้อมูลแรสเตอร์ (GeoTIFF)',
+    btn_vector: '📥 ดาวน์โหลดข้อมูลเวกเตอร์',
+    vdl_title: '📥 ดาวน์โหลดข้อมูลเวกเตอร์',
+    vdl_desc: 'ส่งออกรูปทรงพื้นที่ทำงานเป็นไฟล์เวกเตอร์',
+    vdl_format_label: 'เลือกรูปแบบ',
+    vdl_preparing: 'กำลังเตรียมไฟล์เวกเตอร์…',
     btn_export: '🖨️ ส่งออกรูปภาพ (PNG / JPEG / PDF)',
     mobile_data: 'ข้อมูล', mobile_analysis: 'วิเคราะห์', mobile_draw: 'วาด', mobile_output: 'ผลลัพธ์',
     server_label: 'เซิร์ฟเวอร์',
@@ -20626,7 +20814,12 @@ var SYLVA_TRANSLATIONS = {
     color_selection: 'রং নির্বাচন', choose_color: 'রঙ বেছে নিন',
     data_charts: 'ডেটা চার্ট', bar_chart: '📊 বার চার্ট', pie_chart: '🥧 পাই চার্ট',
     btn_image: '🖼️ ছবি', btn_csv: '📥 CSV ডাউনলোড', btn_pdf: '📄 PDF ডাউনলোড',
-    btn_geotiff: '📥 ডেটা ডাউনলোড (GeoTIFF)',
+    btn_geotiff: '📥 রাস্টার ডেটা ডাউনলোড (GeoTIFF)',
+    btn_vector: '📥 ভেক্টর ডেটা ডাউনলোড',
+    vdl_title: '📥 ভেক্টর ডেটা ডাউনলোড করুন',
+    vdl_desc: 'ওয়ার্কস্পেস জ্যামিতি ভেক্টর ফাইল হিসেবে রপ্তানি করুন।',
+    vdl_format_label: 'ফরম্যাট বেছে নিন',
+    vdl_preparing: 'ভেক্টর ফাইল প্রস্তুত হচ্ছে…',
     btn_export: '🖨️ চিত্র রপ্তানি (PNG / JPEG / PDF)',
     mobile_data: 'ডেটা', mobile_analysis: 'বিশ্লেষণ', mobile_draw: 'অঙ্কন', mobile_output: 'আউটপুট',
     server_label: 'সার্ভার',
@@ -20957,7 +21150,12 @@ var SYLVA_TRANSLATIONS = {
     color_selection: 'Chọn màu', choose_color: 'Chọn màu sắc',
     data_charts: 'Biểu đồ dữ liệu', bar_chart: '📊 Biểu đồ cột', pie_chart: '🥧 Biểu đồ tròn',
     btn_image: '🖼️ Hình ảnh', btn_csv: '📥 Tải CSV', btn_pdf: '📄 Tải PDF',
-    btn_geotiff: '📥 Tải dữ liệu (GeoTIFF)',
+    btn_geotiff: '📥 Tải dữ liệu raster (GeoTIFF)',
+    btn_vector: '📥 Tải dữ liệu vector',
+    vdl_title: '📥 Tải dữ liệu vector',
+    vdl_desc: 'Xuất hình học vùng làm việc dưới dạng tệp vector.',
+    vdl_format_label: 'Chọn định dạng',
+    vdl_preparing: 'Tệp vector đang được chuẩn bị…',
     btn_export: '🖨️ Xuất hình ảnh (PNG / JPEG / PDF)',
     mobile_data: 'Dữ liệu', mobile_analysis: 'Phân tích', mobile_draw: 'Vẽ', mobile_output: 'Đầu ra',
     // ── Hộp thoại thông tin người dùng ──────────────────────────
@@ -21324,7 +21522,12 @@ var SYLVA_TRANSLATIONS = {
     color_selection: 'رنگ کا انتخاب', choose_color: 'رنگ منتخب کریں',
     data_charts: 'ڈیٹا چارٹ', bar_chart: '📊 بار چارٹ', pie_chart: '🥧 پائی چارٹ',
     btn_image: '🖼️ تصویر', btn_csv: '📥 CSV ڈاؤن لوڈ', btn_pdf: '📄 PDF ڈاؤن لوڈ',
-    btn_geotiff: '📥 ڈیٹا ڈاؤن لوڈ (GeoTIFF)',
+    btn_geotiff: '📥 رسٹر ڈیٹا ڈاؤن لوڈ (GeoTIFF)',
+    btn_vector: '📥 ویکٹر ڈیٹا ڈاؤن لوڈ',
+    vdl_title: '📥 ویکٹر ڈیٹا ڈاؤن لوڈ',
+    vdl_desc: 'ورک اسپیس جیومیٹری کو ویکٹر فائل کے طور پر برآمد کریں۔',
+    vdl_format_label: 'فارمیٹ منتخب کریں',
+    vdl_preparing: 'ویکٹر فائل تیار ہو رہی ہے…',
     btn_export: '🖨️ تصویر برآمد (PNG / JPEG / PDF)',
     mobile_data: 'ڈیٹا', mobile_analysis: 'تجزیہ', mobile_draw: 'ڈرائنگ', mobile_output: 'آؤٹ پٹ',
     server_label: 'سرور', server_online: 'آن لائن', server_offline: 'آف لائن',
@@ -21675,7 +21878,12 @@ var SYLVA_TRANSLATIONS = {
     color_selection: 'Wybór koloru', choose_color: 'Wybierz kolor',
     data_charts: 'Wykresy danych', bar_chart: '📊 Wykres słupkowy', pie_chart: '🥧 Wykres kołowy',
     btn_image: '🖼️ Obraz', btn_csv: '📥 Pobierz CSV', btn_pdf: '📄 Pobierz PDF',
-    btn_geotiff: '📥 Pobierz dane (GeoTIFF)',
+    btn_geotiff: '📥 Pobierz dane rastrowe (GeoTIFF)',
+    btn_vector: '📥 Pobierz dane wektorowe',
+    vdl_title: '📥 Pobierz dane wektorowe',
+    vdl_desc: 'Eksportuj geometrię obszaru roboczego jako plik wektorowy.',
+    vdl_format_label: 'Wybierz format',
+    vdl_preparing: 'Plik wektorowy jest przygotowywany…',
     btn_export: '🖨️ Eksportuj obraz (PNG / JPEG / PDF)',
     mobile_data: 'Dane', mobile_analysis: 'Analiza', mobile_draw: 'Rysunek', mobile_output: 'Wyjście',
     server_label: 'Serwer',
@@ -22013,7 +22221,12 @@ var SYLVA_TRANSLATIONS = {
     color_selection: 'Pemilihan Warna', choose_color: 'Pilih Warna',
     data_charts: 'Carta Data', bar_chart: '📊 Carta Bar', pie_chart: '🥧 Carta Pai',
     btn_image: '🖼️ Imej', btn_csv: '📥 Muat Turun CSV', btn_pdf: '📄 Muat Turun PDF',
-    btn_geotiff: '📥 Muat Turun Data (GeoTIFF)',
+    btn_geotiff: '📥 Muat Turun Data Raster (GeoTIFF)',
+    btn_vector: '📥 Muat Turun Data Vektor',
+    vdl_title: '📥 Muat Turun Data Vektor',
+    vdl_desc: 'Eksport geometri ruang kerja sebagai fail vektor.',
+    vdl_format_label: 'Pilih Format',
+    vdl_preparing: 'Fail vektor sedang disediakan…',
     btn_export: '🖨️ Eksport Imej (PNG / JPEG / PDF)',
     mobile_data: 'Data', mobile_analysis: 'Analisis', mobile_draw: 'Lukis', mobile_output: 'Output',
     server_label: 'Pelayan',
@@ -22359,7 +22572,12 @@ var SYLVA_TRANSLATIONS = {
       color_selection: 'Түс тандоо', choose_color: 'Түс тандаңыз',
       data_charts: 'Маалымат диаграммалары', bar_chart: '📊 Тилкелүү диаграмма', pie_chart: '🥧 Тегерек диаграмма',
       btn_image: '🖼️ Сүрөт', btn_csv: '📥 CSV жүктөө', btn_pdf: '📄 PDF жүктөө',
-      btn_geotiff: '📥 Маалыматтарды жүктөө (GeoTIFF)',
+      btn_geotiff: '📥 Растр маалыматтарды жүктөө (GeoTIFF)',
+      btn_vector: '📥 Вектор маалыматтарды жүктөө',
+      vdl_title: '📥 Вектор маалыматтарды жүктөө',
+      vdl_desc: 'Жумуш аймагынын геометриясын вектор файл катары экспорттоо.',
+      vdl_format_label: 'Формат тандоо',
+      vdl_preparing: 'Вектор файл даярдалууда…',
       btn_export: '🖨️ Сүрөттү экспорттоо (PNG / JPEG / PDF)',
       mobile_data: 'Маалымат', mobile_analysis: 'Талдоо', mobile_draw: 'Сүрөт тарт', mobile_output: 'Чыгаруу',
       server_label: 'Сервер',
@@ -22701,7 +22919,12 @@ var SYLVA_TRANSLATIONS = {
     color_selection: 'Өнгө сонгох', choose_color: 'Өнгө сонгоно уу',
     data_charts: 'Өгөгдлийн диаграм', bar_chart: '📊 Баганан диаграм', pie_chart: '🥧 Тойрог диаграм',
     btn_image: '🖼️ Зураг', btn_csv: '📥 CSV татаж авах', btn_pdf: '📄 PDF татаж авах',
-    btn_geotiff: '📥 Өгөгдөл татаж авах (GeoTIFF)',
+    btn_geotiff: '📥 Растр өгөгдөл татаж авах (GeoTIFF)',
+    btn_vector: '📥 Вектор өгөгдөл татаж авах',
+    vdl_title: '📥 Вектор өгөгдөл татаж авах',
+    vdl_desc: 'Ажлын талбайн геометрийг вектор файл болгон гаргах.',
+    vdl_format_label: 'Формат сонгох',
+    vdl_preparing: 'Вектор файл бэлтгэгдэж байна…',
     btn_export: '🖨️ Зураг экспортлох (PNG / JPEG / PDF)',
     mobile_data: 'Өгөгдөл', mobile_analysis: 'Шинжилгээ', mobile_draw: 'Зурах', mobile_output: 'Гаралт',
     server_label: 'Сервер', server_online: 'Онлайн', server_offline: 'Оффлайн',
@@ -23007,7 +23230,12 @@ var SYLVA_TRANSLATIONS = {
       color_selection: 'ფერის შერჩევა', choose_color: 'აირჩიეთ ფერი',
       data_charts: 'მონაცემთა სქემები', bar_chart: '📊 სვეტოვანი სქემა', pie_chart: '🥧 წრიული სქემა',
       btn_image: '🖼️ სურათი', btn_csv: '📥 CSV ჩამოტვირთვა', btn_pdf: '📄 PDF ჩამოტვირთვა',
-      btn_geotiff: '📥 მონაცემების ჩამოტვირთვა (GeoTIFF)',
+      btn_geotiff: '📥 რასტრული მონაცემების ჩამოტვირთვა (GeoTIFF)',
+      btn_vector: '📥 ვექტორული მონაცემების ჩამოტვირთვა',
+      vdl_title: '📥 ვექტორული მონაცემების ჩამოტვირთვა',
+      vdl_desc: 'სამუშაო სივრცის გეომეტრიის ვექტორულ ფაილად ექსპორტი.',
+      vdl_format_label: 'ფორმატის არჩევა',
+      vdl_preparing: 'ვექტორული ფაილი მზადდება…',
       btn_export: '🖨️ სურათის ექსპორტი (PNG / JPEG / PDF)',
       mobile_data: 'მონაცემები', mobile_analysis: 'ანალიზი', mobile_draw: 'ხატვა', mobile_output: 'გამოტანა',
       server_label: 'სერვერი',
@@ -23333,7 +23561,12 @@ var SYLVA_TRANSLATIONS = {
     color_selection: 'Selezione Colore', choose_color: 'Scegli Colore',
     data_charts: 'Grafici Dati', bar_chart: '📊 Grafico a Barre', pie_chart: '🥧 Grafico a Torta',
     btn_image: '🖼️ Immagine', btn_csv: '📥 Scarica CSV', btn_pdf: '📄 Scarica PDF',
-    btn_geotiff: '📥 Scarica Dati (GeoTIFF)',
+    btn_geotiff: '📥 Scarica Dati Raster (GeoTIFF)',
+    btn_vector: '📥 Scarica Dati Vettoriali',
+    vdl_title: '📥 Scarica Dati Vettoriali',
+    vdl_desc: 'Esporta la geometria dell\'area di lavoro come file vettoriale.',
+    vdl_format_label: 'Seleziona Formato',
+    vdl_preparing: 'Il file vettoriale è in preparazione…',
     btn_export: '🖨️ Esporta Immagine (PNG / JPEG / PDF)',
     mobile_data: 'Dati', mobile_analysis: 'Analisi', mobile_draw: 'Disegno', mobile_output: 'Output',
     server_label: 'Server',
@@ -28187,6 +28420,111 @@ function sylvaPdfCardsHTML() {
         sessionStorage.removeItem('sgis_notif_shown');
         if (typeof _origLogout === 'function') _origLogout.apply(this, arguments);
     };
+})();
+</script>
+
+<script>
+// ===== VEKTÖR İNDİRME DİYALOĞU FONKSİYONLARI =====
+var _vdlSelectedFormat = 'kml';
+
+function openVectorDownloadDialog() {
+    var modal = document.getElementById('vector-download-modal');
+    if (!modal) return;
+    // Reset state
+    var status = document.getElementById('vdl-status');
+    var box = document.getElementById('vector-dialog-box');
+    if (status) { status.style.display = 'none'; status.textContent = ''; }
+    if (box) box.classList.remove('downloading');
+    var btn = document.getElementById('vdl-btn-download');
+    if (btn) { btn.disabled = false; btn.innerHTML = (typeof t === 'function' ? t('btn_download') : '⬇️ İndir'); }
+    // Default filename
+    var fnInput = document.getElementById('vdl-filename');
+    if (fnInput && !fnInput._userEdited) fnInput.value = 'SylvaGIS_vector';
+    modal.style.display = 'flex';
+}
+
+function closeVectorDownloadDialog() {
+    var modal = document.getElementById('vector-download-modal');
+    if (modal) modal.style.display = 'none';
+    var box = document.getElementById('vector-dialog-box');
+    if (box) box.classList.remove('downloading');
+}
+
+function selectVdlFormat(fmt) {
+    _vdlSelectedFormat = fmt;
+    ['kml','kmz','shp'].forEach(function(f) {
+        var btn = document.getElementById('vdl-fmt-' + f);
+        if (btn) {
+            if (f === fmt) btn.classList.add('selected');
+            else btn.classList.remove('selected');
+        }
+    });
+}
+
+function executeVectorDownload() {
+    var fmt = _vdlSelectedFormat;
+    var fnInput = document.getElementById('vdl-filename');
+    var filename = (fnInput ? fnInput.value.trim() : '') || 'SylvaGIS_vector';
+    var btn = document.getElementById('vdl-btn-download');
+    var status = document.getElementById('vdl-status');
+    var box = document.getElementById('vector-dialog-box');
+
+    // Show blink indicator
+    if (box) box.classList.add('downloading');
+    if (btn) { btn.disabled = true; btn.innerHTML = '⏳…'; }
+    if (status) { status.style.display = 'none'; }
+
+    // Collect workspace geometry
+    var geomGeoJSON = null;
+    try {
+        if (window._workspaceLayer) {
+            geomGeoJSON = JSON.stringify(window._workspaceLayer.toGeoJSON ? window._workspaceLayer.toGeoJSON() : null);
+        }
+    } catch(e) {}
+
+    var body = { format: fmt, filename: filename };
+    if (geomGeoJSON) body.geometry = geomGeoJSON;
+
+    fetch((window.API_BASE || '') + '/api/vector-download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+    })
+    .then(function(res) {
+        if (!res.ok) return res.json().then(function(e) { throw new Error(e.error || res.statusText); });
+        return res.blob();
+    })
+    .then(function(blob) {
+        var ext = fmt === 'shp' ? '.zip' : ('.' + fmt);
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = filename + ext;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function() { URL.revokeObjectURL(a.href); document.body.removeChild(a); }, 3000);
+        closeVectorDownloadDialog();
+    })
+    .catch(function(err) {
+        if (box) box.classList.remove('downloading');
+        if (btn) { btn.disabled = false; btn.innerHTML = (typeof t === 'function' ? t('btn_download') : '⬇️ İndir'); }
+        if (status) {
+            status.style.display = 'block';
+            status.style.color = '#991b1b';
+            status.style.background = '#fee2e2';
+            status.style.border = '1px solid #fca5a5';
+            status.textContent = '❌ ' + (err.message || 'Hata');
+        }
+    });
+}
+
+// Close on overlay click
+(function() {
+    var modal = document.getElementById('vector-download-modal');
+    if (modal) {
+        modal.addEventListener('click', function(e) {
+            if (e.target === modal) closeVectorDownloadDialog();
+        });
+    }
 })();
 </script>
 </body>
