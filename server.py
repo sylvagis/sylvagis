@@ -204,195 +204,6 @@ def ping():
 
 
 # ════════════════════════════════════════════════════════════════
-# 📄 KVKK AYDINLATMA METNİ SAYFASI
-# ════════════════════════════════════════════════════════════════
-@app.route('/kvkk', methods=['GET'])
-def kvkk_page():
-    html = """<!DOCTYPE html>
-<html lang="tr">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>KVKK Aydınlatma Metni — SylvaGIS</title>
-<style>
-  *{box-sizing:border-box;margin:0;padding:0;}
-  body{font-family:'Segoe UI',Arial,sans-serif;background:#f1f5f9;color:#1e293b;line-height:1.7;}
-  .topbar{background:#1e3a8a;color:#fff;padding:14px 0;}
-  .topbar-inner{max-width:820px;margin:0 auto;padding:0 24px;display:flex;align-items:center;gap:14px;}
-  .topbar-logo{font-size:1.25rem;font-weight:800;letter-spacing:0.01em;}
-  .topbar-logo span{color:#93c5fd;}
-  .topbar-sub{font-size:0.82rem;color:#bfdbfe;margin-top:2px;}
-  .back-btn{margin-left:auto;padding:6px 16px;background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.25);border-radius:6px;color:#fff;text-decoration:none;font-size:0.8rem;transition:.15s;}
-  .back-btn:hover{background:rgba(255,255,255,0.22);}
-  .container{max-width:820px;margin:32px auto;padding:0 24px 60px;}
-  .card{background:#fff;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,0.07);padding:40px 44px;}
-  h1{font-size:1.45rem;font-weight:800;color:#1e3a8a;margin-bottom:4px;}
-  .subtitle{font-size:0.85rem;color:#64748b;margin-bottom:6px;}
-  .update-date{font-size:0.78rem;color:#94a3b8;margin-bottom:28px;padding-bottom:20px;border-bottom:1px solid #e2e8f0;}
-  h2{font-size:1.05rem;font-weight:700;color:#1e3a8a;margin:28px 0 10px;}
-  h3{font-size:0.92rem;font-weight:700;color:#334155;margin:16px 0 7px;}
-  p{font-size:0.88rem;color:#334155;margin-bottom:10px;}
-  ul,ol{padding-left:20px;margin-bottom:10px;}
-  li{font-size:0.88rem;color:#334155;margin-bottom:4px;}
-  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:0.84rem;}
-  th{background:#eff6ff;color:#1e3a8a;font-weight:700;padding:9px 12px;text-align:left;border:1px solid #dbeafe;}
-  td{padding:8px 12px;border:1px solid #e2e8f0;color:#334155;}
-  tr:nth-child(even) td{background:#f8fafc;}
-  .note{background:#fffbeb;border-left:4px solid #f59e0b;border-radius:0 6px 6px 0;padding:10px 14px;margin:14px 0;font-size:0.84rem;color:#78350f;}
-  .note-blue{background:#eff6ff;border-left:4px solid #3b82f6;border-radius:0 6px 6px 0;padding:10px 14px;margin:14px 0;font-size:0.84rem;color:#1e40af;}
-  .consent-box{background:#f0fdf4;border:1.5px solid #86efac;border-radius:8px;padding:16px 20px;margin:28px 0 0;font-size:0.87rem;color:#166534;font-weight:600;}
-  hr{border:none;border-top:1px solid #e2e8f0;margin:24px 0;}
-  strong{color:#1e293b;}
-  a{color:#1e3a8a;}
-  .footer{text-align:center;font-size:0.76rem;color:#94a3b8;margin-top:24px;}
-</style>
-</head>
-<body>
-<div class="topbar">
-  <div class="topbar-inner">
-    <div>
-      <div class="topbar-logo">🌲 Sylva<span>GIS</span></div>
-      <div class="topbar-sub">Orman Analiz ve Uzaktan Algılama Platformu</div>
-    </div>
-    <a href="/" class="back-btn">← Platforma Dön</a>
-  </div>
-</div>
-
-<div class="container">
-<div class="card">
-
-<h1>KVKK Aydınlatma Metni</h1>
-<div class="subtitle">SylvaGIS Orman Analiz ve Uzaktan Algılama Platformu</div>
-<div class="update-date">Son Güncelleme: 2025</div>
-
-<p>6698 sayılı Kişisel Verilerin Korunması Kanunu (<strong>"KVKK"</strong> veya <strong>"Kanun"</strong>) uyarınca, veri sorumlusu sıfatıyla <strong>SylvaGIS</strong> tarafından kişisel verileriniz aşağıda açıklanan kapsamda işlenmektedir.</p>
-
-<hr>
-
-<h2>1. Veri Sorumlusunun Kimliği</h2>
-<table>
-<tr><th>Unvan</th><td>SylvaGIS</td></tr>
-<tr><th>E-posta</th><td><a href="mailto:sylvagis.world@gmail.com">sylvagis.world@gmail.com</a></td></tr>
-<tr><th>KVKK Başvuru</th><td>Platform üzerindeki İletişim formu veya yukarıdaki e-posta</td></tr>
-</table>
-
-<hr>
-
-<h2>2. İşlenen Kişisel Veriler</h2>
-
-<h3>2.1. Kimlik ve İletişim Bilgileri</h3>
-<ul>
-<li>Ad, soyad</li>
-<li>Ülke bilgisi</li>
-<li>Meslek / uzmanlık alanı</li>
-<li>Bağlı olduğu kurum / bölüm-program bilgisi</li>
-<li>E-posta adresi (iletişim formu)</li>
-</ul>
-
-<h3>2.2. Kullanım / İşlem Verileri</h3>
-<ul>
-<li>Platform üzerinde tanımlanan çalışma alanı (AOI) koordinatları</li>
-<li>Seçilen analiz türleri, tarih aralıkları, sensör/veri kaynağı tercihleri</li>
-<li>İndirilen dosya türleri ve formatları (GeoTIFF, KML, SHP vb.)</li>
-</ul>
-
-<h3>2.3. İletişim Formu Verileri</h3>
-<ul>
-<li>İletişim formunda paylaşılan ad-soyad, e-posta, konu ve mesaj içeriği</li>
-</ul>
-
-<h3>2.4. Teknik Veriler</h3>
-<ul>
-<li>IP adresi, tarayıcı türü ve versiyonu, işletim sistemi bilgisi</li>
-<li>Log kayıtları (erişim zamanı, hata kayıtları)</li>
-</ul>
-
-<div class="note">⚠️ <strong>Özel nitelikli kişisel veri</strong> (sağlık, dini/etnik köken vb.) SylvaGIS tarafından toplanmamaktadır. AOI koordinatları doğrudan bir gerçek kişiyle ilişkilendirilebilir nitelikte olmadığı sürece kişisel veri kapsamı dışında değerlendirilir.</div>
-
-<hr>
-
-<h2>3. Kişisel Verilerin İşlenme Amaçları</h2>
-<ul>
-<li>Platforma kullanıcı kaydı oluşturulması ve kimlik doğrulaması</li>
-<li>Talep edilen analiz, veri indirme ve harita çıktısı hizmetlerinin sunulması</li>
-<li>Kullanıcı deneyiminin kişiselleştirilmesi (dil tercihi, meslek bazlı içerik)</li>
-<li>İletişim formu üzerinden iletilen talep, öneri ve şikâyetlerin yanıtlanması</li>
-<li>Platform güvenliğinin sağlanması ve kötüye kullanımın önlenmesi</li>
-<li>Hizmet kalitesinin ölçülmesi ve platformun geliştirilmesi</li>
-<li>Yasal yükümlülüklerin yerine getirilmesi</li>
-<li>İstatistiksel analiz (meslek/ülke bazlı, anonimleştirilmiş)</li>
-</ul>
-
-<hr>
-
-<h2>4. Hukuki Sebep</h2>
-<ul>
-<li><strong>Açık rızanızın bulunması</strong> (m. 5/1) — kayıt formu KVKK onayı</li>
-<li><strong>Sözleşmenin kurulması veya ifasıyla doğrudan ilgili olması</strong> (m. 5/2-c) — hizmet sunumu için gerekli veriler</li>
-<li><strong>Hukuki yükümlülüğün yerine getirilmesi</strong> (m. 5/2-ç)</li>
-<li><strong>Meşru menfaat</strong> (m. 5/2-f) — platform güvenliği, hata analizi</li>
-</ul>
-
-<hr>
-
-<h2>5. Kişisel Verilerin Aktarılması</h2>
-<ul>
-<li><strong>Yurt içi hizmet sağlayıcılar:</strong> Barındırma (hosting) ve e-posta gönderim hizmeti alınan tedarikçiler</li>
-<li><strong>Yurt dışı hizmet sağlayıcılar:</strong> Google Cloud / Google Earth Engine (AOI sorguları), Render (barındırma)</li>
-<li><strong>Yetkili kamu kurum ve kuruluşları:</strong> Yasal düzenlemeler gereği talep halinde</li>
-</ul>
-<div class="note-blue">🌐 <strong>Not:</strong> Google Earth Engine altyapısı kullanıldığından çalışma alanı (AOI) sorgularınız Google'ın (Alphabet Inc.) sunucularına iletilmektedir. Bu aktarım, hizmetin ifası için zorunlu teknik bir gerekliliktir.</div>
-
-<hr>
-
-<h2>6. Verilerin Saklama Süresi</h2>
-<table>
-<tr><th>Veri Kategorisi</th><th>Saklama Süresi</th></tr>
-<tr><td>Hesap / profil bilgileri</td><td>Hesap aktif olduğu sürece</td></tr>
-<tr><td>İletişim formu kayıtları</td><td>3 yıl</td></tr>
-<tr><td>Log / teknik kayıtlar</td><td>1 yıl</td></tr>
-</table>
-
-<hr>
-
-<h2>7. KVKK Madde 11 Kapsamındaki Haklarınız</h2>
-<ol>
-<li>Kişisel verinizin işlenip işlenmediğini öğrenme</li>
-<li>İşlenmişse buna ilişkin bilgi talep etme</li>
-<li>İşlenme amacını ve amacına uygun kullanılıp kullanılmadığını öğrenme</li>
-<li>Yurt içinde / yurt dışında aktarıldığı üçüncü kişileri bilme</li>
-<li>Eksik veya yanlış işlenmişse düzeltilmesini isteme</li>
-<li>KVKK m. 7 şartları çerçevesinde silinmesini veya yok edilmesini isteme</li>
-<li>Yapılan işlemlerin aktarılan üçüncü kişilere bildirilmesini isteme</li>
-<li>Otomatik sistemlerle analiz sonucu aleyhine çıkan sonuca itiraz etme</li>
-<li>Kanuna aykırı işlenmesi sebebiyle zararın giderilmesini talep etme</li>
-</ol>
-
-<p style="margin-top:12px;">Bu haklarınızı kullanmak için taleplerinizi <strong><a href="mailto:sylvagis.world@gmail.com">sylvagis.world@gmail.com</a></strong> adresine yazılı olarak veya platform üzerindeki <strong>İletişim</strong> formunu kullanarak iletebilirsiniz. Başvurunuz en geç <strong>30 gün</strong> içinde ücretsiz olarak sonuçlandırılır.</p>
-
-<hr>
-
-<h2>8. Çerezler (Cookies)</h2>
-<p>Platform, oturum yönetimi ve dil tercihi hatırlama amacıyla yerel depolama (localStorage) ve çerezler kullanmaktadır. Çerez tercihlerinizi tarayıcı ayarlarınızdan yönetebilirsiniz.</p>
-
-<hr>
-
-<h2>10. Değişiklikler</h2>
-<p>SylvaGIS, işbu Aydınlatma Metni'nde gerekli gördüğü hâllerde değişiklik yapma hakkını saklı tutar. Güncel metin her zaman <a href="/kvkk">/kvkk</a> adresi üzerinden erişilebilir olacaktır.</p>
-
-<div class="consent-box">
-  ✅ Onay Metni: "KVKK Aydınlatma Metni'ni okudum; kişisel verilerimin yukarıda belirtilen amaçlarla işlenmesini ve gerekli hâllerde yurt dışına aktarılmasını kabul ediyorum."
-</div>
-
-</div>
-<div class="footer">© SylvaGIS — Orman Analiz ve Uzaktan Algılama Platformu</div>
-</div>
-</body>
-</html>"""
-    return Response(html, mimetype='text/html; charset=utf-8')
-
-
-# ════════════════════════════════════════════════════════════════
 # 📧 İLETİŞİM FORMU — sylvagis.world@gmail.com adresine otomatik gönderim
 # ════════════════════════════════════════════════════════════════
 # Kullanıcının mail istemcisini (Gmail vb.) açmadan, formdaki bilgiler
@@ -428,7 +239,7 @@ def send_contact_message():
         return jsonify({'success': False, 'error': 'Geçersiz e-posta adresi.'}), 400
 
     smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'aaaaaaaaaaaaaa'
+    smtp_pass = 'ksfnkvwcutrawcih'
 
     body = (
         'SylvaGIS İletişim Formu üzerinden yeni bir mesaj gönderildi.\n\n'
@@ -3483,7 +3294,7 @@ SYLVA_OWNER_EMAIL = 'sylvagis.world@gmail.com'
 
 def _send_registration_email(ad, soyad, email, meslek, ulke):
     smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'aaaaaaaaaaaaaa'
+    smtp_pass = 'ksfnkvwcutrawcih'
 
     msg = MIMEMultipart('alternative')
     msg['Subject'] = f'[SylvaGIS] Yeni Kayıt — {ad} {soyad}'
