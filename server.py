@@ -187,7 +187,7 @@ def send_contact_message():
         return jsonify({'success': False, 'error': 'Geçersiz e-posta adresi.'}), 400
 
     smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'ksfnkvwcutrawcih'
+    smtp_pass = 'aaaaaaaaaaaaaaaa'
 
     body = (
         'SylvaGIS İletişim Formu üzerinden yeni bir mesaj gönderildi.\n\n'
@@ -3057,7 +3057,7 @@ SYLVA_OWNER_EMAIL = 'sylvagis.world@gmail.com'
 
 def _send_registration_email(ad, soyad, email, meslek, ulke):
     smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'ksfnkvwcutrawcih'
+    smtp_pass = 'aaaaaaaaaaaaaaaaaa'
 
     msg = MIMEMultipart('alternative')
     msg['Subject'] = f'[SylvaGIS] Yeni Kayıt — {ad} {soyad}'
