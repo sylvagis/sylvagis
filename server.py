@@ -25,6 +25,7 @@ app = Flask(__name__)
 # Üretim URL'si + yerel geliştirme adresleri listeye eklenmiştir.
 _ALLOWED_ORIGINS = [
     'https://sylvagis.onrender.com',
+    'https://sylvagis.vercel.app',
     'http://localhost:5000',
     'http://127.0.0.1:5000',
 ]
