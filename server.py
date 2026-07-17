@@ -255,21 +255,93 @@ def _hex_to_rgb(hex_color):
     return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
 
 
+def _write_vat_dbf(symb):
+    """
+    ArcMap'in okuyacağı .vat.dbf (dBASE III+) dosyasını bellekte oluşturur.
+    Sütunlar: Value (N,10) | Class_TR (C,60) | Class_EN (C,60) | Red (N,3) | Green (N,3) | Blue (N,3)
+
+    ArcMap, TIF ile aynı klasörde '<dosya>.tif.vat.dbf' dosyasını görünce
+    Unique Values sembolojisinde Label sütununu buradan otomatik doldurur.
+    """
+    import struct, datetime
+
+    fields = [
+        ('VALUE',    'N', 10),
+        ('CLASS_TR', 'C', 60),
+        ('CLASS_EN', 'C', 60),
+        ('RED',      'N',  3),
+        ('GREEN',    'N',  3),
+        ('BLUE',     'N',  3),
+    ]
+    records = []
+    for val, (hx, label_tr, label_en) in sorted(symb.items()):
+        r, g, b = _hex_to_rgb(hx)
+        records.append((val, label_tr, label_en, r, g, b))
+
+    num_fields  = len(fields)
+    num_records = len(records)
+    header_size = 32 + 32 * num_fields + 1          # 32 hdr + 32*n field desc + 0x0D terminator
+    record_size = 1 + sum(f[2] for f in fields)      # 1 deletion flag + field widths
+
+    now = datetime.date.today()
+    buf = bytearray()
+
+    # ── DBF başlığı (32 bayt) ──────────────────────────────────────────────
+    buf += struct.pack('<B',   0x03)                          # versiyon: dBASE III+
+    buf += struct.pack('<BBB', now.year - 1900, now.month, now.day)
+    buf += struct.pack('<I',   num_records)
+    buf += struct.pack('<H',   header_size)
+    buf += struct.pack('<H',   record_size)
+    buf += b'\x00' * 20                                      # rezerv
+
+    # ── Alan tanımlayıcıları (32 bayt × n) ────────────────────────────────
+    for name, ftype, length in fields:
+        name_b = name.encode('ascii')[:10].ljust(11, b'\x00')
+        buf += name_b
+        buf += ftype.encode('ascii')
+        buf += b'\x00' * 4                                   # adres rezervi
+        buf += struct.pack('<B', length)                      # alan uzunluğu
+        buf += struct.pack('<B', 0)                           # ondalık sayı
+        buf += b'\x00' * 14                                  # rezerv
+
+    buf += b'\x0D'                                           # başlık sonlandırıcı
+
+    # ── Kayıtlar ───────────────────────────────────────────────────────────
+    for rec in records:
+        buf += b'\x20'                                       # aktif kayıt
+        for (name, ftype, length), val in zip(fields, rec):
+            if ftype == 'N':
+                s = str(int(val)).rjust(length)[:length]
+            else:
+                s = str(val).ljust(length)[:length]
+            buf += s.encode('utf-8', errors='replace')[:length].ljust(length, b' ')
+
+    buf += b'\x1A'                                           # EOF
+    return bytes(buf)
+
+
+def _write_clr(symb):
+    """
+    ESRI ASCII renk tablosu (.clr) oluşturur.
+    Format: <değer> <R> <G> <B> (her satır bir sınıf)
+    ArcMap/QGIS bu dosyayı TIF ile aynı klasörde bulursa renkleri otomatik uygular.
+    """
+    lines = []
+    for val, (hx, label_tr, _en) in sorted(symb.items()):
+        r, g, b = _hex_to_rgb(hx)
+        lines.append('{} {} {} {} # {}'.format(val, r, g, b, label_tr))
+    return '\n'.join(lines).encode('utf-8')
+
+
 def _inject_lulc_symbology(tif_bytes, index):
     """
-    LULC GeoTIFF baytlarına ColorTable ve Raster Attribute Table (RAT) gömer.
-
-    ColorTable (rasterio): ArcMap/QGIS'te otomatik 'Unique Values' renk sembolojisi.
-    RAT (GDAL):            'Value', 'Class_TR', 'Class_EN' sütunları; ArcMap
-                           Label alanı buradan üretilir (sayı yerine sınıf adı).
-
-    Her iki adım da try/except içinde; kütüphane eksikse ham bytes döner.
+    LULC GeoTIFF baytlarına ColorTable (rasterio) gömer ve TIF baytlarını döndürür.
+    ZIP paketleme download_geotiff() içinde yapılır.
     """
     symb = _LULC_SYMBOLOGY.get(index)
     if not symb:
         return tif_bytes
 
-    # ── Adım 1: ColorTable (rasterio) ────────────────────────────────────────
     try:
         import rasterio
         from rasterio.io import MemoryFile
@@ -288,55 +360,65 @@ def _inject_lulc_symbology(tif_bytes, index):
                     try:
                         dst.write_colormap(1, colormap)
                     except Exception:
-                        pass  # colormap yazılamazsa devam et
+                        pass
                 tif_bytes = out_mf.read()
     except Exception:
-        pass  # rasterio yoksa orijinal bytes ile devam
-
-    # ── Adım 2: RAT (GDAL Python bindings) ───────────────────────────────────
-    try:
-        from osgeo import gdal
-        import tempfile
-        import os as _os
-
-        with tempfile.NamedTemporaryFile(suffix='.tif', delete=False) as tmp:
-            tmp.write(tif_bytes)
-            tmp_path = tmp.name
-
-        ds = gdal.Open(tmp_path, gdal.GA_Update)
-        if ds is not None:
-            band = ds.GetRasterBand(1)
-
-            rat = gdal.RasterAttributeTable()
-            rat.CreateColumn('Value',    gdal.GFT_Integer, gdal.GFU_MinMax)
-            rat.CreateColumn('Class_TR', gdal.GFT_String,  gdal.GFU_Name)
-            rat.CreateColumn('Class_EN', gdal.GFT_String,  gdal.GFU_Generic)
-            rat.CreateColumn('Red',      gdal.GFT_Integer, gdal.GFU_Red)
-            rat.CreateColumn('Green',    gdal.GFT_Integer, gdal.GFU_Green)
-            rat.CreateColumn('Blue',     gdal.GFT_Integer, gdal.GFU_Blue)
-
-            for row_i, (val, (hx, label_tr, label_en)) in enumerate(sorted(symb.items())):
-                r, g, b = _hex_to_rgb(hx)
-                rat.SetValueAsInt(row_i, 0, val)
-                rat.SetValueAsString(row_i, 1, label_tr)
-                rat.SetValueAsString(row_i, 2, label_en)
-                rat.SetValueAsInt(row_i, 3, r)
-                rat.SetValueAsInt(row_i, 4, g)
-                rat.SetValueAsInt(row_i, 5, b)
-
-            band.SetDefaultRAT(rat)
-            band.SetDescription('Land_Use_Class')
-            ds.FlushCache()
-            ds = None  # dataset'i kapat
-
-            with open(tmp_path, 'rb') as f:
-                tif_bytes = f.read()
-
-        _os.unlink(tmp_path)
-    except Exception:
-        pass  # GDAL yoksa ColorTable ile yetinilir
+        pass
 
     return tif_bytes
+
+
+def _build_lulc_zip(tif_bytes, index, safe_name):
+    """
+    LULC indirmesi için ZIP paket oluşturur:
+      - <safe_name>.tif            → ColorTable gömülü raster
+      - <safe_name>.tif.vat.dbf   → ArcMap VAT (Value/Class_TR/Class_EN/RGB sütunları)
+      - <safe_name>.clr            → ESRI ASCII renk tablosu (QGIS için de geçerli)
+      - OKUYUN.txt                 → Kısa kullanım kılavuzu
+
+    ArcMap, TIF ile aynı klasörde .vat.dbf bulduğunda Unique Values
+    sembolojisinde Label sütununu otomatik olarak sınıf adıyla doldurur.
+    """
+    symb = _LULC_SYMBOLOGY.get(index)
+
+    # ColorTable'ı TIF'e göm
+    tif_bytes = _inject_lulc_symbology(tif_bytes, index)
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        # 1) Raster
+        zf.writestr(safe_name + '.tif', tif_bytes)
+
+        if symb:
+            # 2) ArcMap VAT (.vat.dbf)
+            zf.writestr(safe_name + '.tif.vat.dbf', _write_vat_dbf(symb))
+
+            # 3) ESRI/QGIS renk tablosu (.clr)
+            zf.writestr(safe_name + '.clr', _write_clr(symb))
+
+        # 4) Kullanım notu
+        readme = (
+            'SylvaGIS — Arazi Kullanımı / Land Use Export\n'
+            '=============================================\n\n'
+            'Bu ZIP paketi 3 dosya içerir:\n\n'
+            '  {name}.tif          → Sınıf değerleri + gömülü renk paleti\n'
+            '  {name}.tif.vat.dbf  → ArcMap sınıf adı tablosu (otomatik yüklenir)\n'
+            '  {name}.clr          → ESRI / QGIS renk tablosu\n\n'
+            'ArcMap kullanımı:\n'
+            '  1. Tüm dosyaları AYNI KLASÖRE çıkartın.\n'
+            '  2. ArcMap\'e yalnızca .tif dosyasını ekleyin.\n'
+            '  3. Layer Properties → Symbology → Unique Values açın.\n'
+            '  4. Label sütunu başlığına sağ tıklayın →\n'
+            '     "Use Class_TR as Label" veya "Use Class_EN as Label" seçin.\n\n'
+            'QGIS kullanımı:\n'
+            '  1. Tüm dosyaları AYNI KLASÖRE çıkartın.\n'
+            '  2. .tif dosyasını QGIS\'e sürükleyin; renkler otomatik uygulanır.\n'
+            '  3. Ek etiket için .clr dosyasını Layer Styling → Color Map\'ten yükleyin.\n'
+        ).format(name=safe_name)
+        zf.writestr('OKUYUN.txt', readme.encode('utf-8'))
+
+    buf.seek(0)
+    return buf.read()
 
 
 @app.route('/api/ping', methods=['GET'])
@@ -380,7 +462,7 @@ def send_contact_message():
         return jsonify({'success': False, 'error': 'Geçersiz e-posta adresi.'}), 400
 
     smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'ksfnkvwcutrawcih'
+    smtp_pass = 'aaaaaaaaaaaaaaaaaa'
 
     body = (
         'SylvaGIS İletişim Formu üzerinden yeni bir mesaj gönderildi.\n\n'
@@ -2439,14 +2521,20 @@ def download_geotiff():
             fallback_region_geom=roi.bounds(maxError=100)
         )
 
-        # ── LULC: ColorTable + RAT (sınıf renkleri ve etiketleri) ─────────
-        # Arazi kullanım sınıflandırması indirildiyse GeoTIFF'e renk paleti
-        # (ColorTable) ve sınıf isimlerini içeren Raster Attribute Table (RAT)
-        # gömer. Bu sayede ArcMap/QGIS açıldığında sayı yerine "Ağaç", "Mera"
-        # gibi etiketler görünür ve renklendirme otomatik uygulanır.
+        # ── LULC: ZIP paketi (TIF + .vat.dbf + .clr) ─────────────────────
+        # Arazi kullanımı indekslerinde tek .tif yerine ZIP döndürülür.
+        # ZIP içindeki .vat.dbf ArcMap tarafından otomatik okunur;
+        # Unique Values sembolojisinde Label sütunu sınıf adıyla dolar
+        # (sayı yerine "Ağaç", "Mera", "Tarım" vb.).
+        # Tüm dosyalar AYNI klasöre çıkartıldığında ArcMap .tif'i açarken
+        # .vat.dbf'yi de yükler ve "Class_TR / Class_EN" alanlarını sunar.
         _dl_index = data.get('index', '')
         if _dl_index in ('LULC', 'LULC_ESA', 'LULC_MODIS', 'LULC_CORINE'):
-            tif_bytes = _inject_lulc_symbology(tif_bytes, _dl_index)
+            zip_bytes = _build_lulc_zip(tif_bytes, _dl_index, safe_name)
+            resp = Response(zip_bytes, mimetype='application/zip')
+            resp.headers['Content-Disposition'] = 'attachment; filename="{}.zip"'.format(safe_name)
+            resp.headers['Content-Length'] = str(len(zip_bytes))
+            return resp
 
         resp = Response(tif_bytes, mimetype='image/tiff')
         resp.headers['Content-Disposition'] = 'attachment; filename="{}.tif"'.format(safe_name)
@@ -3437,7 +3525,7 @@ SYLVA_OWNER_EMAIL = 'sylvagis.world@gmail.com'
 
 def _send_registration_email(ad, soyad, email, meslek, ulke):
     smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'ksfnkvwcutrawcih'
+    smtp_pass = 'aaaaaaaaaaaaaaa'
 
     msg = MIMEMultipart('alternative')
     msg['Subject'] = f'[SylvaGIS] Yeni Kayıt — {ad} {soyad}'
