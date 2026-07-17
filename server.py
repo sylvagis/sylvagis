@@ -187,7 +187,7 @@ def send_contact_message():
         return jsonify({'success': False, 'error': 'Geçersiz e-posta adresi.'}), 400
 
     smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'ksfnkvwcutrawcih'
+    smtp_pass = 'aaaaaaaaaaaaaaaa'
 
     body = (
         'SylvaGIS İletişim Formu üzerinden yeni bir mesaj gönderildi.\n\n'
@@ -1747,7 +1747,13 @@ def analyze():
         # için kullanılır; sorgu başarısız olursa (bazı çok-bantlı/karma
         # görüntülerde farklı bantlar farklı CRS'te olabilir) sessizce None
         # bırakılır ve istemci tarafında WGS 84'e düşülür.
-        global _last_analyze_native_crs
+        # (NOT: 'global _last_analyze_native_crs' bildirimi bu fonksiyonun
+        # başındaki RGB dalında zaten yapıldı; Python'da bir fonksiyon
+        # içinde aynı isim için 'global' yalnızca BİR kez ve — ilgili isme
+        # yapılan İLK atamadan ÖNCE görünmelidir, aksi halde "assigned to
+        # before global declaration" sözdizimi hatası oluşur. Bu yüzden
+        # burada tekrar 'global' yazılmıyor; üstteki bildirim tüm fonksiyon
+        # için geçerlidir.)
         native_crs = None
         try:
             native_crs = _call_with_retry(
@@ -2091,6 +2097,12 @@ def download_geotiff():
             fallback_region_geom=roi.bounds(maxError=100)
         )
 
+        # 🎨 Arazi Kullanımı (LULC) ailesi: ekranda/lejantta görülen sınıf
+        # renklerinin AYNISINI indirilen .tif dosyasının içine (GDAL renk
+        # tablosu olarak) göm — bkz. _stamp_lulc_colormap() docstring'i.
+        if data.get('index') in LULC_COLORMAP_INDICES:
+            tif_bytes = _stamp_lulc_colormap(tif_bytes, vis, nodata_value=nodata_value)
+
         resp = Response(tif_bytes, mimetype='image/tiff')
         resp.headers['Content-Disposition'] = 'attachment; filename="{}.tif"'.format(safe_name)
         resp.headers['Content-Length'] = str(len(tif_bytes))
@@ -2338,6 +2350,125 @@ def _stamp_exact_band_statistics(tif_bytes, nodata_value=None):
                 out_memfile.close()
     except Exception as stat_err:
         print('[SylvaGIS] ⚠️ Band istatistiği gömülemedi (dosya yine de gönderiliyor):', stat_err)
+        return tif_bytes
+
+
+# 🏘️ Arazi Kullanımı (LULC) indirmelerinde renk tablosu gömülecek indeksler.
+# NOT: LULC_FAMILY_INDICES içindeki TOPO/SAR grubu buna dahil DEĞİLDİR —
+# onlar sürekli (continuous) değerler taşır, sınıflandırılmış kategori
+# değil; bu yüzden onlara renk tablosu uygulanmaz.
+LULC_COLORMAP_INDICES = ('LULC', 'LULC_ESA', 'LULC_MODIS', 'LULC_CORINE')
+
+
+def _stamp_lulc_colormap(tif_bytes, vis, nodata_value=None):
+    """
+    🎨 BUG FİX (Arazi Kullanımı / LULC indirmelerinde ekranda görülen sınıf
+    renkleri, indirilen .tif dosyasında KAYBOLUYORDU — ArcMap/QGIS'te
+    yalnızca gri/siyah tonlarda, sadece sayısal (1,2,3...) sınıf kodlarından
+    oluşan bir raster görünüyordu ve kullanıcı hangi rengin/numaranın hangi
+    arazi sınıfına karşılık geldiğini bilemiyordu):
+
+    KÖK NEDEN: GEE'den indirilen GeoTIFF, doğru şekilde tek bantlı HAM SINIF
+    KODLARINI (Dynamic World için 0-8, ESA WorldCover/MODIS/CORINE için
+    1..N) içerir — bu değer kendisi zaten doğrudur ve DEĞİŞTİRİLMEMELİDİR.
+    Ancak dosyanın içine "hangi sınıf kodu hangi renge karşılık gelir"
+    bilgisini taşıyan bir RENK TABLOSU (color table / palette) HİÇ
+    gömülmüyordu. SylvaGIS ekranındaki renkler yalnızca GEE tile
+    servisinin (harita önizlemesi) 'vis.palette' parametresiyle SADECE
+    İSTEMCİ (client) tarafında canlandırılıyordu — indirilen dosyanın
+    kendisi bu bilgiyi hiç içermiyordu. Bir GeoTIFF'te renk tablosu yoksa
+    ArcMap/QGIS ham sayısal değerleri varsayılan gri tonlamalı (stretch)
+    bir sembolojiyle gösterir — kullanıcının bildirdiği sorun tam olarak
+    budur.
+
+    ÇÖZÜM: LULC ailesindeki her indirmede (Dynamic World, ESA WorldCover,
+    MODIS, CORINE), ekranda/lejantta kullanılan AYNI vis['palette'] (hex
+    renk listesi) GeoTIFF'in içine standart bir GDAL renk tablosu
+    (PHOTOMETRIC=PALETTE) olarak gömülür. Bu, GeoTIFF formatının resmi bir
+    özelliğidir (ör. ESRI'nin kendi arazi kullanımı ürünlerinde de aynı
+    yöntem kullanılır) — ArcMap ve QGIS dosyayı AÇAR AÇILMAZ bunu otomatik
+    okur ve haritada görülenle BİREBİR aynı renklerle gösterir; kullanıcının
+    kendi başına renklendirme/sınıflandırma yapmasına gerek kalmaz.
+
+    NOT (veri tipi / NoData kayması): GDAL renk tablosu yalnızca Byte
+    (0-255) veya UInt16 bantlarda desteklenir. LULC ailesindeki en yüksek
+    sınıf sayısı (CORINE, 44 sınıf) bu aralığa rahatça sığar. NoData için
+    0 değeri ayrılır ve TÜM sınıf kodları +1 kaydırılarak yeniden yazılır
+    (örn. Dynamic World'ün orijinal 0-8 kodu dosyada 1-9 olarak saklanır) —
+    böylece "0 = veri yok" ile "sınıf kodu 0 = Su" ASLA karışmaz. Bu kaydırma
+    yalnızca dosyadaki tamsayı etiketleri ilgilendirir; renk/görsel sonuç
+    kullanıcı için ekrandakiyle birebir aynıdır.
+
+    Herhangi bir nedenle bu adım başarısız olursa (bozuk dosya, eksik
+    kütüphane, beklenmeyen palet biçimi vb.) orijinal bayt içeriği
+    DEĞİŞTİRİLMEDEN döndürülür — bu adım indirmeyi ASLA kesintiye uğratmaz.
+    """
+    try:
+        import numpy as np
+        import rasterio
+        from rasterio.io import MemoryFile
+    except ImportError:
+        return tif_bytes
+
+    try:
+        palette = vis.get('palette') or []
+        if not palette:
+            return tif_bytes
+        vmin = float(vis.get('min', 0))
+
+        def _hex_to_rgba(h):
+            h = str(h).lstrip('#')
+            if len(h) == 3:
+                h = ''.join(ch * 2 for ch in h)
+            r = int(h[0:2], 16)
+            g = int(h[2:4], 16)
+            b = int(h[4:6], 16)
+            return (r, g, b, 255)
+
+        with MemoryFile(tif_bytes) as memfile:
+            with memfile.open() as src:
+                arr = src.read(1).astype('float64')
+                src_nodata = src.nodata if src.nodata is not None else nodata_value
+                profile = src.profile.copy()
+
+        if src_nodata is not None:
+            valid_mask = ~np.isclose(arr, float(src_nodata))
+        else:
+            valid_mask = np.isfinite(arr)
+
+        # Sınıf kodu = (orijinal değer - vmin) + 1  →  1..len(palette)
+        # (0, aşağıdaki renk tablosunda NoData/şeffaf olarak ayrılmıştır.)
+        class_idx = np.rint(arr - vmin).astype('int64') + 1
+        class_idx = np.clip(class_idx, 1, len(palette))
+
+        out = np.zeros(arr.shape, dtype='uint8')
+        out[valid_mask] = class_idx[valid_mask].astype('uint8')
+
+        profile.update({
+            'driver':      'GTiff',
+            'dtype':       'uint8',
+            'count':       1,
+            'nodata':      0,
+            'photometric': 'palette',
+        })
+        # Renk tablosuyla çakışabilecek eski sıkıştırma/öngörücü etiketlerini
+        # (ör. float verilere özgü predictor=3) kaldır.
+        profile.pop('predictor', None)
+
+        colormap = {0: (0, 0, 0, 0)}
+        for i, color in enumerate(palette, start=1):
+            colormap[i] = _hex_to_rgba(color)
+
+        out_memfile = MemoryFile()
+        with out_memfile.open(**profile) as dst:
+            dst.write(out, 1)
+            dst.write_colormap(1, colormap)
+        try:
+            return out_memfile.read()
+        finally:
+            out_memfile.close()
+    except Exception as cmap_err:
+        print('[SylvaGIS] ⚠️ LULC renk tablosu gömülemedi (dosya yine de gönderiliyor):', cmap_err)
         return tif_bytes
 
 
@@ -2945,7 +3076,7 @@ SYLVA_OWNER_EMAIL = 'sylvagis.world@gmail.com'
 
 def _send_registration_email(ad, soyad, email, meslek, ulke):
     smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'ksfnkvwcutrawcih'
+    smtp_pass = 'aaaaaaaaaaaaaaaa'
 
     msg = MIMEMultipart('alternative')
     msg['Subject'] = f'[SylvaGIS] Yeni Kayıt — {ad} {soyad}'
