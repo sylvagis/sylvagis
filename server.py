@@ -335,86 +335,170 @@ def _write_clr(symb):
 
 def _inject_lulc_symbology(tif_bytes, index):
     """
-    LULC GeoTIFF baytlarına ColorTable (rasterio) gömer ve TIF baytlarını döndürür.
-    ZIP paketleme download_geotiff() içinde yapılır.
+    LULC GeoTIFF baytlarına ColorTable (rasterio) gömer.
+
+    KRİTİK DÜZELTME — nodata taşma hatası:
+    GEE, maskelenmiş pikselleri -9999 nodata değeriyle gönderir. Bunu
+    doğrudan .astype('uint8') ile dönüştürmek (-9999 % 256 = 17) gibi
+    gerçek bir sınıf değeriyle çakışır. Bu da ArcMap'te ColorTable'ın
+    tanınmamasına ve 'Stretched' (gri tonlu) renderer'ın açılmasına neden
+    olur. Düzeltme: nodata pikseller, geçerli hiçbir LULC sınıfında
+    bulunmayan 255 değeriyle önce işaretlenir, sonra uint8'e dönüştürülür.
     """
     symb = _LULC_SYMBOLOGY.get(index)
     if not symb:
         return tif_bytes
 
     try:
+        import numpy as np
         import rasterio
         from rasterio.io import MemoryFile
 
-        colormap = {val: (*_hex_to_rgb(hx), 255) for val, (hx, _tr, _en) in symb.items()}
+        NODATA_OUT = 255  # LULC sınıf değerleri 0-44 → 255 güvenli sentinel
 
         with MemoryFile(tif_bytes) as mf:
             with mf.open() as src:
-                meta = src.meta.copy()
-                meta.update({'dtype': 'uint8', 'driver': 'GTiff'})
-                raw = src.read().astype('uint8')
+                data       = src.read(1).astype(np.float64)
+                src_nodata = src.nodata
+                src_crs    = src.crs
+                src_tf     = src.transform
+                h, w       = src.height, src.width
 
-            with MemoryFile() as out_mf:
-                with out_mf.open(**meta) as dst:
-                    dst.write(raw)
-                    try:
-                        dst.write_colormap(1, colormap)
-                    except Exception:
-                        pass
-                tif_bytes = out_mf.read()
-    except Exception:
-        pass
+        # Nodata ve geçersiz piksel → 255
+        if src_nodata is not None:
+            data[np.abs(data - src_nodata) < 0.5] = NODATA_OUT
+        data[(data < 0) | (data > 254)] = NODATA_OUT
+        data_u8 = data.astype(np.uint8)
+
+        # ColorTable: sınıf renkleri (opak) + 255 nodata (tam şeffaf)
+        colormap = {int(v): (*_hex_to_rgb(hx), 255)
+                    for v, (hx, _tr, _en) in symb.items()}
+        colormap[NODATA_OUT] = (0, 0, 0, 0)
+
+        meta = {
+            'driver': 'GTiff', 'dtype': 'uint8', 'count': 1,
+            'width': w, 'height': h,
+            'crs': src_crs, 'transform': src_tf,
+            'nodata': NODATA_OUT,
+        }
+
+        with MemoryFile() as out_mf:
+            with out_mf.open(**meta) as dst:
+                dst.write(data_u8[np.newaxis, :, :])
+                dst.write_colormap(1, colormap)
+            tif_bytes = out_mf.read()
+
+    except Exception as ex:
+        print('[SylvaGIS] _inject_lulc_symbology hata: {}'.format(ex))
 
     return tif_bytes
 
 
+def _write_aux_xml(symb):
+    """
+    GDAL PAM formatında .aux.xml içeriği üretir (saf Python, harici lib gerekmez).
+
+    Bu dosya '<dosya>.tif.aux.xml' adıyla TIF ile aynı klasörde yer aldığında
+    ArcMap ve QGIS tarafından otomatik okunur. İçindeki RAT (Raster Attribute
+    Table), 'Unique Values' sembolojisinde Label alanı olarak kullanılır;
+    böylece 12, 21 gibi sayı yerine 'Tarla Bitkileri', 'Karmaşık Tarım' vb.
+    Türkçe/İngilizce sınıf adları Label sütununda görünür.
+
+    GDAL RAT type kodları : 0=Integer  1=Real  2=String
+    GDAL RAT usage kodları: 0=Generic  2=Name  5=MinMax(Value)  6=Red  7=Green  8=Blue
+    """
+    import xml.sax.saxutils as _sax
+
+    field_defs = [
+        ('Value',    '0', '5'),  # Integer, MinMax → piksel değeri
+        ('Class_TR', '2', '2'),  # String,  Name   → Türkçe sınıf adı (Label)
+        ('Class_EN', '2', '0'),  # String,  Generic → İngilizce sınıf adı
+        ('Red',      '0', '6'),  # Integer, Red
+        ('Green',    '0', '7'),  # Integer, Green
+        ('Blue',     '0', '8'),  # Integer, Blue
+    ]
+
+    ln = ['<PAMDataset>',
+          '  <PAMRasterBand band="1">',
+          '    <GDALRasterAttributeTable tableType="thematic">']
+
+    for i, (name, ftype, usage) in enumerate(field_defs):
+        ln += [
+            '      <FieldDefn index="{}">'.format(i),
+            '        <Name>{}</Name>'.format(name),
+            '        <Type>{}</Type>'.format(ftype),
+            '        <Usage>{}</Usage>'.format(usage),
+            '      </FieldDefn>',
+        ]
+
+    for ri, (val, (hx, label_tr, label_en)) in enumerate(sorted(symb.items())):
+        r, g, b = _hex_to_rgb(hx)
+        ln += [
+            '      <Row index="{}">'.format(ri),
+            '        <F>{}</F>'.format(val),
+            '        <F>{}</F>'.format(_sax.escape(label_tr)),
+            '        <F>{}</F>'.format(_sax.escape(label_en)),
+            '        <F>{}</F>'.format(r),
+            '        <F>{}</F>'.format(g),
+            '        <F>{}</F>'.format(b),
+            '      </Row>',
+        ]
+
+    ln += ['    </GDALRasterAttributeTable>',
+           '  </PAMRasterBand>',
+           '</PAMDataset>']
+
+    return '\n'.join(ln).encode('utf-8')
+
+
 def _build_lulc_zip(tif_bytes, index, safe_name):
     """
-    LULC indirmesi için ZIP paket oluşturur:
-      - <safe_name>.tif            → ColorTable gömülü raster
-      - <safe_name>.tif.vat.dbf   → ArcMap VAT (Value/Class_TR/Class_EN/RGB sütunları)
-      - <safe_name>.clr            → ESRI ASCII renk tablosu (QGIS için de geçerli)
-      - OKUYUN.txt                 → Kısa kullanım kılavuzu
+    LULC indirmesi için ZIP paket oluşturur. İçerik:
+      <safe_name>.tif          → uint8, ColorTable gömülü, nodata=255
+      <safe_name>.tif.aux.xml  → GDAL PAM/RAT — ArcMap/QGIS sınıf adlarını buradan okur
+      <safe_name>.tif.vat.dbf  → ArcMap VAT (Value/Class_TR/Class_EN/RGB)
+      <safe_name>.clr          → ESRI ASCII renk tablosu (QGIS için de geçerli)
+      OKUYUN.txt               → Adım adım kullanım kılavuzu
 
-    ArcMap, TIF ile aynı klasörde .vat.dbf bulduğunda Unique Values
-    sembolojisinde Label sütununu otomatik olarak sınıf adıyla doldurur.
+    Dosyalar AYNI klasöre çıkartılıp sadece .tif açıldığında:
+    • ArcMap: renkler otomatik uygulanır; Unique Values → Label = Class_TR
+    • QGIS:   renk + sınıf adları otomatik uygulanır
     """
     symb = _LULC_SYMBOLOGY.get(index)
 
-    # ColorTable'ı TIF'e göm
     tif_bytes = _inject_lulc_symbology(tif_bytes, index)
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-        # 1) Raster
-        zf.writestr(safe_name + '.tif', tif_bytes)
-
+        zf.writestr(safe_name + '.tif',         tif_bytes)
         if symb:
-            # 2) ArcMap VAT (.vat.dbf)
+            zf.writestr(safe_name + '.tif.aux.xml', _write_aux_xml(symb))
             zf.writestr(safe_name + '.tif.vat.dbf', _write_vat_dbf(symb))
+            zf.writestr(safe_name + '.clr',         _write_clr(symb))
 
-            # 3) ESRI/QGIS renk tablosu (.clr)
-            zf.writestr(safe_name + '.clr', _write_clr(symb))
-
-        # 4) Kullanım notu
         readme = (
             'SylvaGIS — Arazi Kullanımı / Land Use Export\n'
             '=============================================\n\n'
-            'Bu ZIP paketi 3 dosya içerir:\n\n'
-            '  {name}.tif          → Sınıf değerleri + gömülü renk paleti\n'
-            '  {name}.tif.vat.dbf  → ArcMap sınıf adı tablosu (otomatik yüklenir)\n'
-            '  {name}.clr          → ESRI / QGIS renk tablosu\n\n'
-            'ArcMap kullanımı:\n'
+            'ZIP içindeki dosyalar:\n\n'
+            '  {n}.tif          → uint8 raster + gömülü renk paleti\n'
+            '  {n}.tif.aux.xml  → GDAL PAM / RAT (sınıf adları — ArcMap & QGIS okur)\n'
+            '  {n}.tif.vat.dbf  → ArcMap Raster Attribute Table\n'
+            '  {n}.clr          → ESRI ASCII renk tablosu\n\n'
+            '╔═ ArcMap kullanımı ════════════════════════════════════╗\n'
             '  1. Tüm dosyaları AYNI KLASÖRE çıkartın.\n'
-            '  2. ArcMap\'e yalnızca .tif dosyasını ekleyin.\n'
-            '  3. Layer Properties → Symbology → Unique Values açın.\n'
-            '  4. Label sütunu başlığına sağ tıklayın →\n'
-            '     "Use Class_TR as Label" veya "Use Class_EN as Label" seçin.\n\n'
-            'QGIS kullanımı:\n'
+            '  2. Yalnızca {n}.tif dosyasını ArcMap\'e ekleyin.\n'
+            '  3. Layer Properties → Symbology → "Unique Values" seçin.\n'
+            '  4. "Add All Values" butonuna basın.\n'
+            '  5. Label sütunu BAŞLIĞINA sağ tıklayın →\n'
+            '     "Field" → "Class_TR" seçin.\n'
+            '     ✔ Artık Label sütununda Türkçe sınıf adları görünür.\n'
+            '╚══════════════════════════════════════════════════════╝\n\n'
+            '╔═ QGIS kullanımı ══════════════════════════════════════╗\n'
             '  1. Tüm dosyaları AYNI KLASÖRE çıkartın.\n'
-            '  2. .tif dosyasını QGIS\'e sürükleyin; renkler otomatik uygulanır.\n'
-            '  3. Ek etiket için .clr dosyasını Layer Styling → Color Map\'ten yükleyin.\n'
-        ).format(name=safe_name)
+            '  2. {n}.tif dosyasını QGIS\'e sürükleyin.\n'
+            '  3. Renkler ve sınıf adları otomatik uygulanır.\n'
+            '╚══════════════════════════════════════════════════════╝\n'
+        ).format(n=safe_name)
         zf.writestr('OKUYUN.txt', readme.encode('utf-8'))
 
     buf.seek(0)
