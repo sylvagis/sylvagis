@@ -10,77 +10,13 @@ import tempfile
 import datetime
 import traceback
 import urllib.parse
-import functools
 import requests
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 
 app = Flask(__name__)
-
-# ════════════════════════════════════════════════════════════════
-# 🔒 CORS — Sadece izin verilen origin'lerden gelen isteklere izin ver
-# ════════════════════════════════════════════════════════════════
-# CORS(app) — sınırsız açık bırakmak, herhangi bir web sitesinin
-# tarayıcı üzerinden API'yi çağırmasına izin verir.
-# Üretim URL'si + yerel geliştirme adresleri listeye eklenmiştir.
-_ALLOWED_ORIGINS = [
-    'https://sylvagis.onrender.com',
-    'https://sylvagis.vercel.app',
-    'http://localhost:5000',
-    'http://127.0.0.1:5000',
-]
-CORS(app, origins=_ALLOWED_ORIGINS, supports_credentials=False)
-
+CORS(app)
 print('SylvaGIS server.py yüklendi — versiyon: zip-export-v2-tiling')
-
-
-# ════════════════════════════════════════════════════════════════
-# 🗄️  UPSTASH REDIS — Kullanıcı hesapları, e-posta doğrulama kodları
-# ════════════════════════════════════════════════════════════════
-# Render'ın dosya sistemi kalıcı değil (free/starter planda disk
-# eklentisi yok) ve gunicorn birden fazla worker ile çalıştığı için
-# process-içi bellek (dict, vs.) de güvenilir değil — worker'lar
-# birbirinin belleğini görmez. Bu yüzden kullanıcı kaydı ve doğrulama
-# kodları Upstash Redis'te (HTTP REST API üzerinden, TCP bağlantısı
-# gerektirmeden) saklanır.
-#
-# Render ortam değişkenlerine şunlar eklenmiş olmalı:
-#   UPSTASH_REDIS_REST_URL   (örn. https://xxxxx.upstash.io)
-#   UPSTASH_REDIS_REST_TOKEN
-UPSTASH_REDIS_REST_URL   = os.environ.get('UPSTASH_REDIS_REST_URL', '').rstrip('/')
-UPSTASH_REDIS_REST_TOKEN = os.environ.get('UPSTASH_REDIS_REST_TOKEN', '')
-
-if not (UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN):
-    print('⚠️  UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN tanımlı değil — '
-          'e-posta doğrulama ve kullanıcı kaydı endpoint\'leri çalışmayacak.')
-
-
-def _redis_cmd(*args, retries=2):
-    """Upstash REST API üzerinden tek bir Redis komutu çalıştırır.
-    args örn: ('SET', 'key', 'value', 'EX', '600')"""
-    if not (UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN):
-        raise RuntimeError('Redis yapılandırılmamış (env var eksik).')
-
-    last_err = None
-    for attempt in range(retries + 1):
-        try:
-            resp = requests.post(
-                UPSTASH_REDIS_REST_URL,
-                headers={'Authorization': f'Bearer {UPSTASH_REDIS_REST_TOKEN}'},
-                json=list(args),
-                timeout=10,
-            )
-            resp.raise_for_status()
-            payload = resp.json()
-            if isinstance(payload, dict) and payload.get('error'):
-                raise RuntimeError(f'Redis hatası: {payload["error"]}')
-            return payload.get('result') if isinstance(payload, dict) else payload
-        except Exception as e:
-            last_err = e
-            if attempt < retries:
-                time.sleep(0.5 * (attempt + 1))
-            else:
-                raise last_err
 
 
 # ════════════════════════════════════════════════════════════════
@@ -174,44 +110,6 @@ try:
         print('⚠️  GEE kişisel hesap ile başlatıldı (yerel geliştirme modu).')
 except Exception as e:
     print('❌ GEE başlatılamadı:', e)
-
-# ════════════════════════════════════════════════════════════════
-# 🔑 GEE ENDPOINT KORUMASI — Paylaşılan API Token
-# ════════════════════════════════════════════════════════════════
-# SORUN: /api/analyze, /api/download-geotiff, /api/rgb-scenes vb.
-# endpoint'leri tamamen açık — URL'yi bilen herkes GEE kotasını
-# sınırsız tüketebilir.
-#
-# ÇÖZÜM: Sunucu ortam değişkeninde (SYLVA_API_TOKEN) güçlü bir
-# rastgele token saklanır. Frontend her GEE isteğinde bu token'ı
-# 'X-Sylva-Token' başlığıyla gönderir; sunucu doğrular.
-#
-# Token üretmek için terminalde:
-#   python -c "import secrets; print(secrets.token_hex(32))"
-# Üretilen değeri Render → Environment Variables'a SYLVA_API_TOKEN
-# adıyla ekleyin. Aynı değeri index.html'deki SYLVA_API_TOKEN
-# sabitine yazın (bkz. HTML tarafındaki yorum).
-#
-# ÖNEMLİ: SYLVA_API_TOKEN tanımlanmamışsa (boşsa) koruma DEVRE
-# DIŞI kalır ve bir uyarı basılır. Üretim ortamında mutlaka set edin.
-SYLVA_API_TOKEN = os.environ.get('SYLVA_API_TOKEN', '')
-if not SYLVA_API_TOKEN:
-    print('⚠️  SYLVA_API_TOKEN tanımlı değil — GEE endpoint\'leri '
-          'herkese açık! Üretimde mutlaka bir token belirleyin.')
-
-def require_api_token(f):
-    """GEE endpoint\'lerini SYLVA_API_TOKEN ile korur.
-    Token tanımlıysa, eksik veya yanlış token'lı istekleri 401 ile reddeder.
-    Token tanımlı değilse devre dışı kalır (geliştirme modu)."""
-    @functools.wraps(f)
-    def _decorated(*args, **kwargs):
-        if SYLVA_API_TOKEN:
-            incoming = request.headers.get('X-Sylva-Token', '').strip()
-            if not incoming or incoming != SYLVA_API_TOKEN:
-                return jsonify({'success': False,
-                                'error': 'Yetkisiz erişim.'}), 401
-        return f(*args, **kwargs)
-    return _decorated
 
 # Last analysis parameters (GeoTIFF download için saklanır)
 _last_analyze_params = {}
@@ -1881,7 +1779,6 @@ def _rgb_scene_metadata(data, roi, image, ds):
 
 
 @app.route('/api/analyze', methods=['POST'])
-@require_api_token
 def analyze():
     global _last_analyze_params, _last_analyze_native_crs
     try:
@@ -2124,7 +2021,6 @@ def analyze():
 
 
 @app.route('/api/highlight-class', methods=['POST'])
-@require_api_token
 def highlight_class():
     """
     Lejant/grafik/tablodaki bir sınıfa tıklandığında, o sınıfa ait alanları
@@ -2163,7 +2059,6 @@ def highlight_class():
 
 
 @app.route('/api/download-geotiff', methods=['POST'])
-@require_api_token
 def download_geotiff():
     """
     Son analizin GeoTIFF dosyasını sunucu üzerinden indirir ve doğrudan
@@ -2371,7 +2266,6 @@ def download_geotiff():
 
 
 @app.route('/api/raw-bands', methods=['POST'])
-@require_api_token
 def raw_bands():
     """
     📡 Ham Veri (Bantlar) — seçilen uydu görüntüsü veri setine ait TÜM
@@ -2966,7 +2860,6 @@ def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata
 
 
 @app.route('/api/download-raw-bands', methods=['POST'])
-@require_api_token
 def download_raw_bands():
     """
     📡 Ham Veri (Bantlar) — Uydu Görüntüsü Galerisi'nden seçilmiş sahnenin
@@ -3161,7 +3054,6 @@ def download_raw_bands():
 
 
 @app.route('/api/rgb-scenes', methods=['POST'])
-@require_api_token
 def rgb_scenes():
     """
     🛰️ Uydu Görüntüsü Galerisi — AOI/tarih/bulutluluk kriterlerine uyan
@@ -3240,7 +3132,6 @@ def rgb_scenes():
 
 
 @app.route('/api/get-scenes', methods=['POST'])
-@require_api_token
 def get_scenes():
     try:
         data       = request.json
@@ -3342,12 +3233,9 @@ from email.mime.multipart import MIMEMultipart
 
 SYLVA_OWNER_EMAIL = 'sylvagis.world@gmail.com'
 
-SYLVA_SMTP_USER = os.environ.get('SYLVA_SMTP_USER', 'sylvagis.world@gmail.com')
-SYLVA_SMTP_PASS = os.environ.get('SYLVA_SMTP_PASS', '')
-
 def _send_registration_email(ad, soyad, email, meslek, ulke):
-    smtp_user = SYLVA_SMTP_USER
-    smtp_pass = SYLVA_SMTP_PASS
+    smtp_user = 'sylvagis.world@gmail.com'
+    smtp_pass = 'ksfnkvwcutrawcih'
 
     msg = MIMEMultipart('alternative')
     msg['Subject'] = f'[SylvaGIS] Yeni Kayıt — {ad} {soyad}'
@@ -3415,160 +3303,6 @@ def register_user():
 
         _send_registration_email(ad, soyad, email, meslek, ulke)
         return jsonify({'ok': True})
-    except Exception as ex:
-        traceback.print_exc()
-        return jsonify({'ok': False, 'error': str(ex)}), 500
-
-
-# ════════════════════════════════════════════════════════════════
-# ✉️  E-POSTA DOĞRULAMA — Kayıt sırasında 6 haneli kod
-# ════════════════════════════════════════════════════════════════
-# Akış:
-#   1) POST /api/send-verification  → kod üretilir, Redis'e 10 dk TTL
-#      ile yazılır, kullanıcının e-postasına gönderilir.
-#   2) POST /api/verify-and-register → kod doğrulanır, kullanıcı
-#      Redis'e kalıcı olarak yazılır, bir oturum token'ı üretilip
-#      döndürülür (frontend bunu saklar).
-#
-# Kötüye kullanımı sınırlamak için aynı e-postaya art arda kod isteğine
-# basit bir bekleme (cooldown) uygulanır.
-import secrets as _secrets
-
-
-def _gen_verification_code():
-    return f'{_secrets.randbelow(1000000):06d}'
-
-
-def _send_verification_email(email, code, ad=''):
-    smtp_user = SYLVA_SMTP_USER
-    smtp_pass = SYLVA_SMTP_PASS
-
-    msg = MIMEMultipart('alternative')
-    msg['Subject'] = f'SylvaGIS Doğrulama Kodu: {code}'
-    msg['From']    = smtp_user or SYLVA_OWNER_EMAIL
-    msg['To']      = email
-
-    hitap = f'Merhaba {ad},' if ad else 'Merhaba,'
-    html_body = f"""
-    <html><body style="font-family:Arial,sans-serif;background:#f4f6f9;padding:24px;">
-      <div style="background:#fff;border-radius:12px;max-width:420px;margin:auto;
-                  padding:32px;text-align:center;box-shadow:0 4px 16px rgba(0,0,0,.1);">
-        <div style="font-size:1.2rem;font-weight:800;color:#1e3a8a;margin-bottom:16px;">
-          🌲 SylvaGIS
-        </div>
-        <div style="color:#334155;margin-bottom:20px;">{hitap}<br>Hesabınızı doğrulamak için aşağıdaki kodu girin:</div>
-        <div style="font-size:2rem;font-weight:800;letter-spacing:.4em;color:#1e3a8a;
-                    background:#eff6ff;border-radius:8px;padding:16px;margin-bottom:16px;">
-          {code}
-        </div>
-        <div style="color:#94a3b8;font-size:.8rem;">Bu kod 10 dakika geçerlidir. Bu isteği siz yapmadıysanız e-postayı yok sayabilirsiniz.</div>
-      </div>
-    </body></html>"""
-    plain_body = f'{hitap}\nSylvaGIS doğrulama kodunuz: {code}\nBu kod 10 dakika geçerlidir.'
-
-    msg.attach(MIMEText(plain_body, 'plain', 'utf-8'))
-    msg.attach(MIMEText(html_body,  'html',  'utf-8'))
-
-    with smtplib.SMTP('smtp.gmail.com', 587) as s:
-        s.ehlo()
-        s.starttls()
-        s.login(smtp_user, smtp_pass)
-        s.sendmail(smtp_user, email, msg.as_string())
-
-
-@app.route('/api/send-verification', methods=['POST'])
-def send_verification():
-    try:
-        data  = request.get_json(silent=True) or {}
-        email = (data.get('email') or '').strip().lower()
-        ad    = (data.get('ad') or '').strip()
-
-        if not email or '@' not in email or '.' not in email.split('@')[-1]:
-            return jsonify({'ok': False, 'error': 'Geçerli bir e-posta adresi girin.'}), 400
-
-        # Basit cooldown: 45 saniyede bir istek
-        cooldown_key = f'verify_cooldown:{email}'
-        try:
-            if _redis_cmd('GET', cooldown_key):
-                return jsonify({'ok': False, 'error': 'Lütfen yeni kod istemeden önce birkaç saniye bekleyin.'}), 429
-        except Exception:
-            pass  # Redis'e ulaşılamıyorsa cooldown kontrolünü atla, akışı bloke etme
-
-        code = _gen_verification_code()
-
-        try:
-            _redis_cmd('SET', f'verify:{email}', code, 'EX', '600')  # 10 dakika
-            _redis_cmd('SET', cooldown_key, '1', 'EX', '45')
-        except Exception as e:
-            traceback.print_exc()
-            return jsonify({'ok': False, 'error': 'Kod oluşturulamadı, lütfen tekrar deneyin.'}), 500
-
-        try:
-            _send_verification_email(email, code, ad)
-        except Exception as e:
-            traceback.print_exc()
-            return jsonify({'ok': False, 'error': 'E-posta gönderilemedi. Lütfen tekrar deneyin.'}), 500
-
-        return jsonify({'ok': True})
-    except Exception as ex:
-        traceback.print_exc()
-        return jsonify({'ok': False, 'error': str(ex)}), 500
-
-
-@app.route('/api/verify-and-register', methods=['POST'])
-def verify_and_register():
-    try:
-        data   = request.get_json(silent=True) or {}
-        email  = (data.get('email') or '').strip().lower()
-        code   = (data.get('code')  or '').strip()
-        ad     = (data.get('ad')     or '').strip()
-        soyad  = (data.get('soyad')  or '').strip()
-        ulke   = (data.get('ulke')   or '').strip()
-        meslek = (data.get('meslek') or '').strip()
-        bolum  = (data.get('bolum')  or '').strip()
-
-        if not email or not code:
-            return jsonify({'ok': False, 'error': 'E-posta ve kod zorunludur.'}), 400
-        if not ad or not soyad or not ulke or not meslek:
-            return jsonify({'ok': False, 'error': 'Tüm zorunlu alanları doldurun.'}), 400
-
-        try:
-            stored_code = _redis_cmd('GET', f'verify:{email}')
-        except Exception:
-            traceback.print_exc()
-            return jsonify({'ok': False, 'error': 'Doğrulama şu anda yapılamıyor, tekrar deneyin.'}), 500
-
-        if not stored_code or stored_code != code:
-            return jsonify({'ok': False, 'error': 'Kod hatalı veya süresi dolmuş.'}), 400
-
-        # Kod tek kullanımlık — doğrulanınca sil
-        try:
-            _redis_cmd('DEL', f'verify:{email}')
-        except Exception:
-            pass
-
-        import json as _json
-        session_token = _secrets.token_hex(24)
-        user_obj = {
-            'email': email, 'ad': ad, 'soyad': soyad,
-            'ulke': ulke, 'meslek': meslek, 'bolum': bolum,
-            'createdAt': datetime.datetime.utcnow().isoformat() + 'Z',
-        }
-
-        try:
-            _redis_cmd('SET', f'user:{email}', _json.dumps(user_obj, ensure_ascii=False))
-            _redis_cmd('SET', f'session:{session_token}', email, 'EX', str(60 * 60 * 24 * 30))  # 30 gün
-        except Exception:
-            traceback.print_exc()
-            return jsonify({'ok': False, 'error': 'Hesap oluşturulamadı, tekrar deneyin.'}), 500
-
-        # Bilgilendirme e-postası (mevcut akış) — hata olsa da kaydı bozma
-        try:
-            _send_registration_email(ad, soyad, email, meslek, ulke)
-        except Exception:
-            traceback.print_exc()
-
-        return jsonify({'ok': True, 'sessionToken': session_token, 'user': user_obj})
     except Exception as ex:
         traceback.print_exc()
         return jsonify({'ok': False, 'error': str(ex)}), 500
@@ -3761,7 +3495,6 @@ def _geojson_to_features(geom):
 # Format: 'kml', 'kmz', 'shp' (SHP → ZIP arşivi)
 # ════════════════════════════════════════════════════════════════
 @app.route('/api/vector-download', methods=['POST'])
-@require_api_token
 def vector_download():
     req_data = request.get_json(silent=True) or {}
 
