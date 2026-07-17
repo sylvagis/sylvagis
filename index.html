@@ -158,6 +158,10 @@
         .reg-submit-btn:hover{background:#1d4ed8;transform:translateY(-1px);box-shadow:0 4px 14px rgba(30,58,138,.28);}
         .reg-submit-btn:active{transform:translateY(0);}
         .reg-submit-btn:disabled{background:#94a3b8;cursor:not-allowed;transform:none;box-shadow:none;}
+        .reg-secondary-btn{width:100%;padding:10px;background:#fff;color:#1e3a8a;border:1.5px solid #1e3a8a;border-radius:10px;font-size:0.85rem;font-weight:700;cursor:pointer;transition:.18s;letter-spacing:0.02em;}
+        .reg-secondary-btn:hover{background:#eff6ff;}
+        .reg-secondary-btn:disabled{color:#94a3b8;border-color:#cbd5e1;cursor:not-allowed;background:#f8fafc;}
+        #reg-code-field input{letter-spacing:0.3em;text-align:center;font-weight:700;font-size:1.1rem;}
         /* ── Navbar kullanıcı profil alanı ── */
         #sylva-auth-area{display:flex;align-items:center;}
         #sylva-user-display{position:relative;display:none;}
@@ -27241,7 +27245,33 @@ document.addEventListener('DOMContentLoaded',function(){
                        placeholder="Mesleğinizi girin">
             </div>
 
-            <button type="submit" class="reg-submit-btn" id="reg-submit-btn" data-i18n="ui_btn_save">
+            <!-- E-posta -->
+            <div class="reg-field">
+                <label for="reg-email" data-i18n="ui_lbl_email">E-posta *</label>
+                <input type="email" id="reg-email" autocomplete="email" required
+                       data-i18n-placeholder="ui_ph_email" placeholder="eposta@ornek.com">
+            </div>
+
+            <!-- Doğrulama kodu gönder butonu -->
+            <div class="reg-field" id="reg-send-code-wrap">
+                <button type="button" class="reg-secondary-btn" id="reg-send-code-btn"
+                        onclick="sylvaSendVerificationCode()" data-i18n="ui_btn_send_code">
+                    Kod Gönder
+                </button>
+            </div>
+
+            <!-- Doğrulama kodu — kod gönderilene kadar gizli -->
+            <div class="reg-field" id="reg-code-field" style="display:none;">
+                <label for="reg-code" data-i18n="ui_lbl_verify_code">Doğrulama Kodu *</label>
+                <input type="text" id="reg-code" autocomplete="one-time-code" inputmode="numeric"
+                       maxlength="6" data-i18n-placeholder="ui_ph_verify_code"
+                       placeholder="6 haneli kod">
+                <div id="reg-code-hint" style="font-size:.78rem;color:#64748b;margin-top:4px;" data-i18n="ui_code_sent_hint">
+                    Kod e-postanıza gönderildi. Almadıysanız <a href="#" onclick="sylvaSendVerificationCode(event)" data-i18n="ui_resend_code">tekrar gönder</a>.
+                </div>
+            </div>
+
+            <button type="submit" class="reg-submit-btn" id="reg-submit-btn" data-i18n="ui_btn_save" disabled>
                 Kaydet &amp; Devam Et
             </button>
         </form>
@@ -27786,65 +27816,180 @@ document.addEventListener('DOMContentLoaded',function(){
     // Dil değiştiğinde çağrılır (applySylvaLang hook)
     window._sylvaRefreshProfDropdown = refreshProfessionDropdown;
 
-    // ── Form gönderimi ────────────────────────────────────────
-    window.sylvaSubmitReg = function (e) {
-        e.preventDefault();
-        var lang = (typeof _sylvaLang !== 'undefined' ? _sylvaLang : 'en');
-        var T    = (typeof SYLVA_TRANSLATIONS !== 'undefined' && SYLVA_TRANSLATIONS[lang]) ?
-                    SYLVA_TRANSLATIONS[lang] : ((typeof SYLVA_TRANSLATIONS !== 'undefined' && SYLVA_TRANSLATIONS['en']) || {});
-
-        var ad    = ((document.getElementById('reg-ad')    || {}).value || '').trim();
-        var soyad = ((document.getElementById('reg-soyad') || {}).value || '').trim();
-        var ulke  = ((document.getElementById('reg-ulke')  || {}).value || '').trim();
+    // ── Ortak: forma girilen tüm alanları oku ──────────────────
+    function _readRegFields() {
         var meslekSel   = ((document.getElementById('reg-meslek')       || {}).value || '').trim();
         var bolum       = ((document.getElementById('reg-bolum')        || {}).value || '').trim();
         var digerMeslek = ((document.getElementById('reg-meslek-diger') || {}).value || '').trim();
-
-        if (!ad)        { setStatus('error', T['ui_err_first_name']      || 'Please enter your first name.'); return; }
-        if (!soyad)     { setStatus('error', T['ui_err_last_name']       || 'Please enter your last name.'); return; }
-        if (!ulke)      { setStatus('error', T['ui_err_country']         || 'Please select your country.'); return; }
-        if (!meslekSel) { setStatus('error', T['ui_err_profession']      || 'Please select your profession.'); return; }
-        if (meslekSel === 'student' && !bolum) {
-            setStatus('error', T['ui_err_program'] || 'Please enter your study program.'); return;
-        }
-        if (meslekSel === 'other' && !digerMeslek) {
-            setStatus('error', T['ui_err_other_profession'] || 'Please enter your profession.'); return;
-        }
+        var lang = (typeof _sylvaLang !== 'undefined' ? _sylvaLang : 'en');
 
         var meslekLabel = '';
         if (meslekSel === 'student') {
+            var T = (typeof SYLVA_TRANSLATIONS !== 'undefined' && SYLVA_TRANSLATIONS[lang]) ? SYLVA_TRANSLATIONS[lang] : {};
             var studentBase = T['ui_prof_student'] || '\uD83C\uDF93 Student';
             meslekLabel = studentBase + (bolum ? ' \u2014 ' + bolum : '');
         } else if (meslekSel === 'other') {
             meslekLabel = digerMeslek;
-        } else {
+        } else if (meslekSel) {
             var profIdx = parseInt(meslekSel.replace('prof_', ''), 10);
-            var profs = SYLVA_PROFESSIONS[lang] || SYLVA_PROFESSIONS['en'];
+            var profs = (typeof SYLVA_PROFESSIONS !== 'undefined') ? (SYLVA_PROFESSIONS[lang] || SYLVA_PROFESSIONS['en']) : [];
             meslekLabel = profs[profIdx - 1] || meslekSel;
+        }
+
+        return {
+            ad:    ((document.getElementById('reg-ad')    || {}).value || '').trim(),
+            soyad: ((document.getElementById('reg-soyad') || {}).value || '').trim(),
+            ulke:  ((document.getElementById('reg-ulke')  || {}).value || '').trim(),
+            email: ((document.getElementById('reg-email') || {}).value || '').trim().toLowerCase(),
+            code:  ((document.getElementById('reg-code')  || {}).value || '').trim(),
+            meslekSel: meslekSel, bolum: bolum, digerMeslek: digerMeslek, meslekLabel: meslekLabel
+        };
+    }
+
+    function _regT() {
+        var lang = (typeof _sylvaLang !== 'undefined' ? _sylvaLang : 'en');
+        return (typeof SYLVA_TRANSLATIONS !== 'undefined' && SYLVA_TRANSLATIONS[lang]) ?
+                SYLVA_TRANSLATIONS[lang] : ((typeof SYLVA_TRANSLATIONS !== 'undefined' && SYLVA_TRANSLATIONS['en']) || {});
+    }
+
+    // ── Adım 1: Doğrulama kodu gönder ──────────────────────────
+    var _codeSendCooldownTimer = null;
+
+    window.sylvaSendVerificationCode = function (e) {
+        if (e && e.preventDefault) e.preventDefault();
+        var T = _regT();
+        var f = _readRegFields();
+
+        if (!f.ad)        { setStatus('error', T['ui_err_first_name'] || 'Please enter your first name.'); return; }
+        if (!f.soyad)     { setStatus('error', T['ui_err_last_name']  || 'Please enter your last name.'); return; }
+        if (!f.ulke)      { setStatus('error', T['ui_err_country']    || 'Please select your country.'); return; }
+        if (!f.meslekSel) { setStatus('error', T['ui_err_profession'] || 'Please select your profession.'); return; }
+        if (f.meslekSel === 'student' && !f.bolum) {
+            setStatus('error', T['ui_err_program'] || 'Please enter your study program.'); return;
+        }
+        if (f.meslekSel === 'other' && !f.digerMeslek) {
+            setStatus('error', T['ui_err_other_profession'] || 'Please enter your profession.'); return;
+        }
+        if (!f.email || f.email.indexOf('@') === -1 || f.email.split('@').pop().indexOf('.') === -1) {
+            setStatus('error', T['ui_err_email'] || 'Please enter a valid email address.'); return;
+        }
+
+        var sendBtn = document.getElementById('reg-send-code-btn');
+        if (sendBtn) sendBtn.disabled = true;
+        setStatus('loading', T['ui_sending_code'] || 'Sending code...');
+
+        fetch(API_BASE + '/api/send-verification', {
+            method: 'POST',
+            headers: _geeHeaders(),
+            body: JSON.stringify({ email: f.email, ad: f.ad })
+        })
+        .then(function (r) { return r.json().then(function (data) { return { ok: r.ok, data: data }; }); })
+        .then(function (res) {
+            if (!res.ok || !res.data || !res.data.ok) {
+                var errMsg = (res.data && res.data.error) ? res.data.error : (T['ui_err_send_code'] || 'Could not send code. Please try again.');
+                setStatus('error', errMsg);
+                if (sendBtn) sendBtn.disabled = false;
+                return;
+            }
+            var codeField = document.getElementById('reg-code-field');
+            if (codeField) codeField.style.display = 'block';
+            var submitBtn = document.getElementById('reg-submit-btn');
+            if (submitBtn) submitBtn.disabled = false;
+            setStatus('success', T['ui_code_sent'] || 'Code sent! Check your email.');
+
+            // 45 sn cooldown — buton metnini sayaçla güncelle
+            var remaining = 45;
+            if (_codeSendCooldownTimer) clearInterval(_codeSendCooldownTimer);
+            var baseLabel = T['ui_btn_send_code'] || 'Send Code';
+            function _tick() {
+                if (!sendBtn) return;
+                if (remaining <= 0) {
+                    sendBtn.disabled = false;
+                    sendBtn.textContent = baseLabel;
+                    clearInterval(_codeSendCooldownTimer);
+                    return;
+                }
+                sendBtn.textContent = baseLabel + ' (' + remaining + ')';
+                remaining -= 1;
+            }
+            _tick();
+            _codeSendCooldownTimer = setInterval(_tick, 1000);
+        })
+        .catch(function () {
+            setStatus('error', T['ui_err_server'] || 'System error. Please try again later.');
+            if (sendBtn) sendBtn.disabled = false;
+        });
+    };
+
+    // ── Adım 2: Kodu doğrula + hesabı oluştur ──────────────────
+    window.sylvaSubmitReg = function (e) {
+        e.preventDefault();
+        var T = _regT();
+        var f = _readRegFields();
+
+        if (!f.ad)        { setStatus('error', T['ui_err_first_name']      || 'Please enter your first name.'); return; }
+        if (!f.soyad)     { setStatus('error', T['ui_err_last_name']       || 'Please enter your last name.'); return; }
+        if (!f.ulke)      { setStatus('error', T['ui_err_country']         || 'Please select your country.'); return; }
+        if (!f.meslekSel) { setStatus('error', T['ui_err_profession']      || 'Please select your profession.'); return; }
+        if (f.meslekSel === 'student' && !f.bolum) {
+            setStatus('error', T['ui_err_program'] || 'Please enter your study program.'); return;
+        }
+        if (f.meslekSel === 'other' && !f.digerMeslek) {
+            setStatus('error', T['ui_err_other_profession'] || 'Please enter your profession.'); return;
+        }
+        if (!f.email || f.email.indexOf('@') === -1 || f.email.split('@').pop().indexOf('.') === -1) {
+            setStatus('error', T['ui_err_email'] || 'Please enter a valid email address.'); return;
+        }
+        if (!f.code || f.code.length !== 6) {
+            setStatus('error', T['ui_err_code'] || 'Please enter the 6-digit code sent to your email.'); return;
         }
 
         var btn = document.getElementById('reg-submit-btn');
         if (btn) btn.disabled = true;
         setStatus('loading', T['ui_saving'] || 'Saving...');
 
-        var user = {
-            name: ad + ' ' + soyad,
-            firstName: ad, lastName: soyad,
-            ulke: ulke, meslekKey: meslekSel, meslek: meslekLabel,
-            bolum: bolum || '', avatar: null
-        };
+        fetch(API_BASE + '/api/verify-and-register', {
+            method: 'POST',
+            headers: _geeHeaders(),
+            body: JSON.stringify({
+                email: f.email, code: f.code,
+                ad: f.ad, soyad: f.soyad, ulke: f.ulke,
+                meslek: f.meslekLabel, bolum: f.bolum
+            })
+        })
+        .then(function (r) { return r.json().then(function (data) { return { ok: r.ok, data: data }; }); })
+        .then(function (res) {
+            if (!res.ok || !res.data || !res.data.ok) {
+                var errMsg = (res.data && res.data.error) ? res.data.error : (T['ui_err_server'] || 'System error. Please try again later.');
+                setStatus('error', errMsg);
+                if (btn) btn.disabled = false;
+                return;
+            }
 
-        saveSession(user);
+            var user = {
+                name: f.ad + ' ' + f.soyad,
+                firstName: f.ad, lastName: f.soyad,
+                ulke: f.ulke, meslekKey: f.meslekSel, meslek: f.meslekLabel,
+                bolum: f.bolum || '', email: f.email,
+                sessionToken: res.data.sessionToken || '', avatar: null
+            };
 
-        _firstVisit = false;
-        window._sylvaUserDone = true;
-        setStatus('success', T['ui_welcome'] || 'Welcome! \uD83C\uDF89');
+            saveSession(user);
 
-        setTimeout(function () {
-            var overlay = document.getElementById('sylva-login-overlay');
-            if (overlay) overlay.classList.remove('active');
-            applyUser(user);
-        }, 900);
+            _firstVisit = false;
+            window._sylvaUserDone = true;
+            setStatus('success', T['ui_welcome'] || 'Welcome! \uD83C\uDF89');
+
+            setTimeout(function () {
+                var overlay = document.getElementById('sylva-login-overlay');
+                if (overlay) overlay.classList.remove('active');
+                applyUser(user);
+            }, 900);
+        })
+        .catch(function () {
+            setStatus('error', T['ui_err_server'] || 'System error. Please try again later.');
+            if (btn) btn.disabled = false;
+        });
     };
 
     // ── UI güncelleme — kayıt/giriş sonrası ──────────────────
