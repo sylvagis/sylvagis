@@ -3289,10 +3289,15 @@ def _send_verification_email(email, code):
     msg.attach(MIMEText(plain_body, 'plain', 'utf-8'))
     msg.attach(MIMEText(html_body,  'html',  'utf-8'))
 
-    # DÜZELTİLEN KISIM: 587 (STARTTLS) yerine 465 (SMTP_SSL) kullanıldı ve timeout eklendi
-    with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=15) as s:
-        s.login(smtp_user, smtp_pass)
-        s.sendmail(smtp_user, [email], msg.as_string())
+    # EN STABİL GMAIL BAĞLANTISI
+    server = smtplib.SMTP('smtp.gmail.com', 587)
+    server.set_debuglevel(1)
+    server.ehlo()
+    server.starttls()
+    server.ehlo()
+    server.login(smtp_user, smtp_pass)
+    server.sendmail(smtp_user, [email], msg.as_string())
+    server.quit()
 
 
 @app.route('/api/send-code', methods=['POST'])
