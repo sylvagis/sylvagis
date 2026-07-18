@@ -3259,7 +3259,7 @@ def _send_verification_email(email, code):
 
     msg = MIMEMultipart('alternative')
     msg['Subject'] = f'SylvaGIS Doğrulama Kodunuz: {code}'
-    msg['From']    = smtp_user or SYLVA_OWNER_EMAIL
+    msg['From']    = smtp_user
     msg['To']      = email
 
     html_body = f"""
@@ -3305,14 +3305,16 @@ def send_verification_code():
             return jsonify({'ok': False, 'error': 'Geçerli bir e-posta adresi girin.'}), 400
 
         now = datetime.datetime.now()
+        code = '%06d' % random.randint(0, 999999)
 
+        # Düzenleme: Kilidi sadece veri yazarken açıp hemen kapatıyoruz,
+        # e-posta gönderimini kilit dışına alarak sunucunun asılı kalmasını önlüyoruz.
         with _VERIFICATION_LOCK:
             existing = _VERIFICATION_CODES.get(email)
             if existing and (now - existing.get('sent_at', now)).total_seconds() < _CODE_RESEND_SECONDS:
                 wait = int(_CODE_RESEND_SECONDS - (now - existing['sent_at']).total_seconds())
                 return jsonify({'ok': False, 'error': f'Lütfen {wait} saniye sonra tekrar deneyin.'}), 429
 
-            code = '%06d' % random.randint(0, 999999)
             _VERIFICATION_CODES[email] = {
                 'code': code,
                 'expires': now + datetime.timedelta(minutes=_CODE_TTL_MINUTES),
