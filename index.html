@@ -27085,22 +27085,19 @@ document.addEventListener('DOMContentLoaded',function(){
                            data-i18n-placeholder="ui_ph_email" placeholder="ornek@eposta.com">
                     <button type="button" class="reg-send-code-btn" id="reg-send-code-btn"
                             onclick="sylvaSendVerificationCode()" data-i18n="ui_btn_send_code">
-                        Kod Gönder
+                        Onay Maili Gönder
                     </button>
                 </div>
             </div>
 
-            <div class="reg-field" id="reg-code-field" style="display:none;">
-                <label for="reg-email-code" data-i18n="ui_lbl_email_code">Doğrulama Kodu *</label>
-                <div class="reg-email-row">
-                    <input type="text" id="reg-email-code" autocomplete="one-time-code" inputmode="numeric"
-                           maxlength="6" data-i18n-placeholder="ui_ph_email_code" placeholder="6 haneli kod">
-                    <button type="button" class="reg-send-code-btn" id="reg-verify-code-btn"
-                            onclick="sylvaVerifyEmailCode()" data-i18n="ui_btn_verify_code">
-                        Doğrula
-                    </button>
+            <div id="reg-code-field" style="display:none;margin-top:4px;">
+                <div id="reg-waiting-note" style="color:#1d4ed8;font-size:0.82rem;background:#eff6ff;
+                     border-radius:8px;padding:10px 14px;display:flex;align-items:center;gap:8px;">
+                    <span style="font-size:1.1rem;">📧</span>
+                    <span>E-posta kutunuzu açın ve gelen onay linkine tıklayın. Bu sayfa otomatik güncellenecek.</span>
                 </div>
-                <div id="reg-email-verified-note" style="display:none;color:#16a34a;font-size:0.78rem;margin-top:4px;">
+                <div id="reg-email-verified-note" style="display:none;color:#16a34a;font-size:0.82rem;
+                     background:#f0fdf4;border-radius:8px;padding:10px 14px;margin-top:6px;">
                     ✓ <span data-i18n="ui_email_verified">E-posta doğrulandı</span>
                 </div>
             </div>
@@ -27670,6 +27667,32 @@ document.addEventListener('DOMContentLoaded',function(){
     });
 
     // ── Kod Gönder ─────────────────────────────────────────────
+    // ── Onay Maili Gönder ─────────────────────────────────────
+    var _sylvaCodeCooldownTimer = null;
+    var _sylvaVerifyPollTimer   = null;
+
+    // postMessage: Doğrulama sayfası kapanırken sinyal gönderir
+    window.addEventListener('message', function (ev) {
+        if (ev.data === 'sylva_email_verified') {
+            _sylvaMarkVerified();
+        }
+    });
+
+    function _sylvaMarkVerified() {
+        var email = ((document.getElementById('reg-email') || {}).value || '').trim();
+        _sylvaEmailVerified = true;
+        _sylvaVerifiedEmail = email.toLowerCase();
+        if (_sylvaVerifyPollTimer) { clearInterval(_sylvaVerifyPollTimer); _sylvaVerifyPollTimer = null; }
+        var waitNote     = document.getElementById('reg-waiting-note');
+        var verifiedNote = document.getElementById('reg-email-verified-note');
+        if (waitNote)     waitNote.style.display    = 'none';
+        if (verifiedNote) verifiedNote.style.display = 'block';
+        var lang = (typeof _sylvaLang !== 'undefined' ? _sylvaLang : 'en');
+        var T    = (typeof SYLVA_TRANSLATIONS !== 'undefined' && SYLVA_TRANSLATIONS[lang]) ?
+                    SYLVA_TRANSLATIONS[lang] : ((typeof SYLVA_TRANSLATIONS !== 'undefined' && SYLVA_TRANSLATIONS['en']) || {});
+        setStatus('success', T['ui_email_verified'] || 'E-posta doğrulandı.');
+    }
+
     window.sylvaSendVerificationCode = function () {
         var lang = (typeof _sylvaLang !== 'undefined' ? _sylvaLang : 'en');
         var T    = (typeof SYLVA_TRANSLATIONS !== 'undefined' && SYLVA_TRANSLATIONS[lang]) ?
@@ -27685,7 +27708,7 @@ document.addEventListener('DOMContentLoaded',function(){
 
         var sendBtn = document.getElementById('reg-send-code-btn');
         if (sendBtn) sendBtn.disabled = true;
-        setStatus('loading', T['ui_sending_code'] || 'Sending code...');
+        setStatus('loading', T['ui_sending_code'] || 'Onay maili gönderiliyor...');
 
         fetch((window.API_BASE || '') + '/api/send-code', {
             method: 'POST',
@@ -27695,21 +27718,38 @@ document.addEventListener('DOMContentLoaded',function(){
         .then(function (r) { return r.json().then(function (j) { return { status: r.status, body: j }; }); })
         .then(function (res) {
             if (!res.body || !res.body.ok) {
-                setStatus('error', (res.body && res.body.error) || (T['ui_err_send_code'] || 'Could not send code.'));
+                setStatus('error', (res.body && res.body.error) || (T['ui_err_send_code'] || 'Mail gönderilemedi.'));
                 if (sendBtn) sendBtn.disabled = false;
                 return;
             }
+
+            // Bekleme panelini göster
             var codeField = document.getElementById('reg-code-field');
             if (codeField) codeField.style.display = 'block';
-            setStatus('success', T['ui_code_sent'] || 'Verification code sent to your e-mail.');
+            setStatus('success', 'Onay maili gönderildi. E-posta kutunuzdaki linke tıklayın.');
 
-            // Yeniden gönderim için kısa bir bekleme (cooldown)
-            var remaining = 45;
+            // Polling: 3sn'de bir doğrulama durumunu kontrol et
+            if (_sylvaVerifyPollTimer) clearInterval(_sylvaVerifyPollTimer);
+            _sylvaVerifyPollTimer = setInterval(function () {
+                fetch((window.API_BASE || '') + '/api/check-verified', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email: email })
+                })
+                .then(function (r) { return r.json(); })
+                .then(function (j) {
+                    if (j && j.verified) _sylvaMarkVerified();
+                })
+                .catch(function () {});
+            }, 3000);
+
+            // Cooldown: 60sn sonra tekrar gönderime izin ver
+            var remaining = 60;
             if (_sylvaCodeCooldownTimer) clearInterval(_sylvaCodeCooldownTimer);
             _sylvaCodeCooldownTimer = setInterval(function () {
                 remaining--;
                 if (sendBtn) sendBtn.textContent = remaining > 0 ? (remaining + 's') :
-                    (T['ui_btn_send_code'] || 'Kod Gönder');
+                    (T['ui_btn_send_code'] || 'Onay Maili Gönder');
                 if (remaining <= 0) {
                     clearInterval(_sylvaCodeCooldownTimer);
                     if (sendBtn) sendBtn.disabled = false;
@@ -27717,49 +27757,8 @@ document.addEventListener('DOMContentLoaded',function(){
             }, 1000);
         })
         .catch(function () {
-            setStatus('error', T['ui_err_send_code'] || 'Could not send code.');
+            setStatus('error', T['ui_err_send_code'] || 'Mail gönderilemedi.');
             if (sendBtn) sendBtn.disabled = false;
-        });
-    };
-
-    // ── Kodu Doğrula ───────────────────────────────────────────
-    window.sylvaVerifyEmailCode = function () {
-        var lang = (typeof _sylvaLang !== 'undefined' ? _sylvaLang : 'en');
-        var T    = (typeof SYLVA_TRANSLATIONS !== 'undefined' && SYLVA_TRANSLATIONS[lang]) ?
-                    SYLVA_TRANSLATIONS[lang] : ((typeof SYLVA_TRANSLATIONS !== 'undefined' && SYLVA_TRANSLATIONS['en']) || {});
-        var email = ((document.getElementById('reg-email')      || {}).value || '').trim();
-        var code  = ((document.getElementById('reg-email-code') || {}).value || '').trim();
-
-        if (!code) {
-            setStatus('error', T['ui_err_code_required'] || 'Please enter the verification code.');
-            return;
-        }
-
-        var verifyBtn = document.getElementById('reg-verify-code-btn');
-        if (verifyBtn) verifyBtn.disabled = true;
-        setStatus('loading', T['ui_verifying_code'] || 'Verifying...');
-
-        fetch((window.API_BASE || '') + '/api/verify-code', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: email, code: code })
-        })
-        .then(function (r) { return r.json().then(function (j) { return { status: r.status, body: j }; }); })
-        .then(function (res) {
-            if (verifyBtn) verifyBtn.disabled = false;
-            if (!res.body || !res.body.ok) {
-                setStatus('error', (res.body && res.body.error) || (T['ui_err_verify_code'] || 'Verification failed.'));
-                return;
-            }
-            _sylvaEmailVerified = true;
-            _sylvaVerifiedEmail = email.toLowerCase();
-            var note = document.getElementById('reg-email-verified-note');
-            if (note) note.style.display = 'block';
-            setStatus('success', T['ui_email_verified'] || 'E-mail verified.');
-        })
-        .catch(function () {
-            if (verifyBtn) verifyBtn.disabled = false;
-            setStatus('error', T['ui_err_verify_code'] || 'Verification failed.');
         });
     };
 
