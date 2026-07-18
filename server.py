@@ -3233,9 +3233,142 @@ from email.mime.multipart import MIMEMultipart
 
 SYLVA_OWNER_EMAIL = 'sylvagis.world@gmail.com'
 
-def _send_registration_email(ad, soyad, email, meslek, ulke):
+
+# ════════════════════════════════════════════════════════════════
+# 🔐 E-POSTA DOĞRULAMA KODU — Kayıt formunda e-posta doğrulaması
+# ════════════════════════════════════════════════════════════════
+# Kullanıcı "Kod Gönder" butonuna basınca 6 haneli bir kod üretilip
+# kendi e-posta adresine gönderilir. Kullanıcı bu kodu forma girip
+# "Doğrula" ile onaylar; onaylanmadan kayıt tamamlanamaz.
+# NOT: Kodlar bellekte (RAM) tutulur; sunucu yeniden başlarsa silinir.
+# Çoklu worker/instance ortamında paylaşılmaz (örn. Redis) — tek
+# instance/dev kullanım için yeterlidir.
+# ════════════════════════════════════════════════════════════════
+import random
+import threading
+
+_VERIFICATION_CODES = {}   # email -> {'code', 'expires', 'verified', 'sent_at'}
+_VERIFICATION_LOCK   = threading.Lock()
+_CODE_TTL_MINUTES    = 10
+_CODE_RESEND_SECONDS = 45  # aynı e-postaya art arda kod gönderimi arası minimum süre
+
+
+def _send_verification_email(email, code):
     smtp_user = 'sylvagis.world@gmail.com'
     smtp_pass = 'ksfnkvwcutrawcih'
+
+    msg = MIMEMultipart('alternative')
+    msg['Subject'] = f'SylvaGIS Doğrulama Kodunuz: {code}'
+    msg['From']    = smtp_user or SYLVA_OWNER_EMAIL
+    msg['To']      = email
+
+    html_body = f"""
+    <html><body style="font-family:Arial,sans-serif;background:#f4f6f9;padding:24px;">
+      <div style="background:#fff;border-radius:12px;max-width:420px;margin:auto;
+                  padding:32px;text-align:center;box-shadow:0 4px 16px rgba(0,0,0,.1);">
+        <div style="font-size:1.2rem;font-weight:800;color:#1e3a8a;margin-bottom:16px;">
+          🌲 SylvaGIS E-posta Doğrulama
+        </div>
+        <div style="color:#64748b;font-size:.9rem;margin-bottom:20px;">
+          Kayıt işleminizi tamamlamak için aşağıdaki kodu forma girin:
+        </div>
+        <div style="font-size:2rem;font-weight:800;letter-spacing:0.3em;color:#1d4ed8;
+                    background:#eff6ff;border-radius:10px;padding:16px;margin-bottom:16px;">
+          {code}
+        </div>
+        <div style="color:#94a3b8;font-size:.78rem;">
+          Bu kod {_CODE_TTL_MINUTES} dakika süreyle geçerlidir. Bu isteği siz yapmadıysanız
+          bu e-postayı yok sayabilirsiniz.
+        </div>
+      </div>
+    </body></html>"""
+
+    plain_body = (f'SylvaGIS Doğrulama Kodunuz: {code}\n'
+                  f'Bu kod {_CODE_TTL_MINUTES} dakika süreyle geçerlidir.')
+
+    msg.attach(MIMEText(plain_body, 'plain', 'utf-8'))
+    msg.attach(MIMEText(html_body,  'html',  'utf-8'))
+
+    with smtplib.SMTP('smtp.gmail.com', 587) as s:
+        s.ehlo()
+        s.starttls()
+        s.login(smtp_user, smtp_pass)
+        s.sendmail(smtp_user, [email], msg.as_string())
+
+
+@app.route('/api/send-code', methods=['POST'])
+def send_verification_code():
+    try:
+        data  = request.get_json(silent=True) or {}
+        email = (data.get('email') or '').strip().lower()
+
+        if not email or '@' not in email or '.' not in email.split('@')[-1]:
+            return jsonify({'ok': False, 'error': 'Geçerli bir e-posta adresi girin.'}), 400
+
+        now = datetime.datetime.now()
+
+        with _VERIFICATION_LOCK:
+            existing = _VERIFICATION_CODES.get(email)
+            if existing and (now - existing.get('sent_at', now)).total_seconds() < _CODE_RESEND_SECONDS:
+                wait = int(_CODE_RESEND_SECONDS - (now - existing['sent_at']).total_seconds())
+                return jsonify({'ok': False, 'error': f'Lütfen {wait} saniye sonra tekrar deneyin.'}), 429
+
+            code = '%06d' % random.randint(0, 999999)
+            _VERIFICATION_CODES[email] = {
+                'code': code,
+                'expires': now + datetime.timedelta(minutes=_CODE_TTL_MINUTES),
+                'verified': False,
+                'sent_at': now,
+            }
+
+        _send_verification_email(email, code)
+        return jsonify({'ok': True})
+    except Exception as ex:
+        traceback.print_exc()
+        return jsonify({'ok': False, 'error': 'Kod gönderilemedi: %s' % str(ex)}), 500
+
+
+@app.route('/api/verify-code', methods=['POST'])
+def verify_code():
+    try:
+        data  = request.get_json(silent=True) or {}
+        email = (data.get('email') or '').strip().lower()
+        code  = (data.get('code')  or '').strip()
+
+        if not email or not code:
+            return jsonify({'ok': False, 'error': 'E-posta ve kod zorunludur.'}), 400
+
+        now = datetime.datetime.now()
+
+        with _VERIFICATION_LOCK:
+            entry = _VERIFICATION_CODES.get(email)
+            if not entry:
+                return jsonify({'ok': False, 'error': 'Önce doğrulama kodu isteyin.'}), 400
+            if now > entry['expires']:
+                del _VERIFICATION_CODES[email]
+                return jsonify({'ok': False, 'error': 'Kodun süresi doldu, yeni kod isteyin.'}), 400
+            if entry['code'] != code:
+                return jsonify({'ok': False, 'error': 'Kod hatalı, lütfen tekrar deneyin.'}), 400
+
+            entry['verified'] = True
+
+        return jsonify({'ok': True})
+    except Exception as ex:
+        traceback.print_exc()
+        return jsonify({'ok': False, 'error': str(ex)}), 500
+
+
+def _is_email_verified(email):
+    """Bir e-postanın az önce başarıyla doğrulanıp doğrulanmadığını kontrol eder."""
+    email = (email or '').strip().lower()
+    with _VERIFICATION_LOCK:
+        entry = _VERIFICATION_CODES.get(email)
+        return bool(entry and entry.get('verified') and datetime.datetime.now() <= entry['expires'])
+
+
+def _send_registration_email(ad, soyad, email, meslek, ulke):
+    smtp_user = 'sylvagis.world@gmail.com'
+    smtp_pass = 'aaaaaaaaaaaaaaaaaaaaaaaa'
 
     msg = MIMEMultipart('alternative')
     msg['Subject'] = f'[SylvaGIS] Yeni Kayıt — {ad} {soyad}'
@@ -3300,6 +3433,8 @@ def register_user():
             return jsonify({'ok': False, 'error': 'Ad, soyad ve e-posta zorunludur.'}), 400
         if '@' not in email or '.' not in email.split('@')[-1]:
             return jsonify({'ok': False, 'error': 'Geçerli bir e-posta adresi girin.'}), 400
+        if not _is_email_verified(email):
+            return jsonify({'ok': False, 'error': 'E-posta adresiniz henüz doğrulanmadı.'}), 400
 
         _send_registration_email(ad, soyad, email, meslek, ulke)
         return jsonify({'ok': True})
