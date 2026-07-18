@@ -3233,218 +3233,9 @@ from email.mime.multipart import MIMEMultipart
 
 SYLVA_OWNER_EMAIL = 'sylvagis.world@gmail.com'
 
-
-# ════════════════════════════════════════════════════════════════
-# 🔐 E-POSTA DOĞRULAMA — Magic Link ile doğrulama
-# ════════════════════════════════════════════════════════════════
-# Kullanıcı "Onay Maili Gönder" butonuna basınca benzersiz bir token
-# üretilip e-posta adresine doğrulama linki gönderilir. Kullanıcı
-# linke tıklar, tarayıcıda onay sayfası açılır ve kayıt formunda
-# "E-posta doğrulandı" mesajı otomatik belirir.
-# NOT: Tokenlar bellekte (RAM) tutulur; sunucu yeniden başlarsa silinir.
-# ════════════════════════════════════════════════════════════════
-import random
-import threading
-import secrets
-
-_VERIFICATION_CODES  = {}  # email -> {'token', 'expires', 'verified', 'sent_at'}
-_TOKEN_MAP           = {}  # token  -> email  (hızlı arama için)
-_VERIFICATION_LOCK   = threading.Lock()
-_CODE_TTL_MINUTES    = 30
-_CODE_RESEND_SECONDS = 60
-
-
-def _send_verification_email(email, token, verify_url):
-    smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'ksfnkvwcutrawcih'
-
-    msg = MIMEMultipart('alternative')
-    msg['Subject'] = 'SylvaGIS — E-posta Adresinizi Doğrulayın'
-    msg['From']    = smtp_user
-    msg['To']      = email
-
-    html_body = f"""
-    <html><body style="font-family:Arial,sans-serif;background:#f4f6f9;padding:24px;">
-      <div style="background:#fff;border-radius:12px;max-width:460px;margin:auto;
-                  padding:36px 32px;text-align:center;box-shadow:0 4px 16px rgba(0,0,0,.1);">
-        <div style="font-size:1.3rem;font-weight:800;color:#1e3a8a;margin-bottom:8px;">
-          🌲 SylvaGIS
-        </div>
-        <div style="font-size:1rem;font-weight:700;color:#1e293b;margin-bottom:16px;">
-          E-posta Adresinizi Doğrulayın
-        </div>
-        <div style="color:#64748b;font-size:.9rem;margin-bottom:28px;">
-          Kaydınızı tamamlamak için aşağıdaki butona tıklayın.
-          Bu link <strong>{_CODE_TTL_MINUTES} dakika</strong> süreyle geçerlidir.
-        </div>
-        <a href="{verify_url}"
-           style="display:inline-block;background:#1d4ed8;color:#fff;font-weight:700;
-                  font-size:1rem;padding:14px 36px;border-radius:10px;text-decoration:none;
-                  letter-spacing:.02em;">
-          ✅ E-postamı Doğrula
-        </a>
-        <div style="color:#94a3b8;font-size:.75rem;margin-top:24px;">
-          Bu isteği siz yapmadıysanız bu e-postayı görmezden gelebilirsiniz.
-        </div>
-      </div>
-    </body></html>"""
-
-    plain_body = (f'SylvaGIS E-posta Doğrulama\n\n'
-                  f'Kaydınızı tamamlamak için aşağıdaki linke tıklayın:\n{verify_url}\n\n'
-                  f'Bu link {_CODE_TTL_MINUTES} dakika süreyle geçerlidir.')
-
-    msg.attach(MIMEText(plain_body, 'plain', 'utf-8'))
-    msg.attach(MIMEText(html_body,  'html',  'utf-8'))
-
-    try:
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=20) as s:
-            s.login(smtp_user, smtp_pass)
-            s.sendmail(smtp_user, [email], msg.as_string())
-        print(f'✅ Doğrulama maili gönderildi: {email}')
-    except Exception as mail_err:
-        print(f'❌ E-posta gönderilemedi ({email}): {mail_err}')
-        raise
-
-
-@app.route('/api/send-code', methods=['POST'])
-def send_verification_code():
-    try:
-        data  = request.get_json(silent=True) or {}
-        email = (data.get('email') or '').strip().lower()
-
-        if not email or '@' not in email or '.' not in email.split('@')[-1]:
-            return jsonify({'ok': False, 'error': 'Geçerli bir e-posta adresi girin.'}), 400
-
-        now   = datetime.datetime.now()
-        token = secrets.token_urlsafe(32)
-
-        with _VERIFICATION_LOCK:
-            existing = _VERIFICATION_CODES.get(email)
-            if existing and (now - existing.get('sent_at', now)).total_seconds() < _CODE_RESEND_SECONDS:
-                wait = int(_CODE_RESEND_SECONDS - (now - existing['sent_at']).total_seconds())
-                return jsonify({'ok': False, 'error': f'Lütfen {wait} saniye sonra tekrar deneyin.'}), 429
-
-            # Eski token varsa temizle
-            old_token = existing.get('token') if existing else None
-            if old_token and old_token in _TOKEN_MAP:
-                del _TOKEN_MAP[old_token]
-
-            _VERIFICATION_CODES[email] = {
-                'token':    token,
-                'expires':  now + datetime.timedelta(minutes=_CODE_TTL_MINUTES),
-                'verified': False,
-                'sent_at':  now,
-            }
-            _TOKEN_MAP[token] = email
-
-        # Doğrulama URL'sini oluştur
-        base_url = request.host_url.rstrip('/')
-        verify_url = f'{base_url}/api/verify-email?token={token}'
-
-        # E-postayı arka planda gönder; endpoint hemen yanıt versin
-        threading.Thread(
-            target=_send_verification_email,
-            args=(email, token, verify_url),
-            daemon=True
-        ).start()
-        return jsonify({'ok': True})
-    except Exception as ex:
-        traceback.print_exc()
-        return jsonify({'ok': False, 'error': 'Mail gönderilemedi: %s' % str(ex)}), 500
-
-
-@app.route('/api/verify-email', methods=['GET'])
-def verify_email_link():
-    """Kullanıcı e-postadaki linke tıkladığında bu endpoint çalışır."""
-    token = (request.args.get('token') or '').strip()
-
-    with _VERIFICATION_LOCK:
-        email = _TOKEN_MAP.get(token)
-        if not email:
-            return ('''<html><body style="font-family:Arial,sans-serif;background:#f4f6f9;
-                        display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;">
-                <div style="background:#fff;border-radius:16px;padding:48px 40px;text-align:center;
-                            box-shadow:0 4px 24px rgba(0,0,0,.1);max-width:400px;">
-                  <div style="font-size:2.5rem;margin-bottom:16px;">❌</div>
-                  <h2 style="color:#dc2626;margin-bottom:8px;">Geçersiz Link</h2>
-                  <p style="color:#64748b;">Bu doğrulama bağlantısı geçersiz veya süresi dolmuş.</p>
-                  <p style="color:#94a3b8;font-size:.8rem;margin-top:24px;">🌲 SylvaGIS</p>
-                </div></body></html>'''), 400
-
-        entry = _VERIFICATION_CODES.get(email)
-        if not entry or datetime.datetime.now() > entry['expires']:
-            _TOKEN_MAP.pop(token, None)
-            return ('''<html><body style="font-family:Arial,sans-serif;background:#f4f6f9;
-                        display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;">
-                <div style="background:#fff;border-radius:16px;padding:48px 40px;text-align:center;
-                            box-shadow:0 4px 24px rgba(0,0,0,.1);max-width:400px;">
-                  <div style="font-size:2.5rem;margin-bottom:16px;">⏰</div>
-                  <h2 style="color:#d97706;margin-bottom:8px;">Bağlantı Süresi Doldu</h2>
-                  <p style="color:#64748b;">Lütfen kayıt formundan yeni bir doğrulama maili isteyin.</p>
-                  <p style="color:#94a3b8;font-size:.8rem;margin-top:24px;">🌲 SylvaGIS</p>
-                </div></body></html>'''), 400
-
-        entry['verified'] = True
-
-    return ('''<html>
-<head>
-<meta charset="utf-8">
-<title>SylvaGIS — E-posta Doğrulandı</title>
-<style>
-  body{font-family:Arial,sans-serif;background:#f4f6f9;display:flex;
-       align-items:center;justify-content:center;min-height:100vh;margin:0;}
-  .card{background:#fff;border-radius:16px;padding:48px 40px;text-align:center;
-        box-shadow:0 4px 24px rgba(0,0,0,.1);max-width:420px;}
-  .icon{font-size:3rem;margin-bottom:16px;}
-  h2{color:#16a34a;margin-bottom:8px;}
-  p{color:#64748b;font-size:.9rem;}
-  .close-note{color:#94a3b8;font-size:.78rem;margin-top:20px;}
-</style>
-<script>
-  // Kaydı tamamla sinyali gönder ve sekmeyi kapat
-  window.onload = function() {
-    if (window.opener) {
-      try { window.opener.postMessage('sylva_email_verified', '*'); } catch(e) {}
-    }
-    setTimeout(function() { window.close(); }, 4000);
-  };
-</script>
-</head>
-<body>
-  <div class="card">
-    <div class="icon">✅</div>
-    <h2>E-posta Doğrulandı!</h2>
-    <p>Harika! Artık kayıt formunu tamamlayabilirsiniz.<br>
-       Bu sekme otomatik olarak kapanacak.</p>
-    <p class="close-note">🌲 SylvaGIS</p>
-  </div>
-</body>
-</html>'''), 200
-
-
-@app.route('/api/check-verified', methods=['POST'])
-def check_verified():
-    """Frontend'in e-posta doğrulamasını kontrol etmek için kullandığı polling endpoint."""
-    try:
-        data  = request.get_json(silent=True) or {}
-        email = (data.get('email') or '').strip().lower()
-        verified = _is_email_verified(email)
-        return jsonify({'ok': True, 'verified': verified})
-    except Exception as ex:
-        return jsonify({'ok': False, 'verified': False, 'error': str(ex)}), 500
-
-
-def _is_email_verified(email):
-    """Bir e-postanın doğrulanıp doğrulanmadığını kontrol eder."""
-    email = (email or '').strip().lower()
-    with _VERIFICATION_LOCK:
-        entry = _VERIFICATION_CODES.get(email)
-        return bool(entry and entry.get('verified') and datetime.datetime.now() <= entry['expires'])
-
-
 def _send_registration_email(ad, soyad, email, meslek, ulke):
     smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'aaaaaaaaaaaaaaaaaaaaaaaa'
+    smtp_pass = 'ksfnkvwcutrawcih'
 
     msg = MIMEMultipart('alternative')
     msg['Subject'] = f'[SylvaGIS] Yeni Kayıt — {ad} {soyad}'
@@ -3485,10 +3276,11 @@ def _send_registration_email(ad, soyad, email, meslek, ulke):
     msg.attach(MIMEText(html_body,  'html',  'utf-8'))
 
     try:
-        # DÜZELTİLEN KISIM: 587 (STARTTLS) yerine 465 (SMTP_SSL) kullanıldı ve timeout eklendi
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=15) as s:
+        with smtplib.SMTP('smtp.gmail.com', 587) as s:
+            s.ehlo()
+            s.starttls()
             s.login(smtp_user, smtp_pass)
-            s.sendmail(smtp_user, [SYLVA_OWNER_EMAIL], msg.as_string())
+            s.sendmail(smtp_user, SYLVA_OWNER_EMAIL, msg.as_string())
     except Exception as smtp_err:
         print(f'❌ _send_registration_email SMTP hatası: {smtp_err}')
         raise
@@ -3508,8 +3300,6 @@ def register_user():
             return jsonify({'ok': False, 'error': 'Ad, soyad ve e-posta zorunludur.'}), 400
         if '@' not in email or '.' not in email.split('@')[-1]:
             return jsonify({'ok': False, 'error': 'Geçerli bir e-posta adresi girin.'}), 400
-        if not _is_email_verified(email):
-            return jsonify({'ok': False, 'error': 'E-posta adresiniz henüz doğrulanmadı.'}), 400
 
         _send_registration_email(ad, soyad, email, meslek, ulke)
         return jsonify({'ok': True})
