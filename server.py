@@ -3289,9 +3289,8 @@ def _send_verification_email(email, code):
     msg.attach(MIMEText(plain_body, 'plain', 'utf-8'))
     msg.attach(MIMEText(html_body,  'html',  'utf-8'))
 
-    with smtplib.SMTP('smtp.gmail.com', 587) as s:
-        s.ehlo()
-        s.starttls()
+    # DÜZELTİLEN KISIM: 587 (STARTTLS) yerine 465 (SMTP_SSL) kullanıldı ve timeout eklendi
+    with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=15) as s:
         s.login(smtp_user, smtp_pass)
         s.sendmail(smtp_user, [email], msg.as_string())
 
@@ -3409,11 +3408,10 @@ def _send_registration_email(ad, soyad, email, meslek, ulke):
     msg.attach(MIMEText(html_body,  'html',  'utf-8'))
 
     try:
-        with smtplib.SMTP('smtp.gmail.com', 587) as s:
-            s.ehlo()
-            s.starttls()
+        # DÜZELTİLEN KISIM: 587 (STARTTLS) yerine 465 (SMTP_SSL) kullanıldı ve timeout eklendi
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=15) as s:
             s.login(smtp_user, smtp_pass)
-            s.sendmail(smtp_user, SYLVA_OWNER_EMAIL, msg.as_string())
+            s.sendmail(smtp_user, [SYLVA_OWNER_EMAIL], msg.as_string())
     except Exception as smtp_err:
         print(f'❌ _send_registration_email SMTP hatası: {smtp_err}')
         raise
