@@ -894,6 +894,48 @@ def _dynamic_stretch_vis(img, roi, scale, fallback_vis):
         return fallback_vis
 
 
+def _load_topo_dem(dem_source, roi):
+    """
+    Ortak DEM yükleme + boşluk (void) doldurma mantığı.
+
+    Hem build_result_image() (TOPO_* / topografik analizler ailesi) hem de
+    build_contour_image() (Eş Yükselti / Contour analizi) tarafından
+    kullanılır — DEM kaynağı seçimi ve void-fill adımları iki yerde ayrı
+    ayrı yazılmasın diye tek bir helper'a taşındı.
+
+    🛠️ BUG FİX (NoData kareler / boş piksel sorunu): ALOS ve Copernicus
+    DEM'leri parçalı (tile-based) ImageCollection'lardır. filterBounds(roi)
+    .mosaic() çağrısı AOI'yi kapsayan tile'ları birleştirir; ancak tile
+    sınırlarında veya kapsama açığı olan bölgelerde mozaikte NoData
+    pikseller kalabilir. .unmask(srtm_fallback) ile bu boşluklar SRTM
+    verisiyle doldurulur (SRTM 60°G–60°K global kapsama sağlar).
+
+    🛠️ BUG FİX (dağınık tekil piksel boşlukları): dik yamaçlarda radar
+    gölgesi nedeniyle oluşan TEKİL/küçük-küme "void" pikselleri, terrain
+    ürünleri (eğim, kontur vb.) hesaplanmadan ÖNCE iki aşamalı bir
+    odak-ortalama (150 m, sonra 450 m yarıçap) ile enterpole edilerek
+    doldurulur.
+    """
+    _srtm_fallback = ee.Image('USGS/SRTMGL1_003').select('elevation')
+
+    if dem_source == 'ALOS':
+        dem = (ee.ImageCollection('JAXA/ALOS/AW3D30/V3_2')
+               .filterBounds(roi).mosaic().select('DSM').rename('elevation'))
+        dem = dem.unmask(_srtm_fallback)
+    elif dem_source == 'Copernicus':
+        dem = (ee.ImageCollection('COPERNICUS/DEM/GLO30')
+               .filterBounds(roi).mosaic().select('DEM').rename('elevation'))
+        dem = dem.unmask(_srtm_fallback)
+    elif dem_source == 'NASADEM':
+        dem = ee.Image('NASA/NASADEM_HGT/001').select('elevation')
+    else:  # SRTM (varsayılan)
+        dem = ee.Image('USGS/SRTMGL1_003').select('elevation')
+
+    dem = dem.unmask(dem.focalMean(radius=150, units='meters'))
+    dem = dem.unmask(dem.focalMean(radius=450, units='meters'))
+    return dem
+
+
 def build_result_image(data, for_export=False):
     """
     Ortak analiz görüntüsü oluşturma mantığı.
@@ -1065,24 +1107,10 @@ def build_result_image(data, for_export=False):
         # NoData pikseli SRTM verisiyle doldurulur. SRTM global kapsama sahiptir
         # (60°G–60°K) ve bu tür boşlukları kapatmak için en sağlıklı alternatiftir.
         # NASADEM zaten tek görüntü olduğu için boşluk sorunu yaşamaz.
-        _srtm_fallback = ee.Image('USGS/SRTMGL1_003').select('elevation')
-
-        dem_source = data.get('demSource', 'SRTM')
-        if dem_source == 'ALOS':
-            dem = (ee.ImageCollection('JAXA/ALOS/AW3D30/V3_2')
-                   .filterBounds(roi).mosaic().select('DSM').rename('elevation'))
-            # Tile sınırlarındaki / kapsama dışı NoData pikselleri SRTM ile doldur
-            dem = dem.unmask(_srtm_fallback)
-        elif dem_source == 'Copernicus':
-            dem = (ee.ImageCollection('COPERNICUS/DEM/GLO30')
-                   .filterBounds(roi).mosaic().select('DEM').rename('elevation'))
-            # Tile sınırlarındaki / kapsama dışı NoData pikselleri SRTM ile doldur
-            dem = dem.unmask(_srtm_fallback)
-        elif dem_source == 'NASADEM':
-            dem = ee.Image('NASA/NASADEM_HGT/001').select('elevation')
-        else:  # SRTM (varsayılan)
-            dem = ee.Image('USGS/SRTMGL1_003').select('elevation')
-
+        # DEM yükleme + void-fill mantığı artık _load_topo_dem() helper'ına
+        # taşındı (bkz. build_result_image'ın hemen üstü) — böylece Eş
+        # Yükselti (Contour) analizi de (build_contour_image) aynı kodu
+        # tekrar yazmadan yeniden kullanabiliyor.
         # 🛠️ BUG FİX (dağınık tekil piksel boşlukları — "kare kare" benek
         # deseni, özellikle sırt/vadi hatlarında yoğunlaşan beyaz/siyah
         # noktalar): Yukarıdaki unmask(SRTM) adımı yalnızca ALOS/Copernicus
@@ -1096,26 +1124,10 @@ def build_result_image(data, for_export=False):
         # dağınık "eksik piksel kareleri" tam olarak budur.
         #
         # ÇÖZÜM: Kaynak ne olursa olsun, DEM'i terrain ürünleri hesaplanmadan
-        # ÖNCE odak-ortalama (focal mean) ile "void-fill" işleminden geçiriyoruz.
-        # reduceNeighborhood tabanlı focalMean, komşuluk penceresindeki YALNIZCA
-        # geçerli (maskelenmemiş) pikselleri kullanarak ortalama alır; bu da
-        # void pikselinin değerini çevresindeki gerçek verilerden enterpole
-        # edip dolduruyor — sonuçta ham DEM'de tek bir maskeli piksel bile
-        # kalmıyor ve türev ürünlerde artık hiçbir boşluk/benek oluşmuyor.
-        # 150 m yarıçap (~5 piksel @ 30 m), tipik void kümelerini (genelde
-        # 1-3 piksel genişliğinde) kapatmaya yeterlidir; büyük gerçek NoData
-        # alanlarını (AOI dışı vb.) ETKİLEMEZ çünkü onlar zaten export
-        # aşamasında ayrı bir clip/nodata mantığıyla ele alınıyor.
-        #
-        # İKİ AŞAMALI doldurma: bazı void kümeleri (özellikle dik vadi
-        # tabanlarında/gölgede kalan geniş alanlarda) 150 m'den daha büyük
-        # olabilir ve TEK geçişte tam dolmayabilir. Bu yüzden önce dar
-        # (150 m), sonra daha geniş (450 m) bir odak-ortalama ile ikinci
-        # bir "güvenlik ağı" geçişi uyguluyoruz — ilk geçişte dolmayan
-        # (çevresi de void olan) nadir pikseller ikinci, daha geniş
-        # pencerede kesinlikle geçerli komşu bulur.
-        dem = dem.unmask(dem.focalMean(radius=150, units='meters'))
-        dem = dem.unmask(dem.focalMean(radius=450, units='meters'))
+        # ÖNCE odak-ortalama (focal mean) ile "void-fill" işleminden geçiriyoruz
+        # — bu adım artık _load_topo_dem() helper'ının içinde uygulanıyor.
+        dem_source = data.get('demSource', 'SRTM')
+        dem = _load_topo_dem(dem_source, roi)
 
         terrain = ee.Terrain.products(dem)
         slope   = terrain.select('slope')
@@ -1731,6 +1743,66 @@ def build_result_image(data, for_export=False):
     return final_display, roi, result, vis, _crs_probe_img
 
 
+def build_contour_image(data):
+    """
+    🏔️ Eş Yükselti (Contour) analizi.
+
+    Diğer topografik analizlerin aksine bu bir "görselleştirme germe"
+    (min/max stretch) katmanı DEĞİL, matematiksel bir MASKELEME işlemidir:
+    DEM, kullanıcının seçtiği aralığa (10, 50, 100, 200 m) göre modulo
+    (.mod()) operatörüyle işlenir; bu aralığa denk gelen yükseklikteki
+    pikseller "1" değeriyle işaretlenip görünür bırakılır, aradaki TÜM
+    diğer pikseller ise .updateMask() ile tamamen gizlenir (mask). Sonuçta
+    haritada yalnızca ince eş yükselti çizgileri görünür — DEM'in tamamı
+    boyanmaz.
+
+    Girdi (data): roi, clipMode, demSource (SRTM/ALOS/Copernicus/NASADEM),
+    interval (10/50/100/200).
+    Returns: (final_display, roi, vis)
+    """
+    roi_coords = data.get('roi')
+    clip_mode  = data.get('clipMode', 'clip')
+    dem_source = data.get('demSource', 'SRTM')
+
+    # Aralık: yalnızca arayüzde sunulan 10/50/100/200 değerleri beklenir;
+    # geçersiz/eksik gelirse güvenli varsayılan olan 100 m'ye düşülür.
+    try:
+        interval = float(data.get('interval', 100))
+    except (TypeError, ValueError):
+        interval = 100.0
+    if interval <= 0:
+        interval = 100.0
+
+    roi = make_roi(roi_coords)
+
+    # DEM yükleme + void-fill: diğer TOPO analizleriyle birebir aynı,
+    # kod tekrarını önlemek için _load_topo_dem() helper'ı kullanılır.
+    dem = _load_topo_dem(dem_source, roi)
+
+    # ── Modulo tabanlı eş yükselti maskesi ──────────────────────────
+    # dem.mod(interval): yüksekliğin aralığa göre "kalanı"nı verir (0'a
+    # yaklaştıkça o piksel, tam olarak bir kontur çizgisinin üstündedir).
+    # Ham DEM sürekli/ondalıklı bir değer olduğu için kalanın TAM 0
+    # olması pratikte neredeyse hiç gerçekleşmez — bu yüzden ince ama
+    # gerçekten görünür bir çizgi kalınlığı elde etmek için ±tolerans
+    # (band) tanımlanır: kalan 0'a ya da interval'in kendisine yakınsa
+    # (yani bir üstteki/alttaki eşiğe çok yakınsa) piksel çizgiye dahil
+    # sayılır. Tolerans, aralıkla orantılı büyütülür (küçük aralıklarda
+    # çizgiler birbirine değmesin, büyük aralıklarda kaybolmasın diye).
+    band = max(1.5, interval * 0.015)
+    remainder = dem.mod(interval)
+    on_contour = remainder.lte(band).Or(remainder.gte(interval - band))
+
+    # Yalnızca çizgi piksellerini "1" olarak bırak, geri kalanını maskele
+    # (gizle) — bu yüzden result burada 'value' değil doğrudan maskelenmiş
+    # ikili (binary) bir görüntü olarak üretiliyor.
+    contour_mask = ee.Image(1).updateMask(on_contour).rename('value')
+
+    vis = {'min': 0, 'max': 1, 'palette': ['#ff5a1f']}
+    final_display = contour_mask.clip(roi) if clip_mode == 'clip' else contour_mask
+    return final_display, roi, vis
+
+
 def _rgb_scene_metadata(data, roi, image, ds):
     """Seçilen sahne için Görüntü Bilgileri / dinamik lejant panelinde
     gösterilecek metadata sözlüğünü üretir. Gerçek CRS/çözünürlük GEE'den
@@ -2014,6 +2086,38 @@ def analyze():
             'visMax':    vis.get('max'),
             'visPalette': vis.get('palette', []),
             'nativeCrs': native_crs
+        })
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/analyze-contours', methods=['POST'])
+def analyze_contours():
+    """
+    🏔️ Eş Yükselti (Contour) analizi ucu.
+
+    Kasıtlı olarak /api/analyze'den TAMAMEN BAĞIMSIZDIR: istatistik
+    (min/max/mean, histogram), zaman serisi galerisi veya CRS tespiti gibi
+    ağır/gereksiz işlemler burada YAPILMAZ — yalnızca seçilen DEM kaynağı ve
+    aralığa göre maskelenmiş eş yükselti tile'ı üretilip döndürülür.
+
+    Beklenen gövde (JSON): { roi, clipMode, demSource, interval }
+    """
+    try:
+        data = request.json or {}
+        if not data.get('roi'):
+            return jsonify({'success': False, 'error': 'roi (çalışma alanı) gerekli.'})
+
+        final_display, roi, vis = build_contour_image(data)
+        map_id   = _call_with_retry(lambda: final_display.getMapId(vis))
+        tile_url = map_id['tile_fetcher'].url_format
+
+        return jsonify({
+            'success':   True,
+            'tileUrl':   tile_url,
+            'interval':  data.get('interval', 100),
+            'demSource': data.get('demSource', 'SRTM'),
         })
 
     except Exception as e:
