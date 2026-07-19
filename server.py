@@ -145,6 +145,254 @@ LULC_FAMILY_INDICES = (
     'SAR',
 )
 
+# ════════════════════════════════════════════════════════════════
+# 🎨 LULC SINIF TANIMLARI — KOD, İSİM VE RESMİ RENK (Color Table / RAT)
+# ════════════════════════════════════════════════════════════════
+# SORUN: ArcMap/QGIS, GeoTIFF içinde gömülü bir "Color Table" (renk
+# paleti) yoksa dosyayı tek bantlı ham "değer" verisi sanır ve
+# varsayılan olarak SİYAH-BEYAZ (grayscale) açar; piksel değerleri de
+# (1, 2, 3...) sınıf isimleri ("Orman", "Tarım Alanı" vb.) yerine çıplak
+# rakam olarak görünür.
+#
+# ÇÖZÜM: Aşağıdaki tanımlar — index.html'deki LULC_CLASS_DEFS ile
+# BİREBİR aynı kod/isim/renk sırasını kullanır (bkz. index.html →
+# renderLulcLegendAndChart) — GeoTIFF indirilirken hem dosyanın
+# İÇİNE bir "Color Table" gömmek (rasterio write_colormap) hem de
+# ArcMap/QGIS'in otomatik okuyacağı bir Raster Attribute Table (RAT)
+# sidecar (.tif.aux.xml) ve klasik bir .clr renk dosyası üretmek için
+# kullanılır. Bkz. _build_lulc_symbology_zip() ve /api/download-geotiff.
+LULC_CLASS_DEFS = {
+    'LULC': [  # Google Dynamic World V1 — band 'label', kod 0-8
+        {'code': 0, 'label': 'Su Kütlesi',              'color': '#419bdf'},
+        {'code': 1, 'label': 'Orman / Ağaçlık',          'color': '#397d49'},
+        {'code': 2, 'label': 'Çayır / Otlak',            'color': '#88b053'},
+        {'code': 3, 'label': 'Sulak Bitki Örtüsü',       'color': '#7a87c6'},
+        {'code': 4, 'label': 'Tarım Alanı',              'color': '#e49635'},
+        {'code': 5, 'label': 'Çalılık',                  'color': '#dfc35a'},
+        {'code': 6, 'label': 'Yapay / Kentsel Alan',     'color': '#c4281b'},
+        {'code': 7, 'label': 'Çıplak Toprak',            'color': '#a59b8f'},
+        {'code': 8, 'label': 'Kar / Buz',                'color': '#b39fe1'},
+    ],
+    'LULC_ESA': [  # ESA WorldCover v200 — sunucuda 1..11'e yeniden kodlanmış sıra
+        {'code': 1,  'label': 'Ağaç Örtüsü / Orman',          'color': '#006400'},
+        {'code': 2,  'label': 'Çalılık',                      'color': '#ffbb22'},
+        {'code': 3,  'label': 'Çayır / Otlak',                'color': '#ffff4c'},
+        {'code': 4,  'label': 'Tarım Alanı',                  'color': '#f096ff'},
+        {'code': 5,  'label': 'Yapay / Kentsel Alan',         'color': '#fa0000'},
+        {'code': 6,  'label': 'Çıplak / Seyrek Bitki Örtüsü', 'color': '#b4b4b4'},
+        {'code': 7,  'label': 'Kar / Buz',                    'color': '#f0f0f0'},
+        {'code': 8,  'label': 'Su Kütlesi',                   'color': '#0064c8'},
+        {'code': 9,  'label': 'Sulak Alan / Bataklık',        'color': '#0096a0'},
+        {'code': 10, 'label': 'Mangrov',                      'color': '#00cf75'},
+        {'code': 11, 'label': 'Yosun / Liken',                'color': '#fae6a0'},
+    ],
+    'LULC_MODIS': [  # MODIS MCD12Q1 — LC_Type1 (IGBP), kod 1-17
+        {'code': 1,  'label': 'Herdemyeşil İbreli Orman',         'color': '#05450a'},
+        {'code': 2,  'label': 'Herdemyeşil Geniş Yapraklı Orman', 'color': '#086a10'},
+        {'code': 3,  'label': 'Yaprak Döken İbreli Orman',        'color': '#54a708'},
+        {'code': 4,  'label': 'Yaprak Döken Geniş Yapraklı Orman','color': '#78d203'},
+        {'code': 5,  'label': 'Karışık Ormanlar',                 'color': '#009900'},
+        {'code': 6,  'label': 'Kapalı Çalılık',                   'color': '#c6b044'},
+        {'code': 7,  'label': 'Açık Çalılık',                     'color': '#dcd159'},
+        {'code': 8,  'label': 'Odunlu Savana',                    'color': '#dade48'},
+        {'code': 9,  'label': 'Savana',                           'color': '#fbff13'},
+        {'code': 10, 'label': 'Çayır / Otlak',                    'color': '#b6ff05'},
+        {'code': 11, 'label': 'Kalıcı Sulak Alan',                'color': '#27ff87'},
+        {'code': 12, 'label': 'Tarım Alanı',                      'color': '#c24f44'},
+        {'code': 13, 'label': 'Kentsel / Yapay Alan',             'color': '#a5a5a5'},
+        {'code': 14, 'label': 'Tarım-Doğal Mozaik',               'color': '#ff6d4c'},
+        {'code': 15, 'label': 'Kar ve Buz',                       'color': '#69fff8'},
+        {'code': 16, 'label': 'Çıplak Toprak / Seyrek Örtü',      'color': '#f9ffa4'},
+        {'code': 17, 'label': 'Su Kütlesi',                       'color': '#1c0dff'},
+    ],
+    'LULC_CORINE': [  # CORINE Land Cover 2018 — 44 sınıf, sunucuda 1..44'e remaplenir
+        {'code': 1,  'label': 'Sürekli Kentsel Doku',      'color': '#e6004d'},
+        {'code': 2,  'label': 'Süreksiz Kentsel Doku',     'color': '#ff0000'},
+        {'code': 3,  'label': 'Sanayi / Ticaret',          'color': '#cc4df2'},
+        {'code': 4,  'label': 'Yol / Demiryolu',           'color': '#cc0000'},
+        {'code': 5,  'label': 'Liman Alanları',            'color': '#e6cccc'},
+        {'code': 6,  'label': 'Havalimanları',             'color': '#e6cce6'},
+        {'code': 7,  'label': 'Maden Çıkarım Sahası',      'color': '#a600cc'},
+        {'code': 8,  'label': 'Döküm / Atık Sahası',       'color': '#a64d00'},
+        {'code': 9,  'label': 'İnşaat Sahası',             'color': '#ff4dff'},
+        {'code': 10, 'label': 'Kentsel Yeşil Alan',        'color': '#ffa6ff'},
+        {'code': 11, 'label': 'Spor / Eğlence',            'color': '#ffe6ff'},
+        {'code': 12, 'label': 'Sulanmayan Tarım',          'color': '#ffffa8'},
+        {'code': 13, 'label': 'Sulanan Tarım',             'color': '#ffff00'},
+        {'code': 14, 'label': 'Pirinç Tarlaları',          'color': '#e6e600'},
+        {'code': 15, 'label': 'Bağlar',                    'color': '#e68000'},
+        {'code': 16, 'label': 'Meyve Bahçeleri',           'color': '#f2a64d'},
+        {'code': 17, 'label': 'Zeytin Bahçeleri',          'color': '#e6a600'},
+        {'code': 18, 'label': 'Çayır / Mera',              'color': '#e6e64d'},
+        {'code': 19, 'label': 'Yıllık Tarım Mozaiği',      'color': '#ffe6a6'},
+        {'code': 20, 'label': 'Karmaşık Tarım',            'color': '#ffe64d'},
+        {'code': 21, 'label': 'Tarım-Doğal Mozaik',        'color': '#e6cc4d'},
+        {'code': 22, 'label': 'Tarım-Ormanlık Mozaik',     'color': '#f2cca6'},
+        {'code': 23, 'label': 'Geniş Yapraklı Orman',      'color': '#80ff00'},
+        {'code': 24, 'label': 'İbreli Orman',              'color': '#00a600'},
+        {'code': 25, 'label': 'Karışık Orman',             'color': '#4dff00'},
+        {'code': 26, 'label': 'Doğal Çayırlık',            'color': '#ccf24d'},
+        {'code': 27, 'label': 'Bozkır / Fundalık',         'color': '#a6ff80'},
+        {'code': 28, 'label': 'Makiler',                   'color': '#a6e64d'},
+        {'code': 29, 'label': 'Geçiş Orman-Çalılık',       'color': '#a6f200'},
+        {'code': 30, 'label': 'Plaj / Kum / Dün',          'color': '#e6e6e6'},
+        {'code': 31, 'label': 'Çıplak Kayalık',            'color': '#cccccc'},
+        {'code': 32, 'label': 'Seyrek Bitki Örtüsü',       'color': '#ccffcc'},
+        {'code': 33, 'label': 'Yanmış Alan',               'color': '#000000'},
+        {'code': 34, 'label': 'Buzul / Kalıcı Kar',        'color': '#a6e6cc'},
+        {'code': 35, 'label': 'İç Bataklık',               'color': '#a6a6ff'},
+        {'code': 36, 'label': 'Turbalık',                  'color': '#4d4dff'},
+        {'code': 37, 'label': 'Tuz Bataklığı',             'color': '#ccccff'},
+        {'code': 38, 'label': 'Tuzla',                     'color': '#e6e6ff'},
+        {'code': 39, 'label': 'Gelgit Düzlüğü',            'color': '#a6a6e6'},
+        {'code': 40, 'label': 'Akarsu',                    'color': '#00ccf2'},
+        {'code': 41, 'label': 'Göl / Gölet',               'color': '#80f2e6'},
+        {'code': 42, 'label': 'Kıyı Lagünü',               'color': '#00ffa6'},
+        {'code': 43, 'label': 'Haliç',                     'color': '#a6ffe6'},
+        {'code': 44, 'label': 'Deniz / Okyanus',           'color': '#e6f2ff'},
+    ],
+}
+
+
+def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name):
+    """
+    LULC ailesi (LULC, LULC_ESA, LULC_MODIS, LULC_CORINE) GeoTIFF'ini alır;
+    çıktısı, ArcMap/QGIS'te doğrudan RENKLİ ve İSİMLENDİRİLMİŞ açılan bir
+    ZIP paketidir:
+
+      1) {ad}.tif          — bandı Byte'a indirgenmiş, İÇİNE "Color Table"
+                              (GDAL Palette) GÖMÜLMÜŞ GeoTIFF. Bu sayede
+                              dosya, yanında hiçbir sidecar olmasa bile artık
+                              siyah-beyaz değil, kendi rengiyle açılır.
+      2) {ad}.tif.aux.xml   — GDAL "Raster Attribute Table" (RAT) sidecar'ı;
+                              ArcGIS/QGIS bunu .tif ile aynı klasörde
+                              otomatik bulur ve piksel değerlerini (1,2,3…)
+                              sınıf isimlerine ("Orman", "Tarım Alanı" vb.)
+                              çevirir (Identify / Öznitelik Tablosu).
+      3) {ad}.clr           — klasik GDAL/ESRI renk eşleştirme dosyası;
+                              ArcMap'te Symbology > Import ile manuel olarak
+                              da yüklenebilir (yedek yol).
+      4) OKUBENI.txt        — ArcMap/QGIS'te nasıl kullanılacağını anlatan
+                              kısa Türkçe kılavuz.
+
+    Girdi verisi zaten sunucuda 1..N (veya Dynamic World için 0..8) gibi
+    küçük, ardışık tam sayı sınıf kodlarına remaplenmiş halde gelir (bkz.
+    build_result_image → LULC/LULC_ESA/LULC_MODIS/LULC_CORINE blokları).
+    Burada yapılan tek şey: NoData sentinel'ini (-9999) 0'a indirgemek,
+    bandı Byte'a çevirmek ve rasterio.write_colormap ile renk tablosunu
+    dosyanın içine yazmaktır — piksellerin taşıdığı SINIF BİLGİSİ hiçbir
+    şekilde değiştirilmez/kaybolmaz.
+    """
+    import numpy as np
+    import rasterio
+    from rasterio.io import MemoryFile
+    from xml.sax.saxutils import escape as _xml_escape
+
+    defs = LULC_CLASS_DEFS.get(index_name)
+    if not defs:
+        return None
+
+    # kod -> (isim, (r,g,b))
+    code_info = {}
+    for d in defs:
+        hexc = d['color'].lstrip('#')
+        rgb = tuple(int(hexc[i:i + 2], 16) for i in (0, 2, 4))
+        code_info[d['code']] = (d['label'], rgb)
+
+    # Dynamic World (LULC) kodları 0'dan başlıyor; 0'ı yalnızca NoData'ya
+    # ayırabilmek için TÜM kodları +1 kaydırıyoruz. Diğer LULC ailesi
+    # (ESA/MODIS/CORINE) zaten 1'den başladığı için kayma 0'dır.
+    shift = 1 if min(code_info.keys()) == 0 else 0
+    shifted_info = {code + shift: v for code, v in code_info.items()}
+
+    with MemoryFile(tif_bytes) as memfile:
+        with memfile.open() as src:
+            band = src.read(1).astype(np.float64)
+            profile = src.profile.copy()
+            src_nodata = src.nodata
+
+    valid = np.isfinite(band)
+    if src_nodata is not None:
+        valid &= ~np.isclose(band, float(src_nodata))
+
+    rounded = np.rint(band).astype(np.int64)
+    out = np.where(valid, rounded + shift, 0)
+    out = np.clip(out, 0, 255).astype(np.uint8)
+
+    new_profile = profile.copy()
+    new_profile.update(dtype='uint8', count=1, nodata=0, compress='lzw')
+    new_profile.pop('photometric', None)
+
+    with MemoryFile() as out_memfile:
+        with out_memfile.open(**new_profile) as dst:
+            dst.write(out, 1)
+            colormap = {0: (255, 255, 255, 0)}
+            for code, (label, rgb) in shifted_info.items():
+                colormap[code] = (rgb[0], rgb[1], rgb[2], 255)
+            dst.write_colormap(1, colormap)
+        new_tif_bytes = out_memfile.read()
+
+    # ── .clr (klasik GDAL/ESRI renk eşleştirme dosyası) ──────────────
+    clr_lines = ['0 255 255 255 0']
+    for code in sorted(shifted_info.keys()):
+        label, rgb = shifted_info[code]
+        clr_lines.append('{} {} {} {} 255'.format(code, rgb[0], rgb[1], rgb[2]))
+    clr_bytes = ('\n'.join(clr_lines) + '\n').encode('utf-8')
+
+    # ── .tif.aux.xml (GDAL Raster Attribute Table — isim eşleştirme) ─
+    rows = ['      <Row index="0"><F>0</F><F>NoData</F><F>255</F><F>255</F><F>255</F></Row>']
+    for i, code in enumerate(sorted(shifted_info.keys()), start=1):
+        label, rgb = shifted_info[code]
+        rows.append(
+            '      <Row index="{}"><F>{}</F><F>{}</F><F>{}</F><F>{}</F><F>{}</F></Row>'.format(
+                i, code, _xml_escape(label), rgb[0], rgb[1], rgb[2]
+            )
+        )
+    aux_xml = (
+        '<PAMDataset>\n'
+        '  <PAMRasterBand band="1">\n'
+        '    <Metadata>\n'
+        '      <MDI key="LAYER_TYPE">thematic</MDI>\n'
+        '    </Metadata>\n'
+        '    <GDALRasterAttributeTable Row0Min="0" BinSize="1" tableType="thematic">\n'
+        '      <FieldDefn index="0"><Name>VALUE</Name><Type>1</Type><Usage>0</Usage></FieldDefn>\n'
+        '      <FieldDefn index="1"><Name>CLASS_NAME</Name><Type>2</Type><Usage>2</Usage></FieldDefn>\n'
+        '      <FieldDefn index="2"><Name>R</Name><Type>1</Type><Usage>6</Usage></FieldDefn>\n'
+        '      <FieldDefn index="3"><Name>G</Name><Type>1</Type><Usage>7</Usage></FieldDefn>\n'
+        '      <FieldDefn index="4"><Name>B</Name><Type>1</Type><Usage>8</Usage></FieldDefn>\n'
+        + '\n'.join(rows) + '\n'
+        '    </GDALRasterAttributeTable>\n'
+        '  </PAMRasterBand>\n'
+        '</PAMDataset>\n'
+    )
+    aux_xml_bytes = aux_xml.encode('utf-8')
+
+    readme = (
+        'SylvaGIS — Renkli/İsimlendirilmiş Arazi Örtüsü (LULC) Paketi\n'
+        '================================================================\n\n'
+        'Bu ZIP içinde:\n'
+        '  - {name}.tif           -> Rengi dosyanın İÇİNE gömülü GeoTIFF.\n'
+        '  - {name}.tif.aux.xml   -> ArcGIS/QGIS için sınıf ismi tablosu (RAT).\n'
+        '  - {name}.clr           -> Yedek/manuel renk dosyası.\n\n'
+        'Kullanım:\n'
+        '  1) Bu üç dosyayı AYNI klasörde tutun (.tif.aux.xml ve .clr, .tif ile\n'
+        '     birlikte kalmalı — isimleri değiştirmeyin).\n'
+        '  2) ArcMap/ArcGIS Pro veya QGIS\'te yalnızca {name}.tif dosyasını açın.\n'
+        '     Katman artık siyah-beyaz değil, kendi renkleriyle gelecek ve\n'
+        '     Identify/Kimlik penelinde piksel değeri yanında sınıf ismini de\n'
+        '     ("Orman", "Tarım Alanı" vb.) gösterecektir.\n'
+        '  3) Renkler görünmezse: ArcMap\'te katmana sağ tık > Properties >\n'
+        '     Symbology > "Unique Values" seçip, "Import" ile {name}.clr\n'
+        '     dosyasını yükleyin.\n'
+    ).format(name=safe_name)
+
+    return {
+        '{}.tif'.format(safe_name): new_tif_bytes,
+        '{}.tif.aux.xml'.format(safe_name): aux_xml_bytes,
+        '{}.clr'.format(safe_name): clr_bytes,
+        'OKUBENI.txt': readme.encode('utf-8'),
+    }
+
 
 @app.route('/api/ping', methods=['GET'])
 def ping():
@@ -2245,6 +2493,34 @@ def download_geotiff():
             nodata_value=nodata_value, aoi_geom_4326=aoi_geom_4326,
             fallback_region_geom=roi.bounds(maxError=100)
         )
+
+        # 🎨 ArcMap/QGIS "Siyah-Beyaz + Rakam" SORUNU DÜZELTMESİ:
+        # LULC ailesi (LULC, LULC_ESA, LULC_MODIS, LULC_CORINE) indirmelerinde
+        # ham GeoTIFF'in içine (ve yanına) Color Table + RAT gömülür; kullanıcıya
+        # tek bir .tif yerine .tif + .tif.aux.xml + .clr içeren bir ZIP sunulur.
+        # Diğer TÜM analizler (NDVI, DEM, RGB, TOPO vb.) etkilenmez; onlar
+        # önceki gibi doğrudan .tif olarak inmeye devam eder.
+        lulc_index = data.get('index')
+        if lulc_index in LULC_CLASS_DEFS:
+            try:
+                sym_files = _build_lulc_symbology_zip(tif_bytes, lulc_index, safe_name)
+            except Exception as sym_err:
+                traceback.print_exc()
+                sym_files = None
+                print('[SylvaGIS] ⚠️ LULC renk tablosu/RAT oluşturulamadı, ham .tif '
+                      'olarak devam ediliyor: {}'.format(sym_err))
+
+            if sym_files:
+                zip_buf = io.BytesIO()
+                with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+                    for fname, fbytes in sym_files.items():
+                        zf.writestr(fname, fbytes)
+                zip_bytes = zip_buf.getvalue()
+
+                resp = Response(zip_bytes, mimetype='application/zip')
+                resp.headers['Content-Disposition'] = 'attachment; filename="{}.zip"'.format(safe_name)
+                resp.headers['Content-Length'] = str(len(zip_bytes))
+                return resp
 
         resp = Response(tif_bytes, mimetype='image/tiff')
         resp.headers['Content-Disposition'] = 'attachment; filename="{}.tif"'.format(safe_name)
