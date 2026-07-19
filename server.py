@@ -254,6 +254,64 @@ LULC_CLASS_DEFS = {
 }
 
 
+def _write_dbf_bytes(field_defs, rows):
+    """
+    Minimal bir dBase III (.dbf) dosyasını sıfırdan (hiçbir ek kütüphane
+    olmadan) bayt dizisi olarak üretir. ArcMap'in "Value Attribute Table"
+    (VAT) olarak tanıyacağı basit/klasik formattadır.
+
+    field_defs: [(isim<=10 karakter, tip 'N'|'C', uzunluk, ondalık), ...]
+    rows: [(değer1, değer2, ...), ...]  — field_defs ile aynı sırada.
+
+    NOT: Karakter alanlarında Türkçe karakterler UTF-8 olarak yazılır;
+    dosyanın YANINA aynı ada sahip bir .cpg dosyası ("UTF-8" içerikli)
+    eklenir — bu, GDAL/OGR'nin shapefile/dbf dosyalarında kullandığı
+    standart yöntemdir ve ArcMap 10.1+ ile QGIS bunu otomatik okuyup
+    karakterleri doğru render eder.
+    """
+    import struct
+    import datetime as _dt
+
+    n_records = len(rows)
+    n_fields = len(field_defs)
+    header_len = 32 + 32 * n_fields + 1
+    record_len = 1 + sum(f[2] for f in field_defs)  # +1: silme bayrağı
+
+    today = _dt.date.today()
+    header = struct.pack(
+        '<BBBBIHH20x',
+        0x03,                              # dBase III (memo yok)
+        today.year - 1900, today.month, today.day,
+        n_records,
+        header_len,
+        record_len,
+    )
+
+    field_descriptors = b''
+    for name, ftype, flen, fdec in field_defs:
+        name_bytes = name.encode('ascii')[:10].ljust(11, b'\x00')
+        field_descriptors += struct.pack(
+            '<11sc4xBB14x',
+            name_bytes, ftype.encode('ascii'), flen, fdec
+        )
+    field_descriptors += b'\x0d'  # alan tanımları sonu
+
+    body = b''
+    for row in rows:
+        rec = b' '  # silinmemiş kayıt
+        for (name, ftype, flen, fdec), val in zip(field_defs, row):
+            if ftype == 'N':
+                s = str(val)
+                rec += s.encode('ascii')[:flen].rjust(flen, b' ')
+            else:  # 'C'
+                s = ('' if val is None else str(val))
+                b = s.encode('utf-8')[:flen]
+                rec += b.ljust(flen, b' ')
+        body += rec
+
+    return header + field_descriptors + body + b'\x1a'
+
+
 def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name):
     """
     LULC ailesi (LULC, LULC_ESA, LULC_MODIS, LULC_CORINE) GeoTIFF'ini alır;
@@ -367,28 +425,65 @@ def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name):
     )
     aux_xml_bytes = aux_xml.encode('utf-8')
 
+    # ── .tif.vat.dbf (Value Attribute Table) ──────────────────────────
+    # SORUN: Klasik ArcMap (ArcGIS Pro DEĞİL), yukarıdaki .tif.aux.xml
+    # RAT'ını Symbology > Unique Values ekranındaki "Label" sütununa
+    # GÜVENİLİR şekilde yansıtmaz — kullanıcı hâlâ sadece rakamları görür.
+    # ArcMap'in bu iş için asıl yerli/güvenilir desteği "<ad>.tif.vat.dbf"
+    # adlı bir Value Attribute Table sidecar'ıdır (ArcCatalog'daki "Build
+    # Raster Attribute Table" aracının ürettiği AYNI formattır). Bu dosya
+    # varken, Symbology > Unique Values ekranındaki "Value Field" açılır
+    # menüsünde "CLASS_NAME" seçeneği belirir; kullanıcı bunu seçip
+    # "Add All Values" dediğinde Label sütunu doğrudan sınıf isimleriyle
+    # dolar — rakamlarla tek tek uğraşmaya gerek kalmaz.
+    counts = np.bincount(out.ravel(), minlength=256)
+    field_defs = [
+        ('VALUE', 'N', 10, 0),
+        ('COUNT', 'N', 12, 0),
+        ('CLASS_NAME', 'C', 60, 0),
+        ('RED', 'N', 3, 0),
+        ('GREEN', 'N', 3, 0),
+        ('BLUE', 'N', 3, 0),
+    ]
+    vat_rows = []
+    for code in sorted(shifted_info.keys()):
+        label, rgb = shifted_info[code]
+        vat_rows.append((code, int(counts[code]) if code < 256 else 0,
+                          label, rgb[0], rgb[1], rgb[2]))
+    vat_dbf_bytes = _write_dbf_bytes(field_defs, vat_rows)
+    vat_cpg_bytes = b'UTF-8'
+
     readme = (
         'SylvaGIS — Renkli/İsimlendirilmiş Arazi Örtüsü (LULC) Paketi\n'
         '================================================================\n\n'
         'Bu ZIP içinde:\n'
-        '  - {name}.tif           -> Rengi dosyanın İÇİNE gömülü GeoTIFF.\n'
-        '  - {name}.tif.aux.xml   -> ArcGIS/QGIS için sınıf ismi tablosu (RAT).\n'
-        '  - {name}.clr           -> Yedek/manuel renk dosyası.\n\n'
-        'Kullanım:\n'
-        '  1) Bu üç dosyayı AYNI klasörde tutun (.tif.aux.xml ve .clr, .tif ile\n'
-        '     birlikte kalmalı — isimleri değiştirmeyin).\n'
-        '  2) ArcMap/ArcGIS Pro veya QGIS\'te yalnızca {name}.tif dosyasını açın.\n'
-        '     Katman artık siyah-beyaz değil, kendi renkleriyle gelecek ve\n'
-        '     Identify/Kimlik penelinde piksel değeri yanında sınıf ismini de\n'
-        '     ("Orman", "Tarım Alanı" vb.) gösterecektir.\n'
-        '  3) Renkler görünmezse: ArcMap\'te katmana sağ tık > Properties >\n'
-        '     Symbology > "Unique Values" seçip, "Import" ile {name}.clr\n'
-        '     dosyasını yükleyin.\n'
+        '  - {name}.tif             -> Rengi dosyanın İÇİNE gömülü GeoTIFF.\n'
+        '  - {name}.tif.vat.dbf/.cpg-> Sınıf isim tablosu (Value Attribute Table).\n'
+        '                              *** ArcMap için EN GÜVENİLİR yöntem budur. ***\n'
+        '  - {name}.tif.aux.xml     -> Ek/yedek isim tablosu (RAT, çoğunlukla QGIS\n'
+        '                              ve ArcGIS Pro tarafından okunur).\n'
+        '  - {name}.clr             -> Yedek/manuel renk dosyası.\n\n'
+        'ÖNEMLİ: Bu 4 dosyayı ZIP\'ten çıkarırken HEPSİNİ AYNI klasörde, isimlerini\n'
+        'DEĞİŞTİRMEDEN tutun — ArcMap/QGIS bunları .tif ile eşleştirmek için dosya\n'
+        'adına bakar.\n\n'
+        'ArcMap\'te kullanım (sınıf isimlerini görmek için):\n'
+        '  1) Sadece {name}.tif dosyasını sürükleyip haritaya ekleyin (renkler\n'
+        '     otomatik gelecektir — artık siyah-beyaz DEĞİL).\n'
+        '  2) Katmana sağ tık > Properties > Symbology sekmesi.\n'
+        '  3) Show: "Unique Values" seçin.\n'
+        '  4) "Value Field" açılır menüsünden "Value" yerine "CLASS_NAME" seçin.\n'
+        '  5) "Add All Values" butonuna basın.\n'
+        '  6) Tamam/Uygula — artık Label sütununda "1, 2, 3" yerine "Orman",\n'
+        '     "Tarım Alanı" gibi isimler görünecektir.\n'
+        '  Renkler görünmüyorsa: adım 3\'te "Import" ile {name}.clr dosyasını\n'
+        '  yükleyebilirsiniz.\n'
     ).format(name=safe_name)
 
     return {
         '{}.tif'.format(safe_name): new_tif_bytes,
         '{}.tif.aux.xml'.format(safe_name): aux_xml_bytes,
+        '{}.tif.vat.dbf'.format(safe_name): vat_dbf_bytes,
+        '{}.tif.vat.cpg'.format(safe_name): vat_cpg_bytes,
         '{}.clr'.format(safe_name): clr_bytes,
         'OKUBENI.txt': readme.encode('utf-8'),
     }
