@@ -3735,6 +3735,27 @@ tr.class-highlight-active {
             <div class="panel panel-content" style="padding:20px; gap:15px; overflow-y:auto; height:100%; box-sizing:border-box;">
             <h2 id="sb-map-layout-heading" style="padding-top:18px;" data-i18n="map_layout">Harita Düzeni</h2>
 
+<!-- Proje Kaydet / Yükle (tarayıcıda, sunucusuz) -->
+<div id="sb-project-manager" style="border:1px solid #e2e8f0; border-radius:8px; padding:10px; background:#f8fafc; display:flex; flex-direction:column; gap:8px; margin-top:5px;">
+    <div style="font-size:0.85rem; font-weight:700; color:#1e3a8a; display:flex; align-items:center; gap:6px;">
+        💾 <span data-i18n="project_manager">Proje Kaydet / Yükle</span>
+    </div>
+    <div style="display:flex; gap:6px;">
+        <input type="text" id="project-name-input" placeholder="Proje adı..." maxlength="60"
+               style="flex:1; min-width:0; padding:6px 8px; border:1px solid #cbd5e1; border-radius:5px; font-size:0.8rem;">
+        <button type="button" class="btn-tool" id="btn-save-project" style="flex:none; padding:6px 10px; font-size:0.8rem;" title="Mevcut görünüm ve ayarları kaydet">💾 Kaydet</button>
+    </div>
+    <div style="display:flex; gap:6px;">
+        <select id="project-select" style="flex:1; min-width:0; padding:6px 8px; border:1px solid #cbd5e1; border-radius:5px; font-size:0.8rem;">
+            <option value="" data-i18n="project_none_saved">Kayıtlı proje yok</option>
+        </select>
+        <button type="button" class="btn-tool" id="btn-load-project" style="flex:none; padding:6px 10px; font-size:0.8rem;" title="Seçili projeyi yükle">📂 Yükle</button>
+        <button type="button" class="btn-tool btn-danger" id="btn-delete-project" style="flex:none; padding:6px 8px; font-size:0.8rem;" title="Seçili projeyi sil">🗑️</button>
+    </div>
+    <div id="project-status-msg" style="font-size:0.7rem; color:#64748b; min-height:14px;"></div>
+</div>
+
+
 <div id="sb-map-layout-options" class="option-list" style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:5px;">
 
     <label class="option-item">
@@ -5040,7 +5061,188 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
         });
     })();
 
-    // 4. Uydu Görüntü Galerisi
+    // ===========================================================
+    // Proje Kaydet / Yükle — tamamen tarayıcıda (localStorage),
+    // sunucuya hiç istek atmaz. Harita görünümü (konum/zoom),
+    // aktif basemap ve Harita Düzeni panelindeki tüm ayarları
+    // (checkbox/select/slider) isimlendirilmiş bir "proje" olarak
+    // saklar; istenildiğinde geri yükler.
+    // ===========================================================
+    (function () {
+        var STORAGE_KEY = 'sylva_gis_projects_v1';
+        var nameInput = document.getElementById('project-name-input');
+        var saveBtn   = document.getElementById('btn-save-project');
+        var loadBtn   = document.getElementById('btn-load-project');
+        var delBtn    = document.getElementById('btn-delete-project');
+        var selectEl  = document.getElementById('project-select');
+        var statusEl  = document.getElementById('project-status-msg');
+        if (!nameInput || !saveBtn || !loadBtn || !delBtn || !selectEl) return;
+
+        function readProjects() {
+            try {
+                var raw = localStorage.getItem(STORAGE_KEY);
+                return raw ? JSON.parse(raw) : {};
+            } catch (e) { return {}; }
+        }
+
+        function writeProjects(projects) {
+            try { localStorage.setItem(STORAGE_KEY, JSON.stringify(projects)); return true; }
+            catch (e) { return false; }
+        }
+
+        function showStatus(msg, isError) {
+            statusEl.textContent = msg;
+            statusEl.style.color = isError ? '#ef4444' : '#16a34a';
+            clearTimeout(showStatus._t);
+            showStatus._t = setTimeout(function () { statusEl.textContent = ''; }, 3500);
+        }
+
+        function refreshSelect(selectedName) {
+            var projects = readProjects();
+            var names = Object.keys(projects).sort(function (a, b) { return a.localeCompare(b, 'tr'); });
+            selectEl.innerHTML = '';
+            if (!names.length) {
+                var opt = document.createElement('option');
+                opt.value = '';
+                opt.textContent = 'Kayıtlı proje yok';
+                selectEl.appendChild(opt);
+                selectEl.disabled = true;
+                loadBtn.disabled = true;
+                delBtn.disabled = true;
+                return;
+            }
+            selectEl.disabled = false;
+            loadBtn.disabled = false;
+            delBtn.disabled = false;
+            names.forEach(function (name) {
+                var opt = document.createElement('option');
+                opt.value = name;
+                opt.textContent = name;
+                selectEl.appendChild(opt);
+            });
+            if (selectedName && projects[selectedName]) selectEl.value = selectedName;
+        }
+
+        // Harita Düzeni panelindeki (checkbox/select/range) tüm ayarları
+        // ID bazlı olarak otomatik toplar — yeni bir toggle eklendiğinde
+        // bu fonksiyonu güncellemeye gerek kalmaz.
+        function captureLayoutState() {
+            var state = { checkboxes: {}, selects: {}, ranges: {} };
+            var container = document.getElementById('sb-map-layout-options');
+            if (!container) return state;
+            container.querySelectorAll('input[type="checkbox"]').forEach(function (el) {
+                if (el.id && !el.disabled) state.checkboxes[el.id] = el.checked;
+            });
+            container.querySelectorAll('select').forEach(function (el) {
+                if (el.id) state.selects[el.id] = el.value;
+            });
+            container.querySelectorAll('input[type="range"]').forEach(function (el) {
+                if (el.id) state.ranges[el.id] = el.value;
+            });
+            return state;
+        }
+
+        function applyLayoutState(state) {
+            if (!state) return;
+            Object.keys(state.checkboxes || {}).forEach(function (id) {
+                var el = document.getElementById(id);
+                if (el && !el.disabled && el.checked !== state.checkboxes[id]) {
+                    el.checked = state.checkboxes[id];
+                    el.dispatchEvent(new Event('change'));
+                }
+            });
+            Object.keys(state.selects || {}).forEach(function (id) {
+                var el = document.getElementById(id);
+                if (el && el.value !== state.selects[id]) {
+                    el.value = state.selects[id];
+                    el.dispatchEvent(new Event('change'));
+                }
+            });
+            Object.keys(state.ranges || {}).forEach(function (id) {
+                var el = document.getElementById(id);
+                if (el) {
+                    el.value = state.ranges[id];
+                    el.dispatchEvent(new Event('input'));
+                    el.dispatchEvent(new Event('change'));
+                }
+            });
+        }
+
+        saveBtn.addEventListener('click', function () {
+            var name = (nameInput.value || '').trim();
+            if (!name) { showStatus('Lütfen bir proje adı girin.', true); return; }
+
+            var mapObj = window._sylvaMap || (typeof map !== 'undefined' ? map : null);
+            var center = mapObj ? mapObj.getCenter() : null;
+
+            var project = {
+                savedAt: new Date().toISOString(),
+                view: center ? { lat: center.lat, lng: center.lng, zoom: mapObj.getZoom() } : null,
+                basemap: (typeof currentBasemapKey !== 'undefined') ? currentBasemapKey : null,
+                scaleUnit: window._sylvaScaleUnit || null,
+                layout: captureLayoutState()
+            };
+
+            var projects = readProjects();
+            projects[name] = project;
+            if (writeProjects(projects)) {
+                showStatus('"' + name + '" kaydedildi.', false);
+                nameInput.value = '';
+                refreshSelect(name);
+            } else {
+                showStatus('Kaydedilemedi (tarayıcı depolama dolu olabilir).', true);
+            }
+        });
+
+        loadBtn.addEventListener('click', function () {
+            var name = selectEl.value;
+            if (!name) return;
+            var projects = readProjects();
+            var project = projects[name];
+            if (!project) { showStatus('Proje bulunamadı.', true); return; }
+
+            var mapObj = window._sylvaMap || (typeof map !== 'undefined' ? map : null);
+            if (mapObj && project.view) {
+                mapObj.setView([project.view.lat, project.view.lng], project.view.zoom);
+            }
+            if (project.basemap && typeof switchBasemap === 'function' &&
+                project.basemap !== currentBasemapKey) {
+                switchBasemap(project.basemap);
+                var bmBtn = document.querySelector('[data-bm="' + project.basemap + '"]');
+                if (bmBtn) {
+                    document.querySelectorAll('[data-bm]').forEach(function (b) { b.classList.remove('active'); });
+                    bmBtn.classList.add('active');
+                }
+            }
+            applyLayoutState(project.layout);
+            if (project.scaleUnit) {
+                window._sylvaScaleUnit = project.scaleUnit;
+                try { localStorage.setItem('sylva_scale_unit', project.scaleUnit); } catch (e) {}
+                var su = document.getElementById('scale-unit-select');
+                if (su) su.value = project.scaleUnit;
+                if (window._sylvaScaleControl && typeof window._sylvaScaleControl._update === 'function') {
+                    window._sylvaScaleControl._update();
+                }
+            }
+            showStatus('"' + name + '" yüklendi.', false);
+        });
+
+        delBtn.addEventListener('click', function () {
+            var name = selectEl.value;
+            if (!name) return;
+            var projects = readProjects();
+            delete projects[name];
+            writeProjects(projects);
+            showStatus('"' + name + '" silindi.', false);
+            refreshSelect();
+        });
+
+        nameInput.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') { e.preventDefault(); saveBtn.click(); }
+        });
+
+        refreshSelect();
+    })();
     // Checkbox işaretli   → galeri tamamen açık  (display:flex, opacity:1, etkileşimli)
     // Checkbox işaretsiz  → galeri tamamen kapalı (display:none)  — ara durum yok
     document.getElementById('toggle-gallery').addEventListener('change', function() {
