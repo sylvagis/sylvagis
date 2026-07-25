@@ -583,6 +583,27 @@ tr.class-highlight-active {
             height: 15px;
             accent-color: #1e3a8a; /* Tik rengini SylvaGIS laciverti yapar */
         }
+        /* Ölçek Çubuğu — birim seçici (km / m / ft / mi) */
+        .scale-unit-select {
+            margin-left: 4px;
+            flex-shrink: 0;
+            width: 46px;
+            font-size: 0.68rem;
+            font-weight: 700;
+            padding: 1px 2px;
+            border: 1.3px solid #cbd5e1;
+            border-radius: 4px;
+            color: #1e3a8a;
+            background: #fff;
+            cursor: pointer;
+            outline: none;
+        }
+        .scale-unit-select:hover,
+        .scale-unit-select:focus {
+            border-color: #1e3a8a;
+            box-shadow: 0 0 0 2px rgba(30,58,138,.12);
+        }
+
         /* Info Box checkbox — diğerleriyle birebir aynı native kare görünüm */
         #toggle-info-box {
             -webkit-appearance: checkbox;
@@ -3721,9 +3742,15 @@ tr.class-highlight-active {
         <span data-i18n="north_arrow">Kuzey Oku</span>
     </label>
 
-    <label class="option-item">
+    <label class="option-item" style="flex-wrap:nowrap; align-items:center;">
         <input type="checkbox" id="toggle-scale" checked>
         <span data-i18n="scale_bar">Ölçek Çubuğu</span>
+        <select id="scale-unit-select" class="scale-unit-select" title="Ölçek birimi" onclick="event.stopPropagation()" onchange="event.stopPropagation()">
+            <option value="km">km</option>
+            <option value="m">m</option>
+            <option value="ft">ft</option>
+            <option value="mi">mi</option>
+        </select>
     </label>
 
     <label class="option-item" id="gallery-toggle-wrap" style="opacity:0.4;">
@@ -4592,7 +4619,65 @@ tr.class-highlight-active {
         }
 
         // 3. Sağ alta gerçek, metrik bir ölçek çubuğu (Leaflet) ekle
-        L.control.scale({ position: 'bottomright', imperial: false }).addTo(map);
+        // Kullanıcı Harita Düzeni panelindeki seçiciden ölçek birimini
+        // (km/m otomatik, km, m, ft, mi) seçebilir; çubuk seçilen birime
+        // göre yeniden hesaplanıp otomatik güncellenir.
+        window._sylvaScaleUnit = window._sylvaScaleUnit || (function () {
+            try { return localStorage.getItem('sylva_scale_unit') || 'km'; }
+            catch (e) { return 'km'; }
+        })();
+        window._sylvaGetRoundNum = function (num) {
+            if (!num || num <= 0) return 0;
+            var pow10 = Math.pow(10, ('' + Math.floor(num)).length - 1),
+                d = num / pow10;
+            d = d >= 10 ? 10 : (d >= 5 ? 5 : (d >= 3 ? 3 : (d >= 2 ? 2 : 1)));
+            return pow10 * d;
+        };
+        var sylvaScaleControl = L.control.scale({ position: 'bottomright', imperial: false, updateWhenIdle: false });
+        sylvaScaleControl._update = function () {
+            var m = this._map;
+            if (!m || !this._mScale) return;
+            var y = m.getSize().y / 2;
+            var maxMeters = m.distance(
+                m.containerPointToLatLng([0, y]),
+                m.containerPointToLatLng([this.options.maxWidth, y])
+            );
+            if (!maxMeters) return;
+
+            var unit  = window._sylvaScaleUnit || 'km';
+            var round = window._sylvaGetRoundNum;
+            var label, ratio;
+
+            if (unit === 'm') {
+                var mVal = round(maxMeters);
+                label = mVal + ' m';
+                ratio = mVal / maxMeters;
+            } else if (unit === 'km') {
+                var kmVal = round(maxMeters / 1000);
+                label = kmVal + ' km';
+                ratio = (kmVal * 1000) / maxMeters;
+            } else if (unit === 'ft') {
+                var maxFeet = maxMeters * 3.2808399;
+                var ftVal = round(maxFeet);
+                label = ftVal + ' ft';
+                ratio = ftVal / maxFeet;
+            } else if (unit === 'mi') {
+                var maxMiles = maxMeters / 1609.344;
+                var miVal = round(maxMiles);
+                label = miVal + ' mi';
+                ratio = miVal / maxMiles;
+            } else {
+                // auto — orijinal Leaflet metrik davranışı (km/m arası otomatik geçiş)
+                var meters = round(maxMeters);
+                label = meters < 1000 ? meters + ' m' : (meters / 1000) + ' km';
+                ratio = meters / maxMeters;
+            }
+
+            this._mScale.style.width = Math.round(this.options.maxWidth * ratio) + 'px';
+            this._mScale.innerHTML = label;
+        };
+        sylvaScaleControl.addTo(map);
+        window._sylvaScaleControl = sylvaScaleControl;
 
         // 3a. Koordinat Bilgisi (logonun altında, küçük) — farenin harita
         // üzerindeki konumunu (X = boylam, Y = enlem) canlı, Z = yükseklik
@@ -4939,6 +5024,21 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
         var el = document.querySelector('.leaflet-control-scale');
         if (el) el.style.display = this.checked ? '' : 'none';
     });
+
+    // 3b. Ölçek Birimi Seçici (km / m / ft / mi) — seçim değişince
+    // ölçek çubuğu otomatik olarak o birime göre yeniden çizilir.
+    (function () {
+        var scaleUnitSelect = document.getElementById('scale-unit-select');
+        if (!scaleUnitSelect) return;
+        scaleUnitSelect.value = window._sylvaScaleUnit || 'km';
+        scaleUnitSelect.addEventListener('change', function () {
+            window._sylvaScaleUnit = this.value;
+            try { localStorage.setItem('sylva_scale_unit', this.value); } catch (e) {}
+            if (window._sylvaScaleControl && typeof window._sylvaScaleControl._update === 'function') {
+                window._sylvaScaleControl._update();
+            }
+        });
+    })();
 
     // 4. Uydu Görüntü Galerisi
     // Checkbox işaretli   → galeri tamamen açık  (display:flex, opacity:1, etkileşimli)
