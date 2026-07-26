@@ -1,6 +1,110 @@
 <!DOCTYPE html>
 <html lang="tr">
 <head>
+    <!-- ===========================================================
+         🛡️ HATA İZLEME (Sentry) — sadece frontend, sunucuya dokunmaz.
+         ===========================================================
+         AKTİF ETMEK İÇİN:
+           1) https://sentry.io üzerinde ücretsiz bir hesap/proje aç
+              (Platform: Browser JavaScript).
+           2) Sana verilen DSN adresini aşağıdaki SYLVA_SENTRY_DSN
+              değişkenine yapıştır (örn: "https://abc123@o0.ingest.
+              sentry.io/0123456").
+           3) Kaydet — bir sonraki sayfa yüklemesinde otomatik devreye
+              girer, hiçbir başka değişiklik gerekmez.
+         DSN boş bırakıldığı sürece Sentry'e hiçbir veri gönderilmez;
+         bu durumda hatalar sadece aşağıdaki yerel (tarayıcı içi,
+         sunucusuz) hata günlüğüne yazılır — bkz. window.sylvaGetErrorLog().
+    -->
+    <script>window.SYLVA_SENTRY_DSN = "";</script>
+    <script src="https://browser.sentry-cdn.com/10.67.0/bundle.tracing.min.js"
+            integrity="sha384-f4VcdT2lkJqtKFAcyIjTE79KAxbFqkhB4wabgu37VaZ96AfCunDhrMgn364YlulE"
+            crossorigin="anonymous"></script>
+    <script>
+        (function () {
+            var DSN = window.SYLVA_SENTRY_DSN;
+            var isRealDsn = !!DSN && DSN.indexOf('http') === 0;
+
+            // --- Sentry'i (varsa geçerli DSN ile) başlat ---
+            if (isRealDsn && window.Sentry && typeof window.Sentry.init === 'function') {
+                try {
+                    window.Sentry.init({
+                        dsn: DSN,
+                        environment: (location.hostname === 'localhost' || location.protocol === 'file:') ? 'development' : 'production',
+                        release: 'sylvagis-frontend@1.0.0',
+                        tracesSampleRate: 0.1,
+                        // KVKK/gizlilik: varsayılan olarak otomatik IP/kullanıcı verisi gönderimini kapat.
+                        sendDefaultPii: false
+                    });
+                } catch (e) {
+                    console.warn('[SylvaGIS] Sentry başlatılamadı:', e);
+                }
+            }
+
+            // --- Yerel yedek hata günlüğü (sunucusuz, tarayıcı localStorage) ---
+            // Sentry DSN'i olmasa bile hataların kaybolmaması, geliştirme/hata
+            // ayıklama sürecinde işine yarasın diye tutulur. Son 25 kayıt saklanır.
+            var LOG_KEY = 'sylva_error_log_v1';
+            var MAX_ENTRIES = 25;
+
+            function pushLocalError(entry) {
+                try {
+                    var raw = localStorage.getItem(LOG_KEY);
+                    var list = raw ? JSON.parse(raw) : [];
+                    list.push(entry);
+                    if (list.length > MAX_ENTRIES) list = list.slice(list.length - MAX_ENTRIES);
+                    localStorage.setItem(LOG_KEY, JSON.stringify(list));
+                } catch (e) { /* localStorage dolu/erişilemez — sessizce geç */ }
+            }
+
+            window.addEventListener('error', function (event) {
+                var entry = {
+                    type: 'error',
+                    message: event.message || 'Bilinmeyen hata',
+                    source: event.filename || '',
+                    line: event.lineno || null,
+                    col: event.colno || null,
+                    stack: (event.error && event.error.stack) ? String(event.error.stack).slice(0, 2000) : null,
+                    url: location.href,
+                    ts: new Date().toISOString()
+                };
+                pushLocalError(entry);
+                if (isRealDsn && window.Sentry && typeof window.Sentry.captureException === 'function' && event.error) {
+                    window.Sentry.captureException(event.error);
+                }
+            });
+
+            window.addEventListener('unhandledrejection', function (event) {
+                var reason = event.reason;
+                var entry = {
+                    type: 'unhandledrejection',
+                    message: (reason && reason.message) ? reason.message : String(reason),
+                    stack: (reason && reason.stack) ? String(reason.stack).slice(0, 2000) : null,
+                    url: location.href,
+                    ts: new Date().toISOString()
+                };
+                pushLocalError(entry);
+                if (isRealDsn && window.Sentry && typeof window.Sentry.captureException === 'function') {
+                    window.Sentry.captureException(reason);
+                }
+            });
+
+            // --- Geliştirici yardımcıları (tarayıcı konsolunda kullanılabilir) ---
+            window.sylvaGetErrorLog = function () {
+                try {
+                    var raw = localStorage.getItem(LOG_KEY);
+                    return raw ? JSON.parse(raw) : [];
+                } catch (e) { return []; }
+            };
+            window.sylvaClearErrorLog = function () {
+                try { localStorage.removeItem(LOG_KEY); } catch (e) {}
+            };
+
+            if (!isRealDsn) {
+                console.info('[SylvaGIS] Hata izleme: Sentry DSN tanımlı değil — hatalar yalnızca yerel günlükte tutuluyor. Konsolda window.sylvaGetErrorLog() ile görüntülenebilir.');
+            }
+        })();
+    </script>
     <script>
         // 🌐 Bazı UI bileşenleri (ör. sınıflandırma satırları) sayfa daha
         // yüklenirken, asıl çok dilli sözlük (SYLVA_TRANSLATIONS/applySylvaLang,
@@ -120,7 +224,7 @@
         #sylva-login-status{text-align:center;padding:10px;font-size:0.82rem;border-radius:8px;margin-top:12px;display:none;}
         #sylva-login-status.loading{display:block;background:#eff6ff;color:#1e3a8a;}
         #sylva-login-status.error{display:block;background:#fef2f2;color:#dc2626;}
-        #sylva-login-status.success{display:block;background:#f0fdf4;color:#16a34a;}
+        #sylva-login-status.success{display:block;background:#f0fdf4;color:#15803d;}
         /* ── Kayıt formu alanları ── */
         #sylva-login-modal{max-height:90vh;overflow-y:auto;}
         .reg-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
@@ -309,6 +413,46 @@ tr.class-highlight-active {
         html, body { width: 100%; max-width: 100%; }
         body { display: flex; flex-direction: column; height: 100vh; background-color: #f4f6f9; color: #333; overflow: hidden; }
 
+        /* ===========================================================
+           ♿ ERİŞİLEBİLİRLİK (Accessibility) — Klavye ile Gezinme
+           Sayfa genelinde bazı elemanlarda inline "outline:none"
+           kullanılmış olsa da, klavye ile (Tab) gezinen kullanıcılar
+           için :focus-visible durumunda HER ZAMAN belirgin bir odak
+           çerçevesi gösterilir. !important, inline stilleri geçersiz
+           kılmak için gereklidir — mouse/dokunmatik kullanımını
+           etkilemez, sadece klavye odaklanmasında devreye girer.
+           =========================================================== */
+        a:focus-visible, button:focus-visible, input:focus-visible,
+        select:focus-visible, textarea:focus-visible,
+        [tabindex]:focus-visible, [role="button"]:focus-visible,
+        [contenteditable]:focus-visible {
+            outline: 3px solid #2563eb !important;
+            outline-offset: 2px !important;
+            box-shadow: 0 0 0 5px rgba(37, 99, 235, 0.25) !important;
+            border-radius: 3px;
+        }
+
+        /* "Skip to map" bağlantısı — klavye/ekran okuyucu kullanıcıları
+           üst menüyü atlayıp doğrudan haritaya geçebilsin. Görsel
+           olarak gizli, sadece klavye ile Tab'landığında görünür. */
+        .sylva-skip-link {
+            position: absolute;
+            left: 8px;
+            top: -60px;
+            z-index: 100000;
+            background: #1e3a8a;
+            color: #fff;
+            padding: 10px 16px;
+            border-radius: 6px;
+            font-weight: 700;
+            font-size: 0.85rem;
+            text-decoration: none;
+            transition: top 0.15s ease;
+        }
+        .sylva-skip-link:focus {
+            top: 8px;
+        }
+
         /* Navbar (Üst Bar) */
         .navbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; background-color: #ffffff; padding: 12px 25px; border-bottom: 2px solid #1e3a8a; box-shadow: 0 2px 10px rgba(0,0,0,0.05); z-index: 2000; position: relative; }
 
@@ -336,7 +480,7 @@ tr.class-highlight-active {
         .btn-tool { flex: 1; background-color: #f1f5f9; border: 1px solid #cbd5e1; padding: 8px; border-radius: 5px; cursor: pointer; font-weight: 600; display: flex; justify-content: center; align-items: center; gap: 5px; }
         .btn-tool:hover { background-color: #e2e8f0; }
         .btn-tool.active { background-color: #e2e8f0; color: #1e293b; border-color: #94a3b8; }
-        .btn-danger { background-color: #fee2e2; color: #ef4444; border: 1px solid #fca5a5; }
+        .btn-danger { background-color: #fee2e2; color:#dc2626; border: 1px solid #fca5a5; }
         .btn-danger:hover { background-color: #fecaca; }
 
         /* Çizilen Alan Bilgisi */
@@ -413,7 +557,7 @@ tr.class-highlight-active {
         /* Belirgin Kuzey Oku */
         .north-arrow { width: 45px; height: 45px; background-color: rgba(255, 255, 255, 0.95); border: 2px solid #1e3a8a; border-radius: 5px; display: flex; flex-direction: column; justify-content: center; align-items: center; box-shadow: 0 3px 6px rgba(0,0,0,0.3); pointer-events: auto; flex-shrink: 0; }
         .north-arrow.hidden-element { visibility: hidden; pointer-events: none; }
-        .north-arrow-icon { color: #ef4444; font-size: 1.2rem; line-height: 0.8; font-weight: 900; }
+        .north-arrow-icon { color:#dc2626; font-size: 1.2rem; line-height: 0.8; font-weight: 900; }
         .north-arrow-text { color: #1e3a8a; font-size: 0.85rem; font-weight: 900; line-height: 1; }
 
         /* Harita İçi - Sol Orta (Yakınlaştırma) — gerçek Leaflet zoom fonksiyonlarına bağlı */
@@ -2172,7 +2316,7 @@ tr.class-highlight-active {
             letter-spacing: 0.03em;
         }
         #topo3d-rec-dot {
-            color: #ef4444;
+            color:#dc2626;
             font-size: 0.6rem;
             animation: rec3d-blink 1s step-start infinite;
         }
@@ -2366,7 +2510,7 @@ tr.class-highlight-active {
 .sylva-dp-yr.sel-yr{background:#1e3a8a;color:#fff;font-weight:700;}
 .sylva-dp-yr.cur-yr{box-shadow:inset 0 0 0 1.5px #1e3a8a;}
 .sylva-dp-clear{margin-top:4px;text-align:right;font-size:0.65rem;color:#94a3b8;cursor:pointer;}
-.sylva-dp-clear:hover{color:#ef4444;}
+.sylva-dp-clear:hover{color:#dc2626;}
 [dir="rtl"] .sylva-dp-popup{left:auto;right:0;}
 [dir="rtl"] #dp-popup-end{left:0;right:auto;}
 /* ── Keyboard text input row ── */
@@ -2382,6 +2526,7 @@ tr.class-highlight-active {
 </style>
 </head>
 <body>
+    <a href="#map" class="sylva-skip-link" data-i18n="skip_to_map">Haritaya geç</a>
     <!-- ANALİZ YÜKLEME OVERLAY -->
     
     <div id="sylva-modal-overlay" role="dialog" aria-modal="true">
@@ -2646,7 +2791,7 @@ tr.class-highlight-active {
                     <div id="mqb-menu-meslek" style="font-size:0.78rem;color:#64748b;margin-top:2px;"></div>
                     <div id="mqb-menu-ulke" style="font-size:0.74rem;color:#94a3b8;margin-top:1px;"></div>
                 </div>
-                <div onclick="sylvaLogout && sylvaLogout()" style="display:flex;align-items:center;gap:8px;padding:11px 16px;font-size:0.84rem;color:#ef4444;font-weight:600;cursor:pointer;transition:background .15s;">
+                <div onclick="sylvaLogout && sylvaLogout()" style="display:flex;align-items:center;gap:8px;padding:11px 16px;font-size:0.84rem;color:#dc2626;font-weight:600;cursor:pointer;transition:background .15s;">
                     <span>🚪</span><span data-i18n="btn_logout">Oturumu Kapat</span>
                 </div>
             </div>
@@ -2710,7 +2855,7 @@ tr.class-highlight-active {
                     <button class="sb-vec-op-btn" onclick="sylvaVecOp('clip')" data-i18n="vec_op_clip_btn">✂️ Clip — AOI ile Kırp</button>
                     <button class="sb-vec-op-btn" onclick="sylvaVecOp('buffer')" data-i18n="vec_op_buffer_btn">⭕ Buffer — Tampon Bölge</button>
                     <div id="sb-buffer-opts">
-                        <label style="font-size:0.74rem;color:#065f46;font-weight:600;" data-i18n="vec_op_dist_lbl">Mesafe</label>
+                        <label for="sb-buffer-dist" style="font-size:0.74rem;color:#065f46;font-weight:600;" data-i18n="vec_op_dist_lbl">Mesafe</label>
                         <div style="display:flex;gap:6px;align-items:center;">
                             <input type="number" id="sb-buffer-dist" value="1" min="0.01" step="0.1"
                                 style="flex:1;padding:4px 6px;border:1px solid #86efac;border-radius:4px;font-size:0.8rem;">
@@ -2815,7 +2960,7 @@ tr.class-highlight-active {
 
 
             <div class="control-group" id="cloud-control-group">
-                <label data-i18n="cloud_label">Bulutluluk Oranı (Maks)</label>
+                <label for="cloud-slider" data-i18n="cloud_label">Bulutluluk Oranı (Maks)</label>
                 <div class="slider-group">
                     <input type="range" id="cloud-slider" min="0" max="100" value="10">
                     <span class="slider-val" id="cloud-val">%10</span>
@@ -3033,6 +3178,7 @@ tr.class-highlight-active {
                         <div class="sensor-group-label" style="margin-bottom:4px;" data-i18n="ts_cloud">☁️ Cloud Cover (Max %)</div>
                         <div class="slider-group" style="margin-bottom:10px;">
                             <input type="range" id="ts-cloud-pct" min="0" max="100" value="10"
+                                   aria-label="Bulutluluk oranı" data-i18n-aria-label="ts_cloud"
                                    oninput="document.getElementById('ts-cloud-val').textContent='%'+this.value" disabled>
                             <span class="slider-val" id="ts-cloud-val">%10</span>
                         </div>
@@ -3437,7 +3583,7 @@ tr.class-highlight-active {
 
         <div class="map-wrapper" id="map-wrapper-inner">
 
-            <div id="map"></div>
+            <div id="map" tabindex="-1" aria-label="Harita" role="application"></div>
 
             <!-- ══ Before/After Swipe Overlay ═════════════════════════════ -->
             <div id="before-after-overlay" style="display:none;position:absolute;inset:0;z-index:450;pointer-events:none;">
@@ -3483,7 +3629,7 @@ tr.class-highlight-active {
                  pointer-events:auto;font-family:inherit;">
                 <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;">
                     <span data-i18n="measure_title" style="font-size:0.8rem;font-weight:700;color:#1e3a8a;">📐 Mesafe Ölçümü</span>
-                    <button onclick="sylvaCloseMeasure()" data-i18n-title="measure_close" title="Kapat"
+                    <button onclick="sylvaCloseMeasure()" data-i18n-title="measure_close" title="Kapat" data-i18n-aria-label="measure_close" aria-label="Kapat"
                         style="background:none;border:none;cursor:pointer;font-size:0.95rem;color:#94a3b8;
                                line-height:1;padding:0 2px;">✕</button>
                 </div>
@@ -3520,7 +3666,7 @@ tr.class-highlight-active {
                         <span data-i18n="measure_undo">↶ Geri Al</span></button>
                     <button onclick="sylvaClearMeasure()"
                         style="flex:1;padding:3px 4px;font-size:0.7rem;border:1px solid #fca5a5;
-                               border-radius:4px;background:#fff5f5;color:#ef4444;cursor:pointer;">
+                               border-radius:4px;background:#fff5f5;color:#dc2626;cursor:pointer;">
                         <span data-i18n="measure_reset">🗑️ Sıfırla</span></button>
                 </div>
             </div>
@@ -3535,7 +3681,7 @@ tr.class-highlight-active {
 
             <div class="map-left-mid">
                 <div id="zoom-pct-wrap" style="display:flex;flex-direction:row;align-items:stretch;">
-                    <div id="zoom-percent-display" class="map-zoom-btn" style="font-size:0.62rem;font-weight:700;color:#1e3a8a;display:flex;align-items:center;justify-content:center;gap:0;border-radius:5px;box-shadow:none;padding:0;" data-i18n-title="zoom_tooltip" title="Zoom (0–100) — yazıp Enter'a bas veya fareyle kaydır (5 adım)"><input id="zoom-num" type="number" min="0" max="100" step="1" value="10" style="width:35px;height:100%;text-align:center;border:none;outline:none;font-size:0.62rem;font-weight:700;color:#1e3a8a;background:transparent;padding:0;margin:0;line-height:1;appearance:none;-moz-appearance:textfield;-webkit-appearance:none;" /></div>
+                    <div id="zoom-percent-display" class="map-zoom-btn" style="font-size:0.62rem;font-weight:700;color:#1e3a8a;display:flex;align-items:center;justify-content:center;gap:0;border-radius:5px;box-shadow:none;padding:0;" data-i18n-title="zoom_tooltip" title="Zoom (0–100) — yazıp Enter'a bas veya fareyle kaydır (5 adım)"><input id="zoom-num" type="number" min="0" max="100" step="1" value="10" aria-label="Zoom seviyesi" style="width:35px;height:100%;text-align:center;border:none;outline:none;font-size:0.62rem;font-weight:700;color:#1e3a8a;background:transparent;padding:0;margin:0;line-height:1;appearance:none;-moz-appearance:textfield;-webkit-appearance:none;" /></div>
                 </div>
                 <button class="map-zoom-btn" id="zoom-in">+</button>
                 <button class="map-zoom-btn" id="zoom-out">-</button>
@@ -3591,6 +3737,7 @@ tr.class-highlight-active {
                                        cursor:pointer;font-size:0.9rem;display:flex;
                                        align-items:center;justify-content:center;flex-shrink:0;">▶</button>
                         <input type="range" id="sylva-time-slider" min="0" max="10" value="0" step="1"
+                               aria-label="Zaman ekseni" data-i18n-aria-label="time_slider_lbl"
                                style="flex:1;accent-color:#1e3a8a;cursor:pointer;"
                                oninput="onTimeSliderChange(this.value)">
                         <div id="ts-date-label"
@@ -3632,6 +3779,7 @@ tr.class-highlight-active {
                             <!-- İlerleme çubuğu -->
                             <input type="range" id="topo3d-progress"
                                    min="0" max="100" value="0" step="1"
+                                   aria-label="Oynatma ilerlemesi" data-i18n-aria-label="playback_progress_lbl"
                                    style="flex:1;accent-color:#1e3a8a;cursor:pointer;"
                                    oninput="on3DProgressInput(this.value)">
                             <!-- Hız seçici -->
@@ -3689,7 +3837,7 @@ tr.class-highlight-active {
                         <div id="topo3d-playback-inner">
                             <div id="topo3d-playback-header">
                                 <span data-i18n="rec_playback_title">🎬 Kayıt İzleme</span>
-                                <button type="button" id="topo3d-playback-close"
+                                <button type="button" id="topo3d-playback-close" title="Kapat" aria-label="Kapat"
                                         onclick="closeRec3DPlayback()">✕</button>
                             </div>
                             <video id="topo3d-playback-video" controls playsinline></video>
@@ -3799,6 +3947,7 @@ tr.class-highlight-active {
                max="1"
                step="0.05"
                value="1"
+               aria-label="Veri şeffaflığı" data-i18n-aria-label="data_transparency"
                style="flex:1;">
 
         <span id="layer-opacity-val"
@@ -3824,6 +3973,7 @@ tr.class-highlight-active {
                max="1"
                step="0.05"
                value="1"
+               aria-label="Basemap şeffaflığı" data-i18n-aria-label="basemap_transparency"
                style="flex:1;">
 
         <span id="basemap-opacity-val"
@@ -3849,6 +3999,7 @@ tr.class-highlight-active {
                max="1"
                step="0.05"
                value="1"
+               aria-label="Çalışma alanı şeffaflığı" data-i18n-aria-label="workspace"
                style="flex:1;">
 
         <span id="workspace-opacity-val"
@@ -4045,7 +4196,7 @@ tr.class-highlight-active {
 
             <!-- Kalem Kalınlığı -->
             <div class="control-group" style="margin-top:6px;">
-                <label style="font-size:0.8rem; color:#64748b;" data-i18n="line_width">Çizgi Kalınlığı</label>
+                <label for="markup-stroke-width" style="font-size:0.8rem; color:#64748b;" data-i18n="line_width">Çizgi Kalınlığı</label>
                 <div style="display:flex; gap:8px; align-items:center;">
                     <input type="range" id="markup-stroke-width" min="1" max="20" value="3" style="flex:1;">
                     <span id="markup-stroke-label" style="font-size:0.8rem; font-weight:bold; min-width:28px;">3px</span>
@@ -4189,19 +4340,19 @@ tr.class-highlight-active {
                 </div>
                 <div id="point-icon-grid" style="display:grid; grid-template-columns:repeat(5,1fr); gap:4px;"></div>
 
-                <label style="font-size:0.8rem; color:#64748b;" data-i18n="point_size">Boyut</label>
+                <label for="point-size" style="font-size:0.8rem; color:#64748b;" data-i18n="point_size">Boyut</label>
                 <div style="display:flex; gap:8px; align-items:center;">
                     <input type="range" id="point-size" min="8" max="80" value="28" style="flex:1;">
                     <span id="point-size-label" style="font-size:0.8rem; font-weight:bold; min-width:32px;">28px</span>
                 </div>
 
-                <label style="font-size:0.8rem; color:#64748b;" data-i18n="point_rotation">Döndürme</label>
+                <label for="point-rotation" style="font-size:0.8rem; color:#64748b;" data-i18n="point_rotation">Döndürme</label>
                 <div style="display:flex; gap:8px; align-items:center;">
                     <input type="range" id="point-rotation" min="0" max="360" value="0" style="flex:1;">
                     <span id="point-rotation-label" style="font-size:0.8rem; font-weight:bold; min-width:36px;">0°</span>
                 </div>
 
-                <label style="font-size:0.8rem; color:#64748b;" data-i18n="point_opacity">Saydamlık</label>
+                <label for="point-opacity" style="font-size:0.8rem; color:#64748b;" data-i18n="point_opacity">Saydamlık</label>
                 <div style="display:flex; gap:8px; align-items:center;">
                     <input type="range" id="point-opacity" min="10" max="100" value="100" style="flex:1;">
                     <span id="point-opacity-label" style="font-size:0.8rem; font-weight:bold; min-width:36px;">100%</span>
@@ -4211,7 +4362,7 @@ tr.class-highlight-active {
                 <div id="point-border-color-palette" style="display:flex; flex-wrap:wrap; gap:3px;"></div>
 
                 <div style="display:flex; gap:8px; align-items:center;">
-                    <label style="font-size:0.8rem; color:#64748b; flex-shrink:0;" data-i18n="border_width">Kenarlık Kalınlığı</label>
+                    <label for="point-border-width" style="font-size:0.8rem; color:#64748b; flex-shrink:0;" data-i18n="border_width">Kenarlık Kalınlığı</label>
                     <input type="range" id="point-border-width" min="0" max="8" value="1" style="flex:1;">
                     <span id="point-border-width-label" style="font-size:0.8rem; font-weight:bold; min-width:24px;">1px</span>
                 </div>
@@ -4267,7 +4418,7 @@ tr.class-highlight-active {
 
             <!-- Proje Kaydet / Yükle (tarayıcıda, sunucusuz) -->
             <div id="sb-project-manager" style="border:1px solid #e2e8f0; border-radius:8px; padding:10px; background:#f8fafc; display:flex; flex-direction:column; gap:8px; margin-top:5px; opacity:0.45; pointer-events:none;">
-                <div style="font-size:0.85rem; font-weight:700; color:#1e3a8a; display:flex; align-items:center; gap:6px;">
+                <div id="sb-project-manager-title" style="font-size:0.85rem; font-weight:700; color:#1e3a8a; display:flex; align-items:center; gap:6px;">
                     🗂️ <span data-i18n="project_manager">Proje Yöneticisi</span>
                     <span class="env-coming-soon-badge sylva-badge-blink" data-i18n="env_coming_soon" style="margin-left:6px;vertical-align:middle;">🔒 Yakında</span>
                 </div>
@@ -7031,7 +7182,7 @@ function selectRamp(name) {
 
             var classifiedInfoHtml = '';
             if (_currentLegendDate) {
-                classifiedInfoHtml = '<div class="real-stats-row" style="font-size:0.62rem;color:#16a34a;margin-top:4px;border-top:1px dashed #cbd5e1;padding-top:3px;">'
+                classifiedInfoHtml = '<div class="real-stats-row" style="font-size:0.62rem;color:#15803d;margin-top:4px;border-top:1px dashed #cbd5e1;padding-top:3px;">'
                     + '📡 ' + t('lbl_date') + ' ' + _currentLegendDate
                     + '</div>';
             }
@@ -8661,7 +8812,7 @@ function selectRamp(name) {
                 });
             })
             .catch(function() {
-                galleryEl.innerHTML = '<div style="padding:6px 10px;font-size:0.75rem;color:#ef4444;">Sahne listesi alınamadı.</div>';
+                galleryEl.innerHTML = '<div style="padding:6px 10px;font-size:0.75rem;color:#dc2626;">Sahne listesi alınamadı.</div>';
             });
         }
 
@@ -9649,7 +9800,7 @@ function selectRamp(name) {
                 if (!row) {
                     row = document.createElement('div');
                     row.className = 'real-stats-row';
-                    row.style.cssText = 'font-size:0.62rem;color:#16a34a;margin-top:4px;border-top:1px dashed #cbd5e1;padding-top:3px;';
+                    row.style.cssText = 'font-size:0.62rem;color:#15803d;margin-top:4px;border-top:1px dashed #cbd5e1;padding-top:3px;';
                     legendBox.appendChild(row);
                 }
                 row.textContent = '📡 ' + t('lbl_date') + ' ' + (_currentLegendDate || '—');
@@ -9725,7 +9876,7 @@ function selectRamp(name) {
                     if (!row) {
                         row = document.createElement('div');
                         row.className = 'real-stats-row';
-                        row.style.cssText = 'font-size:0.62rem;color:#16a34a;margin-top:4px;border-top:1px dashed #cbd5e1;padding-top:3px;';
+                        row.style.cssText = 'font-size:0.62rem;color:#15803d;margin-top:4px;border-top:1px dashed #cbd5e1;padding-top:3px;';
                         legendBox.appendChild(row);
                     }
                     row.textContent = '📡 ' + t('lbl_date') + ' ' + (_currentLegendDate || '—');
@@ -13722,7 +13873,7 @@ function selectRamp(name) {
         <div id="export-modal" role="dialog" aria-modal="true" aria-labelledby="export-modal-title">
             <div id="export-modal-header">
                 <h3 id="export-modal-title" data-i18n="export_map_title">🖨️ Harita Çıktısı Al</h3>
-                <button id="export-modal-close" data-i18n-title="modal_close_title" title="Kapat">✕</button>
+                <button id="export-modal-close" data-i18n-title="modal_close_title" title="Kapat" data-i18n-aria-label="modal_close_title" aria-label="Kapat">✕</button>
             </div>
             <div id="export-modal-body">
 
@@ -14451,7 +14602,7 @@ function selectRamp(name) {
         user-select:none;
     }
     .vdl-format-btn.selected {
-        border-color:#0d9488; background:#f0fdfa; color:#0d9488;
+        border-color:#0d9488; background:#f0fdfa; color:#0f766e;
     }
     .vdl-format-btn:hover:not(.selected) {
         border-color:#94a3b8; background:#f1f5f9;
@@ -14466,7 +14617,7 @@ function selectRamp(name) {
         min-height:44px; line-height:1.3; user-select:none;
     }
     .vdl-source-btn.selected {
-        border-color:#0d9488; background:#f0fdfa; color:#0d9488;
+        border-color:#0d9488; background:#f0fdfa; color:#0f766e;
     }
     .vdl-source-btn:hover:not(.selected) {
         border-color:#94a3b8; background:#f8fafc;
@@ -14489,7 +14640,7 @@ function selectRamp(name) {
         50%     { opacity:0.22; filter:drop-shadow(0 0 10px #0d9488); }
     }
     #vdl-bottom-indicator-sub {
-        font-size:0.73rem; color:#0d9488; margin-top:6px; line-height:1.4;
+        font-size:0.73rem; color:#0f766e; margin-top:6px; line-height:1.4;
         font-weight:700; letter-spacing:0.03em;
     }
     #vdl-progress-index {
@@ -14499,7 +14650,7 @@ function selectRamp(name) {
         display:inline-flex; align-items:center; gap:5px;
         background:#f0fdfa; border:1px solid #99f6e4; border-radius:20px;
         padding:3px 11px; font-size:0.73rem; font-weight:700;
-        color:#0d9488; margin-bottom:12px; max-width:100%; overflow:hidden;
+        color:#0f766e; margin-bottom:12px; max-width:100%; overflow:hidden;
         text-overflow:ellipsis; white-space:nowrap;
     }
     .vdl-source-tabs { display:flex; gap:6px; margin-bottom:14px; }
@@ -14509,7 +14660,7 @@ function selectRamp(name) {
         cursor:pointer; text-align:center; transition:all 0.15s; user-select:none;
         line-height:1.3;
     }
-    .vdl-source-tab.active { border-color:#0d9488; background:#f0fdfa; color:#0d9488; }
+    .vdl-source-tab.active { border-color:#0d9488; background:#f0fdfa; color:#0f766e; }
     .vdl-source-tab:hover:not(.active) { border-color:#94a3b8; background:#f1f5f9; }
     #vdl-coord-section {
         background:#f8fafc; border:1px solid #e2e8f0; border-radius:7px;
@@ -14533,13 +14684,13 @@ function selectRamp(name) {
     <div id="vector-dialog-box">
         <!-- Başlık -->
         <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
-            <h3 style="color:#0d9488; margin:0; font-size:1rem; display:flex; align-items:center;"><span data-i18n="vdl_title">📥 Vektör Veri İndir</span><span class="env-coming-soon-badge sylva-badge-blink" data-i18n="env_coming_soon" style="margin-left:6px;vertical-align:middle;">🔒 Yakında</span></h3>
-            <button onclick="closeVectorDownloadDialog()" style="background:none;border:none;cursor:pointer;color:#94a3b8;font-size:1.1rem;padding:0 2px;" data-i18n-title="vdl_close" title="Kapat">✕</button>
+            <h3 style="color:#0f766e; margin:0; font-size:1rem; display:flex; align-items:center;"><span data-i18n="vdl_title">📥 Vektör Veri İndir</span><span class="env-coming-soon-badge sylva-badge-blink" data-i18n="env_coming_soon" style="margin-left:6px;vertical-align:middle;">🔒 Yakında</span></h3>
+            <button onclick="closeVectorDownloadDialog()" style="background:none;border:none;cursor:pointer;color:#94a3b8;font-size:1.1rem;padding:0 2px;" data-i18n-title="vdl_close" title="Kapat" data-i18n-aria-label="vdl_close" aria-label="Kapat">✕</button>
         </div>
 
         <!-- Veri Kaynağı Seçimi: seçilebilir 2 kutu -->
         <div style="margin-bottom:14px;background:#f8fafc;border:1.5px solid #99f6e4;border-radius:9px;padding:12px;">
-            <label style="font-size:0.84rem; font-weight:700; color:#0d9488; display:block; margin-bottom:10px;" data-i18n="vdl_source_label">🗂️ Veri Kaynağı Seçimi</label>
+            <label style="font-size:0.84rem; font-weight:700; color:#0f766e; display:block; margin-bottom:10px;" data-i18n="vdl_source_label">🗂️ Veri Kaynağı Seçimi</label>
             <div style="display:flex; gap:10px;">
                 <button type="button" class="vdl-source-btn selected" id="vdl-src-raster" onclick="selectVdlSource('raster')">
                     <span data-i18n="vdl_raster_label">🛰️ Raster Veri (Analiz Sonucu)</span>
@@ -14608,16 +14759,16 @@ function selectRamp(name) {
         <div style="margin-bottom:6px;">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
                 <label style="font-size:0.82rem; font-weight:600; color:#64748b;" data-i18n="vdl_coord_label">📍 Alan Koordinatları (WGS 84)</label>
-                <button onclick="vdlResetCoords()" style="font-size:0.7rem;color:#0d9488;background:none;border:none;cursor:pointer;padding:0;" data-i18n="vdl_coord_reset">↺ Sıfırla</button>
+                <button onclick="vdlResetCoords()" style="font-size:0.7rem;color:#0f766e;background:none;border:none;cursor:pointer;padding:0;" data-i18n="vdl_coord_reset">↺ Sıfırla</button>
             </div>
             <div id="vdl-coord-section">
                 <div class="vdl-coord-row">
-                    <div class="vdl-coord-field"><label data-i18n="vdl_coord_north">Kuzey (max lat)</label><input type="number" id="vdl-coord-north" step="0.0001" placeholder="40.0000"></div>
-                    <div class="vdl-coord-field"><label data-i18n="vdl_coord_south">Güney (min lat)</label><input type="number" id="vdl-coord-south" step="0.0001" placeholder="39.0000"></div>
+                    <div class="vdl-coord-field"><label for="vdl-coord-north" data-i18n="vdl_coord_north">Kuzey (max lat)</label><input type="number" id="vdl-coord-north" step="0.0001" placeholder="40.0000"></div>
+                    <div class="vdl-coord-field"><label for="vdl-coord-south" data-i18n="vdl_coord_south">Güney (min lat)</label><input type="number" id="vdl-coord-south" step="0.0001" placeholder="39.0000"></div>
                 </div>
                 <div class="vdl-coord-row">
-                    <div class="vdl-coord-field"><label data-i18n="vdl_coord_west">Batı (min lon)</label><input type="number" id="vdl-coord-west" step="0.0001" placeholder="32.0000"></div>
-                    <div class="vdl-coord-field"><label data-i18n="vdl_coord_east">Doğu (max lon)</label><input type="number" id="vdl-coord-east" step="0.0001" placeholder="33.0000"></div>
+                    <div class="vdl-coord-field"><label for="vdl-coord-west" data-i18n="vdl_coord_west">Batı (min lon)</label><input type="number" id="vdl-coord-west" step="0.0001" placeholder="32.0000"></div>
+                    <div class="vdl-coord-field"><label for="vdl-coord-east" data-i18n="vdl_coord_east">Doğu (max lon)</label><input type="number" id="vdl-coord-east" step="0.0001" placeholder="33.0000"></div>
                 </div>
             </div>
         </div>
@@ -16000,7 +16151,7 @@ function cancelGeoTiffDownload() {
 // SylvaGIS — Global i18n System (17 languages, no reload)
 // ============================================================
 var SYLVA_TRANSLATIONS = {
-  en: { project_manager: "Project Manager", project_save_btn: "💾 Save", project_load_btn: "📂 Load", project_none_saved: "No saved projects", project_name_placeholder: "Project name...", project_save_title: "Save current view and settings", project_load_title: "Load selected project", project_delete_title: "Delete selected project", analysis_history_title: "📜 Analysis History", analysis_history_empty: "No downloaded analyses yet. Once you download a result, it will be listed here (last 10 records).", analysis_history_clear: "🗑️ Clear History", analysis_history_note: "Downloaded to your device/Drive", analysis_history_clear_confirm: "Clear analysis history?", welcome_title: 'Welcome to SylvaGIS', welcome_sub: 'Forest Analysis & Remote Sensing Platform', nav_guide: '❓ Guide', nav_guide_short: 'Guide', nav_login: '👤 User Login', topo_dem_no_data_warning: 'The selected DEM data source has no data for your study area. Please change the data source.',
+  en: { time_slider_lbl: "Time slider", playback_progress_lbl: "Playback progress", skip_to_map: "Skip to map", project_manager: "Project Manager", project_save_btn: "💾 Save", project_load_btn: "📂 Load", project_none_saved: "No saved projects", project_name_placeholder: "Project name...", project_save_title: "Save current view and settings", project_load_title: "Load selected project", project_delete_title: "Delete selected project", analysis_history_title: "📜 Analysis History", analysis_history_empty: "No downloaded analyses yet. Once you download a result, it will be listed here (last 10 records).", analysis_history_clear: "🗑️ Clear History", analysis_history_note: "Downloaded to your device/Drive", analysis_history_clear_confirm: "Clear analysis history?", welcome_title: 'Welcome to SylvaGIS', welcome_sub: 'Forest Analysis & Remote Sensing Platform', nav_guide: '❓ Guide', nav_guide_short: 'Guide', nav_login: '👤 User Login', topo_dem_no_data_warning: 'The selected DEM data source has no data for your study area. Please change the data source.',
     login_title: 'Sign in to your account', login_sub: 'Choose Google, Apple or Microsoft',
     login_google: 'Continue with Google', login_apple: 'Continue with Apple', login_microsoft: 'Continue with Microsoft',
     login_remember: 'Remember Me', btn_logout: 'Sign Out',
@@ -16509,7 +16660,7 @@ var SYLVA_TRANSLATIONS = {
     before_after_label: '◀ Before | After ▶',
     before_after_title: 'Before/After Comparison',
   },
-  uz: { project_manager: "Loyiha Menejeri", project_save_btn: "💾 Saqlash", project_load_btn: "📂 Yuklash", project_none_saved: "Saqlangan loyiha yo'q", project_name_placeholder: "Loyiha nomi...", project_save_title: "Joriy ko'rinish va sozlamalarni saqlash", project_load_title: "Tanlangan loyihani yuklash", project_delete_title: "Tanlangan loyihani o'chirish", analysis_history_title: "📜 Tahlillar Tarixi", analysis_history_empty: "Hozircha yuklab olingan tahlil yo'q. Natijani yuklab olganingizda u shu yerda ko'rsatiladi (oxirgi 10 ta yozuv).", analysis_history_clear: "🗑️ Tarixni Tozalash", analysis_history_note: "Qurilmangizga/Drive-ga yuklandi", analysis_history_clear_confirm: "Tahlillar tarixi tozalansinmi?", welcome_title: 'SylvaGIS-ga xush kelibsiz', welcome_sub: 'Oʻrmon tahlili va masofadan zondlash platformasi', nav_guide: '❓ Qoʻllanma', nav_guide_short: 'Qoʻllanma', nav_login: '👤 Foydalanuvchi kirishi', topo_dem_no_data_warning: 'Tanlangan DEM manbasida ish hududingiz uchun ma\'lumot topilmadi. Iltimos, manbani almashtiring.',
+  uz: { time_slider_lbl: "Vaqt slayderi", playback_progress_lbl: "Ijro jarayoni", skip_to_map: "Xaritaga oʻtish", project_manager: "Loyiha Menejeri", project_save_btn: "💾 Saqlash", project_load_btn: "📂 Yuklash", project_none_saved: "Saqlangan loyiha yo'q", project_name_placeholder: "Loyiha nomi...", project_save_title: "Joriy ko'rinish va sozlamalarni saqlash", project_load_title: "Tanlangan loyihani yuklash", project_delete_title: "Tanlangan loyihani o'chirish", analysis_history_title: "📜 Tahlillar Tarixi", analysis_history_empty: "Hozircha yuklab olingan tahlil yo'q. Natijani yuklab olganingizda u shu yerda ko'rsatiladi (oxirgi 10 ta yozuv).", analysis_history_clear: "🗑️ Tarixni Tozalash", analysis_history_note: "Qurilmangizga/Drive-ga yuklandi", analysis_history_clear_confirm: "Tahlillar tarixi tozalansinmi?", welcome_title: 'SylvaGIS-ga xush kelibsiz', welcome_sub: 'Oʻrmon tahlili va masofadan zondlash platformasi', nav_guide: '❓ Qoʻllanma', nav_guide_short: 'Qoʻllanma', nav_login: '👤 Foydalanuvchi kirishi', topo_dem_no_data_warning: 'Tanlangan DEM manbasida ish hududingiz uchun ma\'lumot topilmadi. Iltimos, manbani almashtiring.',
     login_title: 'Hisobingizga kiring', login_sub: 'Google, Apple yoki Microsoft-ni tanlang',
     login_google: 'Google bilan davom etish', login_apple: 'Apple bilan davom etish', login_microsoft: 'Microsoft bilan davom etish',
     login_remember: 'Meni eslab qol', btn_logout: 'Chiqish',
@@ -17006,7 +17157,7 @@ var SYLVA_TRANSLATIONS = {
     before_after_label: '◀ Oldin | Keyin ▶',
     before_after_title: 'Oldin/Keyin Taqqoslash',
   },
-  el: { project_manager: "Διαχείριση Έργων", project_save_btn: "💾 Αποθήκευση", project_load_btn: "📂 Φόρτωση", project_none_saved: "Δεν υπάρχουν αποθηκευμένα έργα", project_name_placeholder: "Όνομα έργου...", project_save_title: "Αποθήκευση τρέχουσας προβολής και ρυθμίσεων", project_load_title: "Φόρτωση επιλεγμένου έργου", project_delete_title: "Διαγραφή επιλεγμένου έργου", analysis_history_title: "📜 Ιστορικό Αναλύσεων", analysis_history_empty: "Δεν υπάρχουν ακόμη ληφθείσες αναλύσεις. Μόλις κατεβάσετε ένα αποτέλεσμα, θα εμφανιστεί εδώ (τελευταίες 10 εγγραφές).", analysis_history_clear: "🗑️ Εκκαθάριση Ιστορικού", analysis_history_note: "Λήφθηκε στη συσκευή/Drive σας", analysis_history_clear_confirm: "Εκκαθάριση ιστορικού αναλύσεων;", welcome_title: 'Καλώς ήρθατε στο SylvaGIS', welcome_sub: 'Πλατφόρμα Δασικής Ανάλυσης & Τηλεπισκόπησης', nav_guide: '❓ Οδηγός', nav_guide_short: 'Οδηγός', nav_login: '👤 Σύνδεση Χρήστη', topo_dem_no_data_warning: 'Δεν βρέθηκαν δεδομένα για την περιοχή μελέτης σας στην επιλεγμένη πηγή DEM. Παρακαλώ αλλάξτε την πηγή δεδομένων.',
+  el: { time_slider_lbl: "Χρονική γραμμή", playback_progress_lbl: "Πρόοδος αναπαραγωγής", skip_to_map: "Μετάβαση στον χάρτη", project_manager: "Διαχείριση Έργων", project_save_btn: "💾 Αποθήκευση", project_load_btn: "📂 Φόρτωση", project_none_saved: "Δεν υπάρχουν αποθηκευμένα έργα", project_name_placeholder: "Όνομα έργου...", project_save_title: "Αποθήκευση τρέχουσας προβολής και ρυθμίσεων", project_load_title: "Φόρτωση επιλεγμένου έργου", project_delete_title: "Διαγραφή επιλεγμένου έργου", analysis_history_title: "📜 Ιστορικό Αναλύσεων", analysis_history_empty: "Δεν υπάρχουν ακόμη ληφθείσες αναλύσεις. Μόλις κατεβάσετε ένα αποτέλεσμα, θα εμφανιστεί εδώ (τελευταίες 10 εγγραφές).", analysis_history_clear: "🗑️ Εκκαθάριση Ιστορικού", analysis_history_note: "Λήφθηκε στη συσκευή/Drive σας", analysis_history_clear_confirm: "Εκκαθάριση ιστορικού αναλύσεων;", welcome_title: 'Καλώς ήρθατε στο SylvaGIS', welcome_sub: 'Πλατφόρμα Δασικής Ανάλυσης & Τηλεπισκόπησης', nav_guide: '❓ Οδηγός', nav_guide_short: 'Οδηγός', nav_login: '👤 Σύνδεση Χρήστη', topo_dem_no_data_warning: 'Δεν βρέθηκαν δεδομένα για την περιοχή μελέτης σας στην επιλεγμένη πηγή DEM. Παρακαλώ αλλάξτε την πηγή δεδομένων.',
     login_title: 'Συνδεθείτε στον λογαριασμό σας', login_sub: 'Επιλέξτε Google, Apple ή Microsoft',
     login_google: 'Συνέχεια με Google', login_apple: 'Συνέχεια με Apple', login_microsoft: 'Συνέχεια με Microsoft',
     login_remember: 'Να με θυμάσαι', btn_logout: 'Αποσύνδεση',
@@ -17509,7 +17660,7 @@ var SYLVA_TRANSLATIONS = {
     before_after_label: '◀ Πριν | Μετά ▶',
     before_after_title: 'Σύγκριση Πριν/Μετά',
   },
-  bg: { project_manager: "Мениджър на проекти", project_save_btn: "💾 Запис", project_load_btn: "📂 Зареждане", project_none_saved: "Няма запазени проекти", project_name_placeholder: "Име на проект...", project_save_title: "Запазване на текущия изглед и настройки", project_load_title: "Зареждане на избрания проект", project_delete_title: "Изтриване на избрания проект", analysis_history_title: "📜 История на анализите", analysis_history_empty: "Все още няма изтеглени анализи. След като изтеглите резултат, той ще бъде показан тук (последните 10 записа).", analysis_history_clear: "🗑️ Изчистване на историята", analysis_history_note: "Изтеглено на вашето устройство/Drive", analysis_history_clear_confirm: "Изчистване на историята на анализите?", welcome_title: 'Добре дошли в SylvaGIS', welcome_sub: 'Платформа за горски анализ и дистанционно наблюдение', nav_guide: '❓ Ръководство', nav_guide_short: 'Ръководство', nav_login: '👤 Вход на потребител', topo_dem_no_data_warning: 'В избрания източник на DEM няма данни за вашата работна зона. Моля, сменете източника на данни.',
+  bg: { time_slider_lbl: "Времеви плъзгач", playback_progress_lbl: "Напредък на възпроизвеждането", skip_to_map: "Към картата", project_manager: "Мениджър на проекти", project_save_btn: "💾 Запис", project_load_btn: "📂 Зареждане", project_none_saved: "Няма запазени проекти", project_name_placeholder: "Име на проект...", project_save_title: "Запазване на текущия изглед и настройки", project_load_title: "Зареждане на избрания проект", project_delete_title: "Изтриване на избрания проект", analysis_history_title: "📜 История на анализите", analysis_history_empty: "Все още няма изтеглени анализи. След като изтеглите резултат, той ще бъде показан тук (последните 10 записа).", analysis_history_clear: "🗑️ Изчистване на историята", analysis_history_note: "Изтеглено на вашето устройство/Drive", analysis_history_clear_confirm: "Изчистване на историята на анализите?", welcome_title: 'Добре дошли в SylvaGIS', welcome_sub: 'Платформа за горски анализ и дистанционно наблюдение', nav_guide: '❓ Ръководство', nav_guide_short: 'Ръководство', nav_login: '👤 Вход на потребител', topo_dem_no_data_warning: 'В избрания източник на DEM няма данни за вашата работна зона. Моля, сменете източника на данни.',
     login_title: 'Влезте в своя акаунт', login_sub: 'Изберете Google, Apple или Microsoft',
     login_google: 'Продължи с Google', login_apple: 'Продължи с Apple', login_microsoft: 'Продължи с Microsoft',
     login_remember: 'Запомни ме', btn_logout: 'Изход',
@@ -18012,7 +18163,7 @@ var SYLVA_TRANSLATIONS = {
     before_after_label: '◀ Преди | След ▶',
     before_after_title: 'Сравнение Преди/След',
   },
-  tr: { project_manager: "Proje Yöneticisi", project_save_btn: "💾 Kaydet", project_load_btn: "📂 Yükle", project_none_saved: "Kayıtlı proje yok", project_name_placeholder: "Proje adı...", project_save_title: "Mevcut görünüm ve ayarları kaydet", project_load_title: "Seçili projeyi yükle", project_delete_title: "Seçili projeyi sil", analysis_history_title: "📜 Analiz Geçmişi", analysis_history_empty: "Henüz indirilmiş bir analiz yok. Bir sonucu indirdiğinizde burada listelenir (son 10 kayıt).", analysis_history_clear: "🗑️ Geçmişi Temizle", analysis_history_note: "Cihazınıza/Drive'a indirildi", analysis_history_clear_confirm: "Analiz geçmişi temizlensin mi?", welcome_title: 'SylvaGIS\'e Hoş Geldiniz', welcome_sub: 'Orman Analizi ve Uzaktan Algılama Platformu', nav_guide: '❓ Rehber', nav_guide_short: 'Kılavuz', nav_login: '👤 Kullanıcı Girişi', topo_dem_no_data_warning: 'İstediğiniz DEM veri kaynağında çalışma alanınıza göre veri bulunamadı. Lütfen veri kaynağını değiştirin.',
+  tr: { time_slider_lbl: "Zaman ekseni", playback_progress_lbl: "Oynatma ilerlemesi", skip_to_map: "Haritaya geç", project_manager: "Proje Yöneticisi", project_save_btn: "💾 Kaydet", project_load_btn: "📂 Yükle", project_none_saved: "Kayıtlı proje yok", project_name_placeholder: "Proje adı...", project_save_title: "Mevcut görünüm ve ayarları kaydet", project_load_title: "Seçili projeyi yükle", project_delete_title: "Seçili projeyi sil", analysis_history_title: "📜 Analiz Geçmişi", analysis_history_empty: "Henüz indirilmiş bir analiz yok. Bir sonucu indirdiğinizde burada listelenir (son 10 kayıt).", analysis_history_clear: "🗑️ Geçmişi Temizle", analysis_history_note: "Cihazınıza/Drive'a indirildi", analysis_history_clear_confirm: "Analiz geçmişi temizlensin mi?", welcome_title: 'SylvaGIS\'e Hoş Geldiniz', welcome_sub: 'Orman Analizi ve Uzaktan Algılama Platformu', nav_guide: '❓ Rehber', nav_guide_short: 'Kılavuz', nav_login: '👤 Kullanıcı Girişi', topo_dem_no_data_warning: 'İstediğiniz DEM veri kaynağında çalışma alanınıza göre veri bulunamadı. Lütfen veri kaynağını değiştirin.',
     login_title: 'Hesabınızla Giriş Yapın', login_sub: 'Google, Apple veya Microsoft hesabınızı seçin',
     login_google: 'Google ile devam et', login_apple: 'Apple ile devam et', login_microsoft: 'Microsoft ile devam et',
     login_remember: 'Beni Hatırla', btn_logout: 'Oturumu Kapat',
@@ -18517,7 +18668,7 @@ var SYLVA_TRANSLATIONS = {
     before_after_label: '◀ Öncesi | Sonrası ▶',
     before_after_title: 'Öncesi/Sonrası Karşılaştırması',
   },
-  az: { project_manager: "Layihə Meneceri", project_save_btn: "💾 Yadda saxla", project_load_btn: "📂 Yüklə", project_none_saved: "Yadda saxlanmış layihə yoxdur", project_name_placeholder: "Layihə adı...", project_save_title: "Cari görünüşü və ayarları yadda saxla", project_load_title: "Seçilmiş layihəni yüklə", project_delete_title: "Seçilmiş layihəni sil", analysis_history_title: "📜 Analiz Tarixçəsi", analysis_history_empty: "Hələ endirilmiş analiz yoxdur. Nəticəni endirdikdə burada siyahıya alınacaq (son 10 qeyd).", analysis_history_clear: "🗑️ Tarixçəni Təmizlə", analysis_history_note: "Cihazınıza/Drive-a endirildi", analysis_history_clear_confirm: "Analiz tarixçəsi təmizlənsin?", welcome_title: 'SylvaGIS-ə Xoş Gəlmisiniz', welcome_sub: 'Meşə Təhlili və Məsafədən Zondlama Platforması', nav_guide: '❓ Bələdçi', nav_guide_short: 'Bələdçi', nav_login: '👤 İstifadəçi Girişi', topo_dem_no_data_warning: 'Seçdiyiniz DEM mənbəyində iş sahəniz üçün məlumat tapılmadı. Zəhmət olmasa məlumat mənbəyini dəyişdirin.',
+  az: { time_slider_lbl: "Zaman xətti", playback_progress_lbl: "Oxutma irəliləyişi", skip_to_map: "Xəritəyə keç", project_manager: "Layihə Meneceri", project_save_btn: "💾 Yadda saxla", project_load_btn: "📂 Yüklə", project_none_saved: "Yadda saxlanmış layihə yoxdur", project_name_placeholder: "Layihə adı...", project_save_title: "Cari görünüşü və ayarları yadda saxla", project_load_title: "Seçilmiş layihəni yüklə", project_delete_title: "Seçilmiş layihəni sil", analysis_history_title: "📜 Analiz Tarixçəsi", analysis_history_empty: "Hələ endirilmiş analiz yoxdur. Nəticəni endirdikdə burada siyahıya alınacaq (son 10 qeyd).", analysis_history_clear: "🗑️ Tarixçəni Təmizlə", analysis_history_note: "Cihazınıza/Drive-a endirildi", analysis_history_clear_confirm: "Analiz tarixçəsi təmizlənsin?", welcome_title: 'SylvaGIS-ə Xoş Gəlmisiniz', welcome_sub: 'Meşə Təhlili və Məsafədən Zondlama Platforması', nav_guide: '❓ Bələdçi', nav_guide_short: 'Bələdçi', nav_login: '👤 İstifadəçi Girişi', topo_dem_no_data_warning: 'Seçdiyiniz DEM mənbəyində iş sahəniz üçün məlumat tapılmadı. Zəhmət olmasa məlumat mənbəyini dəyişdirin.',
     login_title: 'Hesabınızla Daxil Olun', login_sub: 'Google, Apple və ya Microsoft hesabınızı seçin',
     login_google: 'Google ilə davam et', login_apple: 'Apple ilə davam et', login_microsoft: 'Microsoft ilə davam et',
     login_remember: 'Məni Xatırla', btn_logout: 'Oturumu Bağla',
@@ -19016,7 +19167,7 @@ var SYLVA_TRANSLATIONS = {
     before_after_label: '◀ Əvvəl | Sonra ▶',
     before_after_title: 'Əvvəl/Sonra Müqayisəsi',
   },
-  hu: { project_manager: "Projektkezelő", project_save_btn: "💾 Mentés", project_load_btn: "📂 Betöltés", project_none_saved: "Nincs mentett projekt", project_name_placeholder: "Projekt neve...", project_save_title: "Aktuális nézet és beállítások mentése", project_load_title: "Kiválasztott projekt betöltése", project_delete_title: "Kiválasztott projekt törlése", analysis_history_title: "📜 Elemzési Előzmények", analysis_history_empty: "Még nincs letöltött elemzés. Egy eredmény letöltése után itt fog megjelenni (utolsó 10 bejegyzés).", analysis_history_clear: "🗑️ Előzmények Törlése", analysis_history_note: "Letöltve az eszközére/Drive-jára", analysis_history_clear_confirm: "Törli az elemzési előzményeket?", welcome_title: 'Üdvözöljük a SylvaGIS-ben', welcome_sub: 'Erdőelemzési és Távérzékelési Platform', nav_guide: '❓ Útmutató', nav_guide_short: 'Útmutató', nav_login: '👤 Bejelentkezés', topo_dem_no_data_warning: 'A kiválasztott DEM adatforrásban nincs adat a munkaterületére. Kérjük, változtassa meg az adatforrást.',
+  hu: { time_slider_lbl: "Idővonal csúszka", playback_progress_lbl: "Lejátszási folyamat", skip_to_map: "Ugrás a térképre", project_manager: "Projektkezelő", project_save_btn: "💾 Mentés", project_load_btn: "📂 Betöltés", project_none_saved: "Nincs mentett projekt", project_name_placeholder: "Projekt neve...", project_save_title: "Aktuális nézet és beállítások mentése", project_load_title: "Kiválasztott projekt betöltése", project_delete_title: "Kiválasztott projekt törlése", analysis_history_title: "📜 Elemzési Előzmények", analysis_history_empty: "Még nincs letöltött elemzés. Egy eredmény letöltése után itt fog megjelenni (utolsó 10 bejegyzés).", analysis_history_clear: "🗑️ Előzmények Törlése", analysis_history_note: "Letöltve az eszközére/Drive-jára", analysis_history_clear_confirm: "Törli az elemzési előzményeket?", welcome_title: 'Üdvözöljük a SylvaGIS-ben', welcome_sub: 'Erdőelemzési és Távérzékelési Platform', nav_guide: '❓ Útmutató', nav_guide_short: 'Útmutató', nav_login: '👤 Bejelentkezés', topo_dem_no_data_warning: 'A kiválasztott DEM adatforrásban nincs adat a munkaterületére. Kérjük, változtassa meg az adatforrást.',
     login_title: 'Jelentkezzen be fiókjával', login_sub: 'Válassza ki Google, Apple vagy Microsoft fiókját',
     login_google: 'Folytatás Google-lal', login_apple: 'Folytatás Apple-lel', login_microsoft: 'Folytatás Microsofttal',
     login_remember: 'Emlékezz rám', btn_logout: 'Kijelentkezés',
@@ -19515,7 +19666,7 @@ var SYLVA_TRANSLATIONS = {
     before_after_label: '◀ Előtte | Utána ▶',
     before_after_title: 'Előtte/Utána Összehasonlítás',
   },
-  kk: { project_manager: "Жоба менеджері", project_save_btn: "💾 Сақтау", project_load_btn: "📂 Жүктеу", project_none_saved: "Сақталған жоба жоқ", project_name_placeholder: "Жоба атауы...", project_save_title: "Ағымдағы көрініс пен параметрлерді сақтау", project_load_title: "Таңдалған жобаны жүктеу", project_delete_title: "Таңдалған жобаны жою", analysis_history_title: "📜 Талдау тарихы", analysis_history_empty: "Әзірге жүктеп алынған талдау жоқ. Нәтижені жүктеп алғанда, ол осында тізімделеді (соңғы 10 жазба).", analysis_history_clear: "🗑️ Тарихты тазалау", analysis_history_note: "Құрылғыңызға/Drive-ға жүктелді", analysis_history_clear_confirm: "Талдау тарихы тазалансын ба?", welcome_title: 'SylvaGIS-ке қош келдіңіз', welcome_sub: 'Орман талдауы және қашықтан зондтау платформасы', nav_guide: '❓ Нұсқаулық', nav_guide_short: 'Нұсқаулық', nav_login: '👤 Кіру', topo_dem_no_data_warning: 'Таңдалған DEM дереккөзінде жұмыс аймағыңыз үшін деректер табылмады. Дереккөзді өзгертіңіз.',
+  kk: { time_slider_lbl: "Уақыт жолағы", playback_progress_lbl: "Ойнату барысы", skip_to_map: "Картаға өту", project_manager: "Жоба менеджері", project_save_btn: "💾 Сақтау", project_load_btn: "📂 Жүктеу", project_none_saved: "Сақталған жоба жоқ", project_name_placeholder: "Жоба атауы...", project_save_title: "Ағымдағы көрініс пен параметрлерді сақтау", project_load_title: "Таңдалған жобаны жүктеу", project_delete_title: "Таңдалған жобаны жою", analysis_history_title: "📜 Талдау тарихы", analysis_history_empty: "Әзірге жүктеп алынған талдау жоқ. Нәтижені жүктеп алғанда, ол осында тізімделеді (соңғы 10 жазба).", analysis_history_clear: "🗑️ Тарихты тазалау", analysis_history_note: "Құрылғыңызға/Drive-ға жүктелді", analysis_history_clear_confirm: "Талдау тарихы тазалансын ба?", welcome_title: 'SylvaGIS-ке қош келдіңіз', welcome_sub: 'Орман талдауы және қашықтан зондтау платформасы', nav_guide: '❓ Нұсқаулық', nav_guide_short: 'Нұсқаулық', nav_login: '👤 Кіру', topo_dem_no_data_warning: 'Таңдалған DEM дереккөзінде жұмыс аймағыңыз үшін деректер табылмады. Дереккөзді өзгертіңіз.',
     login_title: 'Тіркелгіңізге кіріңіз', login_sub: 'Google, Apple немесе Microsoft таңдаңыз',
     login_google: 'Google арқылы жалғастыру', login_apple: 'Apple арқылы жалғастыру', login_microsoft: 'Microsoft арқылы жалғастыру',
     login_remember: 'Мені есте сақта', btn_logout: 'Шығу',
@@ -20012,7 +20163,7 @@ var SYLVA_TRANSLATIONS = {
     before_after_label: '◀ Бұрын | Кейін ▶',
     before_after_title: 'Бұрын/Кейін Салыстырмасы',
   },
-  de: { project_manager: "Projektmanager", project_save_btn: "💾 Speichern", project_load_btn: "📂 Laden", project_none_saved: "Keine gespeicherten Projekte", project_name_placeholder: "Projektname...", project_save_title: "Aktuelle Ansicht und Einstellungen speichern", project_load_title: "Ausgewähltes Projekt laden", project_delete_title: "Ausgewähltes Projekt löschen", analysis_history_title: "📜 Analyseverlauf", analysis_history_empty: "Noch keine heruntergeladenen Analysen. Sobald Sie ein Ergebnis herunterladen, wird es hier aufgelistet (letzte 10 Einträge).", analysis_history_clear: "🗑️ Verlauf löschen", analysis_history_note: "Auf Ihr Gerät/Drive heruntergeladen", analysis_history_clear_confirm: "Analyseverlauf löschen?", welcome_title: 'Willkommen bei SylvaGIS', welcome_sub: 'Waldanalyse- und Fernerkundungsplattform', nav_guide: '❓ Hilfe', nav_guide_short: 'Handbuch', nav_login: '👤 Anmelden', topo_dem_no_data_warning: 'Für die gewählte DEM-Datenquelle liegen keine Daten für Ihr Arbeitsgebiet vor. Bitte wechseln Sie die Datenquelle.',
+  de: { time_slider_lbl: "Zeitschieberegler", playback_progress_lbl: "Wiedergabefortschritt", skip_to_map: "Zur Karte springen", project_manager: "Projektmanager", project_save_btn: "💾 Speichern", project_load_btn: "📂 Laden", project_none_saved: "Keine gespeicherten Projekte", project_name_placeholder: "Projektname...", project_save_title: "Aktuelle Ansicht und Einstellungen speichern", project_load_title: "Ausgewähltes Projekt laden", project_delete_title: "Ausgewähltes Projekt löschen", analysis_history_title: "📜 Analyseverlauf", analysis_history_empty: "Noch keine heruntergeladenen Analysen. Sobald Sie ein Ergebnis herunterladen, wird es hier aufgelistet (letzte 10 Einträge).", analysis_history_clear: "🗑️ Verlauf löschen", analysis_history_note: "Auf Ihr Gerät/Drive heruntergeladen", analysis_history_clear_confirm: "Analyseverlauf löschen?", welcome_title: 'Willkommen bei SylvaGIS', welcome_sub: 'Waldanalyse- und Fernerkundungsplattform', nav_guide: '❓ Hilfe', nav_guide_short: 'Handbuch', nav_login: '👤 Anmelden', topo_dem_no_data_warning: 'Für die gewählte DEM-Datenquelle liegen keine Daten für Ihr Arbeitsgebiet vor. Bitte wechseln Sie die Datenquelle.',
     sidebar_title: 'Arbeitsbereich & Datenauswahl',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ Polygon', btn_polygon_short: 'Polygon', btn_rectangle: '▭ Rechteck',
@@ -20516,7 +20667,7 @@ var SYLVA_TRANSLATIONS = {
     before_after_label: '◀ Vorher | Nachher ▶',
     before_after_title: 'Vorher/Nachher-Vergleich',
   },
-  fr: { project_manager: "Gestionnaire de projets", project_save_btn: "💾 Enregistrer", project_load_btn: "📂 Charger", project_none_saved: "Aucun projet enregistré", project_name_placeholder: "Nom du projet...", project_save_title: "Enregistrer la vue et les paramètres actuels", project_load_title: "Charger le projet sélectionné", project_delete_title: "Supprimer le projet sélectionné", analysis_history_title: "📜 Historique des analyses", analysis_history_empty: "Aucune analyse téléchargée pour l'instant. Une fois un résultat téléchargé, il apparaîtra ici (10 derniers enregistrements).", analysis_history_clear: "🗑️ Effacer l'historique", analysis_history_note: "Téléchargé sur votre appareil/Drive", analysis_history_clear_confirm: "Effacer l'historique des analyses ?", welcome_title: 'Bienvenue sur SylvaGIS', welcome_sub: 'Plateforme d\'analyse forestière et de télédétection', nav_guide: '❓ Guide', nav_guide_short: 'Manuel', nav_login: '👤 Connexion', topo_dem_no_data_warning: 'Aucune donnée disponible pour votre zone d\'étude dans la source DEM sélectionnée. Veuillez changer de source de données.',
+  fr: { time_slider_lbl: "Curseur temporel", playback_progress_lbl: "Progression de la lecture", skip_to_map: "Aller à la carte", project_manager: "Gestionnaire de projets", project_save_btn: "💾 Enregistrer", project_load_btn: "📂 Charger", project_none_saved: "Aucun projet enregistré", project_name_placeholder: "Nom du projet...", project_save_title: "Enregistrer la vue et les paramètres actuels", project_load_title: "Charger le projet sélectionné", project_delete_title: "Supprimer le projet sélectionné", analysis_history_title: "📜 Historique des analyses", analysis_history_empty: "Aucune analyse téléchargée pour l'instant. Une fois un résultat téléchargé, il apparaîtra ici (10 derniers enregistrements).", analysis_history_clear: "🗑️ Effacer l'historique", analysis_history_note: "Téléchargé sur votre appareil/Drive", analysis_history_clear_confirm: "Effacer l'historique des analyses ?", welcome_title: 'Bienvenue sur SylvaGIS', welcome_sub: 'Plateforme d\'analyse forestière et de télédétection', nav_guide: '❓ Guide', nav_guide_short: 'Manuel', nav_login: '👤 Connexion', topo_dem_no_data_warning: 'Aucune donnée disponible pour votre zone d\'étude dans la source DEM sélectionnée. Veuillez changer de source de données.',
     sidebar_title: 'Espace de travail & Sélection de données',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ Polygone', btn_polygon_short: 'Polygone', btn_rectangle: '▭ Rectangle',
@@ -21020,7 +21171,7 @@ var SYLVA_TRANSLATIONS = {
     before_after_label: '◀ Avant | Après ▶',
     before_after_title: 'Comparaison Avant/Après',
   },
-  es: { project_manager: "Administrador de proyectos", project_save_btn: "💾 Guardar", project_load_btn: "📂 Cargar", project_none_saved: "No hay proyectos guardados", project_name_placeholder: "Nombre del proyecto...", project_save_title: "Guardar la vista y los ajustes actuales", project_load_title: "Cargar el proyecto seleccionado", project_delete_title: "Eliminar el proyecto seleccionado", analysis_history_title: "📜 Historial de análisis", analysis_history_empty: "Aún no hay análisis descargados. Cuando descargue un resultado, aparecerá aquí (últimos 10 registros).", analysis_history_clear: "🗑️ Borrar historial", analysis_history_note: "Descargado en su dispositivo/Drive", analysis_history_clear_confirm: "¿Borrar el historial de análisis?", welcome_title: 'Bienvenido a SylvaGIS', welcome_sub: 'Plataforma de Análisis Forestal y Teledetección', nav_guide: '❓ Guía', nav_guide_short: 'Manual', nav_login: '👤 Iniciar sesión', topo_dem_no_data_warning: 'No se encontraron datos para su área de trabajo en la fuente DEM seleccionada. Por favor, cambie la fuente de datos.',
+  es: { time_slider_lbl: "Deslizador de tiempo", playback_progress_lbl: "Progreso de reproducción", skip_to_map: "Ir al mapa", project_manager: "Administrador de proyectos", project_save_btn: "💾 Guardar", project_load_btn: "📂 Cargar", project_none_saved: "No hay proyectos guardados", project_name_placeholder: "Nombre del proyecto...", project_save_title: "Guardar la vista y los ajustes actuales", project_load_title: "Cargar el proyecto seleccionado", project_delete_title: "Eliminar el proyecto seleccionado", analysis_history_title: "📜 Historial de análisis", analysis_history_empty: "Aún no hay análisis descargados. Cuando descargue un resultado, aparecerá aquí (últimos 10 registros).", analysis_history_clear: "🗑️ Borrar historial", analysis_history_note: "Descargado en su dispositivo/Drive", analysis_history_clear_confirm: "¿Borrar el historial de análisis?", welcome_title: 'Bienvenido a SylvaGIS', welcome_sub: 'Plataforma de Análisis Forestal y Teledetección', nav_guide: '❓ Guía', nav_guide_short: 'Manual', nav_login: '👤 Iniciar sesión', topo_dem_no_data_warning: 'No se encontraron datos para su área de trabajo en la fuente DEM seleccionada. Por favor, cambie la fuente de datos.',
     sidebar_title: 'Área de trabajo & Selección de datos',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ Polígono', btn_polygon_short: 'Polígono', btn_rectangle: '▭ Rectángulo',
@@ -21524,7 +21675,7 @@ var SYLVA_TRANSLATIONS = {
     before_after_label: '◀ Antes | Después ▶',
     before_after_title: 'Comparación Antes/Después',
   },
-  pt: { project_manager: "Gerenciador de Projetos", project_save_btn: "💾 Salvar", project_load_btn: "📂 Carregar", project_none_saved: "Nenhum projeto salvo", project_name_placeholder: "Nome do projeto...", project_save_title: "Salvar a visualização e as configurações atuais", project_load_title: "Carregar o projeto selecionado", project_delete_title: "Excluir o projeto selecionado", analysis_history_title: "📜 Histórico de Análises", analysis_history_empty: "Ainda não há análises baixadas. Quando você baixar um resultado, ele será listado aqui (últimos 10 registros).", analysis_history_clear: "🗑️ Limpar Histórico", analysis_history_note: "Baixado no seu dispositivo/Drive", analysis_history_clear_confirm: "Limpar o histórico de análises?", welcome_title: 'Bem-vindo ao SylvaGIS', welcome_sub: 'Plataforma de Análise Florestal e Sensoriamento Remoto', nav_guide: '❓ Guia', nav_guide_short: 'Guia', nav_login: '👤 Iniciar sessão', topo_dem_no_data_warning: 'Não foram encontrados dados para a sua área de trabalho na fonte DEM selecionada. Por favor, altere a fonte de dados.',
+  pt: { time_slider_lbl: "Controle de tempo", playback_progress_lbl: "Progresso da reprodução", skip_to_map: "Ir para o mapa", project_manager: "Gerenciador de Projetos", project_save_btn: "💾 Salvar", project_load_btn: "📂 Carregar", project_none_saved: "Nenhum projeto salvo", project_name_placeholder: "Nome do projeto...", project_save_title: "Salvar a visualização e as configurações atuais", project_load_title: "Carregar o projeto selecionado", project_delete_title: "Excluir o projeto selecionado", analysis_history_title: "📜 Histórico de Análises", analysis_history_empty: "Ainda não há análises baixadas. Quando você baixar um resultado, ele será listado aqui (últimos 10 registros).", analysis_history_clear: "🗑️ Limpar Histórico", analysis_history_note: "Baixado no seu dispositivo/Drive", analysis_history_clear_confirm: "Limpar o histórico de análises?", welcome_title: 'Bem-vindo ao SylvaGIS', welcome_sub: 'Plataforma de Análise Florestal e Sensoriamento Remoto', nav_guide: '❓ Guia', nav_guide_short: 'Guia', nav_login: '👤 Iniciar sessão', topo_dem_no_data_warning: 'Não foram encontrados dados para a sua área de trabalho na fonte DEM selecionada. Por favor, altere a fonte de dados.',
     sidebar_title: 'Área de trabalho & Seleção de dados',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ Polígono', btn_polygon_short: 'Polígono', btn_rectangle: '▭ Retângulo',
@@ -22028,7 +22179,7 @@ var SYLVA_TRANSLATIONS = {
     before_after_label: '◀ Antes | Depois ▶',
     before_after_title: 'Comparação Antes/Depois',
   },
-  ar: { project_manager: "مدير المشاريع", project_save_btn: "💾 حفظ", project_load_btn: "📂 تحميل", project_none_saved: "لا توجد مشاريع محفوظة", project_name_placeholder: "اسم المشروع...", project_save_title: "حفظ العرض والإعدادات الحالية", project_load_title: "تحميل المشروع المحدد", project_delete_title: "حذف المشروع المحدد", analysis_history_title: "📜 سجل التحليلات", analysis_history_empty: "لا توجد تحليلات تم تنزيلها بعد. بمجرد تنزيل نتيجة، ستظهر هنا (آخر 10 سجلات).", analysis_history_clear: "🗑️ مسح السجل", analysis_history_note: "تم التنزيل إلى جهازك/Drive", analysis_history_clear_confirm: "هل تريد مسح سجل التحليلات؟", welcome_title: 'مرحبًا بك في SylvaGIS', welcome_sub: 'منصة تحليل الغابات والاستشعار عن بعد', nav_guide: '❓ دليل', nav_guide_short: 'دليل', nav_login: '👤 تسجيل الدخول', topo_dem_no_data_warning: 'لا توجد بيانات لمنطقة عملك في مصدر بيانات DEM المحدد. يرجى تغيير مصدر البيانات.',
+  ar: { time_slider_lbl: "شريط الزمن", playback_progress_lbl: "تقدم التشغيل", skip_to_map: "الانتقال إلى الخريطة", project_manager: "مدير المشاريع", project_save_btn: "💾 حفظ", project_load_btn: "📂 تحميل", project_none_saved: "لا توجد مشاريع محفوظة", project_name_placeholder: "اسم المشروع...", project_save_title: "حفظ العرض والإعدادات الحالية", project_load_title: "تحميل المشروع المحدد", project_delete_title: "حذف المشروع المحدد", analysis_history_title: "📜 سجل التحليلات", analysis_history_empty: "لا توجد تحليلات تم تنزيلها بعد. بمجرد تنزيل نتيجة، ستظهر هنا (آخر 10 سجلات).", analysis_history_clear: "🗑️ مسح السجل", analysis_history_note: "تم التنزيل إلى جهازك/Drive", analysis_history_clear_confirm: "هل تريد مسح سجل التحليلات؟", welcome_title: 'مرحبًا بك في SylvaGIS', welcome_sub: 'منصة تحليل الغابات والاستشعار عن بعد', nav_guide: '❓ دليل', nav_guide_short: 'دليل', nav_login: '👤 تسجيل الدخول', topo_dem_no_data_warning: 'لا توجد بيانات لمنطقة عملك في مصدر بيانات DEM المحدد. يرجى تغيير مصدر البيانات.',
     sidebar_title: 'منطقة العمل واختيار البيانات',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ مضلع', btn_polygon_short: 'مضلع', btn_rectangle: '▭ مستطيل',
@@ -22532,7 +22683,7 @@ var SYLVA_TRANSLATIONS = {
     before_after_label: '◀ قبل | بعد ▶',
     before_after_title: 'مقارنة قبل/بعد',
   },
-  fa: { project_manager: "مدیر پروژه", project_save_btn: "💾 ذخیره", project_load_btn: "📂 بارگذاری", project_none_saved: "هیچ پروژه ذخیره‌شده‌ای وجود ندارد", project_name_placeholder: "نام پروژه...", project_save_title: "ذخیره نمای فعلی و تنظیمات", project_load_title: "بارگذاری پروژه انتخاب‌شده", project_delete_title: "حذف پروژه انتخاب‌شده", analysis_history_title: "📜 تاریخچه تحلیل‌ها", analysis_history_empty: "هنوز هیچ تحلیلی دانلود نشده است. پس از دانلود یک نتیجه، در اینجا فهرست می‌شود (۱۰ رکورد آخر).", analysis_history_clear: "🗑️ پاک‌کردن تاریخچه", analysis_history_note: "در دستگاه/Drive شما دانلود شد", analysis_history_clear_confirm: "تاریخچه تحلیل‌ها پاک شود؟", welcome_title: 'به SylvaGIS خوش آمدید', welcome_sub: 'پلتفرم تحلیل جنگل و سنجش از دور', nav_guide: '❓ راهنما', nav_guide_short: 'راهنما', nav_login: '👤 ورود کاربر', topo_dem_no_data_warning: 'در منبع DEM انتخابی، داده‌ای برای محدوده کاری شما یافت نشد. لطفاً منبع داده را تغییر دهید.',
+  fa: { time_slider_lbl: "نوار زمان", playback_progress_lbl: "پیشرفت پخش", skip_to_map: "رفتن به نقشه", project_manager: "مدیر پروژه", project_save_btn: "💾 ذخیره", project_load_btn: "📂 بارگذاری", project_none_saved: "هیچ پروژه ذخیره‌شده‌ای وجود ندارد", project_name_placeholder: "نام پروژه...", project_save_title: "ذخیره نمای فعلی و تنظیمات", project_load_title: "بارگذاری پروژه انتخاب‌شده", project_delete_title: "حذف پروژه انتخاب‌شده", analysis_history_title: "📜 تاریخچه تحلیل‌ها", analysis_history_empty: "هنوز هیچ تحلیلی دانلود نشده است. پس از دانلود یک نتیجه، در اینجا فهرست می‌شود (۱۰ رکورد آخر).", analysis_history_clear: "🗑️ پاک‌کردن تاریخچه", analysis_history_note: "در دستگاه/Drive شما دانلود شد", analysis_history_clear_confirm: "تاریخچه تحلیل‌ها پاک شود؟", welcome_title: 'به SylvaGIS خوش آمدید', welcome_sub: 'پلتفرم تحلیل جنگل و سنجش از دور', nav_guide: '❓ راهنما', nav_guide_short: 'راهنما', nav_login: '👤 ورود کاربر', topo_dem_no_data_warning: 'در منبع DEM انتخابی، داده‌ای برای محدوده کاری شما یافت نشد. لطفاً منبع داده را تغییر دهید.',
     sidebar_title: 'فضای کاری و انتخاب داده',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ چندضلعی', btn_polygon_short: 'چندضلعی', btn_rectangle: '▭ مستطیل',
@@ -23036,7 +23187,7 @@ var SYLVA_TRANSLATIONS = {
     before_after_label: '◀ قبل | بعد ▶',
     before_after_title: 'مقایسه قبل/بعد',
   },
-  zh: { project_manager: "项目管理器", project_save_btn: "💾 保存", project_load_btn: "📂 加载", project_none_saved: "没有已保存的项目", project_name_placeholder: "项目名称...", project_save_title: "保存当前视图和设置", project_load_title: "加载所选项目", project_delete_title: "删除所选项目", analysis_history_title: "📜 分析历史", analysis_history_empty: "尚无已下载的分析。下载结果后，将在此处列出（最近10条记录）。", analysis_history_clear: "🗑️ 清除历史记录", analysis_history_note: "已下载到您的设备/Drive", analysis_history_clear_confirm: "确定要清除分析历史记录吗？", welcome_title: '欢迎使用 SylvaGIS', welcome_sub: '森林分析与遥感平台', nav_guide: '❓ 指南', nav_guide_short: '手册', nav_login: '👤 用户登录', topo_dem_no_data_warning: '所选DEM数据源中未找到您工作区域的数据。请更换数据源。',
+  zh: { time_slider_lbl: "时间滑块", playback_progress_lbl: "播放进度", skip_to_map: "跳转到地图", project_manager: "项目管理器", project_save_btn: "💾 保存", project_load_btn: "📂 加载", project_none_saved: "没有已保存的项目", project_name_placeholder: "项目名称...", project_save_title: "保存当前视图和设置", project_load_title: "加载所选项目", project_delete_title: "删除所选项目", analysis_history_title: "📜 分析历史", analysis_history_empty: "尚无已下载的分析。下载结果后，将在此处列出（最近10条记录）。", analysis_history_clear: "🗑️ 清除历史记录", analysis_history_note: "已下载到您的设备/Drive", analysis_history_clear_confirm: "确定要清除分析历史记录吗？", welcome_title: '欢迎使用 SylvaGIS', welcome_sub: '森林分析与遥感平台', nav_guide: '❓ 指南', nav_guide_short: '手册', nav_login: '👤 用户登录', topo_dem_no_data_warning: '所选DEM数据源中未找到您工作区域的数据。请更换数据源。',
     sidebar_title: '工作区与数据选择',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ 多边形', btn_polygon_short: '多边形', btn_rectangle: '▭ 矩形',
@@ -23540,7 +23691,7 @@ var SYLVA_TRANSLATIONS = {
     before_after_label: '◀ 之前 | 之后 ▶',
     before_after_title: '前后对比',
   },
-  ja: { project_manager: "プロジェクトマネージャー", project_save_btn: "💾 保存", project_load_btn: "📂 読み込み", project_none_saved: "保存されたプロジェクトはありません", project_name_placeholder: "プロジェクト名...", project_save_title: "現在の表示と設定を保存", project_load_title: "選択したプロジェクトを読み込み", project_delete_title: "選択したプロジェクトを削除", analysis_history_title: "📜 分析履歴", analysis_history_empty: "まだダウンロードされた解析はありません。結果をダウンロードすると、ここに表示されます（直近10件）。", analysis_history_clear: "🗑️ 履歴を消去", analysis_history_note: "デバイス/Driveにダウンロード済み", analysis_history_clear_confirm: "分析履歴を消去しますか？", welcome_title: 'SylvaGISへようこそ', welcome_sub: '森林解析・リモートセンシングプラットフォーム', nav_guide: '❓ ガイド', nav_guide_short: 'マニュアル', nav_login: '👤 ログイン', topo_dem_no_data_warning: '選択したDEMデータソースには作業範囲のデータがありません。データソースを変更してください。',
+  ja: { time_slider_lbl: "タイムスライダー", playback_progress_lbl: "再生進行状況", skip_to_map: "地図へスキップ", project_manager: "プロジェクトマネージャー", project_save_btn: "💾 保存", project_load_btn: "📂 読み込み", project_none_saved: "保存されたプロジェクトはありません", project_name_placeholder: "プロジェクト名...", project_save_title: "現在の表示と設定を保存", project_load_title: "選択したプロジェクトを読み込み", project_delete_title: "選択したプロジェクトを削除", analysis_history_title: "📜 分析履歴", analysis_history_empty: "まだダウンロードされた解析はありません。結果をダウンロードすると、ここに表示されます（直近10件）。", analysis_history_clear: "🗑️ 履歴を消去", analysis_history_note: "デバイス/Driveにダウンロード済み", analysis_history_clear_confirm: "分析履歴を消去しますか？", welcome_title: 'SylvaGISへようこそ', welcome_sub: '森林解析・リモートセンシングプラットフォーム', nav_guide: '❓ ガイド', nav_guide_short: 'マニュアル', nav_login: '👤 ログイン', topo_dem_no_data_warning: '選択したDEMデータソースには作業範囲のデータがありません。データソースを変更してください。',
     sidebar_title: 'ワークスペース＆データ選択',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ ポリゴン', btn_polygon_short: 'ポリゴン', btn_rectangle: '▭ 長方形',
@@ -24044,7 +24195,7 @@ var SYLVA_TRANSLATIONS = {
     before_after_label: '◀ 前 | 後 ▶',
     before_after_title: '前後比較',
   },
-  ko: { project_manager: "프로젝트 관리자", project_save_btn: "💾 저장", project_load_btn: "📂 불러오기", project_none_saved: "저장된 프로젝트가 없습니다", project_name_placeholder: "프로젝트 이름...", project_save_title: "현재 보기와 설정 저장", project_load_title: "선택한 프로젝트 불러오기", project_delete_title: "선택한 프로젝트 삭제", analysis_history_title: "📜 분석 기록", analysis_history_empty: "아직 다운로드한 분석이 없습니다. 결과를 다운로드하면 여기에 표시됩니다(최근 10개).", analysis_history_clear: "🗑️ 기록 지우기", analysis_history_note: "기기/Drive에 다운로드됨", analysis_history_clear_confirm: "분석 기록을 지우시겠습니까?", welcome_title: 'SylvaGIS에 오신 것을 환영합니다', welcome_sub: '산림 분석 및 원격 탐사 플랫폼', nav_guide: '❓ 가이드', nav_guide_short: '매뉴얼', nav_login: '👤 사용자 로그인', topo_dem_no_data_warning: '선택한 DEM 데이터 소스에 작업 영역에 대한 데이터가 없습니다. 데이터 소스를 변경해 주세요.',
+  ko: { time_slider_lbl: "시간 슬라이더", playback_progress_lbl: "재생 진행률", skip_to_map: "지도로 건너뛰기", project_manager: "프로젝트 관리자", project_save_btn: "💾 저장", project_load_btn: "📂 불러오기", project_none_saved: "저장된 프로젝트가 없습니다", project_name_placeholder: "프로젝트 이름...", project_save_title: "현재 보기와 설정 저장", project_load_title: "선택한 프로젝트 불러오기", project_delete_title: "선택한 프로젝트 삭제", analysis_history_title: "📜 분석 기록", analysis_history_empty: "아직 다운로드한 분석이 없습니다. 결과를 다운로드하면 여기에 표시됩니다(최근 10개).", analysis_history_clear: "🗑️ 기록 지우기", analysis_history_note: "기기/Drive에 다운로드됨", analysis_history_clear_confirm: "분석 기록을 지우시겠습니까?", welcome_title: 'SylvaGIS에 오신 것을 환영합니다', welcome_sub: '산림 분석 및 원격 탐사 플랫폼', nav_guide: '❓ 가이드', nav_guide_short: '매뉴얼', nav_login: '👤 사용자 로그인', topo_dem_no_data_warning: '선택한 DEM 데이터 소스에 작업 영역에 대한 데이터가 없습니다. 데이터 소스를 변경해 주세요.',
     sidebar_title: '작업 공간 및 데이터 선택',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ 다각형', btn_polygon_short: '다각형', btn_rectangle: '▭ 직사각형',
@@ -24548,7 +24699,7 @@ var SYLVA_TRANSLATIONS = {
     before_after_label: '◀ 이전 | 이후 ▶',
     before_after_title: '이전/이후 비교',
   },
-  hi: { project_manager: "प्रोजेक्ट प्रबंधक", project_save_btn: "💾 सहेजें", project_load_btn: "📂 लोड करें", project_none_saved: "कोई सहेजा गया प्रोजेक्ट नहीं", project_name_placeholder: "प्रोजेक्ट का नाम...", project_save_title: "वर्तमान दृश्य और सेटिंग्स सहेजें", project_load_title: "चयनित प्रोजेक्ट लोड करें", project_delete_title: "चयनित प्रोजेक्ट हटाएं", analysis_history_title: "📜 विश्लेषण इतिहास", analysis_history_empty: "अभी तक कोई विश्लेषण डाउनलोड नहीं हुआ है। परिणाम डाउनलोड करने पर यह यहाँ सूचीबद्ध होगा (अंतिम 10 रिकॉर्ड)।", analysis_history_clear: "🗑️ इतिहास साफ़ करें", analysis_history_note: "आपके डिवाइस/Drive पर डाउनलोड हुआ", analysis_history_clear_confirm: "विश्लेषण इतिहास साफ़ करें?", welcome_title: 'SylvaGIS में आपका स्वागत है', welcome_sub: 'वन विश्लेषण और रिमोट सेंसिंग प्लेटफ़ॉर्म', nav_guide: '❓ मार्गदर्शिका', nav_guide_short: 'मैनुअल', nav_login: '👤 उपयोगकर्ता लॉगिन', topo_dem_no_data_warning: 'चयनित DEM डेटा स्रोत में आपके कार्य क्षेत्र के लिए डेटा उपलब्ध नहीं है। कृपया डेटा स्रोत बदलें।',
+  hi: { time_slider_lbl: "समय स्लाइडर", playback_progress_lbl: "प्लेबैक प्रगति", skip_to_map: "मानचित्र पर जाएं", project_manager: "प्रोजेक्ट प्रबंधक", project_save_btn: "💾 सहेजें", project_load_btn: "📂 लोड करें", project_none_saved: "कोई सहेजा गया प्रोजेक्ट नहीं", project_name_placeholder: "प्रोजेक्ट का नाम...", project_save_title: "वर्तमान दृश्य और सेटिंग्स सहेजें", project_load_title: "चयनित प्रोजेक्ट लोड करें", project_delete_title: "चयनित प्रोजेक्ट हटाएं", analysis_history_title: "📜 विश्लेषण इतिहास", analysis_history_empty: "अभी तक कोई विश्लेषण डाउनलोड नहीं हुआ है। परिणाम डाउनलोड करने पर यह यहाँ सूचीबद्ध होगा (अंतिम 10 रिकॉर्ड)।", analysis_history_clear: "🗑️ इतिहास साफ़ करें", analysis_history_note: "आपके डिवाइस/Drive पर डाउनलोड हुआ", analysis_history_clear_confirm: "विश्लेषण इतिहास साफ़ करें?", welcome_title: 'SylvaGIS में आपका स्वागत है', welcome_sub: 'वन विश्लेषण और रिमोट सेंसिंग प्लेटफ़ॉर्म', nav_guide: '❓ मार्गदर्शिका', nav_guide_short: 'मैनुअल', nav_login: '👤 उपयोगकर्ता लॉगिन', topo_dem_no_data_warning: 'चयनित DEM डेटा स्रोत में आपके कार्य क्षेत्र के लिए डेटा उपलब्ध नहीं है। कृपया डेटा स्रोत बदलें।',
     sidebar_title: 'कार्यक्षेत्र और डेटा चयन',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ बहुभुज', btn_polygon_short: 'बहुभुज', btn_rectangle: '▭ आयत',
@@ -25052,7 +25203,7 @@ var SYLVA_TRANSLATIONS = {
     before_after_label: '◀ पहले | बाद ▶',
     before_after_title: 'पहले/बाद तुलना',
   },
-  id: { project_manager: "Manajer Proyek", project_save_btn: "💾 Simpan", project_load_btn: "📂 Muat", project_none_saved: "Tidak ada proyek tersimpan", project_name_placeholder: "Nama proyek...", project_save_title: "Simpan tampilan dan pengaturan saat ini", project_load_title: "Muat proyek yang dipilih", project_delete_title: "Hapus proyek yang dipilih", analysis_history_title: "📜 Riwayat Analisis", analysis_history_empty: "Belum ada analisis yang diunduh. Setelah Anda mengunduh hasil, akan ditampilkan di sini (10 catatan terakhir).", analysis_history_clear: "🗑️ Hapus Riwayat", analysis_history_note: "Diunduh ke perangkat/Drive Anda", analysis_history_clear_confirm: "Hapus riwayat analisis?", welcome_title: 'Selamat Datang di SylvaGIS', welcome_sub: 'Platform Analisis Hutan & Penginderaan Jauh', nav_guide: '❓ Panduan', nav_guide_short: 'Manual', nav_login: '👤 Masuk', topo_dem_no_data_warning: 'Tidak ditemukan data untuk area kerja Anda pada sumber DEM yang dipilih. Silakan ganti sumber data.',
+  id: { time_slider_lbl: "Penggeser waktu", playback_progress_lbl: "Progres pemutaran", skip_to_map: "Lompat ke peta", project_manager: "Manajer Proyek", project_save_btn: "💾 Simpan", project_load_btn: "📂 Muat", project_none_saved: "Tidak ada proyek tersimpan", project_name_placeholder: "Nama proyek...", project_save_title: "Simpan tampilan dan pengaturan saat ini", project_load_title: "Muat proyek yang dipilih", project_delete_title: "Hapus proyek yang dipilih", analysis_history_title: "📜 Riwayat Analisis", analysis_history_empty: "Belum ada analisis yang diunduh. Setelah Anda mengunduh hasil, akan ditampilkan di sini (10 catatan terakhir).", analysis_history_clear: "🗑️ Hapus Riwayat", analysis_history_note: "Diunduh ke perangkat/Drive Anda", analysis_history_clear_confirm: "Hapus riwayat analisis?", welcome_title: 'Selamat Datang di SylvaGIS', welcome_sub: 'Platform Analisis Hutan & Penginderaan Jauh', nav_guide: '❓ Panduan', nav_guide_short: 'Manual', nav_login: '👤 Masuk', topo_dem_no_data_warning: 'Tidak ditemukan data untuk area kerja Anda pada sumber DEM yang dipilih. Silakan ganti sumber data.',
     sidebar_title: 'Ruang Kerja & Pemilihan Data',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ Poligon', btn_polygon_short: 'Poligon', btn_rectangle: '▭ Persegi Panjang',
@@ -25556,7 +25707,7 @@ var SYLVA_TRANSLATIONS = {
     before_after_label: '◀ Sebelum | Sesudah ▶',
     before_after_title: 'Perbandingan Sebelum/Sesudah',
   },
-  ru: { project_manager: "Менеджер проектов", project_save_btn: "💾 Сохранить", project_load_btn: "📂 Загрузить", project_none_saved: "Нет сохранённых проектов", project_name_placeholder: "Название проекта...", project_save_title: "Сохранить текущий вид и настройки", project_load_title: "Загрузить выбранный проект", project_delete_title: "Удалить выбранный проект", analysis_history_title: "📜 История анализов", analysis_history_empty: "Пока нет загруженных анализов. Как только вы загрузите результат, он появится здесь (последние 10 записей).", analysis_history_clear: "🗑️ Очистить историю", analysis_history_note: "Загружено на ваше устройство/Drive", analysis_history_clear_confirm: "Очистить историю анализов?", welcome_title: 'Добро пожаловать в SylvaGIS', welcome_sub: 'Платформа анализа лесов и дистанционного зондирования', nav_guide: '❓ Гид', nav_guide_short: 'Руководство', nav_login: '👤 Вход пользователя', topo_dem_no_data_warning: 'В выбранном источнике DEM нет данных для вашей рабочей области. Пожалуйста, смените источник данных.',
+  ru: { time_slider_lbl: "Временной слайдер", playback_progress_lbl: "Прогресс воспроизведения", skip_to_map: "Перейти к карте", project_manager: "Менеджер проектов", project_save_btn: "💾 Сохранить", project_load_btn: "📂 Загрузить", project_none_saved: "Нет сохранённых проектов", project_name_placeholder: "Название проекта...", project_save_title: "Сохранить текущий вид и настройки", project_load_title: "Загрузить выбранный проект", project_delete_title: "Удалить выбранный проект", analysis_history_title: "📜 История анализов", analysis_history_empty: "Пока нет загруженных анализов. Как только вы загрузите результат, он появится здесь (последние 10 записей).", analysis_history_clear: "🗑️ Очистить историю", analysis_history_note: "Загружено на ваше устройство/Drive", analysis_history_clear_confirm: "Очистить историю анализов?", welcome_title: 'Добро пожаловать в SylvaGIS', welcome_sub: 'Платформа анализа лесов и дистанционного зондирования', nav_guide: '❓ Гид', nav_guide_short: 'Руководство', nav_login: '👤 Вход пользователя', topo_dem_no_data_warning: 'В выбранном источнике DEM нет данных для вашей рабочей области. Пожалуйста, смените источник данных.',
     login_title: 'Войдите в свою учётную запись', login_sub: 'Выберите Google, Apple или Microsoft',
     login_google: 'Продолжить с Google', login_apple: 'Продолжить с Apple', login_microsoft: 'Продолжить с Microsoft',
     login_remember: 'Запомнить меня', btn_logout: 'Выйти',
@@ -26059,7 +26210,7 @@ var SYLVA_TRANSLATIONS = {
     before_after_label: '◀ До | После ▶',
     before_after_title: 'Сравнение До/После',
   },
-  th: { project_manager: "ตัวจัดการโปรเจกต์", project_save_btn: "💾 บันทึก", project_load_btn: "📂 โหลด", project_none_saved: "ไม่มีโปรเจกต์ที่บันทึกไว้", project_name_placeholder: "ชื่อโปรเจกต์...", project_save_title: "บันทึกมุมมองและการตั้งค่าปัจจุบัน", project_load_title: "โหลดโปรเจกต์ที่เลือก", project_delete_title: "ลบโปรเจกต์ที่เลือก", analysis_history_title: "📜 ประวัติการวิเคราะห์", analysis_history_empty: "ยังไม่มีการวิเคราะห์ที่ดาวน์โหลด เมื่อคุณดาวน์โหลดผลลัพธ์ จะแสดงรายการที่นี่ (10 รายการล่าสุด)", analysis_history_clear: "🗑️ ล้างประวัติ", analysis_history_note: "ดาวน์โหลดไปยังอุปกรณ์/ไดรฟ์ของคุณแล้ว", analysis_history_clear_confirm: "ล้างประวัติการวิเคราะห์หรือไม่?", welcome_title: 'ยินดีต้อนรับสู่ SylvaGIS', welcome_sub: 'แพลตฟอร์มวิเคราะห์ป่าไม้และการสำรวจระยะไกล', nav_guide: '❓ คู่มือ', nav_guide_short: 'คู่มือ', nav_login: '👤 เข้าสู่ระบบ', topo_dem_no_data_warning: 'ไม่พบข้อมูลสำหรับพื้นที่ศึกษาของคุณในแหล่งข้อมูล DEM ที่เลือก กรุณาเปลี่ยนแหล่งข้อมูล',
+  th: { time_slider_lbl: "แถบเวลา", playback_progress_lbl: "ความคืบหน้าการเล่น", skip_to_map: "ข้ามไปที่แผนที่", project_manager: "ตัวจัดการโปรเจกต์", project_save_btn: "💾 บันทึก", project_load_btn: "📂 โหลด", project_none_saved: "ไม่มีโปรเจกต์ที่บันทึกไว้", project_name_placeholder: "ชื่อโปรเจกต์...", project_save_title: "บันทึกมุมมองและการตั้งค่าปัจจุบัน", project_load_title: "โหลดโปรเจกต์ที่เลือก", project_delete_title: "ลบโปรเจกต์ที่เลือก", analysis_history_title: "📜 ประวัติการวิเคราะห์", analysis_history_empty: "ยังไม่มีการวิเคราะห์ที่ดาวน์โหลด เมื่อคุณดาวน์โหลดผลลัพธ์ จะแสดงรายการที่นี่ (10 รายการล่าสุด)", analysis_history_clear: "🗑️ ล้างประวัติ", analysis_history_note: "ดาวน์โหลดไปยังอุปกรณ์/ไดรฟ์ของคุณแล้ว", analysis_history_clear_confirm: "ล้างประวัติการวิเคราะห์หรือไม่?", welcome_title: 'ยินดีต้อนรับสู่ SylvaGIS', welcome_sub: 'แพลตฟอร์มวิเคราะห์ป่าไม้และการสำรวจระยะไกล', nav_guide: '❓ คู่มือ', nav_guide_short: 'คู่มือ', nav_login: '👤 เข้าสู่ระบบ', topo_dem_no_data_warning: 'ไม่พบข้อมูลสำหรับพื้นที่ศึกษาของคุณในแหล่งข้อมูล DEM ที่เลือก กรุณาเปลี่ยนแหล่งข้อมูล',
     login_title: 'เข้าสู่บัญชีของคุณ', login_sub: 'เลือก Google, Apple หรือ Microsoft',
     login_google: 'ดำเนินการต่อด้วย Google', login_apple: 'ดำเนินการต่อด้วย Apple', login_microsoft: 'ดำเนินการต่อด้วย Microsoft',
     login_remember: 'จดจำฉัน', btn_logout: 'ออกจากระบบ',
@@ -26556,7 +26707,7 @@ var SYLVA_TRANSLATIONS = {
     before_after_label: '◀ ก่อน | หลัง ▶',
     before_after_title: 'เปรียบเทียบก่อน/หลัง',
   },
-  bn: { project_manager: "প্রকল্প ব্যবস্থাপক", project_save_btn: "💾 সংরক্ষণ", project_load_btn: "📂 লোড", project_none_saved: "কোনো সংরক্ষিত প্রকল্প নেই", project_name_placeholder: "প্রকল্পের নাম...", project_save_title: "বর্তমান দৃশ্য ও সেটিংস সংরক্ষণ করুন", project_load_title: "নির্বাচিত প্রকল্প লোড করুন", project_delete_title: "নির্বাচিত প্রকল্প মুছুন", analysis_history_title: "📜 বিশ্লেষণ ইতিহাস", analysis_history_empty: "এখনও কোনো ডাউনলোড করা বিশ্লেষণ নেই। ফলাফল ডাউনলোড করলে এটি এখানে তালিকাভুক্ত হবে (সর্বশেষ ১০টি রেকর্ড)।", analysis_history_clear: "🗑️ ইতিহাস মুছুন", analysis_history_note: "আপনার ডিভাইস/ড্রাইভে ডাউনলোড হয়েছে", analysis_history_clear_confirm: "বিশ্লেষণ ইতিহাস মুছবেন?", welcome_title: 'SylvaGIS-এ স্বাগতম', welcome_sub: 'বন বিশ্লেষণ ও দূর অনুধাবন প্ল্যাটফর্ম', nav_guide: '❓ গাইড', nav_guide_short: 'গাইড', nav_login: '👤 ব্যবহারকারী লগইন', topo_dem_no_data_warning: 'নির্বাচিত DEM ডেটা উৎসে আপনার কার্যক্ষেত্রের জন্য কোনো ডেটা পাওয়া যায়নি। অনুগ্রহ করে ডেটা উৎস পরিবর্তন করুন।',
+  bn: { time_slider_lbl: "সময় স্লাইডার", playback_progress_lbl: "প্লেব্যাক অগ্রগতি", skip_to_map: "মানচিত্রে যান", project_manager: "প্রকল্প ব্যবস্থাপক", project_save_btn: "💾 সংরক্ষণ", project_load_btn: "📂 লোড", project_none_saved: "কোনো সংরক্ষিত প্রকল্প নেই", project_name_placeholder: "প্রকল্পের নাম...", project_save_title: "বর্তমান দৃশ্য ও সেটিংস সংরক্ষণ করুন", project_load_title: "নির্বাচিত প্রকল্প লোড করুন", project_delete_title: "নির্বাচিত প্রকল্প মুছুন", analysis_history_title: "📜 বিশ্লেষণ ইতিহাস", analysis_history_empty: "এখনও কোনো ডাউনলোড করা বিশ্লেষণ নেই। ফলাফল ডাউনলোড করলে এটি এখানে তালিকাভুক্ত হবে (সর্বশেষ ১০টি রেকর্ড)।", analysis_history_clear: "🗑️ ইতিহাস মুছুন", analysis_history_note: "আপনার ডিভাইস/ড্রাইভে ডাউনলোড হয়েছে", analysis_history_clear_confirm: "বিশ্লেষণ ইতিহাস মুছবেন?", welcome_title: 'SylvaGIS-এ স্বাগতম', welcome_sub: 'বন বিশ্লেষণ ও দূর অনুধাবন প্ল্যাটফর্ম', nav_guide: '❓ গাইড', nav_guide_short: 'গাইড', nav_login: '👤 ব্যবহারকারী লগইন', topo_dem_no_data_warning: 'নির্বাচিত DEM ডেটা উৎসে আপনার কার্যক্ষেত্রের জন্য কোনো ডেটা পাওয়া যায়নি। অনুগ্রহ করে ডেটা উৎস পরিবর্তন করুন।',
     login_title: 'আপনার অ্যাকাউন্টে সাইন ইন করুন', login_sub: 'Google, Apple বা Microsoft বেছে নিন',
     login_google: 'Google দিয়ে চালিয়ে যান', login_apple: 'Apple দিয়ে চালিয়ে যান', login_microsoft: 'Microsoft দিয়ে চালিয়ে যান',
     login_remember: 'আমাকে মনে রাখুন', btn_logout: 'সাইন আউট',
@@ -27059,7 +27210,7 @@ var SYLVA_TRANSLATIONS = {
     before_after_label: '◀ আগে | পরে ▶',
     before_after_title: 'আগে/পরে তুলনা',
   },
-  vi: { project_manager: "Quản lý Dự án", project_save_btn: "💾 Lưu", project_load_btn: "📂 Tải", project_none_saved: "Chưa có dự án nào được lưu", project_name_placeholder: "Tên dự án...", project_save_title: "Lưu chế độ xem và cài đặt hiện tại", project_load_title: "Tải dự án đã chọn", project_delete_title: "Xóa dự án đã chọn", analysis_history_title: "📜 Lịch sử Phân tích", analysis_history_empty: "Chưa có phân tích nào được tải xuống. Khi bạn tải xuống một kết quả, nó sẽ được liệt kê ở đây (10 bản ghi gần nhất).", analysis_history_clear: "🗑️ Xóa Lịch sử", analysis_history_note: "Đã tải xuống thiết bị/Drive của bạn", analysis_history_clear_confirm: "Xóa lịch sử phân tích?", welcome_title: 'Chào mừng đến với SylvaGIS', welcome_sub: 'Nền tảng Phân tích Rừng & Viễn thám', nav_guide: '❓ Hướng dẫn', nav_guide_short: 'Cẩm nang', nav_login: '👤 Đăng nhập', topo_dem_no_data_warning: 'Không tìm thấy dữ liệu cho khu vực nghiên cứu của bạn trong nguồn DEM đã chọn. Vui lòng đổi nguồn dữ liệu.',
+  vi: { time_slider_lbl: "Thanh trượt thời gian", playback_progress_lbl: "Tiến trình phát", skip_to_map: "Chuyển đến bản đồ", project_manager: "Quản lý Dự án", project_save_btn: "💾 Lưu", project_load_btn: "📂 Tải", project_none_saved: "Chưa có dự án nào được lưu", project_name_placeholder: "Tên dự án...", project_save_title: "Lưu chế độ xem và cài đặt hiện tại", project_load_title: "Tải dự án đã chọn", project_delete_title: "Xóa dự án đã chọn", analysis_history_title: "📜 Lịch sử Phân tích", analysis_history_empty: "Chưa có phân tích nào được tải xuống. Khi bạn tải xuống một kết quả, nó sẽ được liệt kê ở đây (10 bản ghi gần nhất).", analysis_history_clear: "🗑️ Xóa Lịch sử", analysis_history_note: "Đã tải xuống thiết bị/Drive của bạn", analysis_history_clear_confirm: "Xóa lịch sử phân tích?", welcome_title: 'Chào mừng đến với SylvaGIS', welcome_sub: 'Nền tảng Phân tích Rừng & Viễn thám', nav_guide: '❓ Hướng dẫn', nav_guide_short: 'Cẩm nang', nav_login: '👤 Đăng nhập', topo_dem_no_data_warning: 'Không tìm thấy dữ liệu cho khu vực nghiên cứu của bạn trong nguồn DEM đã chọn. Vui lòng đổi nguồn dữ liệu.',
     sidebar_title: 'Không gian làm việc & Chọn dữ liệu',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ Đa giác', btn_polygon_short: 'Đa giác', btn_rectangle: '▭ Hình chữ nhật',
@@ -27564,7 +27715,7 @@ var SYLVA_TRANSLATIONS = {
     before_after_title: 'So sánh Trước/Sau',
   },
 
-  ur: { project_manager: "پراجیکٹ مینیجر", project_save_btn: "💾 محفوظ کریں", project_load_btn: "📂 لوڈ کریں", project_none_saved: "کوئی محفوظ شدہ پراجیکٹ نہیں", project_name_placeholder: "پراجیکٹ کا نام...", project_save_title: "موجودہ منظر اور ترتیبات محفوظ کریں", project_load_title: "منتخب پراجیکٹ لوڈ کریں", project_delete_title: "منتخب پراجیکٹ حذف کریں", analysis_history_title: "📜 تجزیہ کی تاریخ", analysis_history_empty: "ابھی تک کوئی ڈاؤن لوڈ شدہ تجزیہ نہیں ہے۔ نتیجہ ڈاؤن لوڈ کرنے پر یہ یہاں فہرست ہو جائے گا (آخری 10 ریکارڈز)۔", analysis_history_clear: "🗑️ تاریخ صاف کریں", analysis_history_note: "آپ کے آلے/Drive پر ڈاؤن لوڈ ہو گیا", analysis_history_clear_confirm: "تجزیہ کی تاریخ صاف کی جائے؟", welcome_title: 'SylvaGIS میں خوش آمدید', welcome_sub: 'جنگلاتی تجزیہ اور ریموٹ سینسنگ پلیٹ فارم', nav_guide: '❓ رہنما', nav_guide_short: 'رہنما', nav_login: '👤 صارف لاگ ان', topo_dem_no_data_warning: 'منتخب کردہ DEM ڈیٹا ماخذ میں آپ کے کام کے علاقے کے لیے کوئی ڈیٹا نہیں ملا۔ براہ کرم ڈیٹا ماخذ تبدیل کریں۔',
+  ur: { time_slider_lbl: "وقت سلائیڈر", playback_progress_lbl: "پلے بیک کی پیش رفت", skip_to_map: "نقشے پر جائیں", project_manager: "پراجیکٹ مینیجر", project_save_btn: "💾 محفوظ کریں", project_load_btn: "📂 لوڈ کریں", project_none_saved: "کوئی محفوظ شدہ پراجیکٹ نہیں", project_name_placeholder: "پراجیکٹ کا نام...", project_save_title: "موجودہ منظر اور ترتیبات محفوظ کریں", project_load_title: "منتخب پراجیکٹ لوڈ کریں", project_delete_title: "منتخب پراجیکٹ حذف کریں", analysis_history_title: "📜 تجزیہ کی تاریخ", analysis_history_empty: "ابھی تک کوئی ڈاؤن لوڈ شدہ تجزیہ نہیں ہے۔ نتیجہ ڈاؤن لوڈ کرنے پر یہ یہاں فہرست ہو جائے گا (آخری 10 ریکارڈز)۔", analysis_history_clear: "🗑️ تاریخ صاف کریں", analysis_history_note: "آپ کے آلے/Drive پر ڈاؤن لوڈ ہو گیا", analysis_history_clear_confirm: "تجزیہ کی تاریخ صاف کی جائے؟", welcome_title: 'SylvaGIS میں خوش آمدید', welcome_sub: 'جنگلاتی تجزیہ اور ریموٹ سینسنگ پلیٹ فارم', nav_guide: '❓ رہنما', nav_guide_short: 'رہنما', nav_login: '👤 صارف لاگ ان', topo_dem_no_data_warning: 'منتخب کردہ DEM ڈیٹا ماخذ میں آپ کے کام کے علاقے کے لیے کوئی ڈیٹا نہیں ملا۔ براہ کرم ڈیٹا ماخذ تبدیل کریں۔',
     login_title: 'اپنے اکاؤنٹ میں سائن ان کریں', login_sub: 'گوگل، ایپل یا مائیکروسافٹ کا انتخاب کریں',
     login_google: 'گوگل سے جاری رکھیں', login_apple: 'ایپل سے جاری رکھیں', login_microsoft: 'مائیکروسافٹ سے جاری رکھیں',
     login_remember: 'مجھے یاد رکھیں', btn_logout: 'سائن آؤٹ',
@@ -28071,7 +28222,7 @@ var SYLVA_TRANSLATIONS = {
     before_after_label: '◀ پہلے | بعد ▶',
     before_after_title: 'پہلے/بعد موازنہ',
   },
-  pl: { project_manager: "Menedżer Projektów", project_save_btn: "💾 Zapisz", project_load_btn: "📂 Wczytaj", project_none_saved: "Brak zapisanych projektów", project_name_placeholder: "Nazwa projektu...", project_save_title: "Zapisz bieżący widok i ustawienia", project_load_title: "Wczytaj wybrany projekt", project_delete_title: "Usuń wybrany projekt", analysis_history_title: "📜 Historia Analiz", analysis_history_empty: "Brak jeszcze pobranych analiz. Po pobraniu wyniku pojawi się on tutaj (ostatnie 10 wpisów).", analysis_history_clear: "🗑️ Wyczyść Historię", analysis_history_note: "Pobrano na Twoje urządzenie/Dysk", analysis_history_clear_confirm: "Wyczyścić historię analiz?", welcome_title: 'Witamy w SylvaGIS', welcome_sub: 'Platforma Analizy Lasów i Teledetekcji', nav_guide: '❓ Przewodnik', nav_guide_short: 'Pomoc', nav_login: '👤 Logowanie', topo_dem_no_data_warning: 'W wybranym źródle DEM brak danych dla Twojego obszaru roboczego. Proszę zmienić źródło danych.',
+  pl: { time_slider_lbl: "Suwak czasu", playback_progress_lbl: "Postęp odtwarzania", skip_to_map: "Przejdź do mapy", project_manager: "Menedżer Projektów", project_save_btn: "💾 Zapisz", project_load_btn: "📂 Wczytaj", project_none_saved: "Brak zapisanych projektów", project_name_placeholder: "Nazwa projektu...", project_save_title: "Zapisz bieżący widok i ustawienia", project_load_title: "Wczytaj wybrany projekt", project_delete_title: "Usuń wybrany projekt", analysis_history_title: "📜 Historia Analiz", analysis_history_empty: "Brak jeszcze pobranych analiz. Po pobraniu wyniku pojawi się on tutaj (ostatnie 10 wpisów).", analysis_history_clear: "🗑️ Wyczyść Historię", analysis_history_note: "Pobrano na Twoje urządzenie/Dysk", analysis_history_clear_confirm: "Wyczyścić historię analiz?", welcome_title: 'Witamy w SylvaGIS', welcome_sub: 'Platforma Analizy Lasów i Teledetekcji', nav_guide: '❓ Przewodnik', nav_guide_short: 'Pomoc', nav_login: '👤 Logowanie', topo_dem_no_data_warning: 'W wybranym źródle DEM brak danych dla Twojego obszaru roboczego. Proszę zmienić źródło danych.',
     login_title: 'Zaloguj się do swojego konta', login_sub: 'Wybierz Google, Apple lub Microsoft',
     login_google: 'Kontynuuj z Google', login_apple: 'Kontynuuj z Apple', login_microsoft: 'Kontynuuj z Microsoft',
     login_remember: 'Zapamiętaj mnie', btn_logout: 'Wyloguj',
@@ -28567,7 +28718,7 @@ var SYLVA_TRANSLATIONS = {
     before_after_label: '◀ Przed | Po ▶',
     before_after_title: 'Porównanie Przed/Po',
   },
-  ms: { project_manager: "Pengurus Projek", project_save_btn: "💾 Simpan", project_load_btn: "📂 Muat", project_none_saved: "Tiada projek disimpan", project_name_placeholder: "Nama projek...", project_save_title: "Simpan paparan dan tetapan semasa", project_load_title: "Muat projek yang dipilih", project_delete_title: "Padam projek yang dipilih", analysis_history_title: "📜 Sejarah Analisis", analysis_history_empty: "Belum ada analisis yang dimuat turun. Setelah anda memuat turun hasil, ia akan disenaraikan di sini (10 rekod terakhir).", analysis_history_clear: "🗑️ Kosongkan Sejarah", analysis_history_note: "Dimuat turun ke peranti/Drive anda", analysis_history_clear_confirm: "Kosongkan sejarah analisis?", welcome_title: 'Selamat Datang ke SylvaGIS', welcome_sub: 'Platform Analisis Hutan & Penderiaan Jauh', nav_guide: '❓ Panduan', nav_guide_short: 'Panduan', nav_login: '👤 Log Masuk Pengguna', topo_dem_no_data_warning: 'Tiada data ditemui untuk kawasan kerja anda dalam sumber DEM yang dipilih. Sila tukar sumber data.',
+  ms: { time_slider_lbl: "Peluncur masa", playback_progress_lbl: "Kemajuan main balik", skip_to_map: "Langkau ke peta", project_manager: "Pengurus Projek", project_save_btn: "💾 Simpan", project_load_btn: "📂 Muat", project_none_saved: "Tiada projek disimpan", project_name_placeholder: "Nama projek...", project_save_title: "Simpan paparan dan tetapan semasa", project_load_title: "Muat projek yang dipilih", project_delete_title: "Padam projek yang dipilih", analysis_history_title: "📜 Sejarah Analisis", analysis_history_empty: "Belum ada analisis yang dimuat turun. Setelah anda memuat turun hasil, ia akan disenaraikan di sini (10 rekod terakhir).", analysis_history_clear: "🗑️ Kosongkan Sejarah", analysis_history_note: "Dimuat turun ke peranti/Drive anda", analysis_history_clear_confirm: "Kosongkan sejarah analisis?", welcome_title: 'Selamat Datang ke SylvaGIS', welcome_sub: 'Platform Analisis Hutan & Penderiaan Jauh', nav_guide: '❓ Panduan', nav_guide_short: 'Panduan', nav_login: '👤 Log Masuk Pengguna', topo_dem_no_data_warning: 'Tiada data ditemui untuk kawasan kerja anda dalam sumber DEM yang dipilih. Sila tukar sumber data.',
     login_title: 'Log masuk ke akaun anda', login_sub: 'Pilih Google, Apple atau Microsoft',
     login_google: 'Teruskan dengan Google', login_apple: 'Teruskan dengan Apple', login_microsoft: 'Teruskan dengan Microsoft',
     login_remember: 'Ingat Saya', btn_logout: 'Log Keluar',
@@ -29070,7 +29221,7 @@ var SYLVA_TRANSLATIONS = {
     before_after_label: '◀ Sebelum | Selepas ▶',
     before_after_title: 'Perbandingan Sebelum/Selepas',
   },
-  ky: { project_manager: "Долбоор менеджери", project_save_btn: "💾 Сактоо", project_load_btn: "📂 Жүктөө", project_none_saved: "Сакталган долбоор жок", project_name_placeholder: "Долбоордун аты...", project_save_title: "Учурдагы көрүнүштү жана параметрлерди сактоо", project_load_title: "Тандалган долбоорду жүктөө", project_delete_title: "Тандалган долбоорду өчүрүү", analysis_history_title: "📜 Талдоо тарыхы", analysis_history_empty: "Азырынча жүктөлгөн талдоо жок. Натыйжаны жүктөп алганда, ал бул жерде тизмеленет (акыркы 10 жазуу).", analysis_history_clear: "🗑️ Тарыхты тазалоо", analysis_history_note: "Түзмөгүңүзгө/Drive'га жүктөлдү", analysis_history_clear_confirm: "Талдоо тарыхы тазалансынбы?", welcome_title: 'SylvaGIS-ке кош келдиңиз', welcome_sub: 'Токой талдоо жана алыстан зондтоо платформасы', nav_guide: '❓ Колдонмо', nav_guide_short: 'Колдонмо', nav_login: '👤 Кирүү', topo_dem_no_data_warning: 'Тандалган DEM булагында жумуш аймагыңыз үчүн маалымат табылган жок. Маалымат булагын алмаштырыңыз.',
+  ky: { time_slider_lbl: "Убакыт слайдери", playback_progress_lbl: "Ойнотуу прогресси", skip_to_map: "Картага өтүү", project_manager: "Долбоор менеджери", project_save_btn: "💾 Сактоо", project_load_btn: "📂 Жүктөө", project_none_saved: "Сакталган долбоор жок", project_name_placeholder: "Долбоордун аты...", project_save_title: "Учурдагы көрүнүштү жана параметрлерди сактоо", project_load_title: "Тандалган долбоорду жүктөө", project_delete_title: "Тандалган долбоорду өчүрүү", analysis_history_title: "📜 Талдоо тарыхы", analysis_history_empty: "Азырынча жүктөлгөн талдоо жок. Натыйжаны жүктөп алганда, ал бул жерде тизмеленет (акыркы 10 жазуу).", analysis_history_clear: "🗑️ Тарыхты тазалоо", analysis_history_note: "Түзмөгүңүзгө/Drive'га жүктөлдү", analysis_history_clear_confirm: "Талдоо тарыхы тазалансынбы?", welcome_title: 'SylvaGIS-ке кош келдиңиз', welcome_sub: 'Токой талдоо жана алыстан зондтоо платформасы', nav_guide: '❓ Колдонмо', nav_guide_short: 'Колдонмо', nav_login: '👤 Кирүү', topo_dem_no_data_warning: 'Тандалган DEM булагында жумуш аймагыңыз үчүн маалымат табылган жок. Маалымат булагын алмаштырыңыз.',
       login_title: 'Аккаунтуңузга кириңиз', login_sub: 'Google, Apple же Microsoft тандаңыз',
       login_google: 'Google аркылуу уланта бер', login_apple: 'Apple аркылуу уланта бер', login_microsoft: 'Microsoft аркылуу уланта бер',
       login_remember: 'Мени эсте сакта', btn_logout: 'Чыгуу',
@@ -29544,7 +29695,7 @@ var SYLVA_TRANSLATIONS = {
     before_after_label: '◀ Мурун | Кийин ▶',
     before_after_title: 'Мурун/Кийин Салыштыруу',
   },
-  mn: { project_manager: "Төслийн менежер", project_save_btn: "💾 Хадгалах", project_load_btn: "📂 Ачаалах", project_none_saved: "Хадгалсан төсөл алга", project_name_placeholder: "Төслийн нэр...", project_save_title: "Одоогийн харагдац болон тохиргоог хадгалах", project_load_title: "Сонгосон төслийг ачаалах", project_delete_title: "Сонгосон төслийг устгах", analysis_history_title: "📜 Шинжилгээний Түүх", analysis_history_empty: "Одоогоор татаж авсан шинжилгээ алга байна. Үр дүнг татаж авмагц энд жагсаагдана (сүүлийн 10 бичлэг).", analysis_history_clear: "🗑️ Түүхийг Цэвэрлэх", analysis_history_note: "Таны төхөөрөмж/Drive-д татагдсан", analysis_history_clear_confirm: "Шинжилгээний түүхийг цэвэрлэх үү?", welcome_title: 'SylvaGIS-д тавтай морилно уу', welcome_sub: 'Ойн шинжилгээ ба алсын зондын платформ', nav_guide: '❓ Гарын авлага', nav_guide_short: 'Гарын авлага', nav_login: '👤 Хэрэглэгч нэвтрэх', topo_dem_no_data_warning: 'Сонгосон DEM эх сурвалжид таны судалгааны талбайн мэдээлэл олдсонгүй. Эх сурвалжийг өөрчилнө үү.',
+  mn: { time_slider_lbl: "Цагийн слайдер", playback_progress_lbl: "Тоглуулалтын явц", skip_to_map: "Газрын зураг руу очих", project_manager: "Төслийн менежер", project_save_btn: "💾 Хадгалах", project_load_btn: "📂 Ачаалах", project_none_saved: "Хадгалсан төсөл алга", project_name_placeholder: "Төслийн нэр...", project_save_title: "Одоогийн харагдац болон тохиргоог хадгалах", project_load_title: "Сонгосон төслийг ачаалах", project_delete_title: "Сонгосон төслийг устгах", analysis_history_title: "📜 Шинжилгээний Түүх", analysis_history_empty: "Одоогоор татаж авсан шинжилгээ алга байна. Үр дүнг татаж авмагц энд жагсаагдана (сүүлийн 10 бичлэг).", analysis_history_clear: "🗑️ Түүхийг Цэвэрлэх", analysis_history_note: "Таны төхөөрөмж/Drive-д татагдсан", analysis_history_clear_confirm: "Шинжилгээний түүхийг цэвэрлэх үү?", welcome_title: 'SylvaGIS-д тавтай морилно уу', welcome_sub: 'Ойн шинжилгээ ба алсын зондын платформ', nav_guide: '❓ Гарын авлага', nav_guide_short: 'Гарын авлага', nav_login: '👤 Хэрэглэгч нэвтрэх', topo_dem_no_data_warning: 'Сонгосон DEM эх сурвалжид таны судалгааны талбайн мэдээлэл олдсонгүй. Эх сурвалжийг өөрчилнө үү.',
     login_title: 'Бүртгэлдээ нэвтрэх', login_sub: 'Google, Apple эсвэл Microsoft сонгоно уу',
     login_google: 'Google-ээр үргэлжлүүлэх', login_apple: 'Apple-ээр үргэлжлүүлэх', login_microsoft: 'Microsoft-ээр үргэлжлүүлэх',
     login_remember: 'Намайг санах', btn_logout: 'Гарах',
@@ -30008,7 +30159,7 @@ var SYLVA_TRANSLATIONS = {
     before_after_title: 'Өмнө/Хойно харьцуулалт',
   },
 
-  ka: { project_manager: "პროექტის მენეჯერი", project_save_btn: "💾 შენახვა", project_load_btn: "📂 ჩატვირთვა", project_none_saved: "შენახული პროექტები არ არის", project_name_placeholder: "პროექტის სახელი...", project_save_title: "მიმდინარე ხედისა და პარამეტრების შენახვა", project_load_title: "არჩეული პროექტის ჩატვირთვა", project_delete_title: "არჩეული პროექტის წაშლა", analysis_history_title: "📜 ანალიზის ისტორია", analysis_history_empty: "ჯერ არ არის გადმოწერილი ანალიზი. შედეგის გადმოწერისას ის აქ გამოჩნდება (ბოლო 10 ჩანაწერი).", analysis_history_clear: "🗑️ ისტორიის გასუფთავება", analysis_history_note: "გადმოწერილია თქვენს მოწყობილობაზე/Drive-ზე", analysis_history_clear_confirm: "გავასუფთაოთ ანალიზის ისტორია?", welcome_title: 'მოგესალმებით SylvaGIS-ში', welcome_sub: 'ტყის ანალიზისა და დისტანციური ზონდირების პლატფორმა', nav_guide: '❓ სახელმძღვანელო', nav_guide_short: 'სახელმძღვანელო', nav_login: '👤 შესვლა', topo_dem_no_data_warning: 'შერჩეულ DEM მონაცემთა წყაროში თქვენი სამუშაო არეალისთვის მონაცემები ვერ მოიძებნა. გთხოვთ, შეცვალოთ მონაცემთა წყარო.',
+  ka: { time_slider_lbl: "დროის სლაიდერი", playback_progress_lbl: "დაკვრის პროგრესი", skip_to_map: "რუკაზე გადასვლა", project_manager: "პროექტის მენეჯერი", project_save_btn: "💾 შენახვა", project_load_btn: "📂 ჩატვირთვა", project_none_saved: "შენახული პროექტები არ არის", project_name_placeholder: "პროექტის სახელი...", project_save_title: "მიმდინარე ხედისა და პარამეტრების შენახვა", project_load_title: "არჩეული პროექტის ჩატვირთვა", project_delete_title: "არჩეული პროექტის წაშლა", analysis_history_title: "📜 ანალიზის ისტორია", analysis_history_empty: "ჯერ არ არის გადმოწერილი ანალიზი. შედეგის გადმოწერისას ის აქ გამოჩნდება (ბოლო 10 ჩანაწერი).", analysis_history_clear: "🗑️ ისტორიის გასუფთავება", analysis_history_note: "გადმოწერილია თქვენს მოწყობილობაზე/Drive-ზე", analysis_history_clear_confirm: "გავასუფთაოთ ანალიზის ისტორია?", welcome_title: 'მოგესალმებით SylvaGIS-ში', welcome_sub: 'ტყის ანალიზისა და დისტანციური ზონდირების პლატფორმა', nav_guide: '❓ სახელმძღვანელო', nav_guide_short: 'სახელმძღვანელო', nav_login: '👤 შესვლა', topo_dem_no_data_warning: 'შერჩეულ DEM მონაცემთა წყაროში თქვენი სამუშაო არეალისთვის მონაცემები ვერ მოიძებნა. გთხოვთ, შეცვალოთ მონაცემთა წყარო.',
       login_title: 'შედით თქვენს ანგარიშში', login_sub: 'აირჩიეთ Google, Apple ან Microsoft',
       login_google: 'გაგრძელება Google-ით', login_apple: 'გაგრძელება Apple-ით', login_microsoft: 'გაგრძელება Microsoft-ით',
       login_remember: 'დამიმახსოვრე', btn_logout: 'გასვლა',
@@ -30489,7 +30640,7 @@ var SYLVA_TRANSLATIONS = {
     before_after_label: '◀ ადრე | მერე ▶',
     before_after_title: 'ადრე/მერე შედარება',
   },
-  it: { project_manager: "Gestione Progetti", project_save_btn: "💾 Salva", project_load_btn: "📂 Carica", project_none_saved: "Nessun progetto salvato", project_name_placeholder: "Nome del progetto...", project_save_title: "Salva la vista e le impostazioni correnti", project_load_title: "Carica il progetto selezionato", project_delete_title: "Elimina il progetto selezionato", analysis_history_title: "📜 Cronologia Analisi", analysis_history_empty: "Nessuna analisi scaricata ancora. Una volta scaricato un risultato, verrà elencato qui (ultimi 10 record).", analysis_history_clear: "🗑️ Cancella Cronologia", analysis_history_note: "Scaricato sul tuo dispositivo/Drive", analysis_history_clear_confirm: "Cancellare la cronologia delle analisi?", welcome_title: 'Benvenuto in SylvaGIS', welcome_sub: 'Piattaforma di Analisi Forestale e Telerilevamento', nav_guide: '❓ Guida', nav_guide_short: 'Guida', nav_login: '👤 Accesso Utente', topo_dem_no_data_warning: 'Nessun dato trovato per la tua area di studio nella fonte DEM selezionata. Cambia la fonte dei dati.',
+  it: { time_slider_lbl: "Cursore temporale", playback_progress_lbl: "Avanzamento riproduzione", skip_to_map: "Vai alla mappa", project_manager: "Gestione Progetti", project_save_btn: "💾 Salva", project_load_btn: "📂 Carica", project_none_saved: "Nessun progetto salvato", project_name_placeholder: "Nome del progetto...", project_save_title: "Salva la vista e le impostazioni correnti", project_load_title: "Carica il progetto selezionato", project_delete_title: "Elimina il progetto selezionato", analysis_history_title: "📜 Cronologia Analisi", analysis_history_empty: "Nessuna analisi scaricata ancora. Una volta scaricato un risultato, verrà elencato qui (ultimi 10 record).", analysis_history_clear: "🗑️ Cancella Cronologia", analysis_history_note: "Scaricato sul tuo dispositivo/Drive", analysis_history_clear_confirm: "Cancellare la cronologia delle analisi?", welcome_title: 'Benvenuto in SylvaGIS', welcome_sub: 'Piattaforma di Analisi Forestale e Telerilevamento', nav_guide: '❓ Guida', nav_guide_short: 'Guida', nav_login: '👤 Accesso Utente', topo_dem_no_data_warning: 'Nessun dato trovato per la tua area di studio nella fonte DEM selezionata. Cambia la fonte dei dati.',
     login_title: 'Accedi al tuo account', login_sub: 'Scegli Google, Apple o Microsoft',
     login_google: 'Continua con Google', login_apple: 'Continua con Apple', login_microsoft: 'Continua con Microsoft',
     login_remember: 'Ricordami', btn_logout: 'Esci',
@@ -32004,7 +32155,7 @@ document.addEventListener('DOMContentLoaded',function(){
     width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
     transition: background .15s, color .15s;
 }
-#sylva-tour-close:hover { background: #f1f5f9; color: #ef4444; }
+#sylva-tour-close:hover { background: #f1f5f9; color:#dc2626; }
 #sylva-tour-step-count {
     font-size: .68rem; font-weight: 800; letter-spacing: .04em; color: #152d6e;
     text-transform: uppercase; margin-bottom: 5px;
@@ -32041,7 +32192,7 @@ document.addEventListener('DOMContentLoaded',function(){
 </svg>
 <div id="sylva-tour-number-badge" class="sylva-tour-number-badge"></div>
 <div id="sylva-tour-card">
-    <button type="button" id="sylva-tour-close" title="Kapat" data-i18n-title="modal_close_title">✕</button>
+    <button type="button" id="sylva-tour-close" title="Kapat" data-i18n-title="modal_close_title" data-i18n-aria-label="modal_close_title" aria-label="Kapat">✕</button>
     <div id="sylva-tour-step-count"></div>
     <div id="sylva-tour-title"></div>
     <div id="sylva-tour-desc"></div>
@@ -32076,6 +32227,7 @@ document.addEventListener('DOMContentLoaded',function(){
             drawTools:{title:'✏️ Çıktı Araçları', desc:'Haritaya çizim ve not ekleyin:\n↶ Geri Al / ↷ İleri Al — son işlemi geri al ya da yinele\n🗑️ Tümünü Sil — tüm çizimleri kaldır\n🖱 Seç — nesneyi seç ve taşı\n✏️ Kalem — serbest el çizimi\n— Çizgi & → Ok — doğrusal hatlar ve yönlendirmeler\n⬠ Poligon & ○ Daire — alan işaretleme\nT Metin kutusu — not ekleyin; fareyle sürükleyerek taşıyın, köşesinden tutarak yeniden boyutlandırın.\n📐 Cetvel Ölçüm — İki nokta arasındaki mesafeyi ve alanı harita üzerinde ölçün.'},
             charts:{title:'📊 Veri Grafikleri', desc:'Analiz sonucundaki istatistikler burada sütun, pasta veya çizgi grafik olarak gösterilir; grafiği görsel, CSV veya PDF olarak indirebilirsiniz.'},
                 analysisHistory:{title:'📜 Analiz Geçmişi', desc:'İndirdiğiniz son 10 analiz burada listelenir. Her kayıt analiz türünü, tarihini ve dosya adını gösterir; 🗑️ düğmesiyle geçmişi temizleyebilirsiniz.'},
+                projectManager:{title:'🗂️ Proje Yöneticisi', desc:'Harita görünümünüzü, katman ayarlarınızı ve çalışma alanınızı adlandırıp kaydedebileceğiniz, dilediğinizde tek tıkla geri yükleyebileceğiniz bölüm.'},
             geotiff:{title:'📥 Veri İndir (GeoTIFF)', desc:'Analiz sonucunun ham piksel verisini, istediğiniz çözünürlük ve koordinat sistemiyle (CRS) GeoTIFF formatında bilgisayarınıza indirin — QGIS, ArcGIS gibi CBS yazılımlarında doğrudan kullanılabilir.'},
             vectorDownload:{title:'📥 Veriyi Vektör İndir', desc:'Analiz sonucunu vektör formatında (Shapefile, GeoJSON gibi) bilgisayarınıza indirin — CBS yazılımlarında sınıflandırılmış poligonlar olarak doğrudan kullanılabilir.'},
                         basemapViewArea:{title:'🗺️ Basemap & Görüntü Alanı', desc:'Haritanın altındaki arka plan katmanını (Basemap) buradan değiştirin — Google Earth, Uydu, OpenStreetMap ve daha fazlası arasında seçim yapın.\nGörüntü Alanı: analizin AOI sınırına mı (Çalışma Alanı) yoksa tüm sahneye mi (Full Scene) göre görüntüleneceğini belirler.'},
@@ -32108,6 +32260,7 @@ document.addEventListener('DOMContentLoaded',function(){
             drawTools:{title:'✏️ Çıxış Alətləri', desc:'Xəritəyə çəkim və qeyd əlavə edin:\n↶ Geri Al / ↷ İrəli Al — son əməliyyatı geri al və ya təkrarla\n🗑️ Hamısını Sil — bütün çəkimləri ləğv et\n🖱 Seç — obyekti seç və daşı\n✏️ Qələm — sərbəst əl çəkimi\n— Xətt & → Ox — düz xətlər və istiqamətləndirmələr\n⬠ Poliqon & ○ Dairə — sahə işarələmə\nT Mətn qutusu — qeyd əlavə edin; siçanla sürükləyərək daşıyın, küncündən tutaraq yenidən ölçüləndirin.\n📐 Cetvel Ölçümü — Xəritədə iki nöqtə arasındakı məsafəni və sahəni ölçün.'},
             charts:{title:'📊 Məlumat Qrafikləri', desc:'Təhlil nəticəsindəki statistikalar burada sütun, dairəvi və ya xətti qrafik olaraq göstərilir; qrafiki şəkil, CSV və ya PDF olaraq yükləyə bilərsiniz.'},
                 analysisHistory:{title:'📜 Analiz Tarixçəsi', desc:'Son 10 yüklənmiş analiziniz burada sıralanır. Hər qeyd analiz növünü, tarixini və fayl adını göstərir; 🗑️ düyməsiylə tarixçəni silə bilərsiniz.'},
+                projectManager:{title:'🗂️ Layihə Meneceri', desc:'Xəritə görünüşünüzü, düzən ayarlarınızı və iş sahənizi ad altında yadda saxlayıb istənilən vaxt bir kliklə geri yükləyə bilərsiniz.'},
             geotiff:{title:'📥 Məlumat Yüklə (GeoTIFF)', desc:'Təhlil nəticəsinin xam piksel məlumatını, istədiyiniz ayırdetmə və koordinat sistemi (CRS) ilə GeoTIFF formatında kompüterinizə yükləyin — QGIS, ArcGIS kimi CBS proqramlarında birbaşa istifadə edilə bilər.'},
             vectorDownload:{title:'📥 Vektor Formatında Yüklə', desc:'Təhlil nəticəsini vektor formatında (Shapefile, GeoJSON kimi) kompüterinizə yükləyin — CBS proqramlarında təsnif edilmiş poliqonlar kimi birbaşa istifadə edilə bilər.'},
             basemapViewArea:{title:'🗺️ Basemap & Görüntü Sahəsi', desc:'Xəritənin altındaki arxa fon qatını (Basemap) buradan dəyişin — Google Earth, Peyk, OpenStreetMap və daha çoxu arasında seçim edin.\nGörüntü Sahəsi: təhlilin AOI sərhədinə (İş Sahəsi) yoxsa bütün səhnəyə (Full Scene) görə göstəriləcəyini müəyyənləşdirir.'},
@@ -32140,6 +32293,7 @@ document.addEventListener('DOMContentLoaded',function(){
             drawTools:{title:'✏️ Output Tools', desc:'Add drawings and notes to your map:\n↶ Undo / ↷ Redo — undo or redo the last action\n🗑️ Clear All — remove all drawings\n🖱 Select — pick and move an element\n✏️ Pen — freehand drawing\n— Line & → Arrow — linear marks and directions\n⬠ Polygon & ○ Circle — area marking\n📝 Text box — add notes; drag to move, resize from corners.\n📐 Ruler Measurement — Measure distance and area between points directly on the map.'},
             charts:{title:'📊 Data Charts', desc:'Statistics from your analysis are shown here as a bar, pie or line chart; download them as an image, CSV or PDF.'},
                 analysisHistory:{title:'📜 Analysis History', desc:'Your last 10 downloaded analyses are listed here. Each record shows the analysis type, date, and file name; use the 🗑️ button to clear the history.'},
+                projectManager:{title:'🗂️ Project Manager', desc:'Save your map view, layout settings, and study area under a name, then restore them with a single click anytime.'},
             geotiff:{title:'📥 Download Data (GeoTIFF)', desc:'Download the raw pixel data of your analysis as a GeoTIFF, with your chosen resolution and coordinate system (CRS) — ready to use in QGIS, ArcGIS and other GIS software.'},
             vectorDownload:{title:'📥 Download Vector Data', desc:'Download your analysis result as vector data (Shapefile, GeoJSON, etc.) — ready to use as classified polygons in GIS software.'},
                         basemapViewArea:{title:'🗺️ Basemap & View Area', desc:'Switch the background map layer (Basemap) here — choose from Google Earth, Satellite, OpenStreetMap and more.\nView Area: sets whether the analysis is displayed clipped to your AOI boundary (Work Area) or as the full scene.'},
@@ -32172,6 +32326,7 @@ document.addEventListener('DOMContentLoaded',function(){
             drawTools:{title:'✏️ Ausgabe-Tools', desc:'Zeichnungen und Notizen hinzufügen:\n↶ Rückgängig / ↷ Wiederholen — letzte Aktion umkehren oder wiederholen\n🗑️ Alles löschen — alle Zeichnungen entfernen\n🖱 Auswählen — Objekt auswählen und verschieben\n✏️ Stift — Freihandzeichnung\n— Linie & → Pfeil — lineare Markierungen\n⬠ Polygon & ○ Kreis — Flächenmarkierung\nT Textbox — Notizen; ziehen zum Verschieben, an Ecken skalieren.\n📐 Lineal-Messung — Messen Sie Entfernungen und Flächen direkt auf der Karte.'},
             charts:{title:'📊 Datendiagramme', desc:'Statistiken als Balken-, Kreis- oder Liniendiagramm; als Bild, CSV oder PDF herunterladbar.'},
                 analysisHistory:{title:'📜 Analyseverlauf', desc:'Ihre letzten 10 heruntergeladenen Analysen werden hier aufgelistet. Jeder Eintrag zeigt Typ, Datum und Dateiname; mit 🗑️ können Sie den Verlauf löschen.'},
+                projectManager:{title:'🗂️ Projektmanager', desc:'Speichern Sie Ihre Kartenansicht, Layout-Einstellungen und Ihr Arbeitsgebiet unter einem Namen und stellen Sie sie jederzeit mit einem Klick wieder her.'},
             geotiff:{title:'📥 Daten herunterladen (GeoTIFF)', desc:'Rohpixeldaten als GeoTIFF herunterladen, mit gewählter Auflösung und CRS — direkt in QGIS, ArcGIS nutzbar.'},
             vectorDownload:{title:'📥 Vektordaten herunterladen', desc:'Laden Sie das Analyseergebnis als Vektordaten (Shapefile, GeoJSON usw.) herunter — direkt als klassifizierte Polygone in GIS-Software nutzbar.'},
                         basemapViewArea:{title:'🗺️ Basemap & Ansichtsbereich', desc:'Wechseln Sie hier die Hintergrundkarte — Google Earth, Satellit, OpenStreetMap u. a.\nAnsichtsbereich: legt fest, ob die Analyse auf den AOI-Bereich zugeschnitten oder als vollständige Szene angezeigt wird.'},
@@ -32204,6 +32359,7 @@ document.addEventListener('DOMContentLoaded',function(){
             drawTools:{title:'✏️ Outils de sortie', desc:"Ajoutez des dessins et notes à votre carte :\n↶ Annuler / ↷ Rétablir — annuler ou rétablir la dernière action\n🗑️ Tout effacer — supprimer tous les dessins\n🖱 Sélectionner — sélectionner et déplacer un élément\n✏️ Stylo — dessin à main levée\n— Ligne & → Flèche — marques linéaires\n⬠ Polygone & ○ Cercle — marquage de zone\nT Boîte de texte — notes ; glisser pour déplacer, redimensionner depuis les coins.\n📐 Mesure à la règle — Mesurez les distances et surfaces directement sur la carte."},
             charts:{title:'📊 Graphiques de données', desc:'Les statistiques sont affichées en graphique à barres, circulaire ou en courbes ; téléchargeables en image, CSV ou PDF.'},
                 analysisHistory:{title:'📜 Historique des analyses', desc:'Vos 10 dernières analyses téléchargées sont listées ici. Chaque entrée affiche le type, la date et le nom de fichier ; utilisez 🗑️ pour effacer l\'historique.'},
+                projectManager:{title:'🗂️ Gestionnaire de projets', desc:'Enregistrez la vue de la carte, les paramètres de mise en page et votre zone d\'étude sous un nom, puis restaurez-les en un clic à tout moment.'},
             geotiff:{title:'📥 Télécharger les données (GeoTIFF)', desc:'Téléchargez les données brutes en GeoTIFF, avec la résolution et le CRS de votre choix — utilisable dans QGIS, ArcGIS, etc.'},
             vectorDownload:{title:'📥 Télécharger les données vectorielles', desc:'Téléchargez le résultat de votre analyse au format vectoriel (Shapefile, GeoJSON, etc.) — utilisable directement comme polygones classés dans un logiciel SIG.'},
                         basemapViewArea:{title:"🗺️ Fond de carte & Zone d'affichage", desc:"Changez le fond de carte (Basemap) ici — Google Earth, Satellite, OpenStreetMap et plus.\nZone d'affichage : définit si l'analyse est affichée découpée sur votre AOI ou en scène complète."},
@@ -32236,6 +32392,7 @@ document.addEventListener('DOMContentLoaded',function(){
             drawTools:{title:'✏️ Herramientas de salida', desc:'Agregue dibujos y notas al mapa:\n↶ Deshacer / ↷ Rehacer — deshacer o rehacer la última acción\n🗑️ Borrar todo — eliminar todos los dibujos\n🖱 Seleccionar — seleccionar y mover un elemento\n✏️ Lápiz — dibujo a mano alzada\n— Línea & → Flecha — marcas lineales\n⬠ Polígono & ○ Círculo — marcado de área\nT Cuadro de texto — notas; arrastrar para mover, redimensionar desde esquinas.\n📐 Medición con regla — Mida distancias y áreas entre puntos directamente en el mapa.'},
             charts:{title:'📊 Gráficos de datos', desc:'Las estadísticas se muestran como gráfico de barras, circular o de líneas; descargables como imagen, CSV o PDF.'},
                 analysisHistory:{title:'📜 Historial de análisis', desc:'Sus últimos 10 análisis descargados se muestran aquí. Cada registro incluye tipo, fecha y nombre de archivo; use 🗑️ para borrar el historial.'},
+                projectManager:{title:'🗂️ Administrador de proyectos', desc:'Guarde la vista del mapa, la configuración de diseño y su área de estudio con un nombre, y restáurelos con un solo clic cuando lo desee.'},
             geotiff:{title:'📥 Descargar datos (GeoTIFF)', desc:'Descargue los datos brutos como GeoTIFF, con la resolución y CRS que elija — listo para QGIS, ArcGIS, etc.'},
             vectorDownload:{title:'📥 Descargar datos vectoriales', desc:'Descargue el resultado de su análisis en formato vectorial (Shapefile, GeoJSON, etc.) — listo para usar como polígonos clasificados en software SIG.'},
                         basemapViewArea:{title:'🗺️ Mapa base y Área de vista', desc:'Cambie el mapa de fondo (Basemap) aquí — Google Earth, Satélite, OpenStreetMap y más.\nÁrea de vista: define si el análisis se muestra recortado al AOI o como escena completa.'},
@@ -32268,6 +32425,7 @@ document.addEventListener('DOMContentLoaded',function(){
             drawTools:{title:'✏️ Ferramentas de saída', desc:'Adicione desenhos e notas ao mapa:\\n↶ Anular / ↷ Refazer — anula ou refaz a última ação\\n🗑️ Limpar tudo — remove todos os desenhos\\n🖱 Selecionar — seleciona e move um objeto\\n✏️ Caneta — desenho à mão livre\\n— Linha & → Seta — traços lineares e indicações\\n⬠ Polígono & ○ Círculo — marcação de área\\nT Caixa de texto — adicione notas; arraste com o rato para mover, redimensione pelo canto.\\n📐 Medição por régua — Meça distâncias e áreas entre pontos diretamente no mapa.'},
             charts:{title:'📊 Gráficos de dados', desc:'As estatísticas do resultado da análise são apresentadas aqui como gráfico de barras, circular ou de linhas; pode descarregar o gráfico como imagem, CSV ou PDF.'},
                 analysisHistory:{title:'📜 Histórico de Análises', desc:'As suas últimas 10 análises transferidas são listadas aqui. Cada registo mostra o tipo, a data e o nome do ficheiro; use 🗑️ para limpar o histórico.'},
+                projectManager:{title:'🗂️ Gerenciador de Projetos', desc:'Salve a visualização do mapa, as configurações de layout e sua área de estudo com um nome, e restaure-as com um clique quando quiser.'},
             geotiff:{title:'📥 Descarregar dados (GeoTIFF)', desc:'Descarregue os dados de pixel brutos do resultado da análise, com a resolução e o sistema de coordenadas (CRS) à sua escolha, em formato GeoTIFF — pronto para usar diretamente em software SIG como o ArcGIS Pro ou o QGIS.'},
             vectorDownload:{title:'📥 Descarregar dados vetoriais', desc:'Descarregue o resultado da sua análise em formato vetorial (Shapefile, GeoJSON, etc.) — pronto para usar como polígonos classificados em software SIG.'},
                         basemapViewArea:{title:'🗺️ Mapa base & Área de visualização', desc:'Altere aqui a camada de fundo (mapa base) do mapa — escolha entre Google Earth, Satélite, OpenStreetMap e mais.\\nÁrea de visualização: define se a análise é apresentada recortada aos limites da AOI (Área de trabalho) ou como cena completa (Full Scene).'},
@@ -32300,6 +32458,7 @@ document.addEventListener('DOMContentLoaded',function(){
             drawTools:{title:'✏️ أدوات الإخراج', desc:'أضف رسومات وملاحظات إلى الخريطة:\n↶ تراجع / ↷ إعادة — تراجع عن الإجراء الأخير أو إعادته\n🗑️ مسح الكل — إزالة جميع الرسومات\n🖱 تحديد — تحديد عنصر ونقله\n✏️ قلم — رسم حر\n— خط & → سهم — علامات خطية\n⬠ مضلع & ○ دائرة — تعليم مساحة\nT مربع نص — إضافة ملاحظات؛ اسحب للتحريك، وسّع من الزوايا.\n📐 قياس المسطرة — قِس المسافات والمساحات بين النقاط مباشرةً على الخريطة.'},
             charts:{title:'📊 مخططات البيانات', desc:'تُعرض الإحصاءات كمخطط شريطي أو دائري أو خطي؛ قابل للتنزيل كصورة أو CSV أو PDF.'},
                 analysisHistory:{title:'📜 سجل التحليلات', desc:'يتم سرد آخر 10 تحليلات تم تنزيلها هنا. يعرض كل سجل النوع والتاريخ واسم الملف؛ استخدم 🗑️ لمسح السجل.'},
+                projectManager:{title:'🗂️ مدير المشاريع', desc:'احفظ عرض الخريطة وإعدادات التخطيط ومنطقة العمل الخاصة بك باسم معين، ثم استعدها بنقرة واحدة في أي وقت.'},
             geotiff:{title:'📥 تنزيل البيانات (GeoTIFF)', desc:'نزّل بيانات البكسل الخام بصيغة GeoTIFF بالدقة ونظام الإحداثيات المختار — للاستخدام في QGIS وArcGIS.'},
             vectorDownload:{title:'📥 تنزيل البيانات المتجهية', desc:'نزّل نتيجة التحليل بصيغة متجهية (Shapefile، GeoJSON، إلخ) — جاهزة للاستخدام كمضلعات مصنّفة في برامج نظم المعلومات الجغرافية.'},
                         basemapViewArea:{title:'🗺️ الخريطة الأساسية ومنطقة العرض', desc:'غيّر طبقة الخريطة الخلفية هنا — Google Earth والأقمار الصناعية وOpenStreetMap وغيرها.\nمنطقة العرض: تحدد ما إذا كان التحليل يُعرض مقصوصاً على AOI أم كمشهد كامل.'},
@@ -32332,6 +32491,7 @@ document.addEventListener('DOMContentLoaded',function(){
             drawTools:{title:'✏️ ابزارهای خروجی', desc:'نقشه‌برداری و یادداشت اضافه کنید:\n↶ بازگردانی / ↷ تکرار — آخرین عمل را بازگردان یا دوباره انجام ده\n🗑️ پاک کردن همه — حذف تمام رسم‌ها\n🖱 انتخاب — انتخاب و جابه‌جایی عنصر\n✏️ قلم — رسم آزاد\n— خط & → فلش — خطوط مستقیم\n⬠ چندضلعی & ○ دایره — علامت‌گذاری محدوده\nT جعبه متن — یادداشت؛ بکشید برای جابه‌جایی، از گوشه‌ها برای تغییر اندازه.\n📐 اندازه‌گیری خط‌کش — فاصله و مساحت بین نقاط را مستقیماً روی نقشه اندازه‌گیری کنید.'},
             charts:{title:'📊 نمودارهای داده', desc:'آمار تحلیل به‌صورت نمودار میله‌ای، دایره‌ای یا خطی؛ قابل دانلود به‌صورت تصویر، CSV یا PDF.'},
                 analysisHistory:{title:'📜 تاریخچه تحلیل‌ها', desc:'آخرین ۱۰ تحلیل دانلود‌شده شما اینجا فهرست می‌شوند. هر رکورد نوع، تاریخ و نام فایل را نشان می‌دهد؛ با 🗑️ تاریخچه را پاک کنید.'},
+                projectManager:{title:'🗂️ مدیر پروژه', desc:'نمای نقشه، تنظیمات چیدمان و محدوده کاری خود را با یک نام ذخیره کنید و هر زمان با یک کلیک بازیابی کنید.'},
             geotiff:{title:'📥 دانلود داده (GeoTIFF)', desc:'داده پیکسلی خام را با وضوح و CRS دلخواه به‌صورت GeoTIFF دانلود کنید — برای QGIS و ArcGIS.'},
             vectorDownload:{title:'📥 دانلود داده برداری', desc:'نتیجه تحلیل خود را به‌صورت داده برداری (Shapefile، GeoJSON و غیره) دانلود کنید — آماده استفاده به‌صورت چندضلعی‌های طبقه‌بندی‌شده در نرم‌افزارهای GIS.'},
                         basemapViewArea:{title:'🗺️ نقشه پایه و محدوده نمایش', desc:'لایه پس‌زمینه نقشه (Basemap) را اینجا تغییر دهید — Google Earth، ماهواره، OpenStreetMap و موارد دیگر.\nمحدوده نمایش: تعیین می‌کند تحلیل به AOI برش خورده یا به‌صورت صحنه کامل نمایش داده شود.'},
@@ -32364,6 +32524,7 @@ document.addEventListener('DOMContentLoaded',function(){
             drawTools:{title:'✏️ 输出工具', desc:'在地图上添加绘图和注释：\n↶ 撤销 / ↷ 重做 — 撤销或重做上一操作\n🗑️ 清除所有 — 移除所有绘图\n🖱 选择 — 选取并移动元素\n✏️ 画笔 — 自由绘图\n— 直线 & → 箭头 — 线性标注\n⬠ 多边形 & ○ 圆形 — 区域标注\nT 文本框 — 添加注释；拖动移位，从角落调整大小。\n📐 标尺测量 — 在地图上直接测量两点间距离和面积。'},
             charts:{title:'📊 数据图表', desc:'分析统计以柱状图、饼图或折线图显示；可下载为图片、CSV 或 PDF。'},
                 analysisHistory:{title:'📜 分析历史', desc:'您最近下载的10次分析将列在这里。每条记录显示分析类型、日期和文件名；点击🗑️可清除历史记录。'},
+                projectManager:{title:'🗂️ 项目管理器', desc:'以名称保存您的地图视图、布局设置和工作区域，随时一键恢复。'},
             geotiff:{title:'📥 下载数据（GeoTIFF）', desc:'以所选分辨率和坐标系（CRS）下载原始像素数据（GeoTIFF）— 可在 QGIS、ArcGIS 中使用。'},
             vectorDownload:{title:'📥 下载矢量数据', desc:'将分析结果下载为矢量数据（Shapefile、GeoJSON 等）— 可作为分类多边形直接在 GIS 软件中使用。'},
                         basemapViewArea:{title:'🗺️ 底图与显示区域', desc:'在此切换背景底图 — Google Earth、卫星、OpenStreetMap 等。\n显示区域：设置分析结果是裁剪到 AOI 范围还是以完整场景显示。'},
@@ -32396,6 +32557,7 @@ document.addEventListener('DOMContentLoaded',function(){
             drawTools:{title:'✏️ 出力ツール', desc:'地図に描画と注釈を追加：\n↶ 元に戻す / ↷ やり直し — 最後の操作を元に戻すまたはやり直す\n🗑️ すべて削除 — 全描画を削除\n🖱 選択 — 要素を選択して移動\n✏️ ペン — フリーハンド描画\n— ライン & → 矢印 — 直線マーク\n⬠ ポリゴン & ○ サークル — 面積マーク\nT テキストボックス — メモを追加；ドラッグで移動、角からリサイズ。\n📐 定規測定 — 地図上で2点間の距離や面積を直接測定します。'},
             charts:{title:'📊 データチャート', desc:'解析統計が棒グラフ、円グラフまたは折れ線グラフで表示されます；画像・CSV・PDFとしてダウンロード可能。'},
                 analysisHistory:{title:'📜 分析履歴', desc:'直近10件のダウンロード済み解析がここに表示されます。各記録に解析タイプ・日時・ファイル名が表示され、🗑️で履歴を削除できます。'},
+                projectManager:{title:'🗂️ プロジェクトマネージャー', desc:'地図の表示、レイアウト設定、作業範囲を名前を付けて保存し、いつでもワンクリックで復元できます。'},
             geotiff:{title:'📥 データダウンロード（GeoTIFF）', desc:'任意の解像度とCRSで生ピクセルデータをGeoTIFFとしてダウンロード — QGIS・ArcGISですぐ使用可能。'},
             vectorDownload:{title:'📥 ベクターデータをダウンロード', desc:'解析結果をベクターデータ（Shapefile、GeoJSONなど）としてダウンロード — 分類済みポリゴンとしてGISソフトですぐ使用可能。'},
                         basemapViewArea:{title:'🗺️ ベースマップ & 表示エリア', desc:'ここで背景地図（ベースマップ）を切り替えます — Google Earth・衛星・OpenStreetMapなど。\n表示エリア：分析結果をAOIに切り抜いて表示するか全シーンで表示するかを設定します。'},
@@ -32428,6 +32590,7 @@ document.addEventListener('DOMContentLoaded',function(){
             drawTools:{title:'✏️ 출력 도구', desc:'지도에 그림과 메모를 추가하세요:\n↶ 실행 취소 / ↷ 다시 실행 — 마지막 작업 취소 또는 재실행\n🗑️ 모두 지우기 — 모든 그림 삭제\n🖱 선택 — 요소 선택 및 이동\n✏️ 펜 — 자유 손 그리기\n— 선 & → 화살표 — 선형 표시\n⬠ 다각형 & ○ 원 — 면적 표시\nT 텍스트 상자 — 메모; 드래그로 이동, 모서리에서 크기 조정.\n📐 자 측정 — 지도에서 두 점 사이의 거리와 면적을 직접 측정합니다.'},
             charts:{title:'📊 데이터 차트', desc:'분석 통계가 막대, 원형 또는 꺾은선 차트로 표시됩니다; 이미지·CSV·PDF로 다운로드 가능합니다.'},
                 analysisHistory:{title:'📜 분석 기록', desc:'최근 다운로드한 10개의 분석이 여기에 나열됩니다. 각 기록에는 분석 유형, 날짜, 파일명이 표시되며 🗑️으로 기록을 삭제할 수 있습니다.'},
+                projectManager:{title:'🗂️ 프로젝트 관리자', desc:'지도 보기, 레이아웃 설정, 작업 영역을 이름으로 저장하고 언제든지 클릭 한 번으로 복원할 수 있습니다.'},
             geotiff:{title:'📥 데이터 다운로드 (GeoTIFF)', desc:'선택한 해상도 및 CRS로 원시 픽셀 데이터를 GeoTIFF로 다운로드 — QGIS·ArcGIS에서 바로 사용 가능합니다.'},
             vectorDownload:{title:'📥 벡터 데이터 다운로드', desc:'분석 결과를 벡터 데이터(Shapefile, GeoJSON 등)로 다운로드 — 분류된 폴리곤으로 GIS 소프트웨어에서 바로 사용 가능합니다.'},
                         basemapViewArea:{title:'🗺️ 기본 지도 및 보기 영역', desc:'여기서 배경 지도(Basemap)를 전환합니다 — Google Earth, 위성, OpenStreetMap 등.\n보기 영역: 분석 결과를 AOI로 잘라 표시할지 전체 장면으로 표시할지 설정합니다.'},
@@ -32460,6 +32623,7 @@ document.addEventListener('DOMContentLoaded',function(){
             drawTools:{title:'✏️ आउटपुट टूल्स', desc:'मानचित्र पर चित्र और नोट जोड़ें:\n↶ पूर्ववत / ↷ फिर से करें — अंतिम क्रिया वापस या दोहराएँ\n🗑️ सब साफ़ करें — सभी चित्र हटाएँ\n🖱 चुनें — तत्व चुनें और ले जाएँ\n✏️ पेन — फ्री-हैंड ड्राइंग\n— लाइन & → ऐरो — सरल रेखाएँ\n⬠ बहुभुज & ○ वृत्त — क्षेत्र चिह्नित करें\nT टेक्स्ट बॉक्स — नोट जोड़ें; खींचकर ले जाएँ, कोनों से आकार बदलें।\n📐 रूलर माप — मानचित्र पर बिंदुओं के बीच दूरी और क्षेत्रफल सीधे मापें।'},
             charts:{title:'📊 डेटा चार्ट', desc:'विश्लेषण आँकड़े बार, पाई या लाइन चार्ट में दिखते हैं; इमेज, CSV या PDF में डाउनलोड करें।'},
                 analysisHistory:{title:'📜 विश्लेषण इतिहास', desc:'आपके पिछले 10 डाउनलोड किए गए विश्लेषण यहाँ सूचीबद्ध हैं। प्रत्येक रिकॉर्ड में प्रकार, तारीख और फ़ाइल नाम दिखता है; 🗑️ से इतिहास साफ़ करें।'},
+                projectManager:{title:'🗂️ प्रोजेक्ट प्रबंधक', desc:'अपने मानचित्र दृश्य, लेआउट सेटिंग्स और कार्य क्षेत्र को नाम देकर सहेजें और किसी भी समय एक क्लिक में पुनर्स्थापित करें।'},
             geotiff:{title:'📥 डेटा डाउनलोड (GeoTIFF)', desc:'चुनी हुई रिज़ॉल्यूशन और CRS के साथ कच्चा पिक्सेल डेटा GeoTIFF में डाउनलोड करें — QGIS, ArcGIS में उपयोग योग्य।'},
             vectorDownload:{title:'📥 वेक्टर डेटा डाउनलोड करें', desc:'अपने विश्लेषण परिणाम को वेक्टर डेटा (Shapefile, GeoJSON आदि) के रूप में डाउनलोड करें — GIS सॉफ़्टवेयर में वर्गीकृत बहुभुजों के रूप में सीधे उपयोग के लिए तैयार।'},
                         basemapViewArea:{title:'🗺️ बेसमैप और व्यू एरिया', desc:'यहाँ पृष्ठभूमि मानचित्र (Basemap) बदलें — Google Earth, सैटेलाइट, OpenStreetMap आदि।\nव्यू एरिया: विश्लेषण को AOI तक काटकर या पूरी सीन के रूप में दिखाने का निर्धारण करता है।'},
@@ -32492,6 +32656,7 @@ document.addEventListener('DOMContentLoaded',function(){
             drawTools:{title:'✏️ Alat Output', desc:'Tambahkan gambar dan catatan ke peta:\n↶ Batalkan / ↷ Ulangi — batalkan atau ulangi tindakan terakhir\n🗑️ Hapus Semua — hapus semua gambar\n🖱 Pilih — pilih dan pindahkan elemen\n✏️ Pena — gambar bebas\n— Garis & → Panah — tanda garis\n⬠ Poligon & ○ Lingkaran — tandai area\nT Kotak teks — tambah catatan; seret untuk pindah, ubah ukuran dari sudut.\n📐 Pengukuran Penggaris — Ukur jarak dan luas antar titik langsung di peta.'},
             charts:{title:'📊 Grafik Data', desc:'Statistik analisis ditampilkan sebagai grafik batang, lingkaran, atau garis; dapat diunduh sebagai gambar, CSV, atau PDF.'},
                 analysisHistory:{title:'📜 Riwayat Analisis', desc:'10 analisis yang terakhir diunduh ditampilkan di sini. Setiap catatan menampilkan jenis analisis, tanggal, dan nama file; gunakan 🗑️ untuk menghapus riwayat.'},
+                projectManager:{title:'🗂️ Manajer Proyek', desc:'Simpan tampilan peta, pengaturan tata letak, dan area kerja Anda dengan nama, lalu pulihkan kapan saja hanya dengan satu klik.'},
             geotiff:{title:'📥 Unduh Data (GeoTIFF)', desc:'Unduh data piksel mentah sebagai GeoTIFF dengan resolusi dan CRS pilihan Anda — siap digunakan di QGIS, ArcGIS.'},
             vectorDownload:{title:'📥 Unduh Data Vektor', desc:'Unduh hasil analisis Anda sebagai data vektor (Shapefile, GeoJSON, dll.) — siap digunakan sebagai poligon terklasifikasi di perangkat lunak GIS.'},
                         basemapViewArea:{title:'🗺️ Peta Dasar & Area Tampilan', desc:'Ganti layer peta latar (Basemap) di sini — Google Earth, Satelit, OpenStreetMap dan lainnya.\nArea Tampilan: menentukan apakah analisis ditampilkan dipotong ke AOI atau sebagai adegan penuh.'},
@@ -32524,6 +32689,7 @@ document.addEventListener('DOMContentLoaded',function(){
             drawTools:{title:'✏️ Инструменты вывода', desc:'Добавляйте рисунки и заметки на карту:\n↶ Отменить / ↷ Повторить — отменить или повторить последнее действие\n🗑️ Очистить всё — удалить все рисунки\n🖱 Выбрать — выбрать и переместить элемент\n✏️ Перо — рисование от руки\n— Линия и → Стрелка — линейные отметки и направления\n⬠ Полигон и ○ Круг — обозначение областей\n📝 Текстовое поле — добавить заметки; перетаскивайте для перемещения, изменяйте размер за углы.\n📐 Измерение линейкой — Измеряйте расстояния и площади между точками прямо на карте.'},
             charts:{title:'📊 Диаграммы данных', desc:'Статистика вашего анализа показана здесь в виде столбчатой, круговой или линейной диаграммы; скачайте её как изображение, CSV или PDF.'},
                 analysisHistory:{title:'📜 История анализов', desc:'Здесь отображаются последние 10 загруженных вами анализов. Каждая запись содержит тип, дату и имя файла; кнопка 🗑️ позволяет очистить историю.'},
+                projectManager:{title:'🗂️ Менеджер проектов', desc:'Сохраните вид карты, настройки макета и рабочую область под именем, а затем восстановите их в один клик в любое время.'},
             geotiff:{title:'📥 Скачать данные (GeoTIFF)', desc:'Скачайте исходные пиксельные данные вашего анализа в формате GeoTIFF с выбранным разрешением и системой координат (CRS) — готово к использованию в QGIS, ArcGIS и других ГИС-программах.'},
             vectorDownload:{title:'📥 Скачать векторные данные', desc:'Скачайте результат анализа в векторном формате (Shapefile, GeoJSON и т. д.) — готово к использованию как классифицированные полигоны в ГИС-программах.'},
                         basemapViewArea:{title:'🗺️ Базовая карта и область просмотра', desc:'Переключите фоновый слой карты (базовую карту) здесь — выберите Google Earth, спутник, OpenStreetMap и другие.\nОбласть просмотра: определяет, отображается ли анализ обрезанным по границе AOI (рабочей области) или как полная сцена.'},
@@ -32556,6 +32722,7 @@ document.addEventListener('DOMContentLoaded',function(){
             drawTools:{title:'✏️ เครื่องมือผลลัพธ์', desc:'เพิ่มภาพวาดและบันทึกลงในแผนที่ของคุณ:\n↶ เลิกทำ / ↷ ทำซ้ำ\n🗑️ ล้างทั้งหมด\n🕱 เลือก — เลือกและย้ายองค์ประกอบ\n✏️ ปากกา — การวาดอิสระ\n📝 กล่องข้อความ — เพิ่มบันทึก\n📐 การวัดด้วยไม้บรรทัด — วัดระยะทางและพื้นที่ระหว่างจุดบนแผนที่โดยตรง'},
             charts:{title:'📊 กราฟข้อมูล', desc:'สถิติจากการวิเคราะห์ของคุณจะแสดงที่นี่เป็นกราฟแท่ง กราฟวงกลม หรือกราฟเส้น ดาวน์โหลดเป็นรูปภาพ CSV หรือ PDF'},
                 analysisHistory:{title:'📜 ประวัติการวิเคราะห์', desc:'รายการวิเคราะห์ 10 รายการล่าสุดที่ดาวน์โหลดจะแสดงที่นี่ แต่ละรายการแสดงประเภท วันที่ และชื่อไฟล์ ใช้ 🗑️ เพื่อล้างประวัติ'},
+                projectManager:{title:'🗂️ ตัวจัดการโปรเจกต์', desc:'บันทึกมุมมองแผนที่ การตั้งค่าเลย์เอาต์ และพื้นที่ทำงานของคุณโดยตั้งชื่อ แล้วกู้คืนได้ด้วยคลิกเดียวทุกเมื่อ'},
             geotiff:{title:'📥 ดาวน์โหลดข้อมูล (GeoTIFF)', desc:'ดาวน์โหลดข้อมูลพิกเซลดิบของการวิเคราะห์ของคุณเป็น GeoTIFF พร้อมใช้งานใน QGIS, ArcGIS และซอฟต์แวร์ GIS อื่นๆ'},
             vectorDownload:{title:'📥 ดาวน์โหลดข้อมูลเวกเตอร์', desc:'ดาวน์โหลดผลการวิเคราะห์เป็นข้อมูลเวกเตอร์ (Shapefile, GeoJSON ฯลฯ) — พร้อมใช้งานเป็นโพลีกอนที่จำแนกประเภทแล้วในซอฟต์แวร์ GIS'},
             basemapViewArea:{title:'🗺️ แผนที่ฐาน & พื้นที่ดู', desc:'สลับเลเยอร์แผนที่พื้นหลังได้ที่นี่ — เลือกจาก Google Earth ดาวเทียม OpenStreetMap และอื่นๆ'},
@@ -32588,6 +32755,7 @@ document.addEventListener('DOMContentLoaded',function(){
             drawTools:{title:'✏️ আউটপুট টুলস', desc:'আপনার মানচিত্রে অঙ্কন ও নোট যোগ করুন:\\n↶ পূর্বাবস্থা / ↷ পুনরায় — শেষ কাজ পূর্বাবস্থায় ফেরান বা পুনরায় করুন\\n🗑️ সব মুছুন — সব অঙ্কন সরান\\n🖱 নির্বাচন — একটি উপাদান বাছাই ও সরান\\n✏️ কলম — ফ্রিহ্যান্ড অঙ্কন\\n— রেখা ও → তীর — রৈখিক চিহ্ন ও দিক\\n⬠ বহুভুজ ও ○ বৃত্ত — এলাকা চিহ্নিতকরণ\\n📝 লেখা বাক্স — নোট যোগ করুন; সরাতে টেনে আনুন, কোণা থেকে আকার পরিবর্তন করুন।\\n📐 রুলার পরিমাপ — মানচিত্রে সরাসরি দুই বিন্দুর মধ্যে দূরত্ব ও ক্ষেত্রফল পরিমাপ করুন।'},
             charts:{title:'📊 ডেটা চার্ট', desc:'আপনার বিশ্লেষণের পরিসংখ্যান এখানে বার, পাই বা লাইন চার্ট হিসেবে দেখানো হয়; ছবি, CSV বা PDF হিসেবে ডাউনলোড করুন।'},
                 analysisHistory:{title:'📜 বিশ্লেষণ ইতিহাস', desc:'আপনার সর্বশেষ ১০টি ডাউনলোড করা বিশ্লেষণ এখানে তালিকাভুক্ত হয়। প্রতিটি রেকর্ডে বিশ্লেষণের ধরন, তারিখ ও ফাইলের নাম দেখানো হয়; 🗑️ দিয়ে ইতিহাস মুছুন।'},
+                projectManager:{title:'🗂️ প্রকল্প ব্যবস্থাপক', desc:'আপনার মানচিত্র দৃশ্য, লেআউট সেটিংস এবং কাজের এলাকা একটি নাম দিয়ে সংরক্ষণ করুন এবং যেকোনো সময় এক ক্লিকে পুনরুদ্ধার করুন।'},
             geotiff:{title:'📥 ডেটা ডাউনলোড (GeoTIFF)', desc:'আপনার বিশ্লেষণের কাঁচা পিক্সেল ডেটা একটি GeoTIFF হিসেবে, আপনার নির্বাচিত রেজোলিউশন ও স্থানাঙ্ক পদ্ধতি (CRS) সহ ডাউনলোড করুন — QGIS, ArcGIS ও অন্যান্য GIS সফটওয়্যারে ব্যবহারের জন্য প্রস্তুত।'},
             vectorDownload:{title:'📥 ভেক্টর ডেটা ডাউনলোড করুন', desc:'আপনার বিশ্লেষণের ফলাফল ভেক্টর ডেটা (Shapefile, GeoJSON ইত্যাদি) হিসেবে ডাউনলোড করুন — GIS সফটওয়্যারে শ্রেণীবদ্ধ পলিগন হিসেবে ব্যবহারের জন্য প্রস্তুত।'},
             basemapViewArea:{title:'🗺️ বেসম্যাপ ও প্রদর্শন এলাকা', desc:'এখানে ব্যাকগ্রাউন্ড মানচিত্র স্তর (বেসম্যাপ) পরিবর্তন করুন — Google Earth, স্যাটেলাইট, OpenStreetMap ও আরও অনেক থেকে বেছে নিন।\\nপ্রদর্শন এলাকা: বিশ্লেষণ আপনার AOI সীমানা (কর্মক্ষেত্র) অনুযায়ী ক্লিপ করে দেখানো হবে নাকি সম্পূর্ণ দৃশ্য হিসেবে তা নির্ধারণ করে।'},
@@ -32620,6 +32788,7 @@ document.addEventListener('DOMContentLoaded',function(){
             drawTools:{title:'✏️ Công cụ đầu ra', desc:'Thêm hình vẽ và ghi chú vào bản đồ:\n↶ Hoàn tác / ↷ Làm lại — hoàn tác hoặc làm lại thao tác cuối\n🗑️ Xóa tất cả — xóa toàn bộ hình vẽ\n🖱 Chọn — chọn và di chuyển đối tượng\n✏️ Bút vẽ — vẽ tự do\n— Đường thẳng & → Mũi tên — ký hiệu đường thẳng và hướng\n⬠ Đa giác & ○ Hình tròn — đánh dấu khu vực\n📝 Hộp văn bản — thêm ghi chú; kéo để di chuyển, đổi kích thước từ góc.\n📐 Đo thước — Đo khoảng cách và diện tích giữa các điểm trực tiếp trên bản đồ.'},
             charts:{title:'📊 Biểu đồ dữ liệu', desc:'Số liệu thống kê phân tích được hiển thị dưới dạng biểu đồ cột, tròn hoặc đường; có thể tải xuống dưới dạng hình ảnh, CSV hoặc PDF.'},
                 analysisHistory:{title:'📜 Lịch sử Phân tích', desc:'10 lần phân tích được tải xuống gần nhất sẽ được liệt kê tại đây. Mỗi bản ghi hiển thị loại phân tích, ngày và tên tệp; dùng 🗑️ để xóa lịch sử.'},
+                projectManager:{title:'🗂️ Quản lý Dự án', desc:'Lưu chế độ xem bản đồ, cài đặt bố cục và khu vực làm việc của bạn với một tên, sau đó khôi phục chỉ bằng một cú nhấp chuột bất cứ lúc nào.'},
             geotiff:{title:'📥 Tải dữ liệu (GeoTIFF)', desc:'Tải dữ liệu điểm ảnh thô dưới dạng GeoTIFF với độ phân giải và hệ quy chiếu (CRS) do bạn chọn — sẵn sàng sử dụng trong QGIS, ArcGIS.'},
             vectorDownload:{title:'📥 Tải dữ liệu vector', desc:'Tải kết quả phân tích dưới dạng dữ liệu vector (Shapefile, GeoJSON, v.v.) — sẵn sàng sử dụng như các đa giác đã phân loại trong phần mềm GIS.'},
             basemapViewArea:{title:'🗺️ Nền bản đồ & Khu vực xem', desc:'Thay đổi lớp nền bản đồ (Basemap) tại đây — Google Earth, Vệ tinh, OpenStreetMap và nhiều lựa chọn khác.\nKhu vực xem: xác định phân tích được hiển thị cắt theo AOI hay dưới dạng toàn cảnh.'},
@@ -32652,6 +32821,7 @@ document.addEventListener('DOMContentLoaded',function(){
             drawTools:{title:'✏️ آؤٹ پٹ ٹولز', desc:'نقشے پر ڈرائنگ اور تشریحات شامل کریں:\n↶ پیچھے ہٹیں / ↷ آگے جائیں — آخری عمل کو واپس یا دوبارہ کریں\n🗑️ سب مٹائیں — تمام ڈرائنگ حذف کریں\n🖱 انتخاب — عنصر منتخب کریں اور منتقل کریں\n✏️ قلم — آزادانہ ڈرائنگ\n— لکیر اور → تیر — لکیری نشانات\n⬠ پولیگون اور ○ دائرہ — رقبے کا نشان\nT متن خانہ — نوٹ شامل کریں؛ کھینچ کر منتقل کریں، کونوں سے سائز بدلیں۔\n📐 رولر پیمائش — نقشے پر نقاط کے درمیان فاصلہ اور رقبہ براہ راست ناپیں۔'},
             charts:{title:'📊 ڈیٹا چارٹ', desc:'تجزیہ کے اعداد و شمار بار، پائی یا لائن چارٹ میں دکھائے جاتے ہیں؛ تصویر، CSV یا PDF میں ڈاؤن لوڈ کریں۔'},
                 analysisHistory:{title:'📜 تجزیہ کی تاریخ', desc:'آپ کے آخری 10 ڈاؤن لوڈ کردہ تجزیے یہاں درج ہیں۔ ہر اندراج میں قسم، تاریخ اور فائل نام دکھایا جاتا ہے؛ 🗑️ سے تاریخ صاف کریں۔'},
+                projectManager:{title:'🗂️ پراجیکٹ مینیجر', desc:'اپنے نقشے کا منظر، لے آؤٹ کی ترتیبات اور کام کے علاقے کو نام کے ساتھ محفوظ کریں اور کسی بھی وقت ایک کلک میں بحال کریں۔'},
             geotiff:{title:'📥 ڈیٹا ڈاؤن لوڈ (GeoTIFF)', desc:'منتخب ریزولیوشن اور CRS کے ساتھ خام پکسل ڈیٹا GeoTIFF میں ڈاؤن لوڈ کریں — QGIS، ArcGIS میں استعمال کے لیے۔'},
             vectorDownload:{title:'📥 ویکٹر ڈیٹا ڈاؤن لوڈ کریں', desc:'اپنے تجزیے کے نتیجے کو ویکٹر ڈیٹا (Shapefile، GeoJSON وغیرہ) کی صورت میں ڈاؤن لوڈ کریں — GIS سافٹ ویئر میں درجہ بند پولیگون کے طور پر استعمال کے لیے تیار۔'},
             basemapViewArea:{title:'🗺️ بیس میپ اور منظر کا علاقہ', desc:'یہاں پس منظر کا نقشہ تبدیل کریں — Google Earth، سیٹلائٹ، OpenStreetMap وغیرہ۔\nمنظر کا علاقہ: تعین کرتا ہے کہ تجزیہ AOI تک تراشا جائے یا پوری سین دکھائی جائے۔'},
@@ -32684,6 +32854,7 @@ document.addEventListener('DOMContentLoaded',function(){
             drawTools:{title:'✏️ Narzędzia wyjściowe', desc:'Dodaj rysunki i notatki do mapy:\n↶ Cofnij / ↷ Ponów — cofnij lub ponów ostatnią operację\n🗑️ Wyczyść wszystko — usuń wszystkie rysunki\n🖱 Zaznacz — wybierz i przesuń element\n✏️ Pióro — rysunek odręczny\n— Linia & → Strzałka — oznaczenia liniowe\n⬠ Wielokąt & ○ Koło — oznaczanie obszaru\nT Pole tekstowe — dodaj notatki; przeciągnij, aby przesunąć, zmień rozmiar od rogów.\n📐 Pomiar linijką — Mierz odległości i pola między punktami bezpośrednio na mapie.'},
             charts:{title:'📊 Wykresy danych', desc:'Statystyki z wyników analizy są wyświetlane jako wykres słupkowy, kołowy lub liniowy; pobierz jako obraz, CSV lub PDF.'},
                 analysisHistory:{title:'📜 Historia Analiz', desc:'Twoje ostatnie 10 pobranych analiz jest tutaj wymienionych. Każdy wpis zawiera typ, datę i nazwę pliku; użyj 🗑️ aby wyczyścić historię.'},
+                projectManager:{title:'🗂️ Menedżer Projektów', desc:'Zapisz widok mapy, ustawienia układu i obszar roboczy pod nazwą, a następnie przywróć je jednym kliknięciem w dowolnym momencie.'},
             geotiff:{title:'📥 Pobierz dane (GeoTIFF)', desc:'Pobierz surowe dane pikseli wyników analizy jako GeoTIFF, z wybraną rozdzielczością i układem współrzędnych (CRS) — gotowe do użycia w QGIS, ArcGIS i innym oprogramowaniu GIS.'},
             vectorDownload:{title:'📥 Pobierz dane wektorowe', desc:'Pobierz wynik analizy jako dane wektorowe (Shapefile, GeoJSON itp.) — gotowe do użycia jako sklasyfikowane poligony w oprogramowaniu GIS.'},
             basemapViewArea:{title:'🗺️ Mapa bazowa i obszar widoku', desc:'Przełącz warstwę tła mapy (mapa bazowa) tutaj — wybieraj spośród Google Earth, Satelita, OpenStreetMap i innych.\nObszar widoku: określa czy analiza jest wyświetlana przycięta do granic AOI czy jako pełna scena.'},
@@ -32716,6 +32887,7 @@ document.addEventListener('DOMContentLoaded',function(){
             drawTools:{title:'✏️ Alat Output', desc:'Tambah lukisan dan nota pada peta anda:\\n↶ Buat Asal / ↷ Buat Semula — buat asal atau buat semula tindakan terakhir\\n🗑️ Kosongkan Semua — buang semua lukisan\\n🖱 Pilih — pilih dan alihkan elemen\\n✏️ Pen — lukisan bebas tangan\\n— Garisan & → Anak Panah — tanda linear dan arah\\n⬠ Poligon & ○ Bulatan — penandaan kawasan\\n📝 Kotak teks — tambah nota; seret untuk mengalih, ubah saiz dari sudut.\\n📐 Pengukuran Pembaris — Ukur jarak dan luas antara titik terus pada peta.'},
             charts:{title:'📊 Carta Data', desc:'Statistik daripada analisis anda dipaparkan di sini sebagai carta bar, pai atau garisan; muat turun sebagai imej, CSV atau PDF.'},
                 analysisHistory:{title:'📜 Sejarah Analisis', desc:'10 analisis muat turun terbaru anda disenaraikan di sini. Setiap rekod menunjukkan jenis analisis, tarikh dan nama fail; gunakan 🗑️ untuk kosongkan sejarah.'},
+                projectManager:{title:'🗂️ Pengurus Projek', desc:'Simpan paparan peta, tetapan reka letak dan kawasan kerja anda di bawah satu nama, kemudian pulihkan dengan satu klik pada bila-bila masa.'},
             geotiff:{title:'📥 Muat Turun Data (GeoTIFF)', desc:'Muat turun data piksel mentah analisis anda sebagai GeoTIFF, dengan resolusi dan sistem koordinat (CRS) pilihan anda — sedia digunakan dalam QGIS, ArcGIS dan perisian GIS lain.'},
             vectorDownload:{title:'📥 Muat Turun Data Vektor', desc:'Muat turun hasil analisis anda sebagai data vektor (Shapefile, GeoJSON, dll.) — sedia digunakan sebagai poligon terklasifikasi dalam perisian GIS.'},
             basemapViewArea:{title:'🗺️ Peta Asas & Kawasan Paparan', desc:'Tukar lapisan peta latar belakang (Peta Asas) di sini — pilih daripada Google Earth, Satelit, OpenStreetMap dan lain-lain.\\nKawasan Paparan: menetapkan sama ada analisis dipaparkan dipangkas mengikut sempadan AOI anda (Ruang Kerja) atau sebagai keseluruhan senario.'},
@@ -32748,6 +32920,7 @@ document.addEventListener('DOMContentLoaded',function(){
             drawTools:{title:'✏️ Εργαλεία Εξόδου', desc:'Προσθέστε σχέδια και σημειώσεις στον χάρτη σας:\\n↶ Αναίρεση / ↷ Επανάληψη — αναιρέστε ή επαναλάβετε την τελευταία ενέργεια\\n🗑️ Καθαρισμός Όλων — αφαιρέστε όλα τα σχέδια\\n🖱 Επιλογή — επιλέξτε και μετακινήστε ένα στοιχείο\\n✏️ Πένα — ελεύθερο σχέδιο\\n— Γραμμή & → Βέλος — γραμμικές σημάνσεις και κατευθύνσεις\\n⬠ Πολύγωνο & ○ Κύκλος — σήμανση περιοχής\\n📝 Πλαίσιο κειμένου — προσθέστε σημειώσεις· σύρετε για μετακίνηση, αλλάξτε μέγεθος από τις γωνίες.\\n📐 Μέτρηση χάρακα — Μετρήστε αποστάσεις και εμβαδά μεταξύ σημείων απευθείας στον χάρτη.'},
             charts:{title:'📊 Γραφήματα Δεδομένων', desc:'Τα στατιστικά στοιχεία της ανάλυσής σας εμφανίζονται εδώ ως ραβδόγραμμα, γράφημα πίτας ή γραμμικό γράφημα· κατεβάστε τα ως εικόνα, CSV ή PDF.'},
                 analysisHistory:{title:'📜 Ιστορικό Αναλύσεων', desc:'Οι τελευταίες 10 αναλύσεις που κατεβάσατε εμφανίζονται εδώ. Κάθε εγγραφή δείχνει τύπο, ημερομηνία και όνομα αρχείου· με 🗑️ καθαρίστε το ιστορικό.'},
+                projectManager:{title:'🗂️ Διαχείριση Έργων', desc:'Αποθηκεύστε την προβολή του χάρτη, τις ρυθμίσεις διάταξης και την περιοχή μελέτης σας με ένα όνομα και επαναφέρετέ τα με ένα κλικ όποτε θέλετε.'},
             geotiff:{title:'📥 Λήψη Δεδομένων (GeoTIFF)', desc:'Κατεβάστε τα ακατέργαστα δεδομένα pixel της ανάλυσής σας ως GeoTIFF, με την ανάλυση και το σύστημα συντεταγμένων (CRS) της επιλογής σας — έτοιμο για χρήση σε QGIS, ArcGIS και άλλο λογισμικό GIS.'},
             vectorDownload:{title:'📥 Λήψη Διανυσματικών Δεδομένων', desc:'Κατεβάστε το αποτέλεσμα της ανάλυσής σας ως διανυσματικά δεδομένα (Shapefile, GeoJSON κ.λπ.) — έτοιμο για χρήση ως ταξινομημένα πολύγωνα σε λογισμικό GIS.'},
                         basemapViewArea:{title:'🗺️ Υπόβαθρο & Περιοχή Προβολής', desc:'Αλλάξτε το επίπεδο υποβάθρου κάτω από τον χάρτη από εδώ — επιλέξτε μεταξύ Google Earth, Δορυφόρου, OpenStreetMap και άλλων.\\nΠεριοχή Προβολής: καθορίζει αν η ανάλυση εμφανίζεται περικομμένη στα όρια της AOI σας (Περιοχή Εργασίας) ή ως ολόκληρη η σκηνή.'},
@@ -32780,6 +32953,7 @@ document.addEventListener('DOMContentLoaded',function(){
             drawTools:{title:'✏️ Инструменти за извеждане', desc:'Добавяйте рисунки и бележки към картата си:\\n↶ Отмени / ↷ Повтори — отменете или повторете последното действие\\n🗑️ Изчисти всичко — премахнете всички рисунки\\n🖱 Избери — изберете и преместете елемент\\n✏️ Химикал — свободно рисуване\\n— Линия и → Стрелка — линейни маркировки и посоки\\n⬠ Полигон и ○ Кръг — маркиране на площ\\n📝 Текстово поле — добавете бележки; плъзнете за преместване, преоразмерете от ъглите.\\n📐 Измерване с линийка — Измервайте разстояния и площи между точки директно на картата.'},
             charts:{title:'📊 Диаграми на данните', desc:'Статистиката от вашия анализ се показва тук като стълбовидна, кръгова или линейна диаграма; изтеглете я като изображение, CSV или PDF.'},
                 analysisHistory:{title:'📜 История на анализите', desc:'Последните 10 изтеглени от вас анализа са изброени тук. Всеки запис показва тип, дата и файлово ime; с 🗑️ можете да изчистите историята.'},
+                projectManager:{title:'🗂️ Мениджър на проекти', desc:'Запазете изгледа на картата, настройките на оформлението и работната си зона с име, а после ги възстановете с едно кликване по всяко време.'},
             geotiff:{title:'📥 Изтегляне на данни (GeoTIFF)', desc:'Изтеглете първичните пикселни данни от вашия анализ като GeoTIFF, с избраната от вас разделителна способност и координатна система (CRS) — готово за използване в QGIS, ArcGIS и друг ГИС софтуер.'},
             vectorDownload:{title:'📥 Изтегляне на векторни данни', desc:'Изтеглете резултата от анализа като векторни данни (Shapefile, GeoJSON и др.) — готово за използване като класифицирани полигони в ГИС софтуер.'},
                         basemapViewArea:{title:'🗺️ Базова карта и област на преглед', desc:'Сменете слоя на базовата карта оттук — изберете между Google Earth, Сателит, OpenStreetMap и други.\\nОбласт на преглед: определя дали анализът се показва изрязан по границата на вашия AOI (Работна област) или като цялата сцена.'},
@@ -32812,6 +32986,7 @@ document.addEventListener('DOMContentLoaded',function(){
             drawTools:{title:'✏️ Шығыс құралдары', desc:'Картаңызға сызбалар мен аңдатпалар қосыңыз:\n↶ Болдырмау / ↷ Қайтару\n🗑️ Барлығын өшіру\n✏️ Қалам, Сызық, Көрсеткіш, Көпбұрыш, Шеңбер, Мәтін жолағы\n📐 Сызғышпен өлшеу — Картадағы нүктелер арасындағы қашықтық пен ауданды тікелей өлшеңіз.'},
             charts:{title:'📊 Деректер диаграммалары', desc:'Талдау статистикасы бағаналы, дөңгелек немесе сызықтық диаграмма ретінде көрсетіледі; сурет, CSV немесе PDF ретінде жүктеуге болады.'},
                 analysisHistory:{title:'📜 Талдау тарихы', desc:'Соңғы 10 жүктелген талдауыңыз осында тізімделеді. Әрбір жазбада түрі, күні және файл атауы көрсетіледі; 🗑️ арқылы тарихты тазалаңыз.'},
+                projectManager:{title:'🗂️ Жоба менеджері', desc:'Карта көрінісін, макет параметрлерін және жұмыс аймағыңызды атпен сақтап, кез келген уақытта бір басу арқылы қайта қалпына келтіре аласыз.'},
             geotiff:{title:'📥 Деректерді жүктеу (GeoTIFF)', desc:'Таңдалған ажыратымдылық пен координаттар жүйесімен (CRS) GeoTIFF ретінде жүктеңіз — QGIS, ArcGIS-те пайдалануға дайын.'},
             vectorDownload:{title:'📥 Векторлық деректерді жүктеу', desc:'Талдау нәтижесін векторлық деректер (Shapefile, GeoJSON және т.б.) түрінде жүктеңіз — ГАЖ бағдарламаларында жіктелген полигондар ретінде пайдалануға дайын.'},
             basemapViewArea:{title:'🗺️ Базалық карта және қарау аймағы', desc:'Базалық карта қабатын осы жерден өзгертіңіз — Google Earth, Жерсерік, OpenStreetMap және т.б.\nҚарау аймағы: AOI шекарасына сәйкес кесілген немесе толық сурет ретінде көрсетілетінін анықтайды.'},
@@ -32844,6 +33019,7 @@ document.addEventListener('DOMContentLoaded',function(){
             drawTools:{title:'✏️ Kimeneti Eszközök', desc:'Rajzokat és megjegyzéseket adhat a térképéhez:\\n↶ Visszavonás / ↷ Újra — az utolsó művelet visszavonása vagy megismétlése\\n🗑️ Összes Törlése — minden rajz eltávolítása\\n🖱 Kiválasztás — elem kiválasztása és mozgatása\\n✏️ Toll — szabadkézi rajzolás\\n— Vonal és → Nyíl — vonalas jelölések és irányok\\n⬠ Sokszög és ○ Kör — terület jelölése\\n📝 Szövegdoboz — megjegyzések hozzáadása; húzással mozgatható, sarkoknál átméretezhető.\\n📐 Vonalzó mérés — Mérjen távolságokat és területeket közvetlenül a térképen.'},
             charts:{title:'📊 Adatdiagramok', desc:'Az elemzés statisztikái itt jelennek meg oszlop-, kör- vagy vonaldiagramként; letöltheti képként, CSV-ként vagy PDF-ként.'},
                 analysisHistory:{title:'📜 Elemzési Előzmények', desc:'Az utolsó 10 letöltött elemzése itt szerepel. Minden bejegyzés tartalmazza a típust, dátumot és fájlnevet; a 🗑️ gombbal törölheti az előzményeket.'},
+                projectManager:{title:'🗂️ Projektkezelő', desc:'Mentse el a térkép nézetét, az elrendezési beállításokat és a munkaterületét egy néven, majd bármikor egy kattintással állítsa vissza.'},
             geotiff:{title:'📥 Adat Letöltése (GeoTIFF)', desc:'Töltse le elemzésének nyers pixeladatait GeoTIFF formátumban, a kiválasztott felbontással és koordináta-rendszerrel (CRS) — készen áll a QGIS, ArcGIS és más GIS szoftverekben történő használatra.'},
             vectorDownload:{title:'📥 Vektoradatok letöltése', desc:'Töltse le elemzésének eredményét vektoradatként (Shapefile, GeoJSON stb.) — készen áll osztályozott poligonokként a GIS-szoftverekben való felhasználásra.'},
                         basemapViewArea:{title:'🗺️ Alaptérkép és Nézeti Terület', desc:'Innen módosíthatja az alaptérkép rétegét — válasszon a Google Earth, Műhold, OpenStreetMap és más lehetőségek között.\\nNézeti Terület: meghatározza, hogy az elemzés az AOI (Munkaterület) határaihoz vágva vagy a teljes jelenetként jelenjen meg.'},
@@ -32876,6 +33052,7 @@ document.addEventListener('DOMContentLoaded',function(){
             drawTools:{title:'✏️ Chiqish vositalari', desc:'Xaritangizga chizmalar va izohlar qoʻshing:\n↶ Bekor qilish / ↷ Qaytarish — oxirgi amalni bekor qiling yoki qaytaring\n🗑️ Barchasini tozalash — barcha chizmalarni olib tashlang\n🖱 Tanlash — elementni tanlang va koʻchiring\n✏️ Qalam — erkin qoʻl bilan chizish\n— Chiziq va → Strelka — chiziqli belgilar va yoʻnalishlar\n⬠ Poligon va ○ Doira — hudud belgilash\n📝 Matn qutisi — izoh qoʻshing; koʻchirish uchun sudrab, burchaklardan oʻlchamini oʻzgartiring.\n📐 Chizgʻich oʻlchami — Xaritada nuqtalar orasidagi masofa va maydonni bevosita oʻlchang.'},
             charts:{title:'📊 Maʼlumot diagrammalari', desc:'Tahlilingizdagi statistika bu yerda ustunli, doiraviy yoki chiziqli diagramma sifatida koʻrsatiladi; ularni rasm, CSV yoki PDF sifatida yuklab olishingiz mumkin.'},
                 analysisHistory:{title:'📜 Tahlillar Tarixi', desc:'Oxirgi 10 ta yuklab olingan tahlil shu yerda ro\'yxatlanadi. Har bir yozuvda tahlil turi, sanasi va fayl nomi ko\'rsatiladi; 🗑️ tugmasi bilan tarixni tozalang.'},
+                projectManager:{title:'🗂️ Loyiha Menejeri', desc:'Xarita ko\'rinishingizni, sozlamalaringizni va ish hududingizni nom bilan saqlab, keyin bir bosishda qayta tiklashingiz mumkin.'},
             geotiff:{title:'📥 Maʼlumotni yuklab olish (GeoTIFF)', desc:'Tahlilingizning xom piksel maʼlumotlarini tanlangan bosqich va koordinata tizimi (CRS) bilan GeoTIFF sifatida yuklab oling — QGIS, ArcGIS va boshqa GIS dasturlarida toʻgʻridan-toʻgʻri foydalanish uchun tayyor.'},
             vectorDownload:{title:'📥 Vektor maʼlumotni yuklab olish', desc:'Tahlil natijasini vektor maʼlumot (Shapefile, GeoJSON va h.k.) sifatida yuklab oling — GIS dasturlarida tasniflangan poligonlar sifatida foydalanishga tayyor.'},
                         basemapViewArea:{title:'🗺️ Asosiy xarita va koʻrish maydoni', desc:'Fon xarita qatlamini (Asosiy xarita) shu yerdan almashtiring — Google Earth, Sputnik, OpenStreetMap va boshqalar orasidan tanlang.\nKoʻrish maydoni: tahlilning AOI chegarasiga (Ish maydoni) kesilgan holda yoki toʻliq sahna sifatida koʻrsatilishini belgilaydi.'},
@@ -32908,6 +33085,7 @@ document.addEventListener('DOMContentLoaded',function(){
               drawTools:{title:'✏️ Чыгаруу куралдары', desc:'Калем, сызык, жебе, полигон, текст жана башка куралдар менен картаны белгилеңиз.\n📐 Сызгыч өлчөм — Картада чекиттер ортосундагы аралык жана аянтты түз өлчөңүз.'},
               charts:{title:'📊 Маалымат диаграммалары', desc:'Талдоо статистикасы тилкелүү, тегерек же сызыктуу диаграмма катары — Сүрөт, CSV же PDF жүктөп алыңыз.'},
                 analysisHistory:{title:'📜 Талдоо тарыхы', desc:'Акыркы 10 жүктөлгөн талдооңуз бул жерде тизмеленет. Ар бир жазуу талдоо түрүн, күндү жана файл атын көрсөтөт; 🗑️ менен тарыхты тазалаңыз.'},
+                projectManager:{title:'🗂️ Долбоор менеджери', desc:'Картанын көрүнүшүн, жайгаштыруу параметрлерин жана жумуш аймагыңызды атпен сактап, каалаган убакта бир басуу менен калыбына келтириңиз.'},
               geotiff:{title:'📥 Маалыматтарды жүктөө (GeoTIFF)', desc:'Чийки пиксел маалыматтарын GeoTIFF катары жүктөп — QGIS же ArcGIS та колдонуңуз.'},
               vectorDownload:{title:'📥 Вектордук маалыматтарды жүктөө', desc:'Талдоо жыйынтыгын вектордук маалымат (Shapefile, GeoJSON ж.б.) катары жүктөп алыңыз — GIS программаларында классификацияланган полигондор катары колдонууга даяр.'},
               basemapViewArea:{title:'🗺️ Базалык карта жана көрүү аймагы', desc:'Фон карта катмарын алмаштырыңыз жана AOI же толук сүрөт режимин тандаңыз.'},
@@ -32941,6 +33119,7 @@ document.addEventListener('DOMContentLoaded',function(){
               drawTools:{title:'✏️ Гаралтын хэрэгслүүд', desc:'Газрын зурагт зураг болон тайлбар нэм:\n↶ Буцаах / ↷ Дахин хийх\n🗑️ Бүгдийг арилгах\n✏️ Үзэг, Шугам, Сум, Олон өнцөгт, Тойрог, Текстийн хайрцаг\n📐 Захирагч хэмжилт — Газрын зурагт цэгүүдийн хоорондох зай, талбайг шууд хэмж.'},
               charts:{title:'📊 Өгөгдөлийн диаграмм', desc:'Шинжилгээний статистик нь энд баганат, тойрог эсвэл шугаман диаграмм хэлбээрээр харагдана; зураг, CSV эсвэл PDF хэлбээрээр татаж болно.'},
                 analysisHistory:{title:'📜 Шинжилгээний Түүх', desc:'Сүүлд татаж авсан 10 шинжилгээ энд жагсаагдана. Бүртгэл бүр шинжилгээний төрөл, огноо, файлын нэрийг харуулна; 🗑️ товчоор түүхийг арилга.'},
+                projectManager:{title:'🗂️ Төслийн менежер', desc:'Газрын зургийн харагдац, зохион байгуулалтын тохиргоо болон судалгааны талбайгаа нэрээр хадгалж, хүссэн үедээ нэг товшилтоор сэргээнэ үү.'},
               geotiff:{title:'📥 Өгөгдөл татаж авах (GeoTIFF)', desc:'Шинжилгээнийхээ түүхий пикселийн өгөгдөлийг сонгосон нягтаршил болон координатын систем (CRS)-тэй GeoTIFF хэлбээрээр татаж ав — QGIS, ArcGIS болон бусад GIS програмд ашиглахад бэлэн.'},
               vectorDownload:{title:'📥 Векторын өгөгдөл татаж авах', desc:'Шинжилгээний үр дүнг вектор өгөгдөл (Shapefile, GeoJSON гэх мэт) хэлбэрээр татаж ав — GIS програмд ангилагдсан полигон болгон ашиглахад бэлэн.'},
               satelliteAnalyses:{title:'🌍 Хиймэл дагуулын шинжилгээ', desc:'NDVI, NDWI, EVI, SAVI, LST, SAR болон бусад ургамал, ус, дулаан болон радарын индексүүд энд байрладаг.\nЭхлээд 🛰️ Хиймэл дагуулын зураг самбараас мэдрэгч болон зургийг сонго, дараа нь шаардлагатай шинжилгээг тэмдэглэ.\n📈 Цагийн цуврал ба өөрчлөлтийн шинжилгээ: Олон огноот хиймэл дагуулын өгөгдлөөр ургамалжилт, ус болон газрын бүрхэвчийн өөрчлөлтийг хянаарай.'},
@@ -32973,6 +33152,7 @@ document.addEventListener('DOMContentLoaded',function(){
               drawTools:{title:'✏️ გამოსასვლელი ხელსაწყოები', desc:'რუკაზე ნახაზები და ანოტაციები დაამატეთ:\n↶ გაუქმება / ↷ გამეორება\n🗑️ ყველაფრის გასუფთავება\n✏️ კალამი, ხაზი, ისარი, პოლიგონი, წრე, ტექსტის ყუთი\n📐 სახაზავი გაზომვა — გაზომეთ მანძილი და ფართობი წერტილებს შორის პირდაპირ რუკაზე.'},
               charts:{title:'📊 მონაცემთა სქემები', desc:'ანალიზის სტატისტიკა სვეტოვანი, წრიული ან ხაზოვანი სქემის სახით გამოჩნდება; ჩამოტვირთეთ სურათად, CSV ან PDF.'},
                 analysisHistory:{title:'📜 ანალიზის ისტორია', desc:'თქვენი ბოლო 10 გადმოწერილი ანალიზი აქ ჩამოთვლილია. თითოეული ჩანაწერი გვიჩვენებს ტიპს, თარიღს და ფაილის სახელს; 🗑️-ით ისტორია გასუფთავდება.'},
+                projectManager:{title:'🗂️ პროექტის მენეჯერი', desc:'შეინახეთ რუკის ხედი, განლაგების პარამეტრები და თქვენი სამუშაო არეალი სახელით და აღადგინეთ ერთი დაწკაპუნებით ნებისმიერ დროს.'},
               geotiff:{title:'📥 მონაცემების ჩამოტვირთვა (GeoTIFF)', desc:'ჩამოტვირთეთ ანალიზის ნედლი პიქსელის მონაცემები GeoTIFF სახით შერჩეული გარჩევადობითა და კოორდინატთა სისტემით (CRS) — QGIS, ArcGIS-ში გამოსაყენებლად მზად.'},
               vectorDownload:{title:'📥 ვექტორული მონაცემების ჩამოტვირთვა', desc:'ჩამოტვირთეთ ანალიზის შედეგი ვექტორული მონაცემების სახით (Shapefile, GeoJSON და სხვ.) — მზადაა გამოსაყენებლად კლასიფიცირებულ პოლიგონებად GIS პროგრამებში.'},
               satelliteAnalyses:{title:'🌍 სატელიტური ანალიზი', desc:'NDVI, NDWI, EVI, SAVI, LST, SAR და სხვა მცენარეობის, წყლის, სითბოსა და რადარის ინდექსები აქ არის.\nჯერ 🛰️ სატელიტური სურათის პანელიდან აირჩიეთ სენსორი და სცენა, შემდეგ მონიშნეთ სასურველი ანალიზი.\n📈 დროის მწკრივი და ცვლილების ანალიზი: მრავალ-თარიღიანი თანამგზავრული მონაცემებით მცენარეული, წყლისა და მიწის საფარის ცვლილებებს თვალყური ადევნეთ.'},
@@ -33004,6 +33184,7 @@ document.addEventListener('DOMContentLoaded',function(){
             drawTools:{title:'✏️ Strumenti di Output', desc:"Aggiungi disegni e note alla tua mappa:\n↶ Annulla / ↷ Ripeti — annulla o ripeti l'ultima azione\n🗑️ Cancella Tutto — rimuovi tutti i disegni\n☑ Seleziona — seleziona e sposta un elemento\n✏️ Penna — disegno a mano libera\n— Linea & → Freccia — segni lineari e direzioni\n⬠ Poligono & ○ Cerchio — marcatura area\n📝 Casella di testo — aggiungi note; trascina per spostare, ridimensiona dagli angoli.\n📐 Misura con righello — Misura distanze e aree tra punti direttamente sulla mappa."},
             charts:{title:'📊 Grafici Dati', desc:"Le statistiche dell'analisi vengono mostrate qui come grafico a barre, a torta o a linee; scaricale come immagine, CSV o PDF."},
                 analysisHistory:{title:'📜 Cronologia Analisi', desc:'Le ultime 10 analisi scaricate sono elencate qui. Ogni record mostra tipo, data e nome del file; usa 🗑️ per cancellare la cronologia.'},
+                projectManager:{title:'🗂️ Gestione Progetti', desc:'Salva la vista della mappa, le impostazioni di layout e la tua area di studio con un nome, quindi ripristinale con un clic in qualsiasi momento.'},
             geotiff:{title:'📥 Scarica Dati (GeoTIFF)', desc:"Scarica i dati grezzi dei pixel dell'analisi come GeoTIFF, con la risoluzione e il sistema di coordinate (CRS) scelti — pronto per l'uso in QGIS, ArcGIS e altri software GIS."},
             vectorDownload:{title:'📥 Scarica Dati Vettoriali', desc:'Scarica il risultato dell\'analisi come dati vettoriali (Shapefile, GeoJSON, ecc.) — pronto per l\'uso come poligoni classificati nei software GIS.'},
             basemapViewArea:{title:'🗺️ Mappa di Base e Area di Visualizzazione', desc:"Cambia il livello di sfondo della mappa (Mappa di Base) qui — scegli tra Google Earth, Satellite, OpenStreetMap e altro.\nArea di Visualizzazione: imposta se l'analisi viene visualizzata ritagliata al confine AOI (Area di Lavoro) o come scena completa."},
@@ -33188,6 +33369,9 @@ document.addEventListener('DOMContentLoaded',function(){
 
         // Step 15 — Analysis History
         { id: 'analysisHistory', tab: 'harita', autoScroll: true, sel: ['#analysis-history-section h3'] },
+
+        // Step 15b — Project Manager (coming soon)
+        { id: 'projectManager', tab: 'harita', autoScroll: true, sel: ['#sb-project-manager-title'] },
 
         // Step 16 — GeoTIFF download
         { id: 'geotiff',           tab: 'harita', autoScroll: true, sel: ['#btn-geotiff-download'] },
@@ -34744,7 +34928,7 @@ document.addEventListener('DOMContentLoaded',function(){
     justify-content: center;
     transition: background .15s, color .15s;
 }
-#sylva-guide-close-btn:hover { background: #f1f5f9; color: #ef4444; }
+#sylva-guide-close-btn:hover { background: #f1f5f9; color:#dc2626; }
 #sylva-guide-step-count {
     font-size: .68rem;
     font-weight: 800;
@@ -35723,7 +35907,7 @@ function sylvaPdfCardsHTML() {
                     </svg>
                     İndir
                 </button>
-                <button onclick="closeSylvaCVModal()"
+                <button onclick="closeSylvaCVModal()" title="Kapat" aria-label="Kapat"
                     style="background:rgba(255,255,255,0.12);border:none;color:#fff;width:32px;height:32px;
                            border-radius:8px;cursor:pointer;font-size:1.1rem;display:flex;align-items:center;
                            justify-content:center;transition:.15s;"
@@ -36805,7 +36989,7 @@ function _vdlFallbackDownload(blob, name) {
     .vaw-run-btn{width:100%;margin-top:10px;background:#1e3a8a;color:#fff;border:none;border-radius:8px;padding:9px;font-weight:700;font-size:0.8rem;cursor:pointer;}
     .vaw-run-btn:hover{background:#152d6e;}
     .vaw-status{font-size:0.72rem;margin-top:6px;padding:6px 8px;border-radius:6px;display:none;}
-    .vaw-status.ok{display:block;background:#f0fdf4;color:#16a34a;}
+    .vaw-status.ok{display:block;background:#f0fdf4;color:#15803d;}
     .vaw-status.err{display:block;background:#fef2f2;color:#dc2626;}
     .vaw-status.info{display:block;background:#eff6ff;color:#1e3a8a;}
 </style>
@@ -37083,7 +37267,7 @@ function _vdlFallbackDownload(blob, name) {
                 '<input type="checkbox" class="vaw-vis-cb" ' + (vis ? 'checked' : '') + ' title="Haritada göster/gizle" style="flex-shrink:0;cursor:pointer;width:14px;height:14px;accent-color:' + ws.color + ';">' +
                 '<span class="vaw-ws-swatch" style="background:' + ws.color + ';"></span>' +
                 '<span class="vaw-ws-name">' + esc(wsDisplayName(ws)) + '</span>' +
-                '<button data-act="del" title="Sil" style="color:#ef4444;">🗑️</button>' +
+                '<button data-act="del" title="Sil" style="color:#dc2626;">🗑️</button>' +
                 '</div>';
         });
         box.innerHTML = html;
@@ -37405,7 +37589,7 @@ function _vdlFallbackDownload(blob, name) {
   <div style="background:#fff;border-radius:14px;box-shadow:0 24px 64px rgba(0,0,0,0.28);width:600px;max-width:95vw;max-height:85vh;display:flex;flex-direction:column;overflow:hidden;animation:privacyModalIn .22s ease;">
     <div style="background:#1e3a8a;color:#fff;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;">
       <span id="privacy-modal-title" style="font-size:1rem;font-weight:800;letter-spacing:.02em;" data-i18n="privacy_policy_btn">Gizlilik Politikası</span>
-      <button onclick="closePrivacyPolicy();event.stopPropagation();" style="background:none;border:none;color:#fff;font-size:1.4rem;cursor:pointer;opacity:.8;line-height:1;padding:0 4px;" title="Kapat">&times;</button>
+      <button onclick="closePrivacyPolicy();event.stopPropagation();" style="background:none;border:none;color:#fff;font-size:1.4rem;cursor:pointer;opacity:.8;line-height:1;padding:0 4px;" title="Kapat" aria-label="Kapat">&times;</button>
     </div>
     <div style="padding:24px;overflow-y:auto;font-size:0.88rem;color:#334155;line-height:1.7;">
       <p id="privacy-modal-text" data-i18n="privacy_policy_text"><strong>SylvaGIS Hizmet Şartları ve Gizlilik Politikası</strong><br><br>SylvaGIS olarak, uydu görüntüleri ve mekânsal analizler üzerine sunduğumuz küresel hizmetlerde şeffaflık, veri güvenliği ve bilimsel etiği esas alıyoruz. Bu metin, platformumuzu kullanırken verilerinizin nasıl işlendiğini, korunduğunu ve sistemin genel kullanım koşullarını açıklamaktadır.<br><br><strong>1. Hizmetin Kapsamı ve Amacı</strong><br>SylvaGIS, coğrafi veri işleme, uzaktan algılama operasyonları ve mekânsal analizler gerçekleştirmek üzere tasarlanmış profesyonel bir web platformudur. Sistem, kullanıcılara bulut tabanlı haritalama ve veri görselleştirme araçları sunar.<br><br><strong>2. Veri İşleme Prensipleri</strong><br>Kullanıcılar tarafından sisteme yüklenen raster, vektör veya tablo formatındaki veriler yalnızca talep edilen mekânsal analizlerin yapılması amacıyla işlenir. SylvaGIS, yüklenen veri setlerini hiçbir koşulda üçüncü taraflara satmaz veya farklı ticari amaçlarla kullanmaz.<br><br><strong>3. Üçüncü Taraf Kimlik Doğrulama (SSO)</strong><br>Platforma kesintisiz ve güvenli erişim sağlamak için Google (Gmail) gibi yetkilendirilmiş üçüncü taraf kimlik doğrulama servisleri kullanılmaktadır. Bu entegrasyon, yalnızca size özel izole çalışma alanınızı oluşturmak ve hesabınızı doğrulamak amacıyla e-posta adresi gibi temel kimlik verilerini kullanır; şifreleriniz sistemimizde tutulmaz.<br><br><strong>4. Harici Veri Kaynakları ve Bulut Entegrasyonları</strong><br>Kullanıcıların kendi bulut depolama hesaplarını (örn. harici sürücüler veya entegre veri depolama servisleri) platforma bağlaması durumunda, SylvaGIS yalnızca analiz için yetki verilen spesifik dosyalara erişim sağlar. İzniniz dışında hiçbir dosya kopyalanmaz, taranmaz veya sunucularımızda kalıcı olarak arşivlenmez.<br><br><strong>5. Mekânsal Veri İzolasyonu ve Güvenlik</strong><br>Sisteme aktarılan veriler ve üretilen analiz sonuçları, uluslararası bulut bilişim standartlarına uygun şifreleme algoritmalarıyla korunur. Her kullanıcının çalışma alanı diğerlerinden izole edilmiştir ve verilerin mahremiyeti teknik altyapımızla garanti altına alınmıştır.<br><br><strong>6. Fikri Mülkiyet ve İçerik Sahipliği</strong><br>SylvaGIS altyapısı kullanılarak elde edilen tüm analiz çıktıları, haritalar ve grafikler tamamen kullanıcının fikri mülkiyetindedir. Kullanıcı, sisteme yüklediği veya dışa aktardığı tüm kaynak verilerin telif ve kullanım haklarına sahip olduğunu beyan eder.<br><br><strong>7. Analiz Doğruluğu ve Profesyonel Sorumluluk</strong><br>Platform algoritmaları, bilimsel olarak kanıtlanmış yöntemlerle çalışır. Ancak uydu sensör hataları, bulutluluk oranı, atmosferik koşullar veya kaynak veri kusurlarından doğabilecek sapmalar mümkündür. SylvaGIS analiz sonuçlarının %100 mutlak doğruluğunu taahhüt etmez; verilerin akademik, hukuki veya profesyonel kararlarda kullanım sorumluluğu tamamen kullanıcıya aittir.<br><br><strong>8. Sistem Güncellemeleri ve Erişilebilirlik</strong><br>Hizmet kalitesini ve hızını artırmak amacıyla sistemsel güncellemeler, yeni CBS araçlarının entegrasyonu ve performans iyileştirmeleri düzenli olarak yapılır. Bu iyileştirmeler sırasında oluşabilecek kısa süreli kesintiler olağan kabul edilir.<br><br><strong>9. Çok Dilli Kullanım ve Uluslararası Evrensellik</strong><br>Platformumuz, küresel erişilebilirlik ilkesi gereği 30 dilde hizmet vermektedir. Bu doğrultuda politikalarımız, tek bir ülkenin yerel kanunlarından ziyade uluslararası yazılım etiği ve küresel veri koruma standartları (Global Data Privacy Standards) çerçevesinde yorumlanır.<br><br><strong>10. Çerez (Cookie) ve Oturum Yönetimi</strong><br>Platform, yalnızca kullanıcı oturumunun kesintisiz sürmesi, harita katmanı tercihlerinin ve arayüz dilinin hatırlanması için zorunlu teknik çerezleri kullanır. Reklam amaçlı veya kişisel profilleme yapmaya yönelik takip çerezleri (tracking cookies) sistemimizde yer almaz.<br><br><strong>11. Kötüye Kullanım ve Hesap Sınırlandırması</strong><br>Platformun tersine mühendislik (reverse engineering) yöntemleriyle incelenmesi, zararlı yazılım yüklenmesi veya sunucu kapasitesini manipüle edecek siber eylemlerde bulunulması durumunda SylvaGIS, ilgili hesabın erişimini durdurma hakkını saklı tutar.<br><br><strong>12. Politika Değişiklikleri</strong><br>Teknolojik gelişmelere, yeni eklenecek CBS modüllerine veya global yazılım gereksinimlerine bağlı olarak SylvaGIS, bu hizmet şartlarında güncellemeler yapabilir. Önemli değişiklikler kullanıcılara platform arayüzü üzerinden bildirilir.</p>
@@ -38668,6 +38852,65 @@ function _initSwipeDrag(divider) {
     document.addEventListener('touchmove', onMove, { passive:false });
     document.addEventListener('touchend',  function(){ dragging=false; });
 }
+</script>
+
+<script>
+    // ===========================================================
+    // ♿ ERİŞİLEBİLİRLİK — Klavye ile Kullanılabilirlik
+    // Sitede <div>/<span onclick="..."> gibi native olarak klavye
+    // ile odaklanamayan/etkinleştirilemeyen özel kontroller var.
+    // Bu script sayfadaki TÜM [onclick] elemanlarını tarar; eğer
+    // eleman doğal olarak klavye erişilebilir değilse (buton, link,
+    // form elemanı değilse), otomatik olarak:
+    //   - tabindex="0" (Tab ile odaklanabilir)
+    //   - role="button" (ekran okuyucular için anlamlı rol)
+    //   - Enter / Boşluk tuşuyla tıklama tetikleme
+    // ekler. Görsel/işlevsel hiçbir şeyi değiştirmez, sadece
+    // klavye ve ekran okuyucu erişimini sağlar. Yeni eklenen
+    // elemanlar için de her DOM değişikliğinde otomatik çalışır.
+    // ===========================================================
+    (function () {
+        var NATIVE_INTERACTIVE = ['button', 'a', 'input', 'select', 'textarea', 'label'];
+
+        function enhance(el) {
+            if (!el || el.dataset.a11yEnhanced === '1') return;
+            var tag = el.tagName ? el.tagName.toLowerCase() : '';
+            if (NATIVE_INTERACTIVE.indexOf(tag) !== -1) return;
+            if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '0');
+            if (!el.hasAttribute('role')) el.setAttribute('role', 'button');
+            el.dataset.a11yEnhanced = '1';
+            el.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+                    // Form elemanlarında (input/textarea) boşluk tuşunu yakalama
+                    var activeTag = document.activeElement ? document.activeElement.tagName.toLowerCase() : '';
+                    if (e.key !== 'Enter' && (activeTag === 'input' || activeTag === 'textarea')) return;
+                    e.preventDefault();
+                    el.click();
+                }
+            });
+        }
+
+        function enhanceAll(root) {
+            (root || document).querySelectorAll('[onclick]').forEach(enhance);
+        }
+
+        enhanceAll(document);
+
+        // Dinamik olarak eklenen (JS ile sonradan oluşturulan) onclick'li
+        // elemanları da otomatik yakalamak için basit bir MutationObserver.
+        if (window.MutationObserver) {
+            var mo = new MutationObserver(function (mutations) {
+                mutations.forEach(function (m) {
+                    m.addedNodes && m.addedNodes.forEach(function (node) {
+                        if (node.nodeType !== 1) return;
+                        if (node.hasAttribute && node.hasAttribute('onclick')) enhance(node);
+                        if (node.querySelectorAll) enhanceAll(node);
+                    });
+                });
+            });
+            mo.observe(document.body, { childList: true, subtree: true });
+        }
+    })();
 </script>
 
 </body>
