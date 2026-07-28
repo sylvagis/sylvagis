@@ -34613,6 +34613,19 @@ document.addEventListener('DOMContentLoaded',function(){
       { value: 'USA',          en:'United States', tr:'Amerika Birleşik Devletleri', de:'Vereinigte Staaten', fr:'États-Unis', es:'Estados Unidos',  pt:'Estados Unidos', ar:'الولايات المتحدة', fa:'ایالات متحده آمریکا', zh:'美国', ja:'アメリカ合衆国', ko:'미국', hi:'संयुक्त राज्य अमेरिका', id:'Amerika Serikat' , ru:'США', vi:'Hoa Kỳ', el:'Ηνωμένες Πολιτείες', bg:'САЩ', az:'ABŞ', pl:'Stany Zjednoczone', hu:'Egyesült Államok', th:'สหรัฐอเมริกา', bn:'যুক্তরাষ্ট্র', ur:'ریاستہائے متحدہ امریکہ', ms:'Amerika Syarikat', kk:'Америка Құрама Штаттары'  , uz:'Amerika Qoʻshma Shtatlari', ky:'Кошмо Штаттар' , it:'USA', mn:'Америкийн Нэгдсэн Улс', ka:'ამერიკის შეერთებული შტატები'}
     ];
 
+    // ── Ülke adını aktif dile göre al ───────────────────────
+    function getLocalizedCountryName(countryValue) {
+        if (!countryValue) return '';
+        var lang = (typeof _sylvaLang !== 'undefined' ? _sylvaLang : 'en') || 'en';
+        for (var i = 0; i < SYLVA_COUNTRIES.length; i++) {
+            if (SYLVA_COUNTRIES[i].value === countryValue) {
+                return SYLVA_COUNTRIES[i][lang] || SYLVA_COUNTRIES[i]['en'] || countryValue;
+            }
+        }
+        return countryValue;
+    }
+    window._sylvaGetLocalizedCountryName = getLocalizedCountryName;
+
     // ── Ülke dropdown'u dile göre yenile ─────────────────────
     function refreshCountryDropdown(lang) {
         var sel = document.getElementById('reg-ulke');
@@ -34636,7 +34649,17 @@ document.addEventListener('DOMContentLoaded',function(){
     }
 
     // Dil değiştiğinde çağrılır (applySylvaLang hook)
-    window._sylvaRefreshCountryDropdown = refreshCountryDropdown;
+    window._sylvaRefreshCountryDropdown = function(lang) {
+        refreshCountryDropdown(lang);
+        // Profil menüsünde gösterilen ülke adını da güncelle
+        var menuEmail = document.getElementById('menu-user-email');
+        var mqbMUlke  = document.getElementById('mqb-menu-ulke');
+        if ((menuEmail || mqbMUlke) && typeof currentUser !== 'undefined' && currentUser && currentUser.ulke) {
+            var localized = getLocalizedCountryName(currentUser.ulke);
+            if (menuEmail) menuEmail.textContent = localized || '';
+            if (mqbMUlke)  mqbMUlke.textContent  = localized || '';
+        }
+    };
 
     // ── Meslek dropdown seçeneklerini dile göre yenile ────────
     function refreshProfessionDropdown(lang) {
@@ -34756,7 +34779,7 @@ document.addEventListener('DOMContentLoaded',function(){
         var menuEmail = document.getElementById('menu-user-email');
         var menuProv  = document.getElementById('menu-user-provider');
         if (menuName)  menuName.textContent  = user.name   || '';
-        if (menuEmail) menuEmail.textContent = user.ulke   || '';
+        if (menuEmail) menuEmail.textContent = getLocalizedCountryName(user.ulke) || '';
         if (menuProv)  menuProv.textContent  = user.meslek || '';
 
         // ── Mobil quick-bar kullanıcı güncelleme ──
@@ -34783,7 +34806,7 @@ document.addEventListener('DOMContentLoaded',function(){
         if (mncName)    mncName.textContent    = user.firstName || (user.name || '').split(' ')[0] || 'Ad';
         if (mqbMName)   mqbMName.textContent   = user.name   || '';
         if (mqbMMeslek) mqbMMeslek.textContent = user.meslek || '';
-        if (mqbMUlke)   mqbMUlke.textContent   = user.ulke   || '';
+        if (mqbMUlke)   mqbMUlke.textContent   = getLocalizedCountryName(user.ulke) || '';
     }
 
     // ── Kullanıcı menüsü toggle ──────────────────────────────
@@ -39299,6 +39322,13 @@ window.sylvaToggleRoadmap = function() {
         ov.classList.remove('active');
     } else {
         ov.classList.add('active');
+        // İlk açılışta "görüldü" olarak işaretle → kırmızı ışık sönsün
+        try { localStorage.setItem('sylva_roadmap_seen', '1'); } catch(e) {}
+        var BIDS = ['nav-roadmap-btn', 'mnc-roadmap-btn'];
+        BIDS.forEach(function(id) {
+            var el = document.getElementById(id);
+            if (el) el.classList.remove('sylva-roadmap-blink');
+        });
     }
 };
 window.sylvaCloseRoadmap = function() {
@@ -39325,8 +39355,12 @@ document.addEventListener('keydown', function(e) {
         return false;
     }
 
+    function hasSeen() {
+        try { return !!localStorage.getItem('sylva_roadmap_seen'); } catch(e) { return false; }
+    }
+
     function updateBlink() {
-        var ok = isLoggedIn();
+        var ok = isLoggedIn() && !hasSeen();
         BLINK_IDS.forEach(function(id) {
             var el = document.getElementById(id);
             if (!el) return;
