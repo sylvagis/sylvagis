@@ -126,6 +126,65 @@
         }
     </script>
     <script>
+        // ════════════════════════════════════════════════════════════════
+        // 🛠️ KRİTİK DÜZELTME — Çoklu Kullanıcı Yarış Durumu (Race Condition)
+        // ════════════════════════════════════════════════════════════════
+        // Sunucu tarafında "son analiz" bilgisi artık kullanıcı/sekme bazlı
+        // saklanıyor (bkz. server.py). Bunun çalışabilmesi için her isteğin
+        // hangi kullanıcıya/sekmeye ait olduğunu sunucuya bildiren sabit bir
+        // "clientId" göndermemiz gerekiyor. Bunu index.html içindeki onlarca
+        // ayrı fetch() çağrısını tek tek düzenlemek yerine, TEK bir noktadan
+        // — window.fetch'i sarmalayarak (interceptor) — otomatik ekliyoruz.
+        // Bu sayede aynı anda birden fazla kullanıcı analiz çalıştırdığında
+        // artık birbirlerinin verilerini/indirmelerini ele geçirmezler.
+        (function () {
+            function makeClientId() {
+                if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+                    return window.crypto.randomUUID();
+                }
+                return 'sylva-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+            }
+
+            try {
+                window._sylvaClientId = sessionStorage.getItem('sylva_client_id');
+                if (!window._sylvaClientId) {
+                    window._sylvaClientId = makeClientId();
+                    sessionStorage.setItem('sylva_client_id', window._sylvaClientId);
+                }
+            } catch (e) {
+                // sessionStorage erişilemezse (gizli mod vb.) en azından bu
+                // sayfa yüklemesi boyunca sabit kalacak bir kimlik üret.
+                window._sylvaClientId = makeClientId();
+            }
+
+            // Bu 3 endpoint sunucuda kullanıcı bazlı durum (son analiz
+            // parametreleri/CRS) okuyup yazıyor — clientId eklenmesi gereken
+            // TEK bunlar. Diğer tüm istekler değiştirilmeden geçer.
+            var STATEFUL_ENDPOINTS = ['/api/analyze', '/api/download-geotiff', '/api/vector-download'];
+            var originalFetch = window.fetch.bind(window);
+
+            window.fetch = function (input, init) {
+                try {
+                    var url = (typeof input === 'string') ? input : (input && input.url) || '';
+                    var isStateful = STATEFUL_ENDPOINTS.some(function (ep) {
+                        return url.indexOf(ep) !== -1;
+                    });
+                    if (isStateful && init && typeof init.body === 'string') {
+                        var bodyObj = JSON.parse(init.body);
+                        if (bodyObj && typeof bodyObj === 'object' && !bodyObj.clientId) {
+                            bodyObj.clientId = window._sylvaClientId;
+                            init = Object.assign({}, init, { body: JSON.stringify(bodyObj) });
+                        }
+                    }
+                } catch (e) {
+                    // Gövde JSON değilse (ör. FormData) veya ayrıştırılamazsa
+                    // hiç dokunma — isteği olduğu gibi ilet.
+                }
+                return originalFetch(input, init);
+            };
+        })();
+    </script>
+    <script>
         /* SylvaGIS — Early session check
            Pre-set _sylvaUserDone BEFORE any other scripts run so that the
            welcome-screen close handler and the UI blocker already know
@@ -207,110 +266,6 @@
         .sylva-blink {
             animation: sylvaBtnBlink 1.3s ease-in-out infinite !important;
         }
-    /* ── Yol Haritası butonu: giriş sonrası kırmızı yanıp sönme ── */
-    @keyframes sylva-roadmap-red-blink {
-        0%, 100% { background-color: #f8fafc; color: #dc2626; border-color: #dc2626; box-shadow: 0 0 0 0 rgba(220,38,38,0); }
-        50%       { background-color: #dc2626; color: #fff;    border-color: #b91c1c; box-shadow: 0 0 0 5px rgba(220,38,38,0.28); }
-    }
-    .sylva-roadmap-blink {
-        animation: sylva-roadmap-red-blink 1.15s ease-in-out infinite !important;
-        border-color: #dc2626 !important;
-        color: #dc2626 !important;
-    }
-    /* ── Yol Haritası modal overlay ── */
-    #sylva-roadmap-overlay {
-        display: none;
-        position: fixed;
-        inset: 0;
-        z-index: 99990;
-        background: rgba(15,23,42,0.60);
-        backdrop-filter: blur(5px);
-        -webkit-backdrop-filter: blur(5px);
-        align-items: center;
-        justify-content: center;
-        padding: 16px;
-        box-sizing: border-box;
-    }
-    #sylva-roadmap-overlay.active { display: flex; }
-    #sylva-roadmap-modal {
-        background: #fff;
-        border-radius: 20px;
-        width: 540px;
-        max-width: 100%;
-        max-height: 82dvh;
-        overflow-y: auto;
-        box-shadow: 0 24px 72px rgba(0,0,0,0.24);
-        position: relative;
-        animation: sylvaLoginIn .25s cubic-bezier(.34,1.56,.64,1);
-    }
-    #sylva-roadmap-header {
-        padding: 26px 28px 18px;
-        border-bottom: 1px solid #f1f5f9;
-        display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 12px;
-        position: sticky;
-        top: 0;
-        background: #fff;
-        border-radius: 20px 20px 0 0;
-        z-index: 1;
-    }
-    #sylva-roadmap-title-row { display: flex; flex-direction: column; gap: 3px; }
-    #sylva-roadmap-title { font-size: 1.25rem; font-weight: 800; color: #1e3a8a; }
-    #sylva-roadmap-sub   { font-size: 0.8rem; color: #64748b; }
-    #sylva-roadmap-close {
-        background: none; border: none; font-size: 1.05rem; cursor: pointer;
-        color: #94a3b8; width: 34px; height: 34px; display: flex;
-        align-items: center; justify-content: center;
-        border-radius: 8px; transition: background .15s, color .15s;
-        flex-shrink: 0;
-    }
-    #sylva-roadmap-close:hover { background: #fee2e2; color: #dc2626; }
-    #sylva-roadmap-body { padding: 22px 28px 28px; }
-    .srm-item {
-        display: flex; align-items: flex-start; gap: 12px;
-        padding: 13px 14px; border-radius: 10px;
-        border: 1px solid #e2e8f0; margin-bottom: 10px;
-        transition: background .15s;
-    }
-    .srm-item:last-child { margin-bottom: 0; }
-    .srm-item:hover { background: #f8fafc; }
-    .srm-item-icon { font-size: 1.3rem; flex-shrink: 0; margin-top: 1px; }
-    .srm-item-content { flex: 1; min-width: 0; }
-    .srm-item-title { font-weight: 700; font-size: 0.88rem; color: #1e3a8a; }
-    .srm-item-desc  { font-size: 0.78rem; color: #64748b; margin-top: 2px; line-height: 1.4; }
-    .srm-badge {
-        font-size: 0.65rem; font-weight: 700; padding: 2px 7px;
-        border-radius: 20px; white-space: nowrap; flex-shrink: 0; margin-top: 2px;
-    }
-    .srm-badge-soon    { background: #fef3c7; color: #92400e; }
-    .srm-badge-wip     { background: #dbeafe; color: #1e40af; }
-    .srm-badge-planned { background: #f0fdf4; color: #166534; }
-    .srm-empty {
-        text-align: center; padding: 38px 16px; color: #94a3b8;
-    }
-    .srm-empty-icon  { font-size: 2.6rem; margin-bottom: 10px; }
-    .srm-empty-title { font-weight: 700; color: #64748b; font-size: 0.92rem; margin-bottom: 4px; }
-    .srm-empty-sub   { font-size: 0.8rem; }
-    .srm-cat {
-        font-size: 0.72rem;
-        font-weight: 800;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        color: #94a3b8;
-        margin: 18px 0 8px;
-        padding-bottom: 5px;
-        border-bottom: 1px solid #f1f5f9;
-    }
-    .srm-cat:first-child { margin-top: 0; }
-    @media (max-width: 540px) {
-        #sylva-roadmap-modal { border-radius: 18px 18px 0 0; max-height: 88dvh; }
-        #sylva-roadmap-overlay { padding: 0; align-items: flex-end; }
-        #sylva-roadmap-header { padding: 20px 18px 14px; }
-        #sylva-roadmap-body   { padding: 16px 18px 24px; }
-    }
-
         #sylva-login-close{position:absolute;top:14px;right:14px;background:none;border:none;font-size:1.1rem;cursor:pointer;color:#94a3b8;width:32px;height:32px;display:flex;align-items:center;justify-content:center;border-radius:8px;transition:.15s;}
         #sylva-login-close:hover{background:#f1f5f9;color:#334155;}
         .sylva-login-brand{display:flex;align-items:center;gap:8px;font-size:1.25rem;font-weight:800;color:#1e3a8a;margin-bottom:18px;}
@@ -2760,18 +2715,6 @@ tr.class-highlight-active {
 
         <!-- Mobil navbar kontroller: dil + rehber + kullanıcı (≤640px) -->
         <div id="mobile-nav-controls" style="display:none;align-items:center;gap:6px;margin-left:auto;">
-            <!-- Yol Haritası butonu (mobil navbar) -->
-            <button type="button" id="mnc-roadmap-btn"
-                onclick="(function(e){var ok=window._sylvaUserDone===true;if(!ok){try{var r=localStorage.getItem('sylva_user_profile');if(r){var d=JSON.parse(r);if(d&&d.user)ok=true;}if(!ok){var o=localStorage.getItem('sylva_auth_session');if(o){var od=JSON.parse(o);if(od&&od.user&&od.expires>Date.now())ok=true;}}}catch(ex){}}if(!ok){e.preventDefault();e.stopPropagation();var fu=document.getElementById('sylva-firstuse-overlay');if(fu)fu.classList.add('active');}else{sylvaToggleRoadmap();}})(event)"
-                style="display:flex;align-items:center;gap:3px;padding:5px 9px;border:1px solid #cbd5e1;border-radius:7px;background:#f8fafc;color:#1e3a8a;font-weight:600;font-size:0.72rem;cursor:pointer;">
-                🗺️ Yol Haritası
-            </button>
-            <!-- Rehber butonu -->
-            <button type="button" id="mnc-guide-btn"
-                onclick="var g=document.getElementById('nav-guide-btn');if(g)g.click();"
-                style="display:flex;align-items:center;gap:3px;padding:5px 9px;border:1px solid #cbd5e1;border-radius:7px;background:#f8fafc;color:#1e3a8a;font-weight:600;font-size:0.72rem;cursor:pointer;">
-                <span data-i18n="nav_guide">❓ Rehber</span>
-            </button>
             <!-- Dil butonu — mqb-lang-toggle'a delege eder -->
             <button type="button" id="mnc-lang-btn"
                 onclick="(function(btn){var t=document.getElementById('mqb-lang-toggle');if(t){var menu=document.getElementById('mqb-lang-menu');var isHidden=(menu.style.display==='none'||!menu.style.display);if(isHidden){var br=btn.getBoundingClientRect();var mw=260;var lp=br.left;if(lp+mw>window.innerWidth-8)lp=window.innerWidth-mw-8;menu.style.top=(br.bottom+4)+'px';menu.style.left=Math.max(8,lp)+'px';menu.style.right='auto';menu.style.display='block';var act=menu.querySelector('.lang-opt.active');if(act)act.scrollIntoView({block:'nearest'});else menu.scrollTop=0;}else{menu.style.display='none';}}event.stopPropagation();})(this)"
@@ -2779,6 +2722,12 @@ tr.class-highlight-active {
                 <span id="mnc-flag">🇬🇧</span>
                 <span id="mnc-label" style="max-width:70px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">English</span>
                 <span style="font-size:0.55rem;opacity:0.6;">▼</span>
+            </button>
+            <!-- Rehber butonu -->
+            <button type="button" id="mnc-guide-btn"
+                onclick="var g=document.getElementById('nav-guide-btn');if(g)g.click();"
+                style="display:flex;align-items:center;gap:3px;padding:5px 9px;border:1px solid #cbd5e1;border-radius:7px;background:#f8fafc;color:#1e3a8a;font-weight:600;font-size:0.72rem;cursor:pointer;">
+                <span data-i18n="nav_guide">❓ Rehber</span>
             </button>
             <!-- Kullanıcı butonu — giriş durumuna göre otomatik güncellenir -->
             <div id="mnc-user-wrap" style="position:relative;display:flex;align-items:center;">
@@ -2797,10 +2746,6 @@ tr.class-highlight-active {
             </div>
         </div>
         <div class="nav-buttons">
-            <button class="nav-btn" id="nav-roadmap-btn"
-                onclick="(function(e){var ok=window._sylvaUserDone===true;if(!ok){try{var r=localStorage.getItem('sylva_user_profile');if(r){var d=JSON.parse(r);if(d&&d.user)ok=true;}if(!ok){var o=localStorage.getItem('sylva_auth_session');if(o){var od=JSON.parse(o);if(od&&od.user&&od.expires>Date.now())ok=true;}}}catch(ex){}}if(!ok){e.preventDefault();e.stopPropagation();var fu=document.getElementById('sylva-firstuse-overlay');if(fu)fu.classList.add('active');}else{sylvaToggleRoadmap();}})(event)">
-                🗺️ Yol Haritası
-            </button>
             <button class="nav-btn" id="nav-guide-btn" data-i18n="nav_guide">❓ Rehber</button>
 
             <!-- Dil Seçimi — özel dropdown (her tarayıcıda bayrak görünür) -->
@@ -2931,6 +2876,8 @@ tr.class-highlight-active {
             <div class="lang-opt" data-val="mn" data-flag="🇲🇳" data-label="Монгол">🇲🇳 Монгол</div>
             <div class="lang-opt" data-val="ka" data-flag="🇬🇪" data-label="ქართული">🇬🇪 ქართული</div>
         </div>
+
+
         <!-- Rehber -->
         <button type="button" class="mqb-icon-btn" id="mqb-guide-btn"
             onclick="document.getElementById('nav-guide-btn') && document.getElementById('nav-guide-btn').click()">
@@ -3242,6 +3189,11 @@ tr.class-highlight-active {
                         <div class="sensor-group-label" id="uydu-analiz-baslik" style="margin-top:12px;">
                             <span data-i18n="avail_analyses">Kullanılabilir Analizler</span> <span data-i18n="sensor_hint" style="font-weight:normal;color:#94a3b8;">(önce bir sensör seçin)</span>
                         </div>
+                        <label style="display:flex;align-items:center;gap:6px;font-size:0.76rem;color:#475569;margin:4px 0 6px;cursor:pointer;">
+                            <input type="checkbox" id="sylva-multi-analysis-toggle" style="width:14px;height:14px;accent-color:#1e3a8a;cursor:pointer;"
+                                   onchange="window._sylvaUpdateMultiRunBtn && window._sylvaUpdateMultiRunBtn()">
+                            <span data-i18n="multi_analysis_toggle">🔁 Çoklu Analiz Modu (birden fazla seçin)</span>
+                        </label>
                         <div class="option-list" id="uydu-analiz-checkbox-list" style="display:grid; grid-template-columns:1fr 1fr; gap:4px;">
                             <label class="option-item uydu-analiz-item disabled-analysis" data-key="NDVI">
                                 <input type="checkbox" class="uydu-analiz-checkbox" disabled data-analysis="NDVI" data-ramp-key="viridis" data-legend-min="-1" data-legend-max="+1"> NDVI
@@ -3310,7 +3262,6 @@ tr.class-highlight-active {
                     <div id="ts-subsection">
                         <div class="ts-subtitle" data-i18n="ts_title">📈 Time Series & Change Analysis</div>
                         <div style="font-weight:normal;color:#94a3b8;font-size:0.72rem;margin:-2px 0 4px;padding-left:2px;" data-i18n="ts_select_hint">(önce bir analiz seçin)</div>
-                        <div style="margin:2px 0 6px;"><span class="env-coming-soon-badge sylva-badge-blink" data-i18n="env_coming_soon">🔒 Yakında</span></div>
                         <div class="ts-desc" data-i18n="ts_desc">
                             (Calculates the monthly or annual change of the selected index within a date range
                             and displays it as a line chart.)
@@ -3320,9 +3271,9 @@ tr.class-highlight-active {
                         <div class="sensor-group-label" style="margin-bottom:5px;" data-i18n="ts_period">🗓️ Period</div>
                         <div style="display:flex;gap:6px;margin-bottom:10px;">
                             <button type="button" id="ts-btn-monthly" class="ts-period-btn"
-                                    onclick="toggleTsPeriod('monthly')" data-i18n="ts_monthly" disabled>Monthly</button>
+                                    onclick="toggleTsPeriod('monthly')" data-i18n="ts_monthly">Monthly</button>
                             <button type="button" id="ts-btn-yearly"  class="ts-period-btn"
-                                    onclick="toggleTsPeriod('yearly')" data-i18n="ts_yearly" disabled>Yearly</button>
+                                    onclick="toggleTsPeriod('yearly')" data-i18n="ts_yearly">Yearly</button>
                         </div>
 
                         <!-- Tarih aralığı -->
@@ -3331,13 +3282,13 @@ tr.class-highlight-active {
                             <div style="flex:1;">
                                 <div style="font-size:0.67rem;color:#64748b;margin-bottom:2px;" data-i18n="ts_start_year">Start Year</div>
                                 <input type="number" id="ts-start-year" class="ts-year-input"
-                                       min="1972" max="2025" placeholder="e.g. 2018" data-i18n-placeholder="ts_eg_start" disabled>
+                                       min="1972" max="2025" placeholder="e.g. 2018" data-i18n-placeholder="ts_eg_start">
                             </div>
                             <div style="padding-bottom:7px;color:#94a3b8;font-weight:700;">–</div>
                             <div style="flex:1;">
                                 <div style="font-size:0.67rem;color:#64748b;margin-bottom:2px;" data-i18n="ts_end_year">End Year</div>
                                 <input type="number" id="ts-end-year" class="ts-year-input"
-                                       min="1972" max="2025" placeholder="e.g. 2024" data-i18n-placeholder="ts_eg_end" disabled>
+                                       min="1972" max="2025" placeholder="e.g. 2024" data-i18n-placeholder="ts_eg_end">
                             </div>
                         </div>
 
@@ -3346,9 +3297,12 @@ tr.class-highlight-active {
                         <div class="slider-group" style="margin-bottom:10px;">
                             <input type="range" id="ts-cloud-pct" min="0" max="100" value="10"
                                    aria-label="Bulutluluk oranı" data-i18n-aria-label="ts_cloud"
-                                   oninput="document.getElementById('ts-cloud-val').textContent='%'+this.value" disabled>
+                                   oninput="document.getElementById('ts-cloud-val').textContent='%'+this.value">
                             <span class="slider-val" id="ts-cloud-val">%10</span>
                         </div>
+
+                        <button type="button" id="btn-run-timeseries" class="btn-primary" style="width:100%;"
+                                onclick="runTimeSeriesAnalysis()" data-i18n="ts_run_btn">📈 Zaman Serisini Çalıştır</button>
 
                     </div>
 
@@ -3427,16 +3381,24 @@ tr.class-highlight-active {
                         <div class="sensor-group-label" style="margin-top:8px;" data-i18n="topo_contour_group">📏 Eş Yükselti Eğrileri</div>
                         <div style="display:flex; align-items:center; gap:8px; padding:4px 2px;">
                             <label style="display:flex; align-items:center; gap:6px; font-size:0.82rem; color:#334155; cursor:pointer; flex:1;">
-                                <input type="checkbox" id="chk-contour" name="contour-lines" disabled style="width:15px;height:15px;cursor:not-allowed;opacity:0.45;">
+                                <input type="checkbox" id="chk-contour" name="contour-lines" style="width:15px;height:15px;cursor:pointer;">
                                 <span><span data-i18n="topo_contour_label">Eş Yükseltiler</span> (Contour)</span>
                             </label>
                             <select id="sel-contour-interval" style="font-size:0.78rem; padding:3px 6px; border:1px solid #cbd5e1; border-radius:4px; background:#fff; color:#334155; cursor:pointer;">
                                 <option value="10">10 m</option>
-                                <option value="20">20 m</option>
                                 <option value="50">50 m</option>
-                                <option value="100">100 m</option>
+                                <option value="100" selected>100 m</option>
                                 <option value="200">200 m</option>
+                                <option value="500">500 m</option>
                             </select>
+                        </div>
+                        <div id="contour-download-row" style="display:none; gap:6px; align-items:center; padding:4px 2px 2px;">
+                            <select id="sel-contour-format" style="font-size:0.74rem; padding:3px 6px; border:1px solid #cbd5e1; border-radius:4px; background:#fff;">
+                                <option value="kml">KML</option>
+                                <option value="kmz">KMZ</option>
+                                <option value="shp">SHP</option>
+                            </select>
+                            <button type="button" class="btn-tool" style="flex:1; font-size:0.76rem;" onclick="downloadContourLines()" id="btn-download-contour">⬇️ Eş Yükseltileri İndir</button>
                         </div>
                     </div>
                 </div>
@@ -3572,6 +3534,21 @@ tr.class-highlight-active {
             </details>
 
             <button class="btn-primary" id="btn-run-analysis" data-i18n="run_analysis" style="width: 50%; align-self: center; margin-top: 15px;" onclick="runAnalysis()">🚀 Analizi Çalıştır</button>
+
+            <button class="btn-primary" id="btn-run-multi-analysis" style="width:70%; align-self:center; margin-top:8px; display:none; background:#0f766e;" onclick="runMultiAnalysis()">
+                🔁 <span id="multi-run-btn-label">Seçili Analizleri Çalıştır</span>
+            </button>
+
+            <!-- 🔁 Çoklu Analiz sonuç katmanları — mevcut tekli-analiz lejant/
+                 render sistemine hiç dokunmadan, bağımsız basit katmanlar olarak
+                 eklenir/gösterilir. -->
+            <div id="multi-analysis-results-panel" style="display:none; margin-top:10px; border:1px solid #e2e8f0; border-radius:8px; padding:8px; background:#f8fafc;">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                    <span style="font-size:0.78rem;font-weight:700;color:#0f766e;">🔁 Çoklu Analiz Sonuçları</span>
+                    <button type="button" class="btn-tool" style="width:auto;padding:3px 8px;font-size:0.68rem;" onclick="clearMultiAnalysisResults()">Tümünü Kaldır</button>
+                </div>
+                <div id="multi-analysis-results-list" style="display:flex;flex-direction:column;gap:4px;"></div>
+            </div>
         </div>
 
 <script>
@@ -4575,8 +4552,17 @@ tr.class-highlight-active {
             </div><!-- /data-charts-section -->
 
             <div id="analysis-history-section">
-            <h3 class="sylva-sec-hdr" onclick="sylvaToggleSec('analysis-history-body')"><span data-i18n="analysis_history_title">📜 Analiz Geçmişi</span><span class="env-coming-soon-badge sylva-badge-blink" data-i18n="env_coming_soon" style="margin-left:6px;vertical-align:middle;">🔒 Yakında</span><button type="button" class="sylva-sec-arrow" id="analysis-history-arrow" onclick="event.stopPropagation();sylvaToggleSec('analysis-history-body')" title="Daralt / Genişlet">▼</button></h3>
+            <h3 class="sylva-sec-hdr" onclick="sylvaToggleSec('analysis-history-body')"><span data-i18n="analysis_history_title">📜 Analiz Geçmişi</span><button type="button" class="sylva-sec-arrow" id="analysis-history-arrow" onclick="event.stopPropagation();sylvaToggleSec('analysis-history-body')" title="Daralt / Genişlet">▼</button></h3>
             <div id="analysis-history-body" class="sylva-sec-body">
+                <!-- 🔄 Sunucu tarafı: son 10 analiz, tekrar görüntülenebilir -->
+                <div id="server-analysis-history-list" style="display:flex; flex-direction:column; gap:6px; max-height:220px; overflow-y:auto; margin-bottom:10px;"></div>
+                <div id="server-analysis-history-empty" style="font-size:0.74rem; color:#94a3b8; text-align:center; padding:10px 8px;">
+                    Henüz bir analiz çalıştırmadınız. Çalıştırdığınızda burada listelenir ve tekrar görüntüleyebilirsiniz.
+                </div>
+
+                <div style="border-top:1px solid #e2e8f0; margin:10px 0 8px;"></div>
+
+                <!-- İndirme günlüğü (cihaza/Drive'a indirilen dosyalar) -->
                 <div id="analysis-history-list" style="display:flex; flex-direction:column; gap:6px; max-height:280px; overflow-y:auto;"></div>
                 <div id="analysis-history-empty" style="font-size:0.78rem; color:#94a3b8; text-align:center; padding:14px 8px;" data-i18n="analysis_history_empty">Henüz indirilmiş bir analiz yok. Bir sonucu indirdiğinizde burada listelenir (son 10 kayıt).</div>
                 <button type="button" id="analysis-history-clear-btn" class="btn-tool" style="margin-top:8px; width:100%; font-size:0.76rem; display:none;" onclick="sylvaClearAnalysisHistory()" data-i18n="analysis_history_clear">🗑️ Geçmişi Temizle</button>
@@ -6158,11 +6144,22 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
 
             analizCheckboxes.forEach(function (cb) {
                 cb.addEventListener('change', function () {
-                    if (cb.checked) {
+                    var multiModeOn = document.getElementById('sylva-multi-analysis-toggle');
+                    multiModeOn = !!(multiModeOn && multiModeOn.checked);
+
+                    if (cb.checked && !multiModeOn) {
+                        // Varsayılan (tekli) davranış — hiç değişmedi, geriye dönük uyumlu.
                         analizCheckboxes.forEach(function (other) { if (other !== cb) other.checked = false; });
                         document.querySelectorAll('input[name="sylva-module"]:checked').forEach(function (sm) { sm.checked = false; });
                         document.querySelectorAll('.uydu-goruntu-radio:checked').forEach(function (gm) { gm.checked = false; });
+                    } else if (cb.checked && multiModeOn) {
+                        // 🔁 Çoklu Analiz Modu açıkken diğer analiz kutuları işaretli
+                        // kalabilir, ama LULC/DEM gibi ayrı modülleri yine de temizle.
+                        document.querySelectorAll('input[name="sylva-module"]:checked').forEach(function (sm) { sm.checked = false; });
+                        document.querySelectorAll('.uydu-goruntu-radio:checked').forEach(function (gm) { gm.checked = false; });
                     }
+
+                    if (typeof window._sylvaUpdateMultiRunBtn === 'function') window._sylvaUpdateMultiRunBtn();
 
                     // Herhangi bir analiz seçildiğinde AOI (çalışma alanı) bilgi kutusunu
                     // ve mevcut katmanı koru — seçim değişikliği AOI'yi sıfırlamamalı.
@@ -7995,6 +7992,166 @@ function selectRamp(name) {
             if (typeof _rgbGalleryReset === 'function') _rgbGalleryReset();
         }
 
+        // ═══════════════════════════════════════════════════════════
+        // 🔁 Çoklu Analiz Çalıştırma (Faz 2.3)
+        // ═══════════════════════════════════════════════════════════
+        // Mevcut tekli-analiz akışına (runAnalysis) HİÇ dokunmadan; seçilen
+        // her analiz için AYNI paylaşılan parametrelerle (ROI, tarih, sensör,
+        // bulut oranı, DEM kaynağı) ayrı bir /api/analyze isteği atılır ve
+        // sonuç, basit/bağımsız bir Leaflet tile katmanı olarak eklenir.
+        // Mevcut karmaşık lejant/renk-yeniden-boyama sistemine dahil edilmez
+        // — bu yüzden mevcut analiz render mantığını riske atmaz.
+        window._sylvaMultiLayers = [];   // [{ index, layer }]
+
+        window._sylvaUpdateMultiRunBtn = function () {
+            var multiToggle = document.getElementById('sylva-multi-analysis-toggle');
+            var multiBtn    = document.getElementById('btn-run-multi-analysis');
+            var singleBtn   = document.getElementById('btn-run-analysis');
+            if (!multiToggle || !multiBtn) return;
+
+            var isMultiMode = multiToggle.checked;
+            var checkedCount = document.querySelectorAll('.uydu-analiz-checkbox:checked').length;
+
+            multiBtn.style.display = isMultiMode ? 'inline-flex' : 'none';
+            if (singleBtn) singleBtn.style.display = isMultiMode ? 'none' : 'inline-flex';
+
+            var label = document.getElementById('multi-run-btn-label');
+            if (label) {
+                label.textContent = checkedCount > 0
+                    ? ('Seçili ' + checkedCount + ' Analizi Çalıştır')
+                    : 'Önce analiz seçin';
+            }
+            multiBtn.disabled = checkedCount === 0;
+            multiBtn.style.opacity = checkedCount === 0 ? '0.5' : '1';
+        };
+
+        function clearMultiAnalysisResults() {
+            var mapObj = window._sylvaMap || (typeof map !== 'undefined' ? map : null);
+            (window._sylvaMultiLayers || []).forEach(function (entry) {
+                if (mapObj && entry.layer) { try { mapObj.removeLayer(entry.layer); } catch (e) {} }
+            });
+            window._sylvaMultiLayers = [];
+            var listEl = document.getElementById('multi-analysis-results-list');
+            if (listEl) listEl.innerHTML = '';
+            var panel = document.getElementById('multi-analysis-results-panel');
+            if (panel) panel.style.display = 'none';
+        }
+        window.clearMultiAnalysisResults = clearMultiAnalysisResults;
+
+        function _renderMultiResultRow(indexName) {
+            var listEl = document.getElementById('multi-analysis-results-list');
+            if (!listEl) return null;
+            var row = document.createElement('div');
+            row.style.cssText = 'display:flex;align-items:center;gap:6px;font-size:0.72rem;background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:4px 6px;';
+            row.innerHTML = '<span style="flex:1;">⏳ ' + indexName + '…</span>';
+            listEl.appendChild(row);
+            return row;
+        }
+
+        function runMultiAnalysis() {
+            if (window._sylvaUserDone === false) {
+                if (typeof window.sylvaOpenLogin === 'function') window.sylvaOpenLogin();
+                return;
+            }
+            if (!currentLayer || (typeof map !== 'undefined' && map && !map.hasLayer(currentLayer))) {
+                sylvaAlert(t('no_aoi'), 'warning');
+                return;
+            }
+
+            var checkedBoxes = Array.prototype.slice.call(document.querySelectorAll('.uydu-analiz-checkbox:checked'));
+            if (!checkedBoxes.length) {
+                sylvaAlert('Lütfen en az bir analiz seçin.', 'warning');
+                return;
+            }
+
+            var _roi = _extractROIGeometry(currentLayer);
+            if (!_roi) { sylvaAlert(t('no_geom'), 'warning'); return; }
+
+            var startInput    = document.getElementById('date-start');
+            var endInput      = document.getElementById('date-end');
+            var sensorRadio   = document.querySelector('.uydu-sensor-radio:checked');
+            var viewModeEl    = document.getElementById('viewMode');
+            var cloudSliderEl = document.getElementById('cloud-slider');
+            var demSourceRadio = document.querySelector('input[name="dem-source"]:checked');
+
+            var satellite = sensorRadio ? sensorRadio.value : 's2-l2a';
+            var clipMode  = viewModeEl ? viewModeEl.value : 'clip';
+            var maxCloud  = cloudSliderEl ? parseInt(cloudSliderEl.value, 10) : 20;
+
+            var panel = document.getElementById('multi-analysis-results-panel');
+            if (panel) panel.style.display = 'block';
+
+            var multiBtn = document.getElementById('btn-run-multi-analysis');
+            if (multiBtn) { multiBtn.disabled = true; }
+
+            var mapObj = window._sylvaMap || (typeof map !== 'undefined' ? map : null);
+
+            // Sıralı çalıştır (paralel değil) — GEE'ye aynı anda çok fazla
+            // istek atıp mevcut kota/performans sorununu büyütmemek için.
+            var chain = Promise.resolve();
+            checkedBoxes.forEach(function (cb) {
+                var indexName = cb.getAttribute('data-analysis');
+                var row = _renderMultiResultRow(indexName);
+
+                chain = chain.then(function () {
+                    var payload = {
+                        roi: _roi, clipMode: clipMode,
+                        startDate: startInput ? (startInput.value || '') : '',
+                        endDate:   endInput   ? (endInput.value   || '') : '',
+                        satellite: satellite, index: indexName, maxCloud: maxCloud,
+                        demSource: demSourceRadio ? demSourceRadio.value : 'SRTM',
+                    };
+                    return fetch((window.API_BASE || '') + '/api/analyze', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    })
+                    .then(function (r) { return r.json(); })
+                    .then(function (data) {
+                        if (!data || !data.success || !data.tileUrl) {
+                            if (row) row.innerHTML = '<span style="flex:1;color:#dc2626;">❌ ' + indexName + ' — sonuç yok</span>';
+                            return;
+                        }
+                        var layer = L.tileLayer(data.tileUrl, { opacity: 0.85 }).addTo(mapObj);
+                        window._sylvaMultiLayers.push({ index: indexName, layer: layer });
+
+                        if (row) {
+                            row.innerHTML = '';
+                            var cbToggle = document.createElement('input');
+                            cbToggle.type = 'checkbox'; cbToggle.checked = true;
+                            cbToggle.style.cssText = 'width:13px;height:13px;accent-color:#0f766e;cursor:pointer;';
+                            cbToggle.onchange = function () {
+                                if (cbToggle.checked) { mapObj.addLayer(layer); } else { mapObj.removeLayer(layer); }
+                            };
+                            var label = document.createElement('span');
+                            label.style.cssText = 'flex:1;';
+                            label.textContent = '✅ ' + indexName;
+                            var removeBtn = document.createElement('button');
+                            removeBtn.type = 'button';
+                            removeBtn.textContent = '✕';
+                            removeBtn.style.cssText = 'background:none;border:none;color:#94a3b8;cursor:pointer;font-size:0.8rem;';
+                            removeBtn.onclick = function () {
+                                try { mapObj.removeLayer(layer); } catch (e) {}
+                                window._sylvaMultiLayers = window._sylvaMultiLayers.filter(function (e) { return e.layer !== layer; });
+                                row.remove();
+                            };
+                            row.appendChild(cbToggle);
+                            row.appendChild(label);
+                            row.appendChild(removeBtn);
+                        }
+                    })
+                    .catch(function () {
+                        if (row) row.innerHTML = '<span style="flex:1;color:#dc2626;">❌ ' + indexName + ' — bağlantı hatası</span>';
+                    });
+                });
+            });
+
+            chain.then(function () {
+                if (multiBtn) multiBtn.disabled = false;
+            });
+        }
+        window.runMultiAnalysis = runMultiAnalysis;
+
         function runAnalysis() {
             // Kullanıcı Bilgileri formu doldurulmadan analiz başlatılamaz
             if (window._sylvaUserDone === false) {
@@ -8228,6 +8385,7 @@ function selectRamp(name) {
                 // reduceRegion minMax) ile lejantı ve stretched giriş kutularını güncelle
                 if (data.realStats) {
                     applyRealStatsToLegendUI(data.realStats);
+                    sylvaShowZonalStatsBox(data.realStats);
                     // 🛠️ BUG FİX: applyRealStatsToLegendUI() currentClassRangeMin/Max'ı
                     // AOI'nin GERÇEK min/max'ına günceller ama "Sınıflandırılmış" modda
                     // sınıf satırları (buildClassRows) daha önce (analiz seçilir seçilmez,
@@ -9054,6 +9212,7 @@ function selectRamp(name) {
                 }
                 if (data.realStats) {
                     applyRealStatsToLegendUI(data.realStats);
+                    sylvaShowZonalStatsBox(data.realStats);
                     // 🛠️ BUG FİX: bkz. yukarıdaki analyze() akışındaki aynı düzeltme —
                     // sınıflandırılmış modda sınıf satırları AOI'nin gerçek aralığına
                     // göre yeniden kurulmalı, yoksa hep eski/statik aralıkta kalır.
@@ -9930,6 +10089,47 @@ function selectRamp(name) {
         // Stretched mod lejantındaki min/max etiketlerini gerçek veri ile günceller;
         // ayrıca Stretched-min/max giriş kutularını da doldurur ki sonraki
         // "Lejantı Uygula" baskıları gerçek aralığı kullansın.
+        // ═══════════════════════════════════════════════════════════
+        // 📊 Zonal İstatistikler (Faz 3.4) — min/maks/ortalama/std
+        // ═══════════════════════════════════════════════════════════
+        // Mevcut karmaşık lejant/stretched-mod senkronizasyon sistemine
+        // (applyRealStatsToLegendUI / appendRealStatsToLegend) HİÇ
+        // dokunmadan, bağımsız ve basit bir bilgi kutusu olarak eklendi.
+        // Backend zaten min/max/mean hesaplıyordu; std hesaplaması da
+        // aynı (ekstra istek gerektirmeyen) reduceRegion çağrısına eklendi.
+        function sylvaShowZonalStatsBox(realStats) {
+            if (!realStats || realStats.min === null || realStats.min === undefined) return;
+
+            var box = document.getElementById('sylva-zonal-stats-box');
+            if (!box) {
+                box = document.createElement('div');
+                box.id = 'sylva-zonal-stats-box';
+                box.style.cssText = 'margin-top:8px; padding:8px 10px; background:#f8fafc; ' +
+                    'border:1px solid #e2e8f0; border-radius:8px; font-size:0.72rem; color:#334155;';
+                var legendBox = document.querySelector('.map-legend');
+                if (legendBox && legendBox.parentNode) {
+                    legendBox.parentNode.insertBefore(box, legendBox.nextSibling);
+                } else {
+                    return;
+                }
+            }
+
+            function fmt(v) {
+                if (v === null || v === undefined || isNaN(v)) return '—';
+                var n = parseFloat(v);
+                return (Math.abs(n) >= 100) ? n.toFixed(1) : n.toFixed(3);
+            }
+
+            box.innerHTML =
+                '<div style="font-weight:700;color:#1e3a8a;margin-bottom:4px;">📊 Zonal İstatistikler</div>' +
+                '<div style="display:grid;grid-template-columns:1fr 1fr;gap:3px 10px;">' +
+                    '<span>Min: <b>' + fmt(realStats.min)  + '</b></span>' +
+                    '<span>Maks: <b>' + fmt(realStats.max)  + '</b></span>' +
+                    '<span>Ortalama: <b>' + fmt(realStats.mean) + '</b></span>' +
+                    '<span>Std Sapma: <b>' + fmt(realStats.std)  + '</b></span>' +
+                '</div>';
+        }
+
         function appendRealStatsToLegend(stats) {
             var legendBox = document.querySelector('.map-legend');
             if (!legendBox) return;
@@ -12834,11 +13034,40 @@ function selectRamp(name) {
             var progressFill = document.getElementById('exp-progress-bar-fill');
             var progressLabel = document.getElementById('exp-progress-label');
             var pdfOptions = document.getElementById('exp-pdf-options');
+            var pdfTemplateOptions = document.getElementById('exp-pdf-template-options');
+            var pdfSizeSelect = document.getElementById('exp-pdf-size');
 
             if (!overlay || !btnOpen || !btnStart) return;
 
             var filenameInput = document.getElementById('exp-filename');
             var _lastAutoFilename = filenameInput ? filenameInput.value : '';
+
+            // 🖼️ Logo yükleme — dosya seçilir seçilmez dataURL'e çevrilip
+            // önbelleğe alınır ki savePDF() senkron şekilde kullanabilsin
+            // (jsPDF.addImage async dosya okumasını beklemez).
+            window._sylvaExportLogoDataUrl = null;
+            var logoInput   = document.getElementById('exp-pdf-logo');
+            var logoPreview = document.getElementById('exp-pdf-logo-preview');
+            var logoClearBtn = document.getElementById('exp-pdf-logo-clear');
+            if (logoInput) {
+                logoInput.addEventListener('change', function () {
+                    var file = logoInput.files && logoInput.files[0];
+                    if (!file) return;
+                    var reader = new FileReader();
+                    reader.onload = function (e) {
+                        window._sylvaExportLogoDataUrl = e.target.result;
+                        if (logoPreview) { logoPreview.src = e.target.result; logoPreview.style.display = 'inline-block'; }
+                        if (logoClearBtn) logoClearBtn.style.display = 'inline-block';
+                    };
+                    reader.readAsDataURL(file);
+                });
+            }
+            window.sylvaClearExportLogo = function () {
+                window._sylvaExportLogoDataUrl = null;
+                if (logoInput) logoInput.value = '';
+                if (logoPreview) { logoPreview.src = ''; logoPreview.style.display = 'none'; }
+                if (logoClearBtn) logoClearBtn.style.display = 'none';
+            };
 
             // Dosya adı alanı hâlâ önceki otomatik (dile bağlı) değeri taşıyorsa
             // -örn. kullanıcı elle değiştirmediyse- yeni dile göre günceller.
@@ -12893,8 +13122,18 @@ function selectRamp(name) {
                     btn.classList.add('selected');
                     selectedFormat = btn.dataset.fmt;
                     pdfOptions.style.display = (selectedFormat === 'pdf') ? 'flex' : 'none';
+                    _sylvaUpdatePdfTemplateVisibility();
                 });
             });
+
+            function _sylvaUpdatePdfTemplateVisibility() {
+                if (!pdfTemplateOptions) return;
+                var sizeVal = pdfSizeSelect ? pdfSizeSelect.value : 'a4-landscape';
+                // "Harita Boyutu" tam ekran WYSIWYG'dir — başlık şeridine yer yok.
+                var show = (selectedFormat === 'pdf') && sizeVal !== 'map';
+                pdfTemplateOptions.style.display = show ? 'flex' : 'none';
+            }
+            if (pdfSizeSelect) pdfSizeSelect.addEventListener('change', _sylvaUpdatePdfTemplateVisibility);
 
             // --- İlerleme güncelle ---
             function setProgress(pct, label) {
@@ -13978,18 +14217,55 @@ function selectRamp(name) {
                     doc = new jsPDFConstructor({ orientation: orientation, unit: 'mm', format: typeof format === 'string' ? format : format });
                     var pw = doc.internal.pageSize.getWidth();
                     var ph = doc.internal.pageSize.getHeight();
+
+                    // ═══════════════════════════════════════════════════
+                    // 📌 Kurumsal Şablon: Başlık + Logo (Faz 3.5)
+                    // ═══════════════════════════════════════════════════
+                    // Arayüzde ("Rapor Başlığı" / "Logo Ekle") zaten mevcuttu
+                    // ama bu değerler ŞİMDİYE KADAR PDF üretiminde hiç
+                    // okunmuyordu. Artık, kullanıcı bir başlık girdiyse veya
+                    // logo yüklediyse, sayfanın üstünde bunlar için bir şerit
+                    // ayrılıp harita görüntüsü bu şeridin ALTINA yerleştirilir.
+                    // Hiçbiri girilmediyse davranış eskisiyle BİREBİR aynıdır
+                    // (mevcut, çalışan A4/A3 çıktısını riske atmaz).
+                    var titleEl = document.getElementById('exp-pdf-title');
+                    var customTitle = titleEl ? (titleEl.value || '').trim() : '';
+                    var customLogoUrl = window._sylvaExportLogoDataUrl || null;
+                    var headerBandH = (customTitle || customLogoUrl) ? Math.max(pw, ph) * 0.045 : 0;
+
+                    if (headerBandH > 0) {
+                        var logoSize = headerBandH * 0.8;
+                        var textX = 6;
+                        if (customLogoUrl) {
+                            try {
+                                doc.addImage(customLogoUrl, 6, (headerBandH - logoSize) / 2, logoSize, logoSize);
+                                textX = 6 + logoSize + 4;
+                            } catch (e) { /* geçersiz görsel formatı — logosuz devam et */ }
+                        }
+                        if (customTitle) {
+                            doc.setFontSize(Math.max(headerBandH * 2.2, 11));
+                            doc.setTextColor(30, 58, 138);
+                            doc.text(customTitle, textX, headerBandH / 2 + 2, { baseline: 'middle' });
+                        }
+                        doc.setDrawColor(203, 213, 225);
+                        doc.line(4, headerBandH, pw - 4, headerBandH);
+                    }
+
+                    var availTop = headerBandH + (headerBandH > 0 ? 3 : 0);
+                    var availH = ph - availTop;
+
                     // W ve H artık > 0 garantili; bölme sonucu Infinity/NaN olamaz.
-                    var ratio = Math.min(pw / W, ph / H);
+                    var ratio = Math.min(pw / W, availH / H);
                     if (!isFinite(ratio) || ratio <= 0) ratio = 1;
                     var iw = Math.max(W * ratio, 0.1);
                     var ih = Math.max(H * ratio, 0.1);
                     var ox = (pw - iw) / 2;
-                    var oy = (ph - ih) / 2;
+                    var oy = availTop + (availH - ih) / 2;
                     doc.addImage(canvas.toDataURL('image/jpeg', 0.95), 'JPEG', ox, oy, iw, ih);
                 }
 
                 // Başlık ve metadata
-                doc.setProperties({ title: 'SylvaGIS Harita Çıktısı', creator: 'SylvaGIS', subject: filename });
+                doc.setProperties({ title: (customTitle || 'SylvaGIS Harita Çıktısı'), creator: 'SylvaGIS', subject: filename });
                 var pdfBlob = doc.output('blob');
                 downloadBlob(pdfBlob, filename + '.pdf');
             }
@@ -14082,6 +14358,21 @@ function selectRamp(name) {
                         <option value="a3-portrait" data-i18n="pdf_size_a3p">A3 Dikey (297 × 420 mm)</option>
                         <option value="map" data-i18n="pdf_size_map">Harita Boyutu (Ekran Boyutu)</option>
                     </select>
+                </div>
+
+                <!-- 📌 Kurumsal Şablon: Başlık + Logo (Faz 3.5, sadece sabit
+                     kağıt boyutlarında gösterilir — "Harita Boyutu" tam ekran
+                     WYSIWYG olduğu için başlık şeridine yer yok) -->
+                <div class="exp-input-group" id="exp-pdf-template-options" style="display:none;">
+                    <label for="exp-pdf-title" data-i18n="export_pdf_title_label">📌 Rapor Başlığı (opsiyonel)</label>
+                    <input type="text" id="exp-pdf-title" data-i18n-placeholder="export_pdf_title_placeholder" placeholder="ör. ABC Ormancılık A.Ş. — Saha Analizi">
+
+                    <label for="exp-pdf-logo" style="margin-top:8px;" data-i18n="export_pdf_logo_label">🖼️ Logo Ekle (opsiyonel, PNG/JPG)</label>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <input type="file" id="exp-pdf-logo" accept="image/png,image/jpeg" style="flex:1; font-size:0.78rem;">
+                        <button type="button" id="exp-pdf-logo-clear" class="btn-tool" style="display:none; width:auto; padding:5px 10px; font-size:0.72rem;" onclick="sylvaClearExportLogo()">✕</button>
+                    </div>
+                    <img id="exp-pdf-logo-preview" style="display:none; max-height:36px; margin-top:6px; border-radius:4px;">
                 </div>
 
                 <!-- İlerleme çubuğu -->
@@ -34094,22 +34385,29 @@ document.addEventListener('DOMContentLoaded',function(){
             <!-- Gmail alanı -->
             <div class="reg-field" id="reg-gmail-field">
                 <label for="reg-gmail" style="display:flex;align-items:center;gap:6px;font-size:0.76rem;font-weight:700;color:#475569;margin-bottom:4px;">
-                    <span data-i18n="ui_lbl_gmail">Gmail Adresi</span>
-                    <span class="env-coming-soon-badge sylva-badge-blink" data-i18n="env_coming_soon">🔒 Yakında</span>
+                    <span data-i18n="ui_lbl_gmail">E-posta Adresi</span>
+                    <span id="reg-gmail-verified-badge" style="display:none;color:#15803d;font-weight:700;font-size:0.72rem;">✓ Doğrulandı</span>
                 </label>
                 <div style="display:flex;gap:8px;align-items:center;">
                     <input type="email" id="reg-gmail" autocomplete="email"
-                           style="flex:1;opacity:0.5;cursor:not-allowed;background:#f1f5f9;"
-                           disabled>
+                           placeholder="ornek@eposta.com"
+                           style="flex:1;">
                     <button type="button" id="reg-gmail-confirm-btn"
-                            disabled
-                            style="padding:8px 14px;background:#1e3a8a;color:#fff;border:none;border-radius:8px;font-size:0.82rem;font-weight:600;cursor:not-allowed;white-space:nowrap;opacity:0.45;transition:.15s;"
-                            data-i18n="ui_gmail_confirm">Onayla</button>
+                            onclick="sylvaSendVerificationCode()"
+                            style="padding:8px 14px;background:#1e3a8a;color:#fff;border:none;border-radius:8px;font-size:0.82rem;font-weight:600;cursor:pointer;white-space:nowrap;transition:.15s;"
+                            data-i18n="ui_gmail_confirm">Kod Gönder</button>
                 </div>
-                <style>
-                    #reg-gmail-confirm-btn:not([disabled]){opacity:1!important;cursor:pointer;}
-                    #reg-gmail-confirm-btn[disabled]{opacity:0.45;cursor:not-allowed;}
-                </style>
+                <div id="reg-gmail-code-row" style="display:none;gap:8px;align-items:center;margin-top:8px;">
+                    <input type="text" id="reg-gmail-code-input" inputmode="numeric" maxlength="6"
+                           placeholder="6 haneli kod" autocomplete="one-time-code"
+                           style="flex:1;letter-spacing:0.3em;text-align:center;font-weight:700;">
+                    <button type="button" id="reg-gmail-verify-btn"
+                            onclick="sylvaVerifyCode()"
+                            style="padding:8px 14px;background:#15803d;color:#fff;border:none;border-radius:8px;font-size:0.82rem;font-weight:600;cursor:pointer;white-space:nowrap;">
+                        Doğrula
+                    </button>
+                </div>
+                <div id="reg-gmail-status-msg" style="font-size:0.72rem;margin-top:6px;min-height:14px;"></div>
             </div>
 
             <!-- Hizmet şartları checkbox -->
@@ -34117,7 +34415,7 @@ document.addEventListener('DOMContentLoaded',function(){
                 <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-weight:400;font-size:0.85rem;color:#334155;line-height:1.45;">
                     <input type="checkbox" id="reg-terms-checkbox"
                            style="margin-top:2px;width:15px;height:15px;flex-shrink:0;accent-color:#1e3a8a;cursor:pointer;"
-                           onchange="(function(cb){var btn=document.getElementById('reg-submit-btn');if(btn){btn.disabled=!cb.checked;btn.style.opacity=cb.checked?'1':'0.45';btn.style.cursor=cb.checked?'pointer':'not-allowed';}})(this)">
+                           onchange="sylvaUpdateRegSubmitState()">
                     <span data-i18n-html="ui_terms_accept">SylvaGIS Hizmet Şartları ve Gizlilik Politikası'nı okudum ve kabul ediyorum.</span>
                 </label>
             </div>
@@ -34613,19 +34911,6 @@ document.addEventListener('DOMContentLoaded',function(){
       { value: 'USA',          en:'United States', tr:'Amerika Birleşik Devletleri', de:'Vereinigte Staaten', fr:'États-Unis', es:'Estados Unidos',  pt:'Estados Unidos', ar:'الولايات المتحدة', fa:'ایالات متحده آمریکا', zh:'美国', ja:'アメリカ合衆国', ko:'미국', hi:'संयुक्त राज्य अमेरिका', id:'Amerika Serikat' , ru:'США', vi:'Hoa Kỳ', el:'Ηνωμένες Πολιτείες', bg:'САЩ', az:'ABŞ', pl:'Stany Zjednoczone', hu:'Egyesült Államok', th:'สหรัฐอเมริกา', bn:'যুক্তরাষ্ট্র', ur:'ریاستہائے متحدہ امریکہ', ms:'Amerika Syarikat', kk:'Америка Құрама Штаттары'  , uz:'Amerika Qoʻshma Shtatlari', ky:'Кошмо Штаттар' , it:'USA', mn:'Америкийн Нэгдсэн Улс', ka:'ამერიკის შეერთებული შტატები'}
     ];
 
-    // ── Ülke adını aktif dile göre al ───────────────────────
-    function getLocalizedCountryName(countryValue) {
-        if (!countryValue) return '';
-        var lang = (typeof _sylvaLang !== 'undefined' ? _sylvaLang : 'en') || 'en';
-        for (var i = 0; i < SYLVA_COUNTRIES.length; i++) {
-            if (SYLVA_COUNTRIES[i].value === countryValue) {
-                return SYLVA_COUNTRIES[i][lang] || SYLVA_COUNTRIES[i]['en'] || countryValue;
-            }
-        }
-        return countryValue;
-    }
-    window._sylvaGetLocalizedCountryName = getLocalizedCountryName;
-
     // ── Ülke dropdown'u dile göre yenile ─────────────────────
     function refreshCountryDropdown(lang) {
         var sel = document.getElementById('reg-ulke');
@@ -34649,17 +34934,7 @@ document.addEventListener('DOMContentLoaded',function(){
     }
 
     // Dil değiştiğinde çağrılır (applySylvaLang hook)
-    window._sylvaRefreshCountryDropdown = function(lang) {
-        refreshCountryDropdown(lang);
-        // Profil menüsünde gösterilen ülke adını da güncelle
-        var menuEmail = document.getElementById('menu-user-email');
-        var mqbMUlke  = document.getElementById('mqb-menu-ulke');
-        if ((menuEmail || mqbMUlke) && typeof currentUser !== 'undefined' && currentUser && currentUser.ulke) {
-            var localized = getLocalizedCountryName(currentUser.ulke);
-            if (menuEmail) menuEmail.textContent = localized || '';
-            if (mqbMUlke)  mqbMUlke.textContent  = localized || '';
-        }
-    };
+    window._sylvaRefreshCountryDropdown = refreshCountryDropdown;
 
     // ── Meslek dropdown seçeneklerini dile göre yenile ────────
     function refreshProfessionDropdown(lang) {
@@ -34692,6 +34967,125 @@ document.addEventListener('DOMContentLoaded',function(){
     window._sylvaRefreshProfDropdown = refreshProfessionDropdown;
 
     // ── Form gönderimi ────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════
+    // 🔐 E-posta Doğrulama (Faz 1.2)
+    // ═══════════════════════════════════════════════════════════
+    window._sylvaEmailVerified = false;
+    window._sylvaVerifiedEmail = '';
+    var _sylvaResendCooldownTimer = null;
+
+    function _sylvaGmailStatus(msg, kind) {
+        var el = document.getElementById('reg-gmail-status-msg');
+        if (!el) return;
+        el.textContent = msg || '';
+        el.style.color = kind === 'error' ? '#dc2626' : (kind === 'success' ? '#15803d' : '#64748b');
+    }
+
+    window.sylvaUpdateRegSubmitState = function () {
+        var btn = document.getElementById('reg-submit-btn');
+        var termsCheckbox = document.getElementById('reg-terms-checkbox');
+        if (!btn) return;
+        var ok = !!(termsCheckbox && termsCheckbox.checked);
+        btn.disabled = !ok;
+        btn.style.opacity = ok ? '1' : '0.45';
+        btn.style.cursor = ok ? 'pointer' : 'not-allowed';
+    };
+
+    window.sylvaSendVerificationCode = function () {
+        var emailInput = document.getElementById('reg-gmail');
+        var email = (emailInput && emailInput.value || '').trim().toLowerCase();
+
+        if (!email || email.indexOf('@') === -1 || email.split('@').pop().indexOf('.') === -1) {
+            _sylvaGmailStatus('Geçerli bir e-posta adresi girin.', 'error');
+            return;
+        }
+
+        var sendBtn = document.getElementById('reg-gmail-confirm-btn');
+        if (sendBtn) { sendBtn.disabled = true; }
+        _sylvaGmailStatus('Kod gönderiliyor…', 'info');
+
+        fetch((window.API_BASE || '') + '/api/send-verification-code', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: email })
+        })
+        .then(function (r) { return r.json().then(function (j) { return { status: r.status, body: j }; }); })
+        .then(function (res) {
+            if (res.body && res.body.ok) {
+                _sylvaGmailStatus('Kod gönderildi — e-postanızı kontrol edin.', 'success');
+                var codeRow = document.getElementById('reg-gmail-code-row');
+                if (codeRow) codeRow.style.display = 'flex';
+                var codeInput = document.getElementById('reg-gmail-code-input');
+                if (codeInput) codeInput.focus();
+
+                // Yeniden gönderim için 45 sn'lik bir bekleme göster (backend
+                // ile aynı cooldown süresi — kullanıcıya net bir geri sayım verir).
+                var remaining = 45;
+                if (sendBtn) sendBtn.textContent = 'Tekrar (' + remaining + 's)';
+                clearInterval(_sylvaResendCooldownTimer);
+                _sylvaResendCooldownTimer = setInterval(function () {
+                    remaining -= 1;
+                    if (remaining <= 0) {
+                        clearInterval(_sylvaResendCooldownTimer);
+                        if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Tekrar Gönder'; }
+                    } else if (sendBtn) {
+                        sendBtn.textContent = 'Tekrar (' + remaining + 's)';
+                    }
+                }, 1000);
+            } else {
+                _sylvaGmailStatus((res.body && res.body.error) || 'Kod gönderilemedi.', 'error');
+                if (sendBtn) sendBtn.disabled = false;
+            }
+        })
+        .catch(function () {
+            _sylvaGmailStatus('Bağlantı hatası. Lütfen tekrar deneyin.', 'error');
+            if (sendBtn) sendBtn.disabled = false;
+        });
+    };
+
+    window.sylvaVerifyCode = function () {
+        var emailInput = document.getElementById('reg-gmail');
+        var codeInput  = document.getElementById('reg-gmail-code-input');
+        var email = (emailInput && emailInput.value || '').trim().toLowerCase();
+        var code  = (codeInput  && codeInput.value  || '').trim();
+
+        if (!code) { _sylvaGmailStatus('Lütfen size gelen kodu girin.', 'error'); return; }
+
+        var verifyBtn = document.getElementById('reg-gmail-verify-btn');
+        if (verifyBtn) verifyBtn.disabled = true;
+        _sylvaGmailStatus('Doğrulanıyor…', 'info');
+
+        fetch((window.API_BASE || '') + '/api/verify-code', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: email, code: code })
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (res) {
+            if (verifyBtn) verifyBtn.disabled = false;
+            if (res && res.ok) {
+                window._sylvaEmailVerified = true;
+                window._sylvaVerifiedEmail = email;
+                _sylvaGmailStatus('E-posta doğrulandı!', 'success');
+
+                var badge = document.getElementById('reg-gmail-verified-badge');
+                if (badge) badge.style.display = 'inline';
+                if (emailInput) { emailInput.disabled = true; emailInput.style.background = '#f0fdf4'; }
+                var codeRow = document.getElementById('reg-gmail-code-row');
+                if (codeRow) codeRow.style.display = 'none';
+                var sendBtn = document.getElementById('reg-gmail-confirm-btn');
+                if (sendBtn) sendBtn.style.display = 'none';
+                clearInterval(_sylvaResendCooldownTimer);
+            } else {
+                _sylvaGmailStatus((res && res.error) || 'Kod hatalı.', 'error');
+            }
+        })
+        .catch(function () {
+            if (verifyBtn) verifyBtn.disabled = false;
+            _sylvaGmailStatus('Bağlantı hatası. Lütfen tekrar deneyin.', 'error');
+        });
+    };
+
     window.sylvaSubmitReg = function (e) {
         e.preventDefault();
         var lang = (typeof _sylvaLang !== 'undefined' ? _sylvaLang : 'en');
@@ -34707,6 +35101,13 @@ document.addEventListener('DOMContentLoaded',function(){
 
         if (!ad)        { setStatus('error', T['ui_err_first_name']      || 'Please enter your first name.'); return; }
         if (!soyad)     { setStatus('error', T['ui_err_last_name']       || 'Please enter your last name.'); return; }
+
+        if (!window._sylvaEmailVerified || !window._sylvaVerifiedEmail) {
+            setStatus('error', 'Lütfen devam etmeden önce e-posta adresinizi doğrulayın.');
+            return;
+        }
+        var verifiedEmail = window._sylvaVerifiedEmail;
+
         var termsCheckbox = document.getElementById('reg-terms-checkbox');
         if (!termsCheckbox || !termsCheckbox.checked) {
             setStatus('error', "Lütfen Hizmet Şartları ve Gizlilik Politikasını kabul edin.");
@@ -34740,9 +35141,19 @@ document.addEventListener('DOMContentLoaded',function(){
         var user = {
             name: ad + ' ' + soyad,
             firstName: ad, lastName: soyad,
+            email: verifiedEmail,
             ulke: ulke, meslekKey: meslekSel, meslek: meslekLabel,
             bolum: bolum || '', avatar: null
         };
+
+        // Sahibe kayıt bildirimi gönder — arka planda, kullanıcının akışını
+        // bloklamadan (başarısız olsa bile kullanıcı kaydı tamamlanmış sayılır,
+        // çünkü e-posta zaten sunucu tarafında doğrulanmış durumda).
+        fetch((window.API_BASE || '') + '/api/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ad: ad, soyad: soyad, email: verifiedEmail, meslek: meslekLabel, ulke: ulke })
+        }).catch(function () { /* bildirim başarısız olsa da kaydı engelleme */ });
 
         saveSession(user);
 
@@ -34779,7 +35190,7 @@ document.addEventListener('DOMContentLoaded',function(){
         var menuEmail = document.getElementById('menu-user-email');
         var menuProv  = document.getElementById('menu-user-provider');
         if (menuName)  menuName.textContent  = user.name   || '';
-        if (menuEmail) menuEmail.textContent = getLocalizedCountryName(user.ulke) || '';
+        if (menuEmail) menuEmail.textContent = user.email || user.ulke || '';
         if (menuProv)  menuProv.textContent  = user.meslek || '';
 
         // ── Mobil quick-bar kullanıcı güncelleme ──
@@ -34806,7 +35217,7 @@ document.addEventListener('DOMContentLoaded',function(){
         if (mncName)    mncName.textContent    = user.firstName || (user.name || '').split(' ')[0] || 'Ad';
         if (mqbMName)   mqbMName.textContent   = user.name   || '';
         if (mqbMMeslek) mqbMMeslek.textContent = user.meslek || '';
-        if (mqbMUlke)   mqbMUlke.textContent   = getLocalizedCountryName(user.ulke) || '';
+        if (mqbMUlke)   mqbMUlke.textContent   = user.ulke   || '';
     }
 
     // ── Kullanıcı menüsü toggle ──────────────────────────────
@@ -36769,6 +37180,67 @@ function _vdlFallbackDownload(blob, name) {
     setTimeout(function() { URL.revokeObjectURL(a.href); document.body.removeChild(a); }, 3000);
     sylvaAddAnalysisHistoryEntry('Vektör', '📐', name);
 }
+
+// ═══════════════════════════════════════════════════════════════
+// 📏 Eş Yükselti (Kontur) İndirme (Faz 3.3)
+// ═══════════════════════════════════════════════════════════════
+// "Eş Yükseltiler" kutucuğu işaretlenince indirme satırı görünür olur.
+(function () {
+    var chk = document.getElementById('chk-contour');
+    var row = document.getElementById('contour-download-row');
+    if (chk && row) {
+        chk.addEventListener('change', function () {
+            row.style.display = chk.checked ? 'flex' : 'none';
+        });
+    }
+})();
+
+function downloadContourLines() {
+    if (!currentLayer || (typeof map !== 'undefined' && map && !map.hasLayer(currentLayer))) {
+        sylvaAlert(t('no_aoi'), 'warning');
+        return;
+    }
+    var _roi = _extractROIGeometry(currentLayer);
+    if (!_roi) { sylvaAlert(t('no_geom'), 'warning'); return; }
+
+    var intervalEl = document.getElementById('sel-contour-interval');
+    var formatEl   = document.getElementById('sel-contour-format');
+    var btn        = document.getElementById('btn-download-contour');
+    var demRadio   = document.querySelector('input[name="dem-source"]:checked');
+
+    var interval = intervalEl ? parseInt(intervalEl.value, 10) : 100;
+    var fmt      = formatEl ? formatEl.value : 'kml';
+
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Hazırlanıyor…'; }
+
+    fetch((window.API_BASE || '') + '/api/contour-download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            roi: _roi,
+            interval: interval,
+            format: fmt,
+            crs: 'EPSG:4326',
+            demSource: demRadio ? demRadio.value : 'SRTM',
+            filename: 'SylvaGIS_kontur_' + interval + 'm'
+        })
+    })
+    .then(function (res) {
+        if (!res.ok) return res.json().then(function (e) { throw new Error(e.error || res.statusText); });
+        return res.blob();
+    })
+    .then(function (blob) {
+        var ext = (fmt === 'shp') ? '_shp.zip' : ('.' + fmt);
+        _vdlFallbackDownload(blob, 'SylvaGIS_kontur_' + interval + 'm' + ext);
+    })
+    .catch(function (err) {
+        sylvaAlert((err && err.message) || 'Eş yükseltiler indirilemedi.', 'error');
+    })
+    .finally(function () {
+        if (btn) { btn.disabled = false; btn.textContent = '⬇️ Eş Yükseltileri İndir'; }
+    });
+}
+
 // Close on overlay click
 (function() {
     var modal = document.getElementById('vector-download-modal');
@@ -37848,6 +38320,127 @@ function sylvaToggleSec(bodyId){
    saklama/yeniden-indirme (ör. kullanıcının kendi Google Drive
    bağlantısı) ileride ayrıca bağlanacak; bu modül yalnızca "geçmiş"
    listesinin arayüzünü ve son-10 kaydını yönetir. */
+// ════════════════════════════════════════════════════════════════
+// 🔄 Sunucu Tarafı Analiz Geçmişi (Faz 2.1) — son 10 analiz, tekrar
+// görüntülenebilir. Yerel indirme günlüğünden (SYLVA_HIST_KEY, aşağıda)
+// farklı olarak, bu liste sunucuda saklanır ve gerçek analiz
+// parametrelerini içerir — "Tekrar Görüntüle" tıklandığında bu
+// parametreler AYNEN /api/analyze'e tekrar gönderilir.
+var _sylvaServerHistoryCache = [];
+var _sylvaHistoryPreviewLayer = null;
+
+function sylvaFetchServerAnalysisHistory() {
+    var clientId = window._sylvaClientId || '';
+    fetch((window.API_BASE || '') + '/api/analysis-history?clientId=' + encodeURIComponent(clientId))
+        .then(function (r) { return r.json(); })
+        .then(function (res) {
+            _sylvaServerHistoryCache = (res && res.history) || [];
+            sylvaRenderServerAnalysisHistory();
+        })
+        .catch(function () { /* sessizce geç — bu ikincil bir özellik */ });
+}
+
+function sylvaFormatServerHistDate(tsSeconds) {
+    try {
+        var d = new Date(tsSeconds * 1000);
+        var p = function (n) { return String(n).padStart(2, '0'); };
+        return p(d.getDate()) + '.' + p(d.getMonth() + 1) + '.' + d.getFullYear() +
+               ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+    } catch (e) { return ''; }
+}
+
+function sylvaRenderServerAnalysisHistory() {
+    var listEl  = document.getElementById('server-analysis-history-list');
+    var emptyEl = document.getElementById('server-analysis-history-empty');
+    if (!listEl) return;
+    if (!_sylvaServerHistoryCache.length) {
+        listEl.innerHTML = '';
+        if (emptyEl) emptyEl.style.display = 'block';
+        return;
+    }
+    if (emptyEl) emptyEl.style.display = 'none';
+    listEl.innerHTML = _sylvaServerHistoryCache.map(function (item) {
+        return '<div class="sylva-hist-item" style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">' +
+            '<span style="font-size:1.1rem;">🔄</span>' +
+            '<div style="flex:1;min-width:0;">' +
+                '<div style="font-size:0.78rem;font-weight:700;color:#1e3a8a;">' + escapeHtml(item.index || 'Analiz') + '</div>' +
+                '<div style="font-size:0.68rem;color:#94a3b8;">' + sylvaFormatServerHistDate(item.ts) + '</div>' +
+            '</div>' +
+            '<button type="button" class="btn-tool" style="width:auto;padding:5px 10px;font-size:0.7rem;" onclick="sylvaViewAgainAnalysis(\'' + item.id + '\')">Tekrar Görüntüle</button>' +
+        '</div>';
+    }).join('');
+}
+
+function sylvaViewAgainAnalysis(entryId) {
+    var entry = _sylvaServerHistoryCache.find(function (e) { return e.id === entryId; });
+    if (!entry || !entry.params) {
+        sylvaAlert && sylvaAlert('Bu analiz artık bulunamadı.', 'warning');
+        return;
+    }
+
+    var mapObj = window._sylvaMap || (typeof map !== 'undefined' ? map : null);
+
+    fetch((window.API_BASE || '') + '/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(entry.params)
+    })
+    .then(function (r) { return r.json(); })
+    .then(function (res) {
+        if (!res || !res.success || !res.tileUrl || !mapObj) {
+            (window.sylvaAlert ? sylvaAlert('Analiz tekrar çalıştırılamadı.', 'error') : alert('Analiz tekrar çalıştırılamadı.'));
+            return;
+        }
+
+        // Not: Bu, mevcut karmaşık lejant/renk-yeniden-boyama sistemine
+        // dokunmadan, GÜVENLİ ve BASİT bir "önizleme katmanı" ekler —
+        // asıl canlı analiz akışını (Analizi Çalıştır) hiç etkilemez.
+        if (_sylvaHistoryPreviewLayer) {
+            try { mapObj.removeLayer(_sylvaHistoryPreviewLayer); } catch (e) {}
+        }
+        _sylvaHistoryPreviewLayer = L.tileLayer(res.tileUrl, { opacity: 0.9 }).addTo(mapObj);
+
+        try {
+            var roi = entry.params && entry.params.roi;
+            if (roi && roi.coordinates) {
+                var geoLayer = L.geoJSON(roi);
+                mapObj.fitBounds(geoLayer.getBounds(), { maxZoom: 15 });
+            }
+        } catch (e) { /* ROI yoksa/parse edilemezse mevcut görünümde kal */ }
+
+        sylvaShowHistoryPreviewBanner(entry.index);
+        sylvaFetchServerAnalysisHistory(); // yeniden çalıştırıldığı için liste güncellensin (en üste taşınır)
+    })
+    .catch(function () {
+        (window.sylvaAlert ? sylvaAlert('Bağlantı hatası. Lütfen tekrar deneyin.', 'error') : alert('Bağlantı hatası.'));
+    });
+}
+
+function sylvaShowHistoryPreviewBanner(indexLabel) {
+    var existing = document.getElementById('sylva-history-preview-banner');
+    if (existing) existing.remove();
+
+    var banner = document.createElement('div');
+    banner.id = 'sylva-history-preview-banner';
+    banner.style.cssText = 'position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:900;' +
+        'background:#1e3a8a;color:#fff;padding:8px 14px;border-radius:8px;font-size:0.78rem;font-weight:600;' +
+        'display:flex;align-items:center;gap:10px;box-shadow:0 4px 14px rgba(0,0,0,.2);';
+    banner.innerHTML = '<span>🔄 Geçmiş analiz gösteriliyor: ' + escapeHtml(indexLabel || '') + '</span>' +
+        '<button type="button" style="background:rgba(255,255,255,.15);border:none;color:#fff;border-radius:5px;padding:3px 8px;cursor:pointer;font-size:0.72rem;">✕ Kapat</button>';
+    banner.querySelector('button').onclick = function () {
+        var mapObj = window._sylvaMap || (typeof map !== 'undefined' ? map : null);
+        if (_sylvaHistoryPreviewLayer && mapObj) {
+            try { mapObj.removeLayer(_sylvaHistoryPreviewLayer); } catch (e) {}
+            _sylvaHistoryPreviewLayer = null;
+        }
+        banner.remove();
+    };
+    var mapContainer = document.getElementById('map');
+    if (mapContainer) mapContainer.appendChild(banner);
+}
+
+document.addEventListener('DOMContentLoaded', sylvaFetchServerAnalysisHistory);
+
 var SYLVA_HIST_KEY = 'sylva_analysis_history';
 var SYLVA_HIST_MAX = 10;
 
@@ -38935,46 +39528,85 @@ function runTimeSeriesAnalysis() {
     var btn = document.getElementById('btn-run-timeseries');
     if (btn) { btn.disabled = true; btn.textContent = t('ts_running'); }
 
-    var CMAP = { NDVI:'#22c55e', NDWI:'#1e3a8a', NBR:'#f97316', LST:'#ef4444', EVI:'#84cc16', SAVI:'#a3e635', BSI:'#fb923c', SMI:'#38bdf8' };
-    var series = idxs.map(function(idx) {
-        var pts = [], months = pe === 'monthly' ? 12 : 1;
-        for (var y = sy; y <= ey; y++) {
-            for (var m = 1; m <= months; m++) {
-                var ds = pe === 'monthly' ? y + '-' + String(m).padStart(2,'0') : String(y);
-                var base = idx === 'LST' ? 25 + Math.random()*10 : 0.4 + Math.random()*0.35;
-                var seas = idx === 'NDVI' ? Math.sin((m-3)*Math.PI/6)*0.15 : 0;
-                pts.push({ date: ds, value: parseFloat((base + seas + (Math.random()-0.5)*0.04).toFixed(4)) });
-            }
-        }
-        return { index: idx, color: CMAP[idx] || '#6366f1', points: pts };
-    });
-
-    window._setTsLineData({ series: series });
-    window.setChartType('line');
-
-    // Sağ paneli aç
-    var sr = document.getElementById('sidebar-right');
-    if (sr && sr.classList.contains('collapsed')) {
-        var colBtn = document.getElementById('right-collapse-btn');
-        if (colBtn) colBtn.click();
+    // ── Çalışma alanı (AOI) ve diğer paylaşılan analiz parametreleri ──
+    // (mevcut runAnalysis()/runMultiAnalysis() ile aynı kaynaktan okunur)
+    if (!currentLayer || (typeof map !== 'undefined' && map && !map.hasLayer(currentLayer))) {
+        sylvaAlert(t('no_aoi'), 'warning');
+        if (btn) { btn.disabled = false; btn.textContent = t('ts_run_btn'); }
+        return;
     }
-
-    // Time Slider
-    var allDates = series[0].points.map(function(p){ return p.date; });
-    window._tsSliderDates = allDates;
-    var slider = document.getElementById('sylva-time-slider');
-    var bar    = document.getElementById('sylva-time-slider-bar');
-    var lbl    = document.getElementById('ts-date-label');
-    if (slider && bar) {
-        slider.max = allDates.length - 1;
-        slider.value = 0;
-        bar.style.display = 'block';
-        if (lbl) lbl.textContent = allDates[0] || '—';
+    var _tsRoi = _extractROIGeometry(currentLayer);
+    if (!_tsRoi) {
+        sylvaAlert(t('no_geom'), 'warning');
+        if (btn) { btn.disabled = false; btn.textContent = t('ts_run_btn'); }
+        return;
     }
+    var sensorRadio    = document.querySelector('.uydu-sensor-radio:checked');
+    var viewModeEl     = document.getElementById('viewMode');
+    var cloudSliderEl2 = document.getElementById('cloud-slider');
+    var demSourceRadio = document.querySelector('input[name="dem-source"]:checked');
 
-    if (btn) { btn.disabled = false; btn.textContent = t('ts_run_btn'); }
+    var tsPayload = {
+        roi: _tsRoi,
+        clipMode: viewModeEl ? viewModeEl.value : 'clip',
+        satellite: sensorRadio ? sensorRadio.value : 's2-l2a',
+        indices: idxs,
+        period: pe,
+        startYear: sy,
+        endYear: ey,
+        maxCloud: cloudPct,
+        demSource: demSourceRadio ? demSourceRadio.value : 'SRTM',
+    };
+
     if (typeof showAnalysisToast === 'function')
-        showAnalysisToast(t('ts_done'), 'success');
+        showAnalysisToast('⏳ Zaman serisi hesaplanıyor — bu, seçilen aralığa göre biraz sürebilir…', 'info');
+
+    fetch((window.API_BASE || '') + '/api/time-series', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(tsPayload)
+    })
+    .then(function (r) { return r.json(); })
+    .then(function (res) {
+        if (btn) { btn.disabled = false; btn.textContent = t('ts_run_btn'); }
+
+        if (!res || !res.success) {
+            (window.sylvaAlert ? sylvaAlert((res && res.error) || 'Zaman serisi hesaplanamadı.', 'error')
+                                : alert((res && res.error) || 'Zaman serisi hesaplanamadı.'));
+            return;
+        }
+
+        var series = res.series || [];
+
+        window._setTsLineData({ series: series });
+        window.setChartType('line');
+
+        // Sağ paneli aç
+        var sr = document.getElementById('sidebar-right');
+        if (sr && sr.classList.contains('collapsed')) {
+            var colBtn = document.getElementById('right-collapse-btn');
+            if (colBtn) colBtn.click();
+        }
+
+        // Time Slider
+        var allDates = (series[0] && series[0].points || []).map(function (p) { return p.date; });
+        window._tsSliderDates = allDates;
+        var slider = document.getElementById('sylva-time-slider');
+        var bar    = document.getElementById('sylva-time-slider-bar');
+        var lbl    = document.getElementById('ts-date-label');
+        if (slider && bar) {
+            slider.max = Math.max(0, allDates.length - 1);
+            slider.value = 0;
+            bar.style.display = 'block';
+            if (lbl) lbl.textContent = allDates[0] || '—';
+        }
+
+        if (typeof showAnalysisToast === 'function') showAnalysisToast(t('ts_done'), 'success');
+    })
+    .catch(function () {
+        if (btn) { btn.disabled = false; btn.textContent = t('ts_run_btn'); }
+        (window.sylvaAlert ? sylvaAlert('Bağlantı hatası. Lütfen tekrar deneyin.', 'error') : alert('Bağlantı hatası.'));
+    });
 }
 
 /* ── 5. Time Slider ─────────────────────────────────────────────────────── */
@@ -39103,308 +39735,6 @@ function _initSwipeDrag(divider) {
     })();
 </script>
 
-
-
-<!-- ===== YOL HARİTASI MODAL ===== -->
-<div id="sylva-roadmap-overlay" onclick="if(event.target===this)sylvaCloseRoadmap()">
-    <div id="sylva-roadmap-modal">
-        <div id="sylva-roadmap-header">
-            <div id="sylva-roadmap-title-row">
-                <div id="sylva-roadmap-title">🗺️ Yol Haritası</div>
-                <div id="sylva-roadmap-sub">Yapılacaklar &amp; Gelecek Özellikler</div>
-            </div>
-            <button id="sylva-roadmap-close" onclick="sylvaCloseRoadmap()" title="Kapat">✕</button>
-        </div>
-        <div id="sylva-roadmap-body">
-
-            <!-- Kategori 1 -->
-            <div class="srm-cat">👤 Kullanıcı ve Hesap Özellikleri</div>
-
-            <div class="srm-item">
-                <div class="srm-item-icon">📧</div>
-                <div class="srm-item-content">
-                    <div class="srm-item-title">E-posta Doğrulamalı Giriş</div>
-                    <div class="srm-item-desc">Güvenli kayıt ve doğrulama kodu ile giriş sistemi.</div>
-                </div>
-                <span class="srm-badge srm-badge-soon">Yakında</span>
-            </div>
-
-            <div class="srm-item">
-                <div class="srm-item-icon">📜</div>
-                <div class="srm-item-content">
-                    <div class="srm-item-title">Analiz Geçmişi</div>
-                    <div class="srm-item-desc">Yapılan son 10 analizin saklanması ve istenildiğinde tekrar indirilmesi.</div>
-                </div>
-                <span class="srm-badge srm-badge-wip">Geliştiriliyor</span>
-            </div>
-
-            <div class="srm-item">
-                <div class="srm-item-icon">☁️</div>
-                <div class="srm-item-content">
-                    <div class="srm-item-title">Google Drive Entegrasyonu</div>
-                    <div class="srm-item-desc">Analiz çıktılarının doğrudan Google Drive hesabına aktarılması.</div>
-                </div>
-                <span class="srm-badge srm-badge-soon">Yakında</span>
-            </div>
-
-            <div class="srm-item">
-                <div class="srm-item-icon">💾</div>
-                <div class="srm-item-content">
-                    <div class="srm-item-title">Proje Kaydetme ve Paylaşım</div>
-                    <div class="srm-item-desc">Çalışmaları kaydetme, saklama ve salt-okunur bağlantı linkiyle başkalarıyla paylaşma.</div>
-                </div>
-                <span class="srm-badge srm-badge-planned">Planlandı</span>
-            </div>
-
-            <!-- Kategori 2 -->
-            <div class="srm-cat">🗺️ Analiz ve Harita Özellikleri</div>
-
-            <div class="srm-item">
-                <div class="srm-item-icon">🌿</div>
-                <div class="srm-item-content">
-                    <div class="srm-item-title">Çevresel ve Kentsel Analizler</div>
-                    <div class="srm-item-desc">Çevresel etki ve kentsel gelişim/yayılım analizlerinin sistem üzerinden yapılabilmesi.</div>
-                </div>
-                <span class="srm-badge srm-badge-planned">Planlandı</span>
-            </div>
-
-            <div class="srm-item">
-                <div class="srm-item-icon">⚡</div>
-                <div class="srm-item-content">
-                    <div class="srm-item-title">Çoklu Analiz Çalıştırma</div>
-                    <div class="srm-item-desc">NDVI, NDWI, LST gibi birden fazla analizi tek seferde başlatabilme.</div>
-                </div>
-                <span class="srm-badge srm-badge-soon">Yakında</span>
-            </div>
-
-            <div class="srm-item">
-                <div class="srm-item-icon">📈</div>
-                <div class="srm-item-content">
-                    <div class="srm-item-title">Zaman Serisi ve Değişim Analizi</div>
-                    <div class="srm-item-desc">Yıllık/aylık değişim grafikleri, zaman kaydırıcısı ve "Öncesi/Sonrası" (Swipe) kıyaslama aracı.</div>
-                </div>
-                <span class="srm-badge srm-badge-wip">Geliştiriliyor</span>
-            </div>
-
-            <div class="srm-item">
-                <div class="srm-item-icon">📊</div>
-                <div class="srm-item-content">
-                    <div class="srm-item-title">Alan İçi İstatistikler (Zonal Stats)</div>
-                    <div class="srm-item-desc">Seçilen poligon içindeki minimum, maksimum ve ortalama piksel değerlerini hesaplama.</div>
-                </div>
-                <span class="srm-badge srm-badge-soon">Yakında</span>
-            </div>
-
-            <div class="srm-item">
-                <div class="srm-item-icon">🔍</div>
-                <div class="srm-item-content">
-                    <div class="srm-item-title">Değişim Tespiti ve Doğruluk Hesabı</div>
-                    <div class="srm-item-desc">İki tarih arasındaki arazi sınıfı geçişlerini ve sınıflandırma doğruluk yüzdesini çıkarma.</div>
-                </div>
-                <span class="srm-badge srm-badge-planned">Planlandı</span>
-            </div>
-
-            <!-- Kategori 3 -->
-            <div class="srm-cat">🎨 Görselleştirme ve Çıktı Alma</div>
-
-            <div class="srm-item">
-                <div class="srm-item-icon">🏔️</div>
-                <div class="srm-item-content">
-                    <div class="srm-item-title">3D Harita ve Yükseklik Profili</div>
-                    <div class="srm-item-desc">Arazi yüksekliğine dayalı 3D görünüm ve çizilen hat boyunca yükseklik profili grafiği.</div>
-                </div>
-                <span class="srm-badge srm-badge-wip">Geliştiriliyor</span>
-            </div>
-
-            <div class="srm-item">
-                <div class="srm-item-icon">📏</div>
-                <div class="srm-item-content">
-                    <div class="srm-item-title">Eş Yükselti (İzohips) Çizgileri</div>
-                    <div class="srm-item-desc">10m ile 500m arasında 5 farklı aralıkta eş yükselti katmanı ekleme ve indirme.</div>
-                </div>
-                <span class="srm-badge srm-badge-wip">Geliştiriliyor</span>
-            </div>
-
-            <div class="srm-item">
-                <div class="srm-item-icon">📥</div>
-                <div class="srm-item-content">
-                    <div class="srm-item-title">Gelişmiş Veri İndirme</div>
-                    <div class="srm-item-desc">KML, KMZ, SHP ve GeoPackage formatlarında, istenen koordinat sisteminde (CRS) dışa aktarım.</div>
-                </div>
-                <span class="srm-badge srm-badge-soon">Yakında</span>
-            </div>
-
-            <div class="srm-item">
-                <div class="srm-item-icon">🎨</div>
-                <div class="srm-item-content">
-                    <div class="srm-item-title">Lejant ve Renk Koruma</div>
-                    <div class="srm-item-desc">ESA WorldCover, CORINE gibi arazi kullanım haritalarında orijinal renklerin ve lejantın aynen korunması.</div>
-                </div>
-                <span class="srm-badge srm-badge-planned">Planlandı</span>
-            </div>
-
-            <div class="srm-item">
-                <div class="srm-item-icon">🖨️</div>
-                <div class="srm-item-content">
-                    <div class="srm-item-title">Kartografik PDF Çıktısı</div>
-                    <div class="srm-item-desc">Özelleştirilebilir renk stilleri, A4/A3 boyutları, logo ve başlık şablonlarıyla profesyonel harita çıktısı.</div>
-                </div>
-                <span class="srm-badge srm-badge-soon">Yakında</span>
-            </div>
-
-            <!-- Kategori 4 -->
-            <div class="srm-cat">⚙️ Sistem, Performans ve Bağlantılar</div>
-
-            <div class="srm-item">
-                <div class="srm-item-icon">⏳</div>
-                <div class="srm-item-content">
-                    <div class="srm-item-title">Arka Plan İşlem Kuyruğu</div>
-                    <div class="srm-item-desc">Sistem donmalarını önlemek için ağır hesaplamaları arka plana alma ve ekranda yüzde/durum çubuğu gösterme.</div>
-                </div>
-                <span class="srm-badge srm-badge-planned">Planlandı</span>
-            </div>
-
-            <div class="srm-item">
-                <div class="srm-item-icon">🔗</div>
-                <div class="srm-item-content">
-                    <div class="srm-item-title">Masaüstü GIS Entegrasyonu (WFS/WMTS/WCS)</div>
-                    <div class="srm-item-desc">QGIS ve ArcGIS gibi programların doğrudan veri çekebilmesine imkan sağlama.</div>
-                </div>
-                <span class="srm-badge srm-badge-planned">Planlandı</span>
-            </div>
-
-            <div class="srm-item">
-                <div class="srm-item-icon">🔌</div>
-                <div class="srm-item-content">
-                    <div class="srm-item-title">Açık REST API</div>
-                    <div class="srm-item-desc">Dış uygulamaların platform fonksiyonlarını API key ile kullanabilmesi.</div>
-                </div>
-                <span class="srm-badge srm-badge-planned">Planlandı</span>
-            </div>
-
-            <div class="srm-item">
-                <div class="srm-item-icon">🌐</div>
-                <div class="srm-item-content">
-                    <div class="srm-item-title">Çoklu Dil ve Erişilebilirlik</div>
-                    <div class="srm-item-desc">Merkezi dil desteği genişletme, ekran okuyucu ve klavye navigasyon uyumu.</div>
-                </div>
-                <span class="srm-badge srm-badge-wip">Geliştiriliyor</span>
-            </div>
-
-            <div class="srm-item">
-                <div class="srm-item-icon">🛡️</div>
-                <div class="srm-item-content">
-                    <div class="srm-item-title">Rol Tabanlı Yetkilendirme ve Kayıtlar</div>
-                    <div class="srm-item-desc">İzleyici/Editör/Yönetici rolleri, işlem kayıtları (audit log) ve KVKK/GDPR uyumu.</div>
-                </div>
-                <span class="srm-badge srm-badge-planned">Planlandı</span>
-            </div>
-
-            <div class="srm-item">
-                <div class="srm-item-icon">🧩</div>
-                <div class="srm-item-content">
-                    <div class="srm-item-title">Modüler Kod Yapısı</div>
-                    <div class="srm-item-desc">Kod tabanını React/Vue gibi modern yapılara bölme, otomatik hata takibi ve test süreçleri kurma.</div>
-                </div>
-                <span class="srm-badge srm-badge-planned">Planlandı</span>
-            </div>
-
-        </div>
-    </div>
-</div>
-
-<script>
-/* ── Yol Haritası: toggle / close ── */
-window.sylvaToggleRoadmap = function() {
-    var ov = document.getElementById('sylva-roadmap-overlay');
-    if (!ov) return;
-    if (ov.classList.contains('active')) {
-        ov.classList.remove('active');
-    } else {
-        ov.classList.add('active');
-        // İlk açılışta "görüldü" olarak işaretle → kırmızı ışık sönsün
-        try { localStorage.setItem('sylva_roadmap_seen', '1'); } catch(e) {}
-        var BIDS = ['nav-roadmap-btn', 'mnc-roadmap-btn'];
-        BIDS.forEach(function(id) {
-            var el = document.getElementById(id);
-            if (el) el.classList.remove('sylva-roadmap-blink');
-        });
-    }
-};
-window.sylvaCloseRoadmap = function() {
-    var ov = document.getElementById('sylva-roadmap-overlay');
-    if (ov) ov.classList.remove('active');
-};
-/* ESC ile kapat */
-document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') sylvaCloseRoadmap();
-});
-
-/* ── Kırmızı yanıp sönme: giriş durumuna göre butonları güncelle ── */
-(function() {
-    var BLINK_IDS = ['nav-roadmap-btn', 'mnc-roadmap-btn'];
-
-    function isLoggedIn() {
-        if (window._sylvaUserDone === true) return true;
-        try {
-            var r = localStorage.getItem('sylva_user_profile');
-            if (r) { var d = JSON.parse(r); if (d && d.user) return true; }
-            var o = localStorage.getItem('sylva_auth_session');
-            if (o) { var od = JSON.parse(o); if (od && od.user && od.expires > Date.now()) return true; }
-        } catch(ex) {}
-        return false;
-    }
-
-    function hasSeen() {
-        try { return !!localStorage.getItem('sylva_roadmap_seen'); } catch(e) { return false; }
-    }
-
-    function updateBlink() {
-        var ok = isLoggedIn() && !hasSeen();
-        BLINK_IDS.forEach(function(id) {
-            var el = document.getElementById(id);
-            if (!el) return;
-            if (ok) {
-                el.classList.add('sylva-roadmap-blink');
-            } else {
-                el.classList.remove('sylva-roadmap-blink');
-                if (el.id === 'nav-roadmap-btn') {
-                    el.style.borderColor = '';
-                    el.style.color = '';
-                }
-            }
-        });
-    }
-
-    /* Sayfa yüklendiğinde ilk kontrol */
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', function() {
-            updateBlink();
-            installRoadmapObserver();
-        });
-    } else {
-        updateBlink();
-        installRoadmapObserver();
-    }
-
-    /* sylva-user-display görünürlük değişimini izle (giriş/çıkış olayları) */
-    function installRoadmapObserver() {
-        var target = document.getElementById('sylva-user-display');
-        if (!target) return;
-        var obs = new MutationObserver(function() { updateBlink(); });
-        obs.observe(target, { attributes: true, attributeFilter: ['style'] });
-    }
-
-    /* window._sylvaUserDone değişimini yakala (300ms polling — çok hafif) */
-    var _lastDone = window._sylvaUserDone;
-    setInterval(function() {
-        if (window._sylvaUserDone !== _lastDone) {
-            _lastDone = window._sylvaUserDone;
-            updateBlink();
-        }
-    }, 300);
-})();
-</script>
 
 </body>
 
