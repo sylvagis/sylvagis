@@ -2,113 +2,21 @@ import ee
 import re
 import io
 import os
-import sys
 import math
 import time
 import shutil
-import logging
 import zipfile
 import tempfile
 import datetime
 import traceback
-import collections
 import urllib.parse
 import requests
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
-from werkzeug.exceptions import HTTPException
 
 app = Flask(__name__)
 CORS(app)
 print('SylvaGIS server.py yüklendi — versiyon: zip-export-v2-tiling')
-
-
-# ════════════════════════════════════════════════════════════════
-# 🛡️ BACKEND HATA İZLEME (Faz 1.3) — frontend'deki Sentry entegrasyonunun
-# backend karşılığı.
-# ════════════════════════════════════════════════════════════════
-# AKTİF ETMEK İÇİN (Sentry):
-#   1) https://sentry.io üzerinde "Python/Flask" platformuyla bir proje aç.
-#   2) Sana verilen DSN'i SYLVA_SENTRY_DSN ortam değişkenine ekle
-#      (Render/Cloud Run panelinden — koda YAZMA).
-#   3) requirements.txt'e "sentry-sdk[flask]" ekle, yeniden deploy et.
-# DSN tanımlı olmasa BİLE hatalar aşağıdaki yerel (bellek içi) günlüğe
-# yazılır ve normal konsol/log çıktısına basılır — yani bu özellik Sentry
-# kurulmadan da hemen faydalıdır.
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    stream=sys.stdout,
-)
-logger = logging.getLogger('sylvagis')
-
-_local_error_log = collections.deque(maxlen=50)   # son 50 hata, bellekte tutulur
-
-SENTRY_DSN = os.environ.get('SYLVA_SENTRY_DSN', '')
-_sentry_enabled = False
-if SENTRY_DSN:
-    try:
-        import sentry_sdk
-        from sentry_sdk.integrations.flask import FlaskIntegration
-        sentry_sdk.init(
-            dsn=SENTRY_DSN,
-            integrations=[FlaskIntegration()],
-            traces_sample_rate=0.1,
-            environment=os.environ.get('SYLVA_ENV', 'production'),
-            send_default_pii=False,   # KVKK/gizlilik: varsayılan kullanıcı verisi gönderimi kapalı
-        )
-        _sentry_enabled = True
-        logger.info('✅ Sentry backend hata izleme aktif.')
-    except Exception as _sentry_init_err:
-        logger.warning('⚠️ Sentry başlatılamadı: %s', _sentry_init_err)
-else:
-    logger.info('ℹ️ SYLVA_SENTRY_DSN tanımlı değil — hatalar sadece yerel günlükte tutulacak.')
-
-
-def _log_error(context, exc):
-    """Tutarlı hata kaydı için tek nokta: konsola/log'a yazar, yerel bellek
-    günlüğüne ekler, Sentry aktifse oraya da gönderir. Mevcut endpoint'lerin
-    kendi try/except bloklarından da opsiyonel olarak çağrılabilir —
-    örn: `except Exception as ex: _log_error('analyze', ex)`."""
-    entry = {
-        'context': context,
-        'error': str(exc),
-        'traceback': traceback.format_exc()[-2000:],
-        'ts': datetime.datetime.utcnow().isoformat() + 'Z',
-    }
-    _local_error_log.append(entry)
-    logger.error('[%s] %s', context, exc)
-    if _sentry_enabled:
-        try:
-            import sentry_sdk
-            sentry_sdk.capture_exception(exc)
-        except Exception:
-            pass
-
-
-@app.errorhandler(Exception)
-def _handle_uncaught_exception(exc):
-    """Güvenlik ağı: herhangi bir endpoint'te try/except'in yakalamadığı
-    beklenmeyen bir hata olursa, kullanıcıya çıplak bir stack trace yerine
-    düzgün bir JSON hata mesajı döner VE hatayı kaydeder. Normal HTTP
-    hataları (404, 400 vb.) olduğu gibi bırakılır, sadece gerçek/beklenmeyen
-    istisnalar burada işlenir."""
-    if isinstance(exc, HTTPException):
-        return exc
-    _log_error('unhandled', exc)
-    return jsonify({'success': False, 'error': 'Sunucuda beklenmeyen bir hata oluştu.'}), 500
-
-
-@app.route('/api/debug/error-log', methods=['GET'])
-def debug_error_log():
-    """Son hataları görüntüler (hata ayıklama amaçlı).
-    ⚠️ GÜVENLİK: Bu endpoint'i üretimde herkese açık bırakmak istemiyorsan
-    SYLVA_DEBUG_KEY ortam değişkenini tanımla — o zaman ?key=... ile
-    eşleşmeyen istekler reddedilir."""
-    expected = os.environ.get('SYLVA_DEBUG_KEY', '')
-    if expected and request.args.get('key', '') != expected:
-        return jsonify({'error': 'Yetkisiz.'}), 403
-    return jsonify({'count': len(_local_error_log), 'errors': list(_local_error_log)})
 
 
 # ════════════════════════════════════════════════════════════════
@@ -203,132 +111,23 @@ try:
 except Exception as e:
     print('❌ GEE başlatılamadı:', e)
 
-# ════════════════════════════════════════════════════════════════
-# 🛠️ KRİTİK DÜZELTME — Çoklu Kullanıcı Yarış Durumu (Race Condition)
-# ════════════════════════════════════════════════════════════════
-# ÖNCEKİ DURUM: "_last_analyze_params" ve "_last_analyze_native_crs" TEK,
-# sunucu genelinde paylaşılan (process-wide) global değişkenlerdi. Yani:
-#   Kullanıcı A analiz çalıştırır → sunucu bunu global değişkene yazar.
-#   Kullanıcı B (aynı anda, FARKLI bir AOI/indeks ile) analiz çalıştırır
-#     → aynı global değişkenin üzerine YAZAR.
-#   Kullanıcı A "GeoTIFF indir" derse → artık Kullanıcı B'nin
-#     parametreleriyle bir dosya indirir — sessizce YANLIŞ sonuç!
-# Bu hata, trafik arttıkça (tam da ölçeklenme hedefinin kendisi) daha sık
-# ve daha görünmez şekilde tetiklenir.
-#
-# ÇÖZÜM: Durum artık "clientId" (istemci tarafından üretilen, sekme/oturum
-# başına sabit bir kimlik — bkz. index.html) ile anahtarlanan bir sözlükte
-# tutulur. Her kullanıcının/sekmenin kendi "son analiz" durumu izole edilir.
-# Eski istemciler (henüz clientId göndermeyen) için IP+User-Agent
-# özetinden üretilen bir yedek anahtara geri düşülür — kırılma olmaz,
-# ama gerçek izolasyon için frontend güncellemesi şarttır (bu güncelleme
-# index.html'e de eklendi).
-# ════════════════════════════════════════════════════════════════
-import hashlib as _hashlib
-import time as _time
-
-_analyze_session_store = {}   # { client_key: {'params': {...}, 'native_crs': str|None, 'ts': float} }
-_ANALYZE_SESSION_TTL_SECONDS = 6 * 3600   # 6 saat sonra kullanılmayan oturum kayıtları temizlenir
-
-
-def _client_key_from_request(req_data):
-    """İstek gövdesindeki clientId'yi kullanır; yoksa IP+User-Agent'tan
-    (eski istemciler için geriye dönük uyumluluk amacıyla) bir anahtar
-    üretir. Gerçek izolasyon için clientId gönderilmesi ÖNEMLİDİR."""
-    client_id = (req_data or {}).get('clientId')
-    if client_id and isinstance(client_id, str):
-        return 'cid:' + client_id[:100]
-    fallback_raw = '{}|{}'.format(
-        request.remote_addr or '',
-        request.headers.get('User-Agent', '')
-    )
-    return 'legacy:' + _hashlib.sha256(fallback_raw.encode('utf-8')).hexdigest()[:32]
-
-
-def _prune_analyze_sessions():
-    now = _time.time()
-    expired = [k for k, v in _analyze_session_store.items()
-               if now - v.get('ts', 0) > _ANALYZE_SESSION_TTL_SECONDS]
-    for k in expired:
-        _analyze_session_store.pop(k, None)
-
-
-def _save_analyze_state(req_data, params, native_crs=None):
-    _prune_analyze_sessions()
-    key = _client_key_from_request(req_data)
-    _analyze_session_store[key] = {
-        'params': params,
-        'native_crs': native_crs,
-        'ts': _time.time(),
-    }
-
-
-def _update_analyze_native_crs(req_data, native_crs):
-    key = _client_key_from_request(req_data)
-    entry = _analyze_session_store.get(key)
-    if entry is not None:
-        entry['native_crs'] = native_crs
-        entry['ts'] = _time.time()
-
-
-def _get_analyze_state(req_data):
-    key = _client_key_from_request(req_data)
-    entry = _analyze_session_store.get(key)
-    if not entry:
-        return {}, None
-    return entry.get('params') or {}, entry.get('native_crs')
-
+# Last analysis parameters (GeoTIFF download için saklanır)
+_last_analyze_params = {}
 
 # ════════════════════════════════════════════════════════════════
-# 📜 ANALİZ GEÇMİŞİ (Faz 2.1) — sunucu tarafı, kalıcı (RAM içinde)
+# 🌐 SON ANALİZİN GERÇEK/DOĞAL KOORDİNAT SİSTEMİ (CRS)
 # ════════════════════════════════════════════════════════════════
-# Her kullanıcının (clientId ile) son 10 BAŞARILI analizi burada saklanır:
-# tam istek parametreleri (yeniden çalıştırmak için) + sonuç özeti
-# (tileUrl, index, tarih). Frontend "🔄 Tekrar Görüntüle" dediğinde,
-# saklanan parametreler AYNEN /api/analyze'e tekrar gönderilir — yani
-# ayrı bir "reload" endpoint'i / analiz mantığı tekrarı YOK, mevcut,
-# test edilmiş /api/analyze akışı olduğu gibi yeniden kullanılıyor.
-#
-# ⚠️ Aynı "tek instance" sınırlaması burada da geçerli — Cloud Run'a ve
-# birden fazla instance'a geçilince bu depo da Redis/Firestore gibi
-# paylaşılan bir yere taşınmalı (bkz. _analyze_session_store notu).
-_analysis_history_store = {}   # { client_key: [ {id, index, ts, params, result}, ... ] }  (en yeni başta)
-_ANALYSIS_HISTORY_MAX = 10
-
-
-def _add_analysis_history_entry(req_data, result_summary):
-    import uuid as _uuid
-    key = _client_key_from_request(req_data)
-    history = _analysis_history_store.setdefault(key, [])
-    history.insert(0, {
-        'id': _uuid.uuid4().hex[:12],
-        'index': result_summary.get('index', ''),
-        'ts': _time.time(),
-        'params': dict(req_data) if req_data else {},
-        'result': result_summary,
-    })
-    del history[_ANALYSIS_HISTORY_MAX:]
-
-
-@app.route('/api/analysis-history', methods=['GET'])
-def get_analysis_history():
-    """clientId query parametresiyle o kullanıcının son 10 analizini döner.
-    Frontend, listedeki her kaydın 'params' alanını AYNEN /api/analyze'e
-    tekrar göndererek o analizi 'tekrar görüntüleyebilir'."""
-    fake_req_data = {'clientId': request.args.get('clientId', '')}
-    key = _client_key_from_request(fake_req_data)
-    history = _analysis_history_store.get(key, [])
-    return jsonify({'success': True, 'history': history})
-
-
-@app.route('/api/analysis-history/clear', methods=['POST'])
-def clear_analysis_history():
-    data = request.get_json(silent=True) or {}
-    key = _client_key_from_request(data)
-    _analysis_history_store.pop(key, None)
-    return jsonify({'success': True})
-
-
+# SORUN: "📥 Veriyi İndir (GeoTIFF)" penceresindeki CRS seçici her zaman
+# WGS 84 / EPSG:4326'da açılıyordu — oysa verinin kendi doğal/native CRS'i
+# (örn. Sentinel-2/Landsat bantları çoğunlukla UTM projeksiyonundadır)
+# genellikle farklıdır ve kullanıcı hangi UTM diliminde olduğunu bilemez.
+# /api/analyze her çalıştığında burada son analizin GERÇEK CRS'i saklanır;
+# hem /api/analyze yanıtında ('nativeCrs') doğrudan istemciye bildirilir
+# (istemci CRS seçicisini buna göre otomatik ön-seçer) hem de
+# /api/download-geotiff istemci hiçbir CRS göndermezse GÜVENLİ bir
+# varsayılan (sabit EPSG:4326 yerine) olarak kullanılır. Kullanıcı yine de
+# isterse seçiciden WGS 84'e veya başka bir EPSG koduna geri dönebilir.
+_last_analyze_native_crs = None
 
 # Arazi Kullanımı (LULC) ailesindeki analizler — bunlar statik/tek-katmanlı
 # veri setleridir; tarih aralığı veya bulutluluk filtresi kullanmazlar ve
@@ -730,11 +529,8 @@ def send_contact_message():
     if not email_re.match(email):
         return jsonify({'success': False, 'error': 'Geçersiz e-posta adresi.'}), 400
 
-    smtp_user = os.environ.get('SYLVA_SMTP_USER', 'sylvagis.world@gmail.com')
-    smtp_pass = os.environ.get('SYLVA_SMTP_PASS', '')
-    if not smtp_pass:
-        print('❌ /api/contact: SYLVA_SMTP_PASS ortam değişkeni tanımlı değil.')
-        return jsonify({'success': False, 'error': 'E-posta gönderimi şu anda yapılandırılmamış.'}), 503
+    smtp_user = 'sylvagis.world@gmail.com'
+    smtp_pass = 'ksfnkvwcutrawcih'
 
     body = (
         'SylvaGIS İletişim Formu üzerinden yeni bir mesaj gönderildi.\n\n'
@@ -2327,9 +2123,10 @@ def _rgb_scene_metadata(data, roi, image, ds):
 
 @app.route('/api/analyze', methods=['POST'])
 def analyze():
+    global _last_analyze_params, _last_analyze_native_crs
     try:
         data = request.json
-        _save_analyze_state(data, dict(data) if data else {})
+        _last_analyze_params = dict(data) if data else {}
 
         # ── 🛰️ Uydu Görüntüsü Galerisi — hızlı yol ───────────────────
         # RGB (gerçek renk) önizlemesi için piksel histogramı/istatistik
@@ -2372,16 +2169,7 @@ def analyze():
                 except Exception:
                     pass
             if download_native_crs:
-                _update_analyze_native_crs(data, download_native_crs)
-
-            _add_analysis_history_entry(data, {
-                'index': 'RGB',
-                'tileUrl': tile_url,
-                'meta': meta,
-                'nativeCrs': download_native_crs,
-                'visMin': vis.get('min'),
-                'visMax': vis.get('max'),
-            })
+                _last_analyze_native_crs = download_native_crs
 
             return jsonify({
                 'success':  True,
@@ -2443,7 +2231,7 @@ def analyze():
                       'girecek): {}'.format(_centroid_err))
 
         if native_crs:
-            _update_analyze_native_crs(data, native_crs)
+            _last_analyze_native_crs = native_crs
 
         # ── İstatistik ────────────────────────────────────────────
         # 🛠️ BUG FİX (NoData piksel / büyük AOI istatistik sorunu):
@@ -2472,15 +2260,8 @@ def analyze():
             # çağrı TEK bir GEE isteğine indirilir — hem daha hızlı yanıt
             # verir hem de kullanıcı arka arkaya analiz yaptığında GEE'nin
             # eşzamanlı/istek-başına limitlerine çarpma ihtimalini azaltır.
-            #
-            # Faz 3.4 (Zonal Statistics) eklentisi: standart sapma (std) da
-            # aynı kombine reducer'a eklendi — min/maks/ortalama zaten
-            # hesaplanıyordu, tek eksik std'ydi. Ekstra bir GEE isteği
-            # gerekmeden (aynı reduceRegion çağrısına dahil edilerek).
             combined_reducer = ee.Reducer.minMax().combine(
                 reducer2=ee.Reducer.mean(), sharedInputs=True
-            ).combine(
-                reducer2=ee.Reducer.stdDev(), sharedInputs=True
             )
             mm = _call_with_retry(
                 lambda: result.reduceRegion(
@@ -2494,8 +2275,7 @@ def analyze():
             real_minmax = {
                 'min':  mm.get('value_min'),
                 'max':  mm.get('value_max'),
-                'mean': mm.get('value_mean'),
-                'std':  mm.get('value_stdDev'),
+                'mean': mm.get('value_mean')
             }
         except Exception:
             pass
@@ -2566,17 +2346,6 @@ def analyze():
             except Exception:
                 scenes_list = []
 
-        _add_analysis_history_entry(data, {
-            'index': data.get('index', 'NDVI'),
-            'tileUrl': tile_url,
-            'stats': stats,
-            'realStats': real_minmax,
-            'visMin': vis.get('min'),
-            'visMax': vis.get('max'),
-            'visPalette': vis.get('palette', []),
-            'nativeCrs': native_crs,
-        })
-
         return jsonify({
             'success':   True,
             'tileUrl':   tile_url,
@@ -2592,126 +2361,6 @@ def analyze():
 
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
-
-
-@app.route('/api/time-series', methods=['POST'])
-def time_series():
-    """
-    Zaman Serisi ve Değişim Analizi (Faz 2.4).
-    Seçilen AOI için, her zaman aralığında (ay veya yıl) build_result_image()
-    ile AYNI indeks hesaplama mantığını (mevcut /api/analyze ile birebir aynı
-    kod yolu) tekrar kullanarak GERÇEK bir ortalama değer üretir. Böylece
-    frontend'deki grafik artık rastgele/örnek veriler yerine gerçek GEE
-    hesaplamalarını gösterir.
-
-    ⚠️ PERFORMANS NOTU: Her zaman noktası, arka planda ayrı bir GEE isteği
-    (görüntü koleksiyonu filtreleme + reduceRegion) gerektirir. Bu yüzden
-    zaman noktası sayısı (yıl aralığı × ay sayısı) makul bir üst sınırla
-    (40) sınırlandırılmıştır — aksi halde tek bir istek dakikalarca sürebilir
-    ve sunucu zaman aşımına uğrayabilir. Kuyruk sistemi (Faz 1.1'de bahsedilen)
-    kurulduğunda bu sınır kaldırılıp arka planda işlenebilir hale getirilebilir.
-    """
-    try:
-        data = request.get_json(silent=True) or {}
-
-        roi_coords = data.get('roi')
-        if not roi_coords:
-            return jsonify({'success': False, 'error': 'Çalışma alanı (AOI) gerekli. Önce haritada bir alan çizin.'}), 400
-
-        satellite  = data.get('satellite', 's2-l2a')
-        indices    = data.get('indices') or ([data['index']] if data.get('index') else [])
-        if not indices:
-            return jsonify({'success': False, 'error': 'En az bir analiz (indeks) seçilmeli.'}), 400
-
-        period     = data.get('period', 'yearly')
-        clip_mode  = data.get('clipMode', 'clip')
-        dem_source = data.get('demSource', 'SRTM')
-        max_cloud  = int(data.get('maxCloud', 30))
-
-        try:
-            start_year = int(data.get('startYear'))
-            end_year   = int(data.get('endYear'))
-        except (TypeError, ValueError):
-            return jsonify({'success': False, 'error': 'Geçerli bir başlangıç/bitiş yılı girin.'}), 400
-
-        if start_year >= end_year:
-            return jsonify({'success': False, 'error': 'Başlangıç yılı, bitiş yılından küçük olmalıdır.'}), 400
-
-        months_per_year = 12 if period == 'monthly' else 1
-        n_buckets = (end_year - start_year + 1) * months_per_year * len(indices)
-        MAX_BUCKETS = 40
-        if n_buckets > MAX_BUCKETS:
-            return jsonify({
-                'success': False,
-                'error': (
-                    'Seçilen aralık çok geniş ({} zaman noktası). En fazla {} '
-                    'zaman noktası desteklenir — lütfen yıl aralığını daraltın, '
-                    'daha az indeks seçin veya "Yıllık" periyodu kullanın.'
-                ).format(n_buckets, MAX_BUCKETS)
-            }), 400
-
-        roi = make_roi(roi_coords)
-
-        CMAP = {
-            'NDVI': '#22c55e', 'NDWI': '#1e3a8a', 'NBR': '#f97316', 'LST': '#ef4444',
-            'EVI': '#84cc16', 'SAVI': '#a3e635', 'BSI': '#fb923c', 'SMI': '#38bdf8',
-            'NDSI': '#0ea5e9', 'AVI': '#16a34a', 'SI': '#78716c', 'NDGI': '#0891b2',
-            'NDMI': '#2563eb', 'NPCRI': '#dc2626', 'VHI': '#f59e0b', 'FRI': '#b91c1c',
-        }
-
-        series = []
-        for idx in indices:
-            points = []
-            for y in range(start_year, end_year + 1):
-                month_range = range(1, 13) if period == 'monthly' else [None]
-                for m in month_range:
-                    if period == 'monthly':
-                        start_date = '{:04d}-{:02d}-01'.format(y, m)
-                        end_date   = '{:04d}-01-01'.format(y + 1) if m == 12 else '{:04d}-{:02d}-01'.format(y, m + 1)
-                        date_label = '{:04d}-{:02d}'.format(y, m)
-                    else:
-                        start_date = '{:04d}-01-01'.format(y)
-                        end_date   = '{:04d}-12-31'.format(y)
-                        date_label = str(y)
-
-                    bucket_data = {
-                        'roi': roi_coords, 'clipMode': clip_mode, 'satellite': satellite,
-                        'index': idx, 'startDate': start_date, 'endDate': end_date,
-                        'maxCloud': max_cloud, 'demSource': dem_source,
-                    }
-                    try:
-                        _, _, result, _ = build_result_image(bucket_data)
-                        mm = _call_with_retry(
-                            lambda: result.reduceRegion(
-                                reducer=ee.Reducer.mean(),
-                                geometry=roi,
-                                scale=30,
-                                maxPixels=1e9,
-                                bestEffort=True,
-                            ).getInfo()
-                        )
-                        value = None
-                        if mm:
-                            for v in mm.values():
-                                if v is not None:
-                                    value = v
-                                    break
-                        if value is not None:
-                            points.append({'date': date_label, 'value': round(float(value), 4)})
-                    except Exception as bucket_err:
-                        # Bu zaman diliminde veri yoksa (bulut/kapsama boşluğu vb.)
-                        # sessizce atla — grafik sadece o noktayı boş bırakır,
-                        # tüm isteği başarısız etmez.
-                        logger.warning('[time-series] %s %s bucket atlandı: %s', idx, date_label, bucket_err)
-                        continue
-
-            series.append({'index': idx, 'color': CMAP.get(idx, '#6366f1'), 'points': points})
-
-        return jsonify({'success': True, 'series': series})
-
-    except Exception as ex:
-        _log_error('time-series', ex)
-        return jsonify({'success': False, 'error': 'Zaman serisi hesaplanamadı: {}'.format(str(ex))}), 500
 
 
 @app.route('/api/highlight-class', methods=['POST'])
@@ -2798,8 +2447,6 @@ def download_geotiff():
         # üzerinden AYNI ortak kırpma/NoData mantığını kullandığı için bu
         # düzeltme tüm raster analiz dışa aktarımlarına otomatik uygulanır.
         fresh_roi = req_data.get('roi')
-
-        _last_analyze_params, _last_analyze_native_crs = _get_analyze_state(req_data)
 
         if not _last_analyze_params.get('roi'):
             return jsonify({'success': False, 'error': 'Önce bir uydu analizi çalıştırın.'})
@@ -3957,162 +3604,9 @@ from email.mime.multipart import MIMEMultipart
 
 SYLVA_OWNER_EMAIL = 'sylvagis.world@gmail.com'
 
-
-# ════════════════════════════════════════════════════════════════
-# 🔐 E-POSTA DOĞRULAMA (Faz 1.2) — Kullanıcıya 6 haneli kod gönderimi
-# ════════════════════════════════════════════════════════════════
-# Basit, harici bir servis/veritabanı gerektirmeyen bir doğrulama akışı:
-#   1) Kullanıcı e-postasını girer → /api/send-verification-code
-#      6 haneli bir kod üretilir, e-postaya gönderilir, 10 dakika
-#      süreyle bellekte (in-memory) saklanır.
-#   2) Kullanıcı e-postasına gelen kodu girer → /api/verify-code
-#      Kod doğruysa ve süresi dolmadıysa e-posta "doğrulanmış" sayılır.
-#
-# ⚠️ ÖNEMLİ (ileride Cloud Run'a geçince): Bu kodlar şu an sunucu
-# belleğinde (RAM) tutuluyor. Render'da tek instance çalıştığı sürece
-# sorun olmaz. Cloud Run'da birden fazla instance otomatik açılabildiği
-# için (autoscaling), bir isteğin kodu üreten instance ile doğrulayan
-# instance FARKLI olabilir. O noktaya gelindiğinde bu depoyu Redis veya
-# Firestore gibi paylaşılan bir depoya taşımak gerekecek — şimdilik
-# (tek instance / Render) bu yeterli ve güvenlidir.
-# ════════════════════════════════════════════════════════════════
-import random as _random
-
-_verification_codes = {}   # { email: {'code': str, 'expires': float, 'attempts': int, 'verified': bool} }
-_VERIFICATION_CODE_TTL_SECONDS = 10 * 60   # 10 dakika
-_VERIFICATION_MAX_ATTEMPTS = 5             # Kod başına en fazla yanlış deneme
-_VERIFICATION_RESEND_COOLDOWN_SECONDS = 45  # Yeniden gönderim arasında minimum süre
-
-
-def _prune_verification_codes():
-    now = _time.time()
-    expired = [addr for addr, v in _verification_codes.items() if now > v.get('expires', 0)]
-    for addr in expired:
-        _verification_codes.pop(addr, None)
-
-
-def _send_verification_email(email, code):
-    smtp_user = os.environ.get('SYLVA_SMTP_USER', 'sylvagis.world@gmail.com')
-    smtp_pass = os.environ.get('SYLVA_SMTP_PASS', '')
-    if not smtp_pass:
-        print('❌ _send_verification_email: SYLVA_SMTP_PASS ortam değişkeni tanımlı değil.')
-        raise RuntimeError('SMTP yapılandırılmamış (SYLVA_SMTP_PASS eksik).')
-
-    msg = MIMEMultipart('alternative')
-    msg['Subject'] = f'SylvaGIS Doğrulama Kodunuz: {code}'
-    msg['From']    = smtp_user
-    msg['To']      = email
-
-    html_body = f"""
-    <html><body style="font-family:Arial,sans-serif;background:#f4f6f9;padding:24px;">
-      <div style="background:#fff;border-radius:12px;max-width:420px;margin:auto;
-                  padding:32px;box-shadow:0 4px 16px rgba(0,0,0,.1);text-align:center;">
-        <div style="font-size:1.3rem;font-weight:800;color:#1e3a8a;margin-bottom:18px;">
-          🌲 SylvaGIS E-posta Doğrulama
-        </div>
-        <div style="color:#334155;font-size:.92rem;margin-bottom:20px;">
-          Kayıt işleminizi tamamlamak için aşağıdaki kodu girin:
-        </div>
-        <div style="font-size:2rem;font-weight:800;letter-spacing:0.35em;color:#1e3a8a;
-                    background:#eff6ff;border-radius:10px;padding:14px 10px;margin-bottom:18px;">
-          {code}
-        </div>
-        <div style="color:#94a3b8;font-size:.78rem;">
-          Bu kod 10 dakika süreyle geçerlidir. Bu isteği siz yapmadıysanız
-          bu e-postayı görmezden gelebilirsiniz.
-        </div>
-      </div>
-    </body></html>"""
-
-    plain_body = f'SylvaGIS doğrulama kodunuz: {code}\nBu kod 10 dakika geçerlidir.'
-
-    msg.attach(MIMEText(plain_body, 'plain', 'utf-8'))
-    msg.attach(MIMEText(html_body,  'html',  'utf-8'))
-
-    with smtplib.SMTP('smtp.gmail.com', 587) as s:
-        s.ehlo()
-        s.starttls()
-        s.login(smtp_user, smtp_pass)
-        s.sendmail(smtp_user, email, msg.as_string())
-
-
-@app.route('/api/send-verification-code', methods=['POST'])
-def send_verification_code():
-    try:
-        data  = request.get_json(silent=True) or {}
-        email = (data.get('email') or '').strip().lower()
-
-        if '@' not in email or '.' not in email.split('@')[-1]:
-            return jsonify({'ok': False, 'error': 'Geçerli bir e-posta adresi girin.'}), 400
-
-        _prune_verification_codes()
-
-        existing = _verification_codes.get(email)
-        now = _time.time()
-        if existing and (now - existing.get('sent_at', 0)) < _VERIFICATION_RESEND_COOLDOWN_SECONDS:
-            wait = int(_VERIFICATION_RESEND_COOLDOWN_SECONDS - (now - existing['sent_at']))
-            return jsonify({'ok': False, 'error': f'Lütfen {wait} saniye sonra tekrar deneyin.'}), 429
-
-        code = '{:06d}'.format(_random.randint(0, 999999))
-        _verification_codes[email] = {
-            'code': code,
-            'expires': now + _VERIFICATION_CODE_TTL_SECONDS,
-            'sent_at': now,
-            'attempts': 0,
-            'verified': False,
-        }
-
-        _send_verification_email(email, code)
-        return jsonify({'ok': True})
-
-    except Exception as ex:
-        traceback.print_exc()
-        return jsonify({'ok': False, 'error': 'Doğrulama kodu gönderilemedi. Lütfen tekrar deneyin.'}), 500
-
-
-@app.route('/api/verify-code', methods=['POST'])
-def verify_code():
-    try:
-        data  = request.get_json(silent=True) or {}
-        email = (data.get('email') or '').strip().lower()
-        code  = (data.get('code')  or '').strip()
-
-        _prune_verification_codes()
-        entry = _verification_codes.get(email)
-
-        if not entry:
-            return jsonify({'ok': False, 'error': 'Önce bir doğrulama kodu isteyin.'}), 400
-
-        if entry['attempts'] >= _VERIFICATION_MAX_ATTEMPTS:
-            return jsonify({'ok': False, 'error': 'Çok fazla yanlış deneme. Yeni bir kod isteyin.'}), 429
-
-        entry['attempts'] += 1
-
-        if code != entry['code']:
-            return jsonify({'ok': False, 'error': 'Kod hatalı. Lütfen tekrar deneyin.'}), 400
-
-        entry['verified'] = True
-        return jsonify({'ok': True})
-
-    except Exception as ex:
-        traceback.print_exc()
-        return jsonify({'ok': False, 'error': 'Doğrulama sırasında bir hata oluştu.'}), 500
-
-
-def _is_email_verified(email):
-    """Diğer endpoint'lerin (ör. /api/register) bir e-postanın gerçekten
-    doğrulanıp doğrulanmadığını kontrol edebilmesi için yardımcı fonksiyon."""
-    _prune_verification_codes()
-    entry = _verification_codes.get((email or '').strip().lower())
-    return bool(entry and entry.get('verified'))
-
-
 def _send_registration_email(ad, soyad, email, meslek, ulke):
-    smtp_user = os.environ.get('SYLVA_SMTP_USER', 'sylvagis.world@gmail.com')
-    smtp_pass = os.environ.get('SYLVA_SMTP_PASS', '')
-    if not smtp_pass:
-        print('❌ _send_registration_email: SYLVA_SMTP_PASS ortam değişkeni tanımlı değil.')
-        raise RuntimeError('SMTP yapılandırılmamış (SYLVA_SMTP_PASS eksik).')
+    smtp_user = 'sylvagis.world@gmail.com'
+    smtp_pass = 'ksfnkvwcutrawcih'
 
     msg = MIMEMultipart('alternative')
     msg['Subject'] = f'[SylvaGIS] Yeni Kayıt — {ad} {soyad}'
@@ -4177,8 +3671,6 @@ def register_user():
             return jsonify({'ok': False, 'error': 'Ad, soyad ve e-posta zorunludur.'}), 400
         if '@' not in email or '.' not in email.split('@')[-1]:
             return jsonify({'ok': False, 'error': 'Geçerli bir e-posta adresi girin.'}), 400
-        if not _is_email_verified(email):
-            return jsonify({'ok': False, 'error': 'E-posta adresiniz doğrulanmamış. Lütfen önce doğrulama kodunu girin.'}), 403
 
         _send_registration_email(ad, soyad, email, meslek, ulke)
         return jsonify({'ok': True})
@@ -4273,26 +3765,7 @@ def _features_to_kml(features, name='SylvaGIS_vector'):
     return '\n'.join(lines).encode('utf-8')
 
 
-def _prj_wkt_for_crs(crs_string):
-    """Verilen EPSG koduna karşılık gelen doğru WKT projeksiyon tanımını üretir.
-    ÖNCEKİ HATA: .prj dosyası, seçilen CRS ne olursa olsun HER ZAMAN WGS84
-    yazıyordu — yani kullanıcı örn. EPSG:32636 (UTM 36N) seçtiğinde,
-    koordinatlar GEE tarafından doğru şekilde UTM metre cinsinden üretiliyordu
-    ama .prj dosyası bunun WGS84 derece olduğunu iddia ediyordu. Bu, dosyanın
-    herhangi bir GIS yazılımında YANLIŞ konumda veya bozuk görünmesine yol
-    açıyordu. pyproj, gerçek EPSG koduna karşılık gelen WKT'yi üretir."""
-    try:
-        from pyproj import CRS as _PyprojCRS
-        code = crs_string.strip().upper().replace('EPSG:', '')
-        return _PyprojCRS.from_epsg(int(code)).to_wkt(version='WKT1_ESRI')
-    except Exception as e:
-        logger.warning('[_prj_wkt_for_crs] "%s" için WKT üretilemedi, WGS84 varsayılana dönülüyor: %s', crs_string, e)
-        return ('GEOGCS["GCS_WGS_1984",'
-                'DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]],'
-                'PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]')
-
-
-def _features_to_shp_zip(features, name='SylvaGIS_vector', crs='EPSG:4326'):
+def _features_to_shp_zip(features, name='SylvaGIS_vector'):
     """GeoJSON feature listesini SHP (shapefile) ZIP arşivine dönüştürür.
     Önce pyshp (shapefile) dener; yoksa GeoJSON'u .zip içine koyar."""
     try:
@@ -4342,9 +3815,10 @@ def _features_to_shp_zip(features, name='SylvaGIS_vector', crs='EPSG:4326'):
 
         w.close()
 
-        # 🛠️ DÜZELTME: artık gerçekten seçilen CRS'e karşılık gelen WKT yazılıyor
-        # (önceden burada her zaman sabit WGS84 yazılıyordu — bkz. _prj_wkt_for_crs).
-        prj_wkt = _prj_wkt_for_crs(crs)
+        # PRJ içeriği (WGS84 / EPSG:4326)
+        prj_wkt = ('GEOGCS["GCS_WGS_1984",'
+                   'DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]],'
+                   'PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]')
 
         zip_buf = io.BytesIO()
         with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as z:
@@ -4364,36 +3838,6 @@ def _features_to_shp_zip(features, name='SylvaGIS_vector', crs='EPSG:4326'):
             z.writestr(f'{name}.geojson', fc)
         zip_buf.seek(0)
         return zip_buf.read()
-
-
-def _reproject_geojson_geom(geom, target_crs):
-    """Bir GeoJSON geometrisini WGS84'ten (Leaflet/tarayıcı her zaman bunu
-    üretir) hedef CRS'e dönüştürür. Bu, 'Çalışma Alanı (AOI)' gibi tarayıcı
-    kaynaklı geometrilerin, GEE'den gelen (zaten hedef CRS'te olan) analiz
-    vektörleriyle AYNI dosyada, AYNI koordinat sisteminde birleşebilmesini
-    sağlar — aksi halde iki farklı CRS'teki geometriler aynı dosyada anlamsız
-    / üst üste binmeyen konumlarda görünürdü."""
-    target_norm = (target_crs or 'EPSG:4326').strip().upper()
-    if target_norm in ('EPSG:4326', '4326'):
-        return geom  # zaten WGS84, dönüştürmeye gerek yok
-
-    try:
-        from pyproj import Transformer
-        code = target_norm.replace('EPSG:', '')
-        transformer = Transformer.from_crs('EPSG:4326', f'EPSG:{code}', always_xy=True)
-
-        def _tx_coords(coords):
-            if isinstance(coords[0], (int, float)):
-                x, y = transformer.transform(coords[0], coords[1])
-                return [x, y]
-            return [_tx_coords(c) for c in coords]
-
-        new_geom = dict(geom)
-        new_geom['coordinates'] = _tx_coords(geom['coordinates'])
-        return new_geom
-    except Exception as e:
-        logger.warning('[_reproject_geojson_geom] "%s" dönüşümü başarısız, WGS84 olarak bırakılıyor: %s', target_crs, e)
-        return geom
 
 
 def _geojson_to_features(geom):
@@ -4422,37 +3866,6 @@ def _geojson_to_features(geom):
 # Format: 'kml', 'kmz', 'shp' (SHP → ZIP arşivi)
 # ════════════════════════════════════════════════════════════════
 @app.route('/api/vector-download', methods=['POST'])
-def _enrich_lulc_vector_features(features, index_name):
-    """Vektörize edilmiş LULC (arazi kullanımı) özelliklerine, mevcut
-    LULC_CLASS_DEFS sözlüğünü (raster/GeoTIFF lejant korumasıyla AYNI kaynak)
-    kullanarak sınıf adı ve rengini ekler. Bu sayede KML/SHP çıktısında da
-    kullanıcının haritada gördüğü renkler ve isimler birebir korunur —
-    _features_to_kml / _features_to_shp_zip zaten bu alanları (class_name,
-    color) okumaya hazırdı, sadece şimdiye kadar hiç doldurulmuyordu."""
-    defs = LULC_CLASS_DEFS.get(index_name)
-    if not defs:
-        return features
-
-    code_info = {d['code']: (d['label'], d['color']) for d in defs}
-    shift = 1 if min(code_info.keys()) == 0 else 0   # Dynamic World 0-tabanlı → +1 kaydırma
-
-    for feat in features:
-        props = feat.setdefault('properties', {})
-        raw_cv = props.get('class_value')
-        try:
-            cv_int = int(round(float(raw_cv))) if raw_cv is not None else None
-        except (TypeError, ValueError):
-            cv_int = None
-        if cv_int is not None:
-            orig_code = cv_int - shift
-            if orig_code in code_info:
-                label, color = code_info[orig_code]
-                props['class_name'] = label
-                props['color'] = color
-
-    return features
-
-
 def vector_download():
     req_data = request.get_json(silent=True) or {}
 
@@ -4477,7 +3890,6 @@ def vector_download():
 
         # ── 2. Analiz sonucunu vektörize et ───────────────────────────
         else:
-            _last_analyze_params, _ = _get_analyze_state(req_data)
             if not _last_analyze_params:
                 return jsonify({'error': 'Henüz bir analiz yapılmadı. Önce haritada bir analiz çalıştırın.'}), 400
 
@@ -4485,7 +3897,7 @@ def vector_download():
 
             # Vektörizasyon için sınıflandırılmış görüntüyü al
             try:
-                final_display, roi, result, vis = _call_with_retry(
+                final_display, roi, result, vis, _ = _call_with_retry(
                     build_result_image, data, for_export=False  # sınıf renkleri korunur
                 )
             except Exception as e:
@@ -4506,15 +3918,6 @@ def vector_download():
 
             print(f'[SylvaGIS] Vektörizasyon başlatılıyor: index={index} scale={vec_scale}')
             try:
-                # 🛠️ DÜZELTME: KML/KMZ formatı HER ZAMAN coğrafi (WGS84) koordinat
-                # gerektirir (format spesifikasyonu gereği) — kullanıcı SHP için
-                # farklı bir CRS (örn. UTM) seçmiş olsa bile, KML/KMZ çıktısında
-                # bunu ZORLA yok sayıp WGS84 kullanmalıyız. Aksi halde KML'e UTM
-                # metre değerleri "enlem/boylam" gibi yazılır ve dosya tamamen
-                # anlamsız/bozuk bir konumda açılır.
-                vectorize_crs = 'EPSG:4326' if fmt in ('kml', 'kmz') else (
-                    crs if crs.upper().startswith('EPSG:') else 'EPSG:4326'
-                )
                 # reduceToVectors: pikselleri poligona çevir
                 vec_fc = _call_with_retry(
                     lambda: final_display.int().reduceToVectors(
@@ -4525,24 +3928,11 @@ def vector_download():
                         geometryType='polygon',
                         eightConnected=False,
                         labelProperty='class_value',
-                        crs=vectorize_crs,
+                        crs=crs if crs.upper().startswith('EPSG:') else 'EPSG:4326',
                     ).limit(4000)
                 )
                 fc_info = _call_with_retry(lambda: vec_fc.getInfo())
                 features = fc_info.get('features', []) if fc_info else []
-
-                # 🛠️ DÜZELTME (Faz 3.2 — Lejant Koruma, vektör tarafı):
-                # GeoTIFF (raster) indirmede sınıf renkleri/isimleri zaten
-                # korunuyordu (bkz. _build_lulc_symbology_zip), ama KML/SHP
-                # (vektör) çıktısında class_value dışında hiçbir bilgi
-                # yoktu — _features_to_kml/_features_to_shp_zip zaten
-                # 'class_name' ve 'color' özelliklerini okumaya HAZIRDI,
-                # sadece bu bilgi hiç eklenmiyordu. Mevcut LULC_CLASS_DEFS
-                # sözlüğü (raster tarafıyla AYNI kaynak) burada da
-                # kullanılarak vektör çıktısında da orijinal renkler/isimler
-                # birebir korunur.
-                if index in LULC_CLASS_DEFS:
-                    features = _enrich_lulc_vector_features(features, index)
             except Exception as e:
                 traceback.print_exc()
                 return jsonify({'error': f'Vektöre dönüştürme başarısız: {str(e)}'}), 500
@@ -4551,31 +3941,6 @@ def vector_download():
                 return jsonify({'error': 'Vektör geometri üretilemedi. Alan çok küçük ya da veri yok olabilir.'}), 400
 
             print(f'[SylvaGIS] Vektörizasyon tamamlandı: {len(features)} özellik')
-
-        # ── 2b. Çalışma Alanı (AOI) sınırını da AYNI dosyaya ekle ─────
-        # Faz 3.1: "Çalışma alanı (AOI) birlikte dışa aktarılacak". Frontend
-        # zaten AOI geometrisini 'geometry' alanında gönderiyordu ama bu
-        # 'analysis'/'landuse' dalında ŞİMDİYE KADAR hiç kullanılmıyordu.
-        # AOI, tarayıcıdan her zaman WGS84 (EPSG:4326) gelir; analiz
-        # vektörleri ise seçilen CRS'te — bu yüzden AOI'yi de AYNI CRS'e
-        # dönüştürüp tek bir tutarlı dosyada birleştiriyoruz.
-        if data_source != 'workspace' and geom_json:
-            try:
-                import json as _json2
-                aoi_geom_raw = _json2.loads(geom_json) if isinstance(geom_json, str) else geom_json
-                aoi_features = _geojson_to_features(aoi_geom_raw)
-                # KML/KMZ her zaman WGS84 gerektirir (bkz. yukarıdaki vectorize_crs notu)
-                aoi_target_crs = 'EPSG:4326' if fmt in ('kml', 'kmz') else crs
-                for aoi_feat in aoi_features:
-                    aoi_feat = dict(aoi_feat)
-                    aoi_feat['geometry'] = _reproject_geojson_geom(aoi_feat.get('geometry') or {}, aoi_target_crs)
-                    aoi_feat['properties'] = dict(aoi_feat.get('properties') or {})
-                    aoi_feat['properties']['class_value'] = 'AOI'
-                    aoi_feat['properties']['class_name']  = 'Çalışma Alanı (AOI)'
-                    features = list(features) + [aoi_feat]
-                print(f'[SylvaGIS] Çalışma alanı (AOI) sınırı çıktıya eklendi ({len(aoi_features)} özellik).')
-            except Exception as _aoi_err:
-                logger.warning('[vector_download] AOI dışa aktarıma eklenemedi: %s', _aoi_err)
 
         # ── 3. Formatla ve gönder ──────────────────────────────────────
         if fmt == 'kml':
@@ -4597,8 +3962,7 @@ def vector_download():
             })
 
         elif fmt == 'shp':
-            # 🛠️ DÜZELTME: artık seçilen CRS, .prj dosyasına da doğru şekilde yazılıyor.
-            zip_bytes = _features_to_shp_zip(features, safe_name, crs=crs)
+            zip_bytes = _features_to_shp_zip(features, safe_name)
             return Response(zip_bytes, headers={
                 'Content-Type': 'application/zip',
                 'Content-Disposition': f'attachment; filename="{safe_name}_shp.zip"',
@@ -4610,159 +3974,6 @@ def vector_download():
     except Exception as ex:
         traceback.print_exc()
         return jsonify({'error': str(ex)}), 500
-
-
-@app.route('/api/contour-download', methods=['POST'])
-def contour_download():
-    """
-    Eş Yükselti (Kontur Hattı) İndirme (Faz 3.3).
-    Seçilen AOI için DEM'den belirli bir aralıkta (10/50/100/200/500 m)
-    yükseklik konturları üretir ve KML/KMZ/SHP olarak indirir.
-
-    Mimari not: Yeni bir vektörleştirme/dosya-yazma mantığı YAZILMADI —
-    Faz 3.1'de düzeltilen mevcut _features_to_kml / _features_to_shp_zip /
-    _reproject_geojson_geom altyapısı AYNEN tekrar kullanıldı. Sadece DEM'i
-    yükseklik bantlarına ayırıp bant sınırlarını çizgiye çeviren kısım yeni.
-    """
-    try:
-        data = request.get_json(silent=True) or {}
-
-        roi_coords = data.get('roi')
-        if not roi_coords:
-            return jsonify({'error': 'Çalışma alanı (AOI) gerekli. Önce haritada bir alan çizin.'}), 400
-
-        try:
-            interval = int(data.get('interval', 100))
-        except (TypeError, ValueError):
-            interval = 100
-        if interval not in (10, 50, 100, 200, 500):
-            return jsonify({'error': 'Geçersiz eş yükselti aralığı. Desteklenen değerler: 10, 50, 100, 200, 500 m.'}), 400
-
-        fmt = (data.get('format') or 'kml').lower()
-        if fmt not in ('kml', 'kmz', 'shp'):
-            return jsonify({'error': f'Bilinmeyen format: {fmt}'}), 400
-
-        crs = data.get('crs', 'EPSG:4326')
-        dem_source = data.get('demSource', 'SRTM')
-
-        raw_name = data.get('filename') or f'SylvaGIS_kontur_{interval}m'
-        safe_name = re.sub(r'[^\w\-.]', '_', raw_name)[:80] or f'SylvaGIS_kontur_{interval}m'
-
-        roi = make_roi(roi_coords)
-
-        # ── DEM yükle (mevcut analiz akışıyla AYNI kaynak seçimi) ──────
-        if dem_source == 'ALOS':
-            dem = ee.Image('JAXA/ALOS/AW3D30/V3_2').select('DSM').rename('elevation')
-        elif dem_source == 'COPERNICUS':
-            dem = (ee.ImageCollection('COPERNICUS/DEM/GLO30')
-                   .filterBounds(roi).mosaic().select('DEM').rename('elevation'))
-        else:  # SRTM (varsayılan)
-            dem = ee.Image('USGS/SRTMGL1_003').select('elevation')
-
-        # Kenar etkisi (AOI sınırında kesik konturlar) olmasın diye küçük
-        # bir tampon ile klipleniyor.
-        dem = dem.clip(roi.buffer(300))
-
-        # ── Yükseklik bantlarına ayır ve vektörleştir ──────────────────
-        band_img = dem.divide(interval).floor().multiply(interval).toInt().rename('elev_band')
-
-        # KML/KMZ her zaman WGS84 gerektirir (bkz. vector_download'daki aynı not)
-        vectorize_crs = 'EPSG:4326' if fmt in ('kml', 'kmz') else (
-            crs if crs.upper().startswith('EPSG:') else 'EPSG:4326'
-        )
-
-        try:
-            vec_fc = _call_with_retry(
-                lambda: band_img.reduceToVectors(
-                    reducer=ee.Reducer.first(),
-                    geometry=roi,
-                    scale=30,
-                    maxPixels=1e9,
-                    geometryType='polygon',
-                    eightConnected=False,
-                    labelProperty='elevation',
-                    crs=vectorize_crs,
-                    bestEffort=True,
-                ).limit(3000)
-            )
-            fc_info = _call_with_retry(lambda: vec_fc.getInfo())
-            polygons = fc_info.get('features', []) if fc_info else []
-        except Exception as e:
-            traceback.print_exc()
-            return jsonify({'error': f'Kontur vektörleştirme başarısız: {str(e)}'}), 500
-
-        if not polygons:
-            return jsonify({'error': 'Bu alan için kontur üretilemedi. Alan çok küçük ya da veri kapsamı dışında olabilir.'}), 400
-
-        # ── Yükseklik bandı poligonlarının sınırlarını kontur ÇİZGİSİNE
-        #    (LineString) çevir — "eş yükselti" kavramı çizgi olarak
-        #    beklenir, dolgu poligon olarak değil.
-        features = []
-        for feat in polygons:
-            geom  = feat.get('geometry') or {}
-            props = feat.get('properties') or {}
-            elev  = props.get('elevation')
-
-            rings = []
-            if geom.get('type') == 'Polygon':
-                rings = geom.get('coordinates', [])
-            elif geom.get('type') == 'MultiPolygon':
-                for poly in geom.get('coordinates', []):
-                    rings.extend(poly)
-
-            for ring in rings:
-                features.append({
-                    'type': 'Feature',
-                    'geometry': {'type': 'LineString', 'coordinates': ring},
-                    'properties': {
-                        'class_value': elev,
-                        'class_name': f'{elev} m',
-                        'color': '#a16207',
-                    },
-                })
-
-        # ── Çalışma Alanı (AOI) sınırını da AYNI dosyaya ekle ──────────
-        # (Faz 3.1'de vector_download için eklenen mantığın aynısı)
-        try:
-            aoi_features = _geojson_to_features(roi_coords)
-            aoi_target_crs = 'EPSG:4326' if fmt in ('kml', 'kmz') else crs
-            for aoi_feat in aoi_features:
-                aoi_feat = dict(aoi_feat)
-                aoi_feat['geometry'] = _reproject_geojson_geom(aoi_feat.get('geometry') or {}, aoi_target_crs)
-                aoi_feat['properties'] = {'class_value': 'AOI', 'class_name': 'Çalışma Alanı (AOI)', 'color': '#1e3a8a'}
-                features.append(aoi_feat)
-        except Exception as _aoi_err:
-            logger.warning('[contour_download] AOI dışa aktarıma eklenemedi: %s', _aoi_err)
-
-        # ── Formatla ve gönder (Faz 3.1'de düzeltilen AYNI fonksiyonlar) ──
-        if fmt == 'kml':
-            body = _features_to_kml(features, safe_name)
-            return Response(body, headers={
-                'Content-Type': 'application/vnd.google-earth.kml+xml; charset=utf-8',
-                'Content-Disposition': f'attachment; filename="{safe_name}.kml"',
-            })
-
-        elif fmt == 'kmz':
-            kml_bytes = _features_to_kml(features, safe_name)
-            buf = io.BytesIO()
-            with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
-                z.writestr(f'{safe_name}.kml', kml_bytes)
-            buf.seek(0)
-            return Response(buf.read(), headers={
-                'Content-Type': 'application/vnd.google-earth.kmz',
-                'Content-Disposition': f'attachment; filename="{safe_name}.kmz"',
-            })
-
-        else:  # shp
-            zip_bytes = _features_to_shp_zip(features, safe_name, crs=crs)
-            return Response(zip_bytes, headers={
-                'Content-Type': 'application/zip',
-                'Content-Disposition': f'attachment; filename="{safe_name}_shp.zip"',
-            })
-
-    except Exception as ex:
-        _log_error('contour-download', ex)
-        return jsonify({'error': f'Eş yükselti üretilemedi: {str(ex)}'}), 500
 
 
 if __name__ == '__main__':
