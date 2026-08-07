@@ -2479,71 +2479,6 @@ tr.class-highlight-active {
             padding: 5px 7px !important;
         }
     }
-
-    /* ═══════════════════════════════════════════════════════════════
-       🖥️🖥️ ÇİFT EKRAN — MOBİL/TABLET DÜZELTMESİ
-       Sorun: tek-ekran modu için "#mobile-toolbar" (Veri/Analiz/Harita
-       Düzeni/Çıktı) payı olarak eklenen alt boşluk (padding-bottom),
-       çift ekranda YALNIZCA üstteki (1.) panelin satırına
-       (".ruler-map-row") uygulanmaya devam ediyordu. Üstteki panel artık
-       ekranın en altında olmadığından bu boşluk ekranın ORTASINDA boş
-       bir şerit olarak beliriyordu; alt (2.) panel ise kendi payını hiç
-       almadığından koordinat/ölçek/logo bilgileri sabit alt çubuğun
-       ARKASINDA kalıp kesiliyordu.
-       Çözüm: boşluk üstteki satırdan kaldırılıp, iki paneli birlikte
-       saran dış konteynıra (#map-panes-row) taşınır. Böylece pay,
-       flex:1/flex:1 oranıyla iki panel arasında eşit paylaşılır ve HER
-       İKİ panelin de gerçek alt kenarı (dolayısıyla üzerlerindeki
-       mutlak konumlu logo/koordinat kutuları) sabit çubuğun tam
-       ÜSTÜNDE biter — ne ortada boşluk kalır ne de alt panel çubuğun
-       arkasına gizlenir. */
-    @media (max-width: 900px) {
-        body.sylva-dual-screen-on #map-panes-row {
-            height: 100% !important;
-            min-height: 0 !important;
-            box-sizing: border-box !important;
-        }
-        body.sylva-dual-screen-on #ruler-container,
-        body.sylva-dual-screen-on .sylva-map2-wrapper {
-            min-height: 0 !important;
-        }
-        /* Tek-ekran payı üst panelden kaldırılır — ortadaki boşluğun kaynağı buydu. */
-        body.sylva-dual-screen-on #ruler-container .ruler-map-row {
-            padding-bottom: 0 !important;
-        }
-    }
-    @media (max-width: 640px), (max-height: 500px) and (orientation: landscape) {
-        /* Bu değer yalnızca JS (_sylvaSyncDualScreenBottomClearance) devreye
-           girene kadarki ilk anlık çizim için KABA bir başlangıç değeridir;
-           gerçek değer JS ile çubuğun ölçülen yüksekliğine göre anında
-           düzeltilir (bkz. sylvaToggleDualScreen). */
-        body.sylva-dual-screen-on #map-panes-row {
-            padding-bottom: 64px !important;
-        }
-    }
-    /* Tablet aralığında (641–900px) "Responsive v3" bölümü tek-ekran payını
-       (.ruler-map-row, 102px) yine yalnızca üst panele uyguluyordu — aynı
-       kesilme sorunu burada da vardı. Bu da yalnızca JS devreye girene
-       kadarki kaba başlangıç değeri; gerçek pay JS ile ölçülür. */
-    @media (max-width: 900px) and (min-width: 641px) {
-        body.sylva-dual-screen-on #map-panes-row {
-            padding-bottom: 64px !important;
-        }
-    }
-    /* Çift ekran + mobil/tablet: panel yüksekliği yarıya indiği için,
-       dikey ORTALANMIŞ yakınlaştırma tuşları (top:50%) alt-sol köşedeki
-       logo/koordinat kutusuyla (bottom:15px) çakışabiliyordu — kısa
-       panellerde tuş sütunu aşağı doğru yeterince uzuyor ve logonun
-       üzerine biniyordu. Bu modda tuşlar üst-sol köşeye (cetvelin hemen
-       altına) sabitlenir; böylece iki öğe artık hiçbir panel
-       yüksekliğinde çakışmaz. */
-    @media (max-width: 900px) {
-        body.sylva-dual-screen-on .map-left-mid,
-        body.sylva-dual-screen-on .map2-left-mid {
-            top: 30px !important;
-            transform: none !important;
-        }
-    }
     </style>
 <style>
 
@@ -6173,79 +6108,8 @@ tr.class-highlight-active {
                     _sylvaRefreshVisibleMap(_sylvaActivePaneId() === 'map2' ? map2 : map);
                 }
                 if (typeof window._updateRulers === 'function') window._updateRulers();
-                if (typeof window._sylvaSyncDualScreenBottomClearance === 'function') {
-                    window._sylvaSyncDualScreenBottomClearance();
-                    setTimeout(window._sylvaSyncDualScreenBottomClearance, 300);
-                }
             }, 80);
         };
-
-        // ═══════════════════════════════════════════════════════════
-        // 📐 ÇİFT EKRAN — MOBİL/TABLET ALT BOŞLUK DÜZELTMESİ
-        // CSS'te sabit px değerleriyle (64/102px) tahmin edilen alt çubuk
-        // (#mobile-toolbar, gerekirse sabit .footer) payı, gerçek
-        // render edilen yükseklikle tam örtüşmeyebiliyordu — bu da ya
-        // panellerin altında BOŞ bir şerit bırakıyor ya da bilgi
-        // kutularını (logo/koordinat) çubuğun arkasında bırakıyordu.
-        // Bunun yerine, sabit alt elemanların GERÇEK yüksekliği burada
-        // ölçülüp (getBoundingClientRect), iki paneli saran satıra
-        // (#map-panes-row) tam o kadar pay tanımlanır — böylece boşluk
-        // ne fazla ne eksik olur, veriler tam kenara kadar görünür.
-        function _sylvaSyncDualScreenBottomClearance() {
-            var panesRow = document.getElementById('map-panes-row');
-            if (!panesRow) return;
-            var active = !!window._sylvaDualScreenActive;
-            var toolbar = document.getElementById('mobile-toolbar');
-            var footerEl = document.querySelector('.footer');
-            // "position: fixed" bilgisayarlı stiline güvenmek kırılgan çıktı
-            // (bu dosyada aynı seçici için onlarca çakışan/tekrarlı @media
-            // kuralı var). Bunun yerine DOĞRUDAN geometriye bakılır: eleman
-            // görünürse VE alt kenarı görünüm alanının alt kenarına
-            // yaslanmışsa (birkaç piksel toleransla), bu "ekranın altında
-            // sabit duran bir çubuk" kabul edilir — position değeri ne
-            // olursa olsun (fixed/sticky/absolute hepsi kapsanır).
-            function bottomBarHeight(el) {
-                if (!el) return 0;
-                var cs = window.getComputedStyle(el);
-                if (cs.display === 'none' || cs.visibility === 'hidden') return 0;
-                var rect = el.getBoundingClientRect();
-                if (rect.height <= 0 || rect.width <= 0) return 0;
-                var gapFromViewportBottom = window.innerHeight - rect.bottom;
-                if (gapFromViewportBottom < -2 || gapFromViewportBottom > 6) return 0; // ekranın altına yaslanmamış
-                return window.innerHeight - rect.top;
-            }
-            if (!active) {
-                panesRow.style.removeProperty('padding-bottom');
-                return;
-            }
-            var clearance = Math.max(bottomBarHeight(toolbar), bottomBarHeight(footerEl));
-            if (clearance <= 0) {
-                panesRow.style.removeProperty('padding-bottom');
-                return;
-            }
-            // +8px: koordinat/logo kutusunun alt kenarı çubuğa tam
-            // yapışık değil, rahat bir nefes payıyla bitsin.
-            panesRow.style.setProperty('padding-bottom', (Math.round(clearance) + 8) + 'px', 'important');
-        }
-        window._sylvaSyncDualScreenBottomClearance = _sylvaSyncDualScreenBottomClearance;
-        window.addEventListener('resize', _sylvaSyncDualScreenBottomClearance);
-        window.addEventListener('orientationchange', function () { setTimeout(_sylvaSyncDualScreenBottomClearance, 200); });
-        // Çubuğun (veya varsa footer'ın) yüksekliği HERHANGİ bir sebeple
-        // (yazı tipi/simge geç yüklenmesi, dinamik içerik, adres çubuğu
-        // gizlenmesi vb.) sonradan değişirse boşluk otomatik yeniden
-        // hesaplanır — tek seferlik gecikmeli ölçüme güvenmek yerine
-        // sürekli/gerçek-zamanlı izleme.
-        try {
-            if (window.ResizeObserver) {
-                var _sylvaBottomClearanceRO = new ResizeObserver(function () {
-                    _sylvaSyncDualScreenBottomClearance();
-                });
-                var _sylvaClearanceToolbarEl = document.getElementById('mobile-toolbar');
-                var _sylvaClearanceFooterEl = document.querySelector('.footer');
-                if (_sylvaClearanceToolbarEl) _sylvaBottomClearanceRO.observe(_sylvaClearanceToolbarEl);
-                if (_sylvaClearanceFooterEl) _sylvaBottomClearanceRO.observe(_sylvaClearanceFooterEl);
-            }
-        } catch (e) {}
 
         // ═══════════════════════════════════════════════════════════
         // 🛠️ BUG FİX (Pencere/kapsayıcı küçültülünce basemap kayboluyor):
