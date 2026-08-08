@@ -6638,6 +6638,26 @@ tr.class-highlight-active {
             }
         }
 
+        // 🛠️ BUG FİX: Tek bir çalışma alanı VAW listesinden silindiğinde,
+        // o alanı oluşturan HAM katman referansı (currentLayer/currentLayer2,
+        // window._workspaceLayer[2]) hafızada kalmaya devam ediyordu. Bu
+        // referans, basemap değişimi gibi bir "panel senkronizasyonu"
+        // tetiklendiğinde (_sylvaSyncActivePaneControls) fark edilip
+        // haritaya YENİDEN ekleniyor ve silinen alan hayalet gibi geri
+        // görünüyordu. Bu fonksiyon ilgili ekranın ham referansını da
+        // temizleyerek bu hayalet geri dönüşü engeller.
+        window._sylvaClearRawWorkspaceRef = function (paneId) {
+            if (paneId === 'map2') {
+                if (map2 && currentLayer2 && map2.hasLayer(currentLayer2)) { try { map2.removeLayer(currentLayer2); } catch (e) {} }
+                currentLayer2 = null;
+                window._workspaceLayer2 = null;
+            } else {
+                if (map && currentLayer && map.hasLayer(currentLayer)) { try { map.removeLayer(currentLayer); } catch (e) {} }
+                currentLayer = null;
+                window._workspaceLayer = null;
+            }
+        };
+
         // Üst çöp kutusu ve VAW toplu silme için ortak temizleme noktası.
         // Böylece aktif ekran ne olursa olsun Ekran 1 ve Ekran 2 aynı anda
         // temizlenir; eski katman referansları da haritada asılı kalmaz.
@@ -40189,6 +40209,9 @@ function _vdlFallbackDownload(blob, name) {
         _removeWsLayerEverywhere(removedWs);
         VAW.workspaces.splice(idx, 1);
         _sweepOrphanWorkspaceLayers(VAW.workspaces.map(function(w){ return w.id; }));
+        if (typeof window._sylvaClearRawWorkspaceRef === 'function') {
+            window._sylvaClearRawWorkspaceRef(removedWs.paneId);
+        }
         var boxId = removedWs.paneId === 'map2' ? 'ws-click-info-map2' : 'ws-click-info-map';
         var box = document.getElementById(boxId);
         if (box) { box.style.display = 'none'; box.innerHTML = ''; }
