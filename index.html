@@ -8290,11 +8290,15 @@ function selectRamp(name) {
         // Stretched mod min/max + renk rampasını GEE'ye göndererek tile URL'yi
         // yeniler (syncClassificationToGEE'nin sürekli/stretched karşılığı).
         function syncStretchedToGEE(minVal, maxVal) {
-            // Son analiz ROI'si tercih edilir; yoksa currentLayer'dan çıkar
-            var _roi = _lastAnalysisROI;
+            // 🖥️ EŞİTLEME: her zaman o an AKTİF olan ekranın (Ekran 1/Ekran 2)
+            // son analizine uygulanır.
+            var _pane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+            var _aoiForPane = (_pane === 'map2') ? currentLayer2 : currentLayer;
+            // Son analiz ROI'si tercih edilir; yoksa aktif ekranın AOI'sinden çıkar
+            var _roi = _sylvaLastRoiGet(_pane);
             if (!_roi) {
-                if (!currentLayer) return;
-                _roi = _extractROIGeometry(currentLayer);
+                if (!_aoiForPane) return;
+                _roi = _extractROIGeometry(_aoiForPane);
                 if (!_roi) return;
             }
             var meta = getSelectedAnalysisMeta();
@@ -8307,7 +8311,7 @@ function selectRamp(name) {
             var endInput      = document.getElementById('date-end');
 
             // Son analiz parametrelerini kullan (geçerli UI değerlerinden öncelikli)
-            var _p = _lastAnalysisParams || {};
+            var _p = _sylvaLastParamsGet(_pane) || {};
             var _satellite  = _p.satellite  || (sensorRadio ? sensorRadio.value : 's2-l2a');
             var _startDate  = _p.startDate  || (startInput  ? startInput.value  : '');
             var _endDate    = _p.endDate    || (endInput    ? endInput.value    : '');
@@ -8336,7 +8340,7 @@ function selectRamp(name) {
                     satellite: _satellite,
                     index:     meta.analysisName,
                     maxCloud:  _maxCloud,
-                    sceneId:   currentSceneId,
+                    sceneId:   _sylvaSceneIdGet(_pane),
                     demSource: _demSource,
                     palette:   palette,
                     min:       minVal,
@@ -8347,13 +8351,13 @@ function selectRamp(name) {
             .then(function(data) {
                 if (!data.success) { hideSylvaLoading(); return; }
                 if (data.nativeCrs) window._lastAnalyzeNativeCrs = data.nativeCrs;
-                if (_geeLayer) { map.removeLayer(_geeLayer); _geeLayer = null; }
-                _geeLayer = L.tileLayer(data.tileUrl, { opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane' }).addTo(map);
-                _applyGeeLayerClipMode(_clipMode);
-                if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer();
+                _sylvaReplaceGeeLayer(_pane, data.tileUrl, { opacity: 1 });
+                _applyGeeLayerClipMode(_clipMode, _pane);
+                _sylvaApplyAutoOpacity(_pane, meta);
+                if (_pane === 'map' && window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer();
                 // Renklendirilmiş yeni veri haritada hazır olup tamamen ekrana
                 // yansıdığında (tüm karolar yüklenince) yükleme ekranı kapanır.
-                _hideLoadingWhenTileReady(_geeLayer);
+                _hideLoadingWhenTileReady(_sylvaCurrentGeeLayer(_pane));
                 if (data.stats) {
                     updateStatsTable(data.stats);
                     renderChart(data.stats, meta);
@@ -8696,11 +8700,14 @@ function selectRamp(name) {
         // Sınıf renk/aralık bilgisini GEE'ye göndererek tile URL'yi yeniler
         // classes: [ { min, max, name, color }, ... ] — tam sınıf tanımları JSON olarak gönderilir
         function syncClassificationToGEE(classes) {
-            // Son analiz ROI'si tercih edilir; yoksa currentLayer'dan çıkar
-            var _roiCls = _lastAnalysisROI;
+            // 🖥️ EŞİTLEME: her zaman o an AKTİF olan ekranın son analizine uygulanır.
+            var _pane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+            var _aoiForPane = (_pane === 'map2') ? currentLayer2 : currentLayer;
+            // Son analiz ROI'si tercih edilir; yoksa aktif ekranın AOI'sinden çıkar
+            var _roiCls = _sylvaLastRoiGet(_pane);
             if (!_roiCls) {
-                if (!currentLayer) return;
-                _roiCls = _extractROIGeometry(currentLayer);
+                if (!_aoiForPane) return;
+                _roiCls = _extractROIGeometry(_aoiForPane);
                 if (!_roiCls) return;
             }
             var meta = getSelectedAnalysisMeta();
@@ -8713,7 +8720,7 @@ function selectRamp(name) {
             var endInput      = document.getElementById('date-end');
 
             // Son analiz parametrelerini kullan
-            var _p = _lastAnalysisParams || {};
+            var _p = _sylvaLastParamsGet(_pane) || {};
             var _satellite  = _p.satellite  || (sensorRadio ? sensorRadio.value : 's2-l2a');
             var _startDate  = _p.startDate  || (startInput  ? startInput.value  : '');
             var _endDate    = _p.endDate    || (endInput    ? endInput.value    : '');
@@ -8744,7 +8751,7 @@ function selectRamp(name) {
                     satellite:   _satellite,
                     index:       meta.analysisName,
                     maxCloud:    _maxCloud,
-                    sceneId:     currentSceneId,
+                    sceneId:     _sylvaSceneIdGet(_pane),
                     demSource:   _demSource,
                     palette:     palette,
                     min:         overallMin,
@@ -8756,13 +8763,13 @@ function selectRamp(name) {
             .then(function(data) {
                 if (!data.success) { hideSylvaLoading(); return; }
                 if (data.nativeCrs) window._lastAnalyzeNativeCrs = data.nativeCrs;
-                if (_geeLayer) { map.removeLayer(_geeLayer); _geeLayer = null; }
-                _geeLayer = L.tileLayer(data.tileUrl, { opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane' }).addTo(map);
-                _applyGeeLayerClipMode(_clipMode);
-                if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer();
+                _sylvaReplaceGeeLayer(_pane, data.tileUrl, { opacity: 1 });
+                _applyGeeLayerClipMode(_clipMode, _pane);
+                _sylvaApplyAutoOpacity(_pane, meta);
+                if (_pane === 'map' && window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer();
                 // Renklendirilmiş yeni veri haritada hazır olup tamamen ekrana
                 // yansıdığında (tüm karolar yüklenince) yükleme ekranı kapanır.
-                _hideLoadingWhenTileReady(_geeLayer);
+                _hideLoadingWhenTileReady(_sylvaCurrentGeeLayer(_pane));
 
                 // ── Gerçek veri besleme: rastgele simülasyon yerine, GEE'den
                 // dönen gerçek histogramdan her sınıfın gerçek piksel yüzdesini
@@ -8771,7 +8778,7 @@ function selectRamp(name) {
                     var realPct = computeClassPercentagesFromHistogram(classes, data.stats.value);
                     if (realPct) {
                         var areaHa = null;
-                        try { areaHa = turf.area(currentLayer.toGeoJSON()) / 10000; } catch (e) {}
+                        try { areaHa = turf.area(_aoiForPane.toGeoJSON()) / 10000; } catch (e) {}
                         renderStatsChart({ classes: classes, percentages: realPct, areaHa: areaHa });
                         playSylvaChime('analysis');
                     }
@@ -9344,12 +9351,79 @@ function selectRamp(name) {
         // Yarış koşulu koruması: her yeni analiz başlatılınca artar;
         // geciken eski fetch yanıtları jenerasyon uyuşmazsa UI'ı ezmez.
         var _analysisGeneration = 0;
-        var _lastAnalysisROI = null;    // Son analizin AOI geometrisi — syncLegend için hafızada tutulur
-        var _lastAnalysisParams = {};   // Son analizin tam parametreleri (satellite, dates, demSource…)
+        // 🖥️ EŞİTLEME: Son analiz ROI'si ve parametreleri artık EKRAN BAŞINA
+        // ayrı tutulur (map / map2) — böylece lejanttaki min/max veya
+        // sınıflandırma değiştirildiğinde (syncStretchedToGEE/
+        // syncClassificationToGEE) her zaman o an AKTİF olan ekranın kendi
+        // son analizine uygulanır, diğer ekranın sonucu bozulmaz.
+        window._lastAnalysisROIByPane    = window._lastAnalysisROIByPane    || { map: null, map2: null };
+        window._lastAnalysisParamsByPane = window._lastAnalysisParamsByPane || { map: {},   map2: {}   };
+        function _sylvaLastRoiGet(paneId)    { return window._lastAnalysisROIByPane[(paneId === 'map2') ? 'map2' : 'map']; }
+        function _sylvaLastRoiSet(paneId, v) { window._lastAnalysisROIByPane[(paneId === 'map2') ? 'map2' : 'map'] = v; }
+        function _sylvaLastParamsGet(paneId)    { return window._lastAnalysisParamsByPane[(paneId === 'map2') ? 'map2' : 'map']; }
+        function _sylvaLastParamsSet(paneId, v) { window._lastAnalysisParamsByPane[(paneId === 'map2') ? 'map2' : 'map'] = v; }
         // Galeriden seçilen sahnenin GEE system:index'i. null ise "tarih aralığı medyanı"
         // kullanılır. Sınıflandırma/Stretched senkronizasyonu sırasında bu ID korunarak
         // gönderilir; aksi halde renk/aralık değişince sahne sessizce medyana döner.
         var currentSceneId = null;
+        // 🖥️ EŞİTLEME: Ekran 2 (map2) için galeriden seçilen sahnenin kendi
+        // bağımsız ID'si. Böylece Ekran 1 ve Ekran 2, birbirinden tamamen
+        // bağımsız iki farklı sahne/tarih gösterebilir.
+        var currentSceneId2 = null;
+        function _sylvaSceneIdGet(paneId) { return (paneId === 'map2') ? currentSceneId2 : currentSceneId; }
+        function _sylvaSceneIdSet(paneId, id) { if (paneId === 'map2') currentSceneId2 = id; else currentSceneId = id; }
+
+        // 🖥️ EŞİTLEME (Çift Ekran): Ekran 1 (map/_geeLayer) için yazılmış tüm
+        // analiz sonucu katman ekleme akışlarını (stretched/classification
+        // yeniden boyama, tarih/sahne değişimi, RGB galerisi …) TEK bir ortak
+        // yardımcı üzerinden Ekran 2'ye (map2/_geeLayer2) de eşit şekilde
+        // uygulayabilmek için kullanılır. Hangi ekranda çalışıldığı `paneId`
+        // ('map' | 'map2') ile belirlenir — bkz. _sylvaActivePaneId().
+        function _sylvaTargetMap(paneId) {
+            return (paneId === 'map2' && typeof map2 !== 'undefined' && map2) ? map2 : map;
+        }
+        function _sylvaCurrentGeeLayer(paneId) {
+            return (paneId === 'map2') ? (window._geeLayer2 || null) : (typeof _geeLayer !== 'undefined' ? _geeLayer : null);
+        }
+        function _sylvaReplaceGeeLayer(paneId, tileUrl, options) {
+            var targetMap = _sylvaTargetMap(paneId);
+            var opts = Object.assign({ opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane' }, options || {});
+            if (paneId === 'map2') {
+                if (window._geeLayer2) { try { map2.removeLayer(window._geeLayer2); } catch (e) {} window._geeLayer2 = null; }
+                window._geeLayer2 = L.tileLayer(tileUrl, opts).addTo(targetMap);
+                return window._geeLayer2;
+            }
+            if (typeof _geeLayer !== 'undefined' && _geeLayer) { try { map.removeLayer(_geeLayer); } catch (e) {} _geeLayer = null; }
+            _geeLayer = L.tileLayer(tileUrl, opts).addTo(targetMap);
+            return _geeLayer;
+        }
+        // 🎚️ Otomatik Veri Şeffaflığı: en üstteki katmana/analiz türüne göre
+        // makul bir varsayılan şeffaflık uygular (kullanıcı isterse slider'dan
+        // yine elle değiştirebilir). Gerçek renk (RGB) görüntüleri ve Ham Bant
+        // görselleştirmeleri tam opak (1.0) daha okunaklıdır; LULC/Arazi
+        // Kullanımı gibi sınıflandırılmış tematik katmanlar altındaki
+        // görüntüyü/basemap'i görebilmek için hafif saydam (0.85); sürekli
+        // indeks katmanları (NDVI/NDWI/EVI/TOPO vb.) 0.92 varsayılanla açılır.
+        function _sylvaAutoOpacityForAnalysis(meta) {
+            if (!meta) return 1;
+            if (meta.isRgbGallery) return 1;
+            if (typeof isLulcAnalysis === 'function' && isLulcAnalysis(meta.analysisName)) return 0.85;
+            if (typeof isTopoAnalysis === 'function' && isTopoAnalysis(meta.analysisName)) return 0.92;
+            return 0.92;
+        }
+        function _sylvaApplyAutoOpacity(paneId, meta) {
+            var opacity = _sylvaAutoOpacityForAnalysis(meta);
+            var state = _sylvaPaneState(paneId);
+            state.dataOpacity = opacity;
+            _sylvaSetLayerOpacity(_sylvaCurrentGeeLayer(paneId), opacity);
+            // Sadece o an AKTİF/görünen ekransa slider UI'ını da güncelle
+            if (paneId === _sylvaActivePaneId()) {
+                var slider = document.getElementById('layerOpacity');
+                var valEl  = document.getElementById('layer-opacity-val');
+                if (slider) slider.value = opacity;
+                if (valEl)  valEl.textContent = '%' + Math.round(opacity * 100);
+            }
+        }
 
         // ============================================================
         // SylvaGIS YÜKLEME EKRANI — ortak yardımcılar
@@ -9389,14 +9463,20 @@ function selectRamp(name) {
         // Yeni bir analiz başlatılmadan önce önceki analize ait tüm sonuçları
         // (GEE katmanı, galeri, lejant, grafik, tablo, bilgi kutusu) temizler.
         // LULC / TOPO akışında galeri, galeri içeriği boşaltılarak tamamen gizlenir.
-        function _clearAllAnalysisOutputs() {
-            // 1. Haritadaki önceki GEE tile katmanını kaldır
-            if (typeof _geeLayer !== 'undefined' && _geeLayer) {
+        function _clearAllAnalysisOutputs(paneId) {
+            paneId = (paneId === 'map2') ? 'map2' : 'map';
+            // 1. Haritadaki önceki GEE tile katmanını kaldır (yalnızca ilgili ekran)
+            if (paneId === 'map2') {
+                if (window._geeLayer2) {
+                    try { map2.removeLayer(window._geeLayer2); } catch (e) {}
+                    window._geeLayer2 = null;
+                }
+            } else if (typeof _geeLayer !== 'undefined' && _geeLayer) {
                 try { map.removeLayer(_geeLayer); } catch (e) {}
                 _geeLayer = null;
             }
-            // 2. Sınıf vurgulama katmanını kaldır
-            if (typeof _clearClassHighlight === 'function') _clearClassHighlight();
+            // 2. Sınıf vurgulama katmanını kaldır (yalnızca ilgili ekran)
+            if (typeof _clearClassHighlight === 'function') _clearClassHighlight(paneId);
             // 3. Uydu Görüntü Galerisi'ni boşalt ve gizle
             var _cgEl = document.getElementById('map-gallery');
             if (_cgEl) {
@@ -9451,7 +9531,7 @@ function selectRamp(name) {
             // 8. Yarış koşulu koruması: yeni run jenerasyonunu artır
             _analysisGeneration++;
             // 9. RGB galeri durumunu sıfırla (stale sahne listesi kalmasın)
-            if (typeof _rgbGalleryReset === 'function') _rgbGalleryReset();
+            if (typeof _rgbGalleryReset === 'function') _rgbGalleryReset(paneId);
         }
 
         function runAnalysis() {
@@ -9461,42 +9541,54 @@ function selectRamp(name) {
                 return;
             }
 
-            // Seçili workspace'i AOI olarak kullan.
-            // Öncelik: vaw-workspace-select dropdown (varsa) > tiki açık ilk workspace > ilk workspace
+            // 🖥️ Analiz her zaman o an AKTİF olan ekranda çalışır (Ekran 1 = map,
+            // Ekran 2 = map2). Aktif ekran, kullanıcının son tıkladığı harita
+            // panelidir (bkz. window._sylvaSetActiveMap / _sylvaActivePaneId).
+            // Senkron modda (Çift Ekranı Senkronize Et) iki ekran tek bir
+            // çalışma alanını paylaştığından işlem her zaman Ekran 1 üzerinden
+            // yürütülür ve sonuç mevcut mekanizmayla Ekran 2'ye yansıtılır.
+            var _pane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+            if (window._sylvaWorkspaceSyncActive) _pane = 'map';
+            var _paneMap = (_pane === 'map2' && typeof map2 !== 'undefined' && map2) ? map2 : map;
+
+            // Seçili workspace'i AOI olarak kullan — yalnızca AKTİF ekrana
+            // (Ekran 1 ya da Ekran 2) ait çalışma alanları arasından seçilir.
+            // Öncelik: o ekranda tiki açık ilk workspace > o ekrandaki ilk workspace
             if (window.SylvaVAW && window.SylvaVAW.workspaces && window.SylvaVAW.workspaces.length > 0) {
                 var _activeWs = null;
-                // 1. vaw-workspace-select dropdown'undan seçim oku
-                var _wsSelEl = document.getElementById('vaw-workspace-select');
-                if (_wsSelEl && _wsSelEl.value) {
-                    var _wsSelId = parseInt(_wsSelEl.value, 10);
-                    _activeWs = window.SylvaVAW.workspaces.find(function(w){ return w.id === _wsSelId; }) || null;
-                }
-                // 2. Dropdown yoksa/geçersizse tiki açık olan ilk workspace
-                if (!_activeWs) {
-                    for (var _wi = 0; _wi < window.SylvaVAW.workspaces.length; _wi++) {
-                        if (window.SylvaVAW.workspaces[_wi].visible) {
-                            _activeWs = window.SylvaVAW.workspaces[_wi];
-                            break;
-                        }
+                var _paneWorkspaces = window.SylvaVAW.workspaces.filter(function(w){
+                    return (w.paneId === 'map2' ? 'map2' : 'map') === _pane;
+                });
+                for (var _wi = 0; _wi < _paneWorkspaces.length; _wi++) {
+                    if (_paneWorkspaces[_wi].visible) {
+                        _activeWs = _paneWorkspaces[_wi];
+                        break;
                     }
                 }
-                // 3. Hâlâ bulunamazsa ilk workspace
-                if (!_activeWs) _activeWs = window.SylvaVAW.workspaces[0];
+                if (!_activeWs && _paneWorkspaces.length) _activeWs = _paneWorkspaces[0];
                 if (_activeWs) {
-                    currentLayer = _activeWs.layer;
-                    window._workspaceLayer = currentLayer;
+                    if (_pane === 'map2') {
+                        currentLayer2 = _activeWs.layer;
+                        window._workspaceLayer2 = currentLayer2;
+                    } else {
+                        currentLayer = _activeWs.layer;
+                        window._workspaceLayer = currentLayer;
+                    }
                 }
             }
 
-            // 🛡️ Güvenlik kontrolü: currentLayer atanmış olsa bile haritada
+            var _aoiLayer = (_pane === 'map2') ? currentLayer2 : currentLayer;
+
+            // 🛡️ Güvenlik kontrolü: katman atanmış olsa bile haritada
             // gerçekten yoksa (kullanıcı sildi) geçersiz say ve uyar.
-            if (currentLayer && !map.hasLayer(currentLayer)) {
-                currentLayer = null;
-                window._workspaceLayer = null;
+            if (_aoiLayer && _paneMap && !_paneMap.hasLayer(_aoiLayer)) {
+                _aoiLayer = null;
+                if (_pane === 'map2') { currentLayer2 = null; window._workspaceLayer2 = null; }
+                else { currentLayer = null; window._workspaceLayer = null; }
             }
 
             // Hiç çalışma alanı yoksa analiz başlatma
-            if (!currentLayer) {
+            if (!_aoiLayer) {
                 sylvaAlert(t('no_aoi'), 'warning');
                 return;
             }
@@ -9505,21 +9597,24 @@ function selectRamp(name) {
             if (!meta) { sylvaAlert(t('no_analysis'), 'warning'); return; }
 
             // 🛰️ Uydu Görüntüsü Galerisi (RGB) — gerçek GEE sahneleri
+            // 🖥️ EŞİTLEME: Bu akış artık Ekran 1 ile birebir aynı şekilde
+            // Ekran 2'de de (map2) çalışır — hangi ekran aktifse (_pane)
+            // galeri, sahne seçimi ve harita katmanı o ekrana uygulanır.
             if (meta.isRgbGallery) {
-                if (!currentLayer) { sylvaAlert(t('no_aoi'), 'warning'); return; }
+                if (!_aoiLayer) { sylvaAlert(t('no_aoi'), 'warning'); return; }
                 var startInputG = document.getElementById('date-start');
                 var endInputG   = document.getElementById('date-end');
                 if (!startInputG || !startInputG.value || !endInputG || !endInputG.value) {
                     sylvaAlert(t('no_date'), 'warning'); return;
                 }
-                _clearAllAnalysisOutputs();
-                fetchRgbGallery(meta);
+                _clearAllAnalysisOutputs(_pane);
+                fetchRgbGallery(meta, _pane);
                 return;
             }
 
             // İndeks analizi (NDVI, NDWI, EVI …) — gerçek Python sunucusu
-            if (!currentLayer) { sylvaAlert(t('no_aoi'), 'warning'); return; }
-            currentSceneId = null; // Yeni analiz = tarih aralığı medyanından başla
+            if (!_aoiLayer) { sylvaAlert(t('no_aoi'), 'warning'); return; }
+            _sylvaSceneIdSet(_pane, null); // Yeni analiz = tarih aralığı medyanından başla
 
             var isLulc = isLulcAnalysis(meta.analysisName);
             var isTopo = isTopoAnalysis(meta.analysisName);
@@ -9541,26 +9636,28 @@ function selectRamp(name) {
             var maxCloud  = cloudSliderEl ? parseInt(cloudSliderEl.value, 10) : 20;
 
             // AOI geometrisini normalize et (Polygon, MultiPolygon, KML FeatureCollection)
-            var _roi = _extractROIGeometry(currentLayer);
+            var _roi = _extractROIGeometry(_aoiLayer);
             if (!_roi) {
                 sylvaAlert(t('no_geom'), 'warning');
                 return;
             }
 
             // ── Son analiz parametrelerini sakla (Lejant senkronizasyonu için) ──
-            _lastAnalysisROI = _roi;
+            // 🖥️ EŞİTLEME: o an aktif olan ekrana (_pane) özel saklanır.
+            _sylvaLastRoiSet(_pane, _roi);
             var _demSrcRadioNow = document.querySelector('input[name="dem-source"]:checked');
-            _lastAnalysisParams = {
+            _sylvaLastParamsSet(_pane, {
                 satellite:  satellite,
                 startDate:  startInput ? (startInput.value || '') : '',
                 endDate:    endInput   ? (endInput.value   || '') : '',
                 maxCloud:   maxCloud,
                 clipMode:   clipMode,
                 demSource:  _demSrcRadioNow ? _demSrcRadioNow.value : 'SRTM'
-            };
+            });
 
-            // Önceki analiz sonuçlarını temizle (yeni analiz başlamadan önce)
-            _clearAllAnalysisOutputs();
+            // Önceki analiz sonuçlarını temizle (yeni analiz başlamadan önce) —
+            // yalnızca analiz çalıştırılan ekranın önceki sonucu silinir.
+            _clearAllAnalysisOutputs(_pane);
 
             // Yükleniyor durumu
             var runBtn = document.getElementById('btn-run-analysis');
@@ -9590,8 +9687,10 @@ function selectRamp(name) {
             // Sınıf vurgulama (highlight) özelliği bu payload'ı yeniden kullanır —
             // aynı ROI/tarih/uydu parametreleriyle tek bir sınıfa maskelenmiş
             // ayrı bir tile katmanı istenebilsin diye saklanıyor.
-            window._lastAnalyzePayload = analyzePayload;
-            _clearClassHighlight();
+            // 🖥️ EŞİTLEME: payload ekran başına (map/map2) ayrı saklanır.
+            window._lastAnalyzePayloadByPane = window._lastAnalyzePayloadByPane || { map: null, map2: null };
+            window._lastAnalyzePayloadByPane[_pane] = analyzePayload;
+            _clearClassHighlight(_pane);
             // Yarış koşulu: bu fetch'e ait jenerasyon numarasını yakala
             var _runGen = _analysisGeneration;
 
@@ -9626,13 +9725,19 @@ function selectRamp(name) {
                     return;
                 }
                 if (data.nativeCrs) window._lastAnalyzeNativeCrs = data.nativeCrs;
-                // Önceki GEE katmanını kaldır
-                if (_geeLayer) { map.removeLayer(_geeLayer); _geeLayer = null; }
-                // Yeni GEE tile katmanını ekle (crossOrigin: html2canvas tabanlı
-                // export'un tile'ları yakalayabilmesi için gerekli)
-                _geeLayer = L.tileLayer(data.tileUrl, { opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane' }).addTo(map);
-                _applyGeeLayerClipMode(clipMode);
-                if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer();
+                // Yeni GEE tile katmanı, analiz o an hangi ekranda (Ekran 1/Ekran 2)
+                // çalıştırıldıysa YALNIZCA o ekranın haritasına eklenir; diğer
+                // ekranın mevcut sonucuna dokunulmaz.
+                _sylvaReplaceGeeLayer(_pane, data.tileUrl, { opacity: 1 });
+                _applyGeeLayerClipMode(clipMode, _pane);
+                // 🎚️ En üstteki analiz türüne göre veri şeffaflığını otomatik ayarla
+                _sylvaApplyAutoOpacity(_pane, meta);
+                if (_pane === 'map2') {
+                    // Not: Ekran 2 kendi bağımsız analizini ürettiği için Ekran 1'in
+                    // sonucunu buraya yansıtan (mirror) senkronizasyon burada tetiklenmez.
+                } else {
+                    if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer();
+                }
                 // Analiz sonucu gösterilince Çalışma Alanı checkbox'ını etkinleştir ve aç
                 (function() {
                     var _wsCb   = document.getElementById('toggle-workspace-opacity');
@@ -10253,8 +10358,9 @@ function selectRamp(name) {
         // Böylece kullanıcı her zaman yalnızca AOI şekliyle sınırlı, siyah
         // NoData kenarlığı olmayan bir görüntü görür. Bu yalnızca üstteki
         // analiz katmanını maskeler; alttaki temel harita (basemap) etkilenmez.
-        var _geeClipActive = false;
-        var _geeClipHandlersBound = false;
+        // Ekran 1 (map) ve Ekran 2 (map2) kendi bağımsız AOI-maske durumunu taşır.
+        var _geeClipActive = { map: false, map2: false };
+        var _geeClipHandlersBound = { map: false, map2: false };
 
         function _geoRoiToLatLngRings(roi) {
             if (!roi) return [];
@@ -10269,48 +10375,58 @@ function selectRamp(name) {
             return rings;
         }
 
-        function _clearGeeLayerAoiClip() {
-            if (_geeLayer && _geeLayer._container) {
-                _geeLayer._container.style.clipPath = '';
-                _geeLayer._container.style.webkitClipPath = '';
+        function _clearGeeLayerAoiClip(paneId) {
+            paneId = (paneId === 'map2') ? 'map2' : 'map';
+            var layer = (paneId === 'map2') ? window._geeLayer2 : _geeLayer;
+            if (layer && layer._container) {
+                layer._container.style.clipPath = '';
+                layer._container.style.webkitClipPath = '';
             }
         }
 
-        function _updateGeeLayerAoiClip() {
-            if (!_geeClipActive || !_geeLayer || !_geeLayer._container || !currentLayer) return;
+        function _updateGeeLayerAoiClip(paneId) {
+            paneId = (paneId === 'map2') ? 'map2' : 'map';
+            var lmap = (paneId === 'map2') ? map2 : map;
+            var layer = (paneId === 'map2') ? window._geeLayer2 : _geeLayer;
+            var aoiLayer = (paneId === 'map2') ? currentLayer2 : currentLayer;
+            if (!_geeClipActive[paneId] || !layer || !layer._container || !aoiLayer || !lmap) return;
             try {
-                var roi = _extractROIGeometry(currentLayer);
+                var roi = _extractROIGeometry(aoiLayer);
                 var rings = _geoRoiToLatLngRings(roi);
-                if (!rings.length) { _clearGeeLayerAoiClip(); return; }
+                if (!rings.length) { _clearGeeLayerAoiClip(paneId); return; }
                 var pathParts = rings.map(function(ring) {
                     var pts = ring.map(function(latlng) {
-                        var p = map.latLngToLayerPoint(latlng);
+                        var p = lmap.latLngToLayerPoint(latlng);
                         return p.x.toFixed(1) + 'px ' + p.y.toFixed(1) + 'px';
                     });
                     return 'M ' + pts.join(' L ') + ' Z';
                 });
                 var pathStr = 'path(evenodd, "' + pathParts.join(' ') + '")';
-                _geeLayer._container.style.clipPath = pathStr;
-                _geeLayer._container.style.webkitClipPath = pathStr;
+                layer._container.style.clipPath = pathStr;
+                layer._container.style.webkitClipPath = pathStr;
             } catch (e) { /* clip-path desteklenmiyorsa sessizce orijinal görüntü kalır */ }
         }
 
         // clipMode 'full' (tüm sahne) ise maske tamamen kaldırılır; aksi halde
         // (varsayılan 'clip') AOI dışı görsel olarak gizlenir ve harita
         // hareket/zoom olaylarında maske canlı şekilde yeniden hizalanır.
-        function _applyGeeLayerClipMode(clipMode) {
-            _geeClipActive = (clipMode !== 'full');
-            if (!_geeClipHandlersBound) {
-                _geeClipHandlersBound = true;
-                map.on('move zoom viewreset resize zoomanim', _updateGeeLayerAoiClip);
+        // paneId verilmezse 'map' (Ekran 1) varsayılır — mevcut çağrı noktalarıyla
+        // geriye dönük uyumluluk için.
+        function _applyGeeLayerClipMode(clipMode, paneId) {
+            paneId = (paneId === 'map2') ? 'map2' : 'map';
+            var lmap = (paneId === 'map2') ? map2 : map;
+            _geeClipActive[paneId] = (clipMode !== 'full');
+            if (lmap && !_geeClipHandlersBound[paneId]) {
+                _geeClipHandlersBound[paneId] = true;
+                lmap.on('move zoom viewreset resize zoomanim', function () { _updateGeeLayerAoiClip(paneId); });
             }
-            if (_geeClipActive) {
-                _updateGeeLayerAoiClip();
+            if (_geeClipActive[paneId]) {
+                _updateGeeLayerAoiClip(paneId);
                 // Tile container ilk anda boş/ölçülmemiş olabilir; bir sonraki
                 // karede tekrar uygulanarak kesin hizalama sağlanır.
-                setTimeout(_updateGeeLayerAoiClip, 50);
+                setTimeout(function () { _updateGeeLayerAoiClip(paneId); }, 50);
             } else {
-                _clearGeeLayerAoiClip();
+                _clearGeeLayerAoiClip(paneId);
             }
         }
 
@@ -10445,9 +10561,12 @@ function selectRamp(name) {
 
         // ── Belirli bir sahneyi haritaya yükler ──────────────────────
         function loadSpecificScene(sceneId) {
+            // 🖥️ EŞİTLEME: her zaman o an AKTİF olan ekranda (Ekran 1/Ekran 2) çalışır.
+            var _pane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+            var _aoiForPane = (_pane === 'map2') ? currentLayer2 : currentLayer;
             var meta = getSelectedAnalysisMeta();
-            if (!meta || !currentLayer) return;
-            currentSceneId = sceneId; // Sınıflandırma/Stretched senkronizasyonu bu sahneyi korusun
+            if (!meta || !_aoiForPane) return;
+            _sylvaSceneIdSet(_pane, sceneId); // Sınıflandırma/Stretched senkronizasyonu bu sahneyi korusun
             // Yarış koşulu: bu sahne fetch'ine ait jenerasyon numarasını yakala
             var _sceneGen = _analysisGeneration;
 
@@ -10457,7 +10576,7 @@ function selectRamp(name) {
             var viewModeEl    = document.getElementById('viewMode');
             var cloudSliderEl = document.getElementById('cloud-slider');
 
-            var _roi = _extractROIGeometry(currentLayer);
+            var _roi = _extractROIGeometry(_aoiForPane);
             if (!_roi) return;
             var _sceneClipMode = viewModeEl ? viewModeEl.value : 'clip';
 
@@ -10491,14 +10610,14 @@ function selectRamp(name) {
                 if (data.nativeCrs) window._lastAnalyzeNativeCrs = data.nativeCrs;
                 // Geciken yanıt: kullanıcı yeni bir analiz başlattıysa bu sahne sonucunu yoksay
                 if (_analysisGeneration !== _sceneGen) { hideSylvaLoading(); return; }
-                // Harita katmanını güncelle
-                if (_geeLayer) { map.removeLayer(_geeLayer); _geeLayer = null; }
-                _geeLayer = L.tileLayer(data.tileUrl, { opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane' }).addTo(map);
-                _applyGeeLayerClipMode(_sceneClipMode);
-                if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer();
+                // Harita katmanını güncelle (o an aktif olan ekranda)
+                _sylvaReplaceGeeLayer(_pane, data.tileUrl, { opacity: 1 });
+                _applyGeeLayerClipMode(_sceneClipMode, _pane);
+                _sylvaApplyAutoOpacity(_pane, meta);
+                if (_pane === 'map' && window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer();
                 // Yeni görüntü haritada tamamen görünür hale gelince (tüm karolar
                 // yüklenince) yükleme ekranı otomatik olarak kapanır.
-                _hideLoadingWhenTileReady(_geeLayer);
+                _hideLoadingWhenTileReady(_sylvaCurrentGeeLayer(_pane));
 
                 // Sahne değişiminde aktif renk paleti ve lejant senkronize kalmalı.
                 // Kullanıcının seçtiği ramp'i koruyarak meta'yı klonla (Issue-4 düzeltmesi).
@@ -10542,28 +10661,49 @@ function selectRamp(name) {
         // ════════════════════════════════════════════════════════════
         // 🛰️ UYDU GÖRÜNTÜSÜ GALERİSİ — gerçek GEE sahneleri + thumbnail
         // ════════════════════════════════════════════════════════════
-        var _rgbGalleryState = { scenes: [], dataset: null, meta: null, sortKey: 'date', sortAsc: false };
+        // 🖥️ EŞİTLEME: Galeri durumu artık ekran başına (map / map2) ayrı ayrı
+        // tutulur — böylece Ekran 1 ve Ekran 2 aynı anda birbirinden bağımsız
+        // sahne listeleri/seçimleri gösterebilir.
+        function _rgbGalleryStateFor(paneId) {
+            paneId = (paneId === 'map2') ? 'map2' : 'map';
+            if (!window._rgbGalleryStates) window._rgbGalleryStates = {};
+            if (!window._rgbGalleryStates[paneId]) {
+                window._rgbGalleryStates[paneId] = { scenes: [], dataset: null, meta: null, sortKey: 'date', sortAsc: false };
+            }
+            return window._rgbGalleryStates[paneId];
+        }
 
-        function _rgbGalleryReset() {
-            _rgbGalleryState = { scenes: [], dataset: null, meta: null, sortKey: 'date', sortAsc: false };
-            var galleryEl = document.getElementById('map-gallery');
-            if (galleryEl) { galleryEl.innerHTML = ''; galleryEl.style.display = 'none'; }
-            var legendBox = document.getElementById('map-legend-box');
-            if (legendBox) { legendBox.innerHTML = ''; legendBox.style.display = 'none'; }
+        function _rgbGalleryReset(paneId) {
+            paneId = paneId || (typeof _sylvaActivePaneId === 'function' ? _sylvaActivePaneId() : 'map');
+            paneId = (paneId === 'map2') ? 'map2' : 'map';
+            if (!window._rgbGalleryStates) window._rgbGalleryStates = {};
+            window._rgbGalleryStates[paneId] = { scenes: [], dataset: null, meta: null, sortKey: 'date', sortAsc: false };
+            // Galeri paneli tek/paylaşılan bir kontrol öğesidir; yalnızca o an
+            // AKTİF ekranın galerisi sıfırlandığında görsel olarak temizlenir.
+            if (paneId === _sylvaActivePaneId()) {
+                var galleryEl = document.getElementById('map-gallery');
+                if (galleryEl) { galleryEl.innerHTML = ''; galleryEl.style.display = 'none'; }
+                var legendBox = document.getElementById('map-legend-box');
+                if (legendBox) { legendBox.innerHTML = ''; legendBox.style.display = 'none'; }
+            }
         }
 
         // AOI + tarih + bulutluluk kriterine uyan gerçek sahneleri (thumbnail
         // önizlemeleriyle birlikte) sunucudan/GEE'den çeker ve galeriyi doldurur.
-        function fetchRgbGallery(meta) {
+        // paneId: 'map' (Ekran 1) | 'map2' (Ekran 2) — verilmezse aktif ekran kullanılır.
+        function fetchRgbGallery(meta, paneId) {
+            paneId = (paneId === 'map2') ? 'map2' : 'map';
             var galleryEl = document.getElementById('map-gallery');
             if (!galleryEl) return;
             // Yarış koşulu: bu fetch'e ait jenerasyon numarasını yakala
             var _rgbGen = _analysisGeneration;
+            var _gState = _rgbGalleryStateFor(paneId);
+            var _aoiForPane = (paneId === 'map2') ? currentLayer2 : currentLayer;
 
             var startInput = document.getElementById('date-start');
             var endInput   = document.getElementById('date-end');
             var cloudSliderEl = document.getElementById('cloud-slider');
-            var _roi = _extractROIGeometry(currentLayer);
+            var _roi = _extractROIGeometry(_aoiForPane);
             if (!_roi) { sylvaAlert(t('no_geom'), 'warning'); return; }
 
             var runBtn = document.getElementById('btn-run-analysis');
@@ -10615,16 +10755,16 @@ function selectRamp(name) {
                     showNoDataModal(_TOAST_NO_DATA_MSG);
                     return;
                 }
-                _rgbGalleryState.scenes  = data.scenes;
-                _rgbGalleryState.dataset = data.dataset;
-                _rgbGalleryState.meta    = meta;
-                _rgbGalleryState.sortKey = 'date';
-                _rgbGalleryState.sortAsc = false; // en güncel önce
-                renderRgbGalleryCards();
+                _gState.scenes  = data.scenes;
+                _gState.dataset = data.dataset;
+                _gState.meta    = meta;
+                _gState.sortKey = 'date';
+                _gState.sortAsc = false; // en güncel önce
+                renderRgbGalleryCards(paneId);
 
                 // Galeri açılınca en güncel sahne otomatik olarak haritada gösterilir.
-                var first = _sortedRgbScenes()[0];
-                if (first) loadRgbScene(first.sceneId, meta, data.dataset);
+                var first = _sortedRgbScenes(paneId)[0];
+                if (first) loadRgbScene(first.sceneId, meta, data.dataset, paneId);
                 _ensureDefaultVisibility();
             })
             .catch(function(err) {
@@ -10636,10 +10776,11 @@ function selectRamp(name) {
             });
         }
 
-        function _sortedRgbScenes() {
-            var scenes = _rgbGalleryState.scenes.slice();
-            var key = _rgbGalleryState.sortKey;
-            var asc = _rgbGalleryState.sortAsc;
+        function _sortedRgbScenes(paneId) {
+            var _gState = _rgbGalleryStateFor(paneId);
+            var scenes = _gState.scenes.slice();
+            var key = _gState.sortKey;
+            var asc = _gState.sortAsc;
             scenes.sort(function(a, b) {
                 var av = key === 'cloud' ? (typeof a.cloud === 'number' ? a.cloud : Infinity) : (a.timestamp || 0);
                 var bv = key === 'cloud' ? (typeof b.cloud === 'number' ? b.cloud : Infinity) : (b.timestamp || 0);
@@ -10651,12 +10792,17 @@ function selectRamp(name) {
         // Galeri kartlarını (thumbnail + tarih + sensör + veri seti + bulutluluk
         // + Scene ID) çizer. Kartlardan birine tıklanınca ilgili sahne haritada
         // gösterilir, önceki katman kaldırılır ve harita AOI'ye odaklanır.
-        function renderRgbGalleryCards() {
+        // Galeri paneli paylaşılan tek bir kontrol öğesi olduğundan, yalnızca
+        // o an AKTİF olan ekranın galerisi ekrana çizilir.
+        function renderRgbGalleryCards(paneId) {
+            paneId = (paneId === 'map2') ? 'map2' : 'map';
+            if (paneId !== _sylvaActivePaneId()) return;
             var galleryEl = document.getElementById('map-gallery');
             if (!galleryEl) return;
-            var ds = _rgbGalleryState.dataset;
-            var meta = _rgbGalleryState.meta;
-            var scenes = _sortedRgbScenes();
+            var _gState = _rgbGalleryStateFor(paneId);
+            var ds = _gState.dataset;
+            var meta = _gState.meta;
+            var scenes = _sortedRgbScenes(paneId);
 
             galleryEl.innerHTML = '';
             galleryEl.style.display = 'flex';
@@ -10669,7 +10815,7 @@ function selectRamp(name) {
                     : '🛰️';
 
                 var div = document.createElement('div');
-                div.className = 'gallery-item' + (scene.sceneId === currentSceneId ? ' active' : '');
+                div.className = 'gallery-item' + (scene.sceneId === _sylvaSceneIdGet(paneId) ? ' active' : '');
                 div.setAttribute('data-scene-id', scene.sceneId);
                 div.title = (ds ? ds.datasetName : '') + '\n' + dateLabel + '\nScene ID: ' + scene.sceneId;
                 div.innerHTML = '<div class="gallery-img">' + thumbHtml + '</div>'
@@ -10677,25 +10823,28 @@ function selectRamp(name) {
                 div.addEventListener('click', function() {
                     galleryEl.querySelectorAll('.gallery-item').forEach(function(i) { i.classList.remove('active'); });
                     div.classList.add('active');
-                    loadRgbScene(scene.sceneId, meta, ds);
+                    loadRgbScene(scene.sceneId, meta, ds, paneId);
                 });
                 galleryEl.appendChild(div);
             });
         }
 
-        // Sıralama düğmelerini bağlar (Tarih / Bulutluluk).
+        // Sıralama düğmelerini bağlar (Tarih / Bulutluluk) — her zaman o an
+        // AKTİF ekranın galeri durumunu sıralar.
         (function () {
             var btnDate  = document.getElementById('btn-gallery-sort-date');
             var btnCloud = document.getElementById('btn-gallery-sort-cloud');
             function resort(key) {
-                if (!_rgbGalleryState.scenes.length) return;
-                if (_rgbGalleryState.sortKey === key) {
-                    _rgbGalleryState.sortAsc = !_rgbGalleryState.sortAsc;
+                var paneId = _sylvaActivePaneId();
+                var _gState = _rgbGalleryStateFor(paneId);
+                if (!_gState.scenes.length) return;
+                if (_gState.sortKey === key) {
+                    _gState.sortAsc = !_gState.sortAsc;
                 } else {
-                    _rgbGalleryState.sortKey = key;
-                    _rgbGalleryState.sortAsc = true;
+                    _gState.sortKey = key;
+                    _gState.sortAsc = true;
                 }
-                renderRgbGalleryCards();
+                renderRgbGalleryCards(paneId);
             }
             if (btnDate)  btnDate.addEventListener('click', function () { resort('date'); });
             if (btnCloud) btnCloud.addEventListener('click', function () { resort('cloud'); });
@@ -10704,16 +10853,19 @@ function selectRamp(name) {
         // Seçilen sahneyi (index='RGB') sunucudan/GEE'den çeker, haritaya
         // gerçek renk katmanı olarak ekler, önceki katmanı kaldırır, haritayı
         // AOI'ye odaklar ve dinamik bilgi kutusu/lejantı + Görüntü Bilgileri
-        // panelini günceller.
-        function loadRgbScene(sceneId, meta, dsInfo) {
-            if (!currentLayer) return;
-            currentSceneId = sceneId;
+        // panelini günceller. paneId verilmezse aktif ekran kullanılır — bu
+        // sayede aynı akış Ekran 1 ve Ekran 2'de birebir aynı şekilde çalışır.
+        function loadRgbScene(sceneId, meta, dsInfo, paneId) {
+            paneId = (paneId === 'map2') ? 'map2' : 'map';
+            var _aoiForPane = (paneId === 'map2') ? currentLayer2 : currentLayer;
+            if (!_aoiForPane) return;
+            _sylvaSceneIdSet(paneId, sceneId);
 
             var startInput = document.getElementById('date-start');
             var endInput   = document.getElementById('date-end');
             var viewModeEl = document.getElementById('viewMode');
             var cloudSliderEl = document.getElementById('cloud-slider');
-            var _roi = _extractROIGeometry(currentLayer);
+            var _roi = _extractROIGeometry(_aoiForPane);
             if (!_roi) return;
             var _rgbClipMode = viewModeEl ? viewModeEl.value : 'clip';
 
@@ -10740,31 +10892,33 @@ function selectRamp(name) {
                     window._lastAnalyzeNativeCrs = data.nativeCrs || data.meta.crs;
                 }
 
-                // Önceki katmanı kaldır, yeni gerçek renk katmanını ekle
-                if (_geeLayer) { map.removeLayer(_geeLayer); _geeLayer = null; }
-                _geeLayer = L.tileLayer(data.tileUrl, { opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane' }).addTo(map);
-                _applyGeeLayerClipMode(_rgbClipMode);
-                if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer();
-                _hideLoadingWhenTileReady(_geeLayer);
+                // Önceki katmanı kaldır, yeni gerçek renk katmanını ilgili ekrana ekle
+                var _targetMap = _sylvaTargetMap(paneId);
+                _sylvaReplaceGeeLayer(paneId, data.tileUrl, { opacity: 1 });
+                _applyGeeLayerClipMode(_rgbClipMode, paneId);
+                // 🎚️ Gerçek renk (RGB) görüntüsü — tam opaklık en okunaklı sonucu verir
+                _sylvaApplyAutoOpacity(paneId, { isRgbGallery: true });
+                if (paneId === 'map' && window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer();
+                _hideLoadingWhenTileReady(_sylvaCurrentGeeLayer(paneId));
 
                 // Harita AOI'ye odaklanır
                 try {
-                    var b = currentLayer.getBounds ? currentLayer.getBounds() : null;
-                    if (b && b.isValid && b.isValid()) map.fitBounds(b, { maxZoom: 15, padding: [20, 20] });
+                    var b = _aoiForPane.getBounds ? _aoiForPane.getBounds() : null;
+                    if (b && b.isValid && b.isValid()) _targetMap.fitBounds(b, { maxZoom: 15, padding: [20, 20] });
                 } catch (e) {}
 
-                // Galerideki aktif kartı senkronize et
-                var galleryEl = document.getElementById('map-gallery');
-                if (galleryEl) {
-                    galleryEl.querySelectorAll('.gallery-item').forEach(function(i) {
-                        i.classList.toggle('active', i.getAttribute('data-scene-id') === sceneId);
-                    });
+                // Galerideki aktif kartı senkronize et (yalnızca aktif ekranda görünürse)
+                if (paneId === _sylvaActivePaneId()) {
+                    var galleryEl = document.getElementById('map-gallery');
+                    if (galleryEl) {
+                        galleryEl.querySelectorAll('.gallery-item').forEach(function(i) {
+                            i.classList.toggle('active', i.getAttribute('data-scene-id') === sceneId);
+                        });
+                    }
+                    renderRgbLegend(data.meta || {}, dsInfo);
+                    // 📡 Ham Veri (Bantlar) panelini, yeni seçilen sahneye göre güncelle
+                    onRawBandsSceneSelected(sceneId, meta, dsInfo, data.meta || {});
                 }
-
-                renderRgbLegend(data.meta || {}, dsInfo);
-
-                // 📡 Ham Veri (Bantlar) panelini, yeni seçilen sahneye göre güncelle
-                onRawBandsSceneSelected(sceneId, meta, dsInfo, data.meta || {});
                 _ensureDefaultVisibility();
             })
             .catch(function(err) { hideSylvaLoading(); showAnalysisToast('Görüntü yüklenemedi: ' + err.message, 'error'); });
@@ -10787,7 +10941,7 @@ function selectRamp(name) {
             var cloud       = (typeof scMeta.cloudCover === 'number') ? scMeta.cloudCover.toFixed(1) + '%' : '—';
             var date        = scMeta.acquisitionDate || '—';
             var crs         = scMeta.crs || '—';
-            var imageId     = scMeta.imageId || currentSceneId || '—';
+            var imageId     = scMeta.imageId || _sylvaSceneIdGet(_sylvaActivePaneId()) || '—';
 
             function row(label, value) {
                 return '<div style="display:flex;justify-content:space-between;gap:8px;font-size:0.7rem;margin-top:3px;">'
@@ -11549,44 +11703,52 @@ function selectRamp(name) {
         // Lejant satırı / grafik dilimi / tablo satırından herhangi birine
         // tıklanınca, o sınıfa ait alanlar haritada ayrı bir maskeli tile
         // katmanıyla parlak sarı renkte vurgulanır; tekrar tıklanınca kaldırılır.
-        var _classHighlightLayer = null;
-        var _classHighlightIndex = null;
+        // 🖥️ EŞİTLEME: vurgulama katmanı ve seçili sınıf indeksi artık ekran
+        // başına (map/map2) ayrı tutulur.
+        window._classHighlightLayerByPane = window._classHighlightLayerByPane || { map: null, map2: null };
+        window._classHighlightIndexByPane = window._classHighlightIndexByPane || { map: null, map2: null };
 
-        function _clearClassHighlight() {
-            if (_classHighlightLayer) {
-                try { map.removeLayer(_classHighlightLayer); } catch (e) {}
-                _classHighlightLayer = null;
+        function _clearClassHighlight(paneId) {
+            paneId = (paneId === 'map2') ? 'map2' : ((paneId === 'map') ? 'map' : _sylvaActivePaneId());
+            var layer = window._classHighlightLayerByPane[paneId];
+            if (layer) {
+                try { _sylvaTargetMap(paneId).removeLayer(layer); } catch (e) {}
+                window._classHighlightLayerByPane[paneId] = null;
             }
-            _classHighlightIndex = null;
+            window._classHighlightIndexByPane[paneId] = null;
             _updateHighlightSelectionUI();
         }
 
         // Lejant/grafik/tablo üzerindeki aktif seçim görünümünü senkronize eder
+        // (o an AKTİF ekranın seçili sınıfını yansıtır).
         function _updateHighlightSelectionUI() {
+            var _idx = window._classHighlightIndexByPane[_sylvaActivePaneId()];
             document.querySelectorAll('[data-class-idx]').forEach(function (el) {
                 var idx = parseInt(el.getAttribute('data-class-idx'), 10);
-                var active = (_classHighlightIndex !== null && idx === _classHighlightIndex);
+                var active = (_idx !== null && idx === _idx);
                 el.classList.toggle('class-highlight-active', active);
             });
         }
 
         function _toggleClassHighlight(idx) {
+            var _pane = _sylvaActivePaneId();
+            var _payload = (window._lastAnalyzePayloadByPane || {})[_pane];
             if (!lastChartData || !lastChartData.classes || !lastChartData.classes[idx]) return;
-            if (!window._lastAnalyzePayload) return;
+            if (!_payload) return;
 
             // Aynı sınıfa tekrar tıklanırsa vurgulamayı kaldır
-            if (_classHighlightIndex === idx) {
-                _clearClassHighlight();
+            if (window._classHighlightIndexByPane[_pane] === idx) {
+                _clearClassHighlight(_pane);
                 return;
             }
 
             var cls = lastChartData.classes[idx];
-            var payload = Object.assign({}, window._lastAnalyzePayload, {
+            var payload = Object.assign({}, _payload, {
                 classMin: cls.min,
                 classMax: cls.max
             });
 
-            _classHighlightIndex = idx;
+            window._classHighlightIndexByPane[_pane] = idx;
             _updateHighlightSelectionUI();
 
             fetch(API_BASE + '/api/highlight-class', {
@@ -11598,16 +11760,17 @@ function selectRamp(name) {
             .then(function (data) {
                 // Kullanıcı vurgulama isteği yanıtı gelmeden önce seçimi
                 // değiştirmiş/kaldırmışsa (idx artık eski), sonucu uygulama.
-                if (_classHighlightIndex !== idx) return;
+                if (window._classHighlightIndexByPane[_pane] !== idx) return;
                 if (!data.success) {
                     showAnalysisToast(t('server_error') + '(' + (data.error || '?') + ')', 'error');
                     return;
                 }
-                if (_classHighlightLayer) { try { map.removeLayer(_classHighlightLayer); } catch (e) {} }
-                _classHighlightLayer = L.tileLayer(data.tileUrl, { opacity: 0.95, zIndex: 20, crossOrigin: true, pane: 'geeAnalysisPane' }).addTo(map);
+                var _oldLayer = window._classHighlightLayerByPane[_pane];
+                if (_oldLayer) { try { _sylvaTargetMap(_pane).removeLayer(_oldLayer); } catch (e) {} }
+                window._classHighlightLayerByPane[_pane] = L.tileLayer(data.tileUrl, { opacity: 0.95, zIndex: 20, crossOrigin: true, pane: 'geeAnalysisPane' }).addTo(_sylvaTargetMap(_pane));
             })
             .catch(function (err) {
-                if (_classHighlightIndex === idx) _classHighlightIndex = null;
+                if (window._classHighlightIndexByPane[_pane] === idx) window._classHighlightIndexByPane[_pane] = null;
                 _updateHighlightSelectionUI();
                 showAnalysisToast(t('server_error') + '(' + err.message + ')', 'error');
             });
