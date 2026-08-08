@@ -98,9 +98,19 @@ GEE_SERVICE_ACCOUNT_KEY   = os.environ.get('GEE_SERVICE_ACCOUNT_KEY', '')
 
 try:
     if GEE_SERVICE_ACCOUNT_EMAIL and GEE_SERVICE_ACCOUNT_KEY:
-        credentials = ee.ServiceAccountCredentials(
-            GEE_SERVICE_ACCOUNT_EMAIL, GEE_SERVICE_ACCOUNT_KEY
-        )
+        # GEE_SERVICE_ACCOUNT_KEY ya bir dosya yolu (örn. /etc/secrets/key.json)
+        # ya da doğrudan key.json'un ham JSON içeriği olabilir (Cloud Run
+        # "Environment variables" kutusuna yapıştırıldığında olduğu gibi).
+        # İkisini de destekleyelim:
+        _key_value = GEE_SERVICE_ACCOUNT_KEY.strip()
+        if _key_value.startswith('{'):
+            credentials = ee.ServiceAccountCredentials(
+                GEE_SERVICE_ACCOUNT_EMAIL, key_data=_key_value
+            )
+        else:
+            credentials = ee.ServiceAccountCredentials(
+                GEE_SERVICE_ACCOUNT_EMAIL, key_file=_key_value
+            )
         ee.Initialize(credentials, project='sylvagis')
         print('✅ GEE Service Account ile başlatıldı:', GEE_SERVICE_ACCOUNT_EMAIL)
     else:
