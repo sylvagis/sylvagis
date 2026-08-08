@@ -4468,13 +4468,13 @@ tr.class-highlight-active {
                min="0"
                max="1"
                step="0.05"
-               value="1"
+               value="0"
                aria-label="Veri şeffaflığı" data-i18n-aria-label="data_transparency"
                style="flex:1;">
 
         <span id="layer-opacity-val"
               style="font-size:0.75rem; font-weight:bold; min-width:35px;">
-            %100
+            %0
         </span>
 
     </div>
@@ -4494,13 +4494,13 @@ tr.class-highlight-active {
                min="0"
                max="1"
                step="0.05"
-               value="1"
+               value="0"
                aria-label="Basemap şeffaflığı" data-i18n-aria-label="basemap_transparency"
                style="flex:1;">
 
         <span id="basemap-opacity-val"
               style="font-size:0.75rem; font-weight:bold; min-width:35px;">
-            %100
+            %0
         </span>
 
     </div>
@@ -5298,12 +5298,12 @@ tr.class-highlight-active {
                 if (dataWrap) dataWrap.style.opacity = dataLayer ? '1' : '0.4';
             }
             if (baseCb) baseCb.checked = state.basemapEnabled !== false;
-            if (baseSlider) baseSlider.value = String(state.basemapOpacity);
-            var baseVal = document.getElementById('basemap-opacity-val');
-            if (baseVal) baseVal.textContent = '%' + Math.round(state.basemapOpacity * 100);
-            var dataVal = document.getElementById('layer-opacity-val');
-            if (dataSlider) dataSlider.value = String(state.dataOpacity);
-            if (dataVal) dataVal.textContent = '%' + Math.round(state.dataOpacity * 100);
+            if (baseSlider) baseSlider.value = String(1 - state.basemapOpacity);
+                   var baseVal = document.getElementById('basemap-opacity-val');
+                   if (baseVal) baseVal.textContent = '%' + Math.round((1 - state.basemapOpacity) * 100);
+                   var dataVal = document.getElementById('layer-opacity-val');
+                   if (dataSlider) dataSlider.value = String(1 - state.dataOpacity);
+                   if (dataVal) dataVal.textContent = '%' + Math.round((1 - state.dataOpacity) * 100);
             if (wsCb) {
                 wsCb.disabled = !workspaceLayer || !state.analysisActive;
                 wsCb.checked = !!workspaceLayer && state.analysisActive && state.workspaceVisible !== false;
@@ -6810,24 +6810,25 @@ tr.class-highlight-active {
         // ▲▼ zoom ok butonları kaldırıldı — zoom yalnızca manuel giriş, fare tekerleği ve +/- ile değiştirilir.
 
         // ---------------------------------------------------------
-// Veri Şeffaflığı — yalnızca analiz rasterını (_geeLayer) etkiler
+// Veri Şeffaflığı — slider artık ŞEFFAFLIK yüzdesini temsil ediyor (0 = tam
+// görünür, 100 = tam şeffaf). Katmana uygulanan gerçek opaklık bunun tersidir.
 document.getElementById('layerOpacity').addEventListener('input', function() {
     var val = Math.round(this.value * 100);
     document.getElementById('layer-opacity-val').textContent = '%' + val;
-    var opacity = parseFloat(this.value);
+    var opacity = 1 - parseFloat(this.value);
     var paneId = _sylvaActivePaneId();
     var state = _sylvaPaneState(paneId);
     state.dataOpacity = opacity;
     _sylvaSetLayerOpacity(_sylvaLayerForPane('data', paneId), opacity);
 });
 
-// Basemap Şeffaflığı — aktif basemap katmanının (Google/OSM/Imagery vb.)
-// saydamlığını ayarlar; ekranda ve tüm export çıktılarında (PNG/JPEG/PDF)
-// birebir aynı şekilde yansır.
+// Basemap Şeffaflığı — slider artık ŞEFFAFLIK yüzdesini temsil ediyor
+// (0 = tam görünür, 100 = tam şeffaf); ekranda ve tüm export çıktılarında
+// (PNG/JPEG/PDF) birebir aynı şekilde yansır.
 document.getElementById('basemapOpacity').addEventListener('input', function() {
     var val = Math.round(this.value * 100);
     document.getElementById('basemap-opacity-val').textContent = '%' + val;
-    applyBasemapOpacity(parseFloat(this.value));
+    applyBasemapOpacity(1 - parseFloat(this.value));
 });
 
         // -------------------------------------------------------
@@ -6858,7 +6859,8 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
             container.style.display = 'flex';
         } else {
             container.style.display = 'none';
-            slider.value = 1;
+            // Kapatılınca basemap tam görünür (0 şeffaf) durumuna sıfırlanır.
+            slider.value = 0;
             slider.dispatchEvent(new Event('input'));
         }
     });
@@ -9567,11 +9569,12 @@ function selectRamp(name) {
             state.dataOpacity = opacity;
             _sylvaSetLayerOpacity(_sylvaCurrentGeeLayer(paneId), opacity);
             // Sadece o an AKTİF/görünen ekransa slider UI'ını da güncelle
+            // (slider artık şeffaflığı gösterir: 1 - opaklık)
             if (paneId === _sylvaActivePaneId()) {
                 var slider = document.getElementById('layerOpacity');
                 var valEl  = document.getElementById('layer-opacity-val');
-                if (slider) slider.value = opacity;
-                if (valEl)  valEl.textContent = '%' + Math.round(opacity * 100);
+                if (slider) slider.value = 1 - opacity;
+                if (valEl)  valEl.textContent = '%' + Math.round((1 - opacity) * 100);
             }
         }
 
