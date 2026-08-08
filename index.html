@@ -6268,18 +6268,14 @@ tr.class-highlight-active {
                 if (gapFromViewportBottom < -2 || gapFromViewportBottom > 6) return 0; // ekranın altına yaslanmamış
                 return window.innerHeight - rect.top;
             }
-            if (!active) {
-                panesRow.style.removeProperty('padding-bottom');
-                return;
-            }
-            var clearance = Math.max(bottomBarHeight(toolbar), bottomBarHeight(footerEl));
-            if (clearance <= 0) {
-                panesRow.style.removeProperty('padding-bottom');
-                return;
-            }
-            // +8px: koordinat/logo kutusunun alt kenarı çubuğa tam
-            // yapışık değil, rahat bir nefes payıyla bitsin.
-            panesRow.style.setProperty('padding-bottom', (Math.round(clearance) + 8) + 'px', 'important');
+            // 🛠️ BUG FİX: Bu boşluk dış çerçeveye (#map-panes-row) uygulanınca
+            // iki haritanın ALTINDA gözle görülür boş bir şerit bırakıyordu —
+            // tek ekranda aynı boşluk her haritanın kendi içine uygulandığı için
+            // görünmüyordu. Kullanıcı çift ekranın da tek ekran gibi alt
+            // çizgiye kadar boşluksuz uzanmasını istiyor; bu yüzden dış
+            // çerçeveye artık hiç boşluk eklenmiyor.
+            panesRow.style.removeProperty('padding-bottom');
+            return;
         }
         window._sylvaSyncDualScreenBottomClearance = _sylvaSyncDualScreenBottomClearance;
         window.addEventListener('resize', _sylvaSyncDualScreenBottomClearance);
@@ -6646,6 +6642,21 @@ tr.class-highlight-active {
         // Böylece aktif ekran ne olursa olsun Ekran 1 ve Ekran 2 aynı anda
         // temizlenir; eski katman referansları da haritada asılı kalmaz.
         window._sylvaClearAllAreaLayers = function () {
+            // 🛠️ BUG FİX: Senkronizasyon açıkken Ekran 2'ye çizilen şekil normal
+            // takip sistemine (VAW / _sylvaWsId) dahil olmuyor ve bu yüzden hiçbir
+            // silme butonu onu bulamıyordu. Bu yüzden burada, hangi çöp kutusu
+            // kullanılırsa kullanılsın, her iki ekrandaki TÜM çizilmiş poligon/
+            // dikdörtgenleri (kaynağı ne olursa olsun) zorla kaldırıyoruz.
+            [map, map2].forEach(function (mm) {
+                if (!mm || !mm.eachLayer) return;
+                var toRemove = [];
+                mm.eachLayer(function (l) {
+                    if (l instanceof L.Polygon || l instanceof L.Rectangle) toRemove.push(l);
+                });
+                toRemove.forEach(function (l) {
+                    try { mm.removeLayer(l); } catch (e) {}
+                });
+            });
             var maps = [map, map2];
             var layers = [
                 currentLayer, currentLayer2,
