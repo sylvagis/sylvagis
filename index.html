@@ -7422,8 +7422,14 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
                 sw.setAttribute('data-color', hex);
                 sw.style.cssText = 'width:18px;height:18px;border-radius:3px;cursor:pointer;border:2px solid ' +
                     (hex === getColor() ? '#1e3a8a' : 'transparent') + ';background:' + hex + ';flex-shrink:0;';
-                sw.addEventListener('click', function() {
-                    container.querySelectorAll('div').forEach(function(s) { s.style.borderColor = 'transparent'; });
+                sw.addEventListener('click', function(e) {
+    // 🛠️ BUG FİX: Bu palet checkbox'ı saran <label> içinde olduğu için,
+    // preventDefault() çağrılmazsa tarayıcı tıklamayı "label'a tıklandı"
+    // sayıp Çalışma Alanı checkbox'ını KENDİLİĞİNDEN aç/kapa yapıyordu.
+    // stopPropagation() bunu engellemez — sadece preventDefault() engeller.
+    e.preventDefault();
+    e.stopPropagation();
+    container.querySelectorAll('div').forEach(function(s) { s.style.borderColor = 'transparent'; });
                     sw.style.borderColor = '#1e3a8a';
                     setColor(hex);
                     var activeState = _sylvaPaneState(_sylvaActivePaneId());
@@ -42802,7 +42808,14 @@ var infoSrc = document.getElementById(pane === 'map2' ? 'map2-info-box' : 'map-i
             // ama lejant/bilgi kutusu bu kopyalamadan haberdar değildi, bu yüzden
             // Ekran 2'nin kutusu senkron modda hiçbir zaman dolmuyordu. Senkron
             // mod açıkken Ekran 2 kutusu da doğrudan Ekran 1'in verisini kullanır.
-            var map2Data = window._sylvaWorkspaceSyncActive ? mapData : window._sylvaLegendInfoByPane.map2;
+            // 🛠️ DEĞİŞİKLİK: "Çift Ekranı Senkronize Et" açıkken Ekran 2'nin lejant/
+// bilgi kutusu artık Ekran 1'in verisini KOPYALAMIYOR — bilerek boş/temiz
+// tutuluyor. Sadece Ekran 1'de lejant, bilgi kutusu ve uydu görüntü
+// galerisi görünsün isteniyor; Ekran 2 sadece haritayı (mirror edilen veri
+// katmanını) gösterir, kutuları boş kalır.
+var map2Data = window._sylvaWorkspaceSyncActive
+    ? { legendHTML: '', legendDisplay: 'none', infoHTML: '', infoDisplay: 'none' }
+    : window._sylvaLegendInfoByPane.map2;
 
             var legend1 = document.getElementById('map-legend-box');
             var info1   = document.getElementById('map-info-box');
