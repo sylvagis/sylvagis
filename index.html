@@ -11017,7 +11017,7 @@ function selectRamp(name) {
                 // ekrana ait olduğunu _sylvaTagContentPane garanti eder, böylece
                 // doğru ekranın kutusuna gider (bkz. window._sylvaLegendInfoByPane).
                 if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(paneId);
-                renderRgbLegend(data.meta || {}, dsInfo);
+                renderRgbLegend(data.meta || {}, dsInfo, paneId);
                 // 📡 Ham Veri (Bantlar) paneli tek/paylaşılan bir kontrol panelidir;
                 // yalnızca o an odaklı/aktif ekran için güncellenir.
                 if (paneId === _sylvaActivePaneId()) {
@@ -11033,9 +11033,10 @@ function selectRamp(name) {
         // bulutluluk oranı ile birlikte Görüntü Bilgileri (çözünürlük,
         // projeksiyon/CRS, bantlar) gösterilir.
         var _lastRgbLegendArgs = null;
-        function renderRgbLegend(scMeta, dsInfo) {
-            _lastRgbLegendArgs = { scMeta: scMeta, dsInfo: dsInfo };
-            var legendBox = document.getElementById('map-legend-box');
+        function renderRgbLegend(scMeta, dsInfo, paneId) {
+            paneId = (paneId === 'map2') ? 'map2' : 'map';
+            _lastRgbLegendArgs = { scMeta: scMeta, dsInfo: dsInfo, paneId: paneId };
+            var legendBox = document.getElementById(paneId === 'map2' ? 'map2-legend-box' : 'map-legend-box');
             if (!legendBox) return;
 
             var datasetName = translateDatasetName(scMeta.datasetName || (dsInfo && dsInfo.datasetName) || '—');
@@ -11073,11 +11074,19 @@ function selectRamp(name) {
             }
             _setLegendHTML(legendBox, html);
             var lgToggle = document.getElementById('toggle-legend');
+            if (lgToggle) {
+                lgToggle.disabled = false;
+                if (!lgToggle.checked) lgToggle.checked = true;
+            }
             if (!lgToggle || lgToggle.checked) legendBox.style.display = '';
-        }
 
+            if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[paneId]) {
+                window._sylvaLegendInfoByPane[paneId].legendHTML = legendBox.innerHTML;
+                window._sylvaLegendInfoByPane[paneId].legendDisplay = legendBox.style.display;
+            }
+        }
         window.sylvaRefreshRgbLegend = function() {
-            if (_lastRgbLegendArgs) renderRgbLegend(_lastRgbLegendArgs.scMeta, _lastRgbLegendArgs.dsInfo);
+            if (_lastRgbLegendArgs) renderRgbLegend(_lastRgbLegendArgs.scMeta, _lastRgbLegendArgs.dsInfo, _lastRgbLegendArgs.paneId);
         };
 
         // ── Ham histogram tablosunu #stats-chart-table'a yazar ──────
