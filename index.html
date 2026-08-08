@@ -5767,6 +5767,19 @@ tr.class-highlight-active {
             window._sylvaMap2 = map2;
             _sylvaBindMapViewSync(map, map2);
             _sylvaBindMapViewSync(map2, map);
+            // 🛠️ BUG FİX: Ekran 1'de (map) GEE analiz katmanları için özel bir
+            // 'geeAnalysisPane' oluşturuluyordu (bkz. map.createPane yukarıda),
+            // ancak Ekran 2 (map2) için bu pane hiç oluşturulmamıştı. Leaflet'te
+            // her map örneğinin pane'leri birbirinden bağımsızdır; map2 üzerinde
+            // pane: 'geeAnalysisPane' ile bir tileLayer eklenmeye çalışıldığında
+            // map2.getPane('geeAnalysisPane') undefined dönüyor ve Leaflet içinde
+            // undefined.appendChild(...) çağrılarak "Cannot read properties of
+            // undefined (reading 'appendChild')" hatası fırlatılıyordu — bu da
+            // runAnalysis()/fetchRgbGallery() içindeki catch bloğunca yakalanıp
+            // yanlışlıkla "Sunucuya bağlanılamadı" mesajı olarak gösteriliyordu.
+            map2.createPane('geeAnalysisPane');
+            map2.getPane('geeAnalysisPane').style.zIndex = 450;
+            map2.getPane('geeAnalysisPane').style.pointerEvents = 'none';
             if (typeof window._sylvaRegisterMarkupMap2 === 'function') window._sylvaRegisterMarkupMap2(map2);
             map2.on('pm:create', function (e) {
                 if (map2.pm) map2.pm.disableDraw();
@@ -8802,7 +8815,7 @@ function selectRamp(name) {
 
             var rowsHtml = '<div style="display:flex;flex-direction:column;gap:2px;margin-top:5px;">' +
                 classes.map(function (c, i) {
-                    var isActive = (_classHighlightIndex === i);
+                    var isActive = (window._classHighlightIndexByPane[_sylvaActivePaneId()] === i);
                     return (
                         '<div class="class-highlight-target' + (isActive ? ' class-highlight-active' : '') + '" data-class-idx="' + i + '" style="display:flex; align-items:center; gap:5px; cursor:pointer;" title="' + t('highlight_class_hint', 'Haritada vurgulamak için tıklayın') + '">' +
                             '<span style="width:12px; height:12px; border-radius:2px; background:' + c.color +
@@ -10234,7 +10247,7 @@ function selectRamp(name) {
 
             var rowsHtml = presentDefs.map(function (d, i) {
                 var label = (d.key ? (t(d.key) || d.label) : d.label);
-                var isActive = (_classHighlightIndex === i);
+                var isActive = (window._classHighlightIndexByPane[_sylvaActivePaneId()] === i);
                 return '<div class="class-highlight-target' + (isActive ? ' class-highlight-active' : '') + '" data-class-idx="' + i + '" style="display:flex;align-items:center;gap:5px;margin-top:3px;cursor:pointer;" title="' + t('highlight_class_hint', 'Haritada vurgulamak için tıklayın') + '">' +
                     '<span style="width:12px;height:12px;border-radius:2px;background:' + d.color +
                         ';border:1px solid #cbd5e1;flex-shrink:0;display:inline-block;"></span>' +
@@ -11844,7 +11857,7 @@ function selectRamp(name) {
                 var barH = (pct / maxPct) * (h - padding - 16);
                 var x = padding + i * barW + 4;
                 var y = h - padding - barH;
-                var isActive = (_classHighlightIndex === i);
+                var isActive = (window._classHighlightIndexByPane[_sylvaActivePaneId()] === i);
                 return '<g class="class-highlight-target' + (isActive ? ' class-highlight-active' : '') + '" data-class-idx="' + i + '" style="cursor:pointer;">' +
                     '<rect x="' + x + '" y="' + y + '" width="' + Math.max(barW - 8, 2) + '" height="' + Math.max(barH, 1) + '" fill="' + c.color + '" rx="2" stroke="' + (isActive ? '#1e3a8a' : 'none') + '" stroke-width="2"></rect>' +
                     '<text x="' + (x + Math.max(barW - 8, 2) / 2) + '" y="' + (y - 4) + '" font-size="9" text-anchor="middle" fill="#334155">' + pct.toFixed(1) + '%</text>' +
@@ -11867,7 +11880,7 @@ function selectRamp(name) {
                 var endAngle = startAngle + angle;
                 var path = describeArc(cx, cy, r, startAngle, Math.min(endAngle, startAngle + 359.999));
                 startAngle = endAngle;
-                var isActive = (_classHighlightIndex === i);
+                var isActive = (window._classHighlightIndexByPane[_sylvaActivePaneId()] === i);
                 return '<path d="' + path + '" fill="' + c.color + '" stroke="' + (isActive ? '#1e3a8a' : '#fff') + '" stroke-width="' + (isActive ? 3 : 1) + '" data-class-idx="' + i + '" class="class-highlight-target' + (isActive ? ' class-highlight-active' : '') + '" style="cursor:pointer;"></path>';
             }).join('');
             return '<svg viewBox="0 0 ' + size + ' ' + size + '" width="100%" height="150" style="display:block;margin:0 auto;">' + slices + '</svg>';
@@ -11877,7 +11890,7 @@ function selectRamp(name) {
             var rows = data.classes.map(function (c, i) {
                 var pct = data.percentages[i];
                 var ha = (data.areaHa !== null && data.areaHa !== undefined) ? (data.areaHa * pct / 100) : null;
-                var isActive = (_classHighlightIndex === i);
+                var isActive = (window._classHighlightIndexByPane[_sylvaActivePaneId()] === i);
                 return '<tr class="class-highlight-target' + (isActive ? ' class-highlight-active' : '') + '" data-class-idx="' + i + '" style="cursor:pointer;" title="' + t('highlight_class_hint', 'Haritada vurgulamak için tıklayın') + '">' +
                     '<td style="padding:3px 4px;"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:' + c.color + ';margin-right:4px;vertical-align:middle;"></span>' + escapeHtml(c.name) + '</td>' +
                     '<td style="padding:3px 4px;text-align:right;">' + pct.toFixed(1) + '%</td>' +
