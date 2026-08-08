@@ -7037,7 +7037,8 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
     // Checkbox işaretli   → galeri tamamen açık  (display:flex, opacity:1, etkileşimli)
     // Checkbox işaretsiz  → galeri tamamen kapalı (display:none)  — ara durum yok
     document.getElementById('toggle-gallery').addEventListener('change', function() {
-        var el = document.getElementById('map-gallery');
+        var _galeriEkrani = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+        var el = document.getElementById(_galeriEkrani === 'map2' ? 'map2-gallery' : 'map-gallery');
         if (!el) return;
         if (this.checked) {
             var hasContent = el.innerHTML.trim().length > 0;
@@ -7522,9 +7523,10 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
         // isRestricted=true → checkbox işaretsiz+disabled, panel gizli, opacity 0.4
         // isRestricted=false → checkbox enabled, opacity 1 (galeriyi açmaz; sadece kısıtı kaldırır)
         function _setGalleryPanelRestricted(isRestricted) {
+            var _kisitEkrani = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
             var galleryCb   = document.getElementById('toggle-gallery');
             var galleryWrap = document.getElementById('gallery-toggle-wrap');
-            var galleryEl   = document.getElementById('map-gallery');
+            var galleryEl   = document.getElementById(_kisitEkrani === 'map2' ? 'map2-gallery' : 'map-gallery');
             if (!galleryCb) return;
             if (isRestricted) {
                 galleryCb.checked  = false;
@@ -7575,9 +7577,13 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
 
         // Bilgi Kutusu checkbox'ı elle değiştirildiğinde kutunun görünürlüğünü günceller
         function _onInfoBoxToggleChange(cb) {
-            var box = document.getElementById('map-info-box');
+            var _bilgiEkrani = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+            var box = document.getElementById(_bilgiEkrani === 'map2' ? 'map2-info-box' : 'map-info-box');
             if (!box) return;
             box.style.display = (cb.checked && box.innerHTML.trim()) ? 'block' : 'none';
+            if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[_bilgiEkrani]) {
+                window._sylvaLegendInfoByPane[_bilgiEkrani].infoDisplay = box.style.display;
+            }
         }
 
         (function () {
@@ -17428,24 +17434,18 @@ document.addEventListener('DOMContentLoaded', function() {
 </script>
 
 <script>
-// ===== UYDU GALERİSİ YATAY KAYDIRMA =====
+// ===== UYDU GALERİSİ YATAY KAYDIRMA (her iki ekran için) =====
 (function initGalleryScroll() {
-    var gallery = null;
-    var isDown = false;
-    var startX, startScrollLeft, dragMoved;
-
-    function setup() {
-        gallery = document.getElementById('map-gallery');
+    function setupFor(galleryId) {
+        var gallery = document.getElementById(galleryId);
         if (!gallery || gallery._scrollInited) return;
         gallery._scrollInited = true;
 
-        // Galeri öğeleri üzerinde mousedown — drag vs click ayrımı
         function onItemMousedown(e) {
             var item = e.currentTarget;
-            isDown = true;
-            dragMoved = false;
-            startX = e.pageX;
-            startScrollLeft = gallery.scrollLeft;
+            var dragMoved = false;
+            var startX = e.pageX;
+            var startScrollLeft = gallery.scrollLeft;
             gallery.classList.add('dragging');
 
             function onMove(mv) {
@@ -17456,11 +17456,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             }
             function onUp(uv) {
-                isDown = false;
                 gallery.classList.remove('dragging');
                 document.removeEventListener('mousemove', onMove);
                 document.removeEventListener('mouseup', onUp);
-                // Eğer gerçekten sürüklendi ise öğenin click olayını iptal et
                 if (dragMoved) {
                     uv.stopImmediatePropagation();
                     item.addEventListener('click', function stopClick(ce) {
@@ -17473,7 +17471,6 @@ document.addEventListener('DOMContentLoaded', function() {
             document.addEventListener('mouseup', onUp);
         }
 
-        // Galeri öğelerine mousedown listener'ı ekle (mevcut + gelecek)
         function bindItems() {
             gallery.querySelectorAll('.gallery-item').forEach(function(item) {
                 if (!item._dragBound) {
@@ -17484,11 +17481,8 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         bindItems();
 
-        // Yeni öğeler eklendiğinde de bağla
-        var mo = new MutationObserver(bindItems);
-        mo.observe(gallery, { childList: true });
+        new MutationObserver(bindItems).observe(gallery, { childList: true });
 
-        // Shift + Fare Tekerleği → yatay kaydırma
         gallery.addEventListener('wheel', function(e) {
             if (e.shiftKey) {
                 e.preventDefault();
@@ -17500,19 +17494,22 @@ document.addEventListener('DOMContentLoaded', function() {
         }, { passive: false });
     }
 
+    function setup() {
+        setupFor('map-gallery');
+        setupFor('map2-gallery');
+    }
+
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', setup);
     } else {
         setup();
     }
 
-    // Galeri dinamik oluşturulduğunda tekrar dene
     document.addEventListener('DOMContentLoaded', function() {
         var mapInner = document.getElementById('map-wrapper-inner');
         if (mapInner) {
-            new MutationObserver(function() {
-                if (!gallery || !gallery._scrollInited) setup();
-            }).observe(mapInner, { childList: true, subtree: false });
+            new MutationObserver(function() { setup(); })
+                .observe(mapInner, { childList: true, subtree: false });
         }
     });
 })();
