@@ -894,7 +894,13 @@ tr.class-highlight-active {
            html2canvas ve @media print çıktısında lejant boşluğu/kayması önlenir. */
         .map-legend { background: #ffffff; padding: 4px 6px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); font-size: 0.74rem; pointer-events: auto; min-width: 0; width: fit-content; box-sizing: border-box; max-height: 200px; overflow-y: auto; }
         .map-legend.detached { min-width: 0; min-height: 36px; overflow: auto; position: relative; box-sizing: border-box; }
-        .map-top-left-infobox { position: absolute; top: 86px; left: 15px; right: 15px; z-index: 520; pointer-events: none; }
+        .map-top-left-infobox { position: absolute; top: 86px; left: 15px; right: 15px; z-index: 520; pointer-events: none; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+        .ws-click-info { pointer-events: auto; }
+        @keyframes sylvaWsBlink {
+            0%, 100% { stroke: #1e3a8a; stroke-width: 2.5; }
+            50% { stroke: #f59e0b; stroke-width: 5.5; }
+        }
+        .sylva-ws-blink-path { animation: sylvaWsBlink 0.5s ease-in-out 3; }
         /* DÜZELTİLDİ: padding/min-width/max-width sabit px; box-sizing zaten vardı →
            html2canvas render sırasında bilgi kutusu font/boşluk kayması önlenir.
            2026-08: top 70px→86px (zoom +/- kontrolüyle çakışmayı önlemek için),
@@ -3425,6 +3431,7 @@ tr.class-highlight-active {
 
             <div id="geom-info" class="geometry-info" style="display: none;">
                 <div class="geom-details">
+                    <span id="geom-ws-name" style="display:none;font-weight:700;color:#1e3a8a;"></span>
                     <span id="geom-area"><b data-i18n="lbl_area">Alan:</b> 0 km² | 0 ha</span>
                     <span id="geom-perimeter"><b data-i18n="lbl_perimeter">Çevre:</b> 0 km</span>
                 </div>
@@ -4030,6 +4037,7 @@ tr.class-highlight-active {
 
             <div class="map-top-left-infobox">
                 <div class="map-info-box" id="map-info-box" style="display:none;"></div>
+                <div class="map-info-box ws-click-info" id="ws-click-info-map" style="display:none;"></div>
             </div>
 
             <!-- ── Harita Cetveli (Mesafe Ölçme) Paneli ── -->
@@ -4327,6 +4335,7 @@ tr.class-highlight-active {
                  tutulur (bkz. script: sylvaMirrorLegendInfoToMap2). -->
             <div class="map2-overlay map-top-left-infobox">
                 <div class="map-info-box" id="map2-info-box" style="display:none;"></div>
+                <div class="map-info-box ws-click-info" id="ws-click-info-map2" style="display:none;"></div>
             </div>
             <div class="map2-overlay map-left-mid map2-left-mid">
                 <div id="map2-zoom-pct-wrap" style="display:flex;flex-direction:row;align-items:stretch;">
@@ -6549,6 +6558,23 @@ tr.class-highlight-active {
         }
         window.showGeometryInfo = showGeometryInfo;
 
+        // Sidebar Alan/Çevre kutusunun altında, tıklanan çalışma alanının
+        // adını gösterir/gizler (bkz. VAW workspace click handler).
+        window._sylvaSetGeomInfoName = function (name) {
+            var nameEl = document.getElementById('geom-ws-name');
+            if (!nameEl) return;
+            if (name) { nameEl.textContent = name; nameEl.style.display = 'block'; }
+            else { nameEl.textContent = ''; nameEl.style.display = 'none'; }
+        };
+        // Ekran başına (Ekran 1 / Ekran 2) en son tıklanan çalışma alanının
+        // kutucuğunu gizler ve temizler.
+        window._sylvaHideWsClickInfoBoxes = function () {
+            ['ws-click-info-map', 'ws-click-info-map2'].forEach(function (id) {
+                var b = document.getElementById(id);
+                if (b) { b.style.display = 'none'; b.innerHTML = ''; }
+            });
+        };
+
         // Dil değiştiğinde geom-info kutusunu güncelle
         function _refreshGeomInfo() {
             var aEl = document.getElementById('geom-area');
@@ -6640,6 +6666,8 @@ tr.class-highlight-active {
             }
             setActiveTool(null);
             if (geomInfoBox) geomInfoBox.style.display = 'none';
+            window._sylvaSetGeomInfoName(null);
+            if (typeof window._sylvaHideWsClickInfoBoxes === 'function') window._sylvaHideWsClickInfoBoxes();
             var nameInput = document.getElementById('raw-bands-aoi-name');
             if (nameInput) nameInput.value = '';
             _wsNameFieldEdited = false;
@@ -40073,11 +40101,17 @@ function _vdlFallbackDownload(blob, name) {
                 style: { color: color, weight: 2.5, fill: false, fillColor: color, fillOpacity: 0 }
             }).addTo(lmap)
         };
+        ws.layer._sylvaWsId = ws.id;
         ws.layer.bindTooltip(wsDisplayName(ws), {sticky: true});
         ws.layer.on('click', function(){
             if (typeof window.showGeometryInfo === 'function') {
                 window.showGeometryInfo(ws.fc);
             }
+            if (typeof window._sylvaSetGeomInfoName === 'function') {
+                window._sylvaSetGeomInfoName(wsDisplayName(ws));
+            }
+            showWsClickInfo(ws);
+            flashWorkspace(ws);
         });
         VAW.workspaces.push(ws);
         renderWorkspaceList();
@@ -40098,11 +40132,37 @@ function _vdlFallbackDownload(blob, name) {
         });
     }
 
+    function _sweepOrphanWorkspaceLayers(keepIds){
+        var maps = [];
+        [window._sylvaMap, window._sylvaMap2,
+         (typeof map !== 'undefined' ? map : null),
+         (typeof map2 !== 'undefined' ? map2 : null)].forEach(function(m){
+            if (m && maps.indexOf(m) === -1) maps.push(m);
+        });
+        maps.forEach(function(m){
+            var toRemove = [];
+            try {
+                m.eachLayer(function(l){
+                    if (l && l._sylvaWsId != null && (!keepIds || keepIds.indexOf(l._sylvaWsId) === -1)) {
+                        toRemove.push(l);
+                    }
+                });
+            } catch(e) {}
+            toRemove.forEach(function(l){ try { m.removeLayer(l); } catch(e) {} });
+        });
+    }
+
     function removeWorkspace(id){
         var idx = VAW.workspaces.findIndex(function(w){ return w.id === id; });
         if (idx === -1) return;
-        _removeWsLayerEverywhere(VAW.workspaces[idx]);
+        var removedWs = VAW.workspaces[idx];
+        _removeWsLayerEverywhere(removedWs);
         VAW.workspaces.splice(idx, 1);
+        _sweepOrphanWorkspaceLayers(VAW.workspaces.map(function(w){ return w.id; }));
+        var boxId = removedWs.paneId === 'map2' ? 'ws-click-info-map2' : 'ws-click-info-map';
+        var box = document.getElementById(boxId);
+        if (box) { box.style.display = 'none'; box.innerHTML = ''; }
+        if (typeof window._sylvaSetGeomInfoName === 'function') window._sylvaSetGeomInfoName(null);
         renderWorkspaceList();
         renderToolForm();
     }
@@ -40113,6 +40173,7 @@ function _vdlFallbackDownload(blob, name) {
         VAW.workspaces = [];
         VAW.nextId = 1;
         VAW.paneCounters = { map: 0, map2: 0 };
+        _sweepOrphanWorkspaceLayers([]);
         if (typeof window._sylvaClearAllAreaLayers === 'function') {
             window._sylvaClearAllAreaLayers();
         }
@@ -40120,6 +40181,8 @@ function _vdlFallbackDownload(blob, name) {
         renderToolForm();
         var geomInfoBox = document.getElementById('geom-info');
         if (geomInfoBox) geomInfoBox.style.display = 'none';
+        if (typeof window._sylvaSetGeomInfoName === 'function') window._sylvaSetGeomInfoName(null);
+        if (typeof window._sylvaHideWsClickInfoBoxes === 'function') window._sylvaHideWsClickInfoBoxes();
     };
 
     function toggleWorkspaceVisibility(id){
@@ -40162,6 +40225,48 @@ function _vdlFallbackDownload(blob, name) {
             return areaLabel + (ws.autoSuffix || '');
         }
         return ws.name || areaLabel;
+    }
+
+    // Bir çalışma alanı poligonunu (ait olduğu ekranda) birkaç kez
+    // renk değiştirerek yanıp söndürür; kullanıcının hangi alana
+    // tıkladığını haritada görsel olarak vurgular.
+    function flashWorkspace(ws){
+        if (!ws || !ws.layer) return;
+        var paths = [];
+        try{
+            ws.layer.eachLayer(function(sub){
+                if (sub && sub._path) paths.push(sub._path);
+            });
+        }catch(e){}
+        if (ws.layer._path) paths.push(ws.layer._path);
+        paths.forEach(function(p){
+            p.classList.remove('sylva-ws-blink-path');
+            void p.offsetWidth; // reflow: animasyonu baştan başlat
+            p.classList.add('sylva-ws-blink-path');
+        });
+        setTimeout(function(){
+            paths.forEach(function(p){ p.classList.remove('sylva-ws-blink-path'); });
+        }, 1600);
+    }
+
+    // Ekran 1 / Ekran 2 üzerindeki küçük kutucuğa (haritanın üstünde),
+    // en son tıklanan çalışma alanının adını + alan/çevre bilgisini yazar.
+    function showWsClickInfo(ws){
+        if (!ws || !ws.fc) return;
+        var boxId = ws.paneId === 'map2' ? 'ws-click-info-map2' : 'ws-click-info-map';
+        var box = document.getElementById(boxId);
+        if (!box) return;
+        try{
+            var areaSqMeters = turf.area(ws.fc);
+            var areaKm2 = (areaSqMeters / 1000000).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
+            var areaHa = (areaSqMeters / 10000).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
+            var lengthKm = turf.length(ws.fc, { units: 'kilometers' }).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
+            box.innerHTML =
+                '<div style="font-weight:700;color:#1e3a8a;margin-bottom:3px;">' + esc(wsDisplayName(ws)) + '</div>' +
+                '<div>' + getVawT('lbl_area', 'Alan:') + ' ' + areaKm2 + ' km² | ' + areaHa + ' ha</div>' +
+                '<div>' + getVawT('lbl_perimeter', 'Çevre:') + ' ' + lengthKm + ' km</div>';
+            box.style.display = 'block';
+        }catch(e){}
     }
 
     // Çalışma alanlarının görünen adı kullanıcı tarafından değiştirilebilir;
