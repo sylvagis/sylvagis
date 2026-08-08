@@ -4310,6 +4310,13 @@ tr.class-highlight-active {
                 </div>
             </div>
 
+            <!-- 🛠️ BUG FİX: Ekran 2'de "Analizi Çalıştır" ile üretilen Uydu Görüntüsü
+                 Galerisi eskiden burada değil, tek/paylaşılan #map-gallery (Ekran 1)
+                 içine çiziliyordu; bu yüzden Ekran 2'de yapılan analiz Ekran 1'de
+                 görünüyordu. Artık her ekranın kendi galeri paneli var (bkz.
+                 fetchRgbGallery / renderRgbGalleryCards içindeki _sylvaGalleryEl). -->
+            <div class="map-gallery" id="map2-gallery" style="display:none;opacity:0.45;transition:opacity 0.35s ease;"></div>
+
             <!-- Ekran 2 için lejant/bilgi kutusu aynası: sol haritadaki
                  #map-info-box / #map-legend-box içeriği ile senkronize
                  tutulur (bkz. script: sylvaMirrorLegendInfoToMap2). -->
@@ -9501,7 +9508,8 @@ function selectRamp(name) {
             // 2. Sınıf vurgulama katmanını kaldır (yalnızca ilgili ekran)
             if (typeof _clearClassHighlight === 'function') _clearClassHighlight(paneId);
             // 3. Uydu Görüntü Galerisi'ni boşalt ve gizle
-            var _cgEl = document.getElementById('map-gallery');
+            // 🛠️ BUG FİX: artık İLGİLİ ekranın (map/map2) kendi galeri panelini hedefler.
+            var _cgEl = _sylvaGalleryEl(paneId);
             if (_cgEl) {
                 _cgEl.innerHTML = '';
                 _cgEl.style.display  = 'none';
@@ -9531,8 +9539,24 @@ function selectRamp(name) {
                 if (_wsWrap) _wsWrap.style.opacity = '0.4';
             }
             // 4. Lejant kutusunu gizle ve temizle; anahtarı da pasif/soluk duruma al
-            var _clBox = document.getElementById('map-legend-box');
-            if (_clBox) { _clBox.innerHTML = ''; _clBox.style.display = 'none'; }
+            // 🛠️ BUG FİX: Eskiden bu her zaman #map-legend-box'ı (Ekran 1'in
+            // birincil kutusu) temizliyordu — Ekran 2 için yeni bir analiz
+            // başlarken bile. Bu, Ekran 1'de o an görünen lejantı da silebiliyordu.
+            // Artık önce İLGİLİ ekranın kendi hafızası (store) temizlenir; birincil
+            // kutu yalnızca paneId aktif ekransa (yani gerçekten Ekran 1 içinse)
+            // silinir, ardından her iki ekranın kutuları kendi hafızalarına göre
+            // yeniden eşitlenir.
+            if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[paneId]) {
+                window._sylvaLegendInfoByPane[paneId].legendHTML = '';
+                window._sylvaLegendInfoByPane[paneId].legendDisplay = 'none';
+                window._sylvaLegendInfoByPane[paneId].infoHTML = '';
+                window._sylvaLegendInfoByPane[paneId].infoDisplay = 'none';
+            }
+            if (paneId === _sylvaActivePaneId()) {
+                var _clBox = document.getElementById('map-legend-box');
+                if (_clBox) { _clBox.innerHTML = ''; _clBox.style.display = 'none'; }
+            }
+            if (typeof window.sylvaMirrorLegendInfoToMap2 === 'function') window.sylvaMirrorLegendInfoToMap2();
             var _clToggle = document.getElementById('toggle-legend');
             var _clWrap   = document.getElementById('legend-toggle-row');
             if (_clToggle) { _clToggle.checked = false; _clToggle.disabled = true; }
@@ -9547,8 +9571,13 @@ function selectRamp(name) {
             var _cTbl = document.getElementById('stats-chart-table');
             if (_cTbl) _cTbl.innerHTML = '';
             // 6. Bilgi Kutusunu gizle
-            var _cIb = document.getElementById('map-info-box');
-            if (_cIb) { _cIb.innerHTML = ''; _cIb.style.display = 'none'; }
+            // 🛠️ BUG FİX: yalnızca paneId gerçekten aktif ekransa (Ekran 1) birincil
+            // kutuyu temizler; store zaten yukarıda paneId'ye özel temizlendi ve
+            // sylvaMirrorLegendInfoToMap2() her iki ekranı da doğru şekilde eşitledi.
+            if (paneId === _sylvaActivePaneId()) {
+                var _cIb = document.getElementById('map-info-box');
+                if (_cIb) { _cIb.innerHTML = ''; _cIb.style.display = 'none'; }
+            }
             // 7. Lejant tarih etiketi sıfırla
             if (typeof _currentLegendDate !== 'undefined') _currentLegendDate = null;
             // 8. Yarış koşulu koruması: yeni run jenerasyonunu artır
@@ -9886,7 +9915,7 @@ function selectRamp(name) {
                     if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(_pane);
                     renderDatasetInfoCard(meta.analysisName);
                 } else if (data.scenes && data.scenes.length) {
-                    renderGalleryFromScenes(data.scenes);
+                    renderGalleryFromScenes(data.scenes, _pane);
                 }
 
                 // 3. Akıllı Lejant ve İstatistiksel Raporlama (Arazi Kullanımı):
@@ -10487,8 +10516,13 @@ function selectRamp(name) {
             }
         }
 
-        function renderGalleryFromScenes(scenes) {
-            var galleryEl = document.getElementById('map-gallery');
+        function renderGalleryFromScenes(scenes, paneId) {
+            // 🛠️ BUG FİX: bu galeri (NDVI/NDWI vb. indeks analizlerindeki sahne
+            // seçici) eskiden her zaman #map-gallery'ye (Ekran 1) çiziliyordu;
+            // Ekran 2'de yapılan analizin sahne galerisi de yanlışlıkla Ekran
+            // 1'de görünüyordu. Artık analizin ait olduğu ekrana çizilir.
+            paneId = (paneId === 'map2') ? 'map2' : 'map';
+            var galleryEl = _sylvaGalleryEl(paneId);
             if (!galleryEl || !scenes || !scenes.length) return;
             var meta  = getSelectedAnalysisMeta();
             var emoji = getAnalysisEmoji(meta ? meta.analysisName : '');
@@ -10529,7 +10563,7 @@ function selectRamp(name) {
                         _currentLegendDate = new Date(scene[1]).toISOString().slice(0, 10);
                         _syncLegendDate();
                     }
-                    loadSpecificScene(sceneId);
+                    loadSpecificScene(sceneId, paneId);
                 });
                 galleryEl.appendChild(div);
             });
@@ -10592,9 +10626,13 @@ function selectRamp(name) {
         }
 
         // ── Belirli bir sahneyi haritaya yükler ──────────────────────
-        function loadSpecificScene(sceneId) {
-            // 🖥️ EŞİTLEME: her zaman o an AKTİF olan ekranda (Ekran 1/Ekran 2) çalışır.
-            var _pane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+        function loadSpecificScene(sceneId, paneId) {
+            // 🛠️ BUG FİX: paneId artık tıklanan galeri kartından (o kartın ait
+            // olduğu ekrandan) gelir; verilmezse eskisi gibi o an aktif ekrana
+            // düşer (geriye dönük uyumluluk için).
+            var _pane = (paneId === 'map2' || paneId === 'map')
+                ? paneId
+                : ((typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map');
             var _aoiForPane = (_pane === 'map2') ? currentLayer2 : currentLayer;
             var meta = getSelectedAnalysisMeta();
             if (!meta || !_aoiForPane) return;
@@ -10700,6 +10738,14 @@ function selectRamp(name) {
         // 🖥️ EŞİTLEME: Galeri durumu artık ekran başına (map / map2) ayrı ayrı
         // tutulur — böylece Ekran 1 ve Ekran 2 aynı anda birbirinden bağımsız
         // sahne listeleri/seçimleri gösterebilir.
+        // 🛠️ BUG FİX: Galeri artık ekran başına AYRI bir DOM öğesidir
+        // (#map-gallery = Ekran 1, #map2-gallery = Ekran 2). Önceden tüm
+        // ekranlar için tek/paylaşılan #map-gallery kullanılıyordu; bu yüzden
+        // Ekran 2'de üretilen galeri görsel olarak hep Ekran 1'de görünüyordu.
+        function _sylvaGalleryEl(paneId) {
+            return document.getElementById((paneId === 'map2') ? 'map2-gallery' : 'map-gallery');
+        }
+
         function _rgbGalleryStateFor(paneId) {
             paneId = (paneId === 'map2') ? 'map2' : 'map';
             if (!window._rgbGalleryStates) window._rgbGalleryStates = {};
@@ -10714,14 +10760,21 @@ function selectRamp(name) {
             paneId = (paneId === 'map2') ? 'map2' : 'map';
             if (!window._rgbGalleryStates) window._rgbGalleryStates = {};
             window._rgbGalleryStates[paneId] = { scenes: [], dataset: null, meta: null, sortKey: 'date', sortAsc: false };
-            // Galeri paneli tek/paylaşılan bir kontrol öğesidir; yalnızca o an
-            // AKTİF ekranın galerisi sıfırlandığında görsel olarak temizlenir.
+            // 🛠️ BUG FİX: Galeri artık her ekranın kendi paneline sahip olduğundan,
+            // sıfırlama her zaman İLGİLİ ekranın kendi galeri panelini temizler
+            // (aktif ekran şartı aranmaz — Ekran 2 sıfırlanırken Ekran 1 etkilenmez).
+            var galleryEl = _sylvaGalleryEl(paneId);
+            if (galleryEl) { galleryEl.innerHTML = ''; galleryEl.style.display = 'none'; }
+            // Lejant/bilgi kutusu o ekranın kendi hafızasından da temizlenir.
+            if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[paneId]) {
+                window._sylvaLegendInfoByPane[paneId].legendHTML = '';
+                window._sylvaLegendInfoByPane[paneId].legendDisplay = 'none';
+            }
             if (paneId === _sylvaActivePaneId()) {
-                var galleryEl = document.getElementById('map-gallery');
-                if (galleryEl) { galleryEl.innerHTML = ''; galleryEl.style.display = 'none'; }
                 var legendBox = document.getElementById('map-legend-box');
                 if (legendBox) { legendBox.innerHTML = ''; legendBox.style.display = 'none'; }
             }
+            if (typeof window.sylvaMirrorLegendInfoToMap2 === 'function') window.sylvaMirrorLegendInfoToMap2();
         }
 
         // AOI + tarih + bulutluluk kriterine uyan gerçek sahneleri (thumbnail
@@ -10729,7 +10782,7 @@ function selectRamp(name) {
         // paneId: 'map' (Ekran 1) | 'map2' (Ekran 2) — verilmezse aktif ekran kullanılır.
         function fetchRgbGallery(meta, paneId) {
             paneId = (paneId === 'map2') ? 'map2' : 'map';
-            var galleryEl = document.getElementById('map-gallery');
+            var galleryEl = _sylvaGalleryEl(paneId);
             if (!galleryEl) return;
             // Yarış koşulu: bu fetch'e ait jenerasyon numarasını yakala
             var _rgbGen = _analysisGeneration;
@@ -10832,8 +10885,9 @@ function selectRamp(name) {
         // o an AKTİF olan ekranın galerisi ekrana çizilir.
         function renderRgbGalleryCards(paneId) {
             paneId = (paneId === 'map2') ? 'map2' : 'map';
-            if (paneId !== _sylvaActivePaneId()) return;
-            var galleryEl = document.getElementById('map-gallery');
+            // 🛠️ BUG FİX: Artık her ekranın kendi galeri paneli olduğundan,
+            // aktif ekran şartı aranmadan İLGİLİ ekranın paneline çizilir.
+            var galleryEl = _sylvaGalleryEl(paneId);
             if (!galleryEl) return;
             var _gState = _rgbGalleryStateFor(paneId);
             var ds = _gState.dataset;
@@ -10943,19 +10997,27 @@ function selectRamp(name) {
                     if (b && b.isValid && b.isValid()) _targetMap.fitBounds(b, { maxZoom: 15, padding: [20, 20] });
                 } catch (e) {}
 
-                // Galerideki aktif kartı senkronize et (yalnızca aktif ekranda görünürse)
+                // 🛠️ BUG FİX: Galerideki aktif kartı senkronize et — artık HER ZAMAN
+                // İLGİLİ ekranın kendi galeri panelinde yapılır (aktif ekran şartı
+                // aranmaz), çünkü her ekranın artık kendi galeri DOM öğesi var.
+                var galleryEl = _sylvaGalleryEl(paneId);
+                if (galleryEl) {
+                    galleryEl.querySelectorAll('.gallery-item').forEach(function(i) {
+                        i.classList.toggle('active', i.getAttribute('data-scene-id') === sceneId);
+                    });
+                }
+                // 🛠️ BUG FİX: Lejant üretimi eskiden "yalnızca o an aktif ekransa"
+                // koşuluna bağlıydı. Kullanıcı Ekran 2'de analiz başlatıp yanıt
+                // gelmeden önce (ör. haritada gezinerek) aktif ekran değişirse, bu
+                // koşul hiç sağlanmıyor ve lejant HİÇBİR ekranda görünmüyordu.
+                // Artık lejant her zaman üretilir ve paneId ile etiketlenir; hangi
+                // ekrana ait olduğunu _sylvaTagContentPane garanti eder, böylece
+                // doğru ekranın kutusuna gider (bkz. window._sylvaLegendInfoByPane).
+                if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(paneId);
+                renderRgbLegend(data.meta || {}, dsInfo);
+                // 📡 Ham Veri (Bantlar) paneli tek/paylaşılan bir kontrol panelidir;
+                // yalnızca o an odaklı/aktif ekran için güncellenir.
                 if (paneId === _sylvaActivePaneId()) {
-                    var galleryEl = document.getElementById('map-gallery');
-                    if (galleryEl) {
-                        galleryEl.querySelectorAll('.gallery-item').forEach(function(i) {
-                            i.classList.toggle('active', i.getAttribute('data-scene-id') === sceneId);
-                        });
-                    }
-                    // 🛠️ BUG FİX: paneId ile etiketle — aktif ekran tahminine güvenmek
-                    // yerine bu içeriğin gerçekten hangi ekran için üretildiğini garanti eder.
-                    if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(paneId);
-                    renderRgbLegend(data.meta || {}, dsInfo);
-                    // 📡 Ham Veri (Bantlar) panelini, yeni seçilen sahneye göre güncelle
                     onRawBandsSceneSelected(sceneId, meta, dsInfo, data.meta || {});
                 }
                 _ensureDefaultVisibility();
@@ -42383,21 +42445,28 @@ document.addEventListener('keydown', function(e) {
             var legend2 = document.getElementById('map2-legend-box');
             var info2   = document.getElementById('map2-info-box');
 
+            // 🛠️ BUG FİX: display='' (boş string) "görünür" anlamına gelir, ama
+            // JS'te boş string falsy'dir. Eskiden "mapData.legendDisplay || 'none'"
+            // kullanılıyordu — bu, display='' olan (yani GÖRÜNÜR olması gereken)
+            // bir lejant/bilgi kutusunu yanlışlıkla 'none' yaparak gizliyordu.
+            // Bu yüzden Ekran 2'de üretilen lejant hiç görünmüyordu. Artık sadece
+            // gerçekten hiç değer atanmamışsa (undefined/null) 'none' varsayılır.
+            function _sylvaDisplayOrNone(v) { return (v === undefined || v === null) ? 'none' : v; }
             if (legend1) {
                 if (legend1.innerHTML !== mapData.legendHTML) legend1.innerHTML = mapData.legendHTML;
-                legend1.style.display = mapData.legendDisplay || 'none';
+                legend1.style.display = _sylvaDisplayOrNone(mapData.legendDisplay);
             }
             if (info1) {
                 if (info1.innerHTML !== mapData.infoHTML) info1.innerHTML = mapData.infoHTML;
-                info1.style.display = mapData.infoDisplay || 'none';
+                info1.style.display = _sylvaDisplayOrNone(mapData.infoDisplay);
             }
             if (legend2) {
                 if (legend2.innerHTML !== map2Data.legendHTML) legend2.innerHTML = map2Data.legendHTML;
-                legend2.style.display = map2Data.legendDisplay || 'none';
+                legend2.style.display = _sylvaDisplayOrNone(map2Data.legendDisplay);
             }
             if (info2) {
                 if (info2.innerHTML !== map2Data.infoHTML) info2.innerHTML = map2Data.infoHTML;
-                info2.style.display = map2Data.infoDisplay || 'none';
+                info2.style.display = _sylvaDisplayOrNone(map2Data.infoDisplay);
             }
         } finally {
             _syncing = false;
