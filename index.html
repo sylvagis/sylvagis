@@ -7193,7 +7193,7 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
     // Harita üzerinde UTM dilim çizgilerini ve etiketleri çizer.
     // Tamamen istemci taraflı hesaplanır; GEE gerektirmez.
     // Zoom/pan olaylarında otomatik yenilenir.
-    document.addEventListener('DOMContentLoaded', function () {
+    function _sylvaUtmGridInit() {
         // Ana harita (map) ve çift ekrandaki ikinci harita (map2) için ayrı
         // katmanlar tutulur; ikisi de aynı checkbox ile birlikte açılıp kapanır.
         var _utmLayer   = null;   // ana harita katmanı
@@ -7379,7 +7379,19 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
             ctx.restore();
         };
 
-    });
+    }
+
+    // Dosyanın diğer yerlerinde kullanılan güvenli başlatma kalıbı:
+    // DOMContentLoaded zaten geçmişse (bu script parse sırasında nadiren
+    // olabilir) doğrudan çalıştır, geçmediyse olayı bekle. Eskiden bu kod
+    // koşulsuz DOMContentLoaded'ı bekliyordu; checkbox bazı yükleme
+    // durumlarında hiç dinleyici kazanmıyordu — UTM Grid tıklanınca hiçbir
+    // şey olmamasının nedeni buydu.
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', _sylvaUtmGridInit);
+    } else {
+        _sylvaUtmGridInit();
+    }
 
     // ─── Çalışma Alanı Renk Ayarları ─────────────────────────────────────
     (function() {
@@ -7655,16 +7667,20 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
         // checkbox'ı otomatik işaretlenir ve kutu gösterilir; diğer tüm
         // analizlerde checkbox pasif (devre dışı) ve kutu gizli kalır.
         function _updateInfoBoxAvailability(eligible) {
+            // 🛠️ BUG FİX: Eskiden analiz TÜRÜ (Arazi Kullanımı/Topografik)
+            // seçilir seçilmez checkbox otomatik işaretlenip kutu açılıyordu —
+            // "Analizi Çalıştır"a hiç basılmadan. Artık seçim anında sadece
+            // checkbox ETKİNLEŞTİRİLİR (tıklanabilir olur); gerçekten
+            // işaretlenip kutunun gösterilmesi, analiz çalıştırılıp sonuç
+            // geldiğinde ayrı bir blok tarafından yapılır (bkz. "Analiz
+            // sonucu gösterilince Bilgi Kutusu checkbox'ını etkinleştir ve aç").
             var cb   = document.getElementById('toggle-info-box');
             var wrap = document.getElementById('info-box-toggle-wrap');
             var box  = document.getElementById('map-info-box');
             if (!cb) return;
             cb.disabled = !eligible;
             if (wrap) wrap.style.opacity = eligible ? '1' : '0.4';
-            if (eligible) {
-                cb.checked = true;
-                if (box) box.style.display = box.innerHTML.trim() ? 'block' : 'none';
-            } else {
+            if (!eligible) {
                 cb.checked = false;
                 if (box) box.style.display = 'none';
             }
@@ -9956,6 +9972,17 @@ function selectRamp(name) {
                             _opCb.checked = true;
                             _opCb.dispatchEvent(new Event('change'));
                         }
+                    }
+                })();
+                // Analiz sonucu gösterilince Bilgi Kutusu checkbox'ını etkinleştir ve aç
+                // — yalnızca Arazi Kullanımı / Topografik analizlerde (bunlar
+                // dışında checkbox zaten devre dışı kalır).
+                (function() {
+                    if (!(isLulcAnalysis(meta.analysisName) || isTopoAnalysis(meta.analysisName))) return;
+                    var _ibCb = document.getElementById('toggle-info-box');
+                    if (_ibCb && !_ibCb.disabled && !_ibCb.checked) {
+                        _ibCb.checked = true;
+                        _ibCb.dispatchEvent(new Event('change'));
                     }
                 })();
                 // 🏘️ Arazi Kullanımı/DEM analizi çalıştırıldığında Lejant/Semboloji
