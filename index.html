@@ -5227,8 +5227,8 @@ tr.class-highlight-active {
         // "map" kullanılır; açıkken son tıklanan pencere hedef olur.
         window._sylvaActiveMapId = window._sylvaActiveMapId || 'map';
         window._sylvaPaneStates = window._sylvaPaneStates || {
-            map:   { basemapKey: currentBasemapKey, basemapOpacity: 1, basemapEnabled: true, dataOpacity: 1, dataEnabled: true, workspaceVisible: true, wsStrokeActive: true, wsStrokeColor: '#1e3a8a', analysisActive: false },
-            map2:  { basemapKey: currentBasemapKey, basemapOpacity: 1, basemapEnabled: true, dataOpacity: 1, dataEnabled: true, workspaceVisible: true, wsStrokeActive: true, wsStrokeColor: '#1e3a8a', analysisActive: false }
+            map:   { basemapKey: currentBasemapKey, basemapOpacity: 1, basemapEnabled: true, dataOpacity: 1, dataEnabled: true, workspaceVisible: true, wsStrokeActive: true, wsStrokeColor: '#1e3a8a', analysisActive: false, selectedModule: null, selectedSensor: null, dateStart: null, dateEnd: null, cloudCover: null },
+            map2:  { basemapKey: currentBasemapKey, basemapOpacity: 1, basemapEnabled: true, dataOpacity: 1, dataEnabled: true, workspaceVisible: true, wsStrokeActive: true, wsStrokeColor: '#1e3a8a', analysisActive: false, selectedModule: null, selectedSensor: null, dateStart: null, dateEnd: null, cloudCover: null }
         };
         function _sylvaPaneState(id) {
             var states = window._sylvaPaneStates;
@@ -5337,6 +5337,79 @@ tr.class-highlight-active {
             });
         }
         window._sylvaSyncActivePaneControls = _sylvaSyncActivePaneControls;
+
+        // ============================================================
+        // 🆕 ÇİFT EKRAN BAĞIMSIZ MODÜL / TARİH / BULUT DURUMU
+        // Her ekranın (Ekran 1 = map / Ekran 2 = map2) kendi seçili analiz
+        // modülü, tarih aralığı ve bulutluluk oranı ayrı ayrı hafızada
+        // tutulur. Ekranlar arası geçişte panel o ekranın son durumuna göre
+        // güncellenir; o ekranda daha önce analiz başlatılmadıysa panel
+        // temiz/varsayılan duruma döner.
+        // ============================================================
+        (function () {
+            function _captureModuleState() {
+                var id = _sylvaActivePaneId();
+                var state = _sylvaPaneState(id);
+                var checkedModule = document.querySelector('input[name="sylva-module"]:checked');
+                state.selectedModule = checkedModule ? checkedModule.getAttribute('data-analysis') : null;
+                var checkedIndex = document.querySelector('.uydu-analiz-checkbox:checked');
+                state.selectedIndex = checkedIndex ? checkedIndex.getAttribute('data-analysis') : null;
+                var checkedSensor = document.querySelector('input[name="uydu-goruntu-sensor"]:checked');
+                state.selectedSensor = checkedSensor ? checkedSensor.value : null;
+                var dS = document.getElementById('date-start');
+                var dE = document.getElementById('date-end');
+                var cS = document.getElementById('cloud-slider');
+                state.dateStart = dS ? dS.value : null;
+                state.dateEnd = dE ? dE.value : null;
+                state.cloudCover = cS ? cS.value : null;
+            }
+            document.addEventListener('change', function (e) {
+                if (!e.target) return;
+                var t = e.target;
+                if (t.name === 'sylva-module' || t.name === 'uydu-goruntu-sensor' ||
+                    t.classList.contains('uydu-analiz-checkbox') ||
+                    t.id === 'date-start' || t.id === 'date-end' || t.id === 'cloud-slider') {
+                    _captureModuleState();
+                }
+            });
+
+            var _origSync = window._sylvaSyncActivePaneControls;
+            window._sylvaSyncActivePaneControls = function () {
+                if (typeof _origSync === 'function') _origSync();
+                var id = _sylvaActivePaneId();
+                var state = _sylvaPaneState(id);
+
+                var dS = document.getElementById('date-start');
+                var dE = document.getElementById('date-end');
+                var cS = document.getElementById('cloud-slider');
+                if (dS) dS.value = state.dateStart || '';
+                if (dE) dE.value = state.dateEnd || '';
+                if (cS && state.cloudCover != null) {
+                    cS.value = state.cloudCover;
+                    cS.dispatchEvent(new Event('input'));
+                }
+
+                document.querySelectorAll('input[name="sylva-module"]').forEach(function (r) {
+                    r.checked = !!state.selectedModule && r.getAttribute('data-analysis') === state.selectedModule;
+                });
+                document.querySelectorAll('.uydu-analiz-checkbox').forEach(function (c) {
+                    c.checked = !!state.selectedIndex && c.getAttribute('data-analysis') === state.selectedIndex;
+                });
+                document.querySelectorAll('input[name="uydu-goruntu-sensor"]').forEach(function (r) {
+                    r.checked = !!state.selectedSensor && r.value === state.selectedSensor;
+                });
+
+                // 🧹 Bu ekranda daha önce hiç analiz başlatılmadıysa
+                // (analysisActive=false) tüm seçimleri temizle — panel
+                // varsayılan/temiz duruma döner.
+                if (!state.analysisActive) {
+                    document.querySelectorAll('input[name="sylva-module"], input[name="uydu-goruntu-sensor"], .uydu-analiz-checkbox').forEach(function (el) { el.checked = false; });
+                }
+                if (typeof _updateDateCloudControlsVisibility === 'function') {
+                    _updateDateCloudControlsVisibility();
+                }
+            };
+        })();
         // 🔄 Çift Ekran Senkronizasyon
         // "Çalışma Alanları" panelindeki onay kutusu işaretlendiğinde sol
         // harita kaynak, sağ harita hedef olur. Sol tarafta çizilen/yüklenen
