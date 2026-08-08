@@ -4447,12 +4447,16 @@ tr.class-highlight-active {
 
     <!-- Çalışma Alanı + pasif Hava Durumu: diğer seçeneklerle aynı iki sütunlu düzen -->
     <div class="option-item" id="workspace-opacity-toggle-wrap" style="grid-column: span 2; margin-top:2px; opacity:0.4; display:grid; grid-template-columns:1fr 1fr; column-gap:8px; align-items:center;">
-        <label class="option-item" style="padding:0;">
+        <label class="option-item" style="padding:0;position:relative;">
             <input type="checkbox" id="toggle-workspace-opacity" disabled>
             <span data-i18n="workspace">Çalışma Alanı</span>
             <span id="ws-stroke-preview"
                 aria-hidden="true"
-                style="display:inline-block;width:15px;height:15px;border-radius:2px;border:2px solid #1e3a8a;background:transparent;cursor:default;opacity:0.45;pointer-events:none;flex-shrink:0;"></span>
+                onclick="window._toggleWsPalette('stroke', event)"
+                style="display:inline-block;width:15px;height:15px;border-radius:2px;border:2px solid #1e3a8a;background:transparent;cursor:pointer;flex-shrink:0;"></span>
+            <div id="ws-stroke-palette"
+                 style="display:none;position:absolute;top:22px;left:0;z-index:5000;background:#fff;border:1px solid #cbd5e1;border-radius:6px;padding:6px;box-shadow:0 4px 12px rgba(0,0,0,0.15);flex-wrap:wrap;gap:4px;width:170px;"
+                 onclick="event.stopPropagation()"></div>
         </label>
         <label class="option-item" style="padding:0;">
             <input type="checkbox" id="toggle-weather" disabled aria-disabled="true" style="flex-shrink:0;cursor:default;">
@@ -7429,6 +7433,9 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
                         preview.style.borderColor = hex;
                     }
                     _sylvaApplyWorkspacePaneStyle(_sylvaActivePaneId());
+                    if (containerId === 'ws-stroke-palette' && typeof window._sylvaSetWsStrokeColor === 'function') {
+                        window._sylvaSetWsStrokeColor(hex);
+                    }
                     container.style.display = 'none'; // popup kapat
                 });
                 container.appendChild(sw);
@@ -7472,20 +7479,19 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
     var wsOpacityCheckbox = document.getElementById('toggle-workspace-opacity');
     if (wsOpacityCheckbox) {
         wsOpacityCheckbox.addEventListener('change', function() {
+            var paneId = _sylvaActivePaneId();
+            var state = _sylvaPaneState(paneId);
+            state.workspaceVisible = this.checked;
+            if (typeof window._sylvaSetWsVisible === 'function') {
+                window._sylvaSetWsVisible(paneId, this.checked);
+            }
+            var wsLayer = _sylvaLayerForPane('workspace', paneId);
+            var targetMap = _sylvaActivePaneMap();
             if (this.checked) {
-                var paneId = _sylvaActivePaneId();
-                var state = _sylvaPaneState(paneId);
-                state.workspaceVisible = true;
-                var wsLayer = _sylvaLayerForPane('workspace', paneId);
-                var targetMap = _sylvaActivePaneMap();
                 if (wsLayer && targetMap && !targetMap.hasLayer(wsLayer)) wsLayer.addTo(targetMap);
                 _sylvaApplyWorkspacePaneStyle(paneId);
             } else {
-                var paneIdOff = _sylvaActivePaneId();
-                _sylvaPaneState(paneIdOff).workspaceVisible = false;
-                var wsLayerOff = _sylvaLayerForPane('workspace', paneIdOff);
-                var targetMapOff = _sylvaActivePaneMap();
-                if (wsLayerOff && targetMapOff && targetMapOff.hasLayer(wsLayerOff)) targetMapOff.removeLayer(wsLayerOff);
+                if (wsLayer && targetMap && targetMap.hasLayer(wsLayer)) targetMap.removeLayer(wsLayer);
             }
         });
     }
@@ -7977,8 +7983,10 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
             if (window.SylvaVAW && typeof window.SylvaVAW._onLayerSet === 'function') {
                 window.SylvaVAW._onLayerSet(e.layer, null);
                 // VAW mergedLayer görünümü yönetir; orijinal layer'ı haritadan kaldır
-                try { map.removeLayer(e.layer); } catch(_e) {}
+                try { map.removeLayer(e.layer); } catch (_e) {}
             }
+            // 🛠️ BUG FİX: Bu adım eskiden yalnızca Ekran 2'de çalışıyordu.
+            if (typeof window._sylvaSyncActivePaneControls === 'function') window._sylvaSyncActivePaneControls();
         });
 
         // ---------------------------------------------------------
@@ -9675,6 +9683,18 @@ function selectRamp(name) {
                 if (typeof window.sylvaOpenLogin === 'function') window.sylvaOpenLogin();
                 return;
             }
+
+            // Her analiz başlatıldığında ilgili ekranda "Çalışma Alanı" açılsın.
+            (function _sylvaForceWorkspaceVisibleOnRun() {
+                var _p = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+                if (window._sylvaWorkspaceSyncActive) _p = 'map';
+                var _state = (typeof _sylvaPaneState === 'function') ? _sylvaPaneState(_p) : null;
+                if (_state) _state.workspaceVisible = true;
+                if (typeof window._sylvaSetWsVisible === 'function') window._sylvaSetWsVisible(_p, true);
+                var _cb = document.getElementById('toggle-workspace-opacity');
+                if (_cb) _cb.checked = true;
+                if (typeof window._sylvaSyncActivePaneControls === 'function') window._sylvaSyncActivePaneControls();
+            })();
 
             // 🖥️ Analiz her zaman o an AKTİF olan ekranda çalışır (Ekran 1 = map,
             // Ekran 2 = map2). Aktif ekran, kullanıcının son tıkladığı harita
@@ -40153,7 +40173,10 @@ function _vdlFallbackDownload(blob, name) {
             }
             showWsClickInfo(ws);
             flashWorkspace(ws);
+            // 🎨 En son tıklanan alan, renk paletinin hedefi olur.
+            window._sylvaActiveColorWs = ws;
         });
+        window._sylvaActiveColorWs = ws; // yeni çizilen alan varsayılan hedef
         VAW.workspaces.push(ws);
         renderWorkspaceList();
         renderToolForm();
@@ -40169,6 +40192,33 @@ function _vdlFallbackDownload(blob, name) {
         try{ lmap.fitBounds(ws.layer.getBounds(), {maxZoom: 16}); }catch(e){}
         return ws;
     }
+
+    // ─── Çalışma Alanı görünürlüğü + dış kenar rengi (GERÇEK katman) ───
+    function _wsColorTarget(paneId) {
+        if (window._sylvaActiveColorWs && window._sylvaActiveColorWs.paneId === paneId &&
+            VAW.workspaces.indexOf(window._sylvaActiveColorWs) !== -1) {
+            return window._sylvaActiveColorWs;
+        }
+        var list = VAW.workspaces.filter(function (w) { return w.paneId === paneId; });
+        return list.length ? list[list.length - 1] : null;
+    }
+    window._sylvaSetWsStrokeColor = function (hex) {
+        var paneId = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+        var ws = _wsColorTarget(paneId);
+        if (!ws || !ws.layer) return;
+        ws.color = hex;
+        try { ws.layer.setStyle({ color: hex, weight: 2.5, stroke: true }); } catch (e) {}
+    };
+    window._sylvaSetWsVisible = function (paneId, visible) {
+        var lmap = _paneMap(paneId);
+        VAW.workspaces.forEach(function (ws) {
+            if (ws.paneId !== paneId || !ws.layer) return;
+            try {
+                if (visible) { if (lmap && !lmap.hasLayer(ws.layer)) ws.layer.addTo(lmap); }
+                else { if (lmap && lmap.hasLayer(ws.layer)) lmap.removeLayer(ws.layer); }
+            } catch (e) {}
+        });
+    };
 
     // Bir çalışma alanı katmanını, hangi haritada yaşadığından emin
     // olamasak bile ekranda asla takılı kalmayacak şekilde kaldırır:
