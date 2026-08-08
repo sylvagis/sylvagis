@@ -3314,6 +3314,13 @@ tr.class-highlight-active {
                         <span class="sylva-updating-label" data-i18n="updating_label">(Güncelleniyor)</span>
                     </label>
                 </div>
+                <div id="vaw-location-sync-row" class="vaw-sync-row">
+                    <label class="vaw-sync-label" for="vaw-location-sync-checkbox">
+                        <input type="checkbox" id="vaw-location-sync-checkbox" disabled
+                               onchange="window.sylvaToggleLocationSync && window.sylvaToggleLocationSync(this.checked)">
+                        <span>Konum Senkronizasyonu</span>
+                    </label>
+                </div>
                 <div id="sylva-workspace-sync-modal" class="sylva-sync-modal" role="dialog"
                      aria-modal="true" aria-labelledby="sylva-sync-modal-title"
                      aria-describedby="sylva-sync-modal-message" hidden>
@@ -5482,6 +5489,23 @@ tr.class-highlight-active {
             }
         }
 
+        // 🆕 Konum Senkronizasyonu — yalnızca görünüm (merkez + zoom) senkronize
+        // edilir; katmanlar, analiz parametreleri, AOI ve lejant bundan ETKİLENMEZ
+        // (bkz. _sylvaSyncMapView / _sylvaBindMapViewSync — moveend/zoomend ile
+        // bağlanmış, isSyncing kilidiyle sonsuz döngüden korunuyor).
+        window.sylvaToggleLocationSync = function (checked) {
+            window._sylvaDualScreenSyncActive = !!checked;
+            var box = document.getElementById('vaw-location-sync-checkbox');
+            if (box && box.checked !== window._sylvaDualScreenSyncActive) {
+                box.checked = window._sylvaDualScreenSyncActive;
+            }
+            // Açılır açılmaz iki ekranı anında hizala, sonrasını canlı olay
+            // dinleyicileri (moveend/zoomend) devralır.
+            if (window._sylvaDualScreenSyncActive && map2) {
+                _sylvaSyncMapView(map, map2);
+            }
+        };
+
         function _sylvaRemoveLayerFromMap(layer, targetMap) {
             if (!layer || !targetMap) return;
             try {
@@ -5616,9 +5640,9 @@ tr.class-highlight-active {
                 _sylvaClearWorkspaceHistoryForSync();
             }
             window._sylvaWorkspaceSyncActive = wantsSync;
-            // Aynı kutu, çalışma alanı/analiz katmanlarının yanında iki
-            // ekranın merkez ve zoom bilgisini de yönetir.
-            window._sylvaDualScreenSyncActive = wantsSync;
+            // 🛠️ Konum (görünüm) senkronizasyonu artık BAĞIMSIZ bir kutu
+            // (vaw-location-sync-checkbox) tarafından yönetiliyor — bu kutu
+            // yalnızca çalışma alanı/AOI/katman senkronizasyonunu kontrol eder.
             var syncBox = document.getElementById('vaw-sync-checkbox');
             if (syncBox && syncBox.checked !== window._sylvaWorkspaceSyncActive) {
                 syncBox.checked = window._sylvaWorkspaceSyncActive;
@@ -6266,6 +6290,23 @@ tr.class-highlight-active {
                     if (syncBox.checked) {
                         syncBox.checked = false;
                         if (typeof window.sylvaToggleWorkspaceSync === 'function') window.sylvaToggleWorkspaceSync(false);
+                    }
+                }
+            })();
+
+            // 🆕 Konum Senkronizasyonu kutusu — Çift Ekran açıkken etkin,
+            // tek ekrana dönüşte pasif ve işaretsiz (senkronizasyon kapanır).
+            (function () {
+                var locRow = document.getElementById('vaw-location-sync-row');
+                var locBox = document.getElementById('vaw-location-sync-checkbox');
+                if (!locRow || !locBox) return;
+                if (active) {
+                    locBox.disabled = false;
+                } else {
+                    locBox.disabled = true;
+                    if (locBox.checked) {
+                        locBox.checked = false;
+                        if (typeof window.sylvaToggleLocationSync === 'function') window.sylvaToggleLocationSync(false);
                     }
                 }
             })();
@@ -10058,21 +10099,8 @@ function selectRamp(name) {
                 // Analiz sonucu gösterilince Bilgi Kutusu checkbox'ını etkinleştir ve aç
                 // — yalnızca Arazi Kullanımı / Topografik analizlerde (bunlar
                 // dışında checkbox zaten devre dışı kalır).
-                (function() {
-                    if (!(isLulcAnalysis(meta.analysisName) || isTopoAnalysis(meta.analysisName))) return;
-                    var _ibCb = document.getElementById('toggle-info-box');
-                    var _ibWrap = document.getElementById('info-box-toggle-wrap');
-                    // 🛠️ BUG FİX: checkbox hiçbir yerde enable edilmiyordu, bu
-                    // yüzden hep pasif kalıyor ve kutu asla otomatik açılmıyordu.
-                    if (_ibCb) {
-                        _ibCb.disabled = false;
-                        if (_ibWrap) _ibWrap.style.opacity = '1';
-                        if (!_ibCb.checked) {
-                            _ibCb.checked = true;
-                            _ibCb.dispatchEvent(new Event('change'));
-                        }
-                    }
-                })();
+                if (!(isLulcAnalysis(meta.analysisName) || isTopoAnalysis(meta.analysisName))) return;
+                    var _ibCb =
                 // 🏘️ Arazi Kullanımı/DEM analizi çalıştırıldığında Lejant/Semboloji
                 // panelini ve Uydu Görüntü Galerisi'ni kısıtla.
                 _updateLulcRestrictedUI(isLulcAnalysis(meta.analysisName));
