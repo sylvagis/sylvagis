@@ -8487,7 +8487,7 @@ function selectRamp(name) {
                     renderChart(data.stats, meta);
                     // Lejanta gerçek veri aralığını ekle (kullanıcının girdiği
                     // stretch aralığından bağımsız, ham veriden gelen gerçek min/max)
-                    appendRealStatsToLegend(data.stats);
+                    appendRealStatsToLegend(data.stats, _pane);
                 }
             })
             .catch(function() { hideSylvaLoading(); /* sessiz hata — GEE yoksa yerel önizleme yeterli */ });
@@ -9121,8 +9121,18 @@ function selectRamp(name) {
         // (Eski runAnalysis() içindeki lejant üretim mantığının doğrudan devamıdır;
         //  ek olarak: ramp CSS'in YANLIŞLIKLA iki kere "linear-gradient(...)" içine
         //  sarılması hatası düzeltildi — ramps[key] zaten tam bir gradient string'idir.)
-        function renderAnalysisLegend(meta, keepHidden) {
-            var legendBox = document.getElementById('map-legend-box');
+        function renderAnalysisLegend(meta, keepHidden, paneId) {
+            // 🛠️ BUG FİX: Bu fonksiyon her analizden önce/sonra çalışır ve
+            // eskiden HER ZAMAN #map-legend-box'a (Ekran 1) yazardı. Ekran 2
+            // için çalıştırılan analizlerde bu, Ekran 1'in kutusuna geçici
+            // olarak yanlış içerik yazılmasına (ve pasif senkronizasyon
+            // mekanizmasının bunu yanlışlıkla Ekran 2'ye kopyalamasına) yol
+            // açıyordu. Artık paneId verildiğinde doğrudan ilgili ekranın
+            // kutusuna yazar.
+            paneId = (paneId === 'map2') ? 'map2'
+                : ((paneId === 'map') ? 'map'
+                    : ((typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map'));
+            var legendBox = document.getElementById(paneId === 'map2' ? 'map2-legend-box' : 'map-legend-box');
             if (!legendBox) return;
 
             var legendType = meta.legendType || 'stretched';
@@ -9236,6 +9246,11 @@ function selectRamp(name) {
                     if (!lgToggle3.checked) lgToggle3.checked = true;
                 }
                 if (!lgToggle3 || lgToggle3.checked) legendBox.style.display = '';
+            }
+
+            if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[paneId]) {
+                window._sylvaLegendInfoByPane[paneId].legendHTML = legendBox.innerHTML;
+                window._sylvaLegendInfoByPane[paneId].legendDisplay = legendBox.style.display;
             }
 
             // Dil değişimi sırasında başlık ve input alanlarına dokunma
@@ -9945,18 +9960,18 @@ function selectRamp(name) {
                 // için üretiliyor — sunucu yanıtı gelene kadar kullanıcı diğer ekrana
                 // geçmiş olsa bile lejant doğru ekranda kalsın diye işaretleniyor.
                 if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(_pane);
-                renderAnalysisLegend(meta);
+                renderAnalysisLegend(meta, false, _pane);
                 // Ham histogram tablosu ve görsel grafik
                 if (data.stats) {
                     updateStatsTable(data.stats);
                     renderChart(data.stats, meta);
                     // Lejanttaki tarih bilgisini GEE'den dönen veriye göre güncelle.
-                    appendRealStatsToLegend(data.stats);
+                    appendRealStatsToLegend(data.stats, _pane);
                 }
                 // Backend'den gelen kesin min/max/mean değerleri (histogram değil,
                 // reduceRegion minMax) ile lejantı ve stretched giriş kutularını güncelle
                 if (data.realStats) {
-                    applyRealStatsToLegendUI(data.realStats);
+                    applyRealStatsToLegendUI(data.realStats, _pane);
                     // 🛠️ BUG FİX: applyRealStatsToLegendUI() currentClassRangeMin/Max'ı
                     // AOI'nin GERÇEK min/max'ına günceller ama "Sınıflandırılmış" modda
                     // sınıf satırları (buildClassRows) daha önce (analiz seçilir seçilmez,
@@ -10022,7 +10037,7 @@ function selectRamp(name) {
                     // 🛠️ BUG FİX: bkz. yukarıdaki renderAnalysisLegend işaretlemesi —
                     // aynı gerekçeyle bilgi kutusu da doğru ekrana (_pane) etiketlenir.
                     if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(_pane);
-                    renderDatasetInfoCard(meta.analysisName);
+                    renderDatasetInfoCard(meta.analysisName, _pane);
                 } else if (data.scenes && data.scenes.length) {
                     renderGalleryFromScenes(data.scenes, _pane);
                 }
@@ -10034,7 +10049,7 @@ function selectRamp(name) {
                 // SONRA çalışır ki LULC için her zaman son söz bunda olsun.
                 if (isLulcAnalysis(meta.analysisName)) {
                     if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(_pane);
-                    renderLulcLegendAndChart(meta, data.stats);
+                    renderLulcLegendAndChart(meta, data.stats, _pane);
                 }
                 // Dil değişince lejant yenilenebilmesi için son analiz meta + stats'ı sakla
                 window._lastAnalyzeMeta = meta;
@@ -10378,9 +10393,20 @@ function selectRamp(name) {
         // seçilen dile göre isimlendirerek yeniden çizer; ardından
         // sınıfların alansal/oransal dağılımını sütun/pasta grafiğe yansıtır.
         // stats: /api/analyze yanıtındaki frequencyHistogram (stats.value)
-        function renderLulcLegendAndChart(meta, stats) {
+        function renderLulcLegendAndChart(meta, stats, paneId) {
+            // 🛠️ BUG FİX (Ekran 2'de ESA WorldCover / LULC lejantı hiç görünmüyordu):
+            // Bu fonksiyon eskiden document.querySelector('.map-legend') kullanıyordu —
+            // bu seçici, DOM'daki İLK '.map-legend' elemanını (her zaman Ekran 1'in
+            // #map-legend-box'ını) döndürür; hangi ekranda analiz çalıştırıldığı hiç
+            // dikkate alınmazdı. Artık uydu görüntü galerisindeki (renderRgbLegend)
+            // ile birebir aynı, güvenilir yöntem kullanılır: paneId doğrudan hedef
+            // ekranın kendi lejant kutusunu seçer ve sonucu doğrudan o ekranın
+            // hafızasına (window._sylvaLegendInfoByPane) yazar.
+            paneId = (paneId === 'map2') ? 'map2'
+                : ((paneId === 'map') ? 'map'
+                    : ((typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map'));
             var defs = LULC_CLASS_DEFS[meta.analysisName];
-            var legendBox = document.querySelector('.map-legend');
+            var legendBox = document.getElementById(paneId === 'map2' ? 'map2-legend-box' : 'map-legend-box');
             if (!defs || !legendBox) return;
 
             var hist = (stats && stats.value) ? stats.value : null;
@@ -10403,7 +10429,7 @@ function selectRamp(name) {
 
             var rowsHtml = presentDefs.map(function (d, i) {
                 var label = (d.key ? (t(d.key) || d.label) : d.label);
-                var isActive = (window._classHighlightIndexByPane[_sylvaActivePaneId()] === i);
+                var isActive = (window._classHighlightIndexByPane[paneId] === i);
                 return '<div class="class-highlight-target' + (isActive ? ' class-highlight-active' : '') + '" data-class-idx="' + i + '" style="display:flex;align-items:center;gap:5px;margin-top:3px;cursor:pointer;" title="' + t('highlight_class_hint', 'Haritada vurgulamak için tıklayın') + '">' +
                     '<span style="width:12px;height:12px;border-radius:2px;background:' + d.color +
                         ';border:1px solid #cbd5e1;flex-shrink:0;display:inline-block;"></span>' +
@@ -10415,6 +10441,16 @@ function selectRamp(name) {
             var lgToggle = document.getElementById('toggle-legend');
             if (!lgToggle || lgToggle.checked) legendBox.style.display = '';
 
+            // 🛠️ BUG FİX: bu içerik artık doğrudan ait olduğu ekranın hafızasına
+            // (window._sylvaLegendInfoByPane[paneId]) da yazılır — renderRgbLegend
+            // (galeri) ile aynı güvenilir desen. Böylece pasif senkronizasyon
+            // mekanizmasına (MutationObserver + aktif ekran tahmini) bağımlı
+            // kalınmaz ve Ekran 2'nin kutusu asla boş kalmaz.
+            if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[paneId]) {
+                window._sylvaLegendInfoByPane[paneId].legendHTML = legendBox.innerHTML;
+                window._sylvaLegendInfoByPane[paneId].legendDisplay = legendBox.style.display;
+            }
+
             // Sınıf bazında alansal/oransal dağılım — mevcut sütun/pasta grafik
             // motoru, her sınıfı tek bir değere (min=max=code) sabitleyerek yeniden kullanılır.
             if (hist) {
@@ -10425,8 +10461,7 @@ function selectRamp(name) {
                 var percentages = computeClassPercentagesFromHistogram(classesForChart, hist);
                 if (percentages) {
                     var areaHa = null;
-                    var _lulcAoiPane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
-                    var _lulcAoiLayer = (_lulcAoiPane === 'map2') ? currentLayer2 : currentLayer;
+                    var _lulcAoiLayer = (paneId === 'map2') ? currentLayer2 : currentLayer;
                     try { if (_lulcAoiLayer) areaHa = turf.area(_lulcAoiLayer.toGeoJSON()) / 10000; } catch (e) {}
                     renderStatsChart({ classes: classesForChart, percentages: percentages, areaHa: areaHa });
                     playSylvaChime('analysis');
@@ -10434,8 +10469,16 @@ function selectRamp(name) {
             }
         }
 
-        function renderDatasetInfoCard(analysisName) {
-            var box = document.getElementById('map-info-box');
+        function renderDatasetInfoCard(analysisName, paneId) {
+            // 🛠️ BUG FİX (Ekran 2'de ESA WorldCover / DEM bilgi kartı hiç
+            // görünmüyordu): Bu fonksiyon eskiden her zaman #map-info-box'a
+            // (Ekran 1) yazıyordu; hangi ekranda analiz çalıştırıldığı dikkate
+            // alınmıyordu. Artık galeri (renderRgbLegend) ile aynı desende,
+            // hedef ekranın kendi bilgi kutusuna doğrudan yazar.
+            paneId = (paneId === 'map2') ? 'map2'
+                : ((paneId === 'map') ? 'map'
+                    : ((typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map'));
+            var box = document.getElementById(paneId === 'map2' ? 'map2-info-box' : 'map-info-box');
             if (!box) return;
             var key = (analysisName || '').toUpperCase();
             var info = _DATASET_INFO[key];
@@ -10461,6 +10504,11 @@ function selectRamp(name) {
 
             var cb = document.getElementById('toggle-info-box');
             box.style.display = (cb && cb.checked) ? 'block' : 'none';
+
+            if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[paneId]) {
+                window._sylvaLegendInfoByPane[paneId].infoHTML = box.innerHTML;
+                window._sylvaLegendInfoByPane[paneId].infoDisplay = box.style.display;
+            }
         }
 
         // ── analyze yanıtından gelen scenes dizisini galeriye yazar ─
@@ -10817,14 +10865,14 @@ function selectRamp(name) {
                 // aktifti) için üretiliyor — sunucu yanıtı gelene kadar kullanıcı diğer
                 // ekrana geçmiş olsa bile lejant, sahnenin ait olduğu ekranda kalsın.
                 if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(_pane);
-                renderAnalysisLegend(metaForScene);
+                renderAnalysisLegend(metaForScene, false, _pane);
                 if (data.stats) {
                     updateStatsTable(data.stats);
                     renderChart(data.stats, metaForScene);
-                    appendRealStatsToLegend(data.stats);
+                    appendRealStatsToLegend(data.stats, _pane);
                 }
                 if (data.realStats) {
-                    applyRealStatsToLegendUI(data.realStats);
+                    applyRealStatsToLegendUI(data.realStats, _pane);
                     // 🛠️ BUG FİX: bkz. yukarıdaki analyze() akışındaki aynı düzeltme —
                     // sınıflandırılmış modda sınıf satırları AOI'nin gerçek aralığına
                     // göre yeniden kurulmalı, yoksa hep eski/statik aralıkta kalır.
@@ -11775,8 +11823,15 @@ function selectRamp(name) {
         // Stretched mod lejantındaki min/max etiketlerini gerçek veri ile günceller;
         // ayrıca Stretched-min/max giriş kutularını da doldurur ki sonraki
         // "Lejantı Uygula" baskıları gerçek aralığı kullansın.
-        function appendRealStatsToLegend(stats) {
-            var legendBox = document.querySelector('.map-legend');
+        function appendRealStatsToLegend(stats, paneId) {
+            // 🛠️ BUG FİX: document.querySelector('.map-legend') her zaman Ekran
+            // 1'in kutusunu seçiyordu; Ekran 2 için üretilen istatistik satırı
+            // yanlışlıkla Ekran 1'in kutusuna ekleniyordu. Artık paneId
+            // verildiğinde doğru ekranın kutusu hedeflenir.
+            paneId = (paneId === 'map2') ? 'map2'
+                : ((paneId === 'map') ? 'map'
+                    : ((typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map'));
+            var legendBox = document.getElementById(paneId === 'map2' ? 'map2-legend-box' : 'map-legend-box');
             if (!legendBox) return;
             var real = computeStatsMinMaxMean(stats);
             if (!real) return;
@@ -11821,6 +11876,11 @@ function selectRamp(name) {
                 var _oldRow = legendBox.querySelector('.real-stats-row');
                 if (_oldRow) _oldRow.parentNode.removeChild(_oldRow);
             }
+
+            if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[paneId]) {
+                window._sylvaLegendInfoByPane[paneId].legendHTML = legendBox.innerHTML;
+                window._sylvaLegendInfoByPane[paneId].legendDisplay = legendBox.style.display;
+            }
         }
 
         // Kullanıcı stretched min/max kutularına elle değer girmişse flag'i işaretle
@@ -11841,8 +11901,14 @@ function selectRamp(name) {
         var _classifiedStatsMin;
         var _classifiedStatsMax;
 
-        function applyRealStatsToLegendUI(realStats) {
+        function applyRealStatsToLegendUI(realStats, paneId) {
             if (!realStats) return;
+            // 🛠️ BUG FİX: aynı gerekçe — document.querySelector('.map-legend')
+            // her zaman Ekran 1'in kutusunu döndürüyordu. paneId ile artık
+            // doğru ekranın kutusu güncellenir.
+            paneId = (paneId === 'map2') ? 'map2'
+                : ((paneId === 'map') ? 'map'
+                    : ((typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map'));
             var mn  = realStats.min;
             var mx  = realStats.max;
             var avg = realStats.mean;
@@ -11873,7 +11939,7 @@ function selectRamp(name) {
             if (!stretchedMaxEl || !stretchedMaxEl._userEdited) currentClassRangeMax = parseFloat(mx);
 
             // Lejantın min/max span'larını güncelle (stretched mod)
-            var legendBox = document.querySelector('.map-legend');
+            var legendBox = document.getElementById(paneId === 'map2' ? 'map2-legend-box' : 'map-legend-box');
             if (legendBox) {
                 var minSpan = legendBox.querySelector('.legend-min-label');
                 var maxSpan = legendBox.querySelector('.legend-max-label');
@@ -11895,6 +11961,11 @@ function selectRamp(name) {
                 } else {
                     var _rsOldRow = legendBox.querySelector('.real-stats-row');
                     if (_rsOldRow) _rsOldRow.parentNode.removeChild(_rsOldRow);
+                }
+
+                if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[paneId]) {
+                    window._sylvaLegendInfoByPane[paneId].legendHTML = legendBox.innerHTML;
+                    window._sylvaLegendInfoByPane[paneId].legendDisplay = legendBox.style.display;
                 }
             }
         }
