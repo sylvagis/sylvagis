@@ -3441,6 +3441,11 @@ tr.class-highlight-active {
                 <button class="btn-tool btn-danger" id="btn-delete-geom" style="flex: none; padding: 5px;">🗑️</button>
             </div>
 
+            <!-- Ekran 1 / Ekran 2 çalışma alanı bilgi kutuları — artık haritanın
+                 üstünde değil, burada (Basemap altında) alt alta gösterilir. -->
+            <div class="geometry-info ws-click-info" id="ws-click-info-map" style="display:none;margin-top:8px;"></div>
+            <div class="geometry-info ws-click-info" id="ws-click-info-map2" style="display:none;margin-top:8px;"></div>
+
             <h2 id="date-section-title" data-i18n="date_title">Tarih Seçimi</h2>
             <div class="tool-row" id="date-range-row">
                 <div class="control-group" style="flex: 1;">
@@ -4127,7 +4132,7 @@ tr.class-highlight-active {
             </div>
 
             <div class="map-bottom-right">
-                <div class="map-info-box ws-click-info" id="ws-click-info-map" style="display:none;"></div>
+            </div>
             </div>
             <div class="map-bottom-left">
                 <div class="map-legend" id="map-legend-box" style="display:none;"></div>
@@ -4360,7 +4365,7 @@ tr.class-highlight-active {
                          style="font-size:0.8rem;display:none;" aria-label="Öncesi/Sonrası karşılaştırması">⇔</button>
             </div>
             <div class="map2-overlay map-bottom-right">
-                <div class="map-info-box ws-click-info" id="ws-click-info-map2" style="display:none;"></div>
+            </div>
             </div>
             <div class="map2-bottom-left">
                 <!-- Ekran 2 için lejant aynası: #map-legend-box ile senkronize
@@ -5820,6 +5825,7 @@ tr.class-highlight-active {
             if (typeof window._sylvaRegisterMarkupMap2 === 'function') window._sylvaRegisterMarkupMap2(map2);
             map2.on('pm:create', function (e) {
                 if (map2.pm) map2.pm.disableDraw();
+                setActiveTool(null);
                 window._sylvaSetActiveMap('map2');
                 if (window._sylvaWorkspaceSyncActive) {
                     setCurrentLayer(e.layer);
@@ -40122,6 +40128,7 @@ function _vdlFallbackDownload(blob, name) {
         VAW.workspaces.push(ws);
         renderWorkspaceList();
         renderToolForm();
+        showWsClickInfo(ws);
         try{ lmap.fitBounds(ws.layer.getBounds(), {maxZoom: 16}); }catch(e){}
         return ws;
     }
@@ -40268,10 +40275,15 @@ function _vdlFallbackDownload(blob, name) {
             var areaHa = (areaSqMeters / 10000).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
             var lengthKm = turf.length(ws.fc, { units: 'kilometers' }).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
             box.innerHTML =
-                '<div style="font-weight:700;color:#1e3a8a;margin-bottom:3px;">' + esc(wsDisplayName(ws)) + '</div>' +
-                '<div>' + getVawT('lbl_area', 'Alan:') + ' ' + areaKm2 + ' km² | ' + areaHa + ' ha</div>' +
-                '<div>' + getVawT('lbl_perimeter', 'Çevre:') + ' ' + lengthKm + ' km</div>';
-            box.style.display = 'block';
+                '<div class="geom-details">' +
+                    '<span style="font-weight:700;color:#1e3a8a;">' + esc(wsDisplayName(ws)) + '</span>' +
+                    '<span>' + getVawT('lbl_area', 'Alan:') + ' ' + areaKm2 + ' km² | ' + areaHa + ' ha</span>' +
+                    '<span>' + getVawT('lbl_perimeter', 'Çevre:') + ' ' + lengthKm + ' km</span>' +
+                '</div>' +
+                '<button class="btn-tool btn-danger" data-ws-del="' + ws.id + '" style="flex:none;padding:5px;" title="Sil">🗑️</button>';
+            box.style.display = 'flex';
+            var delBtn = box.querySelector('[data-ws-del]');
+            if (delBtn) delBtn.addEventListener('click', function(){ removeWorkspace(ws.id); });
         }catch(e){}
     }
 
