@@ -4309,6 +4309,13 @@ tr.class-highlight-active {
                     <span class="north-arrow-text">N</span>
                 </div>
             </div>
+
+            <!-- Ekran 2 için lejant/bilgi kutusu aynası: sol haritadaki
+                 #map-info-box / #map-legend-box içeriği ile senkronize
+                 tutulur (bkz. script: sylvaMirrorLegendInfoToMap2). -->
+            <div class="map2-overlay map-top-left-infobox">
+                <div class="map-info-box" id="map2-info-box" style="display:none;"></div>
+            </div>
             <div class="map2-overlay map-left-mid map2-left-mid">
                 <div id="map2-zoom-pct-wrap" style="display:flex;flex-direction:row;align-items:stretch;">
                     <div id="map2-zoom-percent" class="map-zoom-btn map2-control"
@@ -4329,6 +4336,9 @@ tr.class-highlight-active {
                          style="font-size:0.8rem;display:none;" aria-label="Öncesi/Sonrası karşılaştırması">⇔</button>
             </div>
             <div class="map2-bottom-left">
+                <!-- Ekran 2 için lejant aynası: #map-legend-box ile senkronize
+                     tutulur (bkz. script: sylvaMirrorLegendInfoToMap2). -->
+                <div class="map-legend" id="map2-legend-box" style="display:none;"></div>
                 <div class="map2-logo" aria-label="SylvaGIS">
                     <img id="map2-logo-img" src="" alt="SylvaGIS">
                 </div>
@@ -42266,6 +42276,127 @@ document.addEventListener('keydown', function(e) {
             updateBlink();
         }
     }, 300);
+})();
+</script>
+
+<script>
+/* ============================================================
+   Ekran 2 (map2) için Lejant + Bilgi Kutusu aynası
+   ------------------------------------------------------------
+   #map-legend-box ve #map-info-box tek/ortak veri kaynağıdır.
+   Bu blok, içerikleri (ve görünürlük durumunu) #map2-legend-box
+   ve #map2-info-box öğelerine aynen kopyalar; böylece Ekran 2
+   açıkken de aynı lejant ve bilgi kutusu orada da görünür.
+   ============================================================ */
+(function () {
+    function mirrorBox(srcId, dstId) {
+        var src = document.getElementById(srcId);
+        var dst = document.getElementById(dstId);
+        if (!src || !dst) return;
+        if (dst.innerHTML !== src.innerHTML) dst.innerHTML = src.innerHTML;
+        dst.style.display = src.style.display;
+    }
+    window.sylvaMirrorLegendInfoToMap2 = function () {
+        mirrorBox('map-legend-box', 'map2-legend-box');
+        mirrorBox('map-info-box', 'map2-info-box');
+    };
+
+    function installMirror() {
+        var legendSrc = document.getElementById('map-legend-box');
+        var infoSrc = document.getElementById('map-info-box');
+        window.sylvaMirrorLegendInfoToMap2();
+        if (legendSrc) {
+            new MutationObserver(window.sylvaMirrorLegendInfoToMap2)
+                .observe(legendSrc, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['style'] });
+        }
+        if (infoSrc) {
+            new MutationObserver(window.sylvaMirrorLegendInfoToMap2)
+                .observe(infoSrc, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['style'] });
+        }
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', installMirror);
+    } else {
+        installMirror();
+    }
+})();
+</script>
+
+<script>
+/* ============================================================
+   Pasta/Bar Grafik: aktif ekrana (Ekran 1 / Ekran 2) göre değişir
+   ------------------------------------------------------------
+   Her ekranın (pane) en son ürettiği istatistik verisi ayrı
+   saklanır (window._sylvaChartDataByPane). Aktif ekran
+   değiştiğinde (_sylvaSetActiveMap çağrıldığında) grafik/tablo
+   o ekranın kendi verisiyle yeniden çizilir. Bir ekran için
+   henüz veri yoksa grafik alanı boşaltılır.
+   ============================================================ */
+(function () {
+    window._sylvaChartDataByPane = window._sylvaChartDataByPane || { map: null, map2: null };
+
+    // renderStatsChart'ı, çağrıldığı anda aktif olan panonun verisini de
+    // kaydedecek şekilde sarmalar (orijinal fonksiyonun davranışını korur).
+    function wrapRenderStatsChart() {
+        if (typeof window.renderStatsChart !== 'function' || window._sylvaChartWrapped) return;
+        var _origRenderStatsChart = window.renderStatsChart;
+        window.renderStatsChart = function (data) {
+            var _pane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+            window._sylvaChartDataByPane[_pane] = data;
+            return _origRenderStatsChart(data);
+        };
+        window._sylvaChartWrapped = true;
+    }
+
+    // Aktif ekran değiştiğinde: o ekranın son grafiğini geri getirir,
+    // yoksa grafik/tablo alanını temizler.
+    window.sylvaRefreshChartForActivePane = function () {
+        var _pane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+        var data = window._sylvaChartDataByPane[_pane] || null;
+        var wrap = document.getElementById('stats-chart-svg-wrap');
+        var tableWrap = document.getElementById('stats-chart-table');
+        if (!wrap) return;
+        if (data && typeof window.renderStatsChart === 'function') {
+            // lastChartData zaten renderStatsChart içinde güncellenir.
+            var _origRenderStatsChart = window.renderStatsChart;
+            _origRenderStatsChart(data);
+        } else {
+            wrap.className = '';
+            wrap.innerHTML = '';
+            if (tableWrap) tableWrap.innerHTML = '';
+        }
+    };
+
+    // _sylvaSetActiveMap fonksiyonunu, ekran değişince grafiği de
+    // güncelleyecek şekilde sarmalar.
+    function wrapSetActiveMap() {
+        if (typeof window._sylvaSetActiveMap !== 'function' || window._sylvaActiveMapWrappedForChart) return;
+        var _origSetActiveMap = window._sylvaSetActiveMap;
+        window._sylvaSetActiveMap = function (id) {
+            var _result = _origSetActiveMap(id);
+            wrapRenderStatsChart();
+            if (typeof window.sylvaRefreshChartForActivePane === 'function') {
+                window.sylvaRefreshChartForActivePane();
+            }
+            return _result;
+        };
+        window._sylvaActiveMapWrappedForChart = true;
+    }
+
+    function init() {
+        wrapRenderStatsChart();
+        wrapSetActiveMap();
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
+    // Sayfanın geç yüklenen script'leri (renderStatsChart / _sylvaSetActiveMap)
+    // tanımlandıktan hemen sonra da sarmalamayı garanti altına al.
+    window.addEventListener('load', init);
 })();
 </script>
 
