@@ -9064,6 +9064,25 @@ function selectRamp(name) {
             recolorCurrentLayerByClasses(classes);
             updateStatsChartFromClasses(classes);
 
+            // 🆕 Kullanıcı elle sınıflandırma uyguladığında da (özel renk/aralık),
+            // bu, o an ekranda EN ÜSTTE olan katmana ait sayılır ve snapshot'ı
+            // güncellenir — böylece başka bir katmana geçip geri dönüldüğünde bu
+            // özel renkler kaybolmaz, korunur.
+            (function () {
+                var _acmPaneId = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+                var _acmKey = (_acmPaneId === 'map2') ? 'map2' : 'map';
+                var _acmTopKey = (window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[_acmKey]) || null;
+                if (!_acmTopKey) return;
+                window._sylvaLayerLegendSnapshotByPane = window._sylvaLayerLegendSnapshotByPane || { map: {}, map2: {} };
+                var _acmBox = document.getElementById(_acmPaneId === 'map2' ? 'map2-legend-box' : 'map-legend-box');
+                if (_acmBox) {
+                    window._sylvaLayerLegendSnapshotByPane[_acmKey][_acmTopKey] = {
+                        html: _acmBox.innerHTML,
+                        display: _acmBox.style.display
+                    };
+                }
+            })();
+
             // ── GEE senkronizasyonu: özel renk/aralık bilgisini sunucuya gönder ──
             // Böylece haritadaki GEE tile de seçilen sınıflandırmayı yansıtır.
             syncClassificationToGEE(classes);
@@ -9956,34 +9975,44 @@ function selectRamp(name) {
                     } catch (err) {
                         console.error('[Sylva] Katman geçişinde analiz sonucu (istatistik/grafik) yeniden çizilirken hata:', err);
                     }
-                    // 🛠️ GARANTİLİ GÜNCELLEME (BUG FİX — Lejant/Bilgi Kutusu katman
-                    // değiştirilince yenilenmiyordu): Yukarıdaki çağrı; istatistik/
-                    // grafik üretimi sırasında bir hata verse BİLE, veya arka
-                    // plandaki pasif MutationObserver/zamanlama tabanlı senkronizasyon
-                    // (setTimeout ile 50ms sonra çalışan sylvaSyncLegendInfoByPane)
-                    // yanlışlıkla o an ODAKLI OLMAYAN ekranı esas alsa BİLE, Lejant ve
-                    // Bilgi Kutusu'nun öne getirilen katmana ait içerikle KESİN olarak
-                    // güncellenmesini sağlamak için burada AYRICA ve DOĞRUDAN (kendi
-                    // try/catch'i içinde, hemen ve senkron olarak) tekrar çizilir.
-                    // Böylece Ekran 1'de de Ekran 2'de de katman değişimi lejant ve
-                    // bilgi kutusuna anında yansır.
+
+                    // 🛠️ BUG FİX: Lejant artık yukarıdaki çağrının (veya genel/
+                    // paylaşılan sınıflandırma ayarlarının) yeniden hesapladığı
+                    // hâliyle DEĞİL — bu katman için daha önce alınmış TAM
+                    // snapshot (analiz tamamlandığındaki veya "Lejantı Uygula"
+                    // ile en son uygulanan hâliyle birebir) ile değiştirilir.
+                    // Bu, katmanlar arası geçişte rengin/aralığın değişmesini
+                    // tamamen önler; verinin orijinal lejantı korunur.
+                    var _legendSnap = window._sylvaLayerLegendSnapshotByPane &&
+                        window._sylvaLayerLegendSnapshotByPane[key] &&
+                        window._sylvaLayerLegendSnapshotByPane[key][layerKey];
+                    if (_legendSnap) {
+                        var _legendBoxRestore = document.getElementById(paneId === 'map2' ? 'map2-legend-box' : 'map-legend-box');
+                        if (_legendBoxRestore) {
+                            _legendBoxRestore.innerHTML = _legendSnap.html;
+                            _legendBoxRestore.style.display = _legendSnap.display;
+                            if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[paneId]) {
+                                window._sylvaLegendInfoByPane[paneId].legendHTML = _legendSnap.html;
+                                window._sylvaLegendInfoByPane[paneId].legendDisplay = _legendSnap.display;
+                            }
+                            if (typeof window.sylvaMirrorLegendInfoToMap2 === 'function') {
+                                window.sylvaMirrorLegendInfoToMap2();
+                            }
+                        }
+                        // Bilgi kutusu ve istatistikler hâlâ güncel kalsın (renk
+                        // dışındaki içerik), ama lejant rengi/sınıfları yeniden
+                        // hesaplanmasın diye geri kalan bloğu atla.
+                        return;
+                    }
+
+                    // Snapshot yoksa (ör. daha önce hiç görüntülenmemiş eski bir
+                    // kayıt) eski davranışa (yeniden hesaplama) geri dön.
                     try {
                         renderAnalysisLegend(_iaState.meta, false, paneId);
                         if (typeof isLulcAnalysis === 'function' && isLulcAnalysis(_iaState.meta.analysisName)
                             && typeof renderLulcLegendAndChart === 'function') {
                             renderLulcLegendAndChart(_iaState.meta, _iaState.data.stats, paneId);
                         }
-                        // 🆕 BUG FİX (Topografik analizlerde de aynı sorun): TOPO ailesi
-                        // (DEM, Eğim, Bakı, TPI, TRI vb.) "stretched" (gerçek min/max
-                        // aralıklı) lejant kullanır ve bu gerçek aralık sunucudan gelen
-                        // data.realStats üzerinden yazılır (applyRealStatsToLegendUI).
-                        // Bu adım eksik olduğunda katman değiştirilince lejant üstteki
-                        // STATİK varsayılan aralığa (ör. Eğim için 0°–60°) dönüp gerçek
-                        // veriye ait aralığı göstermiyordu. Artık LULC ile birebir aynı
-                        // şekilde, katman öne getirildiğinde de zorla uygulanır.
-                        // Sıra önemli: önce histogram tabanlı (stats), sonra kesin/gerçek
-                        // (realStats) — orijinal analiz akışıyla aynı öncelik sırası
-                        // korunur ki realStats varsa daima o esas alınsın.
                         if (_iaState.data.stats && typeof appendRealStatsToLegend === 'function') {
                             appendRealStatsToLegend(_iaState.data.stats, paneId);
                         }
@@ -9995,9 +10024,6 @@ function selectRamp(name) {
                             && typeof renderDatasetInfoCard === 'function') {
                             renderDatasetInfoCard(_iaState.meta.analysisName, paneId);
                         }
-                        // Ekran 1 / Ekran 2 kutularının (tekli veya çift ekran fark
-                        // etmeksizin) güncel hafızaya göre hemen eşitlenmesini sağla —
-                        // 50ms'lik gecikmeli pasif senkronizasyonu beklemeden.
                         if (typeof window.sylvaMirrorLegendInfoToMap2 === 'function') {
                             window.sylvaMirrorLegendInfoToMap2();
                         }
@@ -10050,7 +10076,7 @@ function selectRamp(name) {
                         '<input type="checkbox" class="sylva-layer-switch-visibility" data-layer-key="' + escapeHtml(k) +
                         '" data-pane="' + escapeHtml(paneId) + '"' + (isVisible ? ' checked' : '') +
                         ' title="' + escapeHtml(t('layer_switch_visibility_hint', 'Haritada göster/gizle')) +
-                        '" style="flex-shrink:0;margin:0;cursor:pointer;" onclick="event.stopPropagation();">' +
+                        '" style="flex-shrink:0;margin:0;cursor:pointer;">' +
                         '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
                         escapeHtml(_sylvaLayerFriendlyName(k)) + '</span></div>';
                 }).join('') + '</div>';
@@ -10768,6 +10794,25 @@ function selectRamp(name) {
             var _iaKey = (_pane === 'map2') ? 'map2' : 'map';
             if (!window._sylvaIndexAnalysisStates[_iaKey]) window._sylvaIndexAnalysisStates[_iaKey] = {};
             window._sylvaIndexAnalysisStates[_iaKey][meta.analysisName] = { meta: meta, data: data };
+
+            // 🛠️ BUG FİX: Katmanlar arası geçişte (Analiz Geçiş kutusu) lejant
+            // rengi, o an geçerli olan GENEL/PAYLAŞILAN sınıflandırma ayarlarına
+            // (currentClassificationType, classCountSelect vb.) göre YENİDEN
+            // hesaplanıyordu — bu, geri dönülen katmanın kendi orijinal/özel
+            // lejant renklerini kaybedip başka bir analize ait ayarları
+            // göstermesine yol açıyordu. Artık lejant kutusunun o anki TAM
+            // (gerçek) hâli, birebir bu katmana özel olarak anlık görüntü
+            // (snapshot) alınıp saklanıyor; katmana geri dönüldüğünde bu
+            // snapshot birebir geri yüklenecek — hiçbir yeniden hesaplama
+            // yapılmayacak, orijinal renkler asla değişmeyecek.
+            window._sylvaLayerLegendSnapshotByPane = window._sylvaLayerLegendSnapshotByPane || { map: {}, map2: {} };
+            var _snapBox = document.getElementById(_pane === 'map2' ? 'map2-legend-box' : 'map-legend-box');
+            if (_snapBox) {
+                window._sylvaLayerLegendSnapshotByPane[_iaKey][meta.analysisName] = {
+                    html: _snapBox.innerHTML,
+                    display: _snapBox.style.display
+                };
+            }
         }
 
         // ── Analiz adına göre galeri ikonunu döndürür ─────────────
