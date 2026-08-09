@@ -10509,10 +10509,18 @@ function selectRamp(name) {
                     if (typeof _rgbGalleryStateFor === 'function') {
                         var _rgbDatasetKey = layerKey.slice(5);
                         var _rgState = _rgbGalleryStateFor(paneId, _rgbDatasetKey);
-                        // 🆕 Konum Senkronizasyonu açıkken Uydu Görüntüsü lejantı da
-                        // Ekran 2'de bağımsızlaşmasın diye HER ZAMAN Ekran 1'in aynı
-                        // veri setine ait scMeta/dsInfo bilgisinden çizilir.
+                        // 🛠️ BUG FİX: Bu blok eskiden senkronizasyon açıkken Ekran 2'nin
+                        // Uydu Görüntüsü lejantını HER ZAMAN Ekran 1'in verisinden
+                        // çiziyordu — Ekran 2'de kendi galerisinden bambaşka bir sahne/
+                        // veri seti seçilmiş olsa bile. Sonuç: Ekran 2'de tıklanan
+                        // görüntü haritada değişse de lejant hiç güncellenmiyor ya da
+                        // Ekran 1'inkiyle karışıyordu. Artık Ekran 1'in verisi SADECE
+                        // Ekran 2'nin bu veri seti için henüz KENDİ verisi yoksa (ör.
+                        // senkronizasyon yeni açılmış, ilk analiz henüz Ekran 2'ye
+                        // yansımış) yedek olarak kullanılır; Ekran 2 kendi verisine
+                        // sahip olur olmaz daima kendi verisi gösterilir.
                         var _useMapRgbForMap2 = (paneId === 'map2') && window._sylvaDualScreenSyncActive &&
+                            !(_rgState && _rgState.scMeta) &&
                             typeof _rgbGalleryStateFor === 'function' &&
                             _rgbGalleryStateFor('map', _rgbDatasetKey) &&
                             _rgbGalleryStateFor('map', _rgbDatasetKey).scMeta;
@@ -10550,19 +10558,27 @@ function selectRamp(name) {
                     // okunan değer aslında az önce ezilmiş yanlış değerdi. Bu yüzden
                     // katmanlar arası geçişte lejant/sınıflandırma sıfırlanıyordu.
                     //
-                    // 🆕 Konum Senkronizasyonu açıkken Ekran 2'nin lejant ayarları
-                    // ARTIK KENDİ (Ekran 2'ye özel) snapshot'ından değil, HER ZAMAN
-                    // Ekran 1'in o katmana ait snapshot'ından okunur — böylece Ekran
-                    // 2'de analizler arası geçiş yapılırken lejant Ekran 1'dekiyle
-                    // birebir aynı kalır, asla kendi başına farklılaşmaz.
+                    // 🛠️ BUG FİX: Bu blok eskiden senkronizasyon açıkken Ekran 2'nin
+                    // lejant ayarlarını HER ZAMAN Ekran 1'in o katmana ait
+                    // snapshot'ından okuyordu — Ekran 2'de bambaşka bir analiz
+                    // (ör. NDWI) çalıştırılıp seçilmiş olsa bile. Sonuç: Ekran 2'de
+                    // farklı bir analiz seçilip çalıştırıldığında harita güncellense
+                    // de lejant hep Ekran 1'deki (veya hiç) değeri göstermeye devam
+                    // ediyordu. Artık Ekran 1'in snapshot'ı SADECE Ekran 2'nin bu
+                    // katman için henüz KENDİ snapshot'ı yoksa (ör. senkronizasyon
+                    // yeni açılmış, ilk analiz henüz yansımış) yedek olarak
+                    // kullanılır; Ekran 2 kendi analizini çalıştırır çalıştırmaz
+                    // daima kendi lejantı gösterilir.
+                    var _ownLegendSnap = window._sylvaLayerLegendSnapshotByPane &&
+                        window._sylvaLayerLegendSnapshotByPane[key] &&
+                        window._sylvaLayerLegendSnapshotByPane[key][layerKey];
                     var _useMapSnapForMap2 = (paneId === 'map2') && window._sylvaDualScreenSyncActive &&
+                        !_ownLegendSnap &&
                         window._sylvaLayerLegendSnapshotByPane && window._sylvaLayerLegendSnapshotByPane.map &&
                         window._sylvaLayerLegendSnapshotByPane.map[layerKey];
                     var _legendSnap = _useMapSnapForMap2
                         ? window._sylvaLayerLegendSnapshotByPane.map[layerKey]
-                        : (window._sylvaLayerLegendSnapshotByPane &&
-                           window._sylvaLayerLegendSnapshotByPane[key] &&
-                           window._sylvaLayerLegendSnapshotByPane[key][layerKey]);
+                        : _ownLegendSnap;
 
                     try {
                         // skipClassifyRecalc=true: snapshot varsa paylaşılan
