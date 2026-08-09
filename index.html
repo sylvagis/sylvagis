@@ -10425,22 +10425,36 @@ function selectRamp(name) {
                 // Görüntüsü Analizi (Ham Bant) bilgilerini geri getir —
                 // önceden bu bilgiler sadece son yüklenen veri setine ait
                 // kalıp diğer katmana geçilince güncellenmeden/boş görünüyordu.
-                if (typeof renderRgbGalleryCards === 'function') renderRgbGalleryCards(paneId);
-                if (typeof _rgbGalleryStateFor === 'function') {
-                    var _rgbDatasetKey = layerKey.slice(5);
-                    var _rgState = _rgbGalleryStateFor(paneId, _rgbDatasetKey);
-                    if (_rgState && _rgState.scMeta && typeof renderRgbLegend === 'function') {
-                        renderRgbLegend(_rgState.scMeta, _rgState.dsInfo, paneId);
+                // 🛠️ BUG FİX: Her adım artık KENDİ try/catch bloğunda çalışır.
+                // Eskiden bu adımlardan biri (ör. editör durumu geri yükleme)
+                // hata verirse, JS o noktada tüm fonksiyonu sessizce durdurup
+                // SONRAKİ adımları (galeri/lejant güncellemesi) hiç çalıştırmıyordu.
+                // Bu da tam olarak bildirilen belirtiye uyuyordu: Ekran 2 hiç
+                // "aktif" yapılmadan tıklanınca bazı şeyler (haritadaki görüntü)
+                // değişiyor ama galeri/lejant değişmiyordu — çünkü aradaki bir
+                // adım sessizce patlayıp geri kalanı iptal ediyordu.
+                try {
+                    if (typeof renderRgbGalleryCards === 'function') renderRgbGalleryCards(paneId);
+                } catch (errGal) { console.error('[Sylva] Galeri güncellenemedi:', errGal); }
+                try {
+                    if (typeof _rgbGalleryStateFor === 'function') {
+                        var _rgbDatasetKey = layerKey.slice(5);
+                        var _rgState = _rgbGalleryStateFor(paneId, _rgbDatasetKey);
+                        if (_rgState && _rgState.scMeta && typeof renderRgbLegend === 'function') {
+                            renderRgbLegend(_rgState.scMeta, _rgState.dsInfo, paneId);
+                        }
+                        if (_rgState && _rgState.activeSceneId && _rgState.meta && _rgState.scMeta &&
+                            paneId === (typeof _sylvaActivePaneId === 'function' ? _sylvaActivePaneId() : 'map') &&
+                            typeof onRawBandsSceneSelected === 'function') {
+                            onRawBandsSceneSelected(_rgState.activeSceneId, _rgState.meta, _rgState.dsInfo, _rgState.scMeta);
+                        }
                     }
-                    if (_rgState && _rgState.activeSceneId && _rgState.meta && _rgState.scMeta &&
-                        paneId === (typeof _sylvaActivePaneId === 'function' ? _sylvaActivePaneId() : 'map') &&
-                        typeof onRawBandsSceneSelected === 'function') {
-                        onRawBandsSceneSelected(_rgState.activeSceneId, _rgState.meta, _rgState.dsInfo, _rgState.scMeta);
+                } catch (errLeg) { console.error('[Sylva] Lejant/Ham Bant güncellenemedi:', errLeg); }
+                try {
+                    if (typeof _sylvaRestoreEditorStateForLayer === 'function') {
+                        _sylvaRestoreEditorStateForLayer(paneId, layerKey);
                     }
-                }
-                if (typeof _sylvaRestoreEditorStateForLayer === 'function') {
-                    _sylvaRestoreEditorStateForLayer(paneId, layerKey);
-                }
+                } catch (errEdit) { console.error('[Sylva] Editör durumu geri yüklenemedi:', errEdit); }
             } else if (layerKey && typeof _sylvaRenderIndexAnalysisResult === 'function') {
                 // 🆕 Öne getirilen katman bir indeks/LULC/TOPO analiziyse (ör.
                 // NDVI, NDWI birlikte çalıştırılmışsa), o analizin kendi Lejant
@@ -10478,9 +10492,14 @@ function selectRamp(name) {
                     // (bkz. _sylvaSaveEditorStateForLayer) panel şimdi ona göre
                     // yeniden kurulur; yoksa panel _sylvaRenderIndexAnalysisResult
                     // tarafından az önce hesaplanan varsayılan durumda kalır.
-                    if (typeof _sylvaRestoreEditorStateForLayer === 'function') {
-                        _sylvaRestoreEditorStateForLayer(paneId, layerKey);
-                    }
+                    // 🛠️ BUG FİX: try/catch ile izole edildi — burada bir hata
+                    // olursa aşağıdaki (asıl) lejant/galeri geri yükleme kodu
+                    // artık ÇALIŞMAYA DEVAM EDER (eskiden sessizce iptal oluyordu).
+                    try {
+                        if (typeof _sylvaRestoreEditorStateForLayer === 'function') {
+                            _sylvaRestoreEditorStateForLayer(paneId, layerKey);
+                        }
+                    } catch (errEdit2) { console.error('[Sylva] Editör durumu geri yüklenemedi:', errEdit2); }
 
                     if (_legendSnap) {
                         var _legendBoxRestore = document.getElementById(paneId === 'map2' ? 'map2-legend-box' : 'map-legend-box');
