@@ -5400,19 +5400,16 @@ tr.class-highlight-active {
             var legendCbSync = document.getElementById('toggle-legend');
             var legendWrapSync = document.getElementById('legend-toggle-row');
             var legendBoxSync = document.getElementById(id === 'map2' ? 'map2-legend-box' : 'map-legend-box');
-            // 🆕 Çift Ekranı/Konumu Senkronize Et açıkken Ekran 2'nin lejantı
-            // artık Ekran 1'den otomatik olarak (mirror ile) geliyor — bu
-            // yüzden Ekran 2 aktif ekran olduğunda lejant ayarları elle
-            // değiştirilemesin diye pasif (disabled) gösterilir. Ekran 1
-            // aktifken veya senkronizasyon kapalıyken davranış eskisi gibi
-            // (içeriğe göre aktif/pasif) devam eder.
-            var _legendSyncLocked = (id === 'map2') &&
-                (window._sylvaWorkspaceSyncActive || window._sylvaDualScreenSyncActive);
+            // 🛠️ DÜZELTME: Ekran 2'nin lejant kontrolleri artık senkronizasyon
+            // açıkken de pasifleştirilmiyor — her ekran kendi lejantını/
+            // sınıflandırmasını bağımsız olarak yönetebilir; bir ekrandaki
+            // değişiklik diğerine karışmaz (bkz. renderDynamicLegend,
+            // recolorCurrentLayerByClasses, syncClassificationToGEE).
             if (legendCbSync && legendBoxSync) {
                 var legendHasContent = legendBoxSync.innerHTML.trim().length > 0;
-                legendCbSync.disabled = _legendSyncLocked || !legendHasContent;
+                legendCbSync.disabled = !legendHasContent;
                 legendCbSync.checked = legendHasContent && legendBoxSync.style.display !== 'none';
-                if (legendWrapSync) legendWrapSync.style.opacity = (legendHasContent && !_legendSyncLocked) ? '1' : '0.4';
+                if (legendWrapSync) legendWrapSync.style.opacity = legendHasContent ? '1' : '0.4';
             }
 
             var infoCbSync = document.getElementById('toggle-info-box');
@@ -6194,6 +6191,39 @@ tr.class-highlight-active {
             if (secondMapEl) secondMapEl.addEventListener('pointerdown', function () { window._sylvaSetActiveMap('map2'); }, true);
             if (mainPaneEl) mainPaneEl.addEventListener('pointerdown', function () { window._sylvaSetActiveMap('map'); }, true);
             if (secondPaneEl) secondPaneEl.addEventListener('pointerdown', function () { window._sylvaSetActiveMap('map2'); }, true);
+        })();
+
+        // 🆕 DÜZELTME: Aktif ekran değiştiğinde (Ekran 1 <-> Ekran 2), sağdaki
+        // "Lejant ve Sembloji" düzenleme paneli (Sınıflandırma Türü / Renk
+        // Paleti / Sınıf satırları / Stretched Min-Max) artık o ekranda EN
+        // ÜSTTE gösterilen analize ait, o ekrana özel kaydedilmiş ayarlarla
+        // otomatik güncellenir. Eskiden panel ekran değiştirilince hiç
+        // yenilenmiyordu — bu yüzden Ekran 2'ye geçilince panelde hâlâ
+        // Ekran 1'in en son düzenlenen analizinin ayarları görünüyordu.
+        (function () {
+            function wrapSetActiveMapForEditorPanel() {
+                if (typeof window._sylvaSetActiveMap !== 'function' || window._sylvaActiveMapWrappedForEditorPanel) return;
+                var _origSetActiveMapForEditor = window._sylvaSetActiveMap;
+                window._sylvaSetActiveMap = function (id) {
+                    var _result = _origSetActiveMapForEditor(id);
+                    try {
+                        var _newPaneId = (id === 'map2') ? 'map2' : 'map';
+                        var _newPaneKey = _newPaneId;
+                        var _newTopKey = (window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[_newPaneKey]) || null;
+                        if (_newTopKey && typeof _sylvaRestoreEditorStateForLayer === 'function') {
+                            _sylvaRestoreEditorStateForLayer(_newPaneId, _newTopKey);
+                        }
+                    } catch (eEditorSwitch) { /* panel yenilenemedi — sessizce geç */ }
+                    return _result;
+                };
+                window._sylvaActiveMapWrappedForEditorPanel = true;
+            }
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', wrapSetActiveMapForEditorPanel);
+            } else {
+                wrapSetActiveMapForEditorPanel();
+            }
+            window.addEventListener('load', wrapSetActiveMapForEditorPanel);
         })();
 
         // 🗺️ Basemap Şeffaflığı — aktif basemap katmanına (tileLayer veya
@@ -9082,7 +9112,12 @@ function selectRamp(name) {
                 _sylvaReplaceGeeLayer(_pane, data.tileUrl, { opacity: 1 });
                 _applyGeeLayerClipMode(_clipMode, _pane);
                 _sylvaApplyAutoOpacity(_pane, meta);
-                if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer({ force: true, srcId: _pane });
+                // 🛠️ DÜZELTME: Lejantı/aralığı elle uygulamak artık KARŞI
+                // EKRANA YANSITILMIYOR — sadece o an aktif olan ekranın kendi
+                // verisine uygulanır. Senkronizasyon açık olsa bile, bir ekranda
+                // elle yapılan lejant/sınıflandırma değişikliği diğer ekranın
+                // verisine karışmaz; her ekran kendi lejantını/sınıflandırmasını
+                // bağımsız olarak korur.
                 // Renklendirilmiş yeni veri haritada hazır olup tamamen ekrana
                 // yansıdığında (tüm karolar yüklenince) yükleme ekranı kapanır.
                 _hideLoadingWhenTileReady(_sylvaCurrentGeeLayer(_pane));
@@ -9516,7 +9551,12 @@ function selectRamp(name) {
                 _sylvaReplaceGeeLayer(_pane, data.tileUrl, { opacity: 1 });
                 _applyGeeLayerClipMode(_clipMode, _pane);
                 _sylvaApplyAutoOpacity(_pane, meta);
-                if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer({ force: true, srcId: _pane });
+                // 🛠️ DÜZELTME: Lejantı/aralığı elle uygulamak artık KARŞI
+                // EKRANA YANSITILMIYOR — sadece o an aktif olan ekranın kendi
+                // verisine uygulanır. Senkronizasyon açık olsa bile, bir ekranda
+                // elle yapılan lejant/sınıflandırma değişikliği diğer ekranın
+                // verisine karışmaz; her ekran kendi lejantını/sınıflandırmasını
+                // bağımsız olarak korur.
                 // Renklendirilmiş yeni veri haritada hazır olup tamamen ekrana
                 // yansıdığında (tüm karolar yüklenince) yükleme ekranı kapanır.
                 _hideLoadingWhenTileReady(_sylvaCurrentGeeLayer(_pane));
@@ -9541,12 +9581,14 @@ function selectRamp(name) {
         var _lastDynamicClasses = null;
         function renderDynamicLegend(classes) {
             _lastDynamicClasses = classes;
-            // 🛠️ BUG FİX: querySelector('.map-legend') sağ üstteki analiz geçiş
-            // kutusunu (#map-layer-switch-box) buluyordu — "Lejantı Uygula"
-            // basınca sınıflar oraya çiziliyordu, gerçek lejant kutusu
-            // (#map-legend-box, sol alt) hiç değişmiyordu. Artık doğrudan
-            // gerçek lejant kutusu hedeflenir.
-            var legendBox = document.getElementById('map-legend-box');
+            // 🛠️ KÖK NEDEN DÜZELTMESİ: Bu fonksiyon eskiden HER ZAMAN sabit
+            // olarak #map-legend-box'ı (Ekran 1) hedefliyordu — Ekran 2 aktif
+            // ekranken "Lejantı Uygula" basılırsa yeni sınıflandırma yanlışlıkla
+            // Ekran 1'in lejant kutusuna yazılıyor, Ekran 2'nin kutusu hiç
+            // güncellenmiyordu. Artık her zaman O AN AKTİF olan ekranın kendi
+            // lejant kutusu hedeflenir; diğer ekranın lejantına dokunulmaz.
+            var _rdlPaneId = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+            var legendBox = document.getElementById(_rdlPaneId === 'map2' ? 'map2-legend-box' : 'map-legend-box');
             if (!legendBox) return;
 
             var titleEl = document.getElementById('classified-title');
@@ -9590,7 +9632,14 @@ function selectRamp(name) {
         // bulunamazsa (örn. henüz gerçek NDVI/raster verisi yüklenmemişse), katman
         // ilk sınıfın rengiyle boyanır ve konsola bilgi notu yazılır.
         function recolorCurrentLayerByClasses(classes) {
-            if (!currentLayer) return;
+            // 🛠️ DÜZELTME: Bu fonksiyon eskiden HER ZAMAN Ekran 1'in AOI
+            // katmanını (currentLayer) boyuyordu — Ekran 2 aktifken
+            // "Lejantı Uygula" çalıştırıldığında bile Ekran 1'in katmanı
+            // etkileniyordu. Artık o an aktif olan ekranın kendi AOI katmanı
+            // (currentLayer / currentLayer2) hedeflenir.
+            var _rclPaneId = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+            var _rclLayer = (_rclPaneId === 'map2') ? currentLayer2 : currentLayer;
+            if (!_rclLayer) return;
 
             var foundNumericData = false;
 
@@ -9611,10 +9660,10 @@ function selectRamp(name) {
                 }
             }
 
-            if (typeof currentLayer.eachLayer === 'function') {
-                currentLayer.eachLayer(styleSingleLayer);
+            if (typeof _rclLayer.eachLayer === 'function') {
+                _rclLayer.eachLayer(styleSingleLayer);
             } else {
-                styleSingleLayer(currentLayer);
+                styleSingleLayer(_rclLayer);
             }
 
             if (!foundNumericData) {
@@ -44470,15 +44519,11 @@ document.addEventListener('keydown', function(e) {
             if (legend2) {
                 if (legend2.innerHTML !== map2Data.legendHTML) legend2.innerHTML = map2Data.legendHTML;
                 legend2.style.display = _sylvaDisplayOrNone(map2Data.legendDisplay);
-                // 🆕 Konum Senkronizasyonu açıkken Ekran 2'nin lejant kutusu artık
-                // Ekran 1'in birebir yansımasıdır; karmaşayı azaltmak için
-                // varsayılan olarak kapalı/şeffaf gösterilir, üstüne tıklanınca
-                // tam açılır (bkz. aşağıdaki click dinleyicisi ve CSS).
-                if (window._sylvaDualScreenSyncActive && !window._sylvaMap2LegendExpanded) {
-                    legend2.classList.add('sylva-legend-collapsed');
-                } else {
-                    legend2.classList.remove('sylva-legend-collapsed');
-                }
+                // 🛠️ DÜZELTME: Ekran 2'nin lejant kutusu artık senkronizasyon
+                // açıkken otomatik olarak küçültülüp/şeffaflaştırılmıyor. Kullanıcı
+                // her zaman tam boyutlu, okunaklı bir lejant görür — tıpkı
+                // Ekran 1'de olduğu gibi.
+                legend2.classList.remove('sylva-legend-collapsed');
             }
             if (info2) {
                 if (info2.innerHTML !== map2Data.infoHTML) info2.innerHTML = map2Data.infoHTML;
@@ -44493,19 +44538,9 @@ document.addEventListener('keydown', function(e) {
     window.sylvaMirrorLegendInfoToMap2 = applyBoxesForBothScreens;
     window.sylvaSyncLegendInfoByPane = function () { captureBox('map'); captureBox('map2'); };
 
-    // 🆕 Ekran 2'nin (kapalı/şeffaf gösterilen) lejant kutusuna tıklanınca
-    // açılır/kapanır (toggle). Konum Senkronizasyonu her kapatılıp
-    // açıldığında bu durum sıfırlanır (bkz. sylvaToggleLocationSync).
-    document.addEventListener('click', function (e) {
-        var box = e.target && e.target.closest ? e.target.closest('#map2-legend-box') : null;
-        if (!box) return;
-        window._sylvaMap2LegendExpanded = !window._sylvaMap2LegendExpanded;
-        if (window._sylvaMap2LegendExpanded) {
-            box.classList.remove('sylva-legend-collapsed');
-        } else if (window._sylvaDualScreenSyncActive) {
-            box.classList.add('sylva-legend-collapsed');
-        }
-    });
+    // 🛠️ DÜZELTME: Ekran 2'nin lejant kutusu artık hiçbir zaman otomatik
+    // küçültülmediği için (bkz. applyBoxesForBothScreens), bu tıklama ile
+    // aç/kapa (toggle) davranışına da gerek kalmadı — kaldırıldı.
 
     function installObservers() {
         var pairs = [
