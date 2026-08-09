@@ -5604,6 +5604,7 @@ tr.class-highlight-active {
         // bağlanmış, isSyncing kilidiyle sonsuz döngüden korunuyor).
         window.sylvaToggleLocationSync = function (checked) {
             window._sylvaDualScreenSyncActive = !!checked;
+            if (checked) window._sylvaSyncFirstAnalysisDone = false;
             var box = document.getElementById('vaw-location-sync-checkbox');
             if (box && box.checked !== window._sylvaDualScreenSyncActive) {
                 box.checked = window._sylvaDualScreenSyncActive;
@@ -5880,6 +5881,14 @@ tr.class-highlight-active {
             // yeniden açıldığında (kutu işaretlendiğinde) her iki ekran
             // tekrar "aynı analiz" varsayılan durumuna döner.
             window._sylvaPaneDiverged = { map: false, map2: false };
+            // 🆕 Senkronizasyon her açıldığında (veya yeniden açıldığında) bir
+            // sonraki "Analizi Çalıştır" tıklaması iki ekrana da aynı analizle
+            // yansısın diye bu bayrak sıfırlanır. İlk analiz sonucu geldikten
+            // sonra true olur; böylece kullanıcı daha sonra tek bir ekranda
+            // farklı bir analiz çalıştırırsa bu artık karşı ekranı ÜZERİNE
+            // YAZMAZ — her ekran kendi başına çalışmaya devam eder (bkz.
+            // runAnalysis() / fetchRgbGallery() içindeki _sylvaMirrorThisRun).
+            window._sylvaSyncFirstAnalysisDone = false;
             var syncBox = document.getElementById('vaw-sync-checkbox');
             if (syncBox && syncBox.checked !== window._sylvaWorkspaceSyncActive) {
                 syncBox.checked = window._sylvaWorkspaceSyncActive;
@@ -11231,6 +11240,19 @@ function selectRamp(name) {
             var metaList = getSelectedAnalysisMetaList();
             if (!metaList.length) { sylvaAlert(t('no_analysis'), 'warning'); return; }
 
+            // 🆕 Bu "Analizi Çalıştır" tıklaması, senkronizasyon açıldıktan sonraki
+            // İLK analizse karşı ekrana da yansıtılır (ikisi de aynı analiz/lejant/
+            // galeriyle açılır). Sonraki tıklamalarda (kullanıcı ekranlardan birinde
+            // farklı bir analiz seçip tekrar çalıştırdığında) artık karşı ekranın
+            // üzerine otomatik yazılmaz — her ekran o andan itibaren bağımsız
+            // çalışır (bkz. _sylvaApplyWorkspaceSync / sylvaToggleLocationSync
+            // içindeki bayrak sıfırlaması). Bayrak, bu tıklamanın fetch'leri daha
+            // sonuçlanmadan hemen tüketilir; böylece aynı anda/art arda gelen
+            // başka bir runAnalysis() çağrısı bunu tekrar tetiklemez.
+            var _sylvaMirrorThisRun = !!(window._sylvaWorkspaceSyncActive || window._sylvaDualScreenSyncActive) &&
+                !window._sylvaSyncFirstAnalysisDone;
+            if (_sylvaMirrorThisRun) window._sylvaSyncFirstAnalysisDone = true;
+
             // 🛰️ Uydu Görüntüsü Galerisi (RGB) — işaretli HER görüntü için ayrı
             // istek atılır; sonuçlar haritaya üst üste eklenir (diğer analizlerle aynı mantık).
             if (metaList[0].isRgbGallery) {
@@ -11243,7 +11265,7 @@ function selectRamp(name) {
                 _clearAllAnalysisOutputs(_pane);
                 _sylvaClearGeeLayers(_pane);
                 metaList.forEach(function (meta) {
-                    if (meta.isRgbGallery) fetchRgbGallery(meta, _pane);
+                    if (meta.isRgbGallery) fetchRgbGallery(meta, _pane, _sylvaMirrorThisRun);
                 });
                 return;
             }
@@ -11355,12 +11377,14 @@ function selectRamp(name) {
                     if (typeof _sylvaRenderLayerSwitchBox === 'function') _sylvaRenderLayerSwitchBox(_pane);
                     _applyGeeLayerClipMode(clipMode, _pane);
                     _sylvaApplyAutoOpacity(_pane, meta);
-                    // 🆕 Artık simetrik: hangi ekranda çalıştırılırsa çalıştırılsın,
-                    // senkronizasyon açıkken sonuç diğer ekrana yansır — TABİİ Kİ
-                    // diğer ekran kullanıcı tarafından manuel farklı analize
-                    // geçirilip "bağımsız" (diverged) işaretlenmediyse (bkz.
-                    // window._sylvaPaneDiverged, _sylvaMirrorDataLayer içinde kontrol edilir).
-                    if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer({ force: true, srcId: _pane });
+                    // 🆕 Senkronizasyon açıldıktan sonraki İLK "Analizi Çalıştır"
+                    // sonucu, hangi ekranda tetiklendiyse tetiklensin, diğer ekrana
+                    // da yansır — böylece ikisi de aynı analiz/lejant ile açılır.
+                    // Bundan sonraki çalıştırmalar (kullanıcı bir ekranda başka bir
+                    // analiz seçip tekrar çalıştırırsa) artık karşı ekranın üzerine
+                    // otomatik yazılmaz — her ekran bağımsız kalır (bkz. _sylvaMirrorThisRun,
+                    // _sylvaApplyWorkspaceSync / sylvaToggleLocationSync içindeki sıfırlama).
+                    if (_sylvaMirrorThisRun && window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer({ force: true, srcId: _pane });
 
                     (function() {
                         var _wsState = (typeof _sylvaPaneState === 'function') ? _sylvaPaneState(_pane) : null;
@@ -12446,7 +12470,7 @@ function selectRamp(name) {
         // AOI + tarih + bulutluluk kriterine uyan gerçek sahneleri (thumbnail
         // önizlemeleriyle birlikte) sunucudan/GEE'den çeker ve galeriyi doldurur.
         // paneId: 'map' (Ekran 1) | 'map2' (Ekran 2) — verilmezse aktif ekran kullanılır.
-        function fetchRgbGallery(meta, paneId) {
+        function fetchRgbGallery(meta, paneId, mirrorThisRun) {
             paneId = (paneId === 'map2') ? 'map2' : 'map';
             var galleryEl = _sylvaGalleryEl(paneId);
             if (!galleryEl) return;
@@ -12514,7 +12538,7 @@ function selectRamp(name) {
 
                 // Galeri açılınca bu veri setinin en güncel sahnesi otomatik gösterilir.
                 var first = _sortedRgbScenes(paneId, meta.datasetKey)[0];
-                if (first) loadRgbScene(first.sceneId, meta, data.dataset, paneId, true);
+                if (first) loadRgbScene(first.sceneId, meta, data.dataset, paneId, true, mirrorThisRun);
                 _ensureDefaultVisibility();
             })
             .catch(function(err) {
@@ -12636,7 +12660,7 @@ function selectRamp(name) {
         // AOI'ye odaklar ve dinamik bilgi kutusu/lejantı + Görüntü Bilgileri
         // panelini günceller. paneId verilmezse aktif ekran kullanılır — bu
         // sayede aynı akış Ekran 1 ve Ekran 2'de birebir aynı şekilde çalışır.
-        function loadRgbScene(sceneId, meta, dsInfo, paneId, _isInitialRun) {
+        function loadRgbScene(sceneId, meta, dsInfo, paneId, _isInitialRun, _mirrorThisRun) {
             paneId = (paneId === 'map2') ? 'map2' : 'map';
             var _aoiForPane = (paneId === 'map2') ? currentLayer2 : currentLayer;
             if (!_aoiForPane) return;
@@ -12700,7 +12724,7 @@ function selectRamp(name) {
                 // açıkken diğer ekrana da yansır — böylece iki ekran analiz
                 // başlar başlamaz aynı görüntüyle başlar, sonrasında galeri
                 // içindeki gezinme her ekranda bağımsız kalır.
-                if (_isInitialRun && window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') {
+                if (_isInitialRun && _mirrorThisRun && window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') {
                     window._sylvaMirrorDataLayer({ force: true, srcId: paneId });
                 }
                 _hideLoadingWhenTileReady(_sylvaCurrentGeeLayer(paneId));
