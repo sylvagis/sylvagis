@@ -9869,6 +9869,19 @@ function selectRamp(name) {
             var layer = L.tileLayer(tileUrl, opts).addTo(targetMap);
             store[layerKey] = layer;
             if (paneId === 'map2') { window._geeLayer2 = layer; } else { _geeLayer = layer; }
+
+            // 🛠️ BUG FİX: Bu katman kullanıcı tarafından daha önce "Analiz Geçiş"
+            // kutusundaki tikten kapatılmışsa (görünürlük=false), yeniden
+            // eklenirken de haritada GÖRÜNMEMELİ — "her ne olursa olsun" gizli
+            // kalmalı. Eskiden bu kontrol hiç yapılmıyor, katman her zaman
+            // görünür ekleniyordu.
+            var _vKey = (paneId === 'map2') ? 'map2' : 'map';
+            window._sylvaLayerVisibleByPane[_vKey] = window._sylvaLayerVisibleByPane[_vKey] || {};
+            if (window._sylvaLayerVisibleByPane[_vKey][layerKey] === false) {
+                try { targetMap.removeLayer(layer); } catch (e) {}
+            } else {
+                window._sylvaLayerVisibleByPane[_vKey][layerKey] = true;
+            }
             return layer;
         }
         function _sylvaClearGeeLayers(paneId) {
@@ -9879,6 +9892,12 @@ function selectRamp(name) {
                 try { targetMap.removeLayer(store[k]); } catch (e) {}
             });
             window._geeLayersByPane[key] = {};
+            // 🛠️ BUG FİX: Yeni bir analiz çalıştırıldığında görünürlük hafızası da
+            // sıfırlanmalı — aksi halde önceki analizden kalan "gizli" bilgisi
+            // yeni katmanlara yanlışlıkla uygulanabiliyor, checkbox durumu ile
+            // haritadaki gerçek durum birbirini tutmuyordu.
+            window._sylvaLayerVisibleByPane = window._sylvaLayerVisibleByPane || { map: {}, map2: {} };
+            window._sylvaLayerVisibleByPane[key] = {};
             window._sylvaTopGeeLayerByPane = window._sylvaTopGeeLayerByPane || { map: null, map2: null };
             window._sylvaTopGeeLayerByPane[key] = null;
             if (typeof _sylvaRenderLayerSwitchBox === 'function') _sylvaRenderLayerSwitchBox(paneId);
@@ -9970,22 +9989,24 @@ function selectRamp(name) {
                 window._sylvaIndexAnalysisStates = window._sylvaIndexAnalysisStates || { map: {}, map2: {} };
                 var _iaState = (window._sylvaIndexAnalysisStates[key] || {})[layerKey];
                 if (_iaState && _iaState.meta && _iaState.data) {
+                    // 🛠️ BUG FİX: Snapshot artık render çağrısından ÖNCE okunuyor.
+                    // Eskiden çağrıdan SONRA okunuyordu ama render fonksiyonu kendi
+                    // içinde kutunun o anki (yanlış/yeniden hesaplanmış) hâlini
+                    // snapshot olarak tekrar kaydediyordu — yani "doğru" diye
+                    // okunan değer aslında az önce ezilmiş yanlış değerdi. Bu yüzden
+                    // katmanlar arası geçişte lejant/sınıflandırma sıfırlanıyordu.
+                    var _legendSnap = window._sylvaLayerLegendSnapshotByPane &&
+                        window._sylvaLayerLegendSnapshotByPane[key] &&
+                        window._sylvaLayerLegendSnapshotByPane[key][layerKey];
+
                     try {
-                        _sylvaRenderIndexAnalysisResult(_iaState.meta, _iaState.data, paneId);
+                        // skipClassifyRecalc=true: snapshot varsa paylaşılan
+                        // sınıflandırma ayarları bu katmana yeniden uygulanmasın.
+                        _sylvaRenderIndexAnalysisResult(_iaState.meta, _iaState.data, paneId, !!_legendSnap);
                     } catch (err) {
                         console.error('[Sylva] Katman geçişinde analiz sonucu (istatistik/grafik) yeniden çizilirken hata:', err);
                     }
 
-                    // 🛠️ BUG FİX: Lejant artık yukarıdaki çağrının (veya genel/
-                    // paylaşılan sınıflandırma ayarlarının) yeniden hesapladığı
-                    // hâliyle DEĞİL — bu katman için daha önce alınmış TAM
-                    // snapshot (analiz tamamlandığındaki veya "Lejantı Uygula"
-                    // ile en son uygulanan hâliyle birebir) ile değiştirilir.
-                    // Bu, katmanlar arası geçişte rengin/aralığın değişmesini
-                    // tamamen önler; verinin orijinal lejantı korunur.
-                    var _legendSnap = window._sylvaLayerLegendSnapshotByPane &&
-                        window._sylvaLayerLegendSnapshotByPane[key] &&
-                        window._sylvaLayerLegendSnapshotByPane[key][layerKey];
                     if (_legendSnap) {
                         var _legendBoxRestore = document.getElementById(paneId === 'map2' ? 'map2-legend-box' : 'map-legend-box');
                         if (_legendBoxRestore) {
@@ -9998,6 +10019,11 @@ function selectRamp(name) {
                             if (typeof window.sylvaMirrorLegendInfoToMap2 === 'function') {
                                 window.sylvaMirrorLegendInfoToMap2();
                             }
+                            // 🛠️ Doğru snapshot'ı hafızaya GERİ yaz — render çağrısı
+                            // sırasında (skip edilmemiş başka bir yerden) bozulmuş
+                            // olabilecek kaydı düzeltip bir sonraki geçiş için de
+                            // doğru veriyi garanti eder.
+                            window._sylvaLayerLegendSnapshotByPane[key][layerKey] = { html: _legendSnap.html, display: _legendSnap.display };
                         }
                         // Bilgi kutusu ve istatistikler hâlâ güncel kalsın (renk
                         // dışındaki içerik), ama lejant rengi/sınıfları yeniden
@@ -10711,7 +10737,7 @@ function selectRamp(name) {
         // bir analiz öne getirildiğinde, o analizin saklı verisiyle bu fonksiyon
         // tekrar çağrılarak Lejant ve Galeri otomatik güncellenir — RGB uydu
         // görüntü galerisiyle birebir aynı mantık.
-        function _sylvaRenderIndexAnalysisResult(meta, data, _pane) {
+        function _sylvaRenderIndexAnalysisResult(meta, data, _pane, skipClassifyRecalc) {
             if (!meta || !data) return;
             var _ibCb = _updateLulcRestrictedUI(isLulcAnalysis(meta.analysisName));
             if (isTopoAnalysis(meta.analysisName)) { _setGalleryPanelRestricted(true); }
@@ -10732,11 +10758,17 @@ function selectRamp(name) {
             }
             if (data.realStats) {
                 applyRealStatsToLegendUI(data.realStats, _pane);
-                if (currentClassificationType === 'classified' && !isLulcAnalysis(meta.analysisName)) {
+                // 🛠️ BUG FİX: skipClassifyRecalc=true iken (katman kutusundan
+                // başka bir analize geçilirken) bu bloğu ATLA — aksi halde o an
+                // ekrandaki PAYLAŞILAN sınıflandırma ayarları (başka bir analize
+                // ait sınıf aralıkları/renkleri) yanlışlıkla bu katmana da
+                // uygulanıyor ve haritadaki rengi bozuyordu.
+                if (!skipClassifyRecalc && currentClassificationType === 'classified' && !isLulcAnalysis(meta.analysisName)) {
                     if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(_pane);
                     buildClassRows(parseInt(classCountSelect.value, 10) || 1);
                     applyClassificationToMap();
                 }
+            }
             }
             if (data.visPalette && Array.isArray(data.visPalette) && data.visPalette.length >= 2) {
                 var _basePalette = data.visPalette.slice();
