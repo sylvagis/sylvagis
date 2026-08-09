@@ -5971,7 +5971,7 @@ tr.class-highlight-active {
             window._sylvaMirrorWorkspaceLayer();
         };
 
-        window._sylvaMirrorDataLayer = function () {
+        window._sylvaMirrorDataLayer = function (opts) {
             if (!(window._sylvaWorkspaceSyncActive || window._sylvaDualScreenSyncActive) || !map2) return;
             if (window._sylvaSyncingData) return;
             window._sylvaSyncingData = true;
@@ -5983,7 +5983,19 @@ tr.class-highlight-active {
                 // analize geçirilmişse (bağımsız/diverged), üzerine otomatik
                 // yazma yapılmaz — o ekran kendi analizini korur. Görünüm
                 // (pan/zoom) senkronizasyonu bundan etkilenmez.
-                if (window._sylvaPaneDiverged && window._sylvaPaneDiverged[dstId]) return;
+                // 🛠️ BUG FİX: Bu kilit eskiden KALICIYDI — kullanıcı bir kez elle
+                // katman değiştirdiğinde (galeri/analiz geçiş kutusundan), o ekran
+                // sonsuza dek "bağımsız" kalıyor ve senkronizasyon açık olsa bile
+                // sonradan çalıştırılan YENİ analizler (ör. farklı topografik
+                // analizler) artık o ekrana hiç yansımıyordu. Artık YENİ bir analiz
+                // sonucu geldiğinde (opts.force === true) bu kilit otomatik olarak
+                // kaldırılıyor — "senkronize" açıkken her yeni analiz, daha önce
+                // elle katman değiştirilmiş olsa bile, her iki ekrana da yansır.
+                if (opts && opts.force) {
+                    if (window._sylvaPaneDiverged) window._sylvaPaneDiverged[dstId] = false;
+                } else if (window._sylvaPaneDiverged && window._sylvaPaneDiverged[dstId]) {
+                    return;
+                }
                 var dstMap = dstId === 'map2' ? map2 : map;
                 var srcLayer = srcId === 'map2' ? window._geeLayer2 : (typeof _geeLayer !== 'undefined' ? _geeLayer : null);
                 if (!srcLayer || !srcLayer._url) return;
@@ -6035,6 +6047,14 @@ tr.class-highlight-active {
                 window._sylvaEditorStateByPane = window._sylvaEditorStateByPane || { map: {}, map2: {} };
                 if (window._sylvaEditorStateByPane[srcKey] && window._sylvaEditorStateByPane[srcKey][srcTopKey] !== undefined) {
                     window._sylvaEditorStateByPane[dstId][srcTopKey] = window._sylvaEditorStateByPane[srcKey][srcTopKey];
+                }
+                // 🆕 Katman bazlı pasta/bar grafik snapshot'ı da hedef ekrana
+                // kopyalanır (LULC/Arazi Örtüsü analizleri) — böylece hedef
+                // ekranda bu katmana daha sonra "Analiz Geçiş" kutusundan geri
+                // dönüldüğünde grafik de doğru şekilde geri yüklenir.
+                window._sylvaChartSnapshotByPane = window._sylvaChartSnapshotByPane || { map: {}, map2: {} };
+                if (window._sylvaChartSnapshotByPane[srcKey] && window._sylvaChartSnapshotByPane[srcKey][srcTopKey] !== undefined) {
+                    window._sylvaChartSnapshotByPane[dstId][srcTopKey] = window._sylvaChartSnapshotByPane[srcKey][srcTopKey];
                 }
                 if (typeof srcTopKey === 'string' && srcTopKey.indexOf('RGB::') === 0) {
                     var _rgbDsKeyM = srcTopKey.slice(5);
@@ -8993,7 +9013,7 @@ function selectRamp(name) {
                 _sylvaReplaceGeeLayer(_pane, data.tileUrl, { opacity: 1 });
                 _applyGeeLayerClipMode(_clipMode, _pane);
                 _sylvaApplyAutoOpacity(_pane, meta);
-                if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer();
+                if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer({ force: true });
                 // Renklendirilmiş yeni veri haritada hazır olup tamamen ekrana
                 // yansıdığında (tüm karolar yüklenince) yükleme ekranı kapanır.
                 _hideLoadingWhenTileReady(_sylvaCurrentGeeLayer(_pane));
@@ -9427,7 +9447,7 @@ function selectRamp(name) {
                 _sylvaReplaceGeeLayer(_pane, data.tileUrl, { opacity: 1 });
                 _applyGeeLayerClipMode(_clipMode, _pane);
                 _sylvaApplyAutoOpacity(_pane, meta);
-                if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer();
+                if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer({ force: true });
                 // Renklendirilmiş yeni veri haritada hazır olup tamamen ekrana
                 // yansıdığında (tüm karolar yüklenince) yükleme ekranı kapanır.
                 _hideLoadingWhenTileReady(_sylvaCurrentGeeLayer(_pane));
@@ -10480,9 +10500,32 @@ function selectRamp(name) {
                             // doğru veriyi garanti eder.
                             window._sylvaLayerLegendSnapshotByPane[key][layerKey] = { html: _legendSnap.html, display: _legendSnap.display };
                         }
-                        // Bilgi kutusu ve istatistikler hâlâ güncel kalsın (renk
-                        // dışındaki içerik), ama lejant rengi/sınıfları yeniden
-                        // hesaplanmasın diye geri kalan bloğu atla.
+                        // 🛠️ BUG FİX: Pasta/bar grafik eskiden burada HİÇ
+                        // güncellenmiyordu — lejant rengi karışmasın diye "geri
+                        // kalan blok" tamamen atlanırken grafik de onunla birlikte
+                        // atlanıyordu ve ekran, bu pane'de en son hesaplanmış
+                        // (başka bir katmana ait) grafiği göstermeye devam
+                        // ediyordu. Artık bu katmana özel grafik verisi (varsa)
+                        // kendi anlık görüntüsünden (window._sylvaChartSnapshotByPane)
+                        // — hiçbir yeniden hesaplama yapılmadan — doğrudan geri
+                        // yükleniyor; yoksa grafik alanı boşaltılıyor (başka bir
+                        // katmana ait eski grafiği göstermeye devam etmesin diye).
+                        var _chartSnap = window._sylvaChartSnapshotByPane &&
+                            window._sylvaChartSnapshotByPane[key] &&
+                            window._sylvaChartSnapshotByPane[key][layerKey];
+                        if (_chartSnap && typeof renderStatsChart === 'function') {
+                            renderStatsChart(_chartSnap, paneId);
+                        } else if (paneId === (typeof _sylvaActivePaneId === 'function' ? _sylvaActivePaneId() : 'map')) {
+                            window._sylvaChartDataByPane = window._sylvaChartDataByPane || { map: null, map2: null };
+                            window._sylvaChartDataByPane[key] = null;
+                            var _chartWrapClear = document.getElementById('stats-chart-svg-wrap');
+                            var _chartTableClear = document.getElementById('stats-chart-table');
+                            if (_chartWrapClear) { _chartWrapClear.className = ''; _chartWrapClear.innerHTML = ''; }
+                            if (_chartTableClear) _chartTableClear.innerHTML = '';
+                        }
+                        // Bilgi kutusu hâlâ güncel kalsın (renk dışındaki içerik),
+                        // ama lejant rengi/sınıfları yeniden hesaplanmasın diye
+                        // geri kalan bloğu atla.
                         _sylvaMirrorLayerSwitch();
                         return;
                     }
@@ -11219,7 +11262,7 @@ function selectRamp(name) {
                     // diğer ekran kullanıcı tarafından manuel farklı analize
                     // geçirilip "bağımsız" (diverged) işaretlenmediyse (bkz.
                     // window._sylvaPaneDiverged, _sylvaMirrorDataLayer içinde kontrol edilir).
-                    if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer();
+                    if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer({ force: true });
 
                     (function() {
                         var _wsState = (typeof _sylvaPaneState === 'function') ? _sylvaPaneState(_pane) : null;
@@ -11796,7 +11839,19 @@ function selectRamp(name) {
                     var areaHa = null;
                     var _lulcAoiLayer = (paneId === 'map2') ? currentLayer2 : currentLayer;
                     try { if (_lulcAoiLayer) areaHa = turf.area(_lulcAoiLayer.toGeoJSON()) / 10000; } catch (e) {}
-                    renderStatsChart({ classes: classesForChart, percentages: percentages, areaHa: areaHa }, paneId);
+                    var _lulcChartData = { classes: classesForChart, percentages: percentages, areaHa: areaHa };
+                    // 🛠️ BUG FİX: Pasta/bar grafik verisi eskiden SADECE ekran
+                    // (pane) bazında saklanıyordu (window._sylvaChartDataByPane),
+                    // katman (layerKey) bazında değil. "Analiz Geçiş" kutusundan
+                    // daha önce görüntülenmiş bir katmana (lejant anlık görüntüsü
+                    // olan) geri dönüldüğünde grafik HİÇ yeniden çizilmiyordu —
+                    // ekran, o pane'de en son hesaplanan (başka bir katmana ait)
+                    // grafiği göstermeye devam ediyordu. Artık bu veri katman
+                    // bazında da (window._sylvaChartSnapshotByPane) saklanıyor;
+                    // bkz. katman geçiş kutusundaki geri yükleme noktası.
+                    window._sylvaChartSnapshotByPane = window._sylvaChartSnapshotByPane || { map: {}, map2: {} };
+                    window._sylvaChartSnapshotByPane[paneId === 'map2' ? 'map2' : 'map'][meta.analysisName] = _lulcChartData;
+                    renderStatsChart(_lulcChartData, paneId);
                     playSylvaChime('analysis');
                 }
             }
@@ -12189,7 +12244,7 @@ function selectRamp(name) {
                 _sylvaReplaceGeeLayer(_pane, data.tileUrl, { opacity: 1 });
                 _applyGeeLayerClipMode(_sceneClipMode, _pane);
                 _sylvaApplyAutoOpacity(_pane, meta);
-                if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer();
+                if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer({ force: true });
                 // Yeni görüntü haritada tamamen görünür hale gelince (tüm karolar
                 // yüklenince) yükleme ekranı otomatik olarak kapanır.
                 _hideLoadingWhenTileReady(_sylvaCurrentGeeLayer(_pane));
@@ -12534,7 +12589,7 @@ function selectRamp(name) {
                 _applyGeeLayerClipMode(_rgbClipMode, paneId);
                 // 🎚️ Gerçek renk (RGB) görüntüsü — tam opaklık en okunaklı sonucu verir
                 _sylvaApplyAutoOpacity(paneId, { isRgbGallery: true });
-                if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer();
+                if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer({ force: true });
                 _hideLoadingWhenTileReady(_sylvaCurrentGeeLayer(paneId));
 
                 // Harita AOI'ye odaklanır
