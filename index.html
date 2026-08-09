@@ -11571,7 +11571,26 @@ function selectRamp(name) {
                 }
                 _clearAllAnalysisOutputs(_pane);
                 _sylvaClearGeeLayers(_pane);
-                metaList.forEach(function (meta) {
+                // 🛠️ BUG FİX (Sensör/Etiket Karışıklığı): Birden fazla uydu
+                // görüntüsü veri seti (ör. Sentinel-2 + Landsat) aynı anda
+                // işaretliyken, her biri için AYRI ve ASENKRON bir sunucu
+                // isteği atılır. Bu istekler ağ gecikmesine bağlı olarak
+                // GÖNDERİLDİKLERİ SIRADAN FARKLI bir sırada yanıt dönebilir.
+                // Eskiden hangi yanıt EN SON gelirse "üstteki katman" (ve
+                // dolayısıyla üstteki açılır etiket / "Kullanılabilir
+                // Analizler" başlığı) onun sensör adına göre ayarlanıyordu —
+                // bu da ekranda görünen gerçek görüntü (ör. Landsat) ile
+                // üstte yazan sensör adının (ör. "Sentinel-2 L2A (BOA)")
+                // birbiriyle uyuşmamasına yol açıyordu. Artık her istek,
+                // işaretlenme SIRASINA göre artan bir sıra numarası
+                // (_seq) taşıyor; "üstteki katman" ataması bu sıraya göre
+                // korunuyor (bkz. loadRgbScene), böylece etiket her zaman
+                // listedeki SON veri setini gösterir — ağ yanıtlarının
+                // hangi sırada döndüğünden bağımsız olarak.
+                window._sylvaRgbTopSeqByPane = window._sylvaRgbTopSeqByPane || { map: -1, map2: -1 };
+                window._sylvaRgbTopSeqByPane[_pane] = -1;
+                metaList.forEach(function (meta, _mIdx) {
+                    meta._seq = _mIdx;
                     if (meta.isRgbGallery) fetchRgbGallery(meta, _pane, _sylvaMirrorThisRun);
                 });
                 return;
@@ -13026,7 +13045,19 @@ function selectRamp(name) {
                 window._sylvaLayerFriendlyNames[_layerKey] = meta.datasetLabel || meta.datasetKey;
                 _sylvaAddGeeLayer(paneId, _layerKey, data.tileUrl, { opacity: 1 });
                 window._sylvaTopGeeLayerByPane = window._sylvaTopGeeLayerByPane || { map: null, map2: null };
-                window._sylvaTopGeeLayerByPane[paneId] = _layerKey;
+                // 🛠️ BUG FİX (Sensör/Etiket Karışıklığı — bkz. dispatch noktasındaki
+                // açıklama): "üstteki katman" artık SADECE bu yanıtın sıra numarası
+                // (meta._seq), o an için kaydedilmiş en yüksek sıra numarasından
+                // KÜÇÜK DEĞİLSE güncellenir. Böylece daha ÖNCE işaretlenmiş bir veri
+                // setinin (ör. Sentinel) yanıtı, ağ gecikmesi yüzünden daha SONRA
+                // işaretlenmiş bir veri setinin (ör. Landsat) yanıtından sonra gelse
+                // bile, üstteki etiketi geriye (yanlış sensöre) döndüremez.
+                window._sylvaRgbTopSeqByPane = window._sylvaRgbTopSeqByPane || { map: -1, map2: -1 };
+                var _thisSeq = (typeof meta._seq === 'number') ? meta._seq : 0;
+                if (_thisSeq >= (window._sylvaRgbTopSeqByPane[paneId] === undefined ? -1 : window._sylvaRgbTopSeqByPane[paneId])) {
+                    window._sylvaRgbTopSeqByPane[paneId] = _thisSeq;
+                    window._sylvaTopGeeLayerByPane[paneId] = _layerKey;
+                }
                 if (typeof _sylvaRenderLayerSwitchBox === 'function') _sylvaRenderLayerSwitchBox(paneId);
                 _applyGeeLayerClipMode(_rgbClipMode, paneId);
                 // 🎚️ Gerçek renk (RGB) görüntüsü — tam opaklık en okunaklı sonucu verir
