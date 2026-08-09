@@ -770,7 +770,7 @@ tr.class-highlight-active {
         .map2-ruler-map-row { display: flex; flex: 1; min-height: 0; }
         .map2-ruler-map-row #map2 { flex: 1; min-width: 0; min-height: 0; }
         .map2-ruler-h canvas, .map2-ruler-v canvas { display: block; }
-        .map2-left-mid { top: 92px; right: 59.5px; left: auto; transform: translateX(50%); }
+        .map2-left-mid { top: 70px; right: 37.5px; left: auto; transform: translateX(50%); }
         /* İkinci harita da ana harita ile aynı yardımcı kontrolleri taşır. */
         .map2-overlay { position: absolute; z-index: 500; pointer-events: none; }
         /* İkinci haritadaki kontroller ana haritanın ortak ölçü ve
@@ -843,17 +843,10 @@ tr.class-highlight-active {
 
         /* Harita İçi Overlay Elemanları — pointer-events ile harita sürüklemesi korunuyor */
         .map-top-right { position: absolute; top: 15px; right: 15px; display: flex; flex-direction: column; gap: 10px; align-items: flex-end; z-index: 500; pointer-events: none; }
-        /* Sağ (çift ekran) haritada, ok kendi 22px'lik cetvel şeridinin altında
-           başladığı için 15px yerine 15+22=37px kullanılmalı — aksi halde
-           .map-top-right'ın top:15 kuralı (aynı önceliğe sahip ama sırada
-           sonra geldiği için) bunu geçersiz kılıp oku sola göre 22px
-           yukarıda gösterir. Bu kural mutlaka .map-top-right'tan SONRA
-           gelmeli. Aynı şekilde sağdaki dikey cetvel şeridi (22px, harita
-           panelinin en sağında) da .map2-overlay'in konum referansı olan
-           .sylva-map2-wrapper'ın İÇİNDE olduğundan, right:15 değeri bu
-           şeritle çakışır (oku cetvelin üstüne bindirir) — right değeri de
-           15+22=37px olmalı ki ok tam soldaki ile aynı hizada dursun. */
-        .map2-top-right { top: 37px; right: 37px; z-index: 600; }
+        /* 🛠️ Hizalama düzeltmesi: Ekran 2'nin yan araç çubuğu artık Ekran 1
+   ile BİREBİR AYNI top/right değerlerini kullanıyor (15px), böylece
+   iki ekranın tuş dizilimi görsel olarak tam simetrik hizalanır. */
+.map2-top-right { top: 15px; right: 15px; z-index: 600; }
         #map2-gallery { top: 37px; right: 37px; }
         .map-control-box { background: rgba(255, 255, 255, 0.95); padding: 10px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); display: flex; align-items: center; gap: 10px; pointer-events: auto; }
 
@@ -2565,7 +2558,7 @@ tr.class-highlight-active {
 
         /* ══ SylvaGIS — Zaman Serisi + Before/After CSS ════════════════════ */
         #btn-chart-line.disabled-chart { opacity: 0.45; cursor: not-allowed; }
-        #btn-before-after.active { background:#1e3a8a !important; color:#fff !important; border-color:#1e3a8a !important; }
+        #btn-before-after.active, #btn-before-after-map2.active { background:#1e3a8a !important; color:#fff !important; border-color:#1e3a8a !important; }
         #before-after-divider { touch-action: none; }
         #sylva-time-slider-bar { box-shadow: 0 -2px 8px rgba(30,58,138,0.08); }
 
@@ -9894,6 +9887,40 @@ function selectRamp(name) {
                 }
                 if (!s.active) _sylvaSwipeClip(paneId, null, 'vertical');
             };
+
+            // 🆕 Ekran geçişlerinde otomatik kapanma: aktif ekran (Ekran 1 <-> Ekran 2)
+            // değiştiğinde, Katman Sıyırıcı her iki ekran için de sıfırlanıp
+            // otomatik olarak devre dışı bırakılır (harita sürüklemesi/pan
+            // normale döner; diğer hiçbir araç kısıtlanmaz — Ekran 2'deki tüm
+            // özellikler Ekran 1 ile aynı kapasitede çalışmaya devam eder).
+            function _sylvaDeactivateSwipe(paneId) {
+                var s = SWIPE[paneId];
+                if (!s || !s.active) return;
+                s.active = false;
+                var button = document.getElementById(paneId === 'map2' ? 'btn-before-after-map2' : 'btn-before-after');
+                if (button) button.classList.remove('active');
+                var lmap = paneId === 'map2' ? map2 : map;
+                if (lmap && lmap.dragging) lmap.dragging.enable();
+                _sylvaSwipeClip(paneId, null, 'vertical');
+            }
+
+            function wrapSetActiveMapForSwipe() {
+                if (typeof window._sylvaSetActiveMap !== 'function' || window._sylvaActiveMapWrappedForSwipe) return;
+                var _origSetActiveMap = window._sylvaSetActiveMap;
+                window._sylvaSetActiveMap = function (id) {
+                    var _result = _origSetActiveMap(id);
+                    _sylvaDeactivateSwipe('map');
+                    _sylvaDeactivateSwipe('map2');
+                    return _result;
+                };
+                window._sylvaActiveMapWrappedForSwipe = true;
+            }
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', wrapSetActiveMapForSwipe);
+            } else {
+                wrapSetActiveMapForSwipe();
+            }
+            window.addEventListener('load', wrapSetActiveMapForSwipe);
         })();
         // ============================================================
         // SylvaGIS YÜKLEME EKRANI — ortak yardımcılar
