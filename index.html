@@ -6200,43 +6200,77 @@ tr.class-highlight-active {
                     return;
                 }
                 var dstMap = dstId === 'map2' ? map2 : map;
-                var srcLayer = srcId === 'map2' ? window._geeLayer2 : (typeof _geeLayer !== 'undefined' ? _geeLayer : null);
-                if (!srcLayer || !srcLayer._url) return;
+                var srcKey = (srcId === 'map2') ? 'map2' : 'map';
 
-                var oldDst = dstId === 'map2' ? window._geeLayer2 : (typeof _geeLayer !== 'undefined' ? _geeLayer : null);
-                _sylvaRemoveLayerFromMap(oldDst, dstMap);
+                // 🛠️ BUG FİX (Ekran 2'de "Analiz Çeşitleri/Üstte Gösterilecek
+                // Katman" kutusu eksik kalıyordu + Sensör/Etiket Karışıklığı):
+                // Bu fonksiyon eskiden HER ZAMAN kaynak ekranın "o an üstteki"
+                // katmanını (window._sylvaTopGeeLayerByPane / son eklenen _geeLayer)
+                // kopyalıyordu. Birden fazla uydu görüntüsü veri seti (ör.
+                // Sentinel-2 + Landsat) ya da birden fazla analiz art arda
+                // çalıştırıldığında, sunucu yanıtları farklı sırada dönebiliyor;
+                // "üstteki katman" artık sadece işaretlenme sırasına (seq) göre
+                // belirleniyor (bkz. loadRgbScene). Ama mirror bunu dikkate
+                // almadan her seferinde "o an üstte ne varsa" onu kopyalıyordu —
+                // bu yüzden sırası erken ama yanıtı GEÇ gelen bir veri seti
+                // (ör. Sentinel) Ekran 2'nin katman deposuna HİÇ eklenmiyor,
+                // üstteki katman (ör. Landsat) tekrar tekrar kopyalanıyordu.
+                // Sonuç: Ekran 1'in "Üstte Gösterilecek Katman" kutusu birden
+                // fazla katmanla doğru çalışırken, Ekran 2'nin deposunda hep
+                // TEK katman kalıyor (kutu 2'den az katmanda gizlendiği için
+                // kuzey okunun yanında hiç görünmüyordu) ve Ekran 2'de uydu
+                // görüntüsü değiştirilemiyordu. Artık çağıran taraf HANGİ
+                // katmanın (opts.layerKey/opts.tileUrl) mirror edileceğini ve bu
+                // katmanın kaynak ekranda GERÇEKTEN üstte olup olmadığını
+                // (opts.isTop) açıkça belirtir — belirtilmezse eskisi gibi
+                // kaynağın o anki üst/son katmanı kopyalanır (geriye dönük
+                // uyumluluk).
+                var explicitLayerKey = (opts && typeof opts.layerKey === 'string' && opts.layerKey) ? opts.layerKey : null;
+                var explicitTileUrl  = (opts && typeof opts.tileUrl  === 'string' && opts.tileUrl)  ? opts.tileUrl  : null;
+                var isTop = !explicitLayerKey || opts.isTop !== false;
 
-                var clone = L.tileLayer(srcLayer._url, {
+                var srcLayer = null;
+                if (explicitLayerKey) {
+                    var _srcStoreLookup = (window._geeLayersByPane && window._geeLayersByPane[srcKey]) ? window._geeLayersByPane[srcKey] : {};
+                    srcLayer = _srcStoreLookup[explicitLayerKey] || null;
+                } else {
+                    srcLayer = srcId === 'map2' ? window._geeLayer2 : (typeof _geeLayer !== 'undefined' ? _geeLayer : null);
+                }
+                var effectiveUrl = explicitTileUrl || (srcLayer && srcLayer._url);
+                if (!effectiveUrl) return;
+
+                var mirrorKey = explicitLayerKey || ((window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[srcKey]) || 'mirrored');
+
+                var clone = L.tileLayer(effectiveUrl, {
                     opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane',
                     // 🛠️ DÜZELTME (Zoom'da Veri Kaybolması): bkz. _sylvaReplaceGeeLayer — maxNativeZoom
                     // artık 16'da tutuluyor, GEE sunucusunun derin zoom'da hesaplanmış
                     // karoları güvenilir üretemediği durumlarda veri kaybolmasın diye.
                     maxZoom: 24, maxNativeZoom: 16,
-                    attribution: srcLayer.options && srcLayer.options.attribution
+                    attribution: srcLayer && srcLayer.options && srcLayer.options.attribution
                 });
-                if (dstId === 'map2') window._geeLayer2 = clone;
-                else _geeLayer = clone;
 
                 // 🆕 Klonlanan katmanı hedef ekranın "Analiz Geçiş" kutusu
                 // deposuna (_geeLayersByPane) da kaydet — böylece hedef
                 // ekranda da bu kutu görünür ve kullanıcı istediğinde bu
                 // katmandan diğer (daha önce hesaplanmış) analizlere manuel
                 // olarak geçiş yapabilir.
-                var srcKey = (srcId === 'map2') ? 'map2' : 'map';
-                var srcTopKey = (window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[srcKey]) || 'mirrored';
                 window._geeLayersByPane = window._geeLayersByPane || { map: {}, map2: {} };
-                var _oldStoreEntry = window._geeLayersByPane[dstId][srcTopKey];
+                var _oldStoreEntry = window._geeLayersByPane[dstId][mirrorKey];
                 if (_oldStoreEntry && _oldStoreEntry !== clone) {
                     try { dstMap.removeLayer(_oldStoreEntry); } catch (eOld) {}
                 }
-                window._geeLayersByPane[dstId][srcTopKey] = clone;
-                window._sylvaTopGeeLayerByPane = window._sylvaTopGeeLayerByPane || { map: null, map2: null };
-                window._sylvaTopGeeLayerByPane[dstId] = srcTopKey;
+                window._geeLayersByPane[dstId][mirrorKey] = clone;
                 window._sylvaLayerFriendlyNames = window._sylvaLayerFriendlyNames || {};
-                if (window._sylvaLayerFriendlyNames[srcTopKey] === undefined &&
+                if (window._sylvaLayerFriendlyNames[mirrorKey] === undefined &&
                     typeof _sylvaLayerFriendlyName === 'function') {
-                    window._sylvaLayerFriendlyNames[srcTopKey] = _sylvaLayerFriendlyName(srcTopKey);
+                    window._sylvaLayerFriendlyNames[mirrorKey] = _sylvaLayerFriendlyName(mirrorKey);
                 }
+                // Kaynaktaki görünürlük durumu (varsa) hedefe de kopyalanır.
+                window._sylvaLayerVisibleByPane = window._sylvaLayerVisibleByPane || { map: {}, map2: {} };
+                window._sylvaLayerVisibleByPane[dstId] = window._sylvaLayerVisibleByPane[dstId] || {};
+                var _srcVisible = window._sylvaLayerVisibleByPane[srcKey] ? window._sylvaLayerVisibleByPane[srcKey][mirrorKey] : undefined;
+                window._sylvaLayerVisibleByPane[dstId][mirrorKey] = (_srcVisible === false) ? false : true;
 
                 // 🆕 Katmana ÖZEL lejant/bilgi kutusu/galeri verisi de hedef
                 // ekranın kendi belleğine kopyalanır — böylece hedef ekranın
@@ -6244,27 +6278,27 @@ tr.class-highlight-active {
                 // geri dönüldüğünde, o katmana ait doğru lejant/bilgi/galeri
                 // (genel/son gösterilenle karışmadan) geri gelir.
                 window._sylvaIndexAnalysisStates = window._sylvaIndexAnalysisStates || { map: {}, map2: {} };
-                if (window._sylvaIndexAnalysisStates[srcKey] && window._sylvaIndexAnalysisStates[srcKey][srcTopKey] !== undefined) {
-                    window._sylvaIndexAnalysisStates[dstId][srcTopKey] = window._sylvaIndexAnalysisStates[srcKey][srcTopKey];
+                if (window._sylvaIndexAnalysisStates[srcKey] && window._sylvaIndexAnalysisStates[srcKey][mirrorKey] !== undefined) {
+                    window._sylvaIndexAnalysisStates[dstId][mirrorKey] = window._sylvaIndexAnalysisStates[srcKey][mirrorKey];
                 }
                 window._sylvaLayerLegendSnapshotByPane = window._sylvaLayerLegendSnapshotByPane || { map: {}, map2: {} };
-                if (window._sylvaLayerLegendSnapshotByPane[srcKey] && window._sylvaLayerLegendSnapshotByPane[srcKey][srcTopKey] !== undefined) {
-                    window._sylvaLayerLegendSnapshotByPane[dstId][srcTopKey] = window._sylvaLayerLegendSnapshotByPane[srcKey][srcTopKey];
+                if (window._sylvaLayerLegendSnapshotByPane[srcKey] && window._sylvaLayerLegendSnapshotByPane[srcKey][mirrorKey] !== undefined) {
+                    window._sylvaLayerLegendSnapshotByPane[dstId][mirrorKey] = window._sylvaLayerLegendSnapshotByPane[srcKey][mirrorKey];
                 }
                 window._sylvaEditorStateByPane = window._sylvaEditorStateByPane || { map: {}, map2: {} };
-                if (window._sylvaEditorStateByPane[srcKey] && window._sylvaEditorStateByPane[srcKey][srcTopKey] !== undefined) {
-                    window._sylvaEditorStateByPane[dstId][srcTopKey] = window._sylvaEditorStateByPane[srcKey][srcTopKey];
+                if (window._sylvaEditorStateByPane[srcKey] && window._sylvaEditorStateByPane[srcKey][mirrorKey] !== undefined) {
+                    window._sylvaEditorStateByPane[dstId][mirrorKey] = window._sylvaEditorStateByPane[srcKey][mirrorKey];
                 }
                 // 🆕 Katman bazlı pasta/bar grafik snapshot'ı da hedef ekrana
                 // kopyalanır (LULC/Arazi Örtüsü analizleri) — böylece hedef
                 // ekranda bu katmana daha sonra "Analiz Geçiş" kutusundan geri
                 // dönüldüğünde grafik de doğru şekilde geri yüklenir.
                 window._sylvaChartSnapshotByPane = window._sylvaChartSnapshotByPane || { map: {}, map2: {} };
-                if (window._sylvaChartSnapshotByPane[srcKey] && window._sylvaChartSnapshotByPane[srcKey][srcTopKey] !== undefined) {
-                    window._sylvaChartSnapshotByPane[dstId][srcTopKey] = window._sylvaChartSnapshotByPane[srcKey][srcTopKey];
+                if (window._sylvaChartSnapshotByPane[srcKey] && window._sylvaChartSnapshotByPane[srcKey][mirrorKey] !== undefined) {
+                    window._sylvaChartSnapshotByPane[dstId][mirrorKey] = window._sylvaChartSnapshotByPane[srcKey][mirrorKey];
                 }
-                if (typeof srcTopKey === 'string' && srcTopKey.indexOf('RGB::') === 0) {
-                    var _rgbDsKeyM = srcTopKey.slice(5);
+                if (typeof mirrorKey === 'string' && mirrorKey.indexOf('RGB::') === 0) {
+                    var _rgbDsKeyM = mirrorKey.slice(5);
                     window._rgbGalleryStates = window._rgbGalleryStates || {};
                     window._rgbGalleryStates[srcKey] = window._rgbGalleryStates[srcKey] || {};
                     window._rgbGalleryStates[dstId] = window._rgbGalleryStates[dstId] || {};
@@ -6274,34 +6308,57 @@ tr.class-highlight-active {
                 }
 
                 var dataState = _sylvaPaneState(dstId);
-                if (dataState.dataEnabled !== false) clone.addTo(dstMap);
+                // Katman her zaman hedef ekranın kendi deposuna/haritasına
+                // eklenir (böylece "Üstte Gösterilecek Katman" kutusundan daha
+                // sonra elle seçilebilir) — sadece bu katman kaynak ekranda
+                // GERÇEKTEN üstteyse (isTop) hedefin de aktif/görünen katmanı
+                // haline getirilir ve zIndex öne alınır.
+                if (window._sylvaLayerVisibleByPane[dstId][mirrorKey] !== false && dataState.dataEnabled !== false) {
+                    clone.addTo(dstMap);
+                }
+                try { if (typeof clone.setZIndex === 'function') clone.setZIndex(isTop ? 20 : 10); } catch (eZ) {}
                 _sylvaSetLayerOpacity(clone, dataState.dataEnabled === false ? 0 : dataState.dataOpacity);
-                if (typeof _sylvaRenderLayerSwitchBox === 'function') _sylvaRenderLayerSwitchBox(dstId);
 
-                // 🎨 Renk paleti / sınıflandırma kuralları (lejant + bilgi kutusu)
-                // da hedef ekrana klonlanır.
-                if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[srcId]) {
-                    window._sylvaLegendInfoByPane[dstId] = Object.assign(
-                        {}, window._sylvaLegendInfoByPane[srcId]
-                    );
-                    if (typeof window.sylvaMirrorLegendInfoToMap2 === 'function') window.sylvaMirrorLegendInfoToMap2();
+                if (isTop) {
+                    var oldDst = dstId === 'map2' ? window._geeLayer2 : (typeof _geeLayer !== 'undefined' ? _geeLayer : null);
+                    if (oldDst && oldDst !== clone) {
+                        try { if (typeof oldDst.setZIndex === 'function') oldDst.setZIndex(10); } catch (eZ2) {}
+                    }
+                    if (dstId === 'map2') window._geeLayer2 = clone;
+                    else _geeLayer = clone;
+                    window._sylvaTopGeeLayerByPane = window._sylvaTopGeeLayerByPane || { map: null, map2: null };
+                    window._sylvaTopGeeLayerByPane[dstId] = mirrorKey;
+
+                    // 🎨 Renk paleti / sınıflandırma kuralları (lejant + bilgi kutusu)
+                    // da hedef ekrana klonlanır — sadece bu katman gerçekten üstteyse,
+                    // aksi halde hedefin mevcut (doğru) lejantı korunur.
+                    if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[srcId]) {
+                        window._sylvaLegendInfoByPane[dstId] = Object.assign(
+                            {}, window._sylvaLegendInfoByPane[srcId]
+                        );
+                        if (typeof window.sylvaMirrorLegendInfoToMap2 === 'function') window.sylvaMirrorLegendInfoToMap2();
+                    }
+
+                    // 🛠️ BUG FİX: Uydu Görüntü Galerisi eskiden hedef ekrana hiç
+                    // kopyalanmıyordu — senkronizasyon açıkken Ekran 2'nin galerisi
+                    // her zaman boş kalıyordu. Artık kaynak ekranın galeri kutusu
+                    // (#map-gallery / #map2-gallery) doğrudan hedef ekranın kendi
+                    // galeri kutusuna kopyalanır. Sadece bu katman üstteyken yapılır
+                    // ki üstte OLMAYAN bir katmanın (geç gelen) galerisi, hedefin o an
+                    // doğru şekilde gösterdiği üst katmanın galerisinin üzerine yazmasın.
+                    try {
+                        var srcGalleryEl = document.getElementById(srcId === 'map2' ? 'map2-gallery' : 'map-gallery');
+                        var dstGalleryEl = document.getElementById(dstId === 'map2' ? 'map2-gallery' : 'map-gallery');
+                        if (srcGalleryEl && dstGalleryEl) {
+                            dstGalleryEl.innerHTML = srcGalleryEl.innerHTML;
+                            dstGalleryEl.style.display = srcGalleryEl.style.display;
+                            dstGalleryEl.style.opacity = srcGalleryEl.style.opacity;
+                            dstGalleryEl.style.pointerEvents = srcGalleryEl.style.pointerEvents;
+                        }
+                    } catch (eGal) { /* galeri kopyalanamadı — sessizce geç */ }
                 }
 
-                // 🛠️ BUG FİX: Uydu Görüntü Galerisi eskiden hedef ekrana hiç
-                // kopyalanmıyordu — senkronizasyon açıkken Ekran 2'nin galerisi
-                // her zaman boş kalıyordu. Artık kaynak ekranın galeri kutusu
-                // (#map-gallery / #map2-gallery) doğrudan hedef ekranın kendi
-                // galeri kutusuna kopyalanır.
-                try {
-                    var srcGalleryEl = document.getElementById(srcId === 'map2' ? 'map2-gallery' : 'map-gallery');
-                    var dstGalleryEl = document.getElementById(dstId === 'map2' ? 'map2-gallery' : 'map-gallery');
-                    if (srcGalleryEl && dstGalleryEl) {
-                        dstGalleryEl.innerHTML = srcGalleryEl.innerHTML;
-                        dstGalleryEl.style.display = srcGalleryEl.style.display;
-                        dstGalleryEl.style.opacity = srcGalleryEl.style.opacity;
-                        dstGalleryEl.style.pointerEvents = srcGalleryEl.style.pointerEvents;
-                    }
-                } catch (eGal) { /* galeri kopyalanamadı — sessizce geç */ }
+                if (typeof _sylvaRenderLayerSwitchBox === 'function') _sylvaRenderLayerSwitchBox(dstId);
             } catch (e) {
                 console.warn('[SylvaGIS] Analiz katmanı yansıtılamadı:', e);
             } finally {
@@ -11760,7 +11817,7 @@ function selectRamp(name) {
                     // Artık mirror çağrısı, bu analizin GERÇEK lejant/galeri/bilgi
                     // içeriği ekrana yazıldıktan SONRA yapılıyor — Ekran 2 artık
                     // her çalıştırılan analiz için doğru içerikle güncelleniyor.
-                    if (_sylvaMirrorThisRun && window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer({ force: true, srcId: _pane });
+                    if (_sylvaMirrorThisRun && window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer({ force: true, srcId: _pane, layerKey: meta.analysisName, tileUrl: data.tileUrl, isTop: true });
                 })
                 .catch(function(err) {
                     _onOneRequestSettled();
@@ -13058,6 +13115,21 @@ function selectRamp(name) {
                     window._sylvaRgbTopSeqByPane[paneId] = _thisSeq;
                     window._sylvaTopGeeLayerByPane[paneId] = _layerKey;
                 }
+                // 🛠️ BUG FİX (Lejant/Bilgi Kutusu ↔ Üst Katman Uyuşmazlığı):
+                // "üstteki katman" (harita üstünde görünen ve katman kutusunda
+                // seçili olan görüntü) SADECE sıra numarası en yüksek olan yanıta
+                // göre güncelleniyordu (yukarıdaki blok), ama lejant/bilgi kutusu
+                // (renderRgbLegend) ve Ham Veri paneli HER yanıt geldiğinde koşulsuz
+                // güncelleniyordu. Sonuç: birden fazla uydu veri seti (ör. Sentinel-2
+                // + Landsat) birlikte işaretlenip çalıştırıldığında, ağ gecikmesi
+                // yüzünden ERKEN sıradaki veri setinin (ör. Sentinel) yanıtı SONRADAN
+                // gelirse — üst katman/dropdown doğru şekilde Landsat'ta kalırken,
+                // lejant/bilgi kutusu yine de Sentinel bilgileriyle EZİLİYORDU. Artık
+                // lejant/bilgi kutusu ve Ham Veri paneli SADECE bu yanıt gerçekten
+                // "üstteki katman" haline geldiyse (ya da o an zaten öyleyse)
+                // güncellenir; aksi halde sadece kendi veri setinin hafızasında
+                // (_gState) saklanır ve kullanıcı o katmana geri döndüğünde gösterilir.
+                var _isTopForPane = (window._sylvaTopGeeLayerByPane[paneId] === _layerKey);
                 if (typeof _sylvaRenderLayerSwitchBox === 'function') _sylvaRenderLayerSwitchBox(paneId);
                 _applyGeeLayerClipMode(_rgbClipMode, paneId);
                 // 🎚️ Gerçek renk (RGB) görüntüsü — tam opaklık en okunaklı sonucu verir
@@ -13071,7 +13143,7 @@ function selectRamp(name) {
                 // başlar başlamaz aynı görüntüyle başlar, sonrasında galeri
                 // içindeki gezinme her ekranda bağımsız kalır.
                 if (_isInitialRun && _mirrorThisRun && window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') {
-                    window._sylvaMirrorDataLayer({ force: true, srcId: paneId });
+                    window._sylvaMirrorDataLayer({ force: true, srcId: paneId, layerKey: _layerKey, tileUrl: data.tileUrl, isTop: _isTopForPane });
                 }
                 _hideLoadingWhenTileReady(_sylvaCurrentGeeLayer(paneId));
 
@@ -13090,7 +13162,6 @@ function selectRamp(name) {
                     });
                 }
                 if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(paneId);
-                renderRgbLegend(data.meta || {}, dsInfo, paneId);
                 // 🆕 Bu veri setinin lejant/analiz verilerini (scMeta + dsInfo)
                 // kendi gState'inde saklıyoruz — böylece katman kutusundan bu
                 // veri setine geri dönüldüğünde (başka bir katman öne alınıp
@@ -13099,10 +13170,15 @@ function selectRamp(name) {
                 _gState.scMeta = data.meta || {};
                 _gState.dsInfo = dsInfo;
                 _gState.sceneMetaSceneId = sceneId;
-                // 📡 Ham Veri (Bantlar) paneli tek/paylaşılan bir kontrol panelidir;
-                // yalnızca o an odaklı/aktif ekran için güncellenir.
-                if (paneId === _sylvaActivePaneId()) {
-                    onRawBandsSceneSelected(sceneId, meta, dsInfo, data.meta || {});
+                // Lejant/bilgi kutusu ve Ham Veri paneli SADECE bu veri seti
+                // gerçekten üstteki katmansa güncellenir (bkz. yukarıdaki BUG FİX notu).
+                if (_isTopForPane) {
+                    renderRgbLegend(data.meta || {}, dsInfo, paneId);
+                    // 📡 Ham Veri (Bantlar) paneli tek/paylaşılan bir kontrol panelidir;
+                    // yalnızca o an odaklı/aktif ekran için güncellenir.
+                    if (paneId === _sylvaActivePaneId()) {
+                        onRawBandsSceneSelected(sceneId, meta, dsInfo, data.meta || {});
+                    }
                 }
                 _ensureDefaultVisibility();
             })
