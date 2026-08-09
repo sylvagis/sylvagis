@@ -11298,19 +11298,74 @@ function selectRamp(name) {
         // kalıyordu, bu davranış artık istenmediği için kaldırıldı.
         // ============================================================
         (function () {
-            var SWIPE = { map: { active: false, clippedEl: null }, map2: { active: false, clippedEl: null } };
+            var SWIPE = { map: { active: false, clippedEls: [] }, map2: { active: false, clippedEls: [] } };
 
             function _sylvaSwipeContainer(paneId) {
                 return document.getElementById(paneId === 'map2' ? 'map2' : 'map');
             }
 
-            // O an o ekranda ÜSTTE gösterilen analiz katmanının kendi DOM
-            // konteynerini döndürür (paylaşılan pane değil) — böylece
-            // kırpma yalnızca bu tek katmanı etkiler.
-            function _sylvaSwipeTargetEl(paneId) {
-                var layer = (typeof _sylvaCurrentGeeLayer === 'function') ? _sylvaCurrentGeeLayer(paneId) : null;
-                if (!layer || typeof layer.getContainer !== 'function') return null;
-                try { return layer.getContainer() || null; } catch (e) { return null; }
+            // 🛠️ KÖK NEDEN DÜZELTMESİ 2 (Sıyırırken "Her Şey Kapanıyormuş Gibi"
+            // Görünme / Renkler Çizgide Tuhaf Karışıyor): Bu fonksiyon eskiden
+            // SADECE _sylvaCurrentGeeLayer() ile takip edilen TEK katmanın
+            // (_geeLayer/_geeLayer2) kendi DOM konteynerini döndürüp
+            // kırpıyordu. Ancak aynı "geeAnalysisPane" içinde EŞ ZAMANLI
+            // olarak başka üst katmanlar da bulunabiliyor — ör. sınıf
+            // vurgulama katmanı (window._classHighlightLayerByPane, zIndex 20)
+            // veya birden fazla veri seti aynı anda seçildiğinde eklenen ek
+            // analiz katmanları (window._geeLayersByPane — bunlar haritadan
+            // KALDIRILMIYOR, sadece setZIndex ile öne/arkaya alınıyor, yani
+            // hepsi DOM'da aynı anda duruyor). Bu ek katmanlar eskiden hiç
+            // kırpılmadığından, sürüklerken kırpılan tek katmanın ÜZERİNDE
+            // tam opak kalmaya devam ediyor, bu da çizginin bir tarafında
+            // beklenen "alt katman/basemap tam görünsün" davranışı yerine
+            // hâlâ (farklı/eski) veri görünmeye devam etmesine — kullanıcının
+            // tarif ettiği "veri hepten kapanıyormuş gibi" tutarsız görünüme —
+            // yol açıyordu.
+            //
+            // NOT: Kırpmayı paylaşılan "geeAnalysisPane" DOM elemanının
+            // KENDİSİNE uygulamak DENENMEDİ/tercih edilmedi — çünkü o pane'in
+            // tüm çocukları position:absolute olduğundan (Leaflet'in
+            // .leaflet-pane kuralı) pane'in kendi kutusu genelde 0×0 boyuta
+            // "çöker"; böyle bir elemana clip-path uygulamak, kesme
+            // çizgisinin konumundan BAĞIMSIZ olarak katmanların TAMAMINI
+            // görünmez yapabilir (tam da şikayet edilen "her şey kapanıyor"
+            // sorununu YENİDEN yaratır). Bunun yerine, halihazırda ekranla
+            // birebir hizalı çalıştığı doğrulanmış YÖNTEM (her katmanın kendi
+            // getContainer() elemanına ayrı ayrı aynı kırpmayı uygulamak)
+            // korunuyor — sadece TEK katman yerine, o an DOM'da bulunan
+            // TÜM analiz katmanları (ana + vurgulama + diğer veri setleri)
+            // bir DİZİ olarak toplanıp hepsine aynı anda uygulanıyor.
+            function _sylvaSwipeTargetEls(paneId) {
+                var key = (paneId === 'map2') ? 'map2' : 'map';
+                var els = [];
+                var seen = null;
+                try { seen = (typeof Set !== 'undefined') ? new Set() : null; } catch (e) { seen = null; }
+                function pushLayer(layer) {
+                    if (!layer || typeof layer.getContainer !== 'function') return;
+                    var el;
+                    try { el = layer.getContainer(); } catch (e) { el = null; }
+                    if (!el) return;
+                    if (seen) { if (seen.has(el)) return; seen.add(el); }
+                    else if (els.indexOf(el) !== -1) return;
+                    els.push(el);
+                }
+                // 1) O an "aktif/üstte" olarak takip edilen ana katman.
+                var mainLayer = (typeof _sylvaCurrentGeeLayer === 'function') ? _sylvaCurrentGeeLayer(paneId) : null;
+                pushLayer(mainLayer);
+                // 2) Aynı ekranda depoda (store) duran TÜM analiz katmanları —
+                //    bunlar haritadan kaldırılmadan setZIndex ile geri planda
+                //    tutulabiliyor, yani DOM'da hâlâ mevcutlar.
+                try {
+                    var store = window._geeLayersByPane && window._geeLayersByPane[key];
+                    if (store) { for (var k in store) { if (Object.prototype.hasOwnProperty.call(store, k)) pushLayer(store[k]); } }
+                } catch (e) {}
+                // 3) Sınıf vurgulama (highlight) katmanı — ayrı bir referansla
+                //    tutulur, yukarıdaki depoların dışında kalır.
+                try {
+                    var hl = window._classHighlightLayerByPane && window._classHighlightLayerByPane[key];
+                    pushLayer(hl);
+                } catch (e) {}
+                return els; // hiç analiz katmanı yoksa boş dizi döner
             }
 
             // Kırpma sınırını, fareyin GERÇEK ekran konumunu (px) hedef
@@ -11332,6 +11387,18 @@ function selectRamp(name) {
 
             function _sylvaSwipeResetClip(targetEl) {
                 if (targetEl) targetEl.style.clipPath = '';
+            }
+
+            // 🆕 Aynı anda kırpılması gereken BİRDEN FAZLA katman (ana + vurgulama
+            // + diğer veri setleri) olabildiğinden, tek elemanlık uygula/sıfırla
+            // yardımcılarını bir DİZİ üzerinde döngüyle çağıran sarmalayıcılar:
+            function _sylvaSwipeApplyClipAll(targetEls, clientX, clientY, orientation) {
+                if (!targetEls) return;
+                for (var i = 0; i < targetEls.length; i++) _sylvaSwipeApplyClip(targetEls[i], clientX, clientY, orientation);
+            }
+            function _sylvaSwipeResetClipAll(targetEls) {
+                if (!targetEls) return;
+                for (var i = 0; i < targetEls.length; i++) _sylvaSwipeResetClip(targetEls[i]);
             }
 
             function _sylvaEnsureSwipeLine(paneId) {
@@ -11358,7 +11425,7 @@ function selectRamp(name) {
                 var line = _sylvaEnsureSwipeLine(paneId);
                 var dragging = false, orientation = 'vertical';
                 var startX = 0, startY = 0;
-                var targetEl = null; // bu sürükleme oturumunda kırpılan katmanın DOM elemanı
+                var targetEls = []; // bu sürükleme oturumunda kırpılan TÜM katmanların DOM elemanları
 
                 function cx(e) { return e.touches ? e.touches[0].clientX : e.clientX; }
                 function cy(e) { return e.touches ? e.touches[0].clientY : e.clientY; }
@@ -11366,20 +11433,20 @@ function selectRamp(name) {
                 function onDown(e) {
                     if (!SWIPE[paneId].active) return;
                     if (e.type === 'mousedown' && e.button !== 0) return; // yalnızca sol tık
-                    // 🆕 Sürükleme başlarken o anki GERÇEK üst katman yeniden
-                    // okunur — "her ne olursa olsun" en güncel/doğru katman
+                    // 🆕 Sürükleme başlarken o anki GERÇEK üst katmanlar yeniden
+                    // okunur — "her ne olursa olsun" en güncel/doğru katman(lar)
                     // hedeflenir (analiz sonradan değişmiş/başka bir katman
                     // öne alınmış olsa bile).
-                    targetEl = _sylvaSwipeTargetEl(paneId);
-                    if (!targetEl) return; // haritada henüz bir analiz katmanı yoksa hiçbir şey yapma
-                    SWIPE[paneId].clippedEl = targetEl;
+                    targetEls = _sylvaSwipeTargetEls(paneId);
+                    if (!targetEls.length) return; // haritada henüz bir analiz katmanı yoksa hiçbir şey yapma
+                    SWIPE[paneId].clippedEls = targetEls;
                     dragging = true;
                     startX = cx(e); startY = cy(e);
                     orientation = 'vertical';
                     line.style.display = 'block';
                 }
                 function onMove(e) {
-                    if (!dragging || !SWIPE[paneId].active || !targetEl) return;
+                    if (!dragging || !SWIPE[paneId].active || !targetEls.length) return;
                     var rect = container.getBoundingClientRect();
                     var x = cx(e), y = cy(e);
                     var dx = Math.abs(x - startX), dy = Math.abs(y - startY);
@@ -11394,7 +11461,7 @@ function selectRamp(name) {
                         line.style.width = '3px'; line.style.height = 'auto';
                         line.style.left = Math.max(0, Math.min(rect.width, x - rect.left)) + 'px';
                     }
-                    _sylvaSwipeApplyClip(targetEl, x, y, orientation);
+                    _sylvaSwipeApplyClipAll(targetEls, x, y, orientation);
                     e.preventDefault();
                 }
                 function onUp() {
@@ -11402,11 +11469,11 @@ function selectRamp(name) {
                     dragging = false;
                     line.style.display = 'none';
                     // 🆕 Fare/parmak bırakılınca kırpma tamamen kaldırılır —
-                    // katman anında normale (tam görünür) döner. Kırpma
+                    // katman(lar) anında normale (tam görünür) döner. Kırpma
                     // efekti sadece basılı tutulup sürüklenirken görünür.
-                    _sylvaSwipeResetClip(targetEl);
-                    SWIPE[paneId].clippedEl = null;
-                    targetEl = null;
+                    _sylvaSwipeResetClipAll(targetEls);
+                    SWIPE[paneId].clippedEls = [];
+                    targetEls = [];
                 }
 
                 container.addEventListener('mousedown', onDown);
@@ -11433,10 +11500,10 @@ function selectRamp(name) {
                     if (s.active) lmap.dragging.disable(); else lmap.dragging.enable();
                 }
                 // Kapatılırken varsa kalan kırpma (ör. sürükleme ortasında
-                // butona tekrar basıldıysa) temizlenir — katman normale döner.
-                if (!s.active && s.clippedEl) {
-                    _sylvaSwipeResetClip(s.clippedEl);
-                    s.clippedEl = null;
+                // butona tekrar basıldıysa) temizlenir — katmanlar normale döner.
+                if (!s.active && s.clippedEls && s.clippedEls.length) {
+                    _sylvaSwipeResetClipAll(s.clippedEls);
+                    s.clippedEls = [];
                 }
             };
 
@@ -11453,7 +11520,7 @@ function selectRamp(name) {
                 if (button) button.classList.remove('active');
                 var lmap = paneId === 'map2' ? map2 : map;
                 if (lmap && lmap.dragging) lmap.dragging.enable();
-                if (s.clippedEl) { _sylvaSwipeResetClip(s.clippedEl); s.clippedEl = null; }
+                if (s.clippedEls && s.clippedEls.length) { _sylvaSwipeResetClipAll(s.clippedEls); s.clippedEls = []; }
             }
 
             function wrapSetActiveMapForSwipe() {
