@@ -5786,8 +5786,10 @@ tr.class-highlight-active {
                 if (!srcLayer || !srcLayer._url) return;
                 var clone = L.tileLayer(srcLayer._url, {
                     opacity: 1, zIndex: (key === srcTopKey ? 20 : 10), crossOrigin: true, pane: 'geeAnalysisPane',
-                    // 🛠️ DÜZELTME (Zoom'da Veri Kaybolması): bkz. _sylvaReplaceGeeLayer
-                    maxZoom: 24, maxNativeZoom: 20,
+                    // 🛠️ DÜZELTME (Zoom'da Veri Kaybolması): bkz. _sylvaReplaceGeeLayer — maxNativeZoom
+                    // artık 16'da tutuluyor, GEE sunucusunun derin zoom'da hesaplanmış
+                    // karoları güvenilir üretemediği durumlarda veri kaybolmasın diye.
+                    maxZoom: 24, maxNativeZoom: 16,
                     attribution: srcLayer.options && srcLayer.options.attribution
                 });
                 window._geeLayersByPane.map2[key] = clone;
@@ -6073,8 +6075,10 @@ tr.class-highlight-active {
 
                 var clone = L.tileLayer(srcLayer._url, {
                     opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane',
-                    // 🛠️ DÜZELTME (Zoom'da Veri Kaybolması): bkz. _sylvaReplaceGeeLayer
-                    maxZoom: 24, maxNativeZoom: 20,
+                    // 🛠️ DÜZELTME (Zoom'da Veri Kaybolması): bkz. _sylvaReplaceGeeLayer — maxNativeZoom
+                    // artık 16'da tutuluyor, GEE sunucusunun derin zoom'da hesaplanmış
+                    // karoları güvenilir üretemediği durumlarda veri kaybolmasın diye.
+                    maxZoom: 24, maxNativeZoom: 16,
                     attribution: srcLayer.options && srcLayer.options.attribution
                 });
                 if (dstId === 'map2') window._geeLayer2 = clone;
@@ -10303,11 +10307,23 @@ function selectRamp(name) {
             // Basemap katmanları (ör. Google) maxZoom:20 desteklediğinden,
             // kullanıcı 18'in ötesine (hangi seviyeye kadar olursa olsun)
             // zoom yaptığında analiz katmanı kare istemeyi bırakıp
-            // kayboluyor, altındaki basemap çıplak görünüyordu. Artık
-            // maxNativeZoom'da (GEE'nin kare ürettiği son seviye) durup,
-            // sonrasında son karolar otomatik büyütülerek (upscale)
-            // gösterilir — veri hiçbir zoom seviyesinde kaybolmaz.
-            var opts = Object.assign({ opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane', maxZoom: 24, maxNativeZoom: 20 }, options || {});
+            // kayboluyor, altındaki basemap çıplak görünüyordu.
+            // 🛠️ DÜZELTME 2 (Hâlâ Kayboluyor — GERÇEK KÖK NEDEN): İlk düzeltmede
+            // maxNativeZoom değeri 20'ye ayarlanmıştı (Google basemap'in kendi
+            // maxZoom'una eşit varsayılarak). Ama bu YANLIŞ varsayımdı: NDVI/NDWI/LST
+            // gibi hesaplanmış (piksel başına sunucu tarafında yeniden hesaplanan)
+            // katmanlar için GEE'nin karo servisi, yüksek zoom'da (özellikle ~zoom 17
+            // ve sonrasında) her karoyu tekrar hesaplamak zorunda kalır; geniş bir
+            // çalışma alanı + derin zoom kombinasyonunda bu hesaplama sunucu
+            // tarafında zaman aşımına uğrar veya boş/hatalı karo döner — basemap
+            // (ham, önceden üretilmiş karo) etkilenmezken analiz katmanı sessizce
+            // kayboluyordu. Artık maxNativeZoom çok daha güvenli bir seviyede (16)
+            // tutuluyor: Leaflet bu seviyeden SONRA sunucudan yeni karo istemeyi
+            // bırakır, bunun yerine son gerçek karoyu optik olarak büyüterek
+            // (upscale) gösterir — kullanıcı istediği kadar (maxZoom:24'e kadar)
+            // zoom yapsa bile veri ARTIK HİÇBİR ZAMAN sunucu hatası yüzünden
+            // kaybolmaz; sadece çok aşırı yakınlaşmada hafif bulanıklaşır.
+            var opts = Object.assign({ opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane', maxZoom: 24, maxNativeZoom: 16 }, options || {});
             var _rgKey = (paneId === 'map2') ? 'map2' : 'map';
             // 🛠️ BUG FİX: Sınıflandırma/Stretched/Sahne değişimi bu fonksiyonu
             // çağırarak katmanı yeniden boyanmış haliyle değiştiriyordu, ama
@@ -10344,7 +10360,7 @@ function selectRamp(name) {
             // 🛠️ DÜZELTME (Zoom'da Veri Kaybolması): bkz. _sylvaReplaceGeeLayer
             // içindeki açıklama — aynı maxZoom/maxNativeZoom eksikliği burada
             // eklenen katmanlar için de geçerliydi.
-            var opts = Object.assign({ opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane', maxZoom: 24, maxNativeZoom: 20 }, options || {});
+            var opts = Object.assign({ opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane', maxZoom: 24, maxNativeZoom: 16 }, options || {});
             var store = window._geeLayersByPane[(paneId === 'map2') ? 'map2' : 'map'];
             if (store[layerKey]) { try { targetMap.removeLayer(store[layerKey]); } catch (e) {} delete store[layerKey]; }
             var layer = L.tileLayer(tileUrl, opts).addTo(targetMap);
@@ -13785,7 +13801,7 @@ function selectRamp(name) {
                 }
                 var _oldLayer = window._classHighlightLayerByPane[_pane];
                 if (_oldLayer) { try { _sylvaTargetMap(_pane).removeLayer(_oldLayer); } catch (e) {} }
-                window._classHighlightLayerByPane[_pane] = L.tileLayer(data.tileUrl, { opacity: 0.95, zIndex: 20, crossOrigin: true, pane: 'geeAnalysisPane', maxZoom: 24, maxNativeZoom: 20 }).addTo(_sylvaTargetMap(_pane));
+                window._classHighlightLayerByPane[_pane] = L.tileLayer(data.tileUrl, { opacity: 0.95, zIndex: 20, crossOrigin: true, pane: 'geeAnalysisPane', maxZoom: 24, maxNativeZoom: 16 }).addTo(_sylvaTargetMap(_pane));
             })
             .catch(function (err) {
                 if (window._classHighlightIndexByPane[_pane] === idx) window._classHighlightIndexByPane[_pane] = null;
