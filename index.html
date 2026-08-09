@@ -9909,7 +9909,42 @@ function selectRamp(name) {
                 window._sylvaIndexAnalysisStates = window._sylvaIndexAnalysisStates || { map: {}, map2: {} };
                 var _iaState = (window._sylvaIndexAnalysisStates[key] || {})[layerKey];
                 if (_iaState && _iaState.meta && _iaState.data) {
-                    _sylvaRenderIndexAnalysisResult(_iaState.meta, _iaState.data, paneId);
+                    try {
+                        _sylvaRenderIndexAnalysisResult(_iaState.meta, _iaState.data, paneId);
+                    } catch (err) {
+                        console.error('[Sylva] Katman geçişinde analiz sonucu (istatistik/grafik) yeniden çizilirken hata:', err);
+                    }
+                    // 🛠️ GARANTİLİ GÜNCELLEME (BUG FİX — Lejant/Bilgi Kutusu katman
+                    // değiştirilince yenilenmiyordu): Yukarıdaki çağrı; istatistik/
+                    // grafik üretimi sırasında bir hata verse BİLE, veya arka
+                    // plandaki pasif MutationObserver/zamanlama tabanlı senkronizasyon
+                    // (setTimeout ile 50ms sonra çalışan sylvaSyncLegendInfoByPane)
+                    // yanlışlıkla o an ODAKLI OLMAYAN ekranı esas alsa BİLE, Lejant ve
+                    // Bilgi Kutusu'nun öne getirilen katmana ait içerikle KESİN olarak
+                    // güncellenmesini sağlamak için burada AYRICA ve DOĞRUDAN (kendi
+                    // try/catch'i içinde, hemen ve senkron olarak) tekrar çizilir.
+                    // Böylece Ekran 1'de de Ekran 2'de de katman değişimi lejant ve
+                    // bilgi kutusuna anında yansır.
+                    try {
+                        renderAnalysisLegend(_iaState.meta, false, paneId);
+                        if (typeof isLulcAnalysis === 'function' && isLulcAnalysis(_iaState.meta.analysisName)
+                            && typeof renderLulcLegendAndChart === 'function') {
+                            renderLulcLegendAndChart(_iaState.meta, _iaState.data.stats, paneId);
+                        }
+                        if (typeof _STATIC_DATASETS !== 'undefined'
+                            && _STATIC_DATASETS.indexOf(_iaState.meta.analysisName) !== -1
+                            && typeof renderDatasetInfoCard === 'function') {
+                            renderDatasetInfoCard(_iaState.meta.analysisName, paneId);
+                        }
+                        // Ekran 1 / Ekran 2 kutularının (tekli veya çift ekran fark
+                        // etmeksizin) güncel hafızaya göre hemen eşitlenmesini sağla —
+                        // 50ms'lik gecikmeli pasif senkronizasyonu beklemeden.
+                        if (typeof window.sylvaMirrorLegendInfoToMap2 === 'function') {
+                            window.sylvaMirrorLegendInfoToMap2();
+                        }
+                    } catch (err2) {
+                        console.error('[Sylva] Lejant/Bilgi Kutusu garanti güncellemesi başarısız oldu:', err2);
+                    }
                 }
             }
         }
