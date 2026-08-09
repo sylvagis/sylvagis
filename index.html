@@ -11304,37 +11304,29 @@ function selectRamp(name) {
                 return document.getElementById(paneId === 'map2' ? 'map2' : 'map');
             }
 
-            // 🛠️ KÖK NEDEN DÜZELTMESİ 2 (Sıyırırken "Her Şey Kapanıyormuş Gibi"
-            // Görünme / Renkler Çizgide Tuhaf Karışıyor): Bu fonksiyon eskiden
-            // SADECE _sylvaCurrentGeeLayer() ile takip edilen TEK katmanın
-            // (_geeLayer/_geeLayer2) kendi DOM konteynerini döndürüp
-            // kırpıyordu. Ancak aynı "geeAnalysisPane" içinde EŞ ZAMANLI
-            // olarak başka üst katmanlar da bulunabiliyor — ör. sınıf
-            // vurgulama katmanı (window._classHighlightLayerByPane, zIndex 20)
-            // veya birden fazla veri seti aynı anda seçildiğinde eklenen ek
-            // analiz katmanları (window._geeLayersByPane — bunlar haritadan
-            // KALDIRILMIYOR, sadece setZIndex ile öne/arkaya alınıyor, yani
-            // hepsi DOM'da aynı anda duruyor). Bu ek katmanlar eskiden hiç
-            // kırpılmadığından, sürüklerken kırpılan tek katmanın ÜZERİNDE
-            // tam opak kalmaya devam ediyor, bu da çizginin bir tarafında
-            // beklenen "alt katman/basemap tam görünsün" davranışı yerine
-            // hâlâ (farklı/eski) veri görünmeye devam etmesine — kullanıcının
-            // tarif ettiği "veri hepten kapanıyormuş gibi" tutarsız görünüme —
-            // yol açıyordu.
+            // 🛠️ KÖK NEDEN DÜZELTMESİ 3 (Sıyırırken Alttaki Analiz Katmanı da
+            // Kayboluyor, Basemap Görünüyor): Bir önceki düzeltmede (v2→v3
+            // arası) "aynı pane'deki TÜM katmanları birlikte kırp" mantığına
+            // geçilmişti; bu YANLIŞTI. ArcMap'in Swipe (Sıyırma) aracında
+            // SADECE tek bir HEDEF katman seçilir ve sürüklerken YALNIZCA o
+            // katman geri çekilir — altında zaten ne varsa (başka bir analiz
+            // katmanı ya da basemap) dokunulmadan, olduğu gibi ortaya çıkar.
+            // Alttaki katmana ASLA kırpma uygulanmaz.
             //
-            // NOT: Kırpmayı paylaşılan "geeAnalysisPane" DOM elemanının
-            // KENDİSİNE uygulamak DENENMEDİ/tercih edilmedi — çünkü o pane'in
-            // tüm çocukları position:absolute olduğundan (Leaflet'in
-            // .leaflet-pane kuralı) pane'in kendi kutusu genelde 0×0 boyuta
-            // "çöker"; böyle bir elemana clip-path uygulamak, kesme
-            // çizgisinin konumundan BAĞIMSIZ olarak katmanların TAMAMINI
-            // görünmez yapabilir (tam da şikayet edilen "her şey kapanıyor"
-            // sorununu YENİDEN yaratır). Bunun yerine, halihazırda ekranla
-            // birebir hizalı çalıştığı doğrulanmış YÖNTEM (her katmanın kendi
-            // getContainer() elemanına ayrı ayrı aynı kırpmayı uygulamak)
-            // korunuyor — sadece TEK katman yerine, o an DOM'da bulunan
-            // TÜM analiz katmanları (ana + vurgulama + diğer veri setleri)
-            // bir DİZİ olarak toplanıp hepsine aynı anda uygulanıyor.
+            // Bu yüzden artık burada SADECE şunlar kırpma hedefi:
+            //   1) O an üstte (zIndex 20) gösterilen ana analiz katmanı
+            //      (_sylvaCurrentGeeLayer ile takip edilen _geeLayer/_geeLayer2)
+            //   2) Onun üzerine binen sınıf vurgulama katmanı
+            //      (window._classHighlightLayerByPane) — bu, üstteki katmanın
+            //      görsel bir PARÇASI (aynı sınıflandırmayı vurgulamak için
+            //      üstüne eklenir), o yüzden üst katmanla BİRLİKTE hareket
+            //      etmesi doğrudur.
+            // window._geeLayersByPane deposundaki DİĞER (zIndex 10, yani daha
+            // ALTTA duran) veri seti katmanlarına KASITLI OLARAK dokunulmuyor
+            // — swipe sırasında kesilen bölgede tam olarak onlar görünsün
+            // diye. Böylece: üstteki tek katman kesilir, altındaki (başka bir
+            // analiz katmanı VEYA hiçbiri yoksa basemap) tam ve dokunulmamış
+            // olarak ortaya çıkar — ArcMap Swipe ile birebir aynı mantık.
             function _sylvaSwipeTargetEls(paneId) {
                 var key = (paneId === 'map2') ? 'map2' : 'map';
                 var els = [];
@@ -11349,22 +11341,19 @@ function selectRamp(name) {
                     else if (els.indexOf(el) !== -1) return;
                     els.push(el);
                 }
-                // 1) O an "aktif/üstte" olarak takip edilen ana katman.
+                // 1) O an "aktif/üstte" olarak takip edilen TEK ana katman —
+                //    kırpma hedefi budur, sıyırma yalnızca bunu etkiler.
                 var mainLayer = (typeof _sylvaCurrentGeeLayer === 'function') ? _sylvaCurrentGeeLayer(paneId) : null;
                 pushLayer(mainLayer);
-                // 2) Aynı ekranda depoda (store) duran TÜM analiz katmanları —
-                //    bunlar haritadan kaldırılmadan setZIndex ile geri planda
-                //    tutulabiliyor, yani DOM'da hâlâ mevcutlar.
-                try {
-                    var store = window._geeLayersByPane && window._geeLayersByPane[key];
-                    if (store) { for (var k in store) { if (Object.prototype.hasOwnProperty.call(store, k)) pushLayer(store[k]); } }
-                } catch (e) {}
-                // 3) Sınıf vurgulama (highlight) katmanı — ayrı bir referansla
-                //    tutulur, yukarıdaki depoların dışında kalır.
+                // 2) O ana katmanın üzerine binen sınıf vurgulama (highlight)
+                //    katmanı — üst katmanla birlikte, aynı anda kırpılır.
                 try {
                     var hl = window._classHighlightLayerByPane && window._classHighlightLayerByPane[key];
                     pushLayer(hl);
                 } catch (e) {}
+                // 🚫 window._geeLayersByPane deposundaki DİĞER katmanlara
+                // (varsa daha alttaki başka veri setleri) BİLEREK dokunulmuyor
+                // — kırpılan bölgede onlar dokunulmadan tam görünsün diye.
                 return els; // hiç analiz katmanı yoksa boş dizi döner
             }
 
