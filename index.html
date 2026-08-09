@@ -5839,6 +5839,22 @@ tr.class-highlight-active {
                     );
                     if (typeof window.sylvaMirrorLegendInfoToMap2 === 'function') window.sylvaMirrorLegendInfoToMap2();
                 }
+
+                // 🛠️ BUG FİX: Uydu Görüntü Galerisi eskiden hedef ekrana hiç
+                // kopyalanmıyordu — senkronizasyon açıkken Ekran 2'nin galerisi
+                // her zaman boş kalıyordu. Artık kaynak ekranın galeri kutusu
+                // (#map-gallery / #map2-gallery) doğrudan hedef ekranın kendi
+                // galeri kutusuna kopyalanır.
+                try {
+                    var srcGalleryEl = document.getElementById(srcId === 'map2' ? 'map2-gallery' : 'map-gallery');
+                    var dstGalleryEl = document.getElementById(dstId === 'map2' ? 'map2-gallery' : 'map-gallery');
+                    if (srcGalleryEl && dstGalleryEl) {
+                        dstGalleryEl.innerHTML = srcGalleryEl.innerHTML;
+                        dstGalleryEl.style.display = srcGalleryEl.style.display;
+                        dstGalleryEl.style.opacity = srcGalleryEl.style.opacity;
+                        dstGalleryEl.style.pointerEvents = srcGalleryEl.style.pointerEvents;
+                    }
+                } catch (eGal) { /* galeri kopyalanamadı — sessizce geç */ }
             } catch (e) {
                 console.warn('[SylvaGIS] Analiz katmanı yansıtılamadı:', e);
             } finally {
@@ -8663,6 +8679,23 @@ function selectRamp(name) {
                 if (_aslTopKey && typeof _sylvaSaveEditorStateForLayer === 'function') {
                     _sylvaSaveEditorStateForLayer(_aslPaneId, _aslTopKey);
                 }
+                // 🛠️ BUG FİX: Gerili (stretched/gradyan) modda "Lejantı Uygula"
+                // basıldığında yalnızca DÜZENLEME paneli (sağdaki Renk Paleti/
+                // Min-Max) snapshot'a kaydediliyordu; lejant KUTUSUNUN kendisi
+                // (sol alttaki gerçek renk çubuğu) hiç kaydedilmiyordu. Sonuç:
+                // başka bir katmana (Analiz Geçiş kutusundan) geçilip geri
+                // dönüldüğünde panel doğru rengi gösterirken, harita üzerindeki
+                // gerçek lejant çubuğu snapshot bulunamadığı için varsayılan/
+                // eski renge sıfırlanıyordu. Sınıflandırılmış (classified) modda
+                // applyClassificationToMap() bu kaydı zaten yapıyordu — aynı
+                // mantık burada da uygulanır.
+                if (_aslTopKey && legendBox) {
+                    window._sylvaLayerLegendSnapshotByPane = window._sylvaLayerLegendSnapshotByPane || { map: {}, map2: {} };
+                    window._sylvaLayerLegendSnapshotByPane[_aslKey][_aslTopKey] = {
+                        html: legendBox.innerHTML,
+                        display: legendBox.style.display
+                    };
+                }
             })();
 
             // ── GEE senkronizasyonu: Stretched modda da artık classified moddaki
@@ -10125,6 +10158,21 @@ function selectRamp(name) {
 
             _sylvaRenderLayerSwitchBox(paneId);
 
+            // 🛠️ BUG FİX: Analiz Geçiş kutusundan (üstte gösterilecek katman
+            // seçimi) başka bir katmana geçildiğinde, senkronizasyon açıksa bu
+            // değişiklik diğer ekrana hiç yansımıyordu — yan ekran ancak yeni
+            // bir analiz ÇALIŞTIRILDIĞINDA güncelleniyordu. Artık, bu fonksiyon
+            // ilgili katmanın görüntüsünü/lejantını/bilgi kutusunu güncellemeyi
+            // BİTİRDİKTEN sonra (aşağıdaki çıkış noktalarında) aktif ekrandaki
+            // güncel durum diğer ekrana (görüntü + lejant + bilgi kutusu +
+            // galeri) otomatik olarak yansıtılır — bkz. _sylvaMirrorLayerSwitch().
+            function _sylvaMirrorLayerSwitch() {
+                if (paneId === (typeof _sylvaActivePaneId === 'function' ? _sylvaActivePaneId() : 'map') &&
+                    window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') {
+                    window._sylvaMirrorDataLayer();
+                }
+            }
+
             if (layerKey && layerKey.indexOf('RGB::') === 0) {
                 // 🆕 Öne getirilen katman bir uydu görüntüsü (RGB) katmanıysa;
                 // Uydu Görüntü Galerisi'ni ve o veri setine ait Lejant + Uydu
@@ -10209,6 +10257,7 @@ function selectRamp(name) {
                         // Bilgi kutusu ve istatistikler hâlâ güncel kalsın (renk
                         // dışındaki içerik), ama lejant rengi/sınıfları yeniden
                         // hesaplanmasın diye geri kalan bloğu atla.
+                        _sylvaMirrorLayerSwitch();
                         return;
                     }
 
@@ -10239,6 +10288,8 @@ function selectRamp(name) {
                     }
                 }
             }
+
+            _sylvaMirrorLayerSwitch();
         }
 
         // 🔽 Katman kutusu artık açılır/kapanır (collapsible): bir katman
@@ -43888,14 +43939,13 @@ var infoSrc = document.getElementById(pane === 'map2' ? 'map2-info-box' : 'map-i
             // ama lejant/bilgi kutusu bu kopyalamadan haberdar değildi, bu yüzden
             // Ekran 2'nin kutusu senkron modda hiçbir zaman dolmuyordu. Senkron
             // mod açıkken Ekran 2 kutusu da doğrudan Ekran 1'in verisini kullanır.
-            // 🛠️ DEĞİŞİKLİK: "Çift Ekranı Senkronize Et" açıkken Ekran 2'nin lejant/
-// bilgi kutusu artık Ekran 1'in verisini KOPYALAMIYOR — bilerek boş/temiz
-// tutuluyor. Sadece Ekran 1'de lejant, bilgi kutusu ve uydu görüntü
-// galerisi görünsün isteniyor; Ekran 2 sadece haritayı (mirror edilen veri
-// katmanını) gösterir, kutuları boş kalır.
-var map2Data = window._sylvaWorkspaceSyncActive
-    ? { legendHTML: '', legendDisplay: 'none', infoHTML: '', infoDisplay: 'none' }
-    : window._sylvaLegendInfoByPane.map2;
+            // 🛠️ DEĞİŞİKLİK: Eskiden "Çift Ekranı Senkronize Et" açıkken Ekran 2'nin
+// lejant/bilgi kutusu bilerek boş/temiz tutuluyordu (sadece Ekran 1'de
+// görünsün diye). Artık her ekran KENDİ verisini (window._sylvaLegendInfoByPane.map2)
+// gösterir — senkronizasyon açıkken bu veri _sylvaMirrorDataLayer() tarafından
+// Ekran 1'in son analiziyle güncel tutulur, böylece Ekran 2 de kendi
+// sınırları içinde aynı lejant/bilgi kutusunu otomatik gösterir.
+var map2Data = window._sylvaLegendInfoByPane.map2;
 
             var legend1 = document.getElementById('map-legend-box');
             var info1   = document.getElementById('map-info-box');
