@@ -9329,6 +9329,40 @@ function selectRamp(name) {
             return null;
         }
 
+        function getSelectedAnalysisMetaList() {
+            var checkedGoruntu = document.querySelector('.uydu-goruntu-radio:checked');
+            if (checkedGoruntu) return [getSelectedAnalysisMeta()];
+            var list = [];
+            document.querySelectorAll('.uydu-analiz-checkbox:checked').forEach(function (cb) {
+                var sensorRadio = document.querySelector('.uydu-sensor-radio:checked');
+                list.push({
+                    analysisName: cb.getAttribute('data-analysis') || 'Analiz',
+                    rampKey: cb.getAttribute('data-ramp-key') || 'black-white',
+                    legendType: 'stretched',
+                    legendMin: cb.getAttribute('data-legend-min') || '-1',
+                    legendMax: cb.getAttribute('data-legend-max') || '+1',
+                    classesRaw: null,
+                    sensorLabel: sensorRadio ? sensorRadio.getAttribute('data-sensor-label') : null,
+                    needsGallery: true
+                });
+            });
+            if (list.length) return list;
+            document.querySelectorAll('.option-item input[name="sylva-module"][data-analysis]:checked').forEach(function (checked) {
+                var legendType = checked.getAttribute('data-legend-type') || 'stretched';
+                list.push({
+                    analysisName: checked.getAttribute('data-analysis') || 'Veri',
+                    rampKey: checked.getAttribute('data-ramp-key') || 'black-white',
+                    legendType: legendType,
+                    legendMin: checked.getAttribute('data-legend-min') || '-1',
+                    legendMax: checked.getAttribute('data-legend-max') || '+1',
+                    classesRaw: checked.getAttribute('data-legend-classes'),
+                    sensorLabel: null,
+                    needsGallery: legendType === 'image'
+                });
+            });
+            return list;
+        }
+
         // Lejantı (harita üzerindeki .map-legend kutusu) meta bilgisinden yeniden çizer.
         // (Eski runAnalysis() içindeki lejant üretim mantığının doğrudan devamıdır;
         //  ek olarak: ramp CSS'in YANLIŞLIKLA iki kere "linear-gradient(...)" içine
@@ -9748,6 +9782,27 @@ function selectRamp(name) {
             _geeLayer = L.tileLayer(tileUrl, opts).addTo(targetMap);
             return _geeLayer;
         }
+
+        window._geeLayersByPane = window._geeLayersByPane || { map: {}, map2: {} };
+        function _sylvaAddGeeLayer(paneId, layerKey, tileUrl, options) {
+            var targetMap = _sylvaTargetMap(paneId);
+            var opts = Object.assign({ opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane' }, options || {});
+            var store = window._geeLayersByPane[(paneId === 'map2') ? 'map2' : 'map'];
+            if (store[layerKey]) { try { targetMap.removeLayer(store[layerKey]); } catch (e) {} delete store[layerKey]; }
+            var layer = L.tileLayer(tileUrl, opts).addTo(targetMap);
+            store[layerKey] = layer;
+            if (paneId === 'map2') { window._geeLayer2 = layer; } else { _geeLayer = layer; }
+            return layer;
+        }
+        function _sylvaClearGeeLayers(paneId) {
+            var targetMap = _sylvaTargetMap(paneId);
+            var key = (paneId === 'map2') ? 'map2' : 'map';
+            var store = window._geeLayersByPane[key];
+            Object.keys(store).forEach(function (k) {
+                try { targetMap.removeLayer(store[k]); } catch (e) {}
+            });
+            window._geeLayersByPane[key] = {};
+        }
         // 🎚️ Otomatik Veri Şeffaflığı: en üstteki katmana/analiz türüne göre
         // makul bir varsayılan şeffaflık uygular (kullanıcı isterse slider'dan
         // yine elle değiştirebilir). Gerçek renk (RGB) görüntüleri ve Ham Bant
@@ -10072,13 +10127,11 @@ function selectRamp(name) {
         }
 
         function runAnalysis() {
-            // Kullanıcı Bilgileri formu doldurulmadan analiz başlatılamaz
             if (window._sylvaUserDone === false) {
                 if (typeof window.sylvaOpenLogin === 'function') window.sylvaOpenLogin();
                 return;
             }
 
-            // Her analiz başlatıldığında ilgili ekranda "Çalışma Alanı" açılsın.
             (function _sylvaForceWorkspaceVisibleOnRun() {
                 var _p = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
                 if (window._sylvaWorkspaceSyncActive) _p = 'map';
@@ -10090,19 +10143,10 @@ function selectRamp(name) {
                 if (typeof window._sylvaSyncActivePaneControls === 'function') window._sylvaSyncActivePaneControls();
             })();
 
-            // 🖥️ Analiz her zaman o an AKTİF olan ekranda çalışır (Ekran 1 = map,
-            // Ekran 2 = map2). Aktif ekran, kullanıcının son tıkladığı harita
-            // panelidir (bkz. window._sylvaSetActiveMap / _sylvaActivePaneId).
-            // Senkron modda (Çift Ekranı Senkronize Et) iki ekran tek bir
-            // çalışma alanını paylaştığından işlem her zaman Ekran 1 üzerinden
-            // yürütülür ve sonuç mevcut mekanizmayla Ekran 2'ye yansıtılır.
             var _pane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
             if (window._sylvaWorkspaceSyncActive) _pane = 'map';
             var _paneMap = (_pane === 'map2' && typeof map2 !== 'undefined' && map2) ? map2 : map;
 
-            // Seçili workspace'i AOI olarak kullan — yalnızca AKTİF ekrana
-            // (Ekran 1 ya da Ekran 2) ait çalışma alanları arasından seçilir.
-            // Öncelik: o ekranda tiki açık ilk workspace > o ekrandaki ilk workspace
             if (window.SylvaVAW && window.SylvaVAW.workspaces && window.SylvaVAW.workspaces.length > 0) {
                 var _activeWs = null;
                 var _paneWorkspaces = window.SylvaVAW.workspaces.filter(function(w){
@@ -10128,28 +10172,23 @@ function selectRamp(name) {
 
             var _aoiLayer = (_pane === 'map2') ? currentLayer2 : currentLayer;
 
-            // 🛡️ Güvenlik kontrolü: katman atanmış olsa bile haritada
-            // gerçekten yoksa (kullanıcı sildi) geçersiz say ve uyar.
             if (_aoiLayer && _paneMap && !_paneMap.hasLayer(_aoiLayer)) {
                 _aoiLayer = null;
                 if (_pane === 'map2') { currentLayer2 = null; window._workspaceLayer2 = null; }
                 else { currentLayer = null; window._workspaceLayer = null; }
             }
 
-            // Hiç çalışma alanı yoksa analiz başlatma
             if (!_aoiLayer) {
                 sylvaAlert(t('no_aoi'), 'warning');
                 return;
             }
 
-            var meta = getSelectedAnalysisMeta();
-            if (!meta) { sylvaAlert(t('no_analysis'), 'warning'); return; }
+            var metaList = getSelectedAnalysisMetaList();
+            if (!metaList.length) { sylvaAlert(t('no_analysis'), 'warning'); return; }
 
-            // 🛰️ Uydu Görüntüsü Galerisi (RGB) — gerçek GEE sahneleri
-            // 🖥️ EŞİTLEME: Bu akış artık Ekran 1 ile birebir aynı şekilde
-            // Ekran 2'de de (map2) çalışır — hangi ekran aktifse (_pane)
-            // galeri, sahne seçimi ve harita katmanı o ekrana uygulanır.
-            if (meta.isRgbGallery) {
+            // 🛰️ Uydu Görüntüsü Galerisi (RGB) — hâlâ tekli akış, ilk seçili sahneyi kullanır.
+            if (metaList[0].isRgbGallery) {
+                var meta = metaList[0];
                 if (!_aoiLayer) { sylvaAlert(t('no_aoi'), 'warning'); return; }
                 var startInputG = document.getElementById('date-start');
                 var endInputG   = document.getElementById('date-end');
@@ -10161,16 +10200,17 @@ function selectRamp(name) {
                 return;
             }
 
-            // İndeks analizi (NDVI, NDWI, EVI …) — gerçek Python sunucusu
+            // İndeks/modül analizleri — işaretli HER analiz için ayrı istek atılır,
+            // sonuç haritaya EKLENİR (öncekiler silinmez) — böylece birden fazla
+            // katman aynı anda üst üste gösterilebilir.
             if (!_aoiLayer) { sylvaAlert(t('no_aoi'), 'warning'); return; }
-            _sylvaSceneIdSet(_pane, null); // Yeni analiz = tarih aralığı medyanından başla
+            _sylvaSceneIdSet(_pane, null);
 
-            var isLulc = isLulcAnalysis(meta.analysisName);
-            var isTopo = isTopoAnalysis(meta.analysisName);
+            var isLulc = isLulcAnalysis(metaList[0].analysisName);
+            var isTopo = isTopoAnalysis(metaList[0].analysisName);
 
             var startInput = document.getElementById('date-start');
             var endInput   = document.getElementById('date-end');
-            // LULC ve TOPO analizleri statik veri setleridir; tarih aralığı gerekmez.
             if (!isLulc && !isTopo && (!startInput || !startInput.value || !endInput || !endInput.value)) {
                 sylvaAlert(t('no_date'), 'warning'); return;
             }
@@ -10180,19 +10220,15 @@ function selectRamp(name) {
             var cloudSliderEl = document.getElementById('cloud-slider');
 
             var satellite = sensorRadio   ? sensorRadio.value    : 's2-l2a';
-            // LULC ve TOPO analizleri her zaman AOI sınırlarına göre kesilir (clip).
             var clipMode  = (isLulc || isTopo) ? 'clip' : (viewModeEl ? viewModeEl.value : 'clip');
             var maxCloud  = cloudSliderEl ? parseInt(cloudSliderEl.value, 10) : 20;
 
-            // AOI geometrisini normalize et (Polygon, MultiPolygon, KML FeatureCollection)
             var _roi = _extractROIGeometry(_aoiLayer);
             if (!_roi) {
                 sylvaAlert(t('no_geom'), 'warning');
                 return;
             }
 
-            // ── Son analiz parametrelerini sakla (Lejant senkronizasyonu için) ──
-            // 🖥️ EŞİTLEME: o an aktif olan ekrana (_pane) özel saklanır.
             _sylvaLastRoiSet(_pane, _roi);
             var _demSrcRadioNow = document.querySelector('input[name="dem-source"]:checked');
             _sylvaLastParamsSet(_pane, {
@@ -10204,275 +10240,181 @@ function selectRamp(name) {
                 demSource:  _demSrcRadioNow ? _demSrcRadioNow.value : 'SRTM'
             });
 
-            // Önceki analiz sonuçlarını temizle (yeni analiz başlamadan önce) —
-            // yalnızca analiz çalıştırılan ekranın önceki sonucu silinir.
             _clearAllAnalysisOutputs(_pane);
+            _sylvaClearGeeLayers(_pane);
 
-            // Yükleniyor durumu
             var runBtn = document.getElementById('btn-run-analysis');
             if (runBtn) { runBtn.disabled = true; runBtn.textContent = t('running'); }
             var loadingOverlay = document.getElementById('analysis-loading-overlay');
             if (loadingOverlay) loadingOverlay.classList.add('active');
 
-            // Lejantı varsayılan konumuna ve boyutuna sıfırla (her yeni analiz
-            // lejantın aynı sol-alt konumdan ve orijinal boyuttan başlamasını sağlar)
             if (typeof window._resetLegendPosition === 'function') window._resetLegendPosition();
-            // Bilgi Kutusunu da varsayılan konumuna ve boyutuna sıfırla
             if (typeof window._resetInfoBoxPosition === 'function') window._resetInfoBoxPosition();
 
-            renderAnalysisLegend(meta, true);
-
             var demSourceRadio = document.querySelector('input[name="dem-source"]:checked');
-            var analyzePayload = {
-                roi:       _roi,
-                clipMode:  clipMode,
-                startDate: startInput ? (startInput.value || '') : '',
-                endDate:   endInput   ? (endInput.value   || '') : '',
-                satellite: satellite,
-                index:     meta.analysisName,
-                maxCloud:  maxCloud,
-                demSource: demSourceRadio ? demSourceRadio.value : 'SRTM',
-            };
-            // Sınıf vurgulama (highlight) özelliği bu payload'ı yeniden kullanır —
-            // aynı ROI/tarih/uydu parametreleriyle tek bir sınıfa maskelenmiş
-            // ayrı bir tile katmanı istenebilsin diye saklanıyor.
-            // 🖥️ EŞİTLEME: payload ekran başına (map/map2) ayrı saklanır.
-            window._lastAnalyzePayloadByPane = window._lastAnalyzePayloadByPane || { map: null, map2: null };
-            window._lastAnalyzePayloadByPane[_pane] = analyzePayload;
             _clearClassHighlight(_pane);
-            // Yarış koşulu: bu fetch'e ait jenerasyon numarasını yakala
-            var _runGen = _analysisGeneration;
+            window._lastAnalyzePayloadByPane = window._lastAnalyzePayloadByPane || { map: null, map2: null };
 
-            fetch(API_BASE + '/api/analyze', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(analyzePayload)
-            })
-            .then(function(r) { return r.json(); })
-            .then(function(data) {
-                if (runBtn) { runBtn.disabled = false; runBtn.textContent = t('run_analysis'); }
-                if (loadingOverlay) loadingOverlay.classList.remove('active');
-                // Geciken yanıt: kullanıcı yeni bir analiz başlattıysa bu yanıtı yoksay
-                if (_analysisGeneration !== _runGen) return;
-                if (!data.success) {
-                    showNoDataModal(_TOAST_NO_DATA_MSG);
-                    return;
+            var _pendingCount = metaList.length;
+            function _onOneRequestSettled() {
+                _pendingCount--;
+                if (_pendingCount <= 0) {
+                    if (runBtn) { runBtn.disabled = false; runBtn.textContent = t('run_analysis'); }
+                    if (loadingOverlay) loadingOverlay.classList.remove('active');
                 }
-                // 🛠️ Topografik (DEM) analizlerde bazı DEM kaynakları (örn. ALOS,
-                // Copernicus, NASADEM) çalışma alanını kapsamayabilir. Bu durumda
-                // ekrana boyanacak raster piksel gelmez ama backend yine de
-                // success:true ve sabit/varsayılan bir vis min-max ile döner —
-                // böylece lejant sanki analiz başarılıymış gibi sabit bir
-                // aralık (ör. "0–60") gösterirdi. Gerçek veri olup olmadığını
-                // realStats.min/realStats.max üzerinden kontrol ediyoruz: ikisi
-                // de yoksa (null/undefined) o AOI için seçilen DEM kaynağında
-                // veri yok demektir — lejant/katman çizilmeden kullanıcıyı uyar.
-                if (isTopoAnalysis(meta.analysisName) &&
-                    (!data.realStats || data.realStats.min === null || data.realStats.min === undefined ||
-                     data.realStats.max === null || data.realStats.max === undefined)) {
-                    showNoDataModal(t('topo_dem_no_data_warning'));
-                    return;
-                }
-                if (data.nativeCrs) window._lastAnalyzeNativeCrs = data.nativeCrs;
-                // Yeni GEE tile katmanı, analiz o an hangi ekranda (Ekran 1/Ekran 2)
-                // çalıştırıldıysa YALNIZCA o ekranın haritasına eklenir; diğer
-                // ekranın mevcut sonucuna dokunulmaz.
-                _sylvaReplaceGeeLayer(_pane, data.tileUrl, { opacity: 1 });
-                _applyGeeLayerClipMode(clipMode, _pane);
-                // 🎚️ En üstteki analiz türüne göre veri şeffaflığını otomatik ayarla
-                _sylvaApplyAutoOpacity(_pane, meta);
-                if (_pane === 'map2') {
-                    // Not: Ekran 2 kendi bağımsız analizini ürettiği için Ekran 1'in
-                    // sonucunu buraya yansıtan (mirror) senkronizasyon burada tetiklenmez.
-                } else {
-                    if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer();
-                }
-                // Analiz sonucu gösterilince Çalışma Alanı checkbox'ını etkinleştir ve aç
-// 🛠️ BUG FİX: Eskiden checkbox doğrudan DOM üzerinden zorla açılıyordu,
-// ama state.analysisActive hiç true yapılmıyordu. Bu yüzden kullanıcı
-// başka ekrana geçip geri dönünce (_sylvaSyncActivePaneControls tekrar
-// çalışınca) checkbox otomatik pasife dönüyordu. Artık kalıcı pane state'i
-// (analysisActive) güncelleniyor; ekranlar arası geçişte doğru şekilde
-// hatırlanıyor.
-(function() {
-    var _wsState = (typeof _sylvaPaneState === 'function') ? _sylvaPaneState(_pane) : null;
-    if (_wsState) {
-        _wsState.analysisActive = true;
-        _wsState.workspaceVisible = true;
-    }
-    if (typeof _sylvaActivePaneId === 'function' && _pane === _sylvaActivePaneId()
-        && typeof window._sylvaSyncActivePaneControls === 'function') {
-        window._sylvaSyncActivePaneControls();
-    }
-})();
-                // Analiz sonucu gösterilince Veri Şeffaflığı checkbox'ını etkinleştir ve aç
-                (function() {
-                    var _opCb   = document.getElementById('toggle-opacity');
-                    var _opWrap = document.getElementById('opacity-toggle-wrap');
-                    if (_opCb) {
-                        _opCb.disabled = false;
-                        if (_opWrap) _opWrap.style.opacity = '1';
-                        if (!_opCb.checked) {
-                            _opCb.checked = true;
-                            _opCb.dispatchEvent(new Event('change'));
+            }
+
+            metaList.forEach(function (meta) {
+                renderAnalysisLegend(meta, true);
+
+                var analyzePayload = {
+                    roi:       _roi,
+                    clipMode:  clipMode,
+                    startDate: startInput ? (startInput.value || '') : '',
+                    endDate:   endInput   ? (endInput.value   || '') : '',
+                    satellite: satellite,
+                    index:     meta.analysisName,
+                    maxCloud:  maxCloud,
+                    demSource: demSourceRadio ? demSourceRadio.value : 'SRTM',
+                };
+                window._lastAnalyzePayloadByPane[_pane] = analyzePayload;
+                var _runGen = _analysisGeneration;
+
+                fetch(API_BASE + '/api/analyze', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(analyzePayload)
+                })
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    _onOneRequestSettled();
+                    if (_analysisGeneration !== _runGen) return;
+                    if (!data.success) {
+                        showNoDataModal(_TOAST_NO_DATA_MSG);
+                        return;
+                    }
+                    if (isTopoAnalysis(meta.analysisName) &&
+                        (!data.realStats || data.realStats.min === null || data.realStats.min === undefined ||
+                         data.realStats.max === null || data.realStats.max === undefined)) {
+                        showNoDataModal(t('topo_dem_no_data_warning'));
+                        return;
+                    }
+                    if (data.nativeCrs) window._lastAnalyzeNativeCrs = data.nativeCrs;
+
+                    _sylvaAddGeeLayer(_pane, meta.analysisName, data.tileUrl, { opacity: 1 });
+                    _applyGeeLayerClipMode(clipMode, _pane);
+                    _sylvaApplyAutoOpacity(_pane, meta);
+                    if (_pane === 'map2') {
+                        // Ekran 2 kendi bağımsız analizini üretir, yansıtma yok.
+                    } else {
+                        if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer();
+                    }
+
+                    (function() {
+                        var _wsState = (typeof _sylvaPaneState === 'function') ? _sylvaPaneState(_pane) : null;
+                        if (_wsState) {
+                            _wsState.analysisActive = true;
+                            _wsState.workspaceVisible = true;
+                        }
+                        if (typeof _sylvaActivePaneId === 'function' && _pane === _sylvaActivePaneId()
+                            && typeof window._sylvaSyncActivePaneControls === 'function') {
+                            window._sylvaSyncActivePaneControls();
+                        }
+                    })();
+
+                    (function() {
+                        var _opCb   = document.getElementById('toggle-opacity');
+                        var _opWrap = document.getElementById('opacity-toggle-wrap');
+                        if (_opCb) {
+                            _opCb.disabled = false;
+                            if (_opWrap) _opWrap.style.opacity = '1';
+                            if (!_opCb.checked) {
+                                _opCb.checked = true;
+                                _opCb.dispatchEvent(new Event('change'));
+                            }
+                        }
+                    })();
+
+                    if (!(isLulcAnalysis(meta.analysisName) || isTopoAnalysis(meta.analysisName))) return;
+                    var _ibCb = _updateLulcRestrictedUI(isLulcAnalysis(meta.analysisName));
+                    if (isTopoAnalysis(meta.analysisName)) { _setGalleryPanelRestricted(true); }
+                    (function() {
+                        var _lsp = document.getElementById('legend-symbology-panel');
+                        if (_lsp && !isLulcAnalysis(meta.analysisName)) {
+                            _lsp.style.opacity = '1';
+                            _lsp.style.pointerEvents = '';
+                            _lsp.style.userSelect = '';
+                        }
+                    })();
+                    if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(_pane);
+                    renderAnalysisLegend(meta, false, _pane);
+                    if (data.stats) {
+                        updateStatsTable(data.stats);
+                        renderChart(data.stats, meta);
+                        appendRealStatsToLegend(data.stats, _pane);
+                    }
+                    if (data.realStats) {
+                        applyRealStatsToLegendUI(data.realStats, _pane);
+                        if (currentClassificationType === 'classified' && !isLulcAnalysis(meta.analysisName)) {
+                            if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(_pane);
+                            buildClassRows(parseInt(classCountSelect.value, 10) || 1);
+                            applyClassificationToMap();
                         }
                     }
-                })();
-                // Analiz sonucu gösterilince Bilgi Kutusu checkbox'ını etkinleştir ve aç
-                // — yalnızca Arazi Kullanımı / Topografik analizlerde (bunlar
-                // dışında checkbox zaten devre dışı kalır).
-                if (!(isLulcAnalysis(meta.analysisName) || isTopoAnalysis(meta.analysisName))) return;
-                    var _ibCb =
-                // 🏘️ Arazi Kullanımı/DEM analizi çalıştırıldığında Lejant/Semboloji
-                // panelini ve Uydu Görüntü Galerisi'ni kısıtla.
-                _updateLulcRestrictedUI(isLulcAnalysis(meta.analysisName));
-                // TOPO analizlerinde de Uydu Görüntü Galerisi kapalı kalır.
-                if (isTopoAnalysis(meta.analysisName)) { _setGalleryPanelRestricted(true); }
-                // NDVI/TOPO/SAR vb. analizlerde panel tam opaklığa döner;
-                // LULC/Uydu Görüntüsü/Ham Veri modüllerinde yarı saydam kalır.
-                (function() {
-                    var _lsp = document.getElementById('legend-symbology-panel');
-                    if (_lsp && !isLulcAnalysis(meta.analysisName)) {
-                        _lsp.style.opacity = '1';
-                        _lsp.style.pointerEvents = '';
-                        _lsp.style.userSelect = '';
+                    if (data.visPalette && Array.isArray(data.visPalette) && data.visPalette.length >= 2) {
+                        var _basePalette = data.visPalette.slice();
+                        if (typeof rampReversed !== 'undefined' && rampReversed) {
+                            _basePalette = _basePalette.slice().reverse();
+                        }
+                        var visCss = 'linear-gradient(to right, ' + _basePalette.join(', ') + ')';
+                        var selRampEl = document.getElementById('selectedRamp');
+                        if (selRampEl) {
+                            selRampEl.style.background = visCss;
+                            selRampEl.setAttribute('data-ramp', '__gee__');
+                        }
+                        var legendBox2 = document.getElementById(_pane === 'map2' ? 'map2-legend-box' : 'map-legend-box');
+                        if (legendBox2) {
+                            var rampBar = legendBox2.querySelector('.color-ramp');
+                            if (rampBar) rampBar.style.background = visCss;
+                            if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[_pane]) {
+                                window._sylvaLegendInfoByPane[_pane].legendHTML = legendBox2.innerHTML;
+                            }
+                        }
                     }
-                })();
-                // Analiz tamamlandığında lejantı sıfırdan yeniden çiz (Clip ve Full mod
-                // fark etmeksizin her zaman güncel analizin meta'sını yansıtsın).
-                // 🛠️ BUG FİX: bu içerik _pane (analiz HANGİ ekran için başlatıldıysa)
-                // için üretiliyor — sunucu yanıtı gelene kadar kullanıcı diğer ekrana
-                // geçmiş olsa bile lejant doğru ekranda kalsın diye işaretleniyor.
-                if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(_pane);
-                renderAnalysisLegend(meta, false, _pane);
-                // Ham histogram tablosu ve görsel grafik
-                if (data.stats) {
-                    updateStatsTable(data.stats);
-                    renderChart(data.stats, meta);
-                    // Lejanttaki tarih bilgisini GEE'den dönen veriye göre güncelle.
-                    appendRealStatsToLegend(data.stats, _pane);
-                }
-                // Backend'den gelen kesin min/max/mean değerleri (histogram değil,
-                // reduceRegion minMax) ile lejantı ve stretched giriş kutularını güncelle
-                if (data.realStats) {
-                    applyRealStatsToLegendUI(data.realStats, _pane);
-                    // 🛠️ BUG FİX: applyRealStatsToLegendUI() currentClassRangeMin/Max'ı
-                    // AOI'nin GERÇEK min/max'ına günceller ama "Sınıflandırılmış" modda
-                    // sınıf satırları (buildClassRows) daha önce (analiz seçilir seçilmez,
-                    // statik data-legend-min/max ile) kurulduğu için hiç yeniden kurulmuyordu.
-                    // Sonuç: farklı bir AOI'de tekrar analiz çalıştırılsa bile lejanttaki
-                    // sınıf aralıkları (örn. "0–3000 m") hep AYNI/statik kalıyor, AOI'nin
-                    // gerçek yükseklik aralığını hiç yansıtmıyordu. Burada sınıf satırlarını
-                    // güncel gerçek aralıkla yeniden kurup haritayı yeniden boyuyoruz.
-                    //
-                    // 🛠️ BUG FİX: LULC ailesi (Dynamic World / ESA / MODIS / CORINE) kendi
-                    // özel lejant+grafik motorunu kullanır (renderLulcLegendAndChart, aşağıda
-                    // çağrılıyor) — legendType'ı da 'classified' olduğu için bu blok LULC
-                    // analizlerinde de tetikleniyor, kullanıcının "Sınıflandırılmış Veri"
-                    // panelindeki VARSAYILAN tek satırlık "Class 1" (0-100 aralığı, tam AOI)
-                    // sahte dağılımını applyClassificationToMap() üzerinden pasta/sütun
-                    // grafiğe VE tabloya yazıyordu; ayrıca senkron GEE isteği geç dönünce bu
-                    // sahte veri, LULC'nin gerçek grafiğinin ÜZERİNE geç yazılıyordu. Bu yüzden
-                    // ekranda gerçek sınıf yüzdeleri yerine "Class 1 / %100" görünüyordu.
-                    // Bu blok artık SADECE kullanıcının elle kurduğu Sınıflandırılmış Veri
-                    // modunda (LULC olmayan analizler) çalışır.
-                    if (currentClassificationType === 'classified' && !isLulcAnalysis(meta.analysisName)) {
+                    if (_STATIC_DATASETS.indexOf(meta.analysisName) !== -1) {
                         if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(_pane);
-                        buildClassRows(parseInt(classCountSelect.value, 10) || 1);
-                        applyClassificationToMap();
+                        renderDatasetInfoCard(meta.analysisName, _pane);
+                    } else if (data.scenes && data.scenes.length) {
+                        renderGalleryFromScenes(data.scenes, _pane);
                     }
-                }
-                // Sunucudan gelen gerçek vis parametreleriyle lejant renk çubuğunu
-                // ve selectedRamp önizlemesini senkronize et. (Issue-3 fix)
-                if (data.visPalette && Array.isArray(data.visPalette) && data.visPalette.length >= 2) {
-                    var _basePalette = data.visPalette.slice();
-                    // rampReversed aktifse GEE'den gelen paleti de tersine çevir
-                    if (typeof rampReversed !== 'undefined' && rampReversed) {
-                        _basePalette = _basePalette.slice().reverse();
+                    if (isLulcAnalysis(meta.analysisName)) {
+                        if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(_pane);
+                        renderLulcLegendAndChart(meta, data.stats, _pane);
                     }
-                    var visCss = 'linear-gradient(to right, ' + _basePalette.join(', ') + ')';
-                    var selRampEl = document.getElementById('selectedRamp');
-                    if (selRampEl) {
-                        selRampEl.style.background = visCss;
-                        selRampEl.setAttribute('data-ramp', '__gee__');
-                    }
-                    // 🛠️ BUG FİX: eskiden her zaman Screen 1'in kutusuna
-                    // (.map-legend -> ilk eşleşen = #map-legend-box) yazıyordu.
-                    // Artık analizin ait olduğu ekranın kendi kutusuna yazar.
-                    var legendBox2 = document.getElementById(_pane === 'map2' ? 'map2-legend-box' : 'map-legend-box');
-                    if (legendBox2) {
-                        var rampBar = legendBox2.querySelector('.color-ramp');
-                        if (rampBar) rampBar.style.background = visCss;
-                        if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[_pane]) {
-                            window._sylvaLegendInfoByPane[_pane].legendHTML = legendBox2.innerHTML;
+                    (function() {
+                        var _ibCb2 = document.getElementById('toggle-info-box');
+                        var _ibWrap = document.getElementById('info-box-toggle-wrap');
+                        if (_ibCb2) {
+                            _ibCb2.disabled = false;
+                            if (_ibWrap) _ibWrap.style.opacity = '1';
+                            _ibCb2.checked = true;
                         }
-                    }
-                    // 🛠️ BUG FİX: Burada data.visMin/data.visMax (haritadaki renk
-                    // germe/kontrast için kullanılan, bazı AOI'lerde persentil hesabı
-                    // GEE tarafında sağlıksız/varsayılana düşebilen değer) lejant
-                    // kutularını EZİYORDU — applyRealStatsToLegendUI() az önce
-                    // data.realStats (gerçek reduceRegion min/max, HER ZAMAN doğru
-                    // ve AOI'ye özgü) ile doğru değerleri yazmışken, bu blok hemen
-                    // ardından "min 0 / max 3000" gibi sabit/varsayılan bir persentil
-                    // germe değeriyle üzerine yazıyordu — kullanıcı ekranda hep aynı
-                    // sabit sayıları görüyordu. Artık lejant/stretched kutuları SADECE
-                    // gerçek istatistiklerden (realStats) besleniyor; visMin/visMax
-                    // yalnızca haritadaki renk kontrastı için kullanılır, lejant
-                    // metnini bir daha ezmez.
-                }
-
-                // LULC / TOPO / SAR statik veri setlerinde sahne seçici yerine
-                // Dataset Info kartı göster; diğer analizlerde scenes listesini doldur.
-                if (_STATIC_DATASETS.indexOf(meta.analysisName) !== -1) {
-                    // 🛠️ BUG FİX: bkz. yukarıdaki renderAnalysisLegend işaretlemesi —
-                    // aynı gerekçeyle bilgi kutusu da doğru ekrana (_pane) etiketlenir.
-                    if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(_pane);
-                    renderDatasetInfoCard(meta.analysisName, _pane);
-                } else if (data.scenes && data.scenes.length) {
-                    renderGalleryFromScenes(data.scenes, _pane);
-                }
-
-                // 3. Akıllı Lejant ve İstatistiksel Raporlama (Arazi Kullanımı):
-                // Lejant yalnızca çizilen AOI içinde GERÇEKTEN tespit edilen sınıfları
-                // seçilen dile göre gösterir; alansal/oransal dağılım sütun/pasta
-                // grafikle raporlanır. Yukarıdaki genel lejant/grafik çağrılarından
-                // SONRA çalışır ki LULC için her zaman son söz bunda olsun.
-                if (isLulcAnalysis(meta.analysisName)) {
-                    if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(_pane);
-                    renderLulcLegendAndChart(meta, data.stats, _pane);
-                }
-
-                // 🛠️ BUG FİX: Bilgi Kutusu artık İÇERİK YAZILDIKTAN SONRA açılıyor
-                // (eskiden checkbox içerikten önce işaretleniyordu, bu yüzden kutu
-                // boş görüp kendini kapatıyordu). Artık tüm analiz türlerinde
-                // çalışır ve doğrudan analizin yapıldığı ekranın (_pane) kendi
-                // kutusunu (map-info-box / map2-info-box) hedefler.
-                (function() {
-                    var _ibCb = document.getElementById('toggle-info-box');
-                    var _ibWrap = document.getElementById('info-box-toggle-wrap');
-                    if (_ibCb) {
-                        _ibCb.disabled = false;
-                        if (_ibWrap) _ibWrap.style.opacity = '1';
-                        _ibCb.checked = true;
-                    }
-                    var _infoBox = document.getElementById(_pane === 'map2' ? 'map2-info-box' : 'map-info-box');
-                    if (_infoBox && _infoBox.innerHTML.trim()) {
-                        _infoBox.style.display = 'block';
-                        if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[_pane]) {
-                            window._sylvaLegendInfoByPane[_pane].infoDisplay = 'block';
+                        var _infoBox = document.getElementById(_pane === 'map2' ? 'map2-info-box' : 'map-info-box');
+                        if (_infoBox && _infoBox.innerHTML.trim()) {
+                            _infoBox.style.display = 'block';
+                            if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[_pane]) {
+                                window._sylvaLegendInfoByPane[_pane].infoDisplay = 'block';
+                            }
                         }
-                    }
-                })();
-
-                // Dil değişince lejant yenilenebilmesi için son analiz meta + stats'ı sakla
-                window._lastAnalyzeMeta = meta;
-                if (window._lastAnalyzeMeta) window._lastAnalyzeMeta._lastStats = (data && data.stats) || null;
-                _ensureDefaultVisibility();
-            })
-            .catch(function(err) {
-                if (runBtn) { runBtn.disabled = false; runBtn.textContent = t('run_analysis'); }
-                if (loadingOverlay) loadingOverlay.classList.remove('active');
-                showAnalysisToast(t('server_error') + '(' + err.message + ')', 'error');
+                    })();
+                    window._lastAnalyzeMeta = meta;
+                    if (window._lastAnalyzeMeta) window._lastAnalyzeMeta._lastStats = (data && data.stats) || null;
+                    _ensureDefaultVisibility();
+                })
+                .catch(function(err) {
+                    _onOneRequestSettled();
+                    showAnalysisToast(t('server_error') + '(' + err.message + ')', 'error');
+                });
             });
         }
 
