@@ -11256,18 +11256,23 @@ function selectRamp(name) {
             var metaList = getSelectedAnalysisMetaList();
             if (!metaList.length) { sylvaAlert(t('no_analysis'), 'warning'); return; }
 
-            // 🆕 Bu "Analizi Çalıştır" tıklaması, senkronizasyon açıldıktan sonraki
-            // İLK analizse karşı ekrana da yansıtılır (ikisi de aynı analiz/lejant/
-            // galeriyle açılır). Sonraki tıklamalarda (kullanıcı ekranlardan birinde
-            // farklı bir analiz seçip tekrar çalıştırdığında) artık karşı ekranın
-            // üzerine otomatik yazılmaz — her ekran o andan itibaren bağımsız
-            // çalışır (bkz. _sylvaApplyWorkspaceSync / sylvaToggleLocationSync
-            // içindeki bayrak sıfırlaması). Bayrak, bu tıklamanın fetch'leri daha
-            // sonuçlanmadan hemen tüketilir; böylece aynı anda/art arda gelen
-            // başka bir runAnalysis() çağrısı bunu tekrar tetiklemez.
-            var _sylvaMirrorThisRun = !!(window._sylvaWorkspaceSyncActive || window._sylvaDualScreenSyncActive) &&
-                !window._sylvaSyncFirstAnalysisDone;
-            if (_sylvaMirrorThisRun) window._sylvaSyncFirstAnalysisDone = true;
+            // 🛠️ KÖK NEDEN DÜZELTMESİ: Bu bayrak eskiden SADECE senkronizasyon
+            // açıldıktan sonraki İLK "Analizi Çalıştır" çalıştırmasında true
+            // oluyordu (window._sylvaSyncFirstAnalysisDone bir kez true olunca
+            // bir daha hiç sıfırlanmıyordu, ta ki kullanıcı senkronizasyonu
+            // kapatıp tekrar açana kadar). Sonuç: kullanıcı senkronizasyonu
+            // açtıktan sonra birden fazla analiz türü seçip çalıştırdığında
+            // (ör. NDSI + NDVI + NDWI) Ekran 1'de hepsi doğru şekilde birikip
+            // "Analiz Geçiş" kutusunda görünürken, Ekran 2'ye SADECE ilk
+            // analiz(ler) yansıyor; sonraki her yeni "Analizi Çalıştır" isteği
+            // Ekran 2'ye hiç kopyalanmıyor, Ekran 2 eski/eksik/yanlış içerikte
+            // kilitli kalıyordu — tam olarak bildirilen "Ekran 2'de sadece 1
+            // analiz oluyor, lejant/galeri/analiz adı yanlış" belirtisi.
+            // Artık senkronizasyon (Konum Senkronizasyonu) açık olduğu SÜRECE
+            // her "Analizi Çalıştır" çalıştırması karşı ekrana yansıtılır —
+            // kullanıcı "senkronize et" işaretini açık tuttuğu sürece iki ekran
+            // sürekli birbiriyle güncel kalır.
+            var _sylvaMirrorThisRun = !!(window._sylvaWorkspaceSyncActive || window._sylvaDualScreenSyncActive);
 
             // 🛰️ Uydu Görüntüsü Galerisi (RGB) — işaretli HER görüntü için ayrı
             // istek atılır; sonuçlar haritaya üst üste eklenir (diğer analizlerle aynı mantık).
@@ -11393,14 +11398,6 @@ function selectRamp(name) {
                     if (typeof _sylvaRenderLayerSwitchBox === 'function') _sylvaRenderLayerSwitchBox(_pane);
                     _applyGeeLayerClipMode(clipMode, _pane);
                     _sylvaApplyAutoOpacity(_pane, meta);
-                    // 🆕 Senkronizasyon açıldıktan sonraki İLK "Analizi Çalıştır"
-                    // sonucu, hangi ekranda tetiklendiyse tetiklensin, diğer ekrana
-                    // da yansır — böylece ikisi de aynı analiz/lejant ile açılır.
-                    // Bundan sonraki çalıştırmalar (kullanıcı bir ekranda başka bir
-                    // analiz seçip tekrar çalıştırırsa) artık karşı ekranın üzerine
-                    // otomatik yazılmaz — her ekran bağımsız kalır (bkz. _sylvaMirrorThisRun,
-                    // _sylvaApplyWorkspaceSync / sylvaToggleLocationSync içindeki sıfırlama).
-                    if (_sylvaMirrorThisRun && window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer({ force: true, srcId: _pane });
 
                     (function() {
                         var _wsState = (typeof _sylvaPaneState === 'function') ? _sylvaPaneState(_pane) : null;
@@ -11443,6 +11440,22 @@ function selectRamp(name) {
                     // değiştirildiğinde Lejant ve Uydu Görüntü Galerisi de o
                     // analize göre otomatik güncellenir; sabit kalmaz.
                     _sylvaRenderIndexAnalysisResult(meta, data, _pane);
+
+                    // 🛠️ KÖK NEDEN DÜZELTMESİ: Karşı ekrana yansıtma (mirror)
+                    // eskiden BURADAN ÖNCE, yani lejant/galeri/bilgi kutusu bu
+                    // analiz için henüz gerçek verisiyle ÇİZİLMEDEN çağrılıyordu.
+                    // _sylvaRenderIndexAnalysisResult() içindeki renderAnalysisLegend/
+                    // renderGalleryFromScenes/appendRealStatsToLegend gibi adımlar
+                    // ekrana yalnızca BU satırdan sonra yazılıyor. Bu yüzden
+                    // senkronizasyon açıkken Ekran 2'ye kopyalanan lejant/galeri
+                    // her zaman bir önceki (bayat) veya "yükleniyor" iskelet
+                    // içeriği oluyordu — birden fazla analiz (NDSI/NDVI/NDWI vb.)
+                    // art arda çalıştırıldığında Ekran 2'nin lejantı/galerisi/
+                    // "Üstte Gösterilecek Katman" adı hep yanlış/eksik kalıyordu.
+                    // Artık mirror çağrısı, bu analizin GERÇEK lejant/galeri/bilgi
+                    // içeriği ekrana yazıldıktan SONRA yapılıyor — Ekran 2 artık
+                    // her çalıştırılan analiz için doğru içerikle güncelleniyor.
+                    if (_sylvaMirrorThisRun && window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer({ force: true, srcId: _pane });
                 })
                 .catch(function(err) {
                     _onOneRequestSettled();
