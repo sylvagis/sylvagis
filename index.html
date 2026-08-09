@@ -8975,30 +8975,19 @@ function selectRamp(name) {
                 }
             })();
 
+            // 🛠️ DÜZELTME (Ekranlar Karışıyor — kesin): "Lejantı Uygula" TAMAMEN
+            // ekrana özel bir görselleştirme ayarıdır. Senkronizasyon (Konum
+            // Senkronizasyonu / Çift Ekran) sadece harita GÖRÜNÜMÜNÜ (pan/zoom)
+            // eşitler; hangi ekranda hangi analiz/lejant/renk paleti olduğu HER
+            // ZAMAN o ekrana özeldir. Bu yüzden "Lejantı Uygula" senkronizasyon
+            // durumundan tamamen BAĞIMSIZ olarak SADECE o an aktif olan (en son
+            // tıklanan) ekranı etkiler — kendi verisini ve kendi lejantını —
+            // karşı ekranın verisine veya lejantına ASLA dokunmaz.
             var _aslActivePaneId = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
-            var legendBox = _sylvaApplyStretchedLegendVisualsForPane(_aslActivePaneId, minVal, maxVal, title, rampCss);
+            _sylvaApplyStretchedLegendVisualsForPane(_aslActivePaneId, minVal, maxVal, title, rampCss);
 
-            // 🆕 DÜZELTME (Çift Ekran Senkronizasyonu): Konum/çift ekran
-            // senkronizasyonu açıkken "Lejantı Uygula" artık KARŞI ekranın
-            // hem lejant KUTUSUNU (renk çubuğu/etiketler) hem de katman
-            // renklendirmesini de günceller. Önceden senkronizasyon açık
-            // olsa bile bu fonksiyon SADECE aktif ekranı etkiliyordu; karşı
-            // ekranın verisi (bkz. syncStretchedToGEE) sessizce değişse de
-            // lejant kutusu hiç güncellenmiyordu.
-            if (window._sylvaWorkspaceSyncActive || window._sylvaDualScreenSyncActive) {
-                var _aslOtherPaneId = (_aslActivePaneId === 'map2') ? 'map' : 'map2';
-                var _aslOtherAoi = (_aslOtherPaneId === 'map2') ? currentLayer2 : currentLayer;
-                if (_aslOtherAoi) {
-                    _sylvaApplyStretchedLegendVisualsForPane(_aslOtherPaneId, minVal, maxVal, title, rampCss);
-                }
-            }
-
-            // ── GEE senkronizasyonu: Stretched modda da artık classified moddaki
-            // gibi sunucuya gerçek bir "yeniden hesapla ve boya" talimatı gider.
-            // (Önceden sadece classified mod GEE'ye senkronize oluyordu — bu eksiklik
-            // "değişiklik sadece tarayıcıda kalıyor" sorununun ana kaynağıydı.)
-            // Senkronizasyon açıkken karşı ekranın verisi de burada güncellenir
-            // (bkz. syncStretchedToGEE içindeki senkronizasyon bloğu).
+            // ── GEE senkronizasyonu: sadece aktif ekranın verisini yeniden
+            // hesaplat/boyat — karşı ekranın verisi asla değişmez.
             syncStretchedToGEE(minVal, maxVal);
         }
 
@@ -9096,16 +9085,6 @@ function selectRamp(name) {
         function syncStretchedToGEE(minVal, maxVal) {
             var _activePane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
             _syncStretchedToGEEForPane(_activePane, minVal, maxVal);
-
-            // 🆕 DÜZELTME (Çift Ekran Senkronizasyonu): Konum/çift ekran
-            // senkronizasyonu açıkken KARŞI ekranın verisi de (GEE tile
-            // yeniden hesaplanıp boyanarak) güncellenir. Lejant kutusunun
-            // kendisi applyStretchedLegend() içinde ayrıca mirror edilir.
-            if (window._sylvaWorkspaceSyncActive || window._sylvaDualScreenSyncActive) {
-                var _otherPane = (_activePane === 'map2') ? 'map' : 'map2';
-                var _otherAoi = (_otherPane === 'map2') ? currentLayer2 : currentLayer;
-                if (_otherAoi) _syncStretchedToGEEForPane(_otherPane, minVal, maxVal);
-            }
         }
 
         function _syncStretchedToGEEForPane(_pane, minVal, maxVal) {
@@ -9512,36 +9491,27 @@ function selectRamp(name) {
             // Lejantta tutarlı bir sıralama için küçükten büyüğe diz
             classes.sort(function (a, b) { return a.min - b.min; });
 
+            // 🛠️ DÜZELTME (Ekranlar Karışıyor — kesin): "Lejantı Uygula" TAMAMEN
+            // ekrana özel bir görselleştirme ayarıdır. Senkronizasyon (Konum
+            // Senkronizasyonu / Çift Ekran) sadece harita GÖRÜNÜMÜNÜ (pan/zoom)
+            // eşitler; hangi ekranda hangi analiz/lejant/renk paleti olduğu HER
+            // ZAMAN o ekrana özeldir. Bu yüzden "Lejantı Uygula" senkronizasyon
+            // durumundan tamamen BAĞIMSIZ olarak SADECE o an aktif olan (en son
+            // tıklanan) ekranı etkiler — kendi verisini ve kendi lejantını —
+            // karşı ekranın verisine veya lejantına ASLA dokunmaz.
             var _acmActivePaneId = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
             _sylvaApplyClassificationVisualsForPane(_acmActivePaneId, classes);
             updateStatsChartFromClasses(classes);
 
-            // 🆕 DÜZELTME (Çift Ekran Senkronizasyonu): Konum/çift ekran
-            // senkronizasyonu açıkken "Lejantı Uygula" artık KARŞI ekranın
-            // hem lejant KUTUSUNU hem de katman renklendirmesini de günceller.
-            // Önceden senkronizasyon açık olsa bile bu SADECE aktif ekranı
-            // etkiliyordu; karşı ekranın verisi (bkz. syncClassificationToGEE)
-            // sessizce değişse de lejant kutusu hiç güncellenmiyordu.
-            if (window._sylvaWorkspaceSyncActive || window._sylvaDualScreenSyncActive) {
-                var _acmOtherPaneId = (_acmActivePaneId === 'map2') ? 'map' : 'map2';
-                var _acmOtherAoi = (_acmOtherPaneId === 'map2') ? currentLayer2 : currentLayer;
-                if (_acmOtherAoi) {
-                    _sylvaApplyClassificationVisualsForPane(_acmOtherPaneId, classes);
-                }
-            }
-
-            // ── GEE senkronizasyonu: özel renk/aralık bilgisini sunucuya gönder ──
-            // Böylece haritadaki GEE tile de seçilen sınıflandırmayı yansıtır.
-            // Senkronizasyon açıkken karşı ekranın verisi de burada güncellenir
-            // (bkz. syncClassificationToGEE içindeki senkronizasyon bloğu).
+            // ── GEE senkronizasyonu: sadece aktif ekranın verisini yeniden
+            // hesaplat/boyat — karşı ekranın verisi asla değişmez.
             syncClassificationToGEE(classes);
         }
 
         // Classified (sınıflandırılmış) modda TEK bir ekranın (paneId) lejant
         // kutusunu + katman renklendirmesini + editör/lejant snapshot'ını
-        // günceller. applyClassificationToMap() bunu aktif ekran için her
-        // zaman, çift ekran senkronizasyonu açıkken de KARŞI ekran için
-        // çağırır — böylece "Lejantı Uygula" her iki ekranda da tutarlı kalır.
+        // günceller. applyClassificationToMap() bunu SADECE o an aktif olan
+        // ekran için çağırır — karşı ekrana asla dokunulmaz.
         function _sylvaApplyClassificationVisualsForPane(paneId, classes) {
             renderDynamicLegend(classes, paneId);
             recolorCurrentLayerByClasses(classes, paneId);
@@ -9585,16 +9555,6 @@ function selectRamp(name) {
         function syncClassificationToGEE(classes) {
             var _activePane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
             _syncClassificationToGEEForPane(_activePane, classes);
-
-            // 🆕 DÜZELTME (Çift Ekran Senkronizasyonu): Konum/çift ekran
-            // senkronizasyonu açıkken KARŞI ekranın verisi de (GEE tile
-            // yeniden hesaplanıp boyanarak) güncellenir. Lejant kutusunun
-            // kendisi applyClassificationToMap() içinde ayrıca mirror edilir.
-            if (window._sylvaWorkspaceSyncActive || window._sylvaDualScreenSyncActive) {
-                var _otherPane = (_activePane === 'map2') ? 'map' : 'map2';
-                var _otherAoi = (_otherPane === 'map2') ? currentLayer2 : currentLayer;
-                if (_otherAoi) _syncClassificationToGEEForPane(_otherPane, classes);
-            }
         }
 
         function _syncClassificationToGEEForPane(_pane, classes) {
