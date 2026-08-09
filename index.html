@@ -2547,7 +2547,20 @@ tr.class-highlight-active {
        (top/right ile) — dikey ortalama (top:50%) kullanılmadığı için
        alt-sol köşedeki logo/koordinat kutusuyla çakışma riski kalmadı;
        ayrı bir dar-ekran/çift-ekran düzeltmesine gerek yok. */
-    </style>
+       .sylva-swipe-divider { position: absolute; top:0; left:0; right:0; bottom:0; z-index: 9000; pointer-events: none; display: none; }
+        .sylva-swipe-divider.active { display: block; }
+        .sylva-swipe-line { position: absolute; background: #fff; box-shadow: 0 0 4px rgba(0,0,0,0.5); pointer-events: none; }
+        .sylva-swipe-divider[data-orientation="vertical"] .sylva-swipe-line { top:0; bottom:0; width:3px; margin-left:-1.5px; }
+        .sylva-swipe-divider[data-orientation="horizontal"] .sylva-swipe-line { left:0; right:0; height:3px; margin-top:-1.5px; }
+        .sylva-swipe-handle {
+            position: absolute; width: 34px; height: 34px; border-radius: 50%;
+            background: #fff; border: 2px solid #1e3a8a; box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+            display: flex; align-items: center; justify-content: center;
+            cursor: grab; pointer-events: auto; font-size: 14px; color: #1e3a8a;
+            user-select: none; touch-action: none;
+        }
+        .sylva-swipe-handle:active { cursor: grabbing; }
+    </style> 
 <style>
 
         /* ══ SylvaGIS — Zaman Serisi + Before/After CSS ════════════════════ */
@@ -4460,6 +4473,12 @@ tr.class-highlight-active {
             <span data-i18n="weather">Hava Durumu</span>
         </label>
     </div>
+
+    <label class="option-item" id="layer-swipe-toggle-wrap" style="grid-column: span 2; margin-top:2px;">
+        <input type="checkbox" id="toggle-layer-swipe"
+               onchange="window.sylvaToggleLayerSwipe && window.sylvaToggleLayerSwipe(this.checked)">
+        <span>Katman Sıyırıcı</span>
+    </label>
 
     <label class="option-item" id="opacity-toggle-wrap" style="grid-column: span 2; margin-top:2px; opacity:0.4;">
         <input type="checkbox" id="toggle-opacity" disabled>
@@ -6970,6 +6989,15 @@ document.getElementById('layerOpacity').addEventListener('input', function() {
     var state = _sylvaPaneState(paneId);
     state.dataOpacity = opacity;
     _sylvaSetLayerOpacity(_sylvaLayerForPane('data', paneId), opacity);
+
+    // 🔁 Konum Senkronizasyonu açıkken şeffaflık diğer ekrana da birebir
+    // ve anında yansır — araç/katman kısıtlaması olmadan.
+    if (window._sylvaDualScreenSyncActive) {
+        var otherPaneId = paneId === 'map2' ? 'map' : 'map2';
+        var otherState = _sylvaPaneState(otherPaneId);
+        otherState.dataOpacity = opacity;
+        _sylvaSetLayerOpacity(_sylvaLayerForPane('data', otherPaneId), opacity);
+    }
 });
 
 // Basemap Şeffaflığı — slider artık ŞEFFAFLIK yüzdesini temsil ediyor
@@ -9724,11 +9752,9 @@ function selectRamp(name) {
         // görüntüyü/basemap'i görebilmek için hafif saydam (0.85); sürekli
         // indeks katmanları (NDVI/NDWI/EVI/TOPO vb.) 0.92 varsayılanla açılır.
         function _sylvaAutoOpacityForAnalysis(meta) {
-            if (!meta) return 1;
-            if (meta.isRgbGallery) return 1;
-            if (typeof isLulcAnalysis === 'function' && isLulcAnalysis(meta.analysisName)) return 0.85;
-            if (typeof isTopoAnalysis === 'function' && isTopoAnalysis(meta.analysisName)) return 0.92;
-            return 0.92;
+            // 🛠️ Artık ekrana inen HER yeni analiz %0 şeffaflıkla (tam opak/
+            // tam görünür) başlıyor; kullanıcı isterse slider'dan elle azaltabilir.
+            return 1;
         }
         function _sylvaApplyAutoOpacity(paneId, meta) {
             var opacity = _sylvaAutoOpacityForAnalysis(meta);
@@ -9744,6 +9770,130 @@ function selectRamp(name) {
                 if (valEl)  valEl.textContent = '%' + Math.round((1 - opacity) * 100);
             }
         }
+
+        // ============================================================
+        // 🆕 KATMAN SIYIRICI (ArcMap Swipe aracı) — üstteki analiz katmanı
+        // (geeAnalysisPane) sürüklenen çizgiye göre kesilir, alttaki uydu
+        // görüntüsü ortaya çıkar. Her iki ekranda BAĞIMSIZ çalışır; hiçbir
+        // çizim/analiz aracını kısıtlamaz (yalnızca görsel clip-path).
+        // Kullanıcı çubuğu sağa-sola (dikey ayırıcı) veya yukarı-aşağı
+        // (yatay ayırıcı) sürükleyebilir; tutamağa çift tıklayınca eksen
+        // değişir.
+        // ============================================================
+        (function () {
+            var SWIPE = {
+                map:  { fraction: 0.5, orientation: 'vertical', active: false },
+                map2: { fraction: 0.5, orientation: 'vertical', active: false }
+            };
+            window._sylvaSwipeState = SWIPE;
+
+            function _sylvaApplySwipeClip(paneId) {
+                var lmap = paneId === 'map2' ? map2 : map;
+                if (!lmap) return;
+                var pane = lmap.getPane('geeAnalysisPane');
+                if (!pane) return;
+                var s = SWIPE[paneId];
+                if (!s.active) { pane.style.clipPath = ''; return; }
+                var pct = Math.round(s.fraction * 100);
+                pane.style.clipPath = s.orientation === 'horizontal'
+                    ? 'inset(0 0 ' + (100 - pct) + '% 0)'
+                    : 'inset(0 ' + (100 - pct) + '% 0 0)';
+            }
+
+            function _sylvaPositionSwipeUi(paneId) {
+                var container = document.getElementById(paneId === 'map2' ? 'map2' : 'map');
+                var divider = document.getElementById('sylva-swipe-' + paneId);
+                var handle  = document.getElementById('sylva-swipe-handle-' + paneId);
+                var line    = document.getElementById('sylva-swipe-line-' + paneId);
+                if (!container || !divider || !handle || !line) return;
+                var s = SWIPE[paneId];
+                var rect = container.getBoundingClientRect();
+                if (s.orientation === 'horizontal') {
+                    var y = rect.height * s.fraction;
+                    line.style.top = y + 'px';
+                    handle.style.top = (y - 17) + 'px';
+                    handle.style.left = (rect.width / 2 - 17) + 'px';
+                    handle.textContent = '↕';
+                } else {
+                    var x = rect.width * s.fraction;
+                    line.style.left = x + 'px';
+                    handle.style.left = (x - 17) + 'px';
+                    handle.style.top = (rect.height / 2 - 17) + 'px';
+                    handle.textContent = '↔';
+                }
+            }
+
+            function _sylvaEnsureSwipeUi(paneId) {
+                var container = document.getElementById(paneId === 'map2' ? 'map2' : 'map');
+                if (!container || document.getElementById('sylva-swipe-' + paneId)) return;
+
+                var divider = document.createElement('div');
+                divider.className = 'sylva-swipe-divider';
+                divider.id = 'sylva-swipe-' + paneId;
+                divider.setAttribute('data-orientation', 'vertical');
+
+                var line = document.createElement('div');
+                line.className = 'sylva-swipe-line';
+                line.id = 'sylva-swipe-line-' + paneId;
+
+                var handle = document.createElement('div');
+                handle.className = 'sylva-swipe-handle';
+                handle.id = 'sylva-swipe-handle-' + paneId;
+                handle.title = 'Sürükleyin — çift tıklayın: yön değiştir';
+                handle.textContent = '↔';
+
+                divider.appendChild(line);
+                divider.appendChild(handle);
+                container.appendChild(divider);
+
+                var dragging = false;
+                function onMove(clientX, clientY) {
+                    var rect = container.getBoundingClientRect();
+                    var s = SWIPE[paneId];
+                    var frac = (s.orientation === 'horizontal')
+                        ? (clientY - rect.top) / rect.height
+                        : (clientX - rect.left) / rect.width;
+                    s.fraction = Math.max(0, Math.min(1, frac));
+                    _sylvaPositionSwipeUi(paneId);
+                    _sylvaApplySwipeClip(paneId);
+                }
+
+                handle.addEventListener('mousedown', function (e) { dragging = true; e.preventDefault(); });
+                handle.addEventListener('touchstart', function () { dragging = true; }, { passive: true });
+                document.addEventListener('mousemove', function (e) { if (dragging) onMove(e.clientX, e.clientY); });
+                document.addEventListener('touchmove', function (e) {
+                    if (dragging && e.touches && e.touches[0]) onMove(e.touches[0].clientX, e.touches[0].clientY);
+                }, { passive: true });
+                document.addEventListener('mouseup', function () { dragging = false; });
+                document.addEventListener('touchend', function () { dragging = false; });
+
+                handle.addEventListener('dblclick', function () {
+                    var s = SWIPE[paneId];
+                    s.orientation = s.orientation === 'vertical' ? 'horizontal' : 'vertical';
+                    divider.setAttribute('data-orientation', s.orientation);
+                    _sylvaPositionSwipeUi(paneId);
+                    _sylvaApplySwipeClip(paneId);
+                });
+
+                window.addEventListener('resize', function () { _sylvaPositionSwipeUi(paneId); });
+            }
+
+            window.sylvaToggleLayerSwipe = function (checked) {
+                ['map', 'map2'].forEach(function (paneId) {
+                    var lmap = paneId === 'map2' ? map2 : map;
+                    if (!lmap) return;
+                    _sylvaEnsureSwipeUi(paneId);
+                    SWIPE[paneId].active = !!checked;
+                    var divider = document.getElementById('sylva-swipe-' + paneId);
+                    if (divider) divider.classList.toggle('active', !!checked);
+                    if (checked) {
+                        SWIPE[paneId].fraction = 0.5;
+                        _sylvaPositionSwipeUi(paneId);
+                    }
+                    _sylvaApplySwipeClip(paneId);
+                });
+            };
+        })();
 
         // ============================================================
         // SylvaGIS YÜKLEME EKRANI — ortak yardımcılar
