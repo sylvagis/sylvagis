@@ -8975,21 +8975,46 @@ function selectRamp(name) {
                 }
             })();
 
-            // Harita lejantını sürekli renk skalası olarak güncelle
+            var _aslActivePaneId = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+            var legendBox = _sylvaApplyStretchedLegendVisualsForPane(_aslActivePaneId, minVal, maxVal, title, rampCss);
+
+            // 🆕 DÜZELTME (Çift Ekran Senkronizasyonu): Konum/çift ekran
+            // senkronizasyonu açıkken "Lejantı Uygula" artık KARŞI ekranın
+            // hem lejant KUTUSUNU (renk çubuğu/etiketler) hem de katman
+            // renklendirmesini de günceller. Önceden senkronizasyon açık
+            // olsa bile bu fonksiyon SADECE aktif ekranı etkiliyordu; karşı
+            // ekranın verisi (bkz. syncStretchedToGEE) sessizce değişse de
+            // lejant kutusu hiç güncellenmiyordu.
+            if (window._sylvaWorkspaceSyncActive || window._sylvaDualScreenSyncActive) {
+                var _aslOtherPaneId = (_aslActivePaneId === 'map2') ? 'map' : 'map2';
+                var _aslOtherAoi = (_aslOtherPaneId === 'map2') ? currentLayer2 : currentLayer;
+                if (_aslOtherAoi) {
+                    _sylvaApplyStretchedLegendVisualsForPane(_aslOtherPaneId, minVal, maxVal, title, rampCss);
+                }
+            }
+
+            // ── GEE senkronizasyonu: Stretched modda da artık classified moddaki
+            // gibi sunucuya gerçek bir "yeniden hesapla ve boya" talimatı gider.
+            // (Önceden sadece classified mod GEE'ye senkronize oluyordu — bu eksiklik
+            // "değişiklik sadece tarayıcıda kalıyor" sorununun ana kaynağıydı.)
+            // Senkronizasyon açıkken karşı ekranın verisi de burada güncellenir
+            // (bkz. syncStretchedToGEE içindeki senkronizasyon bloğu).
+            syncStretchedToGEE(minVal, maxVal);
+        }
+
+        // Stretched (sürekli/gradyan) modda TEK bir ekranın (paneId) lejant
+        // kutusunu + katman renklendirmesini + editör/lejant snapshot'ını
+        // günceller ve o ekranın lejant kutusu (DOM elemanı) döndürülür.
+        // applyStretchedLegend() bunu aktif ekran için her zaman, çift ekran
+        // senkronizasyonu açıkken de KARŞI ekran için çağırır — böylece
+        // "Lejantı Uygula" her iki ekranda da (lejant + veri) tutarlı kalır.
+        function _sylvaApplyStretchedLegendVisualsForPane(paneId, minVal, maxVal, title, rampCss) {
             // 🛠️ BUG FİX: document.querySelector('.map-legend') DOM'daki İLK
             // '.map-legend' elemanını (sağ üstteki analiz geçiş kutusu,
             // #map-layer-switch-box) seçiyordu; gerçek lejant kutusu
-            // (#map-legend-box) hiç güncellenmiyordu. Artık doğrudan gerçek
-            // lejant kutusu hedeflenir; analiz geçiş kutusuna dokunulmaz.
-            // 🛠️ DÜZELTME (Çift Ekran): Bu fonksiyon eskiden HER ZAMAN sabit
-            // olarak #map-legend-box'ı (Ekran 1) hedefliyordu — Ekran 2
-            // aktifken "Lejantı Uygula" (stretched/sürekli mod) basılırsa
-            // yeni lejant yanlışlıkla Ekran 1'in kutusuna yazılıyor, Ekran
-            // 2'nin kutusu hiç güncellenmiyordu (classified moddaki aynı hata
-            // burada henüz düzeltilmemişti). Artık her zaman O AN AKTİF olan
-            // ekranın kendi lejant kutusu hedeflenir.
-            var _aslActivePaneId = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
-            var legendBox = document.getElementById(_aslActivePaneId === 'map2' ? 'map2-legend-box' : 'map-legend-box');
+            // (#map-legend-box / #map2-legend-box) hiç güncellenmiyordu.
+            // Artık doğrudan verilen ekranın gerçek lejant kutusu hedeflenir.
+            var legendBox = document.getElementById(paneId === 'map2' ? 'map2-legend-box' : 'map-legend-box');
             if (legendBox) {
                 // "Lejantı Uygula" çağrısı tüm HTML'yi yeniden çizdiğinden,
                 // lejanttaki tarih satırı (real-stats-row) silinmeden önce
@@ -9022,43 +9047,36 @@ function selectRamp(name) {
             }
 
             // Katmanı stretched palette göre yeniden boyar (değer aralığına normalize eder)
-            recolorCurrentLayerStretched(minVal, maxVal, rampCss);
+            recolorCurrentLayerStretched(minVal, maxVal, rampCss, paneId);
 
-            // 🆕 Bu, o an ekranda EN ÜSTTE olan katmana ait Stretched ayar
+            // 🆕 Bu, verilen ekranda EN ÜSTTE olan katmana ait Stretched ayar
             // olarak sayılır ve panel/editör durumu snapshot'a kaydedilir —
             // böylece başka bir katmana geçip geri dönüldüğünde bu Min/Max/
             // Renk Paleti ayarları kaybolmaz.
-            (function () {
-                var _aslPaneId = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
-                var _aslKey = (_aslPaneId === 'map2') ? 'map2' : 'map';
-                var _aslTopKey = (window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[_aslKey]) || null;
-                if (_aslTopKey && typeof _sylvaSaveEditorStateForLayer === 'function') {
-                    _sylvaSaveEditorStateForLayer(_aslPaneId, _aslTopKey);
-                }
-                // 🛠️ BUG FİX: Gerili (stretched/gradyan) modda "Lejantı Uygula"
-                // basıldığında yalnızca DÜZENLEME paneli (sağdaki Renk Paleti/
-                // Min-Max) snapshot'a kaydediliyordu; lejant KUTUSUNUN kendisi
-                // (sol alttaki gerçek renk çubuğu) hiç kaydedilmiyordu. Sonuç:
-                // başka bir katmana (Analiz Geçiş kutusundan) geçilip geri
-                // dönüldüğünde panel doğru rengi gösterirken, harita üzerindeki
-                // gerçek lejant çubuğu snapshot bulunamadığı için varsayılan/
-                // eski renge sıfırlanıyordu. Sınıflandırılmış (classified) modda
-                // applyClassificationToMap() bu kaydı zaten yapıyordu — aynı
-                // mantık burada da uygulanır.
-                if (_aslTopKey && legendBox) {
-                    window._sylvaLayerLegendSnapshotByPane = window._sylvaLayerLegendSnapshotByPane || { map: {}, map2: {} };
-                    window._sylvaLayerLegendSnapshotByPane[_aslKey][_aslTopKey] = {
-                        html: legendBox.innerHTML,
-                        display: legendBox.style.display
-                    };
-                }
-            })();
+            var _aslKey = (paneId === 'map2') ? 'map2' : 'map';
+            var _aslTopKey = (window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[_aslKey]) || null;
+            if (_aslTopKey && typeof _sylvaSaveEditorStateForLayer === 'function') {
+                _sylvaSaveEditorStateForLayer(paneId, _aslTopKey);
+            }
+            // 🛠️ BUG FİX: Gerili (stretched/gradyan) modda "Lejantı Uygula"
+            // basıldığında yalnızca DÜZENLEME paneli (sağdaki Renk Paleti/
+            // Min-Max) snapshot'a kaydediliyordu; lejant KUTUSUNUN kendisi
+            // (sol alttaki gerçek renk çubuğu) hiç kaydedilmiyordu. Sonuç:
+            // başka bir katmana (Analiz Geçiş kutusundan) geçilip geri
+            // dönüldüğünde panel doğru rengi gösterirken, harita üzerindeki
+            // gerçek lejant çubuğu snapshot bulunamadığı için varsayılan/
+            // eski renge sıfırlanıyordu. Sınıflandırılmış (classified) modda
+            // applyClassificationToMap() bu kaydı zaten yapıyordu — aynı
+            // mantık burada da uygulanır.
+            if (_aslTopKey && legendBox) {
+                window._sylvaLayerLegendSnapshotByPane = window._sylvaLayerLegendSnapshotByPane || { map: {}, map2: {} };
+                window._sylvaLayerLegendSnapshotByPane[_aslKey][_aslTopKey] = {
+                    html: legendBox.innerHTML,
+                    display: legendBox.style.display
+                };
+            }
 
-            // ── GEE senkronizasyonu: Stretched modda da artık classified moddaki
-            // gibi sunucuya gerçek bir "yeniden hesapla ve boya" talimatı gider.
-            // (Önceden sadece classified mod GEE'ye senkronize oluyordu — bu eksiklik
-            // "değişiklik sadece tarayıcıda kalıyor" sorununun ana kaynağıydı.)
-            syncStretchedToGEE(minVal, maxVal);
+            return legendBox;
         }
 
         // Stretched mod min/max + renk rampasını GEE'ye göndererek tile URL'yi
@@ -9078,6 +9096,16 @@ function selectRamp(name) {
         function syncStretchedToGEE(minVal, maxVal) {
             var _activePane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
             _syncStretchedToGEEForPane(_activePane, minVal, maxVal);
+
+            // 🆕 DÜZELTME (Çift Ekran Senkronizasyonu): Konum/çift ekran
+            // senkronizasyonu açıkken KARŞI ekranın verisi de (GEE tile
+            // yeniden hesaplanıp boyanarak) güncellenir. Lejant kutusunun
+            // kendisi applyStretchedLegend() içinde ayrıca mirror edilir.
+            if (window._sylvaWorkspaceSyncActive || window._sylvaDualScreenSyncActive) {
+                var _otherPane = (_activePane === 'map2') ? 'map' : 'map2';
+                var _otherAoi = (_otherPane === 'map2') ? currentLayer2 : currentLayer;
+                if (_otherAoi) _syncStretchedToGEEForPane(_otherPane, minVal, maxVal);
+            }
         }
 
         function _syncStretchedToGEEForPane(_pane, minVal, maxVal) {
@@ -9164,8 +9192,8 @@ function selectRamp(name) {
         // aktif olan ekranın kendi AOI katmanı (currentLayer / currentLayer2)
         // hedeflenir — applyClassificationToMap/recolorCurrentLayerByClasses'daki
         // aynı düzeltmenin stretched moddaki karşılığı.
-        function recolorCurrentLayerStretched(minVal, maxVal, rampCss) {
-            var _rclsPaneId = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+        function recolorCurrentLayerStretched(minVal, maxVal, rampCss, paneIdOverride) {
+            var _rclsPaneId = paneIdOverride || ((typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map');
             var _rclsLayer = (_rclsPaneId === 'map2') ? currentLayer2 : currentLayer;
             if (!_rclsLayer) return;
 
@@ -9484,35 +9512,58 @@ function selectRamp(name) {
             // Lejantta tutarlı bir sıralama için küçükten büyüğe diz
             classes.sort(function (a, b) { return a.min - b.min; });
 
-            renderDynamicLegend(classes);
-            recolorCurrentLayerByClasses(classes);
+            var _acmActivePaneId = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+            _sylvaApplyClassificationVisualsForPane(_acmActivePaneId, classes);
             updateStatsChartFromClasses(classes);
 
-            // 🆕 Kullanıcı elle sınıflandırma uyguladığında da (özel renk/aralık),
-            // bu, o an ekranda EN ÜSTTE olan katmana ait sayılır ve snapshot'ı
-            // güncellenir — böylece başka bir katmana geçip geri dönüldüğünde bu
-            // özel renkler kaybolmaz, korunur.
-            (function () {
-                var _acmPaneId = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
-                var _acmKey = (_acmPaneId === 'map2') ? 'map2' : 'map';
-                var _acmTopKey = (window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[_acmKey]) || null;
-                if (!_acmTopKey) return;
-                window._sylvaLayerLegendSnapshotByPane = window._sylvaLayerLegendSnapshotByPane || { map: {}, map2: {} };
-                var _acmBox = document.getElementById(_acmPaneId === 'map2' ? 'map2-legend-box' : 'map-legend-box');
-                if (_acmBox) {
-                    window._sylvaLayerLegendSnapshotByPane[_acmKey][_acmTopKey] = {
-                        html: _acmBox.innerHTML,
-                        display: _acmBox.style.display
-                    };
+            // 🆕 DÜZELTME (Çift Ekran Senkronizasyonu): Konum/çift ekran
+            // senkronizasyonu açıkken "Lejantı Uygula" artık KARŞI ekranın
+            // hem lejant KUTUSUNU hem de katman renklendirmesini de günceller.
+            // Önceden senkronizasyon açık olsa bile bu SADECE aktif ekranı
+            // etkiliyordu; karşı ekranın verisi (bkz. syncClassificationToGEE)
+            // sessizce değişse de lejant kutusu hiç güncellenmiyordu.
+            if (window._sylvaWorkspaceSyncActive || window._sylvaDualScreenSyncActive) {
+                var _acmOtherPaneId = (_acmActivePaneId === 'map2') ? 'map' : 'map2';
+                var _acmOtherAoi = (_acmOtherPaneId === 'map2') ? currentLayer2 : currentLayer;
+                if (_acmOtherAoi) {
+                    _sylvaApplyClassificationVisualsForPane(_acmOtherPaneId, classes);
                 }
-                if (typeof _sylvaSaveEditorStateForLayer === 'function') {
-                    _sylvaSaveEditorStateForLayer(_acmPaneId, _acmTopKey);
-                }
-            })();
+            }
 
             // ── GEE senkronizasyonu: özel renk/aralık bilgisini sunucuya gönder ──
             // Böylece haritadaki GEE tile de seçilen sınıflandırmayı yansıtır.
+            // Senkronizasyon açıkken karşı ekranın verisi de burada güncellenir
+            // (bkz. syncClassificationToGEE içindeki senkronizasyon bloğu).
             syncClassificationToGEE(classes);
+        }
+
+        // Classified (sınıflandırılmış) modda TEK bir ekranın (paneId) lejant
+        // kutusunu + katman renklendirmesini + editör/lejant snapshot'ını
+        // günceller. applyClassificationToMap() bunu aktif ekran için her
+        // zaman, çift ekran senkronizasyonu açıkken de KARŞI ekran için
+        // çağırır — böylece "Lejantı Uygula" her iki ekranda da tutarlı kalır.
+        function _sylvaApplyClassificationVisualsForPane(paneId, classes) {
+            renderDynamicLegend(classes, paneId);
+            recolorCurrentLayerByClasses(classes, paneId);
+
+            // 🆕 Kullanıcı elle sınıflandırma uyguladığında da (özel renk/aralık),
+            // bu, verilen ekranda EN ÜSTTE olan katmana ait sayılır ve snapshot'ı
+            // güncellenir — böylece başka bir katmana geçip geri dönüldüğünde bu
+            // özel renkler kaybolmaz, korunur.
+            var _acmKey = (paneId === 'map2') ? 'map2' : 'map';
+            var _acmTopKey = (window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[_acmKey]) || null;
+            if (!_acmTopKey) return;
+            window._sylvaLayerLegendSnapshotByPane = window._sylvaLayerLegendSnapshotByPane || { map: {}, map2: {} };
+            var _acmBox = document.getElementById(paneId === 'map2' ? 'map2-legend-box' : 'map-legend-box');
+            if (_acmBox) {
+                window._sylvaLayerLegendSnapshotByPane[_acmKey][_acmTopKey] = {
+                    html: _acmBox.innerHTML,
+                    display: _acmBox.style.display
+                };
+            }
+            if (typeof _sylvaSaveEditorStateForLayer === 'function') {
+                _sylvaSaveEditorStateForLayer(paneId, _acmTopKey);
+            }
         }
 
         // Sınıf renk/aralık bilgisini GEE'ye göndererek tile URL'yi yeniler
@@ -9534,6 +9585,16 @@ function selectRamp(name) {
         function syncClassificationToGEE(classes) {
             var _activePane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
             _syncClassificationToGEEForPane(_activePane, classes);
+
+            // 🆕 DÜZELTME (Çift Ekran Senkronizasyonu): Konum/çift ekran
+            // senkronizasyonu açıkken KARŞI ekranın verisi de (GEE tile
+            // yeniden hesaplanıp boyanarak) güncellenir. Lejant kutusunun
+            // kendisi applyClassificationToMap() içinde ayrıca mirror edilir.
+            if (window._sylvaWorkspaceSyncActive || window._sylvaDualScreenSyncActive) {
+                var _otherPane = (_activePane === 'map2') ? 'map' : 'map2';
+                var _otherAoi = (_otherPane === 'map2') ? currentLayer2 : currentLayer;
+                if (_otherAoi) _syncClassificationToGEEForPane(_otherPane, classes);
+            }
         }
 
         function _syncClassificationToGEEForPane(_pane, classes) {
@@ -9623,15 +9684,15 @@ function selectRamp(name) {
 
         // Harita üzerindeki lejantı (.map-legend), girilen özel isim/aralık/renklerle yeniden çizer
         var _lastDynamicClasses = null;
-        function renderDynamicLegend(classes) {
+        function renderDynamicLegend(classes, paneIdOverride) {
             _lastDynamicClasses = classes;
             // 🛠️ KÖK NEDEN DÜZELTMESİ: Bu fonksiyon eskiden HER ZAMAN sabit
             // olarak #map-legend-box'ı (Ekran 1) hedefliyordu — Ekran 2 aktif
             // ekranken "Lejantı Uygula" basılırsa yeni sınıflandırma yanlışlıkla
             // Ekran 1'in lejant kutusuna yazılıyor, Ekran 2'nin kutusu hiç
-            // güncellenmiyordu. Artık her zaman O AN AKTİF olan ekranın kendi
+            // güncellenmiyordu. Artık verilen (ya da aktif) ekranın kendi
             // lejant kutusu hedeflenir; diğer ekranın lejantına dokunulmaz.
-            var _rdlPaneId = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+            var _rdlPaneId = paneIdOverride || ((typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map');
             var legendBox = document.getElementById(_rdlPaneId === 'map2' ? 'map2-legend-box' : 'map-legend-box');
             if (!legendBox) return;
 
@@ -9643,7 +9704,7 @@ function selectRamp(name) {
 
             var rowsHtml = '<div style="display:flex;flex-direction:column;gap:2px;margin-top:5px;">' +
                 classes.map(function (c, i) {
-                    var isActive = (window._classHighlightIndexByPane[_sylvaActivePaneId()] === i);
+                    var isActive = (window._classHighlightIndexByPane[_rdlPaneId] === i);
                     return (
                         '<div class="class-highlight-target' + (isActive ? ' class-highlight-active' : '') + '" data-class-idx="' + i + '" style="display:flex; align-items:center; gap:5px; cursor:pointer;" title="' + t('highlight_class_hint', 'Haritada vurgulamak için tıklayın') + '">' +
                             '<span style="width:12px; height:12px; border-radius:2px; background:' + c.color +
@@ -9675,13 +9736,13 @@ function selectRamp(name) {
         // göre kendi seçilen renkleriyle yeniden boyar. Sayısal bir veri özniteliği
         // bulunamazsa (örn. henüz gerçek NDVI/raster verisi yüklenmemişse), katman
         // ilk sınıfın rengiyle boyanır ve konsola bilgi notu yazılır.
-        function recolorCurrentLayerByClasses(classes) {
+        function recolorCurrentLayerByClasses(classes, paneIdOverride) {
             // 🛠️ DÜZELTME: Bu fonksiyon eskiden HER ZAMAN Ekran 1'in AOI
             // katmanını (currentLayer) boyuyordu — Ekran 2 aktifken
             // "Lejantı Uygula" çalıştırıldığında bile Ekran 1'in katmanı
-            // etkileniyordu. Artık o an aktif olan ekranın kendi AOI katmanı
-            // (currentLayer / currentLayer2) hedeflenir.
-            var _rclPaneId = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+            // etkileniyordu. Artık verilen (ya da aktif) ekranın kendi AOI
+            // katmanı (currentLayer / currentLayer2) hedeflenir.
+            var _rclPaneId = paneIdOverride || ((typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map');
             var _rclLayer = (_rclPaneId === 'map2') ? currentLayer2 : currentLayer;
             if (!_rclLayer) return;
 
