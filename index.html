@@ -5786,6 +5786,8 @@ tr.class-highlight-active {
                 if (!srcLayer || !srcLayer._url) return;
                 var clone = L.tileLayer(srcLayer._url, {
                     opacity: 1, zIndex: (key === srcTopKey ? 20 : 10), crossOrigin: true, pane: 'geeAnalysisPane',
+                    // 🛠️ DÜZELTME (Zoom'da Veri Kaybolması): bkz. _sylvaReplaceGeeLayer
+                    maxZoom: 24, maxNativeZoom: 20,
                     attribution: srcLayer.options && srcLayer.options.attribution
                 });
                 window._geeLayersByPane.map2[key] = clone;
@@ -6071,6 +6073,8 @@ tr.class-highlight-active {
 
                 var clone = L.tileLayer(srcLayer._url, {
                     opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane',
+                    // 🛠️ DÜZELTME (Zoom'da Veri Kaybolması): bkz. _sylvaReplaceGeeLayer
+                    maxZoom: 24, maxNativeZoom: 20,
                     attribution: srcLayer.options && srcLayer.options.attribution
                 });
                 if (dstId === 'map2') window._geeLayer2 = clone;
@@ -8973,7 +8977,15 @@ function selectRamp(name) {
             // #map-layer-switch-box) seçiyordu; gerçek lejant kutusu
             // (#map-legend-box) hiç güncellenmiyordu. Artık doğrudan gerçek
             // lejant kutusu hedeflenir; analiz geçiş kutusuna dokunulmaz.
-            var legendBox = document.getElementById('map-legend-box');
+            // 🛠️ DÜZELTME (Çift Ekran): Bu fonksiyon eskiden HER ZAMAN sabit
+            // olarak #map-legend-box'ı (Ekran 1) hedefliyordu — Ekran 2
+            // aktifken "Lejantı Uygula" (stretched/sürekli mod) basılırsa
+            // yeni lejant yanlışlıkla Ekran 1'in kutusuna yazılıyor, Ekran
+            // 2'nin kutusu hiç güncellenmiyordu (classified moddaki aynı hata
+            // burada henüz düzeltilmemişti). Artık her zaman O AN AKTİF olan
+            // ekranın kendi lejant kutusu hedeflenir.
+            var _aslActivePaneId = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+            var legendBox = document.getElementById(_aslActivePaneId === 'map2' ? 'map2-legend-box' : 'map-legend-box');
             if (legendBox) {
                 // "Lejantı Uygula" çağrısı tüm HTML'yi yeniden çizdiğinden,
                 // lejanttaki tarih satırı (real-stats-row) silinmeden önce
@@ -9133,8 +9145,17 @@ function selectRamp(name) {
         }
 
         // Stretched mod için katman boyama
+        // 🛠️ DÜZELTME (Çift Ekran): Bu fonksiyon eskiden HER ZAMAN Ekran 1'in
+        // AOI katmanını (currentLayer) boyuyordu — Ekran 2 aktifken
+        // "Lejantı Uygula" (stretched mod) çalıştırıldığında bile Ekran 1'in
+        // katmanı etkileniyor, Ekran 2'nin verisi hiç değişmiyordu. Artık o an
+        // aktif olan ekranın kendi AOI katmanı (currentLayer / currentLayer2)
+        // hedeflenir — applyClassificationToMap/recolorCurrentLayerByClasses'daki
+        // aynı düzeltmenin stretched moddaki karşılığı.
         function recolorCurrentLayerStretched(minVal, maxVal, rampCss) {
-            if (!currentLayer) return;
+            var _rclsPaneId = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+            var _rclsLayer = (_rclsPaneId === 'map2') ? currentLayer2 : currentLayer;
+            if (!_rclsLayer) return;
 
             // Her zaman verilen rampCss'i (tersine çevrilmiş olabilir) doğrudan kullan
             var selectedRampEl = document.getElementById('selectedRamp');
@@ -9182,10 +9203,10 @@ function selectRamp(name) {
                 }
             }
 
-            if (typeof currentLayer.eachLayer === 'function') {
-                currentLayer.eachLayer(styleSingleLayer);
+            if (typeof _rclsLayer.eachLayer === 'function') {
+                _rclsLayer.eachLayer(styleSingleLayer);
             } else {
-                styleSingleLayer(currentLayer);
+                styleSingleLayer(_rclsLayer);
             }
         }
 
@@ -10257,7 +10278,17 @@ function selectRamp(name) {
         }
         function _sylvaReplaceGeeLayer(paneId, tileUrl, options) {
             var targetMap = _sylvaTargetMap(paneId);
-            var opts = Object.assign({ opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane' }, options || {});
+            // 🛠️ DÜZELTME (Zoom'da Veri Kaybolması): GEE analiz katmanları
+            // (NDVI/NDWI/LST vb.) burada maxZoom/maxNativeZoom belirtilmediği
+            // için Leaflet'in varsayılan maxZoom değeri olan 18'i kullanıyordu.
+            // Basemap katmanları (ör. Google) maxZoom:20 desteklediğinden,
+            // kullanıcı 18'in ötesine (hangi seviyeye kadar olursa olsun)
+            // zoom yaptığında analiz katmanı kare istemeyi bırakıp
+            // kayboluyor, altındaki basemap çıplak görünüyordu. Artık
+            // maxNativeZoom'da (GEE'nin kare ürettiği son seviye) durup,
+            // sonrasında son karolar otomatik büyütülerek (upscale)
+            // gösterilir — veri hiçbir zoom seviyesinde kaybolmaz.
+            var opts = Object.assign({ opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane', maxZoom: 24, maxNativeZoom: 20 }, options || {});
             var _rgKey = (paneId === 'map2') ? 'map2' : 'map';
             // 🛠️ BUG FİX: Sınıflandırma/Stretched/Sahne değişimi bu fonksiyonu
             // çağırarak katmanı yeniden boyanmış haliyle değiştiriyordu, ama
@@ -10291,7 +10322,10 @@ function selectRamp(name) {
         window._geeLayersByPane = window._geeLayersByPane || { map: {}, map2: {} };
         function _sylvaAddGeeLayer(paneId, layerKey, tileUrl, options) {
             var targetMap = _sylvaTargetMap(paneId);
-            var opts = Object.assign({ opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane' }, options || {});
+            // 🛠️ DÜZELTME (Zoom'da Veri Kaybolması): bkz. _sylvaReplaceGeeLayer
+            // içindeki açıklama — aynı maxZoom/maxNativeZoom eksikliği burada
+            // eklenen katmanlar için de geçerliydi.
+            var opts = Object.assign({ opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane', maxZoom: 24, maxNativeZoom: 20 }, options || {});
             var store = window._geeLayersByPane[(paneId === 'map2') ? 'map2' : 'map'];
             if (store[layerKey]) { try { targetMap.removeLayer(store[layerKey]); } catch (e) {} delete store[layerKey]; }
             var layer = L.tileLayer(tileUrl, opts).addTo(targetMap);
@@ -13732,7 +13766,7 @@ function selectRamp(name) {
                 }
                 var _oldLayer = window._classHighlightLayerByPane[_pane];
                 if (_oldLayer) { try { _sylvaTargetMap(_pane).removeLayer(_oldLayer); } catch (e) {} }
-                window._classHighlightLayerByPane[_pane] = L.tileLayer(data.tileUrl, { opacity: 0.95, zIndex: 20, crossOrigin: true, pane: 'geeAnalysisPane' }).addTo(_sylvaTargetMap(_pane));
+                window._classHighlightLayerByPane[_pane] = L.tileLayer(data.tileUrl, { opacity: 0.95, zIndex: 20, crossOrigin: true, pane: 'geeAnalysisPane', maxZoom: 24, maxNativeZoom: 20 }).addTo(_sylvaTargetMap(_pane));
             })
             .catch(function (err) {
                 if (window._classHighlightIndexByPane[_pane] === idx) window._classHighlightIndexByPane[_pane] = null;
