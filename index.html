@@ -10165,12 +10165,25 @@ function selectRamp(name) {
         // beyaz arka plan üzerinde yanıp sönen "SylvaGIS" overlay'i;
         // galeri sahne geçişleri ve lejant uygulama işlemleri de dahil
         // olmak üzere TÜM uzun süren (sunucu/GEE) işlemlerde kullanılır.
-        // ============================================================
+        // 🆕 REFERANS SAYAÇLI overlay: birden fazla uydu görüntüsü veri seti
+        // (ör. Sentinel-2 + Landsat) aynı anda seçilip analiz başlatıldığında,
+        // her veri seti kendi showSylvaLoading()/hideSylvaLoading() çiftini
+        // çağırır. Eskiden HERHANGİ BİR veri seti bitince overlay hemen
+        // kapanıyor ve o katman tek başına ekrana düşüyordu (diğerleri hâlâ
+        // yükleniyorken); kullanıcı görüntülerin teker teker "damla damla"
+        // geldiğini görüyordu. Artık overlay yalnızca bekleyen (show çağrısı
+        // yapılmış ama henüz hide edilmemiş) TÜM işlemler bitince kapanır —
+        // böylece kaç uydu görüntüsü seçilmişse hepsi hazır olunca ekran
+        // birlikte açılır.
+        window._sylvaLoadingRefCount = window._sylvaLoadingRefCount || 0;
         function showSylvaLoading() {
+            window._sylvaLoadingRefCount = (window._sylvaLoadingRefCount || 0) + 1;
             var ov = document.getElementById('analysis-loading-overlay');
             if (ov) ov.classList.add('active');
         }
         function hideSylvaLoading() {
+            window._sylvaLoadingRefCount = Math.max(0, (window._sylvaLoadingRefCount || 0) - 1);
+            if (window._sylvaLoadingRefCount > 0) return; // hâlâ bekleyen başka bir yükleme var
             var ov = document.getElementById('analysis-loading-overlay');
             if (ov) ov.classList.remove('active');
         }
