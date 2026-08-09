@@ -3346,11 +3346,11 @@ tr.class-highlight-active {
                         <span class="sylva-updating-label" data-i18n="updating_label" style="display:none;">(Güncelleniyor)</span>
                     </label>
                 </div>
-                <div id="vaw-location-sync-row" class="vaw-sync-row" style="display:none;">
-                    <label class="vaw-sync-label" for="vaw-location-sync-checkbox">
+                <div id="vaw-location-sync-row" class="vaw-sync-row">
+                    <label class="vaw-sync-label" for="vaw-location-sync-checkbox" title="Sadece iki ekranın haritasını (basemap) birlikte kaydırıp yakınlaştırır; poligon, veri veya lejanta karışmaz.">
                         <input type="checkbox" id="vaw-location-sync-checkbox" disabled
                                onchange="window.sylvaToggleLocationSync && window.sylvaToggleLocationSync(this.checked)">
-                        <span>Konum Senkronizasyonu</span>
+                        <span>Haritaları Birlikte Gez (Sadece Basemap)</span>
                     </label>
                 </div>
                 <div id="sylva-workspace-sync-modal" class="sylva-sync-modal" role="dialog"
@@ -3359,8 +3359,8 @@ tr.class-highlight-active {
                     <div class="sylva-sync-modal-backdrop" data-sylva-sync-cancel></div>
                     <div class="sylva-sync-modal-card">
                         <div class="sylva-sync-modal-icon" aria-hidden="true">!</div>
-                        <h3 id="sylva-sync-modal-title" data-i18n="sync_modal_title">Poligonlar silinecek</h3>
-                        <p id="sylva-sync-modal-message" data-i18n="sync_modal_message">Çift ekranı senkronize ederseniz Ekran 1 ve Ekran 2'deki tüm çizilmiş poligonlar silinecek ve senkronizasyon devam edecek. Devam etmek istiyor musunuz?</p>
+                        <h3 id="sylva-sync-modal-title" data-i18n="sync_modal_title">Poligonlar ve veriler silinecek</h3>
+                        <p id="sylva-sync-modal-message" data-i18n="sync_modal_message">Çift ekranı senkronize ederseniz Ekran 1 ve Ekran 2'deki tüm çizilmiş/yüklenmiş poligonlar ve analiz/veri katmanları silinecek; her iki ekranın haritası da varsayılan başlangıç görünümüne ve basemap'ine sıfırlanacak. Senkronizasyon bundan sonra devam edecek. Devam etmek istiyor musunuz?</p>
                         <div class="sylva-sync-modal-actions">
                             <button type="button" class="sylva-sync-cancel" data-sylva-sync-cancel data-i18n="btn_cancel">İptal</button>
                             <button type="button" class="sylva-sync-confirm" data-sylva-sync-confirm data-i18n="sync_confirm_label">Tamam</button>
@@ -5546,8 +5546,12 @@ tr.class-highlight-active {
         // (merkez, zoom ve sürükleme) aynı anda güncel tutar. setView()
         // olayları tekrar karşı tarafa dönmesin diye kilit kullanılır.
         function _sylvaSyncMapView(sourceMap, targetMap) {
-            if (!window._sylvaDualScreenSyncActive || !sourceMap || !targetMap ||
-                window._sylvaSyncingView) return;
+            // 🆕 Görünüm (pan/zoom) senkronizasyonu iki bağımsız kaynaktan
+            // tetiklenebilir: "Çift Ekranı Senkronize Et" (tam senkron) VEYA
+            // "Haritaları Birlikte Gez" (sadece basemap gezinme). İkisinden
+            // biri açıksa görünüm eşitlenir.
+            if (!(window._sylvaDualScreenSyncActive || window._sylvaBasemapNavSyncActive) ||
+                !sourceMap || !targetMap || window._sylvaSyncingView) return;
             var sourceCenter = sourceMap.getCenter();
             var targetCenter = targetMap.getCenter();
             if (Math.abs(sourceCenter.lat - targetCenter.lat) < 0.000001 &&
@@ -5590,39 +5594,32 @@ tr.class-highlight-active {
         }
 
         function _sylvaSyncCurrentMapView() {
-            if (window._sylvaDualScreenSyncActive && map2) {
+            if ((window._sylvaDualScreenSyncActive || window._sylvaBasemapNavSyncActive) && map2) {
                 _sylvaSyncMapView(map, map2);
             }
         }
 
-        // 🆕 Konum Senkronizasyonu — yalnızca görünüm (merkez + zoom) senkronize
-        // edilir; katmanlar, analiz parametreleri, AOI ve lejant bundan ETKİLENMEZ
-        // (bkz. _sylvaSyncMapView / _sylvaBindMapViewSync — moveend/zoomend ile
-        // bağlanmış, isSyncing kilidiyle sonsuz döngüden korunuyor).
+        // 🆕 "Haritaları Birlikte Gez" — TAMAMEN bağımsız, kendine ait bir
+        // bayrak (_sylvaBasemapNavSyncActive) kullanır ve SADECE iki haritanın
+        // görünümünü (merkez + zoom) senkronize eder (bkz. _sylvaSyncMapView /
+        // _sylvaBindMapViewSync — moveend/zoomend ile bağlanmış, isSyncing
+        // kilidiyle sonsuz döngüden korunuyor). "Çift Ekranı Senkronize Et"
+        // (_sylvaWorkspaceSyncActive / _sylvaDualScreenSyncActive) ile
+        // KARIŞTIRILMAZ — poligon, AOI, analiz katmanı, lejant, bilgi kutusu,
+        // galeri: hiçbirine dokunmaz ve hiçbirini kopyalamaz. Tik
+        // kaldırıldığında ekranlar tekrar tamamen bağımsız gezinmeye döner,
+        // başka hiçbir şey değişmez/sıfırlanmaz.
+        window._sylvaBasemapNavSyncActive = false;
         window.sylvaToggleLocationSync = function (checked) {
-            window._sylvaDualScreenSyncActive = !!checked;
-            if (checked) window._sylvaSyncFirstAnalysisDone = false;
+            window._sylvaBasemapNavSyncActive = !!checked;
             var box = document.getElementById('vaw-location-sync-checkbox');
-            if (box && box.checked !== window._sylvaDualScreenSyncActive) {
-                box.checked = window._sylvaDualScreenSyncActive;
+            if (box && box.checked !== window._sylvaBasemapNavSyncActive) {
+                box.checked = window._sylvaBasemapNavSyncActive;
             }
-            // 🆕 Senkronizasyon her açıldığında Ekran 2'nin lejant kutusu
-            // varsayılan (kapalı/şeffaf) duruma döner.
-            window._sylvaMap2LegendExpanded = false;
-            if (typeof window.sylvaMirrorLegendInfoToMap2 === 'function') window.sylvaMirrorLegendInfoToMap2();
-            if (window._sylvaDualScreenSyncActive && map2) {
-                // Açılır açılmaz: 1) görünümü hizala, 2) o an aktif ekrandaki
-                // AOI + analiz katmanı + renk paleti/sınıflandırmayı diğer
-                // ekrana klonla — analiz öncesi/sonrası fark etmez, mevcut
-                // durum ne ise o anında kopyalanır. Araç kısıtlaması YOK.
+            if (window._sylvaBasemapNavSyncActive && map2) {
+                // Açılır açılmaz görünümü bir kez hizala; ardından
+                // moveend/zoomend ile sürekli birlikte hareket eder.
                 _sylvaSyncMapView(map, map2);
-                if (typeof window._sylvaMirrorWorkspaceLayer === 'function') window._sylvaMirrorWorkspaceLayer();
-                if (typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer();
-            }
-            // 🆕 Lejant ayarının Ekran 2 aktifken pasifleşmesi gibi panel
-            // kontrolleri hemen güncellensin.
-            if (typeof window._sylvaSyncActivePaneControls === 'function') {
-                window._sylvaSyncActivePaneControls();
             }
         };
 
@@ -5682,22 +5679,119 @@ tr.class-highlight-active {
             if (vaw && Array.isArray(vaw.workspaces) && vaw.workspaces.length > 0) {
                 return true;
             }
-            return !!(
+            if (
                 (typeof currentLayer !== 'undefined' && currentLayer) ||
                 window._workspaceLayer ||
                 (typeof currentLayer2 !== 'undefined' && currentLayer2) ||
                 window._workspaceLayer2
-            );
+            ) {
+                return true;
+            }
+            // 🆕 Poligon/çalışma alanı kalmamış olsa bile, önceden çalıştırılmış
+            // analiz/veri katmanları (GEE karoları) varsa da uyarı gösterilmeli —
+            // senkronizasyon açılırken bunlar da temizlenecek.
+            var geeStore = window._geeLayersByPane;
+            if (geeStore) {
+                var mapKeys = geeStore.map ? Object.keys(geeStore.map) : [];
+                var map2Keys = geeStore.map2 ? Object.keys(geeStore.map2) : [];
+                if (mapKeys.length > 0 || map2Keys.length > 0) return true;
+            }
+            return false;
         }
 
+        // 🆕 Bir ekranın (paneId) basemap'ini varsayılana ('google-labels')
+        // döndürür. switchBasemap()'ten farklı olarak "o an aktif ekran"a
+        // değil, DOĞRUDAN verilen ekrana uygulanır — bu sayede senkronizasyon
+        // sıfırlaması sırasında iki ekran da (hangisi aktif olursa olsun)
+        // aynı şekilde sıfırlanabilir.
+        function _sylvaResetBasemapForPane(paneId) {
+            var DEFAULT_BASEMAP_KEY = 'google-labels';
+            var state = _sylvaPaneState(paneId);
+            if (paneId === 'map2') {
+                if (!map2) return;
+                if (map2BasemapLayer) { try { map2.removeLayer(map2BasemapLayer); } catch (e) {} }
+                map2BasemapLayer = _sylvaBuildBasemapLayerForMap2(DEFAULT_BASEMAP_KEY);
+                if (map2BasemapLayer) {
+                    map2BasemapLayer.addTo(map2);
+                    _sylvaSetLayerOpacity(map2BasemapLayer, 1);
+                }
+                state.basemapKey = DEFAULT_BASEMAP_KEY;
+                state.basemapEnabled = true;
+                state.basemapOpacity = 1;
+            } else {
+                if (basemapInstances[currentBasemapKey]) { try { map.removeLayer(basemapInstances[currentBasemapKey]); } catch (e) {} }
+                currentBasemapKey = DEFAULT_BASEMAP_KEY;
+                state.basemapKey = DEFAULT_BASEMAP_KEY;
+                state.basemapEnabled = true;
+                state.basemapOpacity = 1;
+                if (basemapInstances[DEFAULT_BASEMAP_KEY]) {
+                    basemapInstances[DEFAULT_BASEMAP_KEY].addTo(map);
+                    _sylvaSetLayerOpacity(basemapInstances[DEFAULT_BASEMAP_KEY], 1);
+                }
+            }
+            if (typeof window._sylvaSyncActivePaneControls === 'function') {
+                window._sylvaSyncActivePaneControls();
+            }
+        }
+
+        // 🛠️ DÜZELTME (Senkron Açılırken Sadece Poligonlar Siliniyordu):
+        // Kullanıcı "Çift Ekranı Senkronize Et" kutusunu işaretleyip uyarıda
+        // "Tamam" dediğinde eskiden SADECE çizilmiş/yüklenmiş poligonlar
+        // (çalışma alanları) siliniyordu — Ekran 1 ve Ekran 2'de daha önce
+        // çalıştırılmış analiz/veri katmanları (GEE karoları), lejant/bilgi
+        // kutuları, grafik-tablo ve galeri OLDUĞU GİBİ kalıyordu. Bu da,
+        // senkron açılır açılmaz Ekran 1'in TÜM analiz katmanlarının Ekran
+        // 2'ye kopyalanması (bkz. _sylvaSyncAllDataLayersToSecondScreen) ile
+        // birleşince iki ekranın verisi karışık/tutarsız bir başlangıç
+        // durumunda kalmasına yol açıyordu. Artık "Tamam" ile hem poligonlar
+        // HEM DE analiz/veri katmanları temizleniyor; ayrıca her iki ekranın
+        // haritası da varsayılan basemap'e ve başlangıç (HOME_VIEW) konumuna
+        // sıfırlanıyor — senkronizasyon tertemiz, eşit bir durumdan başlıyor.
         function _sylvaClearWorkspaceHistoryForSync() {
-            // Senkronizasyon açılmadan önce iki ekrandaki tüm çalışma
-            // alanlarını/poligonları birlikte temizle. removeAll() hem VAW
-            // listesini hem de Ekran 1/Ekran 2 Leaflet katmanlarını kaldırır.
+            // 1) Poligonlar / çalışma alanları — her iki ekran
             if (window.SylvaVAW && typeof window.SylvaVAW.removeAll === 'function') {
                 window.SylvaVAW.removeAll();
             } else if (typeof window._sylvaClearAllAreaLayers === 'function') {
                 window._sylvaClearAllAreaLayers();
+            }
+
+            // 2) Analiz/veri katmanları (GEE karoları) — her iki ekran
+            if (typeof _sylvaClearGeeLayers === 'function') {
+                _sylvaClearGeeLayers('map');
+                _sylvaClearGeeLayers('map2');
+            }
+
+            // 3) Lejant / bilgi kutuları — her iki ekran boşaltılır
+            window._sylvaLegendInfoByPane = {
+                map:  { legendHTML: '', legendDisplay: 'none', infoHTML: '', infoDisplay: 'none' },
+                map2: { legendHTML: '', legendDisplay: 'none', infoHTML: '', infoDisplay: 'none' }
+            };
+            if (typeof window.sylvaMirrorLegendInfoToMap2 === 'function') window.sylvaMirrorLegendInfoToMap2();
+
+            // 4) Pasta/Bar grafik-tablo — her iki ekran
+            if (window._sylvaChartDataByPane) {
+                window._sylvaChartDataByPane = { map: null, map2: null };
+            }
+            if (typeof window.sylvaRefreshChartForActivePane === 'function') {
+                window.sylvaRefreshChartForActivePane();
+            }
+
+            // 5) Uydu görüntü galerisi kutuları — her iki ekran
+            ['map-gallery', 'map2-gallery'].forEach(function (id) {
+                var el = document.getElementById(id);
+                if (el) { el.innerHTML = ''; el.style.display = 'none'; }
+            });
+
+            // 6) Basemap — her iki ekran varsayılana döner
+            _sylvaResetBasemapForPane('map');
+            _sylvaResetBasemapForPane('map2');
+
+            // 7) Görünüm (pan/zoom) — her iki ekran başlangıç konumuna döner
+            if (typeof map !== 'undefined' && map) {
+                map.setView(HOME_VIEW.center, HOME_VIEW.zoom);
+            }
+            if (map2) {
+                map2.setView(HOME_VIEW.center, HOME_VIEW.zoom);
             }
         }
 
@@ -8975,20 +9069,34 @@ function selectRamp(name) {
                 }
             })();
 
-            // 🛠️ DÜZELTME (Ekranlar Karışıyor — kesin): "Lejantı Uygula" TAMAMEN
-            // ekrana özel bir görselleştirme ayarıdır. Senkronizasyon (Konum
-            // Senkronizasyonu / Çift Ekran) sadece harita GÖRÜNÜMÜNÜ (pan/zoom)
-            // eşitler; hangi ekranda hangi analiz/lejant/renk paleti olduğu HER
-            // ZAMAN o ekrana özeldir. Bu yüzden "Lejantı Uygula" senkronizasyon
-            // durumundan tamamen BAĞIMSIZ olarak SADECE o an aktif olan (en son
-            // tıklanan) ekranı etkiler — kendi verisini ve kendi lejantını —
-            // karşı ekranın verisine veya lejantına ASLA dokunmaz.
+            // 🛠️ DÜZELTME (Çift Ekran Senkronizasyonunda Lejant/Veri Uyuşmazlığı):
+            // "Lejantı Uygula" varsayılan olarak SADECE o an aktif olan ekranı
+            // etkiler (kendi verisini ve kendi lejantını) — çift ekran senkronu
+            // KAPALIYKEN karşı ekrana ASLA dokunmaz (önceki "ekranlar karışıyor"
+            // hatasının çözümü budur ve hâlâ geçerlidir).
+            // Ancak Çift Ekran / Konum Senkronizasyonu AÇIKKEN kullanıcı iki
+            // ekranı bilinçli olarak birlikte karşılaştırıyor demektir; bu
+            // durumda "Lejantı Uygula" HER İKİ ekranı da aynı Min/Max/Renk
+            // Paleti ile güncellemelidir — hem lejant kutusunu HEM DE o ekranın
+            // KENDİ verisini (GEE karosu / vektör renklendirmesi). Önceki
+            // sürümde sadece aktif ekran güncelleniyordu; bu da senkron açıkken
+            // karşı ekranın lejant kutusunun (varsa eski/otomatik bir içerikle)
+            // değişmiş gibi görünüp verisinin hiç değişmemesine yol açıyordu.
             var _aslActivePaneId = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
-            _sylvaApplyStretchedLegendVisualsForPane(_aslActivePaneId, minVal, maxVal, title, rampCss);
+            var _aslSyncActive = !!(window._sylvaWorkspaceSyncActive || window._sylvaDualScreenSyncActive);
+            var _aslPanes = _aslSyncActive ? ['map', 'map2'] : [_aslActivePaneId];
 
-            // ── GEE senkronizasyonu: sadece aktif ekranın verisini yeniden
-            // hesaplat/boyat — karşı ekranın verisi asla değişmez.
-            syncStretchedToGEE(minVal, maxVal);
+            _aslPanes.forEach(function (_aslPane) {
+                _sylvaApplyStretchedLegendVisualsForPane(_aslPane, minVal, maxVal, title, rampCss);
+            });
+
+            // ── GEE senkronizasyonu: senkron açıkken HER İKİ ekranın verisi de
+            // (kendi ROI/analiz parametreleriyle, aynı Min/Max/Renk Paleti
+            // kullanılarak) yeniden hesaplanıp boyanır; kapalıyken sadece aktif
+            // ekranın verisi değişir.
+            _aslPanes.forEach(function (_aslPane) {
+                _syncStretchedToGEEForPane(_aslPane, minVal, maxVal);
+            });
         }
 
         // Stretched (sürekli/gradyan) modda TEK bir ekranın (paneId) lejant
