@@ -8652,6 +8652,19 @@ function selectRamp(name) {
             // Katmanı stretched palette göre yeniden boyar (değer aralığına normalize eder)
             recolorCurrentLayerStretched(minVal, maxVal, rampCss);
 
+            // 🆕 Bu, o an ekranda EN ÜSTTE olan katmana ait Stretched ayar
+            // olarak sayılır ve panel/editör durumu snapshot'a kaydedilir —
+            // böylece başka bir katmana geçip geri dönüldüğünde bu Min/Max/
+            // Renk Paleti ayarları kaybolmaz.
+            (function () {
+                var _aslPaneId = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+                var _aslKey = (_aslPaneId === 'map2') ? 'map2' : 'map';
+                var _aslTopKey = (window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[_aslKey]) || null;
+                if (_aslTopKey && typeof _sylvaSaveEditorStateForLayer === 'function') {
+                    _sylvaSaveEditorStateForLayer(_aslPaneId, _aslTopKey);
+                }
+            })();
+
             // ── GEE senkronizasyonu: Stretched modda da artık classified moddaki
             // gibi sunucuya gerçek bir "yeniden hesapla ve boya" talimatı gider.
             // (Önceden sadece classified mod GEE'ye senkronize oluyordu — bu eksiklik
@@ -9080,6 +9093,9 @@ function selectRamp(name) {
                         html: _acmBox.innerHTML,
                         display: _acmBox.style.display
                     };
+                }
+                if (typeof _sylvaSaveEditorStateForLayer === 'function') {
+                    _sylvaSaveEditorStateForLayer(_acmPaneId, _acmTopKey);
                 }
             })();
 
@@ -9944,10 +9960,140 @@ function selectRamp(name) {
         window._sylvaLayerOpacityByPane = window._sylvaLayerOpacityByPane || { map: {}, map2: {} };
         window._sylvaLayerVisibleByPane = window._sylvaLayerVisibleByPane || { map: {}, map2: {} };
 
+        // ============================================================
+        // 🛠️ BUG FİX: "Lejant ve Semboloji" panelindeki DÜZENLEME
+        // kontrolleri (Sınıflandırma Türü, Renk Paleti, Sınıf sayısı/satırları,
+        // Stretched Min/Max, başlıklar) eskiden TAMAMEN PAYLAŞILAN/tek bir
+        // haldeydi — bir katmanda (ör. Eğim/Slope) sınıflandırma yapılıp başka
+        // bir katmana (ör. Yükseklik/DEM) geçildiğinde panel, o katmanın kendi
+        // ayarlarını değil, önceki katmanda EN SON bırakılan ayarları
+        // göstermeye devam ediyordu (harita/lejant kutusu doğru olsa bile,
+        // sağdaki DÜZENLEME formu güncellenmiyordu). Artık her katmana özel
+        // tam bir "editör durumu" saklanır ve katmanlar arası geçişte panel
+        // buna göre yeniden kurulur.
+        // ============================================================
+        window._sylvaEditorStateByPane = window._sylvaEditorStateByPane || { map: {}, map2: {} };
+
+        function _sylvaCaptureEditorState() {
+            var rampEl = document.getElementById('selectedRamp');
+            var state = {
+                classificationType: (typeof currentClassificationType !== 'undefined') ? currentClassificationType : 'stretched',
+                rampBackground: rampEl ? rampEl.style.background : null,
+                rampDataAttr: rampEl ? rampEl.getAttribute('data-ramp') : null,
+                rampReversed: (typeof rampReversed !== 'undefined') ? rampReversed : false,
+                classCount: (typeof classCountSelect !== 'undefined' && classCountSelect) ? classCountSelect.value : '1',
+                classifiedTitleVal: (function () { var el = document.getElementById('classified-title'); return el ? el.value : ''; })(),
+                stretchedMin: (function () { var el = document.getElementById('stretched-min'); return el ? el.value : ''; })(),
+                stretchedMax: (function () { var el = document.getElementById('stretched-max'); return el ? el.value : ''; })(),
+                stretchedTitleVal: (function () { var el = document.getElementById('stretched-title'); return el ? el.value : ''; })(),
+                stretchedUserEdited: (function () { var el = document.getElementById('stretched-min'); return !!(el && el._userEdited); })(),
+                classRows: []
+            };
+            var _crc = (typeof classRowsContainer !== 'undefined') ? classRowsContainer : document.getElementById('class-rows-container');
+            var rowEls = _crc ? _crc.querySelectorAll('.classification-row') : [];
+            rowEls.forEach(function (row) {
+                var minEl = row.querySelector('.class-min');
+                var maxEl = row.querySelector('.class-max');
+                var nameEl = row.querySelector('.class-name');
+                var trigger = row.querySelector('.class-color-trigger');
+                state.classRows.push({
+                    min: minEl ? minEl.value : '',
+                    max: maxEl ? maxEl.value : '',
+                    name: nameEl ? nameEl.value : '',
+                    color: trigger ? (trigger.getAttribute('data-selected-color') || '#999999') : '#999999'
+                });
+            });
+            return state;
+        }
+
+        function _sylvaSaveEditorStateForLayer(paneId, layerKey) {
+            if (!layerKey) return;
+            // Panel DOM'u her zaman AKTİF ekranın kontrollerini gösterir; başka
+            // bir ekranın (henüz görüntülenmeyen) durumunu yanlışlıkla bu
+            // ekranın DOM değerleriyle ezmemek için sadece aktif ekran için kaydet.
+            if (paneId !== (typeof _sylvaActivePaneId === 'function' ? _sylvaActivePaneId() : 'map')) return;
+            var key = (paneId === 'map2') ? 'map2' : 'map';
+            window._sylvaEditorStateByPane[key] = window._sylvaEditorStateByPane[key] || {};
+            window._sylvaEditorStateByPane[key][layerKey] = _sylvaCaptureEditorState();
+        }
+        window._sylvaSaveEditorStateForLayer = _sylvaSaveEditorStateForLayer;
+
+        function _sylvaRestoreEditorStateForLayer(paneId, layerKey) {
+            if (paneId !== (typeof _sylvaActivePaneId === 'function' ? _sylvaActivePaneId() : 'map')) return;
+            var key = (paneId === 'map2') ? 'map2' : 'map';
+            var state = window._sylvaEditorStateByPane[key] && window._sylvaEditorStateByPane[key][layerKey];
+            if (!state) return;
+
+            if (typeof setClassificationType === 'function') setClassificationType(state.classificationType);
+
+            var rampEl = document.getElementById('selectedRamp');
+            if (rampEl && state.rampBackground) {
+                rampEl.style.background = state.rampBackground;
+                if (state.rampDataAttr) rampEl.setAttribute('data-ramp', state.rampDataAttr);
+            }
+            if (typeof rampReversed !== 'undefined') {
+                rampReversed = !!state.rampReversed;
+                var btnReverse = document.getElementById('btn-reverse-ramp');
+                if (btnReverse) {
+                    btnReverse.style.background = rampReversed ? '#dcfce7' : '#f0fdf4';
+                    btnReverse.style.borderColor = rampReversed ? '#4ade80' : '#86efac';
+                    btnReverse.style.fontWeight = rampReversed ? '800' : '600';
+                }
+            }
+
+            var _crcSel = (typeof classCountSelect !== 'undefined') ? classCountSelect : document.getElementById('class-count');
+            var _restoreCount = parseInt(state.classCount, 10) || (state.classRows ? state.classRows.length : 1) || 1;
+            if (_crcSel) _crcSel.value = _restoreCount;
+            if (typeof buildClassRows === 'function') buildClassRows(_restoreCount);
+
+            var _crc2 = (typeof classRowsContainer !== 'undefined') ? classRowsContainer : document.getElementById('class-rows-container');
+            var rowEls = _crc2 ? _crc2.querySelectorAll('.classification-row') : [];
+            rowEls.forEach(function (row, idx) {
+                var saved = state.classRows[idx];
+                if (!saved) return;
+                var minEl = row.querySelector('.class-min');
+                var maxEl = row.querySelector('.class-max');
+                var nameEl = row.querySelector('.class-name');
+                var trigger = row.querySelector('.class-color-trigger');
+                if (minEl) minEl.value = saved.min;
+                if (maxEl) maxEl.value = saved.max;
+                if (nameEl) nameEl.value = saved.name;
+                if (trigger && saved.color) {
+                    trigger.style.background = saved.color;
+                    trigger.setAttribute('data-selected-color', saved.color);
+                    var dropdown = row.querySelector('.color-dropdown');
+                    if (dropdown) {
+                        dropdown.querySelectorAll('.color-option').forEach(function (opt) {
+                            opt.classList.toggle('selected', opt.getAttribute('data-color').toLowerCase() === saved.color.toLowerCase());
+                        });
+                    }
+                }
+            });
+
+            var classifiedTitleEl = document.getElementById('classified-title');
+            if (classifiedTitleEl) classifiedTitleEl.value = state.classifiedTitleVal || '';
+
+            var stretchedMinEl = document.getElementById('stretched-min');
+            var stretchedMaxEl = document.getElementById('stretched-max');
+            var stretchedTitleEl = document.getElementById('stretched-title');
+            if (stretchedMinEl) { stretchedMinEl.value = state.stretchedMin || ''; stretchedMinEl._userEdited = !!state.stretchedUserEdited; }
+            if (stretchedMaxEl) { stretchedMaxEl.value = state.stretchedMax || ''; stretchedMaxEl._userEdited = !!state.stretchedUserEdited; }
+            if (stretchedTitleEl) stretchedTitleEl.value = state.stretchedTitleVal || '';
+        }
+        window._sylvaRestoreEditorStateForLayer = _sylvaRestoreEditorStateForLayer;
+
         function _sylvaBringGeeLayerToFront(paneId, layerKey) {
             var key = (paneId === 'map2') ? 'map2' : 'map';
             var store = window._geeLayersByPane[key];
             if (!store || !store[layerKey]) return;
+            // Katman değişmeden önce, o an panelde görünen (eski üstteki katmana
+            // ait) düzenleme durumunu kaybetmeden kaydet.
+            (function () {
+                var _prevTopKey = (window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[key]) || null;
+                if (_prevTopKey && _prevTopKey !== layerKey) {
+                    _sylvaSaveEditorStateForLayer(paneId, _prevTopKey);
+                }
+            })();
             Object.keys(store).forEach(function (k) {
                 try {
                     if (typeof store[k].setZIndex === 'function') {
@@ -9998,6 +10144,9 @@ function selectRamp(name) {
                         onRawBandsSceneSelected(_rgState.activeSceneId, _rgState.meta, _rgState.dsInfo, _rgState.scMeta);
                     }
                 }
+                if (typeof _sylvaRestoreEditorStateForLayer === 'function') {
+                    _sylvaRestoreEditorStateForLayer(paneId, layerKey);
+                }
             } else if (layerKey && typeof _sylvaRenderIndexAnalysisResult === 'function') {
                 // 🆕 Öne getirilen katman bir indeks/LULC/TOPO analiziyse (ör.
                 // NDVI, NDWI birlikte çalıştırılmışsa), o analizin kendi Lejant
@@ -10025,6 +10174,18 @@ function selectRamp(name) {
                         _sylvaRenderIndexAnalysisResult(_iaState.meta, _iaState.data, paneId, !!_legendSnap);
                     } catch (err) {
                         console.error('[Sylva] Katman geçişinde analiz sonucu (istatistik/grafik) yeniden çizilirken hata:', err);
+                    }
+
+                    // 🛠️ BUG FİX: Harita/lejant kutusu doğru katmana ait değeri
+                    // gösterse bile, sağdaki "Lejant ve Semboloji" DÜZENLEME
+                    // panelindeki Sınıflandırma Türü/Renk Paleti/Sınıf satırları/
+                    // Stretched Min-Max alanları eskiden hiç güncellenmiyordu —
+                    // bu katmana daha önce kaydedilmiş bir editör durumu varsa
+                    // (bkz. _sylvaSaveEditorStateForLayer) panel şimdi ona göre
+                    // yeniden kurulur; yoksa panel _sylvaRenderIndexAnalysisResult
+                    // tarafından az önce hesaplanan varsayılan durumda kalır.
+                    if (typeof _sylvaRestoreEditorStateForLayer === 'function') {
+                        _sylvaRestoreEditorStateForLayer(paneId, layerKey);
                     }
 
                     if (_legendSnap) {
@@ -10938,6 +11099,16 @@ function selectRamp(name) {
                     html: _snapBox.innerHTML,
                     display: _snapBox.style.display
                 };
+            }
+            // 🆕 Bu, katman kutusundan geri dönülerek (skipClassifyRecalc=true)
+            // DEĞİL, gerçekten YENİ bir analiz sonucu olarak işlendiyse — panelin
+            // o anki (bu analize göre az önce hesaplanmış) hâlini bu katmanın
+            // varsayılan/temel editör durumu olarak kaydet. Böylece kullanıcı
+            // hiç "Lejantı Uygula" basmadan başka bir katmana geçse bile, geri
+            // döndüğünde panel bu katmanın kendi otomatik hesaplanan değerlerini
+            // gösterir — başka bir katmanın ayarlarını değil.
+            if (!skipClassifyRecalc && typeof _sylvaSaveEditorStateForLayer === 'function') {
+                _sylvaSaveEditorStateForLayer(_pane, meta.analysisName);
             }
         }
 
