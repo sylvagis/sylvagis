@@ -9059,10 +9059,22 @@ function selectRamp(name) {
 
         // Stretched mod min/max + renk rampasını GEE'ye göndererek tile URL'yi
         // yeniler (syncClassificationToGEE'nin sürekli/stretched karşılığı).
+        // 🛠️ DÜZELTME (Çift Ekran Senkronize): syncClassificationToGEE'deki
+        // aynı düzeltme burada da uygulanır — senkronizasyon açıkken Stretched
+        // modda uygulanan Min/Max/Renk Rampası hem aktif ekrana hem de diğer
+        // ekrana (kendi ROI/tarih/sahne parametreleriyle) gönderilir.
         function syncStretchedToGEE(minVal, maxVal) {
-            // 🖥️ EŞİTLEME: her zaman o an AKTİF olan ekranın (Ekran 1/Ekran 2)
-            // son analizine uygulanır.
-            var _pane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+            var _activePane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+            var _isSynced = !!(window._sylvaWorkspaceSyncActive || window._sylvaDualScreenSyncActive);
+            _syncStretchedToGEEForPane(_activePane, minVal, maxVal);
+            if (_isSynced) {
+                var _otherPane = (_activePane === 'map2') ? 'map' : 'map2';
+                if (_otherPane === 'map2' && (typeof map2 === 'undefined' || !map2)) return;
+                _syncStretchedToGEEForPane(_otherPane, minVal, maxVal);
+            }
+        }
+
+        function _syncStretchedToGEEForPane(_pane, minVal, maxVal) {
             var _aoiForPane = (_pane === 'map2') ? currentLayer2 : currentLayer;
             // Son analiz ROI'si tercih edilir; yoksa aktif ekranın AOI'sinden çıkar
             var _roi = _sylvaLastRoiGet(_pane);
@@ -9124,12 +9136,6 @@ function selectRamp(name) {
                 _sylvaReplaceGeeLayer(_pane, data.tileUrl, { opacity: 1 });
                 _applyGeeLayerClipMode(_clipMode, _pane);
                 _sylvaApplyAutoOpacity(_pane, meta);
-                // 🛠️ DÜZELTME: Lejantı/aralığı elle uygulamak artık KARŞI
-                // EKRANA YANSITILMIYOR — sadece o an aktif olan ekranın kendi
-                // verisine uygulanır. Senkronizasyon açık olsa bile, bir ekranda
-                // elle yapılan lejant/sınıflandırma değişikliği diğer ekranın
-                // verisine karışmaz; her ekran kendi lejantını/sınıflandırmasını
-                // bağımsız olarak korur.
                 // Renklendirilmiş yeni veri haritada hazır olup tamamen ekrana
                 // yansıdığında (tüm karolar yüklenince) yükleme ekranı kapanır.
                 _hideLoadingWhenTileReady(_sylvaCurrentGeeLayer(_pane));
@@ -9505,9 +9511,29 @@ function selectRamp(name) {
 
         // Sınıf renk/aralık bilgisini GEE'ye göndererek tile URL'yi yeniler
         // classes: [ { min, max, name, color }, ... ] — tam sınıf tanımları JSON olarak gönderilir
+        //
+        // 🛠️ DÜZELTME (Çift Ekran Senkronize): Senkronizasyon AÇIKKEN, Ekran
+        // 1'de "Lejantı Uygula" basıldığında değişiklik sadece Ekran 1'in
+        // verisine yansıyor, Ekran 2'nin verisi (grafik/renklendirme) eski
+        // haliyle kalıyordu — kullanıcı için "aynı senkronize alanda
+        // uyguladığım lejant diğer ekranda işe yaramıyor" sorunu buydu.
+        // Artık: senkronizasyon (window._sylvaWorkspaceSyncActive veya
+        // window._sylvaDualScreenSyncActive) açıkken, uygulanan sınıflandırma
+        // hem aktif ekrana HEM DE diğer ekrana (kendi ROI/tarih/sahne
+        // parametreleriyle) gönderilir; kapalıyken davranış eskisi gibi
+        // yalnızca aktif ekranı etkiler.
         function syncClassificationToGEE(classes) {
-            // 🖥️ EŞİTLEME: her zaman o an AKTİF olan ekranın son analizine uygulanır.
-            var _pane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+            var _activePane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+            var _isSynced = !!(window._sylvaWorkspaceSyncActive || window._sylvaDualScreenSyncActive);
+            _syncClassificationToGEEForPane(_activePane, classes);
+            if (_isSynced) {
+                var _otherPane = (_activePane === 'map2') ? 'map' : 'map2';
+                if (_otherPane === 'map2' && (typeof map2 === 'undefined' || !map2)) return;
+                _syncClassificationToGEEForPane(_otherPane, classes);
+            }
+        }
+
+        function _syncClassificationToGEEForPane(_pane, classes) {
             var _aoiForPane = (_pane === 'map2') ? currentLayer2 : currentLayer;
             // Son analiz ROI'si tercih edilir; yoksa aktif ekranın AOI'sinden çıkar
             var _roiCls = _sylvaLastRoiGet(_pane);
@@ -9572,12 +9598,6 @@ function selectRamp(name) {
                 _sylvaReplaceGeeLayer(_pane, data.tileUrl, { opacity: 1 });
                 _applyGeeLayerClipMode(_clipMode, _pane);
                 _sylvaApplyAutoOpacity(_pane, meta);
-                // 🛠️ DÜZELTME: Lejantı/aralığı elle uygulamak artık KARŞI
-                // EKRANA YANSITILMIYOR — sadece o an aktif olan ekranın kendi
-                // verisine uygulanır. Senkronizasyon açık olsa bile, bir ekranda
-                // elle yapılan lejant/sınıflandırma değişikliği diğer ekranın
-                // verisine karışmaz; her ekran kendi lejantını/sınıflandırmasını
-                // bağımsız olarak korur.
                 // Renklendirilmiş yeni veri haritada hazır olup tamamen ekrana
                 // yansıdığında (tüm karolar yüklenince) yükleme ekranı kapanır.
                 _hideLoadingWhenTileReady(_sylvaCurrentGeeLayer(_pane));
