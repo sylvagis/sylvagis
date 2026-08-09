@@ -10133,13 +10133,26 @@ function selectRamp(name) {
                 var vLayer = vStore && vStore[vLayerKey];
                 var vTargetMap = _sylvaTargetMap(vPaneId);
                 var vVisible = e.target.checked;
+                window._sylvaLayerVisibleByPane[vKey] = window._sylvaLayerVisibleByPane[vKey] || {};
                 window._sylvaLayerVisibleByPane[vKey][vLayerKey] = vVisible;
                 if (vLayer && vTargetMap) {
                     try {
-                        if (vVisible) { if (!vTargetMap.hasLayer(vLayer)) vLayer.addTo(vTargetMap); }
-                        else { if (vTargetMap.hasLayer(vLayer)) vTargetMap.removeLayer(vLayer); }
+                        if (vVisible) {
+                            if (!vTargetMap.hasLayer(vLayer)) vLayer.addTo(vTargetMap);
+                            // 🛠️ BUG FİX: Kutu tekrar işaretlenip katman geri
+                            // gösterildiğinde, bu katmanın kendi şeffaflık VE
+                            // lejant ayarları (en son bırakıldığı hâliyle, snapshot'tan)
+                            // geri yüklenir — genel/paylaşılan ayarlara göre
+                            // sıfırlanıp yeniden hesaplanmaz.
+                            if (typeof _sylvaBringGeeLayerToFront === 'function') {
+                                _sylvaBringGeeLayerToFront(vPaneId, vLayerKey);
+                            }
+                        } else {
+                            if (vTargetMap.hasLayer(vLayer)) vTargetMap.removeLayer(vLayer);
+                        }
                     } catch (err) {}
                 }
+                if (typeof _sylvaRenderLayerSwitchBox === 'function') _sylvaRenderLayerSwitchBox(vPaneId);
                 return;
             }
             var item = e.target && e.target.closest ? e.target.closest('.sylva-layer-switch-item') : null;
