@@ -11460,9 +11460,23 @@ function selectRamp(name) {
                 if (typeof window._sylvaSetActiveMap !== 'function' || window._sylvaActiveMapWrappedForSwipe) return;
                 var _origSetActiveMap = window._sylvaSetActiveMap;
                 window._sylvaSetActiveMap = function (id) {
+                    // 🛠️ BUG FİX (Ekrana Tıklayınca Sıyırıcı Kapanıyordu): Bu sarmalayıcı
+                    // eskiden _sylvaSetActiveMap her çağrıldığında (yani haritaya HER
+                    // TIKLANDIĞINDA — pointerdown olayı zaten aktif ekranın üzerinde bile
+                    // olsa çağrılıyor, bkz. aşağıdaki pointerdown dinleyicileri) sıyırıcıyı
+                    // KOŞULSUZ devre dışı bırakıyordu. Bu yüzden buton mavi/aktif oluyor
+                    // ama kullanıcı kırpmak için haritaya tıklar tıklamaz (sürükleme
+                    // başlamadan önce) sıyırıcı hemen kapanıp normal renge dönüyordu.
+                    // Artık sıyırıcı SADECE ekran GERÇEKTEN değiştiğinde (Ekran 1 <->
+                    // Ekran 2) kapatılır; aynı ekrana tekrar tıklamak (sıyırma
+                    // sürüklemesinin kendisi dahil) artık sıyırıcıyı etkilemez.
+                    var _normalizedId = (id === 'map2') ? 'map2' : 'map';
+                    var _prevActiveId = window._sylvaActiveMapId || 'map';
                     var _result = _origSetActiveMap(id);
-                    _sylvaDeactivateSwipe('map');
-                    _sylvaDeactivateSwipe('map2');
+                    if (_normalizedId !== _prevActiveId) {
+                        _sylvaDeactivateSwipe('map');
+                        _sylvaDeactivateSwipe('map2');
+                    }
                     return _result;
                 };
                 window._sylvaActiveMapWrappedForSwipe = true;
