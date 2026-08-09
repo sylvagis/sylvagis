@@ -10474,6 +10474,24 @@ function selectRamp(name) {
         // (GEE katmanı, galeri, lejant, grafik, tablo, bilgi kutusu) temizler.
         // LULC / TOPO akışında galeri, galeri içeriği boşaltılarak tamamen gizlenir.
         function _clearAllAnalysisOutputs(paneId) {
+            // 🛠️ BUG FİX: "Sürekli/Stretched" min-max kutularına kullanıcı bir kez
+            // elle değer girdiğinde, bu kutulara işaretlenen _userEdited bayrağı
+            // hiçbir zaman sıfırlanmıyordu. Bu yüzden currentClassRangeMin/Max
+            // (sınıflandırma motorunun kullandığı aralık) bir daha ASLA yeni
+            // analizin kendi gerçek min/max'ına göre güncellenmiyor, hep o eski
+            // elle girilmiş (ya da eski analize ait) aralıkta kalıp duruyordu —
+            // her analiz kendi lejant sınıf aralığını değil, önceki analizin
+            // aralığını gösteriyordu. Artık her yeni analiz çalıştırıldığında bu
+            // bayrak sıfırlanır; böylece Min/Max ve dolayısıyla sınıf aralıkları
+            // her analize özel, o analizin kendi gerçek verisinden yeniden
+            // hesaplanır (kullanıcı BU analiz için elle değer girerse, o anki
+            // çalıştırma boyunca yine korunur — sadece sonraki YENİ analizde
+            // sıfırlanır).
+            ['stretched-min', 'stretched-max'].forEach(function (_id) {
+                var _el = document.getElementById(_id);
+                if (_el) _el._userEdited = false;
+            });
+
             paneId = (paneId === 'map2') ? 'map2' : 'map';
             // 1. Haritadaki önceki GEE tile katmanını kaldır (yalnızca ilgili ekran)
             if (paneId === 'map2') {
