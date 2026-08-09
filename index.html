@@ -2569,6 +2569,16 @@ tr.class-highlight-active {
             user-select: none; touch-action: none;
         }
         .sylva-swipe-handle:active { cursor: grabbing; }
+        /* 🆕 Konum Senkronizasyonu açıkken Ekran 2'nin lejant kutusu varsayılan
+           olarak kapalı/şeffaf görünür; üstüne tıklanınca tam açılır. */
+        #map2-legend-box.sylva-legend-collapsed {
+            opacity: 0.32;
+            max-height: 34px;
+            overflow: hidden;
+            cursor: pointer;
+            transition: opacity 0.2s ease, max-height 0.2s ease;
+        }
+        #map2-legend-box.sylva-legend-collapsed:hover { opacity: 0.6; }
     </style> 
 <style>
 
@@ -5579,6 +5589,10 @@ tr.class-highlight-active {
             if (box && box.checked !== window._sylvaDualScreenSyncActive) {
                 box.checked = window._sylvaDualScreenSyncActive;
             }
+            // 🆕 Senkronizasyon her açıldığında Ekran 2'nin lejant kutusu
+            // varsayılan (kapalı/şeffaf) duruma döner.
+            window._sylvaMap2LegendExpanded = false;
+            if (typeof window.sylvaMirrorLegendInfoToMap2 === 'function') window.sylvaMirrorLegendInfoToMap2();
             if (window._sylvaDualScreenSyncActive && map2) {
                 // Açılır açılmaz: 1) görünümü hizala, 2) o an aktif ekrandaki
                 // AOI + analiz katmanı + renk paleti/sınıflandırmayı diğer
@@ -10440,8 +10454,16 @@ function selectRamp(name) {
                     if (typeof _rgbGalleryStateFor === 'function') {
                         var _rgbDatasetKey = layerKey.slice(5);
                         var _rgState = _rgbGalleryStateFor(paneId, _rgbDatasetKey);
-                        if (_rgState && _rgState.scMeta && typeof renderRgbLegend === 'function') {
-                            renderRgbLegend(_rgState.scMeta, _rgState.dsInfo, paneId);
+                        // 🆕 Konum Senkronizasyonu açıkken Uydu Görüntüsü lejantı da
+                        // Ekran 2'de bağımsızlaşmasın diye HER ZAMAN Ekran 1'in aynı
+                        // veri setine ait scMeta/dsInfo bilgisinden çizilir.
+                        var _useMapRgbForMap2 = (paneId === 'map2') && window._sylvaDualScreenSyncActive &&
+                            typeof _rgbGalleryStateFor === 'function' &&
+                            _rgbGalleryStateFor('map', _rgbDatasetKey) &&
+                            _rgbGalleryStateFor('map', _rgbDatasetKey).scMeta;
+                        var _rgStateForLegend = _useMapRgbForMap2 ? _rgbGalleryStateFor('map', _rgbDatasetKey) : _rgState;
+                        if (_rgStateForLegend && _rgStateForLegend.scMeta && typeof renderRgbLegend === 'function') {
+                            renderRgbLegend(_rgStateForLegend.scMeta, _rgStateForLegend.dsInfo, paneId);
                         }
                         if (_rgState && _rgState.activeSceneId && _rgState.meta && _rgState.scMeta &&
                             paneId === (typeof _sylvaActivePaneId === 'function' ? _sylvaActivePaneId() : 'map') &&
@@ -44308,6 +44330,15 @@ document.addEventListener('keydown', function(e) {
             if (legend2) {
                 if (legend2.innerHTML !== map2Data.legendHTML) legend2.innerHTML = map2Data.legendHTML;
                 legend2.style.display = _sylvaDisplayOrNone(map2Data.legendDisplay);
+                // 🆕 Konum Senkronizasyonu açıkken Ekran 2'nin lejant kutusu artık
+                // Ekran 1'in birebir yansımasıdır; karmaşayı azaltmak için
+                // varsayılan olarak kapalı/şeffaf gösterilir, üstüne tıklanınca
+                // tam açılır (bkz. aşağıdaki click dinleyicisi ve CSS).
+                if (window._sylvaDualScreenSyncActive && !window._sylvaMap2LegendExpanded) {
+                    legend2.classList.add('sylva-legend-collapsed');
+                } else {
+                    legend2.classList.remove('sylva-legend-collapsed');
+                }
             }
             if (info2) {
                 if (info2.innerHTML !== map2Data.infoHTML) info2.innerHTML = map2Data.infoHTML;
@@ -44321,6 +44352,20 @@ document.addEventListener('keydown', function(e) {
     // Geriye dönük uyumluluk: başka kodlar bu global adı çağırıyor olabilir.
     window.sylvaMirrorLegendInfoToMap2 = applyBoxesForBothScreens;
     window.sylvaSyncLegendInfoByPane = function () { captureBox('map'); captureBox('map2'); };
+
+    // 🆕 Ekran 2'nin (kapalı/şeffaf gösterilen) lejant kutusuna tıklanınca
+    // açılır/kapanır (toggle). Konum Senkronizasyonu her kapatılıp
+    // açıldığında bu durum sıfırlanır (bkz. sylvaToggleLocationSync).
+    document.addEventListener('click', function (e) {
+        var box = e.target && e.target.closest ? e.target.closest('#map2-legend-box') : null;
+        if (!box) return;
+        window._sylvaMap2LegendExpanded = !window._sylvaMap2LegendExpanded;
+        if (window._sylvaMap2LegendExpanded) {
+            box.classList.remove('sylva-legend-collapsed');
+        } else if (window._sylvaDualScreenSyncActive) {
+            box.classList.add('sylva-legend-collapsed');
+        }
+    });
 
     function installObservers() {
         var pairs = [
