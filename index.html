@@ -5400,11 +5400,19 @@ tr.class-highlight-active {
             var legendCbSync = document.getElementById('toggle-legend');
             var legendWrapSync = document.getElementById('legend-toggle-row');
             var legendBoxSync = document.getElementById(id === 'map2' ? 'map2-legend-box' : 'map-legend-box');
+            // 🆕 Çift Ekranı/Konumu Senkronize Et açıkken Ekran 2'nin lejantı
+            // artık Ekran 1'den otomatik olarak (mirror ile) geliyor — bu
+            // yüzden Ekran 2 aktif ekran olduğunda lejant ayarları elle
+            // değiştirilemesin diye pasif (disabled) gösterilir. Ekran 1
+            // aktifken veya senkronizasyon kapalıyken davranış eskisi gibi
+            // (içeriğe göre aktif/pasif) devam eder.
+            var _legendSyncLocked = (id === 'map2') &&
+                (window._sylvaWorkspaceSyncActive || window._sylvaDualScreenSyncActive);
             if (legendCbSync && legendBoxSync) {
                 var legendHasContent = legendBoxSync.innerHTML.trim().length > 0;
-                legendCbSync.disabled = !legendHasContent;
+                legendCbSync.disabled = _legendSyncLocked || !legendHasContent;
                 legendCbSync.checked = legendHasContent && legendBoxSync.style.display !== 'none';
-                if (legendWrapSync) legendWrapSync.style.opacity = legendHasContent ? '1' : '0.4';
+                if (legendWrapSync) legendWrapSync.style.opacity = (legendHasContent && !_legendSyncLocked) ? '1' : '0.4';
             }
 
             var infoCbSync = document.getElementById('toggle-info-box');
@@ -5476,11 +5484,22 @@ tr.class-highlight-active {
                 var id = _sylvaActivePaneId();
                 var state = _sylvaPaneState(id);
 
-                var dS = document.getElementById('date-start');
-                var dE = document.getElementById('date-end');
+                // 🛠️ BUG FİX: Sadece native input.value set etmek, görünür takvim
+                // kutusundaki metni ve iç seçim durumunu güncellemediği için Ekran
+                // 2'ye geçildiğinde takvimde eski tarih yazılı görünüp gerçek değer
+                // boş kalıyordu (bkz. window._sylvaDPSetValue tanımı). Artık varsa
+                // o fonksiyon üzerinden, native input + görünür metin + iç durum
+                // birlikte güncelleniyor.
+                if (typeof window._sylvaDPSetValue === 'function') {
+                    window._sylvaDPSetValue('start', state.dateStart || null);
+                    window._sylvaDPSetValue('end', state.dateEnd || null);
+                } else {
+                    var dS = document.getElementById('date-start');
+                    var dE = document.getElementById('date-end');
+                    if (dS) dS.value = state.dateStart || '';
+                    if (dE) dE.value = state.dateEnd || '';
+                }
                 var cS = document.getElementById('cloud-slider');
-                if (dS) dS.value = state.dateStart || '';
-                if (dE) dE.value = state.dateEnd || '';
                 if (cS && state.cloudCover != null) {
                     cS.value = state.cloudCover;
                     cS.dispatchEvent(new Event('input'));
@@ -5601,6 +5620,11 @@ tr.class-highlight-active {
                 _sylvaSyncMapView(map, map2);
                 if (typeof window._sylvaMirrorWorkspaceLayer === 'function') window._sylvaMirrorWorkspaceLayer();
                 if (typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer();
+            }
+            // 🆕 Lejant ayarının Ekran 2 aktifken pasifleşmesi gibi panel
+            // kontrolleri hemen güncellensin.
+            if (typeof window._sylvaSyncActivePaneControls === 'function') {
+                window._sylvaSyncActivePaneControls();
             }
         };
 
@@ -5876,6 +5900,13 @@ tr.class-highlight-active {
                 // farklı bir analize geçirebilir.
                 _sylvaSyncAllDataLayersToSecondScreen();
             }
+            // 🆕 Senkronizasyon açılıp/kapanır kapanmaz, o an aktif ekranın
+            // panel kontrolleri (özellikle Ekran 2 aktifken Lejant ayarının
+            // pasif hale gelmesi) hemen güncellensin — bir sonraki ekran
+            // geçişini beklemeden.
+            if (typeof window._sylvaSyncActivePaneControls === 'function') {
+                window._sylvaSyncActivePaneControls();
+            }
         }
 
         window.sylvaToggleWorkspaceSync = function (checked, confirmed) {
@@ -5990,8 +6021,23 @@ tr.class-highlight-active {
             if (window._sylvaSyncingData) return;
             window._sylvaSyncingData = true;
             try {
-                // 🔁 Çift yönlü: kaynak = o an AKTİF ekran, hedef = diğeri.
-                var srcId = _sylvaActivePaneId();
+                // 🛠️ BUG FİX: Kaynak ekran eskiden HER ZAMAN "o an aktif olan
+                // ekran" (_sylvaActivePaneId()) kabul ediliyordu. Ancak bir analiz
+                // isteği sunucudan yanıt bekliyorken (fetch async) kullanıcı diğer
+                // ekrana tıklayıp onu aktif hale getirirse, yanıt geldiğinde
+                // "aktif ekran" artık analizin GERÇEKTEN çalıştığı ekran değil,
+                // kullanıcının SONRADAN tıkladığı ekran oluyordu. Sonuç: yanlış
+                // ekrandaki (bayat) veri "kaynak" sayılıp asıl yeni sonucun
+                // olduğu ekrana kopyalanıyor ya da yön tamamen ters dönüyordu —
+                // bu da iki ekranın senkronizasyon açıkken bile lejant/galeri/
+                // analiz katmanı bakımından birbirinden farklı kalmasına yol
+                // açıyordu. Artık çağıran taraf (analiz sonucu hangi ekrana
+                // yazıldıysa) bunu opts.srcId ile AÇIKÇA belirtebilir; belirtilmezse
+                // eskisi gibi o anki aktif ekran kaynak sayılır (geriye dönük
+                // uyumluluk için).
+                var srcId = (opts && (opts.srcId === 'map2' || opts.srcId === 'map'))
+                    ? opts.srcId
+                    : _sylvaActivePaneId();
                 var dstId = srcId === 'map2' ? 'map' : 'map2';
                 // 🆕 Hedef ekran kullanıcı tarafından manuel olarak farklı bir
                 // analize geçirilmişse (bağımsız/diverged), üzerine otomatik
@@ -9027,7 +9073,7 @@ function selectRamp(name) {
                 _sylvaReplaceGeeLayer(_pane, data.tileUrl, { opacity: 1 });
                 _applyGeeLayerClipMode(_clipMode, _pane);
                 _sylvaApplyAutoOpacity(_pane, meta);
-                if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer({ force: true });
+                if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer({ force: true, srcId: _pane });
                 // Renklendirilmiş yeni veri haritada hazır olup tamamen ekrana
                 // yansıdığında (tüm karolar yüklenince) yükleme ekranı kapanır.
                 _hideLoadingWhenTileReady(_sylvaCurrentGeeLayer(_pane));
@@ -9461,7 +9507,7 @@ function selectRamp(name) {
                 _sylvaReplaceGeeLayer(_pane, data.tileUrl, { opacity: 1 });
                 _applyGeeLayerClipMode(_clipMode, _pane);
                 _sylvaApplyAutoOpacity(_pane, meta);
-                if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer({ force: true });
+                if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer({ force: true, srcId: _pane });
                 // Renklendirilmiş yeni veri haritada hazır olup tamamen ekrana
                 // yansıdığında (tüm karolar yüklenince) yükleme ekranı kapanır.
                 _hideLoadingWhenTileReady(_sylvaCurrentGeeLayer(_pane));
@@ -10422,14 +10468,21 @@ function selectRamp(name) {
             // güncel durum diğer ekrana (görüntü + lejant + bilgi kutusu +
             // galeri) otomatik olarak yansıtılır — bkz. _sylvaMirrorLayerSwitch().
             function _sylvaMirrorLayerSwitch() {
-                // 🆕 Bu ekran (paneId) kullanıcı tarafından manuel olarak
-                // bağımsız (diverged) işaretlenmişse, buradaki değişiklik
-                // diğer ekrana KESİNLİKLE yansıtılmaz — "diğer ekranı
-                // etkilemeden" analiz geçişi burada garanti edilir.
-                if (window._sylvaPaneDiverged && window._sylvaPaneDiverged[key]) return;
-                if (paneId === (typeof _sylvaActivePaneId === 'function' ? _sylvaActivePaneId() : 'map') &&
-                    window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') {
-                    window._sylvaMirrorDataLayer();
+                // 🛠️ BUG FİX: Bu fonksiyon eskiden İKİ sebepten hiçbir zaman
+                // çalışmıyordu: 1) "diverged" (bağımsız) bayrağı, TAM OLARAK bu
+                // fonksiyonu tetikleyen aynı tıklama anında true yapılıyordu
+                // (bkz. aşağıdaki tıklama işleyicisi), bu yüzden kontrol her
+                // zaman erken çıkıyordu; 2) mirror sadece "o an tıklanan panel
+                // = global aktif ekran" ise çalışıyordu — ama panel-özel
+                // (Ekran 1/Ekran 2 kendi kutusundan) bir seçim olduğu için bu
+                // eşitlik çoğu zaman sağlanmıyordu. Sonuç: kullanıcı senkronizasyon
+                // açıkken "Üstte Gösterilecek Katman" kutusundan farklı bir
+                // analize geçtiğinde, diğer ekrandaki veri HİÇ değişmiyordu.
+                // Artık senkronizasyon açıkken katman değişimi HER ZAMAN diğer
+                // ekrana da yansıtılır; kaynak ekran, tıklanan kutunun ait
+                // olduğu panel (paneId) olarak AÇIKÇA belirtilir.
+                if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') {
+                    window._sylvaMirrorDataLayer({ force: true, srcId: paneId });
                 }
             }
 
@@ -10761,14 +10814,14 @@ function selectRamp(name) {
                 var iKey = (paneId === 'map2') ? 'map2' : 'map';
                 window._sylvaLayerSwitchExpanded = window._sylvaLayerSwitchExpanded || { map: false, map2: false };
                 window._sylvaLayerSwitchExpanded[iKey] = false;
-                // 🆕 Senkronizasyon açıkken kullanıcı bu kutudan manuel olarak
-                // BAŞKA bir analiz seçerse, bu ekran artık "bağımsız" sayılır
-                // ve otomatik yansıtmadan (mirror) muaf tutulur — harita
-                // görünümü (pan/zoom) yine de senkron kalmaya devam eder.
-                if (window._sylvaWorkspaceSyncActive || window._sylvaDualScreenSyncActive) {
-                    window._sylvaPaneDiverged = window._sylvaPaneDiverged || { map: false, map2: false };
-                    window._sylvaPaneDiverged[iKey] = true;
-                }
+                // 🛠️ BUG FİX: Senkronizasyon açıkken bu kutudan manuel olarak
+                // başka bir analiz seçildiğinde eskiden bu ekran otomatik
+                // olarak "bağımsız" (diverged) işaretlenip mirror'dan muaf
+                // tutuluyordu — bu da tam olarak "farklı analize geçince diğer
+                // ekran güncellenmiyor" şikayetine yol açıyordu. Artık
+                // senkronizasyon açıkken manuel katman seçimi de (yeni bir
+                // analiz çalıştırmak gibi) diğer ekrana yansıtılır; bkz.
+                // _sylvaBringGeeLayerToFront içindeki _sylvaMirrorLayerSwitch().
                 _sylvaBringGeeLayerToFront(paneId, layerKey);
             }
         });
@@ -11314,7 +11367,7 @@ function selectRamp(name) {
                     // diğer ekran kullanıcı tarafından manuel farklı analize
                     // geçirilip "bağımsız" (diverged) işaretlenmediyse (bkz.
                     // window._sylvaPaneDiverged, _sylvaMirrorDataLayer içinde kontrol edilir).
-                    if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer({ force: true });
+                    if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer({ force: true, srcId: _pane });
 
                     (function() {
                         var _wsState = (typeof _sylvaPaneState === 'function') ? _sylvaPaneState(_pane) : null;
@@ -12296,7 +12349,7 @@ function selectRamp(name) {
                 _sylvaReplaceGeeLayer(_pane, data.tileUrl, { opacity: 1 });
                 _applyGeeLayerClipMode(_sceneClipMode, _pane);
                 _sylvaApplyAutoOpacity(_pane, meta);
-                if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer({ force: true });
+                if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer({ force: true, srcId: _pane });
                 // Yeni görüntü haritada tamamen görünür hale gelince (tüm karolar
                 // yüklenince) yükleme ekranı otomatik olarak kapanır.
                 _hideLoadingWhenTileReady(_sylvaCurrentGeeLayer(_pane));
@@ -12641,7 +12694,7 @@ function selectRamp(name) {
                 _applyGeeLayerClipMode(_rgbClipMode, paneId);
                 // 🎚️ Gerçek renk (RGB) görüntüsü — tam opaklık en okunaklı sonucu verir
                 _sylvaApplyAutoOpacity(paneId, { isRgbGallery: true });
-                if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer({ force: true });
+                if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer({ force: true, srcId: paneId });
                 _hideLoadingWhenTileReady(_sylvaCurrentGeeLayer(paneId));
 
                 // Harita AOI'ye odaklanır
@@ -36423,6 +36476,32 @@ function _disp(id){
   var ni=document.getElementById('date-'+id);
   if(ni){ni.value=pk.sel||'';ni.dispatchEvent(new Event('change',{bubbles:true}));}
 }
+
+/* 🛠️ BUG FİX: Çift ekran (Ekran 1 / Ekran 2) arasında geçiş yapılınca
+   panel, o ekranın kayıtlı tarihini native <input type="date"> alanına
+   yazıyordu (bkz. _sylvaSyncActivePaneControls) ama görünür takvim
+   kutusundaki metin (dp-text-start/end) ve iç seçim durumu (_pk) hiç
+   güncellenmiyordu. Sonuç: kullanıcı Ekran 2'ye geçtiğinde takvim
+   kutusunda hâlâ Ekran 1'in tarihi yazılı görünüyordu, ama gerçek
+   (native) tarih değeri boşalmış oluyordu — bu yüzden "Uydu Görüntüsü"
+   analizinde tarih seçilmiş gibi görünse de "Lütfen başlangıç ve bitiş
+   tarihlerini seçin" uyarısı çıkıyordu. Bu fonksiyon, pane değişiminde
+   hem native input'u hem de görünür takvim metnini/iç durumu birlikte
+   ve tutarlı şekilde günceller.
+*/
+window._sylvaDPSetValue = function (id, isoValue) {
+    if (!_pk[id]) return;
+    if (isoValue) {
+        var p = _parseIso(isoValue);
+        _pk[id].sel = isoValue;
+        _pk[id].vy = p.y;
+        _pk[id].vm = p.m;
+    } else {
+        _pk[id].sel = null;
+    }
+    _pk[id].mode = 'days';
+    _disp(id);
+};
 
 /* ── Parse keyboard input → validate → apply ─────────────── */
 function _parseInput(id){
