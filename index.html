@@ -10149,6 +10149,50 @@ function selectRamp(name) {
                             }
                         } else {
                             if (vTargetMap.hasLayer(vLayer)) vTargetMap.removeLayer(vLayer);
+                            // 🛠️ BUG FİX: Kutu kapatılınca (görünürlük kaldırılınca)
+                            // eskiden Lejant/Bilgi kutuları hiç güncellenmiyordu —
+                            // veri haritadan kalkmasına rağmen ekranda hâlâ o
+                            // katmana ait (artık geçersiz/eski) lejant ve bilgi
+                            // kutusu görünmeye devam ediyordu. Kapatılan katman o
+                            // an aktif/üstte gösterilen katmansa, hâlâ görünür
+                            // durumda olan BAŞKA bir katman varsa lejant/bilgi ona
+                            // (kendi hafızadaki değerleriyle, sıfırlanmadan) geçilir;
+                            // hiçbiri görünür değilse lejant/bilgi kutusu tamamen
+                            // temizlenir — haritada görünen ile lejant/bilgi kutusu
+                            // her zaman birbiriyle tutarlı kalır.
+                            var _wasTop = window._sylvaTopGeeLayerByPane &&
+                                window._sylvaTopGeeLayerByPane[vKey] === vLayerKey;
+                            if (_wasTop) {
+                                var _nextVisibleKey = null;
+                                var _switchKeys = vStore ? Object.keys(vStore) : [];
+                                for (var _svi = _switchKeys.length - 1; _svi >= 0; _svi--) {
+                                    var _svk = _switchKeys[_svi];
+                                    if (_svk === vLayerKey) continue;
+                                    if (window._sylvaLayerVisibleByPane[vKey][_svk] !== false) {
+                                        _nextVisibleKey = _svk;
+                                        break;
+                                    }
+                                }
+                                if (_nextVisibleKey && typeof _sylvaBringGeeLayerToFront === 'function') {
+                                    _sylvaBringGeeLayerToFront(vPaneId, _nextVisibleKey);
+                                } else {
+                                    window._sylvaTopGeeLayerByPane = window._sylvaTopGeeLayerByPane || { map: null, map2: null };
+                                    window._sylvaTopGeeLayerByPane[vKey] = null;
+                                    var _clearLegendBox = document.getElementById(vPaneId === 'map2' ? 'map2-legend-box' : 'map-legend-box');
+                                    var _clearInfoBox   = document.getElementById(vPaneId === 'map2' ? 'map2-info-box'   : 'map-info-box');
+                                    if (vPaneId === _sylvaActivePaneId()) {
+                                        if (_clearLegendBox) { _clearLegendBox.innerHTML = ''; _clearLegendBox.style.display = 'none'; }
+                                        if (_clearInfoBox)   { _clearInfoBox.innerHTML = '';   _clearInfoBox.style.display = 'none'; }
+                                    }
+                                    if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[vPaneId]) {
+                                        window._sylvaLegendInfoByPane[vPaneId].legendHTML = '';
+                                        window._sylvaLegendInfoByPane[vPaneId].legendDisplay = 'none';
+                                        window._sylvaLegendInfoByPane[vPaneId].infoHTML = '';
+                                        window._sylvaLegendInfoByPane[vPaneId].infoDisplay = 'none';
+                                    }
+                                    if (typeof window.sylvaMirrorLegendInfoToMap2 === 'function') window.sylvaMirrorLegendInfoToMap2();
+                                }
+                            }
                         }
                     } catch (err) {}
                 }
