@@ -9059,19 +9059,21 @@ function selectRamp(name) {
 
         // Stretched mod min/max + renk rampasını GEE'ye göndererek tile URL'yi
         // yeniler (syncClassificationToGEE'nin sürekli/stretched karşılığı).
-        // 🛠️ DÜZELTME (Çift Ekran Senkronize): syncClassificationToGEE'deki
-        // aynı düzeltme burada da uygulanır — senkronizasyon açıkken Stretched
-        // modda uygulanan Min/Max/Renk Rampası hem aktif ekrana hem de diğer
-        // ekrana (kendi ROI/tarih/sahne parametreleriyle) gönderilir.
+        // 🛠️ DÜZELTME (Ekranlar Karışıyor): Bu fonksiyon eskiden, senkronizasyon
+        // (_sylvaWorkspaceSyncActive / _sylvaDualScreenSyncActive) açıkken, "Lejantı
+        // Uygula" ile yapılan Min/Max/Renk Rampası değişikliğini KARŞI ekrana da
+        // otomatik gönderiyordu. Ama bu sırada lejant KUTUSU (renk çubuğu/etiketler)
+        // sadece aktif ekranda güncelleniyordu (bkz. applyStretchedLegend). Sonuç:
+        // Ekran 1'de "Lejantı Uygula" basılınca Ekran 2'nin VERİSİ de sessizce
+        // değişiyor ama lejantı değişmiyordu; Ekran 2 aktifken basılınca ise Ekran
+        // 2'nin lejantı doğru güncellenirken Ekran 1'in verisi de (istenmeden)
+        // değişiyordu — iki ekran birbirine karışıyordu. "Lejantı Uygula" tamamen
+        // ekrana özel bir görselleştirme ayarı olduğundan (analiz senkronizasyonundan
+        // farklı olarak), artık senkronizasyon durumundan BAĞIMSIZ olarak SADECE o an
+        // aktif olan ekranı etkiler; karşı ekranın verisine asla dokunulmaz.
         function syncStretchedToGEE(minVal, maxVal) {
             var _activePane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
-            var _isSynced = !!(window._sylvaWorkspaceSyncActive || window._sylvaDualScreenSyncActive);
             _syncStretchedToGEEForPane(_activePane, minVal, maxVal);
-            if (_isSynced) {
-                var _otherPane = (_activePane === 'map2') ? 'map' : 'map2';
-                if (_otherPane === 'map2' && (typeof map2 === 'undefined' || !map2)) return;
-                _syncStretchedToGEEForPane(_otherPane, minVal, maxVal);
-            }
         }
 
         function _syncStretchedToGEEForPane(_pane, minVal, maxVal) {
@@ -9512,25 +9514,22 @@ function selectRamp(name) {
         // Sınıf renk/aralık bilgisini GEE'ye göndererek tile URL'yi yeniler
         // classes: [ { min, max, name, color }, ... ] — tam sınıf tanımları JSON olarak gönderilir
         //
-        // 🛠️ DÜZELTME (Çift Ekran Senkronize): Senkronizasyon AÇIKKEN, Ekran
-        // 1'de "Lejantı Uygula" basıldığında değişiklik sadece Ekran 1'in
-        // verisine yansıyor, Ekran 2'nin verisi (grafik/renklendirme) eski
-        // haliyle kalıyordu — kullanıcı için "aynı senkronize alanda
-        // uyguladığım lejant diğer ekranda işe yaramıyor" sorunu buydu.
-        // Artık: senkronizasyon (window._sylvaWorkspaceSyncActive veya
-        // window._sylvaDualScreenSyncActive) açıkken, uygulanan sınıflandırma
-        // hem aktif ekrana HEM DE diğer ekrana (kendi ROI/tarih/sahne
-        // parametreleriyle) gönderilir; kapalıyken davranış eskisi gibi
-        // yalnızca aktif ekranı etkiler.
+        // 🛠️ DÜZELTME (Ekranlar Karışıyor): Bu fonksiyon eskiden, senkronizasyon
+        // açıkken, "Lejantı Uygula" ile yapılan sınıflandırma değişikliğini KARŞI
+        // ekrana da otomatik gönderiyordu. Ama lejant KUTUSU (renk/aralık listesi)
+        // sadece aktif ekranda güncelleniyordu (bkz. applyClassificationToMap →
+        // renderDynamicLegend). Sonuç: Ekran 1'de "Lejantı Uygula" basılınca Ekran
+        // 2'nin VERİSİ de sessizce değişiyor ama lejantı değişmiyordu; Ekran 2
+        // aktifken basılınca Ekran 2'nin lejantı doğru güncellenirken Ekran 1'in
+        // verisi de (istenmeden) değişiyordu — iki ekran birbirine karışıyordu.
+        // "Lejantı Uygula" tamamen ekrana özel bir görselleştirme ayarı olduğundan
+        // (analiz senkronizasyonundan farklı olarak), artık senkronizasyon
+        // durumundan BAĞIMSIZ olarak SADECE o an aktif olan ekranı etkiler; karşı
+        // ekranın verisine asla dokunulmaz — Ekran 1 kendi verisi/lejantını,
+        // Ekran 2 kendi verisi/lejantını korur.
         function syncClassificationToGEE(classes) {
             var _activePane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
-            var _isSynced = !!(window._sylvaWorkspaceSyncActive || window._sylvaDualScreenSyncActive);
             _syncClassificationToGEEForPane(_activePane, classes);
-            if (_isSynced) {
-                var _otherPane = (_activePane === 'map2') ? 'map' : 'map2';
-                if (_otherPane === 'map2' && (typeof map2 === 'undefined' || !map2)) return;
-                _syncClassificationToGEEForPane(_otherPane, classes);
-            }
         }
 
         function _syncClassificationToGEEForPane(_pane, classes) {
