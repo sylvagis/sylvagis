@@ -8998,7 +8998,7 @@ function selectRamp(name) {
                 // yansıdığında (tüm karolar yüklenince) yükleme ekranı kapanır.
                 _hideLoadingWhenTileReady(_sylvaCurrentGeeLayer(_pane));
                 if (data.stats) {
-                    updateStatsTable(data.stats);
+                    updateStatsTable(data.stats, _pane);
                     renderChart(data.stats, meta, _pane);
                     // Lejanta gerçek veri aralığını ekle (kullanıcının girdiği
                     // stretch aralığından bağımsız, ham veriden gelen gerçek min/max)
@@ -11040,7 +11040,6 @@ function selectRamp(name) {
 
             (function _sylvaForceWorkspaceVisibleOnRun() {
                 var _p = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
-                if (window._sylvaWorkspaceSyncActive) _p = 'map';
                 var _state = (typeof _sylvaPaneState === 'function') ? _sylvaPaneState(_p) : null;
                 if (_state) _state.workspaceVisible = true;
                 if (typeof window._sylvaSetWsVisible === 'function') window._sylvaSetWsVisible(_p, true);
@@ -11050,7 +11049,6 @@ function selectRamp(name) {
             })();
 
             var _pane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
-            if (window._sylvaWorkspaceSyncActive) _pane = 'map';
             var _paneMap = (_pane === 'map2' && typeof map2 !== 'undefined' && map2) ? map2 : map;
 
             if (window.SylvaVAW && window.SylvaVAW.workspaces && window.SylvaVAW.workspaces.length > 0) {
@@ -11294,7 +11292,7 @@ function selectRamp(name) {
             if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(_pane);
             renderAnalysisLegend(meta, false, _pane);
             if (data.stats) {
-                updateStatsTable(data.stats);
+                updateStatsTable(data.stats, _pane);
                 renderChart(data.stats, meta, _pane);
                 appendRealStatsToLegend(data.stats, _pane);
             }
@@ -12209,7 +12207,7 @@ function selectRamp(name) {
                 if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(_pane);
                 renderAnalysisLegend(metaForScene, false, _pane);
                 if (data.stats) {
-                    updateStatsTable(data.stats);
+                    updateStatsTable(data.stats, _pane);
                     renderChart(data.stats, metaForScene, _pane);
                     appendRealStatsToLegend(data.stats, _pane);
                 }
@@ -12636,9 +12634,23 @@ function selectRamp(name) {
 
         // ── Ham histogram tablosunu #stats-chart-table'a yazar ──────
         // stats: sunucudan gelen tam nesne  { value: { "0.12": 34, ... } }
-        function updateStatsTable(stats) {
+        function updateStatsTable(stats, paneId) {
              // Değer/Piksel/% tablosu yalnızca Classified modunda aktif
              if (typeof currentClassificationType !== 'undefined' && currentClassificationType !== 'classified') return;
+            // 🛠️ BUG FİX: paneId olmadan bu fonksiyon HER ZAMAN paylaşılan
+            // #stats-chart-table kutusuna yazıyordu. Arka planda tamamlanan
+            // (o an aktif OLMAYAN ekrana ait) bir analiz sonucu geldiğinde,
+            // kullanıcının o an BAKTIĞI ekranın tablosunu yanlışlıkla eziyordu
+            // — grafik (renderChart/renderStatsChart) ekrana-özel çalışırken
+            // bu tablo çalışmıyordu, ikisi arasında tutarsızlık oluşuyordu.
+            // Artık bu veri yalnızca o an AKTİF olan ekrana aitse yazılır;
+            // aktif olmayan ekran için gelen veri sessizce atlanır (o ekran
+            // tekrar aktif olduğunda zaten renderStatsChart/sylvaRefreshChart
+            // ForActivePane üzerinden kendi verisiyle yeniden çizilir).
+            paneId = (paneId === 'map2') ? 'map2'
+                : ((paneId === 'map') ? 'map'
+                    : ((typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map'));
+            if (typeof _sylvaActivePaneId === 'function' && paneId !== _sylvaActivePaneId()) return;
             var tableWrap = document.getElementById('stats-chart-table');
             if (!tableWrap) return;
             var hist = (stats && stats.value) ? stats.value : null;
