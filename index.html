@@ -5677,6 +5677,84 @@ tr.class-highlight-active {
             }
         }
 
+        // 🆕 Senkronizasyon açıldığı anda, Ekran 1'de o ana kadar çalıştırılmış
+        // TÜM analiz katmanlarını (sadece en üstteki değil, "Üstte Gösterilecek
+        // Katman" kutusundaki tüm liste) birebir Ekran 2'ye kopyalar. Böylece:
+        //   1) Ekran 2 senkronizasyon başlar başlamaz Ekran 1 ile birebir aynı
+        //      görünümde başlar (aynı üstteki katman, aynı lejant/bilgi/galeri).
+        //   2) Ekran 2'nin kendi "Üstte Gösterilecek Katman" kutusu artık
+        //      Ekran 1'deki TÜM analizleri seçenek olarak sunar — kullanıcı bu
+        //      kutudan Ekran 2'de manuel olarak FARKLI bir analize geçebilir.
+        //      Bu seçim SADECE Ekran 2'yi değiştirir (bkz. _sylvaBringGeeLayerToFront
+        //      içindeki window._sylvaPaneDiverged işaretlemesi); harita görünümü
+        //      (pan/zoom) ise senkronizasyon açık olduğu sürece Ekran 1 ile
+        //      aynı kalmaya devam eder (görünüm senkronu ayrı bir mekanizmadır,
+        //      bkz. _sylvaBindMapViewSync — diverge durumundan etkilenmez).
+        function _sylvaSyncAllDataLayersToSecondScreen() {
+            if (!map2) return;
+            var srcStore = (window._geeLayersByPane && window._geeLayersByPane.map) || {};
+            var srcKeys = Object.keys(srcStore);
+            if (!srcKeys.length) return;
+
+            // Ekran 2'nin senkron-öncesi kendi analiz katmanlarını temizle —
+            // yerine Ekran 1'in tüm katmanları birebir kopyalanacak.
+            if (typeof _sylvaClearGeeLayers === 'function') _sylvaClearGeeLayers('map2');
+
+            window._geeLayersByPane = window._geeLayersByPane || { map: {}, map2: {} };
+            window._sylvaLayerVisibleByPane = window._sylvaLayerVisibleByPane || { map: {}, map2: {} };
+            window._sylvaLayerOpacityByPane = window._sylvaLayerOpacityByPane || { map: {}, map2: {} };
+
+            var srcTopKey = (window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane.map) || srcKeys[srcKeys.length - 1];
+
+            srcKeys.forEach(function (key) {
+                var srcLayer = srcStore[key];
+                if (!srcLayer || !srcLayer._url) return;
+                var clone = L.tileLayer(srcLayer._url, {
+                    opacity: 1, zIndex: (key === srcTopKey ? 20 : 10), crossOrigin: true, pane: 'geeAnalysisPane',
+                    attribution: srcLayer.options && srcLayer.options.attribution
+                });
+                window._geeLayersByPane.map2[key] = clone;
+
+                var srcVisible = !(window._sylvaLayerVisibleByPane.map && window._sylvaLayerVisibleByPane.map[key] === false);
+                window._sylvaLayerVisibleByPane.map2[key] = srcVisible;
+                var srcOpacity = (window._sylvaLayerOpacityByPane.map && window._sylvaLayerOpacityByPane.map[key] != null)
+                    ? window._sylvaLayerOpacityByPane.map[key] : 1;
+                window._sylvaLayerOpacityByPane.map2[key] = srcOpacity;
+
+                if (srcVisible) {
+                    clone.addTo(map2);
+                    _sylvaSetLayerOpacity(clone, srcOpacity);
+                }
+            });
+
+            window._sylvaTopGeeLayerByPane = window._sylvaTopGeeLayerByPane || { map: null, map2: null };
+            window._sylvaTopGeeLayerByPane.map2 = srcTopKey;
+            if (window._geeLayersByPane.map2[srcTopKey]) window._geeLayer2 = window._geeLayersByPane.map2[srcTopKey];
+
+            var dataState = _sylvaPaneState('map2');
+            if (dataState) dataState.dataEnabled = true;
+
+            if (typeof _sylvaRenderLayerSwitchBox === 'function') _sylvaRenderLayerSwitchBox('map2');
+
+            // Lejant + bilgi kutusu, Ekran 1'in üstteki analiziyle eşitlenir.
+            if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane.map) {
+                window._sylvaLegendInfoByPane.map2 = Object.assign({}, window._sylvaLegendInfoByPane.map);
+                if (typeof window.sylvaMirrorLegendInfoToMap2 === 'function') window.sylvaMirrorLegendInfoToMap2();
+            }
+            // Uydu Görüntü Galerisi de eşitlenir.
+            try {
+                var srcGalleryEl = document.getElementById('map-gallery');
+                var dstGalleryEl = document.getElementById('map2-gallery');
+                if (srcGalleryEl && dstGalleryEl) {
+                    dstGalleryEl.innerHTML = srcGalleryEl.innerHTML;
+                    dstGalleryEl.style.display = srcGalleryEl.style.display;
+                    dstGalleryEl.style.opacity = srcGalleryEl.style.opacity;
+                    dstGalleryEl.style.pointerEvents = srcGalleryEl.style.pointerEvents;
+                }
+            } catch (eGal) { /* galeri kopyalanamadı — sessizce geç */ }
+        }
+        window._sylvaSyncAllDataLayersToSecondScreen = _sylvaSyncAllDataLayersToSecondScreen;
+
         function _sylvaApplyWorkspaceSync(wantsSync, clearHistory) {
             // Eski poligonları yalnızca kullanıcı uyarıdaki "Tamam" ile
             // senkronizasyonu açmayı onayladıysa sil.
@@ -5708,7 +5786,13 @@ tr.class-highlight-active {
                 _sylvaSyncBasemapToSecondScreen();
                 _sylvaSyncCurrentMapView();
                 window._sylvaNotifyWorkspaceChanged();
-                window._sylvaMirrorDataLayer();
+                // 🆕 Sadece en üstteki katmanı değil, Ekran 1'de o ana kadar
+                // çalıştırılmış TÜM analiz katmanlarını Ekran 2'ye kopyala —
+                // böylece Ekran 2'nin "Üstte Gösterilecek Katman" kutusu
+                // Ekran 1 ile aynı seçenekleri sunar ve kullanıcı buradan
+                // Ekran 2'yi bağımsız (sadece Ekran 2'yi etkileyecek şekilde)
+                // farklı bir analize geçirebilir.
+                _sylvaSyncAllDataLayersToSecondScreen();
             }
         }
 
