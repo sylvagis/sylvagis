@@ -5377,6 +5377,45 @@ tr.class-highlight-active {
             document.querySelectorAll('#sb-basemap-dropdown .sb-dp-option').forEach(function (el) {
                 el.classList.toggle('selected', el.dataset.bm === bmKey);
             });
+
+            // 🛠️ BUG FİX: Lejant / Bilgi Kutusu / Uydu Görüntü Galerisi checkbox'ları
+            // tek/paylaşılan kontrollerdir (o an aktif olan ekranı temsil eder).
+            // Eskiden ekran değiştirilince (► ile Ekran 1 <-> Ekran 2 geçişinde)
+            // bu üç checkbox eski aktif ekranın işaretli/pasif durumunda
+            // kalıyordu — bu yüzden Ekran 2'ye geçilince, o ekranda gerçekte
+            // lejant/bilgi/galeri içeriği olsa bile checkbox hâlâ pasif
+            // görünebiliyor ya da tam tersi. Artık her ekran geçişinde üç
+            // checkbox da o an aktif olan ekranın (id) kendi kutu içeriğine
+            // göre yeniden hesaplanır.
+            var legendCbSync = document.getElementById('toggle-legend');
+            var legendWrapSync = document.getElementById('legend-toggle-row');
+            var legendBoxSync = document.getElementById(id === 'map2' ? 'map2-legend-box' : 'map-legend-box');
+            if (legendCbSync && legendBoxSync) {
+                var legendHasContent = legendBoxSync.innerHTML.trim().length > 0;
+                legendCbSync.disabled = !legendHasContent;
+                legendCbSync.checked = legendHasContent && legendBoxSync.style.display !== 'none';
+                if (legendWrapSync) legendWrapSync.style.opacity = legendHasContent ? '1' : '0.4';
+            }
+
+            var infoCbSync = document.getElementById('toggle-info-box');
+            var infoWrapSync = document.getElementById('info-box-toggle-wrap');
+            var infoBoxSync = document.getElementById(id === 'map2' ? 'map2-info-box' : 'map-info-box');
+            if (infoCbSync && infoBoxSync) {
+                var infoHasContent = infoBoxSync.innerHTML.trim().length > 0;
+                infoCbSync.disabled = !infoHasContent;
+                infoCbSync.checked = infoHasContent && infoBoxSync.style.display !== 'none';
+                if (infoWrapSync) infoWrapSync.style.opacity = infoHasContent ? '1' : '0.4';
+            }
+
+            var galleryCbSync = document.getElementById('toggle-gallery');
+            var galleryWrapSync = document.getElementById('gallery-toggle-wrap');
+            var galleryElSync = document.getElementById(id === 'map2' ? 'map2-gallery' : 'map-gallery');
+            if (galleryCbSync && galleryElSync) {
+                var galleryHasContent = galleryElSync.innerHTML.trim().length > 0;
+                galleryCbSync.disabled = !galleryHasContent;
+                galleryCbSync.checked = galleryHasContent && galleryElSync.style.display !== 'none';
+                if (galleryWrapSync) galleryWrapSync.style.opacity = galleryHasContent ? '1' : '0.4';
+            }
         }
         window._sylvaSyncActivePaneControls = _sylvaSyncActivePaneControls;
 
@@ -8077,7 +8116,8 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
             // durum sıfırlanır.
             var cb   = document.getElementById('toggle-info-box');
             var wrap = document.getElementById('info-box-toggle-wrap');
-            var box  = document.getElementById('map-info-box');
+            var _ibaPane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+            var box  = document.getElementById(_ibaPane === 'map2' ? 'map2-info-box' : 'map-info-box');
             if (!cb) return;
             if (!eligible) {
                 cb.disabled = true;
@@ -8959,7 +8999,7 @@ function selectRamp(name) {
                 _hideLoadingWhenTileReady(_sylvaCurrentGeeLayer(_pane));
                 if (data.stats) {
                     updateStatsTable(data.stats);
-                    renderChart(data.stats, meta);
+                    renderChart(data.stats, meta, _pane);
                     // Lejanta gerçek veri aralığını ekle (kullanıcının girdiği
                     // stretch aralığından bağımsız, ham veriden gelen gerçek min/max)
                     appendRealStatsToLegend(data.stats, _pane);
@@ -9400,7 +9440,7 @@ function selectRamp(name) {
                     if (realPct) {
                         var areaHa = null;
                         try { areaHa = turf.area(_aoiForPane.toGeoJSON()) / 10000; } catch (e) {}
-                        renderStatsChart({ classes: classes, percentages: realPct, areaHa: areaHa });
+                        renderStatsChart({ classes: classes, percentages: realPct, areaHa: areaHa }, _pane);
                         playSylvaChime('analysis');
                     }
                 }
@@ -11255,7 +11295,7 @@ function selectRamp(name) {
             renderAnalysisLegend(meta, false, _pane);
             if (data.stats) {
                 updateStatsTable(data.stats);
-                renderChart(data.stats, meta);
+                renderChart(data.stats, meta, _pane);
                 appendRealStatsToLegend(data.stats, _pane);
             }
             if (data.realStats) {
@@ -11758,7 +11798,7 @@ function selectRamp(name) {
                     var areaHa = null;
                     var _lulcAoiLayer = (paneId === 'map2') ? currentLayer2 : currentLayer;
                     try { if (_lulcAoiLayer) areaHa = turf.area(_lulcAoiLayer.toGeoJSON()) / 10000; } catch (e) {}
-                    renderStatsChart({ classes: classesForChart, percentages: percentages, areaHa: areaHa });
+                    renderStatsChart({ classes: classesForChart, percentages: percentages, areaHa: areaHa }, paneId);
                     playSylvaChime('analysis');
                 }
             }
@@ -12170,7 +12210,7 @@ function selectRamp(name) {
                 renderAnalysisLegend(metaForScene, false, _pane);
                 if (data.stats) {
                     updateStatsTable(data.stats);
-                    renderChart(data.stats, metaForScene);
+                    renderChart(data.stats, metaForScene, _pane);
                     appendRealStatsToLegend(data.stats, _pane);
                 }
                 if (data.realStats) {
@@ -13089,7 +13129,7 @@ function selectRamp(name) {
 
         // ── Histogram → 7 bin → bar/pie SVG grafiği ─────────────────
         // stats: sunucudan gelen tam nesne  { value: { ... } }
-        function renderChart(stats, meta) {
+        function renderChart(stats, meta, paneId) {
              if (typeof currentClassificationType !== 'undefined' && currentClassificationType !== 'classified') return;
             var hist = (stats && stats.value) ? stats.value : null;
             if (!hist) return;
@@ -13131,11 +13171,11 @@ function selectRamp(name) {
             }
             var totalCount = bins.reduce(function(s, b) { return s + b.count; }, 0) || 1;
             var areaHa = null;
-            var _chartAoiPane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+            var _chartAoiPane = (paneId === 'map2' || paneId === 'map') ? paneId : ((typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map');
             var _chartAoiLayer = (_chartAoiPane === 'map2') ? currentLayer2 : currentLayer;
             try { if (_chartAoiLayer) areaHa = turf.area(_chartAoiLayer.toGeoJSON()) / 10000; } catch(e) {}
             var percentages = bins.map(function(b) { return (b.count / totalCount) * 100; });
-            renderStatsChart({ classes: bins, percentages: percentages, areaHa: areaHa });
+            renderStatsChart({ classes: bins, percentages: percentages, areaHa: areaHa }, _chartAoiPane);
             playSylvaChime('analysis');
         }
 
@@ -13453,7 +13493,7 @@ function selectRamp(name) {
                 } catch (e) { areaHa = null; }
             }
             var percentages = generateMockClassDistribution(classes, currentMockMeanValue);
-            renderStatsChart({ classes: classes, percentages: percentages, areaHa: areaHa });
+            renderStatsChart({ classes: classes, percentages: percentages, areaHa: areaHa }, _mockAoiPane);
             playSylvaChime('analysis');
         }
 
@@ -13585,7 +13625,7 @@ function selectRamp(name) {
             }
         };
 
-        function renderStatsChart(data) {
+        function renderStatsChart(data, paneId) {
             lastChartData = data;
             var wrap = document.getElementById('stats-chart-svg-wrap');
             var tableWrap = document.getElementById('stats-chart-table');
@@ -44102,53 +44142,25 @@ document.addEventListener('keydown', function(e) {
 
     var _syncing = false;
 
-    function activePane() {
-        return (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
-    }
-
-    // 🛠️ BUG FİX (Ekran 1/Ekran 2 lejant-bilgi kutusu karışması):
-    // Önceki davranış, içerik hangi ekran için üretildiyse onu değil,
-    // yakalama anında (sunucu yanıtı geldiğinde) HANGİ EKRAN O SIRADA
-    // AKTİF/ODAKLIYSA onu esas alıyordu. Kullanıcı Ekran 2 için bir analiz/
-    // sahne başlatıp yanıt gelene kadar Ekran 1'e tıklarsa (ör. haritada
-    // gezinirse), yanıt geldiğinde aktif ekran artık Ekran 1 gibi görünür
-    // ve Ekran 2 için üretilen lejant/bilgi kutusu içeriği YANLIŞLIKLA
-    // Ekran 1'e de yazılırdı (ve bazen sadece Ekran 1'e).
-    // Çözüm: analiz çağrılarının başında window._sylvaTagContentPane(pane)
-    // ile "bu içerik hangi ekran için üretiliyor" açıkça işaretlenir; bu
-    // işaret set edilmişse yakalama onu kullanır (ve hemen temizler),
-    // set edilmemişse eskisi gibi o anki aktif ekrana göre davranır
-    // (sürükleme, dil değişimi gibi ekrandan bağımsız/UI kaynaklı
-    // değişiklikler için).
-    window._sylvaTagContentPane = function (paneId) {
-        window._sylvaPendingContentPane = (paneId === 'map2') ? 'map2' : 'map';
-        // 🛠️ BUG FİX: Eşitleme artık yalnızca pasif MutationObserver'ın
-        // #map-legend-box / #map-info-box üzerindeki değişikliği "fark edip"
-        // tetiklemesine bırakılmıyor — bu gözlemci bazı durumlarda hiç
-        // ateşlenmediği için Ekran 2'nin lejant/bilgi kutusu kalıcı olarak
-        // boş kalıyordu. Etiketlemeden kısa bir süre sonra eşitleme artık
-        // DOĞRUDAN ve GARANTİLİ olarak da tetiklenir; MutationObserver yine
-        // de ayrıca çalışmaya devam eder (sürükleme gibi başka değişiklikler için).
-        setTimeout(function () {
-            if (typeof window.sylvaSyncLegendInfoByPane === 'function') {
-                window.sylvaSyncLegendInfoByPane();
-            }
-        }, 50);
-    };
-
-    // İç analiz fonksiyonları her zaman "birincil" kutulara (map-legend-box /
-    // map-info-box) yazar; bu yazma anında hangi ekran aktifse içerik ona aittir.
-    function captureFromPrimaryBoxes() {
+    // 🛠️ GERÇEK KÖK NEDEN (Ekran 2'de lejant/bilgi kutusu hiç güncellenmiyordu):
+    // Önceki sürüm SADECE #map-legend-box / #map-info-box (Ekran 1'in kutuları)
+    // üzerinde MutationObserver çalıştırıyordu ve hangi ekranın içeriğini
+    // yakaladığını "aktif ekran" tahminiyle (ya da elle etiketlenen bir bayrakla)
+    // belirlemeye çalışıyordu. Ama analiz fonksiyonları zaten paneId'ye göre
+    // DOĞRUDAN doğru kutuya yazıyor (Ekran 2 aktifken #map2-legend-box'a).
+    // Bu yazma hiçbir observer tarafından fark edilmediği için
+    // window._sylvaLegendInfoByPane.map2 hep eski/boş kalıyordu — ve hemen
+    // ardından applyBoxesForBothScreens() bu eski veriyi #map2-legend-box'ın
+    // ÜZERİNE yazarak az önce üretilen içeriği siliyordu.
+    // ÇÖZÜM: Artık iki ekranın kutuları da ayrı ayrı, doğrudan kendi
+    // MutationObserver'larıyla izleniyor. Tahmine gerek yok — hangi kutu
+    // değiştiyse o kutunun ait olduğu ekranın hafızası güncellenir. Bu sayede
+    // Ekran 2'nin lejantı/bilgi kutusu artık Ekran 1'den tamamen bağımsız
+    // olarak kendi analizine göre güncellenir.
+    function captureBox(pane) {
         if (_syncing) return;
-        var pane;
-        if (window._sylvaPendingContentPane) {
-            pane = window._sylvaPendingContentPane;
-            window._sylvaPendingContentPane = null; // yalnızca bu yakalama için geçerli
-        } else {
-            pane = activePane();
-        }
         var legendSrc = document.getElementById(pane === 'map2' ? 'map2-legend-box' : 'map-legend-box');
-var infoSrc = document.getElementById(pane === 'map2' ? 'map2-info-box' : 'map-info-box');
+        var infoSrc = document.getElementById(pane === 'map2' ? 'map2-info-box' : 'map-info-box');
         var store = window._sylvaLegendInfoByPane[pane];
         if (legendSrc) {
             store.legendHTML = legendSrc.innerHTML;
@@ -44161,39 +44173,32 @@ var infoSrc = document.getElementById(pane === 'map2' ? 'map2-info-box' : 'map-i
         applyBoxesForBothScreens();
     }
 
+    // Geriye dönük uyumluluk: başka kodlar bu fonksiyonu çağırıyor olabilir
+    // (analiz sonucu üretilince "az sonra kesin eşitle" garantisi için).
+    window._sylvaTagContentPane = function (paneId) {
+        var pane = (paneId === 'map2') ? 'map2' : 'map';
+        setTimeout(function () { captureBox(pane); }, 50);
+    };
+
     // Her iki fiziksel ekranın kutusunu SADECE kendi ekranının hafızasındaki
     // içerikle doldurur — Ekran 1 kutuları hep 'map' verisini, Ekran 2
-    // kutuları hep 'map2' verisini gösterir.
+    // kutuları hep 'map2' verisini gösterir. Ekran 2'nin lejant/bilgi/eşleştirme
+    // içeriği Ekran 1'inkiyle aynı olmak ZORUNDA DEĞİLDİR; her ekran kendi
+    // gerçek analiz sonucunu bağımsız gösterir.
     function applyBoxesForBothScreens() {
         _syncing = true;
         try {
             var mapData  = window._sylvaLegendInfoByPane.map;
-            // 🛠️ BUG FİX: "Çift Ekranı Senkronize Et" açıkken analiz her zaman
-            // 'map' (Ekran 1) hafızasına yazılıyor (bkz. runAnalysis() içindeki
-            // _sylvaWorkspaceSyncActive kontrolü) ve harita katmanı ayrı bir
-            // mekanizmayla (_sylvaMirrorDataLayer) Ekran 2'ye kopyalanıyor —
-            // ama lejant/bilgi kutusu bu kopyalamadan haberdar değildi, bu yüzden
-            // Ekran 2'nin kutusu senkron modda hiçbir zaman dolmuyordu. Senkron
-            // mod açıkken Ekran 2 kutusu da doğrudan Ekran 1'in verisini kullanır.
-            // 🛠️ DEĞİŞİKLİK: Eskiden "Çift Ekranı Senkronize Et" açıkken Ekran 2'nin
-// lejant/bilgi kutusu bilerek boş/temiz tutuluyordu (sadece Ekran 1'de
-// görünsün diye). Artık her ekran KENDİ verisini (window._sylvaLegendInfoByPane.map2)
-// gösterir — senkronizasyon açıkken bu veri _sylvaMirrorDataLayer() tarafından
-// Ekran 1'in son analiziyle güncel tutulur, böylece Ekran 2 de kendi
-// sınırları içinde aynı lejant/bilgi kutusunu otomatik gösterir.
-var map2Data = window._sylvaLegendInfoByPane.map2;
+            var map2Data = window._sylvaLegendInfoByPane.map2;
 
             var legend1 = document.getElementById('map-legend-box');
             var info1   = document.getElementById('map-info-box');
             var legend2 = document.getElementById('map2-legend-box');
             var info2   = document.getElementById('map2-info-box');
 
-            // 🛠️ BUG FİX: display='' (boş string) "görünür" anlamına gelir, ama
-            // JS'te boş string falsy'dir. Eskiden "mapData.legendDisplay || 'none'"
-            // kullanılıyordu — bu, display='' olan (yani GÖRÜNÜR olması gereken)
-            // bir lejant/bilgi kutusunu yanlışlıkla 'none' yaparak gizliyordu.
-            // Bu yüzden Ekran 2'de üretilen lejant hiç görünmüyordu. Artık sadece
-            // gerçekten hiç değer atanmamışsa (undefined/null) 'none' varsayılır.
+            // display='' (boş string) "görünür" anlamına gelir, ama JS'te boş
+            // string falsy'dir — sadece gerçekten hiç değer atanmamışsa
+            // (undefined/null) 'none' varsayılır.
             function _sylvaDisplayOrNone(v) { return (v === undefined || v === null) ? 'none' : v; }
             if (legend1) {
                 if (legend1.innerHTML !== mapData.legendHTML) legend1.innerHTML = mapData.legendHTML;
@@ -44218,20 +44223,27 @@ var map2Data = window._sylvaLegendInfoByPane.map2;
 
     // Geriye dönük uyumluluk: başka kodlar bu global adı çağırıyor olabilir.
     window.sylvaMirrorLegendInfoToMap2 = applyBoxesForBothScreens;
-    window.sylvaSyncLegendInfoByPane = captureFromPrimaryBoxes;
+    window.sylvaSyncLegendInfoByPane = function () { captureBox('map'); captureBox('map2'); };
 
     function installObservers() {
-        var legendSrc = document.getElementById('map-legend-box');
-        var infoSrc = document.getElementById('map-info-box');
-        captureFromPrimaryBoxes();
-        if (legendSrc) {
-            new MutationObserver(captureFromPrimaryBoxes)
-                .observe(legendSrc, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['style'] });
-        }
-        if (infoSrc) {
-            new MutationObserver(captureFromPrimaryBoxes)
-                .observe(infoSrc, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['style'] });
-        }
+        var pairs = [
+            { legend: 'map-legend-box',  info: 'map-info-box',  pane: 'map'  },
+            { legend: 'map2-legend-box', info: 'map2-info-box', pane: 'map2' }
+        ];
+        pairs.forEach(function (p) {
+            var legendSrc = document.getElementById(p.legend);
+            var infoSrc = document.getElementById(p.info);
+            captureBox(p.pane);
+            var handler = function () { captureBox(p.pane); };
+            if (legendSrc) {
+                new MutationObserver(handler)
+                    .observe(legendSrc, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['style'] });
+            }
+            if (infoSrc) {
+                new MutationObserver(handler)
+                    .observe(infoSrc, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['style'] });
+            }
+        });
     }
 
     // Aktif ekran değiştiğinde (analiz yapılmadan sadece ► ile geçiş olsa
@@ -44274,15 +44286,31 @@ var map2Data = window._sylvaLegendInfoByPane.map2;
 (function () {
     window._sylvaChartDataByPane = window._sylvaChartDataByPane || { map: null, map2: null };
 
-    // renderStatsChart'ı, çağrıldığı anda aktif olan panonun verisini de
-    // kaydedecek şekilde sarmalar (orijinal fonksiyonun davranışını korur).
+    // renderStatsChart'ı, hangi ekran için üretildiğini (çağrının ilettiği
+    // paneId) de kaydedecek şekilde sarmalar (orijinal fonksiyonun davranışını
+    // korur). 🛠️ BUG FİX: eskiden pane bilgisi çağrı anındaki "aktif ekran"dan
+    // tahmin ediliyordu — sunucu yanıtı gelene kadar kullanıcı diğer ekrana
+    // geçerse (ör. Ekran 2 için analiz başlatıp yanıt gelmeden Ekran 1'e
+    // tıklarsa), grafik yanlış ekrana yazılıyor ya da Ekran 2'nin grafiği hiç
+    // dolmuyordu. Artık her çağrı üretildiği ekranı (paneId) açıkça iletir;
+    // tahmin sadece paneId verilmediği eski/UI kaynaklı çağrılar için yedektir.
     function wrapRenderStatsChart() {
         if (typeof window.renderStatsChart !== 'function' || window._sylvaChartWrapped) return;
         var _origRenderStatsChart = window.renderStatsChart;
-        window.renderStatsChart = function (data) {
-            var _pane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+        window.renderStatsChart = function (data, paneId) {
+            var _pane = (paneId === 'map2' || paneId === 'map')
+                ? paneId
+                : ((typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map');
             window._sylvaChartDataByPane[_pane] = data;
-            return _origRenderStatsChart(data);
+            // Bu veri o an EKRANDA GÖSTERİLEN (aktif) ekrana ait değilse
+            // (ör. Ekran 2 için gecikmeli gelen bir sunucu yanıtı, kullanıcı
+            // o sırada Ekran 1'deyken düşerse), paylaşılan grafik/tablo
+            // kutusuna hiç çizilmez — sadece kendi ekranının hafızasına
+            // kaydedilir. Kullanıcı o ekrana geçtiğinde (_sylvaSetActiveMap)
+            // sylvaRefreshChartForActivePane zaten bu veriyi gösterir.
+            var _activeNow = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+            if (_pane !== _activeNow) return data;
+            return _origRenderStatsChart(data, paneId);
         };
         window._sylvaChartWrapped = true;
     }
