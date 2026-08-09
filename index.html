@@ -13186,17 +13186,6 @@ function selectRamp(name) {
                 _applyGeeLayerClipMode(_rgbClipMode, paneId);
                 // 🎚️ Gerçek renk (RGB) görüntüsü — tam opaklık en okunaklı sonucu verir
                 _sylvaApplyAutoOpacity(paneId, { isRgbGallery: true });
-                // 🛠️ BUG FİX: Uydu Görüntü Galerisi'nden elle farklı bir sahne
-                // (tarih kartı) seçmek artık SADECE o kartın ait olduğu ekranı
-                // etkiler — karşı ekrana yansıtılmaz (Ekran 2'de sahne seçmek
-                // Ekran 1'i değiştirmesin diye). Yalnızca "Analiz Et" ile
-                // başlatılan İLK sahne yüklemesi (_isInitialRun) senkronizasyon
-                // açıkken diğer ekrana da yansır — böylece iki ekran analiz
-                // başlar başlamaz aynı görüntüyle başlar, sonrasında galeri
-                // içindeki gezinme her ekranda bağımsız kalır.
-                if (_isInitialRun && _mirrorThisRun && window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') {
-                    window._sylvaMirrorDataLayer({ force: true, srcId: paneId, layerKey: _layerKey, tileUrl: data.tileUrl, isTop: _isTopForPane });
-                }
                 _hideLoadingWhenTileReady(_sylvaCurrentGeeLayer(paneId));
 
                 // Harita AOI'ye odaklanır
@@ -13231,6 +13220,23 @@ function selectRamp(name) {
                     if (paneId === _sylvaActivePaneId()) {
                         onRawBandsSceneSelected(sceneId, meta, dsInfo, data.meta || {});
                     }
+                }
+                // 🛠️ BUG FİX (Ekran 2'de İlk Açılışta Lejant Görünmüyordu — özellikle
+                // Sentinel seçiliyken): Bu mirror çağrısı eskiden renderRgbLegend()'den
+                // ÖNCE çalışıyordu. window._sylvaMirrorDataLayer(), hedef ekranın
+                // lejantını kaynak ekranın o anki window._sylvaLegendInfoByPane[srcId]
+                // ANLIK GÖRÜNTÜSÜNDEN kopyalar — ama renderRgbLegend() henüz
+                // çalışmadığı için bu anlık görüntü bu sahneye ait YENİ lejant
+                // HTML'ini değil, bir önceki (çoğu zaman boş/hiç) içeriği taşıyordu.
+                // Sonuç: senkronizasyon açıkken "Analizi Çalıştır" ile başlatılan
+                // İLK Uydu Görüntüsü yüklemesinde Ekran 2'nin lejant kutusu ya boş
+                // kalıyor ya da bir önceki analizin lejantını gösteriyordu — tam
+                // olarak bildirilen "Ekran 2'de ilk açılışta lejant görünmüyor"
+                // belirtisi. Artık mirror çağrısı, bu sahnenin GERÇEK lejant
+                // içeriği (renderRgbLegend) ekrana yazıldıktan SONRA yapılıyor —
+                // Ekran 2 artık ilk açılıştan itibaren doğru lejantla geliyor.
+                if (_isInitialRun && _mirrorThisRun && window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') {
+                    window._sylvaMirrorDataLayer({ force: true, srcId: paneId, layerKey: _layerKey, tileUrl: data.tileUrl, isTop: _isTopForPane });
                 }
                 _ensureDefaultVisibility();
             })
