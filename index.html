@@ -9352,8 +9352,25 @@ function selectRamp(name) {
         }
 
         function getSelectedAnalysisMetaList() {
-            var checkedGoruntu = document.querySelector('.uydu-goruntu-radio:checked');
-            if (checkedGoruntu) return [getSelectedAnalysisMeta()];
+            var checkedGoruntuList = document.querySelectorAll('.uydu-goruntu-radio:checked');
+            if (checkedGoruntuList.length) {
+                var rgbList = [];
+                checkedGoruntuList.forEach(function (cg) {
+                    rgbList.push({
+                        analysisName: 'RGB',
+                        datasetKey: cg.value,
+                        datasetLabel: cg.getAttribute('data-label') || cg.value,
+                        sensorLabel: cg.getAttribute('data-sensor') || null,
+                        rampKey: 'black-white',
+                        legendType: 'image',
+                        legendMin: '', legendMax: '',
+                        classesRaw: null,
+                        isRgbGallery: true,
+                        needsGallery: true
+                    });
+                });
+                return rgbList;
+            }
             var list = [];
             document.querySelectorAll('.uydu-analiz-checkbox:checked').forEach(function (cb) {
                 var sensorRadio = document.querySelector('.uydu-sensor-radio:checked');
@@ -9841,6 +9858,9 @@ function selectRamp(name) {
             'LULC_CORINE': 'CORINE Land Cover'
         };
         function _sylvaLayerFriendlyName(analysisName) {
+            if (window._sylvaLayerFriendlyNames && window._sylvaLayerFriendlyNames[analysisName]) {
+                return window._sylvaLayerFriendlyNames[analysisName];
+            }
             return _LULC_SWITCH_TITLES[analysisName] || analysisName;
         }
 
@@ -10312,9 +10332,9 @@ function selectRamp(name) {
             var metaList = getSelectedAnalysisMetaList();
             if (!metaList.length) { sylvaAlert(t('no_analysis'), 'warning'); return; }
 
-            // 🛰️ Uydu Görüntüsü Galerisi (RGB) — hâlâ tekli akış, ilk seçili sahneyi kullanır.
+            // 🛰️ Uydu Görüntüsü Galerisi (RGB) — işaretli HER görüntü için ayrı
+            // istek atılır; sonuçlar haritaya üst üste eklenir (diğer analizlerle aynı mantık).
             if (metaList[0].isRgbGallery) {
-                var meta = metaList[0];
                 if (!_aoiLayer) { sylvaAlert(t('no_aoi'), 'warning'); return; }
                 var startInputG = document.getElementById('date-start');
                 var endInputG   = document.getElementById('date-end');
@@ -10322,7 +10342,10 @@ function selectRamp(name) {
                     sylvaAlert(t('no_date'), 'warning'); return;
                 }
                 _clearAllAnalysisOutputs(_pane);
-                fetchRgbGallery(meta, _pane);
+                _sylvaClearGeeLayers(_pane);
+                metaList.forEach(function (meta) {
+                    if (meta.isRgbGallery) fetchRgbGallery(meta, _pane);
+                });
                 return;
             }
 
@@ -11395,20 +11418,23 @@ function selectRamp(name) {
             return document.getElementById((paneId === 'map2') ? 'map2-gallery' : 'map-gallery');
         }
 
-        function _rgbGalleryStateFor(paneId) {
+        function _rgbGalleryStateFor(paneId, datasetKey) {
             paneId = (paneId === 'map2') ? 'map2' : 'map';
             if (!window._rgbGalleryStates) window._rgbGalleryStates = {};
-            if (!window._rgbGalleryStates[paneId]) {
-                window._rgbGalleryStates[paneId] = { scenes: [], dataset: null, meta: null, sortKey: 'date', sortAsc: false };
+            if (!window._rgbGalleryStates[paneId]) window._rgbGalleryStates[paneId] = {};
+            var paneStates = window._rgbGalleryStates[paneId];
+            if (!datasetKey) return paneStates; // datasetKey verilmezse tüm pane'in haritasını döndür
+            if (!paneStates[datasetKey]) {
+                paneStates[datasetKey] = { scenes: [], dataset: null, meta: null, sortKey: 'date', sortAsc: false, activeSceneId: null };
             }
-            return window._rgbGalleryStates[paneId];
+            return paneStates[datasetKey];
         }
 
         function _rgbGalleryReset(paneId) {
             paneId = paneId || (typeof _sylvaActivePaneId === 'function' ? _sylvaActivePaneId() : 'map');
             paneId = (paneId === 'map2') ? 'map2' : 'map';
             if (!window._rgbGalleryStates) window._rgbGalleryStates = {};
-            window._rgbGalleryStates[paneId] = { scenes: [], dataset: null, meta: null, sortKey: 'date', sortAsc: false };
+            window._rgbGalleryStates[paneId] = {};
             // 🛠️ BUG FİX: Galeri artık her ekranın kendi paneline sahip olduğundan,
             // sıfırlama her zaman İLGİLİ ekranın kendi galeri panelini temizler
             // (aktif ekran şartı aranmaz — Ekran 2 sıfırlanırken Ekran 1 etkilenmez).
@@ -11435,7 +11461,7 @@ function selectRamp(name) {
             if (!galleryEl) return;
             // Yarış koşulu: bu fetch'e ait jenerasyon numarasını yakala
             var _rgbGen = _analysisGeneration;
-            var _gState = _rgbGalleryStateFor(paneId);
+            var _gState = _rgbGalleryStateFor(paneId, meta.datasetKey);
             var _aoiForPane = (paneId === 'map2') ? currentLayer2 : currentLayer;
 
             var startInput = document.getElementById('date-start');
@@ -11463,8 +11489,6 @@ function selectRamp(name) {
                 }
                 if (_gw) _gw.style.opacity = '1';
             })();
-            galleryEl.innerHTML = '<div style="padding:6px 10px;font-size:0.75rem;color:#94a3b8;">' + t('scan_gallery') + '</div>';
-
             fetch(API_BASE + '/api/rgb-scenes', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -11483,13 +11507,10 @@ function selectRamp(name) {
                 // Geciken yanıt: kullanıcı yeni bir analiz başlattıysa bu yanıtı yoksay
                 if (_analysisGeneration !== _rgbGen) return;
                 if (!data.success) {
-                    galleryEl.innerHTML = '';
-                    galleryEl.style.display = 'none';
                     showNoDataModal(_TOAST_NO_DATA_MSG);
                     return;
                 }
                 if (!data.scenes || !data.scenes.length) {
-                    galleryEl.innerHTML = '';
                     showNoDataModal(_TOAST_NO_DATA_MSG);
                     return;
                 }
@@ -11500,8 +11521,8 @@ function selectRamp(name) {
                 _gState.sortAsc = false; // en güncel önce
                 renderRgbGalleryCards(paneId);
 
-                // Galeri açılınca en güncel sahne otomatik olarak haritada gösterilir.
-                var first = _sortedRgbScenes(paneId)[0];
+                // Galeri açılınca bu veri setinin en güncel sahnesi otomatik gösterilir.
+                var first = _sortedRgbScenes(paneId, meta.datasetKey)[0];
                 if (first) loadRgbScene(first.sceneId, meta, data.dataset, paneId);
                 _ensureDefaultVisibility();
             })
@@ -11514,8 +11535,8 @@ function selectRamp(name) {
             });
         }
 
-        function _sortedRgbScenes(paneId) {
-            var _gState = _rgbGalleryStateFor(paneId);
+        function _sortedRgbScenes(paneId, datasetKey) {
+            var _gState = _rgbGalleryStateFor(paneId, datasetKey);
             var scenes = _gState.scenes.slice();
             var key = _gState.sortKey;
             var asc = _gState.sortAsc;
@@ -11534,55 +11555,72 @@ function selectRamp(name) {
         // o an AKTİF olan ekranın galerisi ekrana çizilir.
         function renderRgbGalleryCards(paneId) {
             paneId = (paneId === 'map2') ? 'map2' : 'map';
-            // 🛠️ BUG FİX: Artık her ekranın kendi galeri paneli olduğundan,
-            // aktif ekran şartı aranmadan İLGİLİ ekranın paneline çizilir.
             var galleryEl = _sylvaGalleryEl(paneId);
             if (!galleryEl) return;
-            var _gState = _rgbGalleryStateFor(paneId);
-            var ds = _gState.dataset;
-            var meta = _gState.meta;
-            var scenes = _sortedRgbScenes(paneId);
+            var paneStates = _rgbGalleryStateFor(paneId); // datasetKey yok → tüm pane haritası
+            var datasetKeys = Object.keys(paneStates);
 
             galleryEl.innerHTML = '';
             galleryEl.style.display = 'flex';
+            galleryEl.style.flexWrap = 'wrap';
 
-            scenes.forEach(function(scene, idx) {
-                var dateLabel = scene.timestamp ? new Date(scene.timestamp).toLocaleDateString('tr-TR') : '—';
-                var cloudLabel = (typeof scene.cloud === 'number') ? ('☁ %' + scene.cloud.toFixed(1)) : '☁ —';
-                var thumbHtml = scene.thumbnailUrl
-                    ? '<img src="' + scene.thumbnailUrl + '" alt="' + escapeHtml(dateLabel) + '" style="width:100%;height:100%;object-fit:cover;">'
-                    : '🛰️';
+            datasetKeys.forEach(function (dk) {
+                var _gState = paneStates[dk];
+                if (!_gState || !_gState.scenes || !_gState.scenes.length) return;
+                var ds = _gState.dataset;
+                var meta = _gState.meta;
+                var scenes = _sortedRgbScenes(paneId, dk);
 
-                var div = document.createElement('div');
-                div.className = 'gallery-item' + (scene.sceneId === _sylvaSceneIdGet(paneId) ? ' active' : '');
-                div.setAttribute('data-scene-id', scene.sceneId);
-                div.title = (ds ? ds.datasetName : '') + '\n' + dateLabel + '\nScene ID: ' + scene.sceneId;
-                div.innerHTML = '<div class="gallery-img">' + thumbHtml + '</div>'
-                              + '<div class="gallery-info">' + dateLabel + '<br>' + cloudLabel + '</div>';
-                div.addEventListener('click', function() {
-                    galleryEl.querySelectorAll('.gallery-item').forEach(function(i) { i.classList.remove('active'); });
-                    div.classList.add('active');
-                    loadRgbScene(scene.sceneId, meta, ds, paneId);
+                // 🛰️ Birden fazla uydu görüntüsü aynı anda seçiliyse hangi kartın
+                // hangi veri setine ait olduğunu göstermek için küçük başlık.
+                if (datasetKeys.length > 1) {
+                    var header = document.createElement('div');
+                    header.style.cssText = 'flex-basis:100%;font-size:0.7rem;font-weight:700;color:#1e3a8a;margin:6px 0 2px;';
+                    header.textContent = (meta && meta.datasetLabel) || dk;
+                    galleryEl.appendChild(header);
+                }
+
+                scenes.forEach(function(scene) {
+                    var dateLabel = scene.timestamp ? new Date(scene.timestamp).toLocaleDateString('tr-TR') : '—';
+                    var cloudLabel = (typeof scene.cloud === 'number') ? ('☁ %' + scene.cloud.toFixed(1)) : '☁ —';
+                    var thumbHtml = scene.thumbnailUrl
+                        ? '<img src="' + scene.thumbnailUrl + '" alt="' + escapeHtml(dateLabel) + '" style="width:100%;height:100%;object-fit:cover;">'
+                        : '🛰️';
+
+                    var div = document.createElement('div');
+                    div.className = 'gallery-item' + (scene.sceneId === _gState.activeSceneId ? ' active' : '');
+                    div.setAttribute('data-scene-id', scene.sceneId);
+                    div.setAttribute('data-dataset-key', dk);
+                    div.title = (ds ? ds.datasetName : '') + '\n' + dateLabel + '\nScene ID: ' + scene.sceneId;
+                    div.innerHTML = '<div class="gallery-img">' + thumbHtml + '</div>'
+                                  + '<div class="gallery-info">' + dateLabel + '<br>' + cloudLabel + '</div>';
+                    div.addEventListener('click', function() {
+                        galleryEl.querySelectorAll('.gallery-item[data-dataset-key="' + dk + '"]').forEach(function(i) { i.classList.remove('active'); });
+                        div.classList.add('active');
+                        _gState.activeSceneId = scene.sceneId;
+                        loadRgbScene(scene.sceneId, meta, ds, paneId);
+                    });
+                    galleryEl.appendChild(div);
                 });
-                galleryEl.appendChild(div);
             });
         }
 
-        // Sıralama düğmelerini bağlar (Tarih / Bulutluluk) — her zaman o an
-        // AKTİF ekranın galeri durumunu sıralar.
+        // Sıralama düğmelerini bağlar (Tarih / Bulutluluk) — aktif ekrandaki
+        // TÜM uydu görüntüsü veri setlerini aynı anda sıralar.
         (function () {
             var btnDate  = document.getElementById('btn-gallery-sort-date');
             var btnCloud = document.getElementById('btn-gallery-sort-cloud');
             function resort(key) {
                 var paneId = _sylvaActivePaneId();
-                var _gState = _rgbGalleryStateFor(paneId);
-                if (!_gState.scenes.length) return;
-                if (_gState.sortKey === key) {
-                    _gState.sortAsc = !_gState.sortAsc;
-                } else {
-                    _gState.sortKey = key;
-                    _gState.sortAsc = true;
-                }
+                var paneStates = _rgbGalleryStateFor(paneId);
+                var keys = Object.keys(paneStates);
+                var hasScenes = keys.some(function (dk) { return paneStates[dk].scenes.length; });
+                if (!hasScenes) return;
+                keys.forEach(function (dk) {
+                    var _gState = paneStates[dk];
+                    if (_gState.sortKey === key) { _gState.sortAsc = !_gState.sortAsc; }
+                    else { _gState.sortKey = key; _gState.sortAsc = true; }
+                });
                 renderRgbGalleryCards(paneId);
             }
             if (btnDate)  btnDate.addEventListener('click', function () { resort('date'); });
@@ -11599,6 +11637,9 @@ function selectRamp(name) {
             var _aoiForPane = (paneId === 'map2') ? currentLayer2 : currentLayer;
             if (!_aoiForPane) return;
             _sylvaSceneIdSet(paneId, sceneId);
+
+            var _gState = _rgbGalleryStateFor(paneId, meta.datasetKey);
+            _gState.activeSceneId = sceneId;
 
             var startInput = document.getElementById('date-start');
             var endInput   = document.getElementById('date-end');
@@ -11631,9 +11672,19 @@ function selectRamp(name) {
                     window._lastAnalyzeNativeCrs = data.nativeCrs || data.meta.crs;
                 }
 
-                // Önceki katmanı kaldır, yeni gerçek renk katmanını ilgili ekrana ekle
+                // 🛠️ DÜZELTME: Önceki katman artık SİLİNMİYOR — her uydu görüntüsü
+                // veri seti kendi anahtarıyla (RGB::datasetKey) ayrı saklanıyor.
+                // Böylece birden fazla uydu görüntüsü aynı anda haritada kalabiliyor
+                // ve kuzey okunun yanındaki katman kutusundan aralarında geçiş
+                // yapılabiliyor (diğer analizlerle birebir aynı davranış).
                 var _targetMap = _sylvaTargetMap(paneId);
-                _sylvaReplaceGeeLayer(paneId, data.tileUrl, { opacity: 1 });
+                var _layerKey = 'RGB::' + meta.datasetKey;
+                window._sylvaLayerFriendlyNames = window._sylvaLayerFriendlyNames || {};
+                window._sylvaLayerFriendlyNames[_layerKey] = meta.datasetLabel || meta.datasetKey;
+                _sylvaAddGeeLayer(paneId, _layerKey, data.tileUrl, { opacity: 1 });
+                window._sylvaTopGeeLayerByPane = window._sylvaTopGeeLayerByPane || { map: null, map2: null };
+                window._sylvaTopGeeLayerByPane[paneId] = _layerKey;
+                if (typeof _sylvaRenderLayerSwitchBox === 'function') _sylvaRenderLayerSwitchBox(paneId);
                 _applyGeeLayerClipMode(_rgbClipMode, paneId);
                 // 🎚️ Gerçek renk (RGB) görüntüsü — tam opaklık en okunaklı sonucu verir
                 _sylvaApplyAutoOpacity(paneId, { isRgbGallery: true });
@@ -11646,22 +11697,14 @@ function selectRamp(name) {
                     if (b && b.isValid && b.isValid()) _targetMap.fitBounds(b, { maxZoom: 15, padding: [20, 20] });
                 } catch (e) {}
 
-                // 🛠️ BUG FİX: Galerideki aktif kartı senkronize et — artık HER ZAMAN
-                // İLGİLİ ekranın kendi galeri panelinde yapılır (aktif ekran şartı
-                // aranmaz), çünkü her ekranın artık kendi galeri DOM öğesi var.
+                // Galerideki aktif kartı senkronize et — sadece bu veri setinin
+                // kartları arasında (diğer veri setlerinin seçili kartını bozmaz).
                 var galleryEl = _sylvaGalleryEl(paneId);
                 if (galleryEl) {
-                    galleryEl.querySelectorAll('.gallery-item').forEach(function(i) {
+                    galleryEl.querySelectorAll('.gallery-item[data-dataset-key="' + meta.datasetKey + '"]').forEach(function(i) {
                         i.classList.toggle('active', i.getAttribute('data-scene-id') === sceneId);
                     });
                 }
-                // 🛠️ BUG FİX: Lejant üretimi eskiden "yalnızca o an aktif ekransa"
-                // koşuluna bağlıydı. Kullanıcı Ekran 2'de analiz başlatıp yanıt
-                // gelmeden önce (ör. haritada gezinerek) aktif ekran değişirse, bu
-                // koşul hiç sağlanmıyor ve lejant HİÇBİR ekranda görünmüyordu.
-                // Artık lejant her zaman üretilir ve paneId ile etiketlenir; hangi
-                // ekrana ait olduğunu _sylvaTagContentPane garanti eder, böylece
-                // doğru ekranın kutusuna gider (bkz. window._sylvaLegendInfoByPane).
                 if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(paneId);
                 renderRgbLegend(data.meta || {}, dsInfo, paneId);
                 // 📡 Ham Veri (Bantlar) paneli tek/paylaşılan bir kontrol panelidir;
