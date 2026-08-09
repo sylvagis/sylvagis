@@ -9878,24 +9878,38 @@ function selectRamp(name) {
             window._sylvaTopGeeLayerByPane = window._sylvaTopGeeLayerByPane || { map: null, map2: null };
             window._sylvaTopGeeLayerByPane[key] = layerKey;
             _sylvaRenderLayerSwitchBox(paneId);
-            // 🆕 Üstteki katman değiştiğinde, Uydu Görüntü Galerisi de o an
-            // öne getirilen veri setine göre otomatik olarak güncellensin.
-            if (typeof renderRgbGalleryCards === 'function') renderRgbGalleryCards(paneId);
-            // 🆕 Öne getirilen katman bir uydu görüntüsü (RGB) katmanıysa, o
-            // veri setine ait Lejant ve Uydu Görüntü Analizi (Ham Bant)
-            // bilgilerini de geri getir — önceden bu bilgiler sadece son
-            // yüklenen veri setine ait kalıp diğer katmana geçilince
-            // güncellenmeden/boş görünüyordu.
-            if (layerKey && layerKey.indexOf('RGB::') === 0 && typeof _rgbGalleryStateFor === 'function') {
-                var _rgbDatasetKey = layerKey.slice(5);
-                var _rgState = _rgbGalleryStateFor(paneId, _rgbDatasetKey);
-                if (_rgState && _rgState.scMeta && typeof renderRgbLegend === 'function') {
-                    renderRgbLegend(_rgState.scMeta, _rgState.dsInfo, paneId);
+
+            if (layerKey && layerKey.indexOf('RGB::') === 0) {
+                // 🆕 Öne getirilen katman bir uydu görüntüsü (RGB) katmanıysa;
+                // Uydu Görüntü Galerisi'ni ve o veri setine ait Lejant + Uydu
+                // Görüntüsü Analizi (Ham Bant) bilgilerini geri getir —
+                // önceden bu bilgiler sadece son yüklenen veri setine ait
+                // kalıp diğer katmana geçilince güncellenmeden/boş görünüyordu.
+                if (typeof renderRgbGalleryCards === 'function') renderRgbGalleryCards(paneId);
+                if (typeof _rgbGalleryStateFor === 'function') {
+                    var _rgbDatasetKey = layerKey.slice(5);
+                    var _rgState = _rgbGalleryStateFor(paneId, _rgbDatasetKey);
+                    if (_rgState && _rgState.scMeta && typeof renderRgbLegend === 'function') {
+                        renderRgbLegend(_rgState.scMeta, _rgState.dsInfo, paneId);
+                    }
+                    if (_rgState && _rgState.activeSceneId && _rgState.meta && _rgState.scMeta &&
+                        paneId === (typeof _sylvaActivePaneId === 'function' ? _sylvaActivePaneId() : 'map') &&
+                        typeof onRawBandsSceneSelected === 'function') {
+                        onRawBandsSceneSelected(_rgState.activeSceneId, _rgState.meta, _rgState.dsInfo, _rgState.scMeta);
+                    }
                 }
-                if (_rgState && _rgState.activeSceneId && _rgState.meta && _rgState.scMeta &&
-                    paneId === (typeof _sylvaActivePaneId === 'function' ? _sylvaActivePaneId() : 'map') &&
-                    typeof onRawBandsSceneSelected === 'function') {
-                    onRawBandsSceneSelected(_rgState.activeSceneId, _rgState.meta, _rgState.dsInfo, _rgState.scMeta);
+            } else if (layerKey && typeof _sylvaRenderIndexAnalysisResult === 'function') {
+                // 🆕 Öne getirilen katman bir indeks/LULC/TOPO analiziyse (ör.
+                // NDVI, NDWI birlikte çalıştırılmışsa), o analizin kendi Lejant
+                // + Uydu Görüntü Galerisi verisini geri getir. Önceden analiz
+                // değiştirilince galeri ekrandan kalkıyor, Lejant ise sabit
+                // kalıp son çalıştırılan analize ait bilgiyi göstermeye devam
+                // ediyordu. Artık RGB uydu görüntü galerisiyle birebir aynı
+                // mantıkla, üstteki analiz hangisiyse ekran ona göre güncellenir.
+                window._sylvaIndexAnalysisStates = window._sylvaIndexAnalysisStates || { map: {}, map2: {} };
+                var _iaState = (window._sylvaIndexAnalysisStates[key] || {})[layerKey];
+                if (_iaState && _iaState.meta && _iaState.data) {
+                    _sylvaRenderIndexAnalysisResult(_iaState.meta, _iaState.data, paneId);
                 }
             }
         }
@@ -10529,86 +10543,111 @@ function selectRamp(name) {
                     // dahil normal indeksler de) aşağıdaki ortak sonlandırma akışını
                     // (lejant + istatistik/grafik + galeri + bilgi kutusu) izliyor —
                     // Uydu Görüntüsü (RGB) galerisiyle birebir aynı mantık.
-                    var _ibCb = _updateLulcRestrictedUI(isLulcAnalysis(meta.analysisName));
-                    if (isTopoAnalysis(meta.analysisName)) { _setGalleryPanelRestricted(true); }
-                    (function() {
-                        var _lsp = document.getElementById('legend-symbology-panel');
-                        if (_lsp && !isLulcAnalysis(meta.analysisName)) {
-                            _lsp.style.opacity = '1';
-                            _lsp.style.pointerEvents = '';
-                            _lsp.style.userSelect = '';
-                        }
-                    })();
-                    if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(_pane);
-                    renderAnalysisLegend(meta, false, _pane);
-                    if (data.stats) {
-                        updateStatsTable(data.stats);
-                        renderChart(data.stats, meta);
-                        appendRealStatsToLegend(data.stats, _pane);
-                    }
-                    if (data.realStats) {
-                        applyRealStatsToLegendUI(data.realStats, _pane);
-                        if (currentClassificationType === 'classified' && !isLulcAnalysis(meta.analysisName)) {
-                            if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(_pane);
-                            buildClassRows(parseInt(classCountSelect.value, 10) || 1);
-                            applyClassificationToMap();
-                        }
-                    }
-                    if (data.visPalette && Array.isArray(data.visPalette) && data.visPalette.length >= 2) {
-                        var _basePalette = data.visPalette.slice();
-                        if (typeof rampReversed !== 'undefined' && rampReversed) {
-                            _basePalette = _basePalette.slice().reverse();
-                        }
-                        var visCss = 'linear-gradient(to right, ' + _basePalette.join(', ') + ')';
-                        var selRampEl = document.getElementById('selectedRamp');
-                        if (selRampEl) {
-                            selRampEl.style.background = visCss;
-                            selRampEl.setAttribute('data-ramp', '__gee__');
-                        }
-                        var legendBox2 = document.getElementById(_pane === 'map2' ? 'map2-legend-box' : 'map-legend-box');
-                        if (legendBox2) {
-                            var rampBar = legendBox2.querySelector('.color-ramp');
-                            if (rampBar) rampBar.style.background = visCss;
-                            if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[_pane]) {
-                                window._sylvaLegendInfoByPane[_pane].legendHTML = legendBox2.innerHTML;
-                            }
-                        }
-                    }
-                    if (_STATIC_DATASETS.indexOf(meta.analysisName) !== -1) {
-                        if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(_pane);
-                        renderDatasetInfoCard(meta.analysisName, _pane);
-                    } else if (data.scenes && data.scenes.length) {
-                        renderGalleryFromScenes(data.scenes, _pane);
-                    }
-                    if (isLulcAnalysis(meta.analysisName)) {
-                        if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(_pane);
-                        renderLulcLegendAndChart(meta, data.stats, _pane);
-                    }
-                    (function() {
-                        var _ibCb2 = document.getElementById('toggle-info-box');
-                        var _ibWrap = document.getElementById('info-box-toggle-wrap');
-                        if (_ibCb2) {
-                            _ibCb2.disabled = false;
-                            if (_ibWrap) _ibWrap.style.opacity = '1';
-                            _ibCb2.checked = true;
-                        }
-                        var _infoBox = document.getElementById(_pane === 'map2' ? 'map2-info-box' : 'map-info-box');
-                        if (_infoBox && _infoBox.innerHTML.trim()) {
-                            _infoBox.style.display = 'block';
-                            if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[_pane]) {
-                                window._sylvaLegendInfoByPane[_pane].infoDisplay = 'block';
-                            }
-                        }
-                    })();
-                    window._lastAnalyzeMeta = meta;
-                    if (window._lastAnalyzeMeta) window._lastAnalyzeMeta._lastStats = (data && data.stats) || null;
-                    _ensureDefaultVisibility();
+                    // 🆕 Bu blok artık _sylvaRenderIndexAnalysisResult() içinde —
+                    // hem ilk analiz çalıştırıldığında hem de katman kutusundan
+                    // (Üstte Gösterilecek Katman) birden fazla analiz arasında
+                    // geçiş yapılırken AYNI fonksiyon çağrılır. Böylece analiz
+                    // değiştirildiğinde Lejant ve Uydu Görüntü Galerisi de o
+                    // analize göre otomatik güncellenir; sabit kalmaz.
+                    _sylvaRenderIndexAnalysisResult(meta, data, _pane);
                 })
                 .catch(function(err) {
                     _onOneRequestSettled();
                     showAnalysisToast(t('server_error') + '(' + err.message + ')', 'error');
                 });
             });
+        }
+
+        // 🆕 Bir indeks analizinin (NDVI/NDWI/EVI/... veya LULC/TOPO) sunucudan
+        // gelen sonucunu (lejant, istatistik/grafik, galeri, bilgi kutusu)
+        // ekrana uygular VE bu analizin verisini (meta+data) pane+analysisName
+        // bazında saklar. Katman kutusundan (Üstte Gösterilecek Katman) başka
+        // bir analiz öne getirildiğinde, o analizin saklı verisiyle bu fonksiyon
+        // tekrar çağrılarak Lejant ve Galeri otomatik güncellenir — RGB uydu
+        // görüntü galerisiyle birebir aynı mantık.
+        function _sylvaRenderIndexAnalysisResult(meta, data, _pane) {
+            if (!meta || !data) return;
+            var _ibCb = _updateLulcRestrictedUI(isLulcAnalysis(meta.analysisName));
+            if (isTopoAnalysis(meta.analysisName)) { _setGalleryPanelRestricted(true); }
+            (function() {
+                var _lsp = document.getElementById('legend-symbology-panel');
+                if (_lsp && !isLulcAnalysis(meta.analysisName)) {
+                    _lsp.style.opacity = '1';
+                    _lsp.style.pointerEvents = '';
+                    _lsp.style.userSelect = '';
+                }
+            })();
+            if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(_pane);
+            renderAnalysisLegend(meta, false, _pane);
+            if (data.stats) {
+                updateStatsTable(data.stats);
+                renderChart(data.stats, meta);
+                appendRealStatsToLegend(data.stats, _pane);
+            }
+            if (data.realStats) {
+                applyRealStatsToLegendUI(data.realStats, _pane);
+                if (currentClassificationType === 'classified' && !isLulcAnalysis(meta.analysisName)) {
+                    if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(_pane);
+                    buildClassRows(parseInt(classCountSelect.value, 10) || 1);
+                    applyClassificationToMap();
+                }
+            }
+            if (data.visPalette && Array.isArray(data.visPalette) && data.visPalette.length >= 2) {
+                var _basePalette = data.visPalette.slice();
+                if (typeof rampReversed !== 'undefined' && rampReversed) {
+                    _basePalette = _basePalette.slice().reverse();
+                }
+                var visCss = 'linear-gradient(to right, ' + _basePalette.join(', ') + ')';
+                var selRampEl = document.getElementById('selectedRamp');
+                if (selRampEl) {
+                    selRampEl.style.background = visCss;
+                    selRampEl.setAttribute('data-ramp', '__gee__');
+                }
+                var legendBox2 = document.getElementById(_pane === 'map2' ? 'map2-legend-box' : 'map-legend-box');
+                if (legendBox2) {
+                    var rampBar = legendBox2.querySelector('.color-ramp');
+                    if (rampBar) rampBar.style.background = visCss;
+                    if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[_pane]) {
+                        window._sylvaLegendInfoByPane[_pane].legendHTML = legendBox2.innerHTML;
+                    }
+                }
+            }
+            if (_STATIC_DATASETS.indexOf(meta.analysisName) !== -1) {
+                if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(_pane);
+                renderDatasetInfoCard(meta.analysisName, _pane);
+            } else if (data.scenes && data.scenes.length) {
+                renderGalleryFromScenes(data.scenes, _pane, meta);
+            }
+            if (isLulcAnalysis(meta.analysisName)) {
+                if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(_pane);
+                renderLulcLegendAndChart(meta, data.stats, _pane);
+            }
+            (function() {
+                var _ibCb2 = document.getElementById('toggle-info-box');
+                var _ibWrap = document.getElementById('info-box-toggle-wrap');
+                if (_ibCb2) {
+                    _ibCb2.disabled = false;
+                    if (_ibWrap) _ibWrap.style.opacity = '1';
+                    _ibCb2.checked = true;
+                }
+                var _infoBox = document.getElementById(_pane === 'map2' ? 'map2-info-box' : 'map-info-box');
+                if (_infoBox && _infoBox.innerHTML.trim()) {
+                    _infoBox.style.display = 'block';
+                    if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[_pane]) {
+                        window._sylvaLegendInfoByPane[_pane].infoDisplay = 'block';
+                    }
+                }
+            })();
+            window._lastAnalyzeMeta = meta;
+            if (window._lastAnalyzeMeta) window._lastAnalyzeMeta._lastStats = (data && data.stats) || null;
+            _ensureDefaultVisibility();
+
+            // Bu analizin (meta + sunucu yanıtı) verisini pane+analysisName
+            // bazında sakla — katman kutusundan geri dönüldüğünde kullanılır.
+            window._sylvaIndexAnalysisStates = window._sylvaIndexAnalysisStates || { map: {}, map2: {} };
+            var _iaKey = (_pane === 'map2') ? 'map2' : 'map';
+            if (!window._sylvaIndexAnalysisStates[_iaKey]) window._sylvaIndexAnalysisStates[_iaKey] = {};
+            window._sylvaIndexAnalysisStates[_iaKey][meta.analysisName] = { meta: meta, data: data };
         }
 
         // ── Analiz adına göre galeri ikonunu döndürür ─────────────
@@ -11229,7 +11268,7 @@ function selectRamp(name) {
             }
         }
 
-        function renderGalleryFromScenes(scenes, paneId) {
+        function renderGalleryFromScenes(scenes, paneId, explicitMeta) {
             // 🛠️ BUG FİX: bu galeri (NDVI/NDWI vb. indeks analizlerindeki sahne
             // seçici) eskiden her zaman #map-gallery'ye (Ekran 1) çiziliyordu;
             // Ekran 2'de yapılan analizin sahne galerisi de yanlışlıkla Ekran
@@ -11237,7 +11276,11 @@ function selectRamp(name) {
             paneId = (paneId === 'map2') ? 'map2' : 'map';
             var galleryEl = _sylvaGalleryEl(paneId);
             if (!galleryEl || !scenes || !scenes.length) return;
-            var meta  = getSelectedAnalysisMeta();
+            // 🆕 explicitMeta: katman kutusundan bir analiz öne getirilip galeri
+            // o analizin verisiyle yeniden çizilirken, o an EKRANDA işaretli
+            // olan checkbox'lardan bağımsız olarak DOĞRU analiz meta'sı kullanılır
+            // (getSelectedAnalysisMeta() yalnızca ilk analiz çalıştırılırken uygundur).
+            var meta  = explicitMeta || getSelectedAnalysisMeta();
             var emoji = getAnalysisEmoji(meta ? meta.analysisName : '');
             // İlk sahneyi tarih kaynağı olarak kaydet ve lejantı hemen güncelle
             if (scenes[0] && scenes[0][1]) {
