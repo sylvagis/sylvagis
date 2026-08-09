@@ -7006,6 +7006,15 @@ document.getElementById('layerOpacity').addEventListener('input', function() {
     state.dataOpacity = opacity;
     _sylvaSetLayerOpacity(_sylvaLayerForPane('data', paneId), opacity);
 
+    // 🆕 Bu değeri, o an ekranda EN ÜSTTE olan katmanın kendi hafızasına da
+    // yaz — böylece katmanlar arası geçişte (Analiz Geçiş kutusu) her
+    // katman kendi son şeffaflık değeriyle geri gelir.
+    var _pk = (paneId === 'map2') ? 'map2' : 'map';
+    var _topKey = (window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[_pk]) || null;
+    if (_topKey && window._sylvaLayerOpacityByPane) {
+        window._sylvaLayerOpacityByPane[_pk][_topKey] = opacity;
+    }
+
     // 🔁 Konum Senkronizasyonu açıkken şeffaflık diğer ekrana da birebir
     // ve anında yansır — araç/katman kısıtlaması olmadan.
     if (window._sylvaDualScreenSyncActive) {
@@ -9874,6 +9883,9 @@ function selectRamp(name) {
             return _LULC_SWITCH_TITLES[analysisName] || analysisName;
         }
 
+        window._sylvaLayerOpacityByPane = window._sylvaLayerOpacityByPane || { map: {}, map2: {} };
+        window._sylvaLayerVisibleByPane = window._sylvaLayerVisibleByPane || { map: {}, map2: {} };
+
         function _sylvaBringGeeLayerToFront(paneId, layerKey) {
             var key = (paneId === 'map2') ? 'map2' : 'map';
             var store = window._geeLayersByPane[key];
@@ -9887,6 +9899,26 @@ function selectRamp(name) {
             });
             window._sylvaTopGeeLayerByPane = window._sylvaTopGeeLayerByPane || { map: null, map2: null };
             window._sylvaTopGeeLayerByPane[key] = layerKey;
+
+            // 🛠️ BUG FİX: "Veri Şeffaflığı" slider'ı her zaman EN SON EKLENEN
+            // katmanı (_geeLayer / _geeLayer2) hedefliyordu; katman listesinden
+            // farklı bir analiz öne getirildiğinde slider hâlâ eski katmanı
+            // kontrol ediyordu. Artık ekranda en üstte hangi katman varsa
+            // slider otomatik ona geçer ve o katmanın kendi hafızadaki
+            // şeffaflık değerini geri yükler.
+            if (paneId === 'map2') { window._geeLayer2 = store[layerKey]; } else { _geeLayer = store[layerKey]; }
+            var _rememberedOpacity = window._sylvaLayerOpacityByPane[key][layerKey];
+            var _opacityToApply = (_rememberedOpacity != null) ? _rememberedOpacity : 1;
+            var _paneState = _sylvaPaneState(paneId);
+            _paneState.dataOpacity = _opacityToApply;
+            _sylvaSetLayerOpacity(store[layerKey], _opacityToApply);
+            if (paneId === _sylvaActivePaneId()) {
+                var _slider = document.getElementById('layerOpacity');
+                var _valEl  = document.getElementById('layer-opacity-val');
+                if (_slider) _slider.value = 1 - _opacityToApply;
+                if (_valEl)  _valEl.textContent = '%' + Math.round((1 - _opacityToApply) * 100);
+            }
+
             _sylvaRenderLayerSwitchBox(paneId);
 
             if (layerKey && layerKey.indexOf('RGB::') === 0) {
@@ -10010,11 +10042,17 @@ function selectRamp(name) {
             if (expanded) {
                 html += '<div style="margin-top:3px;">' + keys.map(function (k) {
                     var isActive = (k === topKey);
+                    var isVisible = (window._sylvaLayerVisibleByPane[key][k] !== false);
                     return '<div class="sylva-layer-switch-item' + (isActive ? ' active' : '') + '" data-layer-key="' +
                         escapeHtml(k) + '" data-pane="' + escapeHtml(paneId) + '" style="cursor:pointer;padding:2px 6px;' +
-                        'border-radius:4px;font-size:0.7rem;margin-top:2px;' +
+                        'border-radius:4px;font-size:0.7rem;margin-top:2px;display:flex;align-items:center;gap:5px;' +
                         (isActive ? 'background:#1e3a8a;color:#fff;' : 'background:#f1f5f9;color:#1e293b;') + '">' +
-                        escapeHtml(_sylvaLayerFriendlyName(k)) + '</div>';
+                        '<input type="checkbox" class="sylva-layer-switch-visibility" data-layer-key="' + escapeHtml(k) +
+                        '" data-pane="' + escapeHtml(paneId) + '"' + (isVisible ? ' checked' : '') +
+                        ' title="' + escapeHtml(t('layer_switch_visibility_hint', 'Haritada göster/gizle')) +
+                        '" style="flex-shrink:0;margin:0;cursor:pointer;" onclick="event.stopPropagation();">' +
+                        '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
+                        escapeHtml(_sylvaLayerFriendlyName(k)) + '</span></div>';
                 }).join('') + '</div>';
             }
             box.innerHTML = html;
@@ -10030,6 +10068,26 @@ function selectRamp(name) {
                 window._sylvaLayerSwitchExpanded = window._sylvaLayerSwitchExpanded || { map: false, map2: false };
                 window._sylvaLayerSwitchExpanded[hKey] = !window._sylvaLayerSwitchExpanded[hKey];
                 _sylvaRenderLayerSwitchBox(hPaneId);
+                return;
+            }
+            // 🆕 Görünürlük checkbox'ı: katmanı haritadan tamamen kaldırır/ekler
+            // (sadece şeffaflık değil) — böylece kullanılmayan katmanlar
+            // render edilmez ve sayfa performansı artar (kasma azalır).
+            if (e.target && e.target.classList && e.target.classList.contains('sylva-layer-switch-visibility')) {
+                var vPaneId = e.target.getAttribute('data-pane') || 'map';
+                var vKey = (vPaneId === 'map2') ? 'map2' : 'map';
+                var vLayerKey = e.target.getAttribute('data-layer-key');
+                var vStore = window._geeLayersByPane[vKey];
+                var vLayer = vStore && vStore[vLayerKey];
+                var vTargetMap = _sylvaTargetMap(vPaneId);
+                var vVisible = e.target.checked;
+                window._sylvaLayerVisibleByPane[vKey][vLayerKey] = vVisible;
+                if (vLayer && vTargetMap) {
+                    try {
+                        if (vVisible) { if (!vTargetMap.hasLayer(vLayer)) vLayer.addTo(vTargetMap); }
+                        else { if (vTargetMap.hasLayer(vLayer)) vTargetMap.removeLayer(vLayer); }
+                    } catch (err) {}
+                }
                 return;
             }
             var item = e.target && e.target.closest ? e.target.closest('.sylva-layer-switch-item') : null;
