@@ -9881,6 +9881,23 @@ function selectRamp(name) {
             // 🆕 Üstteki katman değiştiğinde, Uydu Görüntü Galerisi de o an
             // öne getirilen veri setine göre otomatik olarak güncellensin.
             if (typeof renderRgbGalleryCards === 'function') renderRgbGalleryCards(paneId);
+            // 🆕 Öne getirilen katman bir uydu görüntüsü (RGB) katmanıysa, o
+            // veri setine ait Lejant ve Uydu Görüntü Analizi (Ham Bant)
+            // bilgilerini de geri getir — önceden bu bilgiler sadece son
+            // yüklenen veri setine ait kalıp diğer katmana geçilince
+            // güncellenmeden/boş görünüyordu.
+            if (layerKey && layerKey.indexOf('RGB::') === 0 && typeof _rgbGalleryStateFor === 'function') {
+                var _rgbDatasetKey = layerKey.slice(5);
+                var _rgState = _rgbGalleryStateFor(paneId, _rgbDatasetKey);
+                if (_rgState && _rgState.scMeta && typeof renderRgbLegend === 'function') {
+                    renderRgbLegend(_rgState.scMeta, _rgState.dsInfo, paneId);
+                }
+                if (_rgState && _rgState.activeSceneId && _rgState.meta && _rgState.scMeta &&
+                    paneId === (typeof _sylvaActivePaneId === 'function' ? _sylvaActivePaneId() : 'map') &&
+                    typeof onRawBandsSceneSelected === 'function') {
+                    onRawBandsSceneSelected(_rgState.activeSceneId, _rgState.meta, _rgState.dsInfo, _rgState.scMeta);
+                }
+            }
         }
 
         // 🔽 Katman kutusu artık açılır/kapanır (collapsible): bir katman
@@ -11723,6 +11740,14 @@ function selectRamp(name) {
                 }
                 if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(paneId);
                 renderRgbLegend(data.meta || {}, dsInfo, paneId);
+                // 🆕 Bu veri setinin lejant/analiz verilerini (scMeta + dsInfo)
+                // kendi gState'inde saklıyoruz — böylece katman kutusundan bu
+                // veri setine geri dönüldüğünde (başka bir katman öne alınıp
+                // sonra tekrar bu katmana geçildiğinde) lejant ve uydu görüntü
+                // analizi (Ham Bant) bilgileri kaybolmadan yeniden gösterilebilir.
+                _gState.scMeta = data.meta || {};
+                _gState.dsInfo = dsInfo;
+                _gState.sceneMetaSceneId = sceneId;
                 // 📡 Ham Veri (Bantlar) paneli tek/paylaşılan bir kontrol panelidir;
                 // yalnızca o an odaklı/aktif ekran için güncellenir.
                 if (paneId === _sylvaActivePaneId()) {
