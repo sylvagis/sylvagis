@@ -5846,9 +5846,31 @@ tr.class-highlight-active {
                 if (dstId === 'map2') window._geeLayer2 = clone;
                 else _geeLayer = clone;
 
+                // 🆕 Klonlanan katmanı hedef ekranın "Analiz Geçiş" kutusu
+                // deposuna (_geeLayersByPane) da kaydet — böylece hedef
+                // ekranda da bu kutu görünür ve kullanıcı istediğinde bu
+                // katmandan diğer (daha önce hesaplanmış) analizlere manuel
+                // olarak geçiş yapabilir.
+                var srcKey = (srcId === 'map2') ? 'map2' : 'map';
+                var srcTopKey = (window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[srcKey]) || 'mirrored';
+                window._geeLayersByPane = window._geeLayersByPane || { map: {}, map2: {} };
+                var _oldStoreEntry = window._geeLayersByPane[dstId][srcTopKey];
+                if (_oldStoreEntry && _oldStoreEntry !== clone) {
+                    try { dstMap.removeLayer(_oldStoreEntry); } catch (eOld) {}
+                }
+                window._geeLayersByPane[dstId][srcTopKey] = clone;
+                window._sylvaTopGeeLayerByPane = window._sylvaTopGeeLayerByPane || { map: null, map2: null };
+                window._sylvaTopGeeLayerByPane[dstId] = srcTopKey;
+                window._sylvaLayerFriendlyNames = window._sylvaLayerFriendlyNames || {};
+                if (window._sylvaLayerFriendlyNames[srcTopKey] === undefined &&
+                    typeof _sylvaLayerFriendlyName === 'function') {
+                    window._sylvaLayerFriendlyNames[srcTopKey] = _sylvaLayerFriendlyName(srcTopKey);
+                }
+
                 var dataState = _sylvaPaneState(dstId);
                 if (dataState.dataEnabled !== false) clone.addTo(dstMap);
                 _sylvaSetLayerOpacity(clone, dataState.dataEnabled === false ? 0 : dataState.dataOpacity);
+                if (typeof _sylvaRenderLayerSwitchBox === 'function') _sylvaRenderLayerSwitchBox(dstId);
 
                 // 🎨 Renk paleti / sınıflandırma kuralları (lejant + bilgi kutusu)
                 // da hedef ekrana klonlanır.
@@ -10186,6 +10208,11 @@ function selectRamp(name) {
             // güncel durum diğer ekrana (görüntü + lejant + bilgi kutusu +
             // galeri) otomatik olarak yansıtılır — bkz. _sylvaMirrorLayerSwitch().
             function _sylvaMirrorLayerSwitch() {
+                // 🆕 Bu ekran (paneId) kullanıcı tarafından manuel olarak
+                // bağımsız (diverged) işaretlenmişse, buradaki değişiklik
+                // diğer ekrana KESİNLİKLE yansıtılmaz — "diğer ekranı
+                // etkilemeden" analiz geçişi burada garanti edilir.
+                if (window._sylvaPaneDiverged && window._sylvaPaneDiverged[key]) return;
                 if (paneId === (typeof _sylvaActivePaneId === 'function' ? _sylvaActivePaneId() : 'map') &&
                     window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') {
                     window._sylvaMirrorDataLayer();
