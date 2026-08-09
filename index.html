@@ -5499,10 +5499,14 @@ tr.class-highlight-active {
             if (box && box.checked !== window._sylvaDualScreenSyncActive) {
                 box.checked = window._sylvaDualScreenSyncActive;
             }
-            // Açılır açılmaz iki ekranı anında hizala, sonrasını canlı olay
-            // dinleyicileri (moveend/zoomend) devralır.
             if (window._sylvaDualScreenSyncActive && map2) {
+                // Açılır açılmaz: 1) görünümü hizala, 2) o an aktif ekrandaki
+                // AOI + analiz katmanı + renk paleti/sınıflandırmayı diğer
+                // ekrana klonla — analiz öncesi/sonrası fark etmez, mevcut
+                // durum ne ise o anında kopyalanır. Araç kısıtlaması YOK.
                 _sylvaSyncMapView(map, map2);
+                if (typeof window._sylvaMirrorWorkspaceLayer === 'function') window._sylvaMirrorWorkspaceLayer();
+                if (typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer();
             }
         };
 
@@ -5544,8 +5548,7 @@ tr.class-highlight-active {
                 'pm:markerdragend', 'edit', 'dragend'
             ].forEach(function (eventName) {
                 layer.on(eventName, function () {
-                    if (window._sylvaWorkspaceSyncActive &&
-                        window._sylvaActiveMapId === 'map' &&
+                    if ((window._sylvaWorkspaceSyncActive || window._sylvaDualScreenSyncActive) &&
                         typeof window._sylvaNotifyWorkspaceChanged === 'function') {
                         window._sylvaNotifyWorkspaceChanged();
                     }
@@ -5700,48 +5703,56 @@ tr.class-highlight-active {
         })();
 
         window._sylvaMirrorWorkspaceLayer = function () {
-            if (!window._sylvaWorkspaceSyncActive || !map2) return;
+            if (!(window._sylvaWorkspaceSyncActive || window._sylvaDualScreenSyncActive) || !map2) return;
             if (window._sylvaSyncingWorkspace) return;
             window._sylvaSyncingWorkspace = true;
             try {
-                var source = (typeof currentLayer !== 'undefined' ? currentLayer : null) ||
-                    window._workspaceLayer;
-                var geo = _sylvaWorkspaceSourceGeoJSON();
-                var oldMirror = window._workspaceLayer2;
-                _sylvaRemoveLayerFromMap(oldMirror, map2);
-                window._workspaceLayer2 = null;
-                if (!geo || !source || typeof L.geoJSON !== 'function') {
-                    currentLayer2 = null;
-                    return;
-                }
-                window._workspaceLayer2 = L.geoJSON(geo, {
-                    style: _sylvaWorkspaceStyleForSource(source)
+                // 🔁 Çift yönlü: kaynak = o an AKTİF ekran, hedef = diğeri.
+                var srcId = _sylvaActivePaneId();
+                var dstId = srcId === 'map2' ? 'map' : 'map2';
+                var srcMap = srcId === 'map2' ? map2 : map;
+                var dstMap = dstId === 'map2' ? map2 : map;
+                var source = srcId === 'map2'
+                    ? (currentLayer2 || window._workspaceLayer2)
+                    : (currentLayer || window._workspaceLayer);
+                var geo = null;
+                try { geo = source && typeof source.toGeoJSON === 'function' ? source.toGeoJSON() : null; } catch (e) {}
+
+                var oldMirror = dstId === 'map2' ? window._workspaceLayer2 : window._workspaceLayer;
+                _sylvaRemoveLayerFromMap(oldMirror, dstMap);
+                if (dstId === 'map2') { window._workspaceLayer2 = null; currentLayer2 = null; }
+                else { window._workspaceLayer = null; currentLayer = null; }
+
+                if (!geo || !source || typeof L.geoJSON !== 'function') return;
+
+                var dstState = _sylvaPaneState(dstId);
+                var mirrorLayer = L.geoJSON(geo, {
+                    style: {
+                        color: dstState.wsStrokeColor || '#1e3a8a',
+                        weight: 2, opacity: 1, fill: false, fillColor: '#1e3a8a', fillOpacity: 0
+                    }
                 });
-                currentLayer2 = window._workspaceLayer2;
-                if (_sylvaPaneState('map2').workspaceVisible !== false) {
-                    window._workspaceLayer2.addTo(map2);
-                }
-                _sylvaApplyWorkspacePaneStyle('map2');
-                // Senkron modda sağ panel kaynak haritanın görünümünü aynen
-                // izler; bağımsız modda ise kopya çalışma alanına yaklaştırılır.
-                if (map2 && window._workspaceLayer2 &&
-                    typeof window._workspaceLayer2.getBounds === 'function') {
-                    var mirrorBounds = window._workspaceLayer2.getBounds();
+                if (dstId === 'map2') { window._workspaceLayer2 = mirrorLayer; currentLayer2 = mirrorLayer; }
+                else { window._workspaceLayer = mirrorLayer; currentLayer = mirrorLayer; }
+
+                if (dstState.workspaceVisible !== false) mirrorLayer.addTo(dstMap);
+                _sylvaApplyWorkspacePaneStyle(dstId);
+
+                if (dstMap && mirrorLayer && typeof mirrorLayer.getBounds === 'function') {
+                    var mirrorBounds = mirrorLayer.getBounds();
                     if (mirrorBounds && mirrorBounds.isValid && mirrorBounds.isValid()) {
                         setTimeout(function () {
                             try {
-                                map2.invalidateSize({ animate: false, pan: false });
-                                if (window._sylvaWorkspaceSyncActive) {
-                                    _sylvaSyncCurrentMapView();
+                                dstMap.invalidateSize({ animate: false, pan: false });
+                                if (window._sylvaDualScreenSyncActive) {
+                                    _sylvaSyncMapView(srcMap, dstMap);
                                 } else {
-                                    map2.fitBounds(mirrorBounds, {
-                                        maxZoom: 16,
-                                        padding: [24, 24],
-                                        animate: false
+                                    dstMap.fitBounds(mirrorBounds, {
+                                        maxZoom: 16, padding: [24, 24], animate: false
                                     });
                                 }
                             } catch (fitError) {
-                                console.warn('[SylvaGIS] Sağ panel yakınlaştırılamadı:', fitError);
+                                console.warn('[SylvaGIS] Karşı ekran yakınlaştırılamadı:', fitError);
                             }
                         }, 0);
                     }
@@ -5754,26 +5765,44 @@ tr.class-highlight-active {
         };
 
         window._sylvaNotifyWorkspaceChanged = function () {
-            if (!window._sylvaWorkspaceSyncActive ||
-                window._sylvaActiveMapId !== 'map') return;
+            if (!(window._sylvaWorkspaceSyncActive || window._sylvaDualScreenSyncActive)) return;
             window._sylvaMirrorWorkspaceLayer();
         };
 
         window._sylvaMirrorDataLayer = function () {
-            if (!window._sylvaWorkspaceSyncActive || !map2 ||
-                typeof _geeLayer === 'undefined' || !_geeLayer || !_geeLayer._url) return;
+            if (!(window._sylvaWorkspaceSyncActive || window._sylvaDualScreenSyncActive) || !map2) return;
             if (window._sylvaSyncingData) return;
             window._sylvaSyncingData = true;
             try {
-                _sylvaRemoveLayerFromMap(window._geeLayer2, map2);
-                window._geeLayer2 = null;
-                window._geeLayer2 = L.tileLayer(_geeLayer._url, {
+                // 🔁 Çift yönlü: kaynak = o an AKTİF ekran, hedef = diğeri.
+                var srcId = _sylvaActivePaneId();
+                var dstId = srcId === 'map2' ? 'map' : 'map2';
+                var dstMap = dstId === 'map2' ? map2 : map;
+                var srcLayer = srcId === 'map2' ? window._geeLayer2 : (typeof _geeLayer !== 'undefined' ? _geeLayer : null);
+                if (!srcLayer || !srcLayer._url) return;
+
+                var oldDst = dstId === 'map2' ? window._geeLayer2 : (typeof _geeLayer !== 'undefined' ? _geeLayer : null);
+                _sylvaRemoveLayerFromMap(oldDst, dstMap);
+
+                var clone = L.tileLayer(srcLayer._url, {
                     opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane',
-                    attribution: _geeLayer.options && _geeLayer.options.attribution
+                    attribution: srcLayer.options && srcLayer.options.attribution
                 });
-                var dataState = _sylvaPaneState('map2');
-                if (dataState.dataEnabled !== false) window._geeLayer2.addTo(map2);
-                _sylvaSetLayerOpacity(window._geeLayer2, dataState.dataEnabled === false ? 0 : dataState.dataOpacity);
+                if (dstId === 'map2') window._geeLayer2 = clone;
+                else _geeLayer = clone;
+
+                var dataState = _sylvaPaneState(dstId);
+                if (dataState.dataEnabled !== false) clone.addTo(dstMap);
+                _sylvaSetLayerOpacity(clone, dataState.dataEnabled === false ? 0 : dataState.dataOpacity);
+
+                // 🎨 Renk paleti / sınıflandırma kuralları (lejant + bilgi kutusu)
+                // da hedef ekrana klonlanır.
+                if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[srcId]) {
+                    window._sylvaLegendInfoByPane[dstId] = Object.assign(
+                        {}, window._sylvaLegendInfoByPane[srcId]
+                    );
+                    if (typeof window.sylvaMirrorLegendInfoToMap2 === 'function') window.sylvaMirrorLegendInfoToMap2();
+                }
             } catch (e) {
                 console.warn('[SylvaGIS] Analiz katmanı yansıtılamadı:', e);
             } finally {
@@ -8629,7 +8658,7 @@ function selectRamp(name) {
                 _sylvaReplaceGeeLayer(_pane, data.tileUrl, { opacity: 1 });
                 _applyGeeLayerClipMode(_clipMode, _pane);
                 _sylvaApplyAutoOpacity(_pane, meta);
-                if (_pane === 'map' && window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer();
+                if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer();
                 // Renklendirilmiş yeni veri haritada hazır olup tamamen ekrana
                 // yansıdığında (tüm karolar yüklenince) yükleme ekranı kapanır.
                 _hideLoadingWhenTileReady(_sylvaCurrentGeeLayer(_pane));
@@ -11321,7 +11350,7 @@ function selectRamp(name) {
                 _applyGeeLayerClipMode(_rgbClipMode, paneId);
                 // 🎚️ Gerçek renk (RGB) görüntüsü — tam opaklık en okunaklı sonucu verir
                 _sylvaApplyAutoOpacity(paneId, { isRgbGallery: true });
-                if (paneId === 'map' && window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer();
+                if (window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer();
                 _hideLoadingWhenTileReady(_sylvaCurrentGeeLayer(paneId));
 
                 // Harita AOI'ye odaklanır
