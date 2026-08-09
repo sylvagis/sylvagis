@@ -6182,6 +6182,30 @@ tr.class-highlight-active {
                     ? opts.srcId
                     : _sylvaActivePaneId();
                 var dstId = srcId === 'map2' ? 'map' : 'map2';
+
+                // 🛠️ BUG FİX (Ekran 2'de bağımsız analiz, Ekran 1'in kendi
+                // lejantını/üst katmanını eziyordu): Bu fonksiyon eskiden kaynağı
+                // "hangi ekranda analiz çalıştırıldıysa" o ekran kabul ederek İKİ
+                // YÖNLÜ çalışıyordu. Ancak dosyanın başındaki tasarım notunda da
+                // belirtildiği gibi veri/lejant senkronizasyonu SADECE Ekran 1
+                // (map) → Ekran 2 (map2) yönünde olmalı; Ekran 2'deki bağımsız
+                // etkileşimler (ör. Ekran 2'de farklı bir uydu/sensör seçip
+                // "Analizi Çalıştır" ile ayrı bir analiz başlatmak) kaynak
+                // durumunu (Ekran 1'i) DEĞİŞTİRMEMELİ. Eskiden, kullanıcı önce
+                // Ekran 1'de bir analiz çalıştırıp (kendi doğru lejantı/üst
+                // katmanı oluşuyordu), ardından Ekran 2'de FARKLI bir analiz
+                // çalıştırdığında — senkronizasyon açık olduğu için — bu ikinci
+                // (Ekran 2) analiz sonucu "kaynak" sayılıp Ekran 1'in üzerine
+                // mirror ediliyordu: Ekran 1'in üst katman etiketi ve lejantı
+                // Ekran 2'nin verisiyle EZİLİYORDU (ör. Ekran 1 "Sentinel-2"
+                // iken aniden "Landsat" görünüyordu). Kullanıcı daha sonra
+                // galeriden elle bir sahne kartına tıklayınca (bu tür geçişler
+                // mirror'ı TETİKLEMEDİĞİ için) Ekran 1 kendi doğru içeriğini
+                // yeniden çizip "kendiliğinden düzeliyormuş" gibi görünüyordu.
+                // Artık kaynak ekran Ekran 2 ise hiçbir şey mirror edilmez —
+                // Ekran 2'nin analiz sonuçları her zaman kendi ekranında kalır.
+                if (srcId === 'map2') return;
+
                 // 🆕 Hedef ekran kullanıcı tarafından manuel olarak farklı bir
                 // analize geçirilmişse (bağımsız/diverged), üzerine otomatik
                 // yazma yapılmaz — o ekran kendi analizini korur. Görünüm
@@ -11628,6 +11652,23 @@ function selectRamp(name) {
                 }
                 _clearAllAnalysisOutputs(_pane);
                 _sylvaClearGeeLayers(_pane);
+                // 🛠️ BUG FİX (Ekran 2'nin "Üstte Gösterilecek Katman" kutusunda
+                // eski/artık seçili olmayan analizler birikip kalıyordu): Ekran 1
+                // (map) senkronizasyon açıkken YENİ bir "Analizi Çalıştır" başlattığında
+                // sadece Ekran 1'in kendi katman deposu (_sylvaClearGeeLayers(_pane))
+                // temizleniyordu; Ekran 2'nin deposu ise hiç temizlenmiyor, yeni
+                // mirror edilen katman(lar) sadece ÜSTÜNE EKLENİYORDU. Sonuç: Ekran 2
+                // için "Analiz Seçenekleri/Üstte Gösterilecek Katman" kutusu, artık
+                // işaretli olmayan ÖNCEKİ analizleri de göstermeye devam ediyordu
+                // (ör. Sentinel-2 uzun süre önce kaldırılmış olsa bile listede
+                // kalıyordu). Artık Ekran 1'de yeni bir analiz başlatıldığında,
+                // senkronizasyon açıksa Ekran 2'nin deposu da AYNI ANDA temizlenir —
+                // böylece Ekran 2'nin kutusu her zaman sadece bu son çalıştırmadan
+                // gelen (mevcut işaretli) analizleri gösterir.
+                if (_sylvaMirrorThisRun && _pane === 'map' && window.map2) {
+                    _clearAllAnalysisOutputs('map2');
+                    _sylvaClearGeeLayers('map2');
+                }
                 // 🛠️ BUG FİX (Sensör/Etiket Karışıklığı): Birden fazla uydu
                 // görüntüsü veri seti (ör. Sentinel-2 + Landsat) aynı anda
                 // işaretliyken, her biri için AYRI ve ASENKRON bir sunucu
@@ -11695,6 +11736,17 @@ function selectRamp(name) {
 
             _clearAllAnalysisOutputs(_pane);
             _sylvaClearGeeLayers(_pane);
+            // 🛠️ BUG FİX: bkz. yukarıdaki aynı isimli not (Uydu Görüntüsü Galerisi
+            // dalı) — indeks/modül (NDVI, LULC, DEM/Topografya vb.) analizleri için
+            // de aynı sorun geçerliydi: Ekran 1'de yeni bir analiz çalıştırıldığında
+            // Ekran 2'nin eski/artık seçili olmayan katmanları hiç temizlenmiyor,
+            // Ekran 2'nin "Üstte Gösterilecek Katman" kutusunda birikip kalıyordu.
+            // Senkronizasyon açıkken Ekran 1'den başlatılan HER yeni analiz artık
+            // Ekran 2'nin deposunu da temizleyerek başlar.
+            if (_sylvaMirrorThisRun && _pane === 'map' && window.map2) {
+                _clearAllAnalysisOutputs('map2');
+                _sylvaClearGeeLayers('map2');
+            }
 
             var runBtn = document.getElementById('btn-run-analysis');
             if (runBtn) { runBtn.disabled = true; runBtn.textContent = t('running'); }
