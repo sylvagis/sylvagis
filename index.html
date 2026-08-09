@@ -3350,7 +3350,7 @@ tr.class-highlight-active {
                     <label class="vaw-sync-label" for="vaw-location-sync-checkbox" title="Sadece iki ekranın haritasını (basemap) birlikte kaydırıp yakınlaştırır; poligon, veri veya lejanta karışmaz.">
                         <input type="checkbox" id="vaw-location-sync-checkbox" disabled
                                onchange="window.sylvaToggleLocationSync && window.sylvaToggleLocationSync(this.checked)">
-                        <span>Haritaları Birlikte Gez (Sadece Basemap)</span>
+                        <span data-i18n="vaw_location_sync_label">Haritaları Birlikte Gez (Sadece Basemap)</span>
                     </label>
                 </div>
                 <div id="sylva-workspace-sync-modal" class="sylva-sync-modal" role="dialog"
@@ -3359,8 +3359,8 @@ tr.class-highlight-active {
                     <div class="sylva-sync-modal-backdrop" data-sylva-sync-cancel></div>
                     <div class="sylva-sync-modal-card">
                         <div class="sylva-sync-modal-icon" aria-hidden="true">!</div>
-                        <h3 id="sylva-sync-modal-title" data-i18n="sync_modal_title">Poligonlar ve veriler silinecek</h3>
-                        <p id="sylva-sync-modal-message" data-i18n="sync_modal_message">Çift ekranı senkronize ederseniz Ekran 1 ve Ekran 2'deki tüm çizilmiş/yüklenmiş poligonlar ve analiz/veri katmanları silinecek; her iki ekranın haritası da varsayılan başlangıç görünümüne ve basemap'ine sıfırlanacak. Senkronizasyon bundan sonra devam edecek. Devam etmek istiyor musunuz?</p>
+                        <h3 id="sylva-sync-modal-title" data-i18n="sync_modal_title">Veriler ve analizler silinecek</h3>
+                        <p id="sylva-sync-modal-message" data-i18n="sync_modal_message">Çift ekranı senkronize ederseniz Ekran 1 ve Ekran 2'deki tüm poligonlar, veri katmanları ve analizler silinecek; her iki haritanın görünümü de varsayılan başlangıç konumuna sıfırlanacaktır. Ardından senkronizasyon devam edecek. Devam etmek istiyor musunuz?</p>
                         <div class="sylva-sync-modal-actions">
                             <button type="button" class="sylva-sync-cancel" data-sylva-sync-cancel data-i18n="btn_cancel">İptal</button>
                             <button type="button" class="sylva-sync-confirm" data-sylva-sync-confirm data-i18n="sync_confirm_label">Tamam</button>
@@ -5987,6 +5987,45 @@ tr.class-highlight-active {
             var syncBox = document.getElementById('vaw-sync-checkbox');
             if (syncBox && syncBox.checked !== window._sylvaWorkspaceSyncActive) {
                 syncBox.checked = window._sylvaWorkspaceSyncActive;
+            }
+
+            // 🆕 "Çift Ekranı Senkronize Et" açıldığında "Haritaları Birlikte
+            // Gez (Sadece Basemap)" otomatik olarak kapatılır — tam senkron
+            // zaten görünüm senkronunu da kapsadığından ikisi birden açık
+            // kalırsa çakışma/karışıklık olabilir. Kutu kapanır, kendi
+            // bayrağı (_sylvaBasemapNavSyncActive) sıfırlanır, başka hiçbir
+            // şeye dokunulmaz.
+            if (window._sylvaWorkspaceSyncActive) {
+                window._sylvaBasemapNavSyncActive = false;
+                var locBox = document.getElementById('vaw-location-sync-checkbox');
+                if (locBox && locBox.checked) locBox.checked = false;
+            }
+
+            // 🆕 Senkronizasyon açıldığında iki ekranın analiz seçim kutuları
+            // (NDVI/NDWI/LST vb. .uydu-analiz-checkbox, modül ve sensör
+            // seçimleri) işaretli kalmasın diye sıfırlanır — her iki ekran
+            // da senkronizasyona "seçimsiz" bir başlangıç durumundan girer.
+            if (window._sylvaWorkspaceSyncActive) {
+                document.querySelectorAll('.uydu-analiz-checkbox:checked').forEach(function (c) {
+                    c.checked = false;
+                });
+                document.querySelectorAll('input[name="sylva-module"]:checked').forEach(function (r) {
+                    r.checked = false;
+                });
+                document.querySelectorAll('input[name="uydu-goruntu-sensor"]:checked').forEach(function (r) {
+                    r.checked = false;
+                });
+                if (window._sylvaPaneStates) {
+                    ['map', 'map2'].forEach(function (id) {
+                        var st = window._sylvaPaneStates[id];
+                        if (st) {
+                            st.selectedModule = null;
+                            st.selectedIndex = null;
+                            st.selectedSensor = null;
+                            st.analysisActive = false;
+                        }
+                    });
+                }
             }
 
             if (map2 && map2.pm && window._sylvaWorkspaceSyncActive) {
@@ -35703,182 +35742,182 @@ var SYLVA_TRANSLATIONS = {
     en: {
       vaw_select_area: 'Select an area',
       dual_screen: 'Dual Screen',
-      sync_modal_title: 'Polygons will be deleted',
-      sync_modal_message: 'If you synchronize the dual screen, all drawn polygons on Screen 1 and Screen 2 will be deleted and synchronization will continue. Do you want to continue?'
+      sync_modal_title: 'Data and analyses will be deleted',
+      sync_modal_message: 'If you synchronize the dual screen, all polygons, data layers and analyses on Screen 1 and Screen 2 will be deleted, and both maps will reset to their default view. Synchronization will then continue. Do you want to continue?'
     },
     uz: {
       vaw_select_area: 'Hududni tanlang',
       dual_screen: 'Ikki ekran',
-      sync_modal_title: 'Poligonlar o‘chiriladi',
-      sync_modal_message: 'Ikki ekranni sinxronlashtirsangiz, 1-ekran va 2-ekrandagi barcha chizilgan poligonlar o‘chiriladi va sinxronlash davom etadi. Davom etishni xohlaysizmi?'
+      sync_modal_title: "Ma'lumotlar va tahlillar o‘chiriladi",
+      sync_modal_message: "Ikki ekranni sinxronlashtirsangiz, 1-ekran va 2-ekrandagi barcha poligonlar, ma'lumot qatlamlari va tahlillar o‘chiriladi, ikkala xarita ham standart ko‘rinishga qaytariladi. Shundan so‘ng sinxronlash davom etadi. Davom etishni xohlaysizmi?"
     },
     el: {
       vaw_select_area: 'Επιλέξτε περιοχή',
       dual_screen: 'Διπλή οθόνη',
-      sync_modal_title: 'Τα πολύγωνα θα διαγραφούν',
-      sync_modal_message: 'Αν συγχρονίσετε τη διπλή οθόνη, όλα τα σχεδιασμένα πολύγωνα στην Οθόνη 1 και την Οθόνη 2 θα διαγραφούν και ο συγχρονισμός θα συνεχιστεί. Θέλετε να συνεχίσετε;'
+      sync_modal_title: 'Τα δεδομένα και οι αναλύσεις θα διαγραφούν',
+      sync_modal_message: 'Αν συγχρονίσετε τη διπλή οθόνη, όλα τα πολύγωνα, τα επίπεδα δεδομένων και οι αναλύσεις στην Οθόνη 1 και την Οθόνη 2 θα διαγραφούν, και οι δύο χάρτες θα επανέλθουν στην προεπιλεγμένη προβολή. Στη συνέχεια ο συγχρονισμός θα συνεχιστεί. Θέλετε να συνεχίσετε;'
     },
     bg: {
       vaw_select_area: 'Изберете област',
       dual_screen: 'Двоен екран',
-      sync_modal_title: 'Полигоните ще бъдат изтрити',
-      sync_modal_message: 'Ако синхронизирате двойния екран, всички начертани полигони на Екран 1 и Екран 2 ще бъдат изтрити и синхронизирането ще продължи. Искате ли да продължите?'
+      sync_modal_title: 'Данните и анализите ще бъдат изтрити',
+      sync_modal_message: 'Ако синхронизирате двойния екран, всички полигони, слоеве с данни и анализи на Екран 1 и Екран 2 ще бъдат изтрити, а двете карти ще се върнат към изгледа по подразбиране. След това синхронизирането ще продължи. Искате ли да продължите?'
     },
     tr: {
       vaw_select_area: 'Bir alan seçin',
       dual_screen: 'Çift Ekran',
-      sync_modal_title: 'Poligonlar silinecek',
-      sync_modal_message: 'Çift ekranı senkronize ederseniz Ekran 1 ve Ekran 2’deki tüm çizilmiş poligonlar silinecek ve senkronizasyon devam edecek. Devam etmek istiyor musunuz?'
+      sync_modal_title: 'Veriler ve analizler silinecek',
+      sync_modal_message: 'Çift ekranı senkronize ederseniz Ekran 1 ve Ekran 2’deki tüm poligonlar, veri katmanları ve analizler silinecek; her iki haritanın görünümü de varsayılan başlangıç konumuna sıfırlanacaktır. Ardından senkronizasyon devam edecek. Devam etmek istiyor musunuz?'
     },
     az: {
       vaw_select_area: 'Ərazi seçin',
       dual_screen: 'İkili ekran',
-      sync_modal_title: 'Poliqonlar silinəcək',
-      sync_modal_message: 'İkili ekranı sinxronlaşdırdıqda Ekran 1 və Ekran 2-də çəkilmiş bütün poliqonlar silinəcək və sinxronizasiya davam edəcək. Davam etmək istəyirsiniz?'
+      sync_modal_title: 'Verilər və analizlər silinəcək',
+      sync_modal_message: 'İkili ekranı sinxronlaşdırsanız, Ekran 1 və Ekran 2-də olan bütün poliqonlar, məlumat qatları və analizlər silinəcək, hər iki xəritə standart görünüşə sıfırlanacaq. Bundan sonra sinxronizasiya davam edəcək. Davam etmək istəyirsiniz?'
     },
     hu: {
       vaw_select_area: 'Válasszon egy területet',
       dual_screen: 'Kettős képernyő',
-      sync_modal_title: 'A poligonok törlődnek',
-      sync_modal_message: 'A kettős képernyő szinkronizálásakor az 1. és 2. képernyőn rajzolt összes poligon törlődik, és a szinkronizálás folytatódik. Szeretné folytatni?'
+      sync_modal_title: 'Az adatok és elemzések törlődnek',
+      sync_modal_message: 'A kettős képernyő szinkronizálásakor az 1. és 2. képernyőn található összes poligon, adatréteg és elemzés törlődik, és mindkét térkép visszaáll az alapértelmezett nézetre. Ezután a szinkronizálás folytatódik. Szeretné folytatni?'
     },
     kk: {
       vaw_select_area: 'Аймақты таңдаңыз',
       dual_screen: 'Қос экран',
-      sync_modal_title: 'Полигондар өшіріледі',
-      sync_modal_message: 'Қос экранды синхрондасаңыз, 1-экран мен 2-экранда сызылған барлық полигон өшіріліп, синхрондау жалғасады. Жалғастыруды қалайсыз ба?'
+      sync_modal_title: 'Деректер мен талдаулар өшіріледі',
+      sync_modal_message: 'Қос экранды синхрондасаңыз, 1-экран мен 2-экрандағы барлық полигондар, деректер қабаттары және талдаулар өшіріледі, әрі екі карта да әдепкі көрініске қайтарылады. Содан кейін синхрондау жалғасады. Жалғастыруды қалайсыз ба?'
     },
     de: {
       vaw_select_area: 'Bereich auswählen',
       dual_screen: 'Doppelbildschirm',
-      sync_modal_title: 'Polygone werden gelöscht',
-      sync_modal_message: 'Wenn Sie den Doppelbildschirm synchronisieren, werden alle auf Bildschirm 1 und Bildschirm 2 gezeichneten Polygone gelöscht und die Synchronisierung wird fortgesetzt. Möchten Sie fortfahren?'
+      sync_modal_title: 'Daten und Analysen werden gelöscht',
+      sync_modal_message: 'Wenn Sie den Doppelbildschirm synchronisieren, werden alle Polygone, Datenebenen und Analysen auf Bildschirm 1 und Bildschirm 2 gelöscht, und beide Karten werden auf die Standardansicht zurückgesetzt. Anschließend wird die Synchronisierung fortgesetzt. Möchten Sie fortfahren?'
     },
     fr: {
       vaw_select_area: 'Sélectionner une zone',
       dual_screen: 'Double écran',
-      sync_modal_title: 'Les polygones seront supprimés',
-      sync_modal_message: 'Si vous synchronisez le double écran, tous les polygones dessinés sur l’écran 1 et l’écran 2 seront supprimés et la synchronisation continuera. Voulez-vous continuer ?'
+      sync_modal_title: 'Les données et analyses seront supprimées',
+      sync_modal_message: 'Si vous synchronisez le double écran, tous les polygones, couches de données et analyses de l’écran 1 et de l’écran 2 seront supprimés, et les deux cartes reviendront à la vue par défaut. La synchronisation se poursuivra ensuite. Voulez-vous continuer ?'
     },
     es: {
       vaw_select_area: 'Seleccione un área',
       dual_screen: 'Pantalla doble',
-      sync_modal_title: 'Se eliminarán los polígonos',
-      sync_modal_message: 'Si sincroniza la pantalla doble, se eliminarán todos los polígonos dibujados en la Pantalla 1 y la Pantalla 2 y continuará la sincronización. ¿Desea continuar?'
+      sync_modal_title: 'Los datos y análisis se eliminarán',
+      sync_modal_message: 'Si sincroniza la pantalla doble, se eliminarán todos los polígonos, capas de datos y análisis de la Pantalla 1 y la Pantalla 2, y ambos mapas volverán a la vista predeterminada. Luego continuará la sincronización. ¿Desea continuar?'
     },
     pt: {
       vaw_select_area: 'Selecione uma área',
       dual_screen: 'Tela dupla',
-      sync_modal_title: 'Os polígonos serão excluídos',
-      sync_modal_message: 'Se sincronizar a tela dupla, todos os polígonos desenhados na Tela 1 e na Tela 2 serão excluídos e a sincronização continuará. Deseja continuar?'
+      sync_modal_title: 'Os dados e análises serão excluídos',
+      sync_modal_message: 'Se sincronizar a tela dupla, todos os polígonos, camadas de dados e análises da Tela 1 e da Tela 2 serão excluídos, e ambos os mapas voltarão à visualização padrão. Em seguida, a sincronização continuará. Deseja continuar?'
     },
     ar: {
       vaw_select_area: 'اختر منطقة',
       dual_screen: 'شاشة مزدوجة',
-      sync_modal_title: 'سيتم حذف المضلعات',
-      sync_modal_message: 'إذا قمت بمزامنة الشاشة المزدوجة، فسيتم حذف جميع المضلعات المرسومة على الشاشة 1 والشاشة 2 وستستمر المزامنة. هل تريد المتابعة؟'
+      sync_modal_title: 'سيتم حذف البيانات والتحليلات',
+      sync_modal_message: 'إذا قمت بمزامنة الشاشة المزدوجة، فسيتم حذف جميع المضلعات وطبقات البيانات والتحليلات الموجودة على الشاشة 1 والشاشة 2، وستعود كلتا الخريطتين إلى العرض الافتراضي. بعد ذلك ستستمر المزامنة. هل تريد المتابعة؟'
     },
     fa: {
       vaw_select_area: 'یک ناحیه انتخاب کنید',
       dual_screen: 'صفحه‌نمایش دوگانه',
-      sync_modal_title: 'چندضلعی‌ها حذف خواهند شد',
-      sync_modal_message: 'اگر صفحه‌نمایش دوگانه را همگام‌سازی کنید، همه چندضلعی‌های رسم‌شده در صفحه ۱ و صفحه ۲ حذف می‌شوند و همگام‌سازی ادامه می‌یابد. آیا می‌خواهید ادامه دهید؟'
+      sync_modal_title: 'داده‌ها و تحلیل‌ها حذف خواهند شد',
+      sync_modal_message: 'اگر صفحه‌نمایش دوگانه را همگام‌سازی کنید، همه چندضلعی‌ها، لایه‌های داده و تحلیل‌های موجود در صفحه ۱ و صفحه ۲ حذف می‌شوند و هر دو نقشه به نمای پیش‌فرض بازمی‌گردند. سپس همگام‌سازی ادامه می‌یابد. آیا می‌خواهید ادامه دهید؟'
     },
     zh: {
       vaw_select_area: '选择区域',
       dual_screen: '双屏',
-      sync_modal_title: '多边形将被删除',
-      sync_modal_message: '如果同步双屏，屏幕 1 和屏幕 2 上绘制的所有多边形都将被删除，随后将继续同步。是否要继续？'
+      sync_modal_title: '数据和分析将被删除',
+      sync_modal_message: '如果同步双屏，屏幕 1 和屏幕 2 上的所有多边形、数据图层和分析都将被删除，两个地图都将重置为默认视图，随后将继续同步。是否要继续？'
     },
     ja: {
       vaw_select_area: 'エリアを選択',
       dual_screen: 'デュアル画面',
-      sync_modal_title: 'ポリゴンが削除されます',
-      sync_modal_message: 'デュアル画面を同期すると、画面 1 と画面 2 に描画されたすべてのポリゴンが削除され、同期が続行されます。続行しますか？'
+      sync_modal_title: 'データと解析結果が削除されます',
+      sync_modal_message: 'デュアル画面を同期すると、画面 1 と画面 2 のすべてのポリゴン、データレイヤー、解析結果が削除され、両方の地図が既定の表示に戻ります。その後、同期が続行されます。続行しますか？'
     },
     ko: {
       vaw_select_area: '영역 선택',
       dual_screen: '듀얼 화면',
-      sync_modal_title: '폴리곤이 삭제됩니다',
-      sync_modal_message: '듀얼 화면을 동기화하면 화면 1과 화면 2에 그려진 모든 폴리곤이 삭제되고 동기화가 계속됩니다. 계속하시겠습니까?'
+      sync_modal_title: '데이터와 분석 결과가 삭제됩니다',
+      sync_modal_message: '듀얼 화면을 동기화하면 화면 1과 화면 2의 모든 폴리곤, 데이터 레이어, 분석 결과가 삭제되고 두 지도 모두 기본 보기로 재설정됩니다. 이후 동기화가 계속됩니다. 계속하시겠습니까?'
     },
     hi: {
       vaw_select_area: 'क्षेत्र चुनें',
       dual_screen: 'दोहरी स्क्रीन',
-      sync_modal_title: 'बहुभुज हटाए जाएंगे',
-      sync_modal_message: 'यदि आप दोहरी स्क्रीन को सिंक्रनाइज़ करते हैं, तो स्क्रीन 1 और स्क्रीन 2 पर बनाए गए सभी बहुभुज हटा दिए जाएंगे और सिंक्रनाइज़ेशन जारी रहेगा। क्या आप जारी रखना चाहते हैं?'
+      sync_modal_title: 'डेटा और विश्लेषण हटाए जाएंगे',
+      sync_modal_message: 'यदि आप दोहरी स्क्रीन को सिंक्रनाइज़ करते हैं, तो स्क्रीन 1 और स्क्रीन 2 के सभी बहुभुज, डेटा परतें और विश्लेषण हटा दिए जाएंगे, और दोनों मानचित्र डिफ़ॉल्ट दृश्य पर रीसेट हो जाएंगे। इसके बाद सिंक्रनाइज़ेशन जारी रहेगा। क्या आप जारी रखना चाहते हैं?'
     },
     id: {
       vaw_select_area: 'Pilih area',
       dual_screen: 'Layar Ganda',
-      sync_modal_title: 'Poligon akan dihapus',
-      sync_modal_message: 'Jika Anda menyinkronkan layar ganda, semua poligon yang digambar di Layar 1 dan Layar 2 akan dihapus dan sinkronisasi akan dilanjutkan. Apakah Anda ingin melanjutkan?'
+      sync_modal_title: 'Data dan analisis akan dihapus',
+      sync_modal_message: 'Jika Anda menyinkronkan layar ganda, semua poligon, lapisan data, dan analisis di Layar 1 dan Layar 2 akan dihapus, dan kedua peta akan diatur ulang ke tampilan default. Sinkronisasi akan dilanjutkan setelahnya. Apakah Anda ingin melanjutkan?'
     },
     ru: {
       vaw_select_area: 'Выберите область',
       dual_screen: 'Двойной экран',
-      sync_modal_title: 'Полигоны будут удалены',
-      sync_modal_message: 'При синхронизации двойного экрана все нарисованные полигоны на Экране 1 и Экране 2 будут удалены, после чего синхронизация продолжится. Продолжить?'
+      sync_modal_title: 'Данные и анализы будут удалены',
+      sync_modal_message: 'При синхронизации двойного экрана все полигоны, слои данных и анализы на Экране 1 и Экране 2 будут удалены, а обе карты вернутся к виду по умолчанию. После этого синхронизация продолжится. Продолжить?'
     },
     th: {
       vaw_select_area: 'เลือกพื้นที่',
       dual_screen: 'หน้าจอคู่',
-      sync_modal_title: 'รูปหลายเหลี่ยมจะถูกลบ',
-      sync_modal_message: 'หากคุณซิงโครไนซ์หน้าจอคู่ รูปหลายเหลี่ยมที่วาดไว้ทั้งหมดบนหน้าจอ 1 และหน้าจอ 2 จะถูกลบ และการซิงโครไนซ์จะดำเนินต่อไป ต้องการดำเนินการต่อหรือไม่'
+      sync_modal_title: 'ข้อมูลและการวิเคราะห์จะถูกลบ',
+      sync_modal_message: 'หากคุณซิงโครไนซ์หน้าจอคู่ รูปหลายเหลี่ยม เลเยอร์ข้อมูล และการวิเคราะห์ทั้งหมดบนหน้าจอ 1 และหน้าจอ 2 จะถูกลบ และแผนที่ทั้งสองจะรีเซ็ตเป็นมุมมองเริ่มต้น จากนั้นการซิงโครไนซ์จะดำเนินต่อไป ต้องการดำเนินการต่อหรือไม่'
     },
     bn: {
       vaw_select_area: 'একটি এলাকা নির্বাচন করুন',
       dual_screen: 'দুই স্ক্রিন',
-      sync_modal_title: 'বহুভুজ মুছে ফেলা হবে',
-      sync_modal_message: 'আপনি দুই স্ক্রিন সিঙ্ক্রোনাইজ করলে স্ক্রিন ১ ও স্ক্রিন ২-এ আঁকা সব বহুভুজ মুছে যাবে এবং সিঙ্ক্রোনাইজেশন চলতে থাকবে। আপনি কি চালিয়ে যেতে চান?'
+      sync_modal_title: 'ডেটা এবং বিশ্লেষণ মুছে ফেলা হবে',
+      sync_modal_message: 'আপনি দুই স্ক্রিন সিঙ্ক্রোনাইজ করলে স্ক্রিন ১ ও স্ক্রিন ২-এর সব বহুভুজ, ডেটা স্তর এবং বিশ্লেষণ মুছে যাবে, এবং উভয় মানচিত্র ডিফল্ট ভিউতে ফিরে যাবে। এরপর সিঙ্ক্রোনাইজেশন চলতে থাকবে। আপনি কি চালিয়ে যেতে চান?'
     },
     vi: {
       vaw_select_area: 'Chọn một khu vực',
       dual_screen: 'Màn hình kép',
-      sync_modal_title: 'Các đa giác sẽ bị xóa',
-      sync_modal_message: 'Nếu bạn đồng bộ hóa màn hình kép, tất cả đa giác được vẽ trên Màn hình 1 và Màn hình 2 sẽ bị xóa và quá trình đồng bộ sẽ tiếp tục. Bạn có muốn tiếp tục không?'
+      sync_modal_title: 'Dữ liệu và phân tích sẽ bị xóa',
+      sync_modal_message: 'Nếu bạn đồng bộ hóa màn hình kép, tất cả đa giác, lớp dữ liệu và phân tích trên Màn hình 1 và Màn hình 2 sẽ bị xóa, và cả hai bản đồ sẽ đặt lại về chế độ xem mặc định. Sau đó quá trình đồng bộ sẽ tiếp tục. Bạn có muốn tiếp tục không?'
     },
     ur: {
       vaw_select_area: 'علاقہ منتخب کریں',
       dual_screen: 'دوہری اسکرین',
-      sync_modal_title: 'کثیرالاضلاع حذف ہو جائیں گے',
-      sync_modal_message: 'اگر آپ دوہری اسکرین کو ہم وقت ساز کریں گے تو اسکرین ۱ اور اسکرین ۲ پر بنائے گئے تمام کثیرالاضلاع حذف ہو جائیں گے اور ہم وقت سازی جاری رہے گی۔ کیا آپ جاری رکھنا چاہتے ہیں؟'
+      sync_modal_title: 'ڈیٹا اور تجزیے حذف ہو جائیں گے',
+      sync_modal_message: 'اگر آپ دوہری اسکرین کو ہم وقت ساز کریں گے تو اسکرین ۱ اور اسکرین ۲ کے تمام کثیرالاضلاع، ڈیٹا لیئرز اور تجزیے حذف ہو جائیں گے، اور دونوں نقشے ڈیفالٹ ویو پر ری سیٹ ہو جائیں گے۔ اس کے بعد ہم وقت سازی جاری رہے گی۔ کیا آپ جاری رکھنا چاہتے ہیں؟'
     },
     pl: {
       vaw_select_area: 'Wybierz obszar',
       dual_screen: 'Podwójny ekran',
-      sync_modal_title: 'Poligony zostaną usunięte',
-      sync_modal_message: 'Po zsynchronizowaniu podwójnego ekranu wszystkie poligony narysowane na ekranie 1 i ekranie 2 zostaną usunięte, a synchronizacja będzie kontynuowana. Czy chcesz kontynuować?'
+      sync_modal_title: 'Dane i analizy zostaną usunięte',
+      sync_modal_message: 'Po zsynchronizowaniu podwójnego ekranu wszystkie poligony, warstwy danych i analizy na ekranie 1 i ekranie 2 zostaną usunięte, a obie mapy zostaną zresetowane do widoku domyślnego. Następnie synchronizacja będzie kontynuowana. Czy chcesz kontynuować?'
     },
     ms: {
       vaw_select_area: 'Pilih kawasan',
       dual_screen: 'Skrin berkembar',
-      sync_modal_title: 'Poligon akan dipadam',
-      sync_modal_message: 'Jika anda menyegerakkan skrin berkembar, semua poligon yang dilukis pada Skrin 1 dan Skrin 2 akan dipadam dan penyegerakan akan diteruskan. Adakah anda mahu meneruskan?'
+      sync_modal_title: 'Data dan analisis akan dipadam',
+      sync_modal_message: 'Jika anda menyegerakkan skrin berkembar, semua poligon, lapisan data dan analisis pada Skrin 1 dan Skrin 2 akan dipadam, dan kedua-dua peta akan ditetapkan semula ke paparan lalai. Penyegerakan akan diteruskan selepas itu. Adakah anda mahu meneruskan?'
     },
     ky: {
       vaw_select_area: 'Аймакты тандаңыз',
       dual_screen: 'Кош экран',
-      sync_modal_title: 'Полигондор өчүрүлөт',
-      sync_modal_message: 'Кош экранды синхрондосоңуз, 1-экранда жана 2-экранда тартылган бардык полигондор өчүрүлүп, синхрондоштуруу улантылат. Улантууну каалайсызбы?'
+      sync_modal_title: 'Дайындар жана талдоолор өчүрүлөт',
+      sync_modal_message: 'Кош экранды синхрондосоңуз, 1-экрандагы жана 2-экрандагы бардык полигондор, дайын катмарлары жана талдоолор өчүрүлөт, эки карта тең демейки көрүнүшкө кайтарылат. Андан кийин синхрондоштуруу улантылат. Улантууну каалайсызбы?'
     },
     mn: {
       vaw_select_area: 'Бүс сонгоно уу',
       dual_screen: 'Хос дэлгэц',
-      sync_modal_title: 'Полигонууд устгагдана',
-      sync_modal_message: 'Хос дэлгэцийг синхрончилбол Дэлгэц 1 болон Дэлгэц 2 дээр зурсан бүх полигон устгагдаж, синхрончлол үргэлжилнэ. Үргэлжлүүлэх үү?'
+      sync_modal_title: 'Өгөгдөл болон шинжилгээ устгагдана',
+      sync_modal_message: 'Хос дэлгэцийг синхрончилбол Дэлгэц 1 болон Дэлгэц 2 дээрх бүх полигон, өгөгдлийн давхарга, шинжилгээ устгагдаж, хоёр газрын зураг анхны төлөвт шинэчлэгдэнэ. Дараа нь синхрончлол үргэлжилнэ. Үргэлжлүүлэх үү?'
     },
     ka: {
       vaw_select_area: 'აირჩიეთ არეალი',
       dual_screen: 'ორმაგი ეკრანი',
-      sync_modal_title: 'პოლიგონები წაიშლება',
-      sync_modal_message: 'ორმაგი ეკრანის სინქრონიზაციისას ეკრან 1-სა და ეკრან 2-ზე დახატული ყველა პოლიგონი წაიშლება და სინქრონიზაცია გაგრძელდება. გსურთ გაგრძელება?'
+      sync_modal_title: 'მონაცემები და ანალიზები წაიშლება',
+      sync_modal_message: 'ორმაგი ეკრანის სინქრონიზაციისას ეკრან 1-სა და ეკრან 2-ზე არსებული ყველა პოლიგონი, მონაცემთა ფენა და ანალიზი წაიშლება, ორივე რუკა დაუბრუნდება ნაგულისხმევ ხედს. შემდეგ სინქრონიზაცია გაგრძელდება. გსურთ გაგრძელება?'
     },
     it: {
       vaw_select_area: 'Seleziona un’area',
       dual_screen: 'Doppio schermo',
-      sync_modal_title: 'I poligoni verranno eliminati',
-      sync_modal_message: 'Se sincronizzi il doppio schermo, tutti i poligoni disegnati sullo Schermo 1 e sullo Schermo 2 verranno eliminati e la sincronizzazione continuerà. Vuoi continuare?'
+      sync_modal_title: 'I dati e le analisi verranno eliminati',
+      sync_modal_message: 'Se sincronizzi il doppio schermo, tutti i poligoni, i livelli di dati e le analisi presenti sullo Schermo 1 e sullo Schermo 2 verranno eliminati, ed entrambe le mappe torneranno alla vista predefinita. La sincronizzazione continuerà quindi. Vuoi continuare?'
     }
   };
   Object.keys(commonLabels).forEach(function (lang) {
@@ -35972,6 +36011,47 @@ var SYLVA_TRANSLATIONS = {
   Object.keys(syncConfirmLabels).forEach(function (lang) {
     if (SYLVA_TRANSLATIONS[lang]) {
       SYLVA_TRANSLATIONS[lang].sync_confirm_label = syncConfirmLabels[lang];
+    }
+  });
+})();
+
+// "Haritaları Birlikte Gez (Sadece Basemap)" etiketi için 30 dilin tamamı.
+(function () {
+  var locationSyncLabels = {
+    en: 'Explore maps together (Basemap only)',
+    uz: "Xaritalarni birga ko'rib chiqish (faqat asosiy xarita)",
+    el: 'Περιήγηση στους χάρτες μαζί (Μόνο βασικός χάρτης)',
+    bg: 'Разглеждане на картите заедно (Само базова карта)',
+    tr: 'Haritaları Birlikte Gez (Sadece Basemap)',
+    az: 'Xəritələrə birlikdə baxın (Yalnız əsas xəritə)',
+    hu: 'Térképek közös böngészése (Csak alaptérkép)',
+    kk: 'Карталарды бірге шолу (Тек негізгі карта)',
+    de: 'Karten gemeinsam erkunden (Nur Basiskarte)',
+    fr: 'Explorer les cartes ensemble (Fond de carte uniquement)',
+    es: 'Explorar los mapas juntos (Solo mapa base)',
+    pt: 'Explorar os mapas juntos (Apenas mapa base)',
+    ar: 'استكشاف الخرائط معًا (الخريطة الأساسية فقط)',
+    fa: 'کاوش نقشه‌ها با هم (فقط نقشه پایه)',
+    zh: '同步浏览地图（仅底图）',
+    ja: '地図を一緒に閲覧（ベースマップのみ）',
+    ko: '지도 함께 탐색 (베이스맵만)',
+    hi: 'मानचित्रों को साथ देखें (केवल आधार मानचित्र)',
+    id: 'Jelajahi peta bersama (Hanya peta dasar)',
+    ru: 'Совместный просмотр карт (Только базовая карта)',
+    th: 'สำรวจแผนที่ร่วมกัน (เฉพาะแผนที่ฐาน)',
+    bn: 'মানচিত্র একসাথে দেখুন (শুধু বেস মানচিত্র)',
+    vi: 'Cùng khám phá bản đồ (Chỉ bản đồ nền)',
+    ur: 'نقشوں کو ساتھ دیکھیں (صرف بیس میپ)',
+    pl: 'Wspólne przeglądanie map (Tylko mapa bazowa)',
+    ms: 'Terokai peta bersama (Peta asas sahaja)',
+    ky: 'Карталарды бирге кароо (Негизги карта гана)',
+    mn: 'Газрын зургийг хамт үзэх (Зөвхөн суурь зураг)',
+    ka: 'რუკების ერთად დათვალიერება (მხოლოდ საბაზისო რუკა)',
+    it: 'Esplora le mappe insieme (Solo mappa base)'
+  };
+  Object.keys(locationSyncLabels).forEach(function (lang) {
+    if (SYLVA_TRANSLATIONS[lang]) {
+      SYLVA_TRANSLATIONS[lang].vaw_location_sync_label = locationSyncLabels[lang];
     }
   });
 })();
