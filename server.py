@@ -2,9 +2,13 @@ import ee
 import re
 import io
 import os
+import copy
+import hashlib
+import json
 import math
 import time
 import shutil
+import threading
 import zipfile
 import tempfile
 import datetime
@@ -96,6 +100,62 @@ def _call_with_retry(fn, *args, retries=3, base_delay=1.5, **kwargs):
             else:
                 raise
     raise last_err
+
+
+# ════════════════════════════════════════════════════════════════
+# 🏠 BİNA POLİGONU SORGULARI İÇİN KISA SÜRELİ ÖNBELLEK
+# ════════════════════════════════════════════════════════════════
+# Harita senkronizasyonu, çift tıklama veya aynı AOI'nin yeniden çizilmesi
+# aynı GEE sorgusunun kısa aralıklarla tekrar gönderilmesine neden olabilir.
+# Başarılı yanıtları kısa süreli ve sınırlı bir bellekte tutarak gereksiz kota
+# tüketimini azaltıyoruz. Hata yanıtları önbelleğe alınmaz.
+_BUILDING_CACHE_TTL_SECONDS = 60
+_BUILDING_CACHE_MAX_ITEMS = 24
+_building_cache = {}
+_building_cache_lock = threading.RLock()
+
+
+def _building_cache_key(geometry, max_features):
+    """Aynı GeoJSON + limit için kararlı, hassas olmayan bir anahtar üretir."""
+    canonical = json.dumps(
+        geometry,
+        sort_keys=True,
+        separators=(',', ':'),
+        ensure_ascii=False,
+    )
+    digest = hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+    return '{}:{}'.format(digest, max_features)
+
+
+def _get_cached_buildings(key):
+    now = time.monotonic()
+    with _building_cache_lock:
+        entry = _building_cache.get(key)
+        if not entry:
+            return None
+        if now - entry['created_at'] > _BUILDING_CACHE_TTL_SECONDS:
+            _building_cache.pop(key, None)
+            return None
+        # En son kullanılanı sona taşı; limit dolunca eski kayıt çıkar.
+        entry['last_used_at'] = now
+        return copy.deepcopy(entry['payload'])
+
+
+def _cache_buildings(key, payload):
+    now = time.monotonic()
+    with _building_cache_lock:
+        _building_cache[key] = {
+            'created_at': now,
+            'last_used_at': now,
+            'payload': copy.deepcopy(payload),
+        }
+        if len(_building_cache) > _BUILDING_CACHE_MAX_ITEMS:
+            oldest_key = min(
+                _building_cache,
+                key=lambda cache_key: _building_cache[cache_key]['last_used_at'],
+            )
+            _building_cache.pop(oldest_key, None)
+
 
 # ════════════════════════════════════════════════════════════════
 # 🛰️ GOOGLE EARTH ENGINE — SERVICE ACCOUNT İLE BAĞLANTI
@@ -1290,7 +1350,7 @@ def building_footprints():
     İstek gövdesi:
       {
         "geometry": <GeoJSON Polygon/MultiPolygon>,
-        "maxFeatures": 2000  # isteğe bağlı, en fazla 10000
+        "maxFeatures": 2000  # isteğe bağlı, en fazla 5000
       }
 
     `roi` alanı da geriye dönük/istemci uyumluluğu için `geometry` yerine
@@ -1325,9 +1385,17 @@ def building_footprints():
                 'success': False,
                 'error': 'maxFeatures pozitif bir tam sayı olmalıdır.'
             }), 400
-        max_features = max(1, min(max_features, 10000))
+        # Büyük bir poligon listesini istemeden indirmemek ve GEE/istemci
+        # belleğini korumak için sunucu tarafında kesin bir üst sınır uygula.
+        max_features = max(1, min(max_features, 5000))
 
         aoi = make_roi(geometry)
+        cache_key = _building_cache_key(geometry, max_features)
+        cached_payload = _get_cached_buildings(cache_key)
+        if cached_payload is not None:
+            cached_payload['cached'] = True
+            return jsonify(cached_payload)
+
         buildings = ee.FeatureCollection(
             'GOOGLE/Research/open-buildings/v3/polygons'
         ).filterBounds(aoi)
@@ -1349,34 +1417,46 @@ def building_footprints():
             retries=2
         ) or {}
 
-        # Haritaya gönderilecek GeoJSON'u ayrı ve sınırlı bir getInfo çağrısıyla
-        # al. İstatistikler yine de tüm filterBounds koleksiyonu içindir.
-        feature_collection_info = _call_with_retry(
-            lambda: buildings.limit(max_features).getInfo(),
-            retries=2
-        ) or {'type': 'FeatureCollection', 'features': []}
-        features = feature_collection_info.get('features', [])
-
         try:
             building_count = int(stats.get('buildingCount') or 0)
         except (TypeError, ValueError):
             building_count = 0
+
+        # Bina yoksa ikinci GEE getInfo çağrısını yapma. Bu hem boş AOI'lerde
+        # yanıtı hızlandırır hem de gereksiz istek sayısını azaltır.
+        if building_count <= 0:
+            feature_collection_info = {
+                'type': 'FeatureCollection',
+                'features': [],
+            }
+        else:
+            # Haritaya gönderilecek GeoJSON'u ayrı ve sınırlı bir getInfo
+            # çağrısıyla al. İstatistikler yine de tüm koleksiyon içindir.
+            feature_collection_info = _call_with_retry(
+                lambda: buildings.limit(max_features).getInfo(),
+                retries=2
+            ) or {'type': 'FeatureCollection', 'features': []}
+        features = feature_collection_info.get('features', [])
+
         try:
             total_area_m2 = float(stats.get('totalAreaM2') or 0)
         except (TypeError, ValueError):
             total_area_m2 = 0.0
 
-        return jsonify({
+        payload = {
             'success': True,
             'buildingCount': building_count,
             'totalAreaM2': total_area_m2,
             'returnedFeatureCount': len(features),
             'truncated': building_count > len(features),
+            'cached': False,
             'geojson': {
                 'type': 'FeatureCollection',
                 'features': features,
             },
-        })
+        }
+        _cache_buildings(cache_key, payload)
+        return jsonify(payload)
 
     except Exception as e:
         traceback.print_exc()
