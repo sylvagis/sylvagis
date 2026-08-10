@@ -985,7 +985,11 @@ def _overpass_query_bbox(west, south, east, north, timeout=30):
     sonuçtan düşürdüğü için dört farklı bina geometrisi kaynağı birlikte
     taranır.
     """
-    query = f'''[out:json][timeout:{int(timeout)}];
+    # [maxsize:...] açıkça belirtilir: Overpass'ın varsayılan çıktı boyutu
+    # sınırı, yoğun/binlerce binalı bir tile'da sessizce yarım (kesik) bir
+    # yanıtla sonuçlanabiliyordu. Üst sınırı yükseltmek bu tür kesilmeleri
+    # daha da azaltır (bkz. aşağıdaki 'remark' kontrolü — asıl güvence odur).
+    query = f'''[out:json][timeout:{int(timeout)}][maxsize:1073741824];
 (
   way["building"]({south},{west},{north},{east});
   way["building:part"]({south},{west},{north},{east});
@@ -1000,9 +1004,32 @@ out body geom;'''
     result = None
     request_errors = []
 
+    def _reject_if_truncated(candidate):
+        """
+        🐛 KÖK NEDEN DÜZELTMESİ — "çalışma alanında az sayıda çatı çiziliyor":
+        Overpass, bir sorgu zaman aşımına/bellek limitine uğrayıp YARIM
+        kaldığında bile çoğu zaman HTTP 200 ile başarılı bir yanıt döner;
+        yalnızca gövdedeki ``remark`` alanı bunun kesik/eksik bir sonuç
+        olduğunu belirtir (ör. "runtime error: Query timed out ...").
+        Eskiden kod yalnızca HTTP durum kodunu/`response.json()` başarısını
+        kontrol ediyor, `remark` alanını hiç incelemeden sonucu kesin kabul
+        edip döngüden çıkıyordu (`break`) — bu da diğer Overpass
+        sunucularının hiç denenmemesine ve az sayıdaki kısmi sonucun (ör.
+        büyük bir çalışma alanının yalnızca bir köşesindeki birkaç bina)
+        "tamamlandı" olarak önbelleğe alınıp gösterilmesine yol açıyordu.
+        Artık `remark` varsa bu bir hata olarak ele alınır; böylece hem
+        diğer endpoint/metotlar denenir hem de hepsi başarısız olursa
+        `_scan_tile_recursive` tile'ı 4 küçük parçaya bölüp yeniden dener.
+        """
+        if isinstance(candidate, dict) and candidate.get('remark'):
+            raise RuntimeError(
+                'Overpass sorgusu kesik/eksik sonuç döndürdü (remark: {}).'
+                .format(candidate.get('remark'))
+            )
+
     # Overpass sunucuları ortak ve zaman zaman yoğun olabilir. Önce POST,
-    # başarısızsa GET deniyoruz; tek bir sunucunun geçici arızası yedeği
-    # kullanılamaz hale getirmemeli.
+    # başarısızsa GET deniyoruz; tek bir sunucunun geçici arızası (veya
+    # sessiz kesilmesi) yedeği kullanılamaz hale getirmemeli.
     for endpoint in _OSM_OVERPASS_ENDPOINTS:
         try:
             response = requests.post(
@@ -1012,7 +1039,9 @@ out body geom;'''
                 timeout=(8, 25),
             )
             response.raise_for_status()
-            result = response.json() or {}
+            candidate = response.json() or {}
+            _reject_if_truncated(candidate)
+            result = candidate
             break
         except Exception as post_error:
             request_errors.append('{} POST: {}'.format(endpoint, post_error))
@@ -1024,7 +1053,9 @@ out body geom;'''
                     timeout=(8, 25),
                 )
                 response.raise_for_status()
-                result = response.json() or {}
+                candidate = response.json() or {}
+                _reject_if_truncated(candidate)
+                result = candidate
                 break
             except Exception as get_error:
                 request_errors.append('{} GET: {}'.format(endpoint, get_error))
@@ -1032,9 +1063,8 @@ out body geom;'''
 
     if result is None:
         raise RuntimeError(
-            'Overpass sunucularına erişilemedi ({} deneme).'.format(
-                len(request_errors)
-            )
+            'Overpass sunucularına erişilemedi veya sonuçlar kesikti ({} deneme).'
+            .format(len(request_errors))
         )
 
     all_features = []
