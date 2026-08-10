@@ -197,8 +197,14 @@
         // NOT: API_BASE her zaman (koşulsuz) set edilmelidir — t() stub bloğunun
         // dışında tanımlanmazsa, t() daha önce yüklenmiş olduğunda API_BASE
         // undefined kalır ve tüm fetch() çağrıları bozulur.
-        window.API_BASE = (typeof location !== 'undefined' && location.protocol === 'file:')
-    ? 'http://127.0.0.1:5000' : 'https://sylvagis-237489186187.europe-west1.run.app';
+        // Aynı sunucudan yayınlanan HTML'de API çağrılarını sabit/eski bir
+        // domaine göndermek yerine mevcut origin'i kullan. Harici bir API
+        // gerekiyorsa window.SYLVA_API_BASE ile açıkça değiştirilebilir.
+        window.API_BASE = (typeof window !== 'undefined' && window.SYLVA_API_BASE)
+    ? window.SYLVA_API_BASE
+    : ((typeof location !== 'undefined' && location.protocol === 'file:')
+        ? 'http://127.0.0.1:5000'
+        : '');
 
         if (typeof window.t !== 'function') {
             window.t = function(key, fallback) { return fallback || key; };
@@ -13044,10 +13050,65 @@ function selectRamp(name) {
 
             var _aoiLayer = (_pane === 'map2') ? currentLayer2 : currentLayer;
 
+            // Çalışma alanı kaydı (VAW) geçerli geometriyi korur. Bazı Leaflet
+            // işlemleri veya görünürlük senkronizasyonu katmanı haritadan
+            // geçici olarak kaldırabildiği için, sadece hasLayer() sonucuna
+            // bakmak analiz için geçerli AOI'yi yanlışlıkla yok sayıyordu.
+            // Analizden hemen önce seçili/görünür çalışma alanını güvenli
+            // şekilde tekrar haritaya bağla.
+            if (window.SylvaVAW && Array.isArray(window.SylvaVAW.workspaces)) {
+                var _paneWorkspacesForAoi = window.SylvaVAW.workspaces.filter(function (w) {
+                    return (w.paneId === 'map2' ? 'map2' : 'map') === _pane &&
+                        w.layer && w.fc;
+                });
+                var _registeredAoi = null;
+                for (var _awi = 0; _awi < _paneWorkspacesForAoi.length; _awi++) {
+                    if (_paneWorkspacesForAoi[_awi].visible !== false) {
+                        _registeredAoi = _paneWorkspacesForAoi[_awi];
+                        break;
+                    }
+                }
+                if (!_registeredAoi && _paneWorkspacesForAoi.length) {
+                    _registeredAoi = _paneWorkspacesForAoi[0];
+                }
+                if (_registeredAoi) {
+                    _aoiLayer = _registeredAoi.layer;
+                    if (_pane === 'map2') {
+                        currentLayer2 = _aoiLayer;
+                        window._workspaceLayer2 = _aoiLayer;
+                    } else {
+                        currentLayer = _aoiLayer;
+                        window._workspaceLayer = _aoiLayer;
+                    }
+                    if (_paneMap && !_paneMap.hasLayer(_aoiLayer) &&
+                        _registeredAoi.visible !== false) {
+                        _aoiLayer.addTo(_paneMap);
+                    }
+                }
+            }
+
             if (_aoiLayer && _paneMap && !_paneMap.hasLayer(_aoiLayer)) {
-                _aoiLayer = null;
-                if (_pane === 'map2') { currentLayer2 = null; window._workspaceLayer2 = null; }
-                else { currentLayer = null; window._workspaceLayer = null; }
+                // Katman görünürlük tiki kapalıysa analiz yine de kayıtlı
+                // geometriden çalışabilir; katmanı silip AOI'yi kaybetme.
+                var _aoiFromRegisteredWorkspace = null;
+                if (window.SylvaVAW && Array.isArray(window.SylvaVAW.workspaces)) {
+                    var _registeredFallback = window.SylvaVAW.workspaces.find(function (w) {
+                        return (w.paneId === 'map2' ? 'map2' : 'map') === _pane &&
+                            w.fc && w.layer === _aoiLayer;
+                    });
+                    if (_registeredFallback && _registeredFallback.fc) {
+                        _aoiFromRegisteredWorkspace = _registeredFallback.fc;
+                    }
+                }
+                if (_aoiFromRegisteredWorkspace) {
+                    _aoiLayer = {
+                        toGeoJSON: function () { return _aoiFromRegisteredWorkspace; }
+                    };
+                } else {
+                    _aoiLayer = null;
+                    if (_pane === 'map2') { currentLayer2 = null; window._workspaceLayer2 = null; }
+                    else { currentLayer = null; window._workspaceLayer = null; }
+                }
             }
 
             if (!_aoiLayer) {
