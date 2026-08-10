@@ -1259,6 +1259,110 @@ def make_roi(roi):
         raise ValueError('Invalid geometry — lütfen çalışma alanını kontrol edin: ' + str(e))
 
 
+@app.route('/api/building-footprints', methods=['POST'])
+def building_footprints():
+    """
+    Çalışma alanı içindeki Google Open Buildings bina poligonlarını döndürür.
+
+    İstek gövdesi:
+      {
+        "geometry": <GeoJSON Polygon/MultiPolygon>,
+        "maxFeatures": 2000  # isteğe bağlı, en fazla 10000
+      }
+
+    `roi` alanı da geriye dönük/istemci uyumluluğu için `geometry` yerine
+    kullanılabilir. Bina sayısı ve toplam alan bütün filtrelenmiş koleksiyon
+    üzerinden hesaplanır; GeoJSON yanıtı ise haritada güvenli şekilde
+    gösterilebilmesi için sınırlı sayıda bina içerir.
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        geometry = data.get('geometry')
+        if geometry is None:
+            geometry = data.get('roi')
+        if geometry is None:
+            return jsonify({
+                'success': False,
+                'error': 'Çalışma alanı geometrisi gönderilmedi.'
+            }), 400
+
+        # GeoJSON Feature gönderilirse içindeki geometriyi de kabul et.
+        if isinstance(geometry, dict) and geometry.get('type') == 'Feature':
+            geometry = geometry.get('geometry')
+        if not geometry:
+            return jsonify({
+                'success': False,
+                'error': 'Geçerli bir çalışma alanı geometrisi gönderilmedi.'
+            }), 400
+
+        try:
+            max_features = int(data.get('maxFeatures', 2000))
+        except (TypeError, ValueError):
+            return jsonify({
+                'success': False,
+                'error': 'maxFeatures pozitif bir tam sayı olmalıdır.'
+            }), 400
+        max_features = max(1, min(max_features, 10000))
+
+        aoi = make_roi(geometry)
+        buildings = ee.FeatureCollection(
+            'GOOGLE/Research/open-buildings/v3/polygons'
+        ).filterBounds(aoi)
+
+        # Alanı, veri setindeki hazır bir alana güvenmeden doğrudan bina
+        # geometrisinden hesapla. Böylece toplam değer m² cinsinden ve
+        # sorgulanan koleksiyonla aynı kapsamda olur.
+        buildings_with_area = buildings.map(
+            lambda feature: feature.set(
+                '_sylva_area_m2',
+                feature.geometry().area(maxError=1)
+            )
+        )
+        stats = _call_with_retry(
+            lambda: ee.Dictionary({
+                'buildingCount': buildings.size(),
+                'totalAreaM2': buildings_with_area.aggregate_sum('_sylva_area_m2'),
+            }).getInfo(),
+            retries=2
+        ) or {}
+
+        # Haritaya gönderilecek GeoJSON'u ayrı ve sınırlı bir getInfo çağrısıyla
+        # al. İstatistikler yine de tüm filterBounds koleksiyonu içindir.
+        feature_collection_info = _call_with_retry(
+            lambda: buildings.limit(max_features).getInfo(),
+            retries=2
+        ) or {'type': 'FeatureCollection', 'features': []}
+        features = feature_collection_info.get('features', [])
+
+        try:
+            building_count = int(stats.get('buildingCount') or 0)
+        except (TypeError, ValueError):
+            building_count = 0
+        try:
+            total_area_m2 = float(stats.get('totalAreaM2') or 0)
+        except (TypeError, ValueError):
+            total_area_m2 = 0.0
+
+        return jsonify({
+            'success': True,
+            'buildingCount': building_count,
+            'totalAreaM2': total_area_m2,
+            'returnedFeatureCount': len(features),
+            'truncated': building_count > len(features),
+            'geojson': {
+                'type': 'FeatureCollection',
+                'features': features,
+            },
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': f'Bina verileri alınamadı: {str(e)}'
+        }), 500
+
+
 def build_classified_image(result, class_breaks):
     """
     class_breaks: [{ min, max, color, label }, ...]  (küçükten büyüğe sıralı)
