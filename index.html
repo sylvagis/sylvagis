@@ -8748,13 +8748,11 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
             analizCheckboxes.forEach(function (cb) {
                 cb.addEventListener('change', function () {
                     if (cb.checked) {
-                        // 🛠️ DÜZELTME (geri alındı): Zaman Serisi ve Değişim Analizi
-                        // bölümü tek analiz üzerinden çalışır — aynı gruptaki diğer
-                        // analiz kutuları (NDVI, NDWI, EVI...) artık ÇOKLU seçime
-                        // izin vermiyor. Bir kutu işaretlenince, aynı gruptaki
-                        // önceki işaretli kutu (varsa) otomatik olarak kaldırılır;
-                        // böylece her zaman en fazla TEK analiz seçili kalır.
-                        analizCheckboxes.forEach(function (other) { if (other !== cb) other.checked = false; });
+                        // 🆕 Uydu analizlerinde (NDVI, NDWI, EVI...) artık ÇOKLU seçime
+                        // izin verilir — aynı anda birden fazla analiz kutusu işaretli
+                        // kalabilir. Zaman Serisi analizi için gereken "yalnızca 1 analiz"
+                        // kısıtı burada değil, toggleTsPeriod() içinde ayrıca kontrol edilir
+                        // (bkz. ts_alert_only_one uyarısı).
                         // Diğer modül gruplarıyla (Arazi Kullanımı, Uydu Görüntüsü Galerisi)
                         // hâlâ karşılıklı dışlama uygulanır — aynı anda tek "tür" katman aktif olsun.
                         document.querySelectorAll('input[name="sylva-module"]:checked').forEach(function (sm) { sm.checked = false; });
@@ -8767,6 +8765,26 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
                     if (geomBox) {
                         geomBox.style.display = 'none';
                     }
+
+                    // 🆕 Zaman Serisi periyodu (Aylık/Yıllık) zaten aktifken analiz
+                    // seçimi değişip tam olarak 1 olmaktan çıkarsa (2. bir analiz
+                    // işaretlendi ya da tek işaretli analiz kaldırıldı), aktif periyot
+                    // ve buna bağlı tarih/bulut alanları otomatik olarak sıfırlanır —
+                    // böylece zaman serisi her zaman yalnızca tek bir analiz ile
+                    // ilişkilendirilmiş kalır.
+                    var _tsBtnM = document.getElementById('ts-btn-monthly');
+                    var _tsBtnY = document.getElementById('ts-btn-yearly');
+                    var _tsWasActive = !!((_tsBtnM && _tsBtnM.classList.contains('active')) || (_tsBtnY && _tsBtnY.classList.contains('active')));
+                    if (_tsWasActive && document.querySelectorAll('.uydu-analiz-checkbox:checked').length !== 1) {
+                        if (_tsBtnM) _tsBtnM.classList.remove('active');
+                        if (_tsBtnY) _tsBtnY.classList.remove('active');
+                        ['date-section-title', 'date-range-row', 'cloud-control-group', 'month-control-group'].forEach(function (id) {
+                            var el = document.getElementById(id);
+                            if (el) el.classList.remove('sylva-ts-passive');
+                        });
+                        if (typeof _sylvaSyncTsDateCloudLock === 'function') _sylvaSyncTsDateCloudLock();
+                    }
+
                     _updateDateCloudControlsVisibility();
                 });
             });
@@ -22254,6 +22272,7 @@ var SYLVA_TRANSLATIONS = {
     ts_alert_year: 'Please enter start and end year.',
     ts_alert_year_order: 'Start year must be less than end year.',
     ts_alert_index: 'Please select an index from the Available Analyses section.',
+    ts_alert_only_one: 'You must select only 1 analysis to run the time series analysis.',
     ts_running: '⏳ Calculating…',
     ts_run_btn: '📈 Run Time Series',
     ts_done: 'Time series created — switched to line chart view.',
@@ -24264,6 +24283,7 @@ var SYLVA_TRANSLATIONS = {
     ts_alert_year: 'Lütfen başlangıç ve bitiş yılını girin.',
     ts_alert_year_order: 'Başlangıç yılı bitiş yılından küçük olmalıdır.',
     ts_alert_index: 'Lütfen Kullanılabilir Analizler bölümünden bir indeks seçin.',
+    ts_alert_only_one: 'Zaman serisi analizini çalıştırmak için yalnızca 1 analiz seçmelisiniz.',
     ts_running: '⏳ Hesaplanıyor…',
     ts_run_btn: '📈 Zaman Serisini Çalıştır',
     ts_done: 'Zaman serisi oluşturuldu — çizgi grafik görünümüne geçildi.',
@@ -45241,6 +45261,19 @@ function toggleTsPeriod(type) {
     // olur ve tıklama olayı tarayıcı tarafından hiç tetiklenmez; yine de
     // ekstra güvenlik olarak burada da kontrol edilir.
     if (btnM.disabled || btnY.disabled) return;
+
+    // 🆕 Zaman serisi analizi yalnızca TEK bir analiz seçiliyken çalışabilir
+    // (normal analizlerde birden fazla seçim serbesttir, ama zaman serisi
+    // için zorunlu olarak yalnızca 1 analiz seçili olmalı). Birden fazla
+    // (veya hiç) analiz seçiliyken Aylık/Yıllık butonuna basılırsa, periyot
+    // hiç aktifleşmez ve ekranın ortasında bilgilendirici bir uyarı gösterilir.
+    var _tsCheckedCount = document.querySelectorAll('.uydu-analiz-checkbox:checked').length;
+    if (_tsCheckedCount !== 1) {
+        if (typeof sylvaAlert === 'function') {
+            sylvaAlert(t('ts_alert_only_one', 'You must select only 1 analysis to run the time series analysis.'), 'info');
+        }
+        return;
+    }
 
     // Her iki buton da zaten aktifse (aynına tekrar basıldı) → seçimi kaldır
     var alreadyActive = (type === 'monthly' && btnM.classList.contains('active')) ||
