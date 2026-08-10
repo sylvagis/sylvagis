@@ -11327,6 +11327,32 @@ function selectRamp(name) {
             // diye. Böylece: üstteki tek katman kesilir, altındaki (başka bir
             // analiz katmanı VEYA hiçbiri yoksa basemap) tam ve dokunulmamış
             // olarak ortaya çıkar — ArcMap Swipe ile birebir aynı mantık.
+            // 🛠️ KÖK NEDEN DÜZELTMESİ 4 (Sıyırıcı Yanlış/Eski Katmanı Kırpıyordu):
+            // _sylvaCurrentGeeLayer(paneId), sadece global _geeLayer/_geeLayer2
+            // değişkenini döndürüyordu — bu değişken SADECE en son
+            // _sylvaAddGeeLayer()/_sylvaReplaceGeeLayer() çağrısının eklediği
+            // katmanı gösterir. Ama ekranda GERÇEKTEN üstte (zIndex 20) hangi
+            // katmanın göründüğü ayrı bir mekanizmayla — katman kutusundan
+            // "öne getir" (_sylvaBringGeeLayerToFront) çağrıldığında —
+            // window._sylvaTopGeeLayerByPane[pane] üzerinden belirlenir ve bu
+            // iki mekanizma birbirinden bağımsızdı. Kullanıcı katman kutusundan
+            // farklı bir analizi öne getirdiğinde _geeLayer güncellenmediği için
+            // sıyırıcı hâlâ ESKİ (artık görünmeyen ya da altta kalan) katmanı
+            // kırpıyordu — bu yüzden ekranda hiçbir şey değişmiyor ya da yanlış
+            // katman kesiliyordu. Artık gerçek üst katman, tıpkı diğer tüm
+            // "üst katman" mantığının (lejant, opaklık slider'ı, galeri vb.)
+            // yaptığı gibi window._sylvaTopGeeLayerByPane + window._geeLayersByPane
+            // deposundan okunuyor; sadece o bilgi hiç yoksa (ör. tek katman,
+            // henüz hiç "öne getirme" yapılmamış) eski _geeLayer/_geeLayer2
+            // yedek olarak kullanılıyor.
+            function _sylvaSwipeCurrentTopLayer(paneId) {
+                var key = (paneId === 'map2') ? 'map2' : 'map';
+                var store = (window._geeLayersByPane && window._geeLayersByPane[key]) || null;
+                var topKey = (window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[key]) || null;
+                if (topKey && store && store[topKey]) return store[topKey];
+                return (typeof _sylvaCurrentGeeLayer === 'function') ? _sylvaCurrentGeeLayer(paneId) : null;
+            }
+
             function _sylvaSwipeTargetEls(paneId) {
                 var key = (paneId === 'map2') ? 'map2' : 'map';
                 var els = [];
@@ -11343,7 +11369,7 @@ function selectRamp(name) {
                 }
                 // 1) O an "aktif/üstte" olarak takip edilen TEK ana katman —
                 //    kırpma hedefi budur, sıyırma yalnızca bunu etkiler.
-                var mainLayer = (typeof _sylvaCurrentGeeLayer === 'function') ? _sylvaCurrentGeeLayer(paneId) : null;
+                var mainLayer = _sylvaSwipeCurrentTopLayer(paneId);
                 pushLayer(mainLayer);
                 // 2) O ana katmanın üzerine binen sınıf vurgulama (highlight)
                 //    katmanı — üst katmanla birlikte, aynı anda kırpılır.
