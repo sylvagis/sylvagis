@@ -604,6 +604,19 @@ def _run_building_job(job_id):
                 gee_features, gee_truncated = _gee_buildings_paginated(
                     buildings, building_count
                 )
+                # filterBounds AOI'ye değen binaları döndürür; sınır dışına
+                # taşan çatı parçalarını sonuçtan çıkarmak için gerçek
+                # geometrik kesişimi uygula.
+                gee_features = _clip_building_features_to_aoi(
+                    gee_features,
+                    geometry,
+                )
+                # Bilgi kutusundaki toplam alan da artık yalnızca AOI
+                # içinde kalan çatı parçalarının alanını göstermeli.
+                gee_total_area = sum(
+                    float((feature.get('properties') or {}).get('area_m2') or 0.0)
+                    for feature in gee_features
+                )
         except Exception as e:
             gee_error = str(e)
             print('[SylvaGIS] Bina job — GEE denemesi başarısız:', gee_error)
@@ -716,11 +729,18 @@ def _run_building_job(job_id):
 
                 # 20 — dedup: aynı bina birden fazla tile sınırında görünebilir,
                 # way id'sine göre tekilleştir.
-                for feature in tile_features:
+                clipped_tile_features = _clip_building_features_to_aoi(
+                    tile_features,
+                    geometry,
+                )
+                for feature in clipped_tile_features:
                     fid = feature.get('id')
                     if fid not in seen_features:
                         seen_features[fid] = feature
-                        total_area_m2 += feature['properties'].get('area_m2', 0.0)
+                        total_area_m2 += (
+                            feature.get('properties', {})
+                            .get('area_m2', 0.0)
+                        )
 
                 tiles_done += 1
                 with _building_jobs_lock:
@@ -889,6 +909,71 @@ def _geojson_area_m2(geometry):
     return 0.0
 
 
+def _clip_building_features_to_aoi(features, aoi_geometry):
+    """Bina poligonlarını AOI ile kesiştirir; AOI dışındaki parçaları atar.
+
+    Open Buildings ve Overpass sorguları `filterBounds`/bbox kullandığı için
+    AOI'ye değen ancak sınırın dışına taşan binaları da döndürebilir. Haritada
+    yalnızca seçili alanın içindeki çatı parçaları görünmelidir. Shapely
+    mevcutsa gerçek polygon intersection uygulanır; eski/eksik sunucularda
+    frontend de aynı kırpmayı Turf.js ile ikinci kez uygular.
+    """
+    if not features or not aoi_geometry:
+        return []
+    try:
+        from shapely.geometry import shape as _shape
+        from shapely.geometry import mapping as _mapping
+        from shapely.geometry import MultiPolygon as _MultiPolygon
+        from shapely.validation import make_valid as _make_valid
+    except ImportError:
+        # Sunucunun eski kurulumlarında shapely olmayabilir. Bu durumda
+        # istemci tarafındaki Turf.js kırpması sınır dışı çizimi engeller.
+        return copy.deepcopy(features)
+
+    try:
+        aoi_shape = _shape(_normalize_to_geojson(aoi_geometry))
+        if not aoi_shape.is_valid:
+            aoi_shape = _make_valid(aoi_shape)
+    except Exception as clip_error:
+        print('[SylvaGIS] AOI geometri kırpması hazırlanamadı:', clip_error)
+        return copy.deepcopy(features)
+
+    clipped_features = []
+    for feature in features:
+        raw_geometry = feature.get('geometry') if isinstance(feature, dict) else None
+        if not raw_geometry:
+            continue
+        try:
+            building_shape = _shape(raw_geometry)
+            if not building_shape.is_valid:
+                building_shape = _make_valid(building_shape)
+            intersection = building_shape.intersection(aoi_shape)
+            polygons = [
+                polygon for polygon in _collect_polygons(intersection)
+                if polygon.is_valid and polygon.area > 1e-14
+            ]
+            if not polygons:
+                continue
+            clipped_geometry = (
+                _mapping(polygons[0])
+                if len(polygons) == 1
+                else _mapping(_MultiPolygon(polygons))
+            )
+            clipped_feature = copy.deepcopy(feature)
+            clipped_feature['geometry'] = clipped_geometry
+            clipped_feature.setdefault('properties', {})
+            clipped_feature['properties']['area_m2'] = _geojson_area_m2(
+                clipped_geometry
+            )
+            clipped_features.append(clipped_feature)
+        except Exception as feature_error:
+            # Tek bir bozuk yapı tüm analizi bozmasın; diğer çatılar devam
+            # eder. Bozuk yapı istemci tarafına da taşınmaz.
+            print('[SylvaGIS] Bina poligonu kırpılamadı:', feature_error)
+
+    return clipped_features
+
+
 def _overpass_query_bbox(west, south, east, north, timeout=30):
     """
     Verilen bbox içindeki `building` etiketli OSM way'lerini Overpass
@@ -1002,7 +1087,10 @@ def _osm_buildings_from_bbox(geometry):
             ),
         }
 
-    all_features = _overpass_query_bbox(west, south, east, north)
+    all_features = _clip_building_features_to_aoi(
+        _overpass_query_bbox(west, south, east, north),
+        geometry,
+    )
     total_area_m2 = sum(f['properties'].get('area_m2', 0.0) for f in all_features)
 
     return {
