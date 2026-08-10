@@ -5473,6 +5473,20 @@ tr.class-highlight-active {
                 state.dateStart = dS ? dS.value : null;
                 state.dateEnd = dE ? dE.value : null;
                 state.cloudCover = cS ? cS.value : null;
+
+                // 🆕 Ekran 2'nin tarih/bulut mantığı artık her zaman Ekran 1
+                // ile birebir aynı: Ekran 1'de (id === 'map') tarih veya
+                // bulutluluk değiştirildiği anda aynı değerler doğrudan
+                // Ekran 2'nin (map2) hafızasına da yazılır. Böylece kullanıcı
+                // Ekran 2'ye geçtiğinde her zaman Ekran 1'in güncel tarih
+                // ayarlarını görür — iki ekran arasında tarih için ayrı/
+                // bağımsız bir durum kalmaz.
+                if (id === 'map') {
+                    var _map2State = _sylvaPaneState('map2');
+                    _map2State.dateStart = state.dateStart;
+                    _map2State.dateEnd = state.dateEnd;
+                    _map2State.cloudCover = state.cloudCover;
+                }
             }
             document.addEventListener('change', function (e) {
                 if (!e.target) return;
@@ -5489,6 +5503,20 @@ tr.class-highlight-active {
                 if (typeof _origSync === 'function') _origSync();
                 var id = _sylvaActivePaneId();
                 var state = _sylvaPaneState(id);
+
+                // 🆕 Güvenlik önlemi: Ekran 2'nin tarih/bulut alanları normalde
+                // her değişiklikte zaten Ekran 1 ile senkronize ediliyor (bkz.
+                // _captureModuleState), ama olası başka bir yoldan (ör. sayfa
+                // ilk yüklendiğinde ya da başka bir kod yolundan) Ekran 2'nin
+                // tarih durumu Ekran 1'den farklı kalmışsa, panel Ekran 2'yi
+                // her göstermeye çalıştığında bu fark burada da giderilir —
+                // Ekran 2 tarih/bulut konusunda HER ZAMAN Ekran 1'i yansıtır.
+                if (id === 'map2') {
+                    var _map1State = _sylvaPaneState('map');
+                    state.dateStart = _map1State.dateStart;
+                    state.dateEnd = _map1State.dateEnd;
+                    state.cloudCover = _map1State.cloudCover;
+                }
 
                 // 🛠️ BUG FİX: Sadece native input.value set etmek, görünür takvim
                 // kutusundaki metni ve iç seçim durumunu güncellemediği için Ekran
@@ -11377,24 +11405,81 @@ function selectRamp(name) {
                 return (typeof _sylvaCurrentGeeLayer === 'function') ? _sylvaCurrentGeeLayer(paneId) : null;
             }
 
+            // 🛠️ KÖK NEDEN DÜZELTMESİ 7 (Ekran 2'de Üst Üste Binen Analizlerde
+            // Sıyırıcı Üst Katmanı TAMAMEN Kaldırıyordu): Yukarıdaki
+            // _sylvaSwipeCurrentTopLayer, "gerçekte üstte hangi katman
+            // görünüyor" sorusunu window._sylvaTopGeeLayerByPane / 
+            // window._geeLayersByPane defterine (bookkeeping) bakarak
+            // cevaplıyordu. Ekran 1'de bu defter her zaman ekranla birebir
+            // uyumlu kalıyor; ama Ekran 2'de birden fazla analiz üst üste
+            // bindiğinde (özellikle senkron/klonlama ile katmanlar
+            // kopyalandığında, bkz. _sylvaSyncAllDataLayersToSecondScreen)
+            // bu defter GERÇEK ekran hiyerarşisinden sapabiliyordu. Sonuç:
+            // sıyırıcı, ekranda GERÇEKTEN üstte görünen katman yerine
+            // defterdeki (artık üstte olmayan/farklı) bir katmanı hedef
+            // alıyor, o katmanın konteyneri haritada hiç görünür
+            // olmadığından (0×0/detached) kırpma hiçbir görsel etki
+            // yaratmıyor ya da gerçek üstteki katman kırpılmadan aniden
+            // komple kayboluyordu.
+            //
+            // Artık kırpma hedefi, defter yerine DOĞRUDAN DOM'dan —
+            // paylaşılan "geeAnalysisPane" kutusunun İÇİNDE, o an GERÇEKTEN
+            // görünür (display:none olmayan) ve en yüksek z-index'e sahip
+            // katman konteyneri aranarak — belirlenir. Bu, ekrandaki GERÇEK
+            // görsel sırayla birebir aynı olduğundan hem Ekran 1 hem Ekran 2
+            // için, kaç analiz üst üste binerse binsin, HER ZAMAN doğru ve
+            // tutarlı çalışır. Defter tabanlı yöntem sadece bu DOM taraması
+            // hiçbir sonuç vermediği (ör. henüz hiç analiz eklenmemiş)
+            // durumlarda yedek olarak kullanılır.
+            function _sylvaSwipeTopContainerFromDOM(paneId) {
+                var targetMap = (paneId === 'map2') ? map2 : map;
+                if (!targetMap || typeof targetMap.getPane !== 'function') return null;
+                var pane;
+                try { pane = targetMap.getPane('geeAnalysisPane'); } catch (e) { pane = null; }
+                if (!pane || !pane.children || !pane.children.length) return null;
+                var topEl = null, topZ = -Infinity;
+                for (var i = 0; i < pane.children.length; i++) {
+                    var child = pane.children[i];
+                    if (!child || child.style.display === 'none') continue;
+                    // Sıyırıcının kendi çizgisi de bu pane'e eklenmiş olabilir —
+                    // o asla bir kırpma hedefi olmamalı.
+                    if (child.id && child.id.indexOf('sylva-swipe-line-') === 0) continue;
+                    var z = parseInt(child.style.zIndex, 10);
+                    if (isNaN(z)) z = 0;
+                    if (z >= topZ) { topZ = z; topEl = child; }
+                }
+                return topEl;
+            }
+
             function _sylvaSwipeTargetEls(paneId) {
                 var key = (paneId === 'map2') ? 'map2' : 'map';
                 var els = [];
                 var seen = null;
                 try { seen = (typeof Set !== 'undefined') ? new Set() : null; } catch (e) { seen = null; }
-                function pushLayer(layer) {
-                    if (!layer || typeof layer.getContainer !== 'function') return;
-                    var el;
-                    try { el = layer.getContainer(); } catch (e) { el = null; }
+                function pushEl(el) {
                     if (!el) return;
                     if (seen) { if (seen.has(el)) return; seen.add(el); }
                     else if (els.indexOf(el) !== -1) return;
                     els.push(el);
                 }
-                // 1) O an "aktif/üstte" olarak takip edilen TEK ana katman —
-                //    kırpma hedefi budur, sıyırma yalnızca bunu etkiler.
-                var mainLayer = _sylvaSwipeCurrentTopLayer(paneId);
-                pushLayer(mainLayer);
+                function pushLayer(layer) {
+                    if (!layer || typeof layer.getContainer !== 'function') return;
+                    var el;
+                    try { el = layer.getContainer(); } catch (e) { el = null; }
+                    pushEl(el);
+                }
+                // 1) Ekranda GERÇEKTEN üstte görünen (en yüksek z-index'li,
+                //    görünür) tek katman konteyneri — kırpma hedefi budur,
+                //    sıyırma yalnızca bunu etkiler. Bookkeeping ile ekran
+                //    arasında fark varsa bile DOM her zaman gerçeği yansıtır.
+                var topEl = _sylvaSwipeTopContainerFromDOM(paneId);
+                if (topEl) {
+                    pushEl(topEl);
+                } else {
+                    // Yedek: DOM taraması sonuç vermediyse eski defter yöntemi.
+                    var mainLayer = _sylvaSwipeCurrentTopLayer(paneId);
+                    pushLayer(mainLayer);
+                }
                 // 2) O ana katmanın üzerine binen sınıf vurgulama (highlight)
                 //    katmanı — üst katmanla birlikte, aynı anda kırpılır.
                 try {
