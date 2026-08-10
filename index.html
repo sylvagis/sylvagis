@@ -12022,6 +12022,25 @@ function selectRamp(name) {
         }
 
         function runAnalysis() {
+            // 🛠️ BUG FİX (KÖK NEDEN): "📈 Zaman Serisi ve Değişim Analizi" bölümünde
+            // bir periyot (Aylık/Yıllık) seçiliyken, kullanıcı ts-start-year/
+            // ts-end-year/ts-cloud-pct değerlerini girip genel "🚀 Analizi Çalıştır"
+            // butonuna basarsa — bu buton HER ZAMAN üstteki (o an görsel olarak
+            // pasifleştirilmiş ama hâlâ eski değerini koruyan) genel Tarih Aralığı/
+            // Bulutluluk Oranı alanlarını okuyordu; kullanıcının Zaman Serisi
+            // kutusuna girdiği değerler tamamen yok sayılıyordu. Artık: bir zaman
+            // serisi periyodu aktifken bu buton otomatik olarak doğru fonksiyona
+            // (runTimeSeriesAnalysis — ts-start-year/ts-end-year/ts-cloud-pct
+            // değerlerini kullanır) yönlenir.
+            var _tsBtnM = document.getElementById('ts-btn-monthly');
+            var _tsBtnY = document.getElementById('ts-btn-yearly');
+            var _tsPeriodActive = (_tsBtnM && _tsBtnM.classList.contains('active')) ||
+                                   (_tsBtnY && _tsBtnY.classList.contains('active'));
+            if (_tsPeriodActive) {
+                runTimeSeriesAnalysis();
+                return;
+            }
+
             if (window._sylvaUserDone === false) {
                 if (typeof window.sylvaOpenLogin === 'function') window.sylvaOpenLogin();
                 return;
@@ -45132,7 +45151,12 @@ function runTimeSeriesAnalysis() {
     var sensorRadio = document.querySelector('.uydu-sensor-radio:checked');
     var satellite = sensorRadio ? sensorRadio.value : 's2-l2a';
 
-    var btn = document.getElementById('btn-run-timeseries');
+    // 🆕 Ayrı bir "Zaman Serisini Çalıştır" butonu YOK — bu özellik genel
+    // "🚀 Analizi Çalıştır" butonuna entegre edildi (bkz. runAnalysis()
+    // içindeki periyot kontrolü). Yükleniyor/disable geri bildirimi de o
+    // butonda gösterilir.
+    var btn = document.getElementById('btn-run-analysis');
+    var _btnOrigLabel = btn ? btn.innerHTML : null;
     if (btn) { btn.disabled = true; btn.textContent = t('ts_running'); }
 
     fetch(API_BASE + '/api/timeseries', {
@@ -45150,7 +45174,7 @@ function runTimeSeriesAnalysis() {
     })
     .then(function(r) { return r.json(); })
     .then(function(data) {
-        if (btn) { btn.disabled = false; btn.textContent = t('ts_run_btn'); }
+        if (btn) { btn.disabled = false; btn.innerHTML = _btnOrigLabel; }
 
         if (!data.success) {
             var errMsg = data.error || 'Zaman serisi hesaplanamadı.';
@@ -45203,7 +45227,7 @@ function runTimeSeriesAnalysis() {
             showAnalysisToast(t('ts_done'), 'success');
     })
     .catch(function(err) {
-        if (btn) { btn.disabled = false; btn.textContent = t('ts_run_btn'); }
+        if (btn) { btn.disabled = false; btn.innerHTML = _btnOrigLabel; }
         var errMsg = 'Zaman serisi hesaplanamadı: ' + err;
         if (typeof showAnalysisToast === 'function') showAnalysisToast(errMsg, 'error');
         else alert(errMsg);
