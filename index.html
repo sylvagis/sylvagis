@@ -21,6 +21,85 @@
             integrity="sha384-f4VcdT2lkJqtKFAcyIjTE79KAxbFqkhB4wabgu37VaZ96AfCunDhrMgn364YlulE"
             crossorigin="anonymous"></script>
     <script>
+        // Arama sonuçlarının dilini, sabit bir dile zorlamak yerine kullanıcının
+        // sorgusundaki yazı sistemine göre seçer. Latin harfli sorgularda
+        // uygulamanın seçili dili; Korece, Japonca, Çince vb. sorgularda ise
+        // ilgili yerel dil tercih edilir.
+        function sylvaSearchLanguage(query) {
+            var text = String(query || '');
+            if (/[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]/.test(text)) return 'ko';
+            if (/[\u3040-\u30FF\u31F0-\u31FF]/.test(text)) return 'ja';
+            if (/[\u4E00-\u9FFF\u3400-\u4DBF\uF900-\uFAFF]/.test(text)) return 'zh';
+            if (/[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]/.test(text)) return 'ar';
+            if (/[\u0590-\u05FF]/.test(text)) return 'he';
+            if (/[\u0400-\u04FF]/.test(text)) return 'ru';
+            if (/[\u0370-\u03FF]/.test(text)) return 'el';
+            if (/[\u0900-\u097F]/.test(text)) return 'hi';
+            if (/[\u0980-\u09FF]/.test(text)) return 'bn';
+            if (/[\u0E00-\u0E7F]/.test(text)) return 'th';
+            if (/[\u0E80-\u0EFF]/.test(text)) return 'lo';
+            if (/[\u1000-\u109F]/.test(text)) return 'my';
+            if (/[\u1780-\u17FF]/.test(text)) return 'km';
+            if (/[\u10A0-\u10FF]/.test(text)) return 'ka';
+            if (/[\u0530-\u058F]/.test(text)) return 'hy';
+            if (/[\u0B80-\u0BFF]/.test(text)) return 'ta';
+            if (/[\u0C00-\u0C7F]/.test(text)) return 'te';
+            if (/[\u0C80-\u0CFF]/.test(text)) return 'kn';
+            if (/[\u0D00-\u0D7F]/.test(text)) return 'ml';
+            if (/[\u0A80-\u0AFF]/.test(text)) return 'gu';
+            if (/[\u0A00-\u0A7F]/.test(text)) return 'pa';
+            if (/[\u0D80-\u0DFF]/.test(text)) return 'si';
+            if (/[\u1200-\u137F]/.test(text)) return 'am';
+            return (typeof _sylvaLang !== 'undefined' && _sylvaLang) || 'en';
+        }
+
+        // Nominatim sonucu alan sınırı içeriyorsa alan olarak, yalnızca
+        // koordinat/POI içeriyorsa nokta olarak gösterilir. Böylece kullanıcı
+        // öneri listesinden poligon ile raptiyeyi ayırt edebilir.
+        function sylvaSearchResultIsArea(item) {
+            if (!item) return false;
+            var geometryType = item.geojson && item.geojson.type;
+            return /^(Polygon|MultiPolygon)$/i.test(String(geometryType || '')) ||
+                (String(item.class || '').toLowerCase() === 'boundary' &&
+                 String(item.type || '').toLowerCase() === 'administrative');
+        }
+
+        function sylvaSearchResultIcon(item) {
+            return sylvaSearchResultIsArea(item) ? '⬟' : '📍';
+        }
+
+        function sylvaOrderSearchResults(items) {
+            return (Array.isArray(items) ? items : []).slice().sort(function (a, b) {
+                return Number(sylvaSearchResultIsArea(b)) - Number(sylvaSearchResultIsArea(a));
+            });
+        }
+
+        // Ekran 2, iki harita yan yana ve tam senkron modundayken kaynak
+        // ekranla aynı görünümü korumalıdır; bu durumda Ekran 2 araması
+        // kullanıcı tarafından başlatılamaz. Ekran 2 tek ana harita olduğunda
+        // (çift ekran kapatıldığında) kontrol yeniden etkinleşir.
+        window._sylvaUpdateMap2SearchAvailability = function () {
+            var control = document.getElementById('map2-search-control');
+            if (!control) return;
+            var locked = !!(window._sylvaDualScreenActive &&
+                window._sylvaDualScreenSyncActive);
+            var elements = control.querySelectorAll('button, input');
+            control.classList.toggle('sylva-search-disabled', locked);
+            control.setAttribute('aria-disabled', locked ? 'true' : 'false');
+            elements.forEach(function (element) {
+                element.disabled = locked;
+                element.setAttribute('aria-disabled', locked ? 'true' : 'false');
+            });
+            if (locked) {
+                control.classList.remove('search-open');
+                var results = document.getElementById('map2-search-results');
+                if (results) {
+                    results.innerHTML = '';
+                    results.style.display = 'none';
+                }
+            }
+        };
+
         (function () {
             var DSN = window.SYLVA_SENTRY_DSN;
             var isRealDsn = !!DSN && DSN.indexOf('http') === 0;
@@ -905,19 +984,39 @@ tr.class-highlight-active {
         .map-legend.detached { min-width: 0; min-height: 36px; overflow: auto; position: relative; box-sizing: border-box; }
         .map-top-left-infobox { position: absolute; top: 86px; left: 15px; right: 15px; z-index: 520; pointer-events: none; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
 
-        /* ── Konum Arama (Geocoding) kutusu — haritanın üstünde, ortalanmış ── */
-        .map-search-box { position: absolute; top: 15px; left: 50%; transform: translateX(-50%); z-index: 650; width: 320px; max-width: calc(100% - 30px); pointer-events: auto; font-family: inherit; }
+        /* ── Konum Arama (Geocoding) — yan kontrol grubunun en altında ── */
+        .map-search-control { position: relative; width: 35px; height: 35px; flex: 0 0 35px; }
+        .map-search-toggle { font-size: 0.95rem; padding: 0; }
+        .map-search-box { position: absolute; top: 0; right: 0; left: auto; transform: none; z-index: 650; width: 320px; max-width: min(320px, calc(100vw - 30px)); pointer-events: auto; font-family: inherit; display: none; }
+        .map-search-control.search-open .map-search-box { display: block; }
+        .map-search-control.search-open .map-search-toggle { visibility: hidden; pointer-events: none; }
         .map-search-input-wrap { display: flex; align-items: center; background: #ffffff; border: 1.5px solid #1e3a8a; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.22); overflow: hidden; }
         .map-search-input { flex: 1; min-width: 0; border: none; outline: none; padding: 8px 4px 8px 12px; font-size: 0.82rem; color: #1e293b; background: transparent; }
         .map-search-btn, .map-search-clear { border: none; background: transparent; cursor: pointer; padding: 0 10px; height: 36px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 0.95rem; color: #1e3a8a; }
         .map-search-btn:hover, .map-search-clear:hover { background: #f1f5f9; }
         .map-search-results { margin-top: 4px; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; box-shadow: 0 3px 10px rgba(0,0,0,0.18); max-height: 260px; overflow-y: auto; }
-        .map-search-result-item { padding: 8px 10px; font-size: 0.78rem; color: #334155; cursor: pointer; border-bottom: 1px solid #f1f5f9; }
+        .map-search-result-item { display: flex; align-items: flex-start; gap: 7px; padding: 8px 10px; font-size: 0.78rem; color: #334155; cursor: pointer; border-bottom: 1px solid #f1f5f9; line-height: 1.35; }
         .map-search-result-item:last-child { border-bottom: none; }
         .map-search-result-item:hover, .map-search-result-item.active { background: #eff6ff; }
+        .map-search-result-icon { flex: 0 0 18px; width: 18px; text-align: center; font-size: 0.95rem; line-height: 1.25; }
+        .map-search-result-icon.area { color: #1e3a8a; }
+        .map-search-result-icon.point { color: #dc2626; }
+        .map-search-result-label { min-width: 0; overflow-wrap: anywhere; }
         .map-search-result-empty { padding: 8px 10px; font-size: 0.78rem; color: #94a3b8; }
+        #map2-search-control.sylva-search-disabled {
+            opacity: 0.42;
+            filter: grayscale(0.75);
+            pointer-events: none;
+            cursor: not-allowed;
+        }
+        #map2-search-control.sylva-search-disabled .map-search-toggle,
+        #map2-search-control.sylva-search-disabled .map-search-input,
+        #map2-search-control.sylva-search-disabled .map-search-btn,
+        #map2-search-control.sylva-search-disabled .map-search-clear {
+            cursor: not-allowed;
+        }
         @media (max-width: 720px) {
-            .map-search-box { width: 250px; top: 10px; }
+            .map-search-box { width: 250px; }
         }
         .ws-click-info { pointer-events: auto; }
         .map-bottom-right { position: absolute; bottom: 15px; right: 15px; z-index: 500; pointer-events: none; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
@@ -3942,15 +4041,19 @@ tr.class-highlight-active {
                         <div class="sensor-group-label" style="margin-top:8px;" data-i18n="topo_contour_group">📏 Eş Yükselti Eğrileri</div>
                         <div style="display:flex; align-items:center; gap:8px; padding:4px 2px;">
                             <label style="display:flex; align-items:center; gap:6px; font-size:0.82rem; color:#334155; cursor:pointer; flex:1;">
-                                <input type="checkbox" id="chk-contour" name="contour-lines" disabled style="width:15px;height:15px;cursor:not-allowed;opacity:0.45;">
+                                <input type="checkbox" id="chk-contour" name="contour-lines" checked style="width:15px;height:15px;cursor:pointer;">
                                 <span><span data-i18n="topo_contour_label">Eş Yükseltiler</span> (Contour)</span>
                             </label>
                             <select id="sel-contour-interval" style="font-size:0.78rem; padding:3px 6px; border:1px solid #cbd5e1; border-radius:4px; background:#fff; color:#334155; cursor:pointer;">
-                                <option value="10">10 m</option>
-                                <option value="20">20 m</option>
-                                <option value="50">50 m</option>
-                                <option value="100">100 m</option>
+                                <option value="500">500 m</option>
+                                <option value="250">250 m</option>
                                 <option value="200">200 m</option>
+                                <option value="100">100 m</option>
+                                <option value="50">50 m</option>
+                                <option value="25">25 m</option>
+                                <option value="20">20 m</option>
+                                <option value="10">10 m</option>
+                                <option value="5">5 m</option>
                             </select>
                         </div>
                     </div>
@@ -3990,6 +4093,7 @@ tr.class-highlight-active {
                         <div class="sensor-group-label" style="margin-top:8px;" data-i18n="env_urban_dev_group">🏙️ Kentsel Gelişim ve Arazi Değişimi</div>
                         <label class="option-item env-disabled-item"><input type="checkbox" name="sylva-module" disabled data-analysis="URBAN_GROWTH" data-ramp-key="rainbow" data-legend-type="classified" data-legend-classes='[{"color":"#94a3b8","label":"Değişmeyen"},{"color":"#c4281b","label":"Yeni Kentsel Alan"}]'> <span data-i18n="env_urban_growth">Kentsel Genişleme Analizi (Çok-zamanlı LULC Farkı)</span></label>
                         <label class="option-item env-disabled-item"><input type="checkbox" name="sylva-module" disabled data-analysis="IMPERVIOUS_CHANGE" data-ramp-key="gray" data-legend-type="stretched" data-legend-min="0%" data-legend-max="100%"> <span data-i18n="env_impervious">Geçirimsiz Yüzey Değişimi (Impervious Surface)</span></label>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="BUILDING_FOOTPRINT" data-ramp-key="gray" data-legend-type="classified" data-legend-classes='[{"color":"#dc2626","label":"Bina Çatı Poligonu"},{"color":"#cbd5e1","label":"Bina Dışı Alan"}]'> <span>Bina Çatı Tespiti / Poligon Oluşturma</span></label>
 
                         <!-- Çevresel Risk ve İzleme -->
                         <div class="sensor-group-label" style="margin-top:8px;" data-i18n="env_risk_group">⚠️ Çevresel Risk ve İzleme</div>
@@ -4179,23 +4283,6 @@ tr.class-highlight-active {
 
             <div id="map" tabindex="-1" aria-label="Harita" role="application"></div>
 
-            <!-- ══ Konum Arama (Geocoding) ═════════════════════════════ -->
-            <div class="map-search-box" id="map-search-box">
-                <div class="map-search-input-wrap">
-                    <input type="text" id="map-search-input" class="map-search-input"
-                           data-i18n-placeholder="map_search_placeholder"
-                           placeholder="İl / ilçe / adres ara..." autocomplete="off"
-                           aria-label="Konum ara">
-                    <button type="button" id="map-search-btn" class="map-search-btn"
-                            data-i18n-title="map_search_btn" data-i18n-aria-label="map_search_btn"
-                            title="Ara" aria-label="Ara">🔍</button>
-                    <button type="button" id="map-search-clear" class="map-search-clear"
-                            data-i18n-title="map_search_clear" data-i18n-aria-label="map_search_clear"
-                            title="Temizle" aria-label="Temizle" style="display:none;">✕</button>
-                </div>
-                <div id="map-search-results" class="map-search-results" style="display:none;"></div>
-            </div>
-
             <!-- ══ Arama sonucu sınır poligonu → çalışma alanı onay penceresi ══ -->
             <div id="sylva-search-boundary-modal" class="sylva-sync-modal" role="dialog"
                  aria-modal="true" aria-labelledby="sylva-search-boundary-title"
@@ -4338,6 +4425,26 @@ tr.class-highlight-active {
                               font-weight="700" fill="#ef4444" font-family="sans-serif">N</text>
                     </svg>
                 </div>
+                 <div class="map-search-control" id="map-search-control">
+                     <button type="button" class="map-zoom-btn map-search-toggle"
+                             id="map-search-toggle" aria-label="Konum aramayı aç"
+                             title="Konum ara" aria-expanded="false">🔍</button>
+                     <div class="map-search-box" id="map-search-box">
+                         <div class="map-search-input-wrap">
+                             <input type="text" id="map-search-input" class="map-search-input"
+                                    data-i18n-placeholder="map_search_placeholder"
+                                    placeholder="İl / ilçe / adres ara..." autocomplete="off"
+                                    aria-label="Konum ara">
+                             <button type="button" id="map-search-btn" class="map-search-btn"
+                                     data-i18n-title="map_search_btn" data-i18n-aria-label="map_search_btn"
+                                     title="Ara" aria-label="Ara">🔍</button>
+                             <button type="button" id="map-search-clear" class="map-search-clear"
+                                     data-i18n-title="map_search_clear" data-i18n-aria-label="map_search_clear"
+                                     title="Temizle" aria-label="Temizle" style="display:none;">✕</button>
+                         </div>
+                         <div id="map-search-results" class="map-search-results" style="display:none;"></div>
+                     </div>
+                 </div>
             </div>
 
             <div class="map-bottom-right">
@@ -4575,6 +4682,26 @@ tr.class-highlight-active {
                          data-i18n-title="before_after_title" title="Öncesi/Sonrası Karşılaştırması"
                          style="font-size:0.8rem;display:none;" aria-label="Öncesi/Sonrası karşılaştırması"
                          onclick="window.sylvaToggleLayerSwipeBtn('map2', this)">⇔</button>
+                 <div class="map-search-control" id="map2-search-control">
+                     <button type="button" class="map-zoom-btn map-search-toggle map2-control"
+                             id="map2-search-toggle" aria-label="İkinci haritada konum aramayı aç"
+                             title="Konum ara" aria-expanded="false">🔍</button>
+                     <div class="map-search-box" id="map2-search-box">
+                         <div class="map-search-input-wrap">
+                             <input type="text" id="map2-search-input" class="map-search-input"
+                                    data-i18n-placeholder="map_search_placeholder"
+                                    placeholder="İl / ilçe / adres ara..." autocomplete="off"
+                                    aria-label="İkinci haritada konum ara">
+                             <button type="button" id="map2-search-btn" class="map-search-btn"
+                                     data-i18n-title="map_search_btn" data-i18n-aria-label="map_search_btn"
+                                     title="Ara" aria-label="Ara">🔍</button>
+                             <button type="button" id="map2-search-clear" class="map-search-clear"
+                                     data-i18n-title="map_search_clear" data-i18n-aria-label="map_search_clear"
+                                     title="Temizle" aria-label="Temizle" style="display:none;">✕</button>
+                         </div>
+                         <div id="map2-search-results" class="map-search-results" style="display:none;"></div>
+                     </div>
+                 </div>
             </div>
             <div class="map2-overlay map-bottom-right">
             </div>
@@ -6175,6 +6302,9 @@ tr.class-highlight-active {
             // harita sürekli birbiriyle hareket eder (moveend/zoomend ile,
             // bkz. _sylvaBindMapViewSync), kutu kaldırılana kadar devam eder.
             window._sylvaDualScreenSyncActive = wantsSync;
+            if (typeof window._sylvaUpdateMap2SearchAvailability === 'function') {
+                window._sylvaUpdateMap2SearchAvailability();
+            }
             // 🆕 Ekranlardan biri manuel olarak farklı bir analiz seçtiğinde
             // (analiz değiştirme kutusundan) o ekran "bağımsız" (diverged)
             // sayılır ve otomatik analiz yansıtmasından muaf tutulur — ama
@@ -7122,8 +7252,10 @@ tr.class-highlight-active {
             if (panesRow) panesRow.classList.toggle('sylva-single-pane-map2', singlePaneIsMap2);
 
             // 🔄 Çalışma Alanları senkronizasyon kutusu her zaman görünür.
-            // Çift ekran açıkken etkinleşir; tek ekrana dönüşte pasifleşir
-            // ve varsa işareti kaldırılır.
+            // Çift ekran açıkken etkinleşir; tek ekrana dönüşte yalnızca
+            // geçici olarak pasifleşir. İşaret ve senkronizasyon durumu
+            // korunur; kullanıcı senkronizasyonu kapatmak isterse çift
+            // ekranı yeniden açtıktan sonra kutuya ayrıca basar.
             (function () {
                 var syncRow = document.getElementById('vaw-sync-row');
                 var syncBox = document.getElementById('vaw-sync-checkbox');
@@ -7131,13 +7263,13 @@ tr.class-highlight-active {
                 if (active) {
                     syncRow.style.display = '';
                     syncBox.disabled = false;
+                    syncBox.checked = !!window._sylvaWorkspaceSyncActive;
                 } else {
                     syncRow.style.display = '';
                     syncBox.disabled = true;
-                    if (syncBox.checked) {
-                        syncBox.checked = false;
-                        if (typeof window.sylvaToggleWorkspaceSync === 'function') window.sylvaToggleWorkspaceSync(false);
-                    }
+                    // Tek ekrana geçmek senkronizasyon tercihini kapatmaz.
+                    // Böylece çift ekran yeniden açıldığında kutu işaretli
+                    // kalır ve senkronizasyon kaldığı yerden sürer.
                 }
             })();
 
@@ -7160,6 +7292,14 @@ tr.class-highlight-active {
 
             if (active) {
                 if (wrap2) wrap2.style.display = 'flex';
+                 // Çift ekran açıldığında Çalışma Alanları & Vektör Analiz
+                 // kutusu otomatik olarak görünür olsun.
+                 (function () {
+                     var vawPanel = document.getElementById('vaw-panel');
+                     var vawArrow = document.getElementById('vaw-sidebar-arrow');
+                     if (vawPanel) vawPanel.style.display = 'block';
+                     if (vawArrow) vawArrow.textContent = '▲';
+                 })();
                 // Çift ekran açıkken Öncesi/Sonrası (⇔) butonu anlamsız
                 // (iki bağımsız harita var) — gizlenir, tekli ekrana
                 // dönüldüğünde otomatik geri gelir.
@@ -7209,6 +7349,9 @@ tr.class-highlight-active {
                     setTimeout(window._sylvaSyncDualScreenBottomClearance, 300);
                 }
             }, 80);
+            if (typeof window._sylvaUpdateMap2SearchAvailability === 'function') {
+                window._sylvaUpdateMap2SearchAvailability();
+            }
         };
 
         // ═══════════════════════════════════════════════════════════
@@ -7715,11 +7858,13 @@ tr.class-highlight-active {
         // gösterilir ve seçildiğinde harita o konuma kaydırılır/yakınlaştırılır.
         // ---------------------------------------------------------
         (function () {
+            var searchControl = document.getElementById('map-search-control');
+            var toggleBtn    = document.getElementById('map-search-toggle');
             var searchInput = document.getElementById('map-search-input');
             var searchBtn   = document.getElementById('map-search-btn');
             var clearBtn    = document.getElementById('map-search-clear');
             var resultsBox  = document.getElementById('map-search-results');
-            if (!searchInput || !searchBtn || !resultsBox) return;
+            if (!searchControl || !toggleBtn || !searchInput || !searchBtn || !resultsBox) return;
 
             var NOMINATIM_URL = 'https://nominatim.openstreetmap.org/search';
             var debounceTimer = null;
@@ -7728,6 +7873,19 @@ tr.class-highlight-active {
             var searchMarker = null;
             var lastQuery = '';
             var lastFetchController = null;
+
+            function setSearchOpen(open, focusInput) {
+                searchControl.classList.toggle('search-open', !!open);
+                toggleBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+                if (open && focusInput) {
+                    setTimeout(function () { searchInput.focus(); }, 0);
+                }
+            }
+
+            toggleBtn.addEventListener('click', function () {
+                var open = !searchControl.classList.contains('search-open');
+                setSearchOpen(open, open);
+            });
 
             function _t(key, fallback) {
                 return (typeof t === 'function') ? (t(key, fallback) || fallback) : fallback;
@@ -7758,17 +7916,29 @@ tr.class-highlight-active {
             }
 
             function renderResults(items) {
-                currentResults = items;
+                currentResults = sylvaOrderSearchResults(items);
                 activeIndex = -1;
-                if (!items.length) {
+                if (!currentResults.length) {
                     showMessage(_t('map_search_no_result', 'Sonuç bulunamadı'));
                     return;
                 }
                 resultsBox.innerHTML = '';
-                items.forEach(function (item, idx) {
+                currentResults.forEach(function (item, idx) {
                     var row = document.createElement('div');
                     row.className = 'map-search-result-item';
-                    row.textContent = item.display_name;
+                    row.title = sylvaSearchResultIsArea(item) ? 'Alan sonucu' : 'Konum sonucu';
+
+                    var icon = document.createElement('span');
+                    icon.className = 'map-search-result-icon ' +
+                        (sylvaSearchResultIsArea(item) ? 'area' : 'point');
+                    icon.textContent = sylvaSearchResultIcon(item);
+                    icon.setAttribute('aria-hidden', 'true');
+
+                    var label = document.createElement('span');
+                    label.className = 'map-search-result-label';
+                    label.textContent = item.display_name;
+                    row.appendChild(icon);
+                    row.appendChild(label);
                     row.addEventListener('click', function () { selectResult(idx); });
                     resultsBox.appendChild(row);
                 });
@@ -7816,8 +7986,29 @@ tr.class-highlight-active {
                         _closeBoundaryModal();
                         if (!geojson || typeof L.geoJSON !== 'function' || typeof setCurrentLayer !== 'function') return;
                         try {
+                            // Arama sonucunu, haritada elle çizilen Poligon/Dikdörtgen
+                            // ile aynı standart AOI (Draw) akışından geçir. Böylece
+                            // yalnızca geçici bir GeoJSON önizlemesi değil, analiz
+                            // modüllerinin doğrudan kullanabileceği bir çalışma alanı
+                            // oluşturulur.
                             var layer = L.geoJSON(geojson);
                             setCurrentLayer(layer);
+
+                            // Manuel çizimlerde kullanılan ortak VAW katman yönetimi:
+                            // çalışma alanını listeye ekler, görünür katmanı yönetir ve
+                            // analiz seçimlerinde kullanılabilir hale getirir.
+                            if (window.SylvaVAW &&
+                                typeof window.SylvaVAW._onLayerSet === 'function') {
+                                window.SylvaVAW._onLayerSet(layer, null);
+                                var activeMap = (typeof window._sylvaActivePaneMap === 'function')
+                                    ? window._sylvaActivePaneMap()
+                                    : map;
+                                try {
+                                    if (activeMap && activeMap.hasLayer(layer)) {
+                                        activeMap.removeLayer(layer);
+                                    }
+                                } catch (_removeErr) {}
+                            }
                         } catch (err) {
                             console.warn('[SylvaGIS] Arama sınırı çalışma alanına dönüştürülemedi:', err);
                         }
@@ -7839,6 +8030,9 @@ tr.class-highlight-active {
                 searchInput.value = item.display_name;
                 clearResults();
                 clearBtn.style.display = 'flex';
+                // Konum haritaya geldikten sonra arama panelini tekrar küçük
+                // büyüteç düğmesine indir.
+                setSearchOpen(false, false);
 
                 if (searchMarker) { map.removeLayer(searchMarker); searchMarker = null; }
                 searchMarker = L.marker([lat, lon]).addTo(map);
@@ -7887,7 +8081,8 @@ tr.class-highlight-active {
                 var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
                 lastFetchController = controller;
 
-                var url = NOMINATIM_URL + '?format=json&addressdetails=0&limit=6&polygon_geojson=1&accept-language=tr&q=' + encodeURIComponent(query);
+                var resultLanguage = sylvaSearchLanguage(query);
+                var url = NOMINATIM_URL + '?format=json&addressdetails=1&limit=6&polygon_geojson=1&accept-language=' + encodeURIComponent(resultLanguage) + '&q=' + encodeURIComponent(query);
                 fetch(url, {
                     headers: { 'Accept': 'application/json' },
                     signal: controller ? controller.signal : undefined
@@ -7936,6 +8131,7 @@ tr.class-highlight-active {
                     }
                 } else if (e.key === 'Escape') {
                     clearResults();
+                    setSearchOpen(false, false);
                 }
             });
 
@@ -7950,11 +8146,305 @@ tr.class-highlight-active {
                 lastQuery = '';
                 clearResults();
                 if (searchMarker) { map.removeLayer(searchMarker); searchMarker = null; }
-                searchInput.focus();
+                setSearchOpen(false, false);
             });
 
             document.addEventListener('click', function (e) {
-                if (!e.target.closest || !e.target.closest('#map-search-box')) clearResults();
+                if (!e.target.closest || !e.target.closest('#map-search-control')) {
+                    clearResults();
+                    setSearchOpen(false, false);
+                }
+            });
+        })();
+
+        // ---------------------------------------------------------
+        // Ekran 2 Konum Arama (Geocoding) — OpenStreetMap Nominatim
+        // Ekran 1'den bağımsız sonuç, işaretçi ve AOI onay akışı kullanır.
+        // ---------------------------------------------------------
+        (function () {
+            var searchControl = document.getElementById('map2-search-control');
+            var toggleBtn    = document.getElementById('map2-search-toggle');
+            var searchInput = document.getElementById('map2-search-input');
+            var searchBtn   = document.getElementById('map2-search-btn');
+            var clearBtn    = document.getElementById('map2-search-clear');
+            var resultsBox  = document.getElementById('map2-search-results');
+            if (!searchControl || !toggleBtn || !searchInput || !searchBtn || !resultsBox) return;
+
+            var NOMINATIM_URL = 'https://nominatim.openstreetmap.org/search';
+            var debounceTimer = null;
+            var activeIndex = -1;
+            var currentResults = [];
+            var searchMarker = null;
+            var lastQuery = '';
+            var lastFetchController = null;
+            var _pendingBoundaryGeoJSON = null;
+
+            function setSearchOpen(open, focusInput) {
+                searchControl.classList.toggle('search-open', !!open);
+                toggleBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+                if (open && focusInput) {
+                    setTimeout(function () { searchInput.focus(); }, 0);
+                }
+            }
+
+            toggleBtn.addEventListener('click', function () {
+                var open = !searchControl.classList.contains('search-open');
+                setSearchOpen(open, open);
+            });
+
+            function _t(key, fallback) {
+                return (typeof t === 'function') ? (t(key, fallback) || fallback) : fallback;
+            }
+
+            function activateMap2() {
+                if (typeof window._sylvaSetActiveMap === 'function') {
+                    window._sylvaSetActiveMap('map2');
+                }
+            }
+
+            function clearResults() {
+                resultsBox.innerHTML = '';
+                resultsBox.style.display = 'none';
+                currentResults = [];
+                activeIndex = -1;
+            }
+
+            function showMessage(text) {
+                var msg = document.createElement('div');
+                msg.className = 'map-search-result-empty';
+                msg.textContent = text;
+                resultsBox.innerHTML = '';
+                resultsBox.appendChild(msg);
+                resultsBox.style.display = 'block';
+            }
+
+            function highlightActive() {
+                var rows = resultsBox.querySelectorAll('.map-search-result-item');
+                rows.forEach(function (row, idx) {
+                    row.classList.toggle('active', idx === activeIndex);
+                    if (idx === activeIndex) row.scrollIntoView({ block: 'nearest' });
+                });
+            }
+
+            function renderResults(items) {
+                currentResults = sylvaOrderSearchResults(items);
+                activeIndex = -1;
+                if (!currentResults.length) {
+                    showMessage(_t('map_search_no_result', 'Sonuç bulunamadı'));
+                    return;
+                }
+                resultsBox.innerHTML = '';
+                currentResults.forEach(function (item, idx) {
+                    var row = document.createElement('div');
+                    row.className = 'map-search-result-item';
+                    row.title = sylvaSearchResultIsArea(item) ? 'Alan sonucu' : 'Konum sonucu';
+
+                    var icon = document.createElement('span');
+                    icon.className = 'map-search-result-icon ' +
+                        (sylvaSearchResultIsArea(item) ? 'area' : 'point');
+                    icon.textContent = sylvaSearchResultIcon(item);
+                    icon.setAttribute('aria-hidden', 'true');
+
+                    var label = document.createElement('span');
+                    label.className = 'map-search-result-label';
+                    label.textContent = item.display_name;
+                    row.appendChild(icon);
+                    row.appendChild(label);
+                    row.addEventListener('click', function () { selectResult(idx); });
+                    resultsBox.appendChild(row);
+                });
+                resultsBox.style.display = 'block';
+            }
+
+            function boundaryModalEls() {
+                return {
+                    modal: document.getElementById('sylva-search-boundary-modal'),
+                    confirmBtn: document.querySelector('[data-sylva-search-boundary-confirm]')
+                };
+            }
+
+            function closeBoundaryModal() {
+                var els = boundaryModalEls();
+                if (els.modal) els.modal.hidden = true;
+                _pendingBoundaryGeoJSON = null;
+            }
+
+            function openBoundaryModal(geojson) {
+                var els = boundaryModalEls();
+                if (!els.modal) return;
+                _pendingBoundaryGeoJSON = geojson;
+                if (els.modal.parentElement !== document.body) {
+                    document.body.appendChild(els.modal);
+                }
+                els.modal.hidden = false;
+                if (els.confirmBtn) setTimeout(function () { els.confirmBtn.focus(); }, 0);
+            }
+
+            // Modal tek ve ortak olduğu için Ekran 1'in handler'ı boş pending
+            // değerle geçer; bu handler Ekran 2'nin bekleyen GeoJSON'ını işler.
+            document.addEventListener('click', function (e) {
+                if (e.target.closest && e.target.closest('[data-sylva-search-boundary-cancel]')) {
+                    closeBoundaryModal();
+                } else if (e.target.closest && e.target.closest('[data-sylva-search-boundary-confirm]')) {
+                    var geojson = _pendingBoundaryGeoJSON;
+                    closeBoundaryModal();
+                    if (!geojson || typeof L.geoJSON !== 'function' || typeof setCurrentLayer !== 'function') return;
+                    activateMap2();
+                    try {
+                        var layer = L.geoJSON(geojson);
+                        setCurrentLayer(layer);
+                        if (window.SylvaVAW &&
+                            typeof window.SylvaVAW._onLayerSet === 'function') {
+                            window.SylvaVAW._onLayerSet(layer, null);
+                            try {
+                                if (map2 && map2.hasLayer(layer)) map2.removeLayer(layer);
+                            } catch (_removeErr) {}
+                        }
+                    } catch (err) {
+                        console.warn('[SylvaGIS] Ekran 2 arama sınırı çalışma alanına dönüştürülemedi:', err);
+                    }
+                }
+            });
+
+            document.addEventListener('keydown', function (e) {
+                var els = boundaryModalEls();
+                if (els.modal && !els.modal.hidden && e.key === 'Escape') closeBoundaryModal();
+            });
+
+            function selectResult(idx) {
+                var item = currentResults[idx];
+                if (!item) return;
+                var lat = parseFloat(item.lat);
+                var lon = parseFloat(item.lon);
+                if (isNaN(lat) || isNaN(lon) || !map2) return;
+
+                activateMap2();
+                searchInput.value = item.display_name;
+                clearResults();
+                clearBtn.style.display = 'flex';
+                // Sonuç haritaya geldikten sonra arama kutusunu küçült.
+                setSearchOpen(false, false);
+
+                if (searchMarker) { map2.removeLayer(searchMarker); searchMarker = null; }
+                searchMarker = L.marker([lat, lon]).addTo(map2);
+                if (typeof searchMarker.bindPopup === 'function') {
+                    searchMarker.bindPopup(item.display_name);
+                }
+
+                var boundaryLayer = null;
+                if (item.geojson && item.geojson.type && /Polygon/.test(item.geojson.type)) {
+                    try { boundaryLayer = L.geoJSON(item.geojson); } catch (e) { boundaryLayer = null; }
+                }
+
+                if (boundaryLayer) {
+                    map2.flyToBounds(boundaryLayer.getBounds(), { maxZoom: 15, duration: 0.75 });
+                } else if (item.boundingbox && item.boundingbox.length === 4) {
+                    var bb = item.boundingbox.map(parseFloat);
+                    var bounds = L.latLngBounds([bb[0], bb[2]], [bb[1], bb[3]]);
+                    map2.flyToBounds(bounds, { maxZoom: 15, duration: 0.75 });
+                } else {
+                    map2.flyTo([lat, lon], 14, { duration: 0.75 });
+                }
+
+                if (item.geojson && item.geojson.type && /Polygon/.test(item.geojson.type)) {
+                    openBoundaryModal(item.geojson);
+                }
+            }
+
+            function runSearch(query) {
+                query = (query || '').trim();
+                if (!query) { clearResults(); return; }
+                if (query === lastQuery && currentResults.length) {
+                    resultsBox.style.display = 'block';
+                    return;
+                }
+                activateMap2();
+                lastQuery = query;
+                showMessage(_t('map_search_loading', 'Aranıyor...'));
+
+                if (lastFetchController && typeof lastFetchController.abort === 'function') {
+                    lastFetchController.abort();
+                }
+                var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+                lastFetchController = controller;
+                var resultLanguage = sylvaSearchLanguage(query);
+                var url = NOMINATIM_URL + '?format=json&addressdetails=1&limit=6&polygon_geojson=1&accept-language=' + encodeURIComponent(resultLanguage) + '&q=' + encodeURIComponent(query);
+
+                fetch(url, {
+                    headers: { 'Accept': 'application/json' },
+                    signal: controller ? controller.signal : undefined
+                })
+                    .then(function (res) {
+                        if (!res.ok) throw new Error('Nominatim isteği başarısız: ' + res.status);
+                        return res.json();
+                    })
+                    .then(function (data) {
+                        if (lastQuery !== query) return;
+                        renderResults(Array.isArray(data) ? data : []);
+                    })
+                    .catch(function (err) {
+                        if (err && err.name === 'AbortError') return;
+                        console.warn('[SylvaGIS] Ekran 2 geocoding hatası:', err);
+                        if (lastQuery === query) showMessage(_t('map_search_error', 'Arama sırasında bir hata oluştu'));
+                    });
+            }
+
+            searchInput.addEventListener('pointerdown', activateMap2);
+            searchInput.addEventListener('input', function () {
+                var val = searchInput.value;
+                activateMap2();
+                clearBtn.style.display = val ? 'flex' : 'none';
+                clearTimeout(debounceTimer);
+                if (!val.trim()) { clearResults(); return; }
+                debounceTimer = setTimeout(function () { runSearch(val); }, 450);
+            });
+
+            searchInput.addEventListener('keydown', function (e) {
+                if (e.key === 'ArrowDown') {
+                    if (!currentResults.length) return;
+                    e.preventDefault();
+                    activeIndex = Math.min(activeIndex + 1, currentResults.length - 1);
+                    highlightActive();
+                } else if (e.key === 'ArrowUp') {
+                    if (!currentResults.length) return;
+                    e.preventDefault();
+                    activeIndex = Math.max(activeIndex - 1, 0);
+                    highlightActive();
+                } else if (e.key === 'Enter') {
+                    e.preventDefault();
+                    clearTimeout(debounceTimer);
+                    if (activeIndex >= 0 && currentResults[activeIndex]) {
+                        selectResult(activeIndex);
+                    } else {
+                        runSearch(searchInput.value);
+                    }
+                } else if (e.key === 'Escape') {
+                    clearResults();
+                    setSearchOpen(false, false);
+                }
+            });
+
+            searchBtn.addEventListener('click', function () {
+                activateMap2();
+                clearTimeout(debounceTimer);
+                runSearch(searchInput.value);
+            });
+
+            clearBtn.addEventListener('click', function () {
+                activateMap2();
+                searchInput.value = '';
+                clearBtn.style.display = 'none';
+                lastQuery = '';
+                clearResults();
+                if (searchMarker && map2) { map2.removeLayer(searchMarker); searchMarker = null; }
+                setSearchOpen(false, false);
+            });
+
+            document.addEventListener('click', function (e) {
+                if (!e.target.closest || !e.target.closest('#map2-search-control')) {
+                    clearResults();
+                    setSearchOpen(false, false);
+                }
             });
         })();
 
@@ -8805,13 +9295,17 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
             return _TOPO_FAMILY_ANALYSES.indexOf(name) !== -1;
         }
 
+        function isBuildingFootprintAnalysis(name) {
+            return name === 'BUILDING_FOOTPRINT';
+        }
+
         // ===========================================================
         // 📈 Zaman Serisi ve Değişim Analizi — erişim kademeleri
         // (bkz. HTML'deki #ts-subsection yorum bloğu). Statik veri
         // setleri (LULC/TOPO/SAR ailesi) zaman serisini desteklemez —
         // "ndvı gibi" (NDVI, NDWI, EVI... ) her indeks analizi uygundur.
         // ===========================================================
-        var _TS_INELIGIBLE_KEYS = ['LULC', 'TOPO', 'SAR'];
+        var _TS_INELIGIBLE_KEYS = ['LULC', 'TOPO', 'SAR', 'BUILDING_FOOTPRINT'];
         function _tsEligibleAnalysisSelected() {
             var boxes = document.querySelectorAll('.uydu-analiz-checkbox:checked');
             for (var i = 0; i < boxes.length; i++) {
@@ -8866,7 +9360,8 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
 
         function _updateDateCloudControlsVisibility() {
             var meta = (typeof getSelectedAnalysisMeta === 'function') ? getSelectedAnalysisMeta() : null;
-            var isStatic = !!(meta && (isLulcAnalysis(meta.analysisName) || isTopoAnalysis(meta.analysisName)));
+            var isStatic = !!(meta && (isLulcAnalysis(meta.analysisName) ||
+                isTopoAnalysis(meta.analysisName) || isBuildingFootprintAnalysis(meta.analysisName)));
 
             var dateTitle = document.getElementById('date-section-title');
             var dateRow   = document.getElementById('date-range-row');
@@ -12467,6 +12962,7 @@ function selectRamp(name) {
             _analysisGeneration++;
             // 9. RGB galeri durumunu sıfırla (stale sahne listesi kalmasın)
             if (typeof _rgbGalleryReset === 'function') _rgbGalleryReset(paneId);
+            _sylvaClearBuildingLayer(paneId);
         }
 
         function runAnalysis() {
@@ -12668,10 +13164,11 @@ function selectRamp(name) {
 
             var isLulc = isLulcAnalysis(metaList[0].analysisName);
             var isTopo = isTopoAnalysis(metaList[0].analysisName);
+            var isBuilding = isBuildingFootprintAnalysis(metaList[0].analysisName);
 
             var startInput = document.getElementById('date-start');
             var endInput   = document.getElementById('date-end');
-            if (!isLulc && !isTopo && (!startInput || !startInput.value || !endInput || !endInput.value)) {
+            if (!isLulc && !isTopo && !isBuilding && (!startInput || !startInput.value || !endInput || !endInput.value)) {
                 sylvaAlert(t('no_date'), 'warning'); return;
             }
 
@@ -12680,12 +13177,17 @@ function selectRamp(name) {
             var cloudSliderEl = document.getElementById('cloud-slider');
 
             var satellite = sensorRadio   ? sensorRadio.value    : 's2-l2a';
-            var clipMode  = (isLulc || isTopo) ? 'clip' : (viewModeEl ? viewModeEl.value : 'clip');
+            var clipMode  = (isLulc || isTopo || isBuilding) ? 'clip' : (viewModeEl ? viewModeEl.value : 'clip');
             var maxCloud  = cloudSliderEl ? parseInt(cloudSliderEl.value, 10) : 20;
 
             var _roi = _extractROIGeometry(_aoiLayer);
             if (!_roi) {
                 sylvaAlert(t('no_geom'), 'warning');
+                return;
+            }
+
+            if (isBuilding) {
+                _sylvaRunBuildingFootprintAnalysis(_roi, _pane, _sylvaMirrorThisRun, _stackMode);
                 return;
             }
 
@@ -12935,6 +13437,147 @@ function selectRamp(name) {
             }
         }
 
+        window._sylvaBuildingLayerByPane = window._sylvaBuildingLayerByPane || {
+            map: null,
+            map2: null
+        };
+
+        function _sylvaClearBuildingLayer(paneId) {
+            var key = (paneId === 'map2') ? 'map2' : 'map';
+            var layer = window._sylvaBuildingLayerByPane[key];
+            var targetMap = (key === 'map2') ? window.map2 : window.map;
+            if (layer && targetMap && typeof targetMap.removeLayer === 'function') {
+                try { targetMap.removeLayer(layer); } catch (e) {}
+            }
+            window._sylvaBuildingLayerByPane[key] = null;
+        }
+
+        function _sylvaRenderBuildingFootprints(data, paneId) {
+            var key = (paneId === 'map2') ? 'map2' : 'map';
+            var targetMap = (key === 'map2') ? window.map2 : window.map;
+            if (!targetMap || typeof L === 'undefined' || typeof L.geoJSON !== 'function') {
+                throw new Error('Harita katmanı oluşturulamadı.');
+            }
+
+            _sylvaClearBuildingLayer(key);
+            var geojson = data && data.geojson
+                ? data.geojson
+                : { type: 'FeatureCollection', features: [] };
+            var buildingLayer = L.geoJSON(geojson, {
+                interactive: false,
+                style: function () {
+                    return {
+                        color: '#b91c1c',
+                        weight: 1,
+                        opacity: 0.95,
+                        fillColor: '#ef4444',
+                        fillOpacity: 0.42
+                    };
+                }
+            });
+            buildingLayer.addTo(targetMap);
+            if (typeof buildingLayer.bringToFront === 'function') buildingLayer.bringToFront();
+            window._sylvaBuildingLayerByPane[key] = buildingLayer;
+            return buildingLayer;
+        }
+
+        function _sylvaRenderBuildingInfo(data, paneId) {
+            var key = (paneId === 'map2') ? 'map2' : 'map';
+            var box = document.getElementById(key === 'map2' ? 'map2-info-box' : 'map-info-box');
+            if (!box) return;
+
+            var buildingCount = Number(data && data.buildingCount);
+            var totalAreaM2 = Number(data && data.totalAreaM2);
+            if (!isFinite(buildingCount)) buildingCount = 0;
+            if (!isFinite(totalAreaM2)) totalAreaM2 = 0;
+
+            box.innerHTML =
+                '<div style="font-size:0.77rem;font-weight:700;color:#991b1b;margin-bottom:5px;">' +
+                    '🏠 Bina Çatı Tespiti / Poligon Oluşturma' +
+                '</div>' +
+                '<table style="border-collapse:collapse;width:100%;table-layout:fixed;"><tbody>' +
+                    '<tr>' +
+                        '<td style="padding:2px 5px 2px 0;color:#64748b;font-size:0.69rem;font-weight:600;vertical-align:top;">Toplam Bina/Çatı Sayısı (Adet)</td>' +
+                        '<td style="padding:2px 0;color:#1e293b;font-size:0.72rem;font-weight:700;text-align:right;">' +
+                            escapeHtml(Math.round(buildingCount).toLocaleString('tr-TR')) +
+                        '</td>' +
+                    '</tr>' +
+                    '<tr>' +
+                        '<td style="padding:2px 5px 2px 0;color:#64748b;font-size:0.69rem;font-weight:600;vertical-align:top;">Toplam Çatı Alanı (m²)</td>' +
+                        '<td style="padding:2px 0;color:#1e293b;font-size:0.72rem;font-weight:700;text-align:right;">' +
+                            escapeHtml(totalAreaM2.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })) +
+                        '</td>' +
+                    '</tr>' +
+                '</tbody></table>';
+
+            var cb = document.getElementById('toggle-info-box');
+            if (cb) {
+                cb.disabled = false;
+                cb.checked = true;
+            }
+            var wrap = document.getElementById('info-box-toggle-wrap');
+            if (wrap) wrap.style.opacity = '1';
+            box.style.display = 'block';
+
+            if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[key]) {
+                window._sylvaLegendInfoByPane[key].infoHTML = box.innerHTML;
+                window._sylvaLegendInfoByPane[key].infoDisplay = 'block';
+            }
+        }
+
+        function _sylvaRunBuildingFootprintAnalysis(roi, paneId, mirrorActive, stackMode) {
+            var runBtn = document.getElementById('btn-run-analysis');
+            var loadingOverlay = document.getElementById('analysis-loading-overlay');
+            if (!stackMode) {
+                _clearAllAnalysisOutputs(paneId);
+                _sylvaClearGeeLayers(paneId);
+                if (mirrorActive && paneId === 'map' && window.map2) {
+                    _clearAllAnalysisOutputs('map2');
+                    _sylvaClearGeeLayers('map2');
+                }
+            }
+            if (runBtn) {
+                runBtn.disabled = true;
+                runBtn.textContent = typeof t === 'function' ? t('running') : 'Çalışıyor...';
+            }
+            if (loadingOverlay) loadingOverlay.classList.add('active');
+
+            fetch(API_BASE + '/api/building-footprints', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ geometry: roi, maxFeatures: 2000 })
+            })
+            .then(function (response) {
+                return response.json().then(function (data) {
+                    if (!response.ok && (!data || data.success !== false)) {
+                        data = { success: false, error: 'Bina analizi sunucuda başarısız oldu.' };
+                    }
+                    return data;
+                });
+            })
+            .then(function (data) {
+                if (!data || !data.success) {
+                    throw new Error((data && data.error) || 'Bina verileri alınamadı.');
+                }
+                _sylvaRenderBuildingFootprints(data, paneId);
+                _sylvaRenderBuildingInfo(data, paneId);
+                if (typeof window._sylvaTagContentPane === 'function') {
+                    window._sylvaTagContentPane(paneId);
+                }
+                if (typeof playSylvaChime === 'function') playSylvaChime('analysis');
+            })
+            .catch(function (err) {
+                showAnalysisToast('Bina analizi başarısız: ' + err.message, 'error');
+            })
+            .finally(function () {
+                if (runBtn) {
+                    runBtn.disabled = false;
+                    runBtn.textContent = typeof t === 'function' ? t('run_analysis') : '🚀 Analizi Çalıştır';
+                }
+                if (loadingOverlay) loadingOverlay.classList.remove('active');
+            });
+        }
+
         function _sylvaRenderIndexAnalysisResult(meta, data, _pane, skipClassifyRecalc, layerKeyOverride) {
             if (!meta || !data) return;
             // 🆕 Stack modunda çalıştırılan analizler kendi benzersiz depolama
@@ -13142,7 +13785,7 @@ function selectRamp(name) {
             'TOPO_FLOWDIR', 'TOPO_FLOWACC', 'TOPO_STREAM',
             'TOPO_TWI', 'TOPO_SPI', 'TOPO_STI',
             'TOPO_HILLSHADE_MULTI', 'TOPO_SOLAR', 'TOPO_SHADOW',
-            'SAR',
+            'SAR', 'BUILDING_FOOTPRINT',
         ];
 
         var _DATASET_INFO = {
@@ -37090,6 +37733,53 @@ var SYLVA_TRANSLATIONS = {
     before_after_title: 'Scorrimento Livello',
   },
 };
+
+// Arama kutusu ve arama durumları için 30 dil desteği.
+(function () {
+  var searchLabels = {
+    en: { placeholder: 'Search city / district / address...', search: 'Search', clear: 'Clear', loading: 'Searching...', noResult: 'No results found', error: 'An error occurred while searching' },
+    uz: { placeholder: 'Shahar / tuman / manzilni qidiring...', search: 'Qidirish', clear: 'Tozalash', loading: 'Qidirilmoqda...', noResult: 'Natija topilmadi', error: 'Qidirishda xatolik yuz berdi' },
+    el: { placeholder: 'Αναζήτηση πόλης / περιοχής / διεύθυνσης...', search: 'Αναζήτηση', clear: 'Εκκαθάριση', loading: 'Αναζήτηση...', noResult: 'Δεν βρέθηκαν αποτελέσματα', error: 'Παρουσιάστηκε σφάλμα κατά την αναζήτηση' },
+    bg: { placeholder: 'Търсене на град / район / адрес...', search: 'Търсене', clear: 'Изчистване', loading: 'Търсене...', noResult: 'Няма намерени резултати', error: 'Възникна грешка при търсенето' },
+    tr: { placeholder: 'İl / ilçe / adres ara...', search: 'Ara', clear: 'Temizle', loading: 'Aranıyor...', noResult: 'Sonuç bulunamadı', error: 'Arama sırasında bir hata oluştu' },
+    az: { placeholder: 'Şəhər / rayon / ünvan axtar...', search: 'Axtar', clear: 'Təmizlə', loading: 'Axtarılır...', noResult: 'Nəticə tapılmadı', error: 'Axtarış zamanı xəta baş verdi' },
+    hu: { placeholder: 'Város / kerület / cím keresése...', search: 'Keresés', clear: 'Törlés', loading: 'Keresés...', noResult: 'Nincs találat', error: 'Hiba történt a keresés során' },
+    kk: { placeholder: 'Қала / аудан / мекенжай іздеу...', search: 'Іздеу', clear: 'Тазалау', loading: 'Ізделуде...', noResult: 'Нәтиже табылмады', error: 'Іздеу кезінде қате орын алды' },
+    de: { placeholder: 'Stadt / Bezirk / Adresse suchen...', search: 'Suchen', clear: 'Löschen', loading: 'Suche läuft...', noResult: 'Keine Ergebnisse gefunden', error: 'Bei der Suche ist ein Fehler aufgetreten' },
+    fr: { placeholder: 'Rechercher une ville / région / adresse...', search: 'Rechercher', clear: 'Effacer', loading: 'Recherche...', noResult: 'Aucun résultat trouvé', error: 'Une erreur est survenue pendant la recherche' },
+    es: { placeholder: 'Buscar ciudad / distrito / dirección...', search: 'Buscar', clear: 'Limpiar', loading: 'Buscando...', noResult: 'No se encontraron resultados', error: 'Se produjo un error durante la búsqueda' },
+    pt: { placeholder: 'Pesquisar cidade / distrito / endereço...', search: 'Pesquisar', clear: 'Limpar', loading: 'Pesquisando...', noResult: 'Nenhum resultado encontrado', error: 'Ocorreu um erro durante a pesquisa' },
+    ar: { placeholder: 'ابحث عن مدينة / منطقة / عنوان...', search: 'بحث', clear: 'مسح', loading: 'جارٍ البحث...', noResult: 'لم يتم العثور على نتائج', error: 'حدث خطأ أثناء البحث' },
+    fa: { placeholder: 'جستجوی شهر / منطقه / نشانی...', search: 'جستجو', clear: 'پاک کردن', loading: 'در حال جستجو...', noResult: 'نتیجه‌ای یافت نشد', error: 'هنگام جستجو خطایی رخ داد' },
+    zh: { placeholder: '搜索城市 / 地区 / 地址...', search: '搜索', clear: '清除', loading: '正在搜索...', noResult: '未找到结果', error: '搜索时发生错误' },
+    ja: { placeholder: '市区町村・地域・住所を検索...', search: '検索', clear: 'クリア', loading: '検索中...', noResult: '結果が見つかりません', error: '検索中にエラーが発生しました' },
+    ko: { placeholder: '도시 / 지역 / 주소 검색...', search: '검색', clear: '지우기', loading: '검색 중...', noResult: '검색 결과가 없습니다', error: '검색 중 오류가 발생했습니다' },
+    hi: { placeholder: 'शहर / ज़िला / पता खोजें...', search: 'खोजें', clear: 'साफ़ करें', loading: 'खोज जारी है...', noResult: 'कोई परिणाम नहीं मिला', error: 'खोज के दौरान एक त्रुटि हुई' },
+    id: { placeholder: 'Cari kota / distrik / alamat...', search: 'Cari', clear: 'Hapus', loading: 'Mencari...', noResult: 'Tidak ada hasil ditemukan', error: 'Terjadi kesalahan saat mencari' },
+    ru: { placeholder: 'Поиск города / района / адреса...', search: 'Найти', clear: 'Очистить', loading: 'Поиск...', noResult: 'Результаты не найдены', error: 'Произошла ошибка при поиске' },
+    th: { placeholder: 'ค้นหาเมือง / เขต / ที่อยู่...', search: 'ค้นหา', clear: 'ล้าง', loading: 'กำลังค้นหา...', noResult: 'ไม่พบผลลัพธ์', error: 'เกิดข้อผิดพลาดระหว่างการค้นหา' },
+    bn: { placeholder: 'শহর / জেলা / ঠিকানা খুঁজুন...', search: 'খুঁজুন', clear: 'পরিষ্কার', loading: 'খোঁজা হচ্ছে...', noResult: 'কোনো ফলাফল পাওয়া যায়নি', error: 'অনুসন্ধানের সময় একটি ত্রুটি হয়েছে' },
+    vi: { placeholder: 'Tìm thành phố / quận / địa chỉ...', search: 'Tìm kiếm', clear: 'Xóa', loading: 'Đang tìm kiếm...', noResult: 'Không tìm thấy kết quả', error: 'Đã xảy ra lỗi khi tìm kiếm' },
+    ur: { placeholder: 'شہر / ضلع / پتہ تلاش کریں...', search: 'تلاش', clear: 'صاف کریں', loading: 'تلاش جاری ہے...', noResult: 'کوئی نتیجہ نہیں ملا', error: 'تلاش کے دوران خرابی پیش آئی' },
+    pl: { placeholder: 'Wyszukaj miasto / dzielnicę / adres...', search: 'Szukaj', clear: 'Wyczyść', loading: 'Wyszukiwanie...', noResult: 'Nie znaleziono wyników', error: 'Wystąpił błąd podczas wyszukiwania' },
+    ms: { placeholder: 'Cari bandar / daerah / alamat...', search: 'Cari', clear: 'Kosongkan', loading: 'Mencari...', noResult: 'Tiada hasil ditemui', error: 'Ralat berlaku semasa mencari' },
+    ky: { placeholder: 'Шаарды / районду / даректи издөө...', search: 'Издөө', clear: 'Тазалоо', loading: 'Изделүүдө...', noResult: 'Натыйжа табылган жок', error: 'Издөө учурунда ката кетти' },
+    mn: { placeholder: 'Хот / дүүрэг / хаяг хайх...', search: 'Хайх', clear: 'Арилгах', loading: 'Хайж байна...', noResult: 'Үр дүн олдсонгүй', error: 'Хайлт хийхэд алдаа гарлаа' },
+    ka: { placeholder: 'მოძებნეთ ქალაქი / რაიონი / მისამართი...', search: 'ძებნა', clear: 'გასუფთავება', loading: 'იძებნება...', noResult: 'შედეგები ვერ მოიძებნა', error: 'ძიებისას შეცდომა მოხდა' },
+    it: { placeholder: 'Cerca città / quartiere / indirizzo...', search: 'Cerca', clear: 'Cancella', loading: 'Ricerca...', noResult: 'Nessun risultato trovato', error: 'Si è verificato un errore durante la ricerca' }
+  };
+
+  Object.keys(searchLabels).forEach(function (lang) {
+    if (!SYLVA_TRANSLATIONS[lang]) return;
+    var labels = searchLabels[lang];
+    SYLVA_TRANSLATIONS[lang].map_search_placeholder = labels.placeholder;
+    SYLVA_TRANSLATIONS[lang].map_search_btn = labels.search;
+    SYLVA_TRANSLATIONS[lang].map_search_clear = labels.clear;
+    SYLVA_TRANSLATIONS[lang].map_search_loading = labels.loading;
+    SYLVA_TRANSLATIONS[lang].map_search_no_result = labels.noResult;
+    SYLVA_TRANSLATIONS[lang].map_search_error = labels.error;
+  });
+})();
 
 // Çalışma alanı listesindeki ekran adları için 30 dilli etiketler.
 (function () {
