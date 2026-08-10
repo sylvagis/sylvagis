@@ -113,6 +113,12 @@ _BUILDING_CACHE_TTL_SECONDS = 60
 _BUILDING_CACHE_MAX_ITEMS = 24
 _building_cache = {}
 _building_cache_lock = threading.RLock()
+_BUILDING_DATASET_ID = 'GOOGLE/Research/open-buildings/v3/polygons'
+_BUILDING_DATASET_NAME = 'Google Open Buildings v3'
+_BUILDING_DATASET_COVERAGE_NOTE = (
+    'Haritada görünen yapılar altlık/uydu görüntüsünde olabilir; Google Open '
+    'Buildings v3 veri kümesi tüm ülkeleri kapsamaz.'
+)
 
 
 def _building_cache_key(geometry, max_features):
@@ -1397,7 +1403,7 @@ def building_footprints():
             return jsonify(cached_payload)
 
         buildings = ee.FeatureCollection(
-            'GOOGLE/Research/open-buildings/v3/polygons'
+            _BUILDING_DATASET_ID
         ).filterBounds(aoi)
 
         # Alanı, veri setindeki hazır bir alana güvenmeden doğrudan bina
@@ -1450,6 +1456,8 @@ def building_footprints():
             'returnedFeatureCount': len(features),
             'truncated': building_count > len(features),
             'cached': False,
+            'dataset': _BUILDING_DATASET_NAME,
+            'coverageNote': _BUILDING_DATASET_COVERAGE_NOTE,
             'geojson': {
                 'type': 'FeatureCollection',
                 'features': features,
