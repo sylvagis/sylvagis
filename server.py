@@ -119,7 +119,11 @@ _BUILDING_DATASET_COVERAGE_NOTE = (
     'Haritada görünen yapılar altlık/uydu görüntüsünde olabilir; Google Open '
     'Buildings v3 veri kümesi tüm ülkeleri kapsamaz.'
 )
-_OSM_OVERPASS_ENDPOINT = 'https://overpass-api.de/api/interpreter'
+_OSM_OVERPASS_ENDPOINTS = (
+    'https://overpass-api.de/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter',
+    'https://overpass.private.coffee/api/interpreter',
+)
 _OSM_FALLBACK_NOTE = (
     'Google Open Buildings v3 sonuç vermediği için aynı alan OpenStreetMap '
     'bina ayak izleriyle kontrol edildi.'
@@ -273,17 +277,49 @@ def _osm_buildings_from_bbox(geometry, max_features):
   way["building"]({south},{west},{north},{east});
 );
 out body geom;'''
-    response = requests.post(
-        _OSM_OVERPASS_ENDPOINT,
-        data=query.encode('utf-8'),
-        headers={
-            'Content-Type': 'text/plain; charset=utf-8',
-            'User-Agent': 'SylvaGIS/1.0 building-footprint-fallback',
-        },
-        timeout=40,
-    )
-    response.raise_for_status()
-    result = response.json() or {}
+    request_headers = {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'User-Agent': 'SylvaGIS/1.0 building-footprint-fallback',
+    }
+    result = None
+    request_errors = []
+
+    # Overpass sunucuları ortak ve zaman zaman yoğun olabilir. Önce POST,
+    # başarısızsa GET deniyoruz; tek bir sunucunun geçici arızası yedeği
+    # kullanılamaz hale getirmemeli.
+    for endpoint in _OSM_OVERPASS_ENDPOINTS:
+        try:
+            response = requests.post(
+                endpoint,
+                data=query.encode('utf-8'),
+                headers=request_headers,
+                timeout=(8, 25),
+            )
+            response.raise_for_status()
+            result = response.json() or {}
+            break
+        except Exception as post_error:
+            request_errors.append('{} POST: {}'.format(endpoint, post_error))
+            try:
+                response = requests.get(
+                    endpoint,
+                    params={'data': query},
+                    headers={'User-Agent': request_headers['User-Agent']},
+                    timeout=(8, 25),
+                )
+                response.raise_for_status()
+                result = response.json() or {}
+                break
+            except Exception as get_error:
+                request_errors.append('{} GET: {}'.format(endpoint, get_error))
+                time.sleep(0.35)
+
+    if result is None:
+        raise RuntimeError(
+            'Overpass sunucularına erişilemedi ({} deneme).'.format(
+                len(request_errors)
+            )
+        )
 
     all_features = []
     total_area_m2 = 0.0
