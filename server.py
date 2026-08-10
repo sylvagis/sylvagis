@@ -128,7 +128,7 @@ _OSM_OVERPASS_ENDPOINTS = (
 )
 _OSM_FALLBACK_NOTE = (
     'Google Open Buildings v3 sonuç vermediği için aynı alan OpenStreetMap '
-    'bina ayak izleriyle kontrol edildi.'
+    'bina ayak izleriyle kontrol edildi. Bina ve çatı parçaları birlikte tarandı.'
 )
 
 
@@ -976,15 +976,21 @@ def _clip_building_features_to_aoi(features, aoi_geometry):
 
 def _overpass_query_bbox(west, south, east, north, timeout=30):
     """
-    Verilen bbox içindeki `building` etiketli OSM way'lerini Overpass
-    API'den çeker ve GeoJSON Feature listesine dönüştürür. Tile bazlı
-    tarama (Aşama 1-3) ve eski tek-AOI sorgusu (`_osm_buildings_from_bbox`)
-    bu ortak yardımcıyı paylaşır — böylece Overpass istemci mantığı tek
-    yerde tutulur.
+    Verilen bbox içindeki OSM bina ve çatı geometrilerini Overpass API'den
+    çeker ve GeoJSON Feature listesine dönüştürür.
+
+    Kentlerdeki yapıların bir bölümü ``building:part`` olarak, karmaşık
+    yapılar ise ``relation["building"]`` veya ``relation["building:part"]``
+    olarak çizilir. Yalnızca ``way["building"]`` sorgulamak bu çatıları
+    sonuçtan düşürdüğü için dört farklı bina geometrisi kaynağı birlikte
+    taranır.
     """
     query = f'''[out:json][timeout:{int(timeout)}];
 (
   way["building"]({south},{west},{north},{east});
+  way["building:part"]({south},{west},{north},{east});
+  relation["building"]({south},{west},{north},{east});
+  relation["building:part"]({south},{west},{north},{east});
 );
 out body geom;'''
     request_headers = {
@@ -1032,9 +1038,43 @@ out body geom;'''
         )
 
     all_features = []
-    for element in result.get('elements', []):
-        if element.get('type') != 'way':
-            continue
+    geometry_keys = set()
+
+    def _geometry_key(geometry):
+        try:
+            return json.dumps(
+                geometry,
+                sort_keys=True,
+                separators=(',', ':'),
+                ensure_ascii=False,
+            )
+        except Exception:
+            return repr(geometry)
+
+    def _append_feature(element_type, element_id, tags, feature_geometry):
+        if not feature_geometry:
+            return
+        key = _geometry_key(feature_geometry)
+        if key in geometry_keys:
+            return
+        area_m2 = _geojson_area_m2(feature_geometry)
+        if area_m2 <= 0:
+            return
+        geometry_keys.add(key)
+        all_features.append({
+            'type': 'Feature',
+            'id': 'osm-{}/{}'.format(element_type, element_id),
+            'properties': {
+                'source': 'OpenStreetMap',
+                'building': tags.get('building', 'yes'),
+                'buildingPart': tags.get('building:part', ''),
+                'roofShape': tags.get('roof:shape', ''),
+                'area_m2': area_m2,
+            },
+            'geometry': feature_geometry,
+        })
+
+    def _way_geometry(element):
         geometry_points = element.get('geometry') or []
         coordinates = [
             [point.get('lon'), point.get('lat')]
@@ -1044,25 +1084,89 @@ out body geom;'''
             and isinstance(point.get('lat'), (int, float))
         ]
         if len(coordinates) < 3:
-            continue
+            return None
         if coordinates[0] != coordinates[-1]:
             coordinates.append(coordinates[0])
-        feature_geometry = {
-            'type': 'Polygon',
-            'coordinates': [coordinates],
-        }
-        area_m2 = _geojson_area_m2(feature_geometry)
-        feature = {
-            'type': 'Feature',
-            'id': 'osm-way/{}'.format(element.get('id')),
-            'properties': {
-                'source': 'OpenStreetMap',
-                'building': (element.get('tags') or {}).get('building', 'yes'),
-                'area_m2': area_m2,
-            },
-            'geometry': feature_geometry,
-        }
-        all_features.append(feature)
+        return {'type': 'Polygon', 'coordinates': [coordinates]}
+
+    def _relation_geometries(element):
+        """Relation üyelerinden bina çokgenleri üretir.
+
+        Overpass relation geometrisini member way'lerinin geometry alanlarında
+        döndürür. Shapely varsa outer/inner halkalar birleştirilir; yoksa
+        kapalı outer üyeleri ayrı Polygon olarak kullanılır. Böylece relation
+        binaları shapely olmayan eski sunucularda da kaybolmaz.
+        """
+        outer_rings = []
+        inner_rings = []
+        members = element.get('members') or []
+        for member in members:
+            if not isinstance(member, dict) or member.get('type') != 'way':
+                continue
+            points = member.get('geometry') or []
+            coordinates = [
+                [point.get('lon'), point.get('lat')]
+                for point in points
+                if isinstance(point, dict)
+                and isinstance(point.get('lon'), (int, float))
+                and isinstance(point.get('lat'), (int, float))
+            ]
+            if len(coordinates) < 3:
+                continue
+            if coordinates[0] != coordinates[-1]:
+                coordinates.append(coordinates[0])
+            if member.get('role') == 'inner':
+                inner_rings.append(coordinates)
+            else:
+                outer_rings.append(coordinates)
+
+        if not outer_rings:
+            return []
+
+        fallback = [
+            {'type': 'Polygon', 'coordinates': [ring]}
+            for ring in outer_rings
+        ]
+
+        try:
+            from shapely.geometry import Polygon as _Polygon
+            from shapely.geometry import mapping as _mapping
+            from shapely.ops import polygonize as _polygonize
+            from shapely.ops import unary_union as _unary_union
+
+            outer_lines = [_Polygon(ring).boundary for ring in outer_rings]
+            polygons = list(_polygonize(_unary_union(outer_lines)))
+            if not polygons:
+                polygons = [_Polygon(ring) for ring in outer_rings]
+            if inner_rings:
+                inner_union = _unary_union([_Polygon(ring) for ring in inner_rings])
+                polygons = [polygon.difference(inner_union) for polygon in polygons]
+            polygons = [
+                polygon for polygon in polygons
+                if not polygon.is_empty and polygon.area > 1e-14
+            ]
+            return [_mapping(polygon) for polygon in polygons] or fallback
+        except Exception:
+            return fallback
+
+    for element in result.get('elements', []):
+        element_type = element.get('type')
+        tags = element.get('tags') or {}
+        if element_type == 'way':
+            _append_feature(
+                'way',
+                element.get('id'),
+                tags,
+                _way_geometry(element),
+            )
+        elif element_type == 'relation':
+            for relation_geometry in _relation_geometries(element):
+                _append_feature(
+                    'relation',
+                    element.get('id'),
+                    tags,
+                    relation_geometry,
+                )
 
     return all_features
 
