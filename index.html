@@ -11445,9 +11445,38 @@ function selectRamp(name) {
                 function cx(e) { return e.touches ? e.touches[0].clientX : e.clientX; }
                 function cy(e) { return e.touches ? e.touches[0].clientY : e.clientY; }
 
+                // 🛠️ KÖK NEDEN DÜZELTMESİ 5 (Sıyırıcı "Kendiliğinden" Tetikleniyordu):
+                // onDown, #map/#map2 konteynerinin TAMAMINDA dinleniyordu — ama bu
+                // konteynerin içinde sadece harita karoları değil, ⇔/+/-/🏠/pusula
+                // butonları, lejant kutusu, "Görüntü Bilgileri" kutusu, Leaflet
+                // popup'ları gibi TÜM UI kontrolleri de DOM olarak yer alıyor
+                // (hepsi #map'in çocuğu). mousedown bu kontrollerden HANGİSİNE
+                // basılırsa basılsın #map'e kadar KABARIYOR (bubbling), ve eski
+                // kod tıklamanın gerçekten harita/görüntü üzerinde mi yoksa bir
+                // butonun/panelin üzerinde mi olduğunu hiç ayırt etmiyordu. Bu
+                // yüzden lejant kutusuna, bilgi kutusuna ya da herhangi bir
+                // butona dokunmak bile "kendiliğinden" bir sürükleme oturumu
+                // başlatıyor, ilk mousemove'da o an fare neredeyse (tamamen
+                // farklı/uzak bir noktada) oraya göre ani bir kırpma uygulanıyor
+                // — kullanıcının bildirdiği "otomatik oluyor" ve "üst katman
+                // yarısı değil, tamamen kalkıyor" sorunu tam olarak buydu.
+                // Artık tıklama, bu bilinen UI kontrollerinden biri (veya onun
+                // içi) ÜZERİNDEYSE sürükleme hiç başlatılmıyor — sadece gerçek
+                // harita/görüntü alanına yapılan basılı-tutup-sürükleme hareketi
+                // sıyırıcıyı tetikliyor.
+                function _sylvaSwipeIsUiTarget(target) {
+                    if (!target || typeof target.closest !== 'function') return false;
+                    return !!target.closest(
+                        'button, a, input, select, textarea, ' +
+                        '.leaflet-control, .leaflet-popup, .leaflet-marker-icon, ' +
+                        '.map-legend, .map-info-box, #topo3d-compass, ' +
+                        '#sylva-swipe-line-map, #sylva-swipe-line-map2'
+                    );
+                }
                 function onDown(e) {
                     if (!SWIPE[paneId].active) return;
                     if (e.type === 'mousedown' && e.button !== 0) return; // yalnızca sol tık
+                    if (_sylvaSwipeIsUiTarget(e.target)) return; // harita üzerindeki bir UI kontrolüne basıldı — sıyırma başlatma
                     // 🆕 Sürükleme başlarken o anki GERÇEK üst katmanlar yeniden
                     // okunur — "her ne olursa olsun" en güncel/doğru katman(lar)
                     // hedeflenir (analiz sonradan değişmiş/başka bir katman
