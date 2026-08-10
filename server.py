@@ -1314,7 +1314,7 @@ LULC_FAMILY_INDICES = (
     'TOPO_CURVATURE', 'TOPO_PLAN_CURV', 'TOPO_PROFILE_CURV',
     'TOPO_FLOWDIR', 'TOPO_FLOWACC', 'TOPO_STREAM',
     'TOPO_TWI', 'TOPO_SPI', 'TOPO_STI',
-    'TOPO_HILLSHADE_MULTI', 'TOPO_SOLAR', 'TOPO_SHADOW',
+    'TOPO_HILLSHADE_MULTI', 'TOPO_SOLAR', 'TOPO_SHADOW', 'TOPO_CONTOUR',
     # SAR — zaman aralığı kullanır ama sahne galerisi gösterilmez
     'SAR',
 )
@@ -2908,7 +2908,7 @@ def build_result_image(data, for_export=False):
         'TOPO_CURVATURE', 'TOPO_PLAN_CURV', 'TOPO_PROFILE_CURV',
         'TOPO_FLOWDIR', 'TOPO_FLOWACC', 'TOPO_STREAM',
         'TOPO_TWI', 'TOPO_SPI', 'TOPO_STI',
-        'TOPO_HILLSHADE_MULTI', 'TOPO_SOLAR', 'TOPO_SHADOW',
+        'TOPO_HILLSHADE_MULTI', 'TOPO_SOLAR', 'TOPO_SHADOW', 'TOPO_CONTOUR',
     )
     if index in _TOPO_KEYS:
         import math as _math
@@ -3115,6 +3115,31 @@ def build_result_image(data, for_export=False):
             # Gölge analizi: KD azimuth kabartması (düşük değer = gölge alan)
             result = ee.Terrain.hillshade(dem, 315, 45).rename('value')
             vis = {'min': 0, 'max': 255, 'palette': ['black', 'white']}
+
+        elif index == 'TOPO_CONTOUR':
+            # 📏 Eş Yükselti (İzohips/Kontur) Çizgileri
+            # Frontend'deki "Eş Yükseltiler" kutusu işaretlenip aralık (contourInterval,
+            # varsayılan 50 m) seçildiğinde çalışır. Earth Engine'de gerçek vektör
+            # izohips (isoline) üretimi istemci tarafında çok ağır olduğundan, DEM
+            # önce seçilen aralığa göre yükselti bantlarına ayrılır (ör. 50 m'de bir
+            # basamaklanan bir "merdiven" yüzeyi); ardından her pikselin 4 komşusuyla
+            # (üst/alt/sağ/sol) bant değeri karşılaştırılır — komşusundan FARKLI bant
+            # değerine sahip pikseller tam olarak bant sınırından geçer, yani bir eş
+            # yükselti çizgisi üzerindedir. Sonuç ikili (0/1) bir maskedir; diğer
+            # ikili TOPO ürünleriyle (ör. TOPO_STREAM) aynı görüntüleme/lejant
+            # deseniyle (min 0 – maks 1, gri palet) haritada anında gösterilebilir.
+            try:
+                _contour_interval = float(data.get('contourInterval', 50) or 50)
+            except (TypeError, ValueError):
+                _contour_interval = 50.0
+            if _contour_interval <= 0:
+                _contour_interval = 50.0
+            _banded  = dem.divide(_contour_interval).floor().multiply(_contour_interval)
+            _kernel4 = ee.Kernel.plus(1)
+            _max_n   = _banded.reduceNeighborhood(reducer=ee.Reducer.max(), kernel=_kernel4)
+            _min_n   = _banded.reduceNeighborhood(reducer=ee.Reducer.min(), kernel=_kernel4)
+            result = _max_n.neq(_min_n).rename('value')
+            vis = {'min': 0, 'max': 1, 'palette': ['black', 'white']}
 
         else:
             result = slope.rename('value')
