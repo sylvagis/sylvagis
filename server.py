@@ -3,6 +3,7 @@ import re
 import io
 import os
 import copy
+import uuid
 import hashlib
 import json
 import math
@@ -15,6 +16,7 @@ import datetime
 import traceback
 import urllib.parse
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 
@@ -130,8 +132,533 @@ _OSM_FALLBACK_NOTE = (
 )
 
 
-def _building_cache_key(geometry, max_features):
-    """Aynı GeoJSON + limit için kararlı, hassas olmayan bir anahtar üretir."""
+# ════════════════════════════════════════════════════════════════
+# 🧩 TILE BAZLI BİNA TARAMASI — Aşama 1-3 (server.py: tiling + dedup)
+# ════════════════════════════════════════════════════════════════
+# Overpass tek seferde yalnızca küçük AOI'leri güvenilir şekilde tarayabiliyor
+# (bkz. _osm_buildings_from_bbox'daki 0.08°/0.004° eşiği). Büyük bir çalışma
+# alanı (ör. bir ilçe) seçildiğinde eskiden bu eşik AŞILIYOR ve tarama hiç
+# yapılmadan "alan çok büyük" uyarısı dönüyordu — sonuçta çatılar eksik
+# kalıyordu. Bunun yerine büyük AOI, sabit boyutlu küçük tile'lara (kareler)
+# bölünür; her tile ayrı ayrı (ve gerekirse tekrar denenerek) Overpass'a
+# sorgulanır, sonuçlar way id'sine göre tekilleştirilir (aynı bina birden
+# fazla tile sınırında görünebilir) ve birleştirilir. Böylece alan ne kadar
+# büyük olursa olsun otomatik olarak tam taranır.
+_OSM_TILE_SIZE_DEG = 0.025      # varsayılan tile kenarı (~2.5 km) — küçük/orta alanlarda
+_OSM_TILE_SIZE_MIN_DEG = 0.01   # otomatik boyutlandırmada inebileceği en küçük kenar
+_OSM_TILE_SIZE_MAX_DEG = 0.2    # otomatik büyümede çıkabileceği en büyük kenar (~20 km)
+_OSM_TILE_TARGET_COUNT = 800    # otomatik boyutlandırmanın hedeflediği tile sayısı
+_OSM_TILE_GROW_FACTOR = 1.5     # tile sayısı tavanı aşılınca kenarın büyüme çarpanı
+_OSM_TILE_MAX_COUNT = 6000      # tek bir işte taranabilecek azami tile sayısı (üst tavan)
+_OSM_TILE_MAX_WORKERS = 5       # Overpass'a eşzamanlı gönderilecek azami istek sayısı (4-6)
+_OSM_TILE_RECURSE_MAX_DEPTH = 2       # başarısız tile'ın bölüneceği azami özyineleme derinliği
+_OSM_TILE_RECURSE_MIN_DEG = 0.003     # bu boyutun altına inen alt-tile artık bölünmez
+
+
+def _split_bbox_into_tiles(west, south, east, north, tile_size=_OSM_TILE_SIZE_DEG):
+    """
+    Bir bbox'u sabit boyutlu, ızgaraya hizalı (grid-aligned) tile'lara böler.
+    Izgara hizalaması, komşu/örtüşen AOI'lerin aynı tile sınırlarını
+    üretmesini sağlar — bu da tile önbelleğinin (bkz. Aşama 6) yeniden
+    kullanılabilir olması için gereklidir.
+    """
+    if tile_size <= 0:
+        raise ValueError('tile_size sıfırdan büyük olmalı.')
+
+    start_x = math.floor(west / tile_size) * tile_size
+    start_y = math.floor(south / tile_size) * tile_size
+
+    tiles = []
+    x = start_x
+    while x < east:
+        y = start_y
+        while y < north:
+            tiles.append((
+                round(x, 8),
+                round(y, 8),
+                round(x + tile_size, 8),
+                round(y + tile_size, 8),
+            ))
+            y += tile_size
+        x += tile_size
+    return tiles
+
+
+def _auto_tile_size(west, south, east, north):
+    """
+    Aşama 1 — tile boyutunu alan büyüklüğüne göre otomatik seçer. Küçük/orta
+    alanlarda varsayılan ayrıntı (_OSM_TILE_SIZE_DEG) korunur; bbox alanı
+    büyüdükçe (hedef tile sayısını, _OSM_TILE_TARGET_COUNT, aşacak şekilde)
+    tile kenarı orantılı olarak büyütülür — böylece çok büyük bir bölge
+    gereksiz yere onbinlerce küçük tile'a bölünmez.
+    """
+    width = max(1e-9, east - west)
+    height = max(1e-9, north - south)
+    area_deg2 = width * height
+    estimated_count_at_default = area_deg2 / (_OSM_TILE_SIZE_DEG ** 2)
+    if estimated_count_at_default <= _OSM_TILE_TARGET_COUNT:
+        return _OSM_TILE_SIZE_DEG
+    ideal_edge = math.sqrt(area_deg2 / _OSM_TILE_TARGET_COUNT)
+    return max(_OSM_TILE_SIZE_MIN_DEG, min(_OSM_TILE_SIZE_MAX_DEG, ideal_edge))
+
+
+def _filter_tiles_by_polygon(tiles, geometry):
+    """
+    Aşama 1 — yalnızca gerçek AOI poligonuyla kesişen tile'ları döndürür
+    (bbox-only değil, poligon kesişimi kontrolü). shapely sunucuda kurulu
+    değilse veya geometri ayrıştırılamazsa, güvenli tarafta kalmak için
+    filtrelemeden tüm tile'lar (eski bbox-only davranış) döndürülür.
+    """
+    try:
+        from shapely.geometry import shape as _shapely_shape
+        from shapely.geometry import box as _shapely_box
+    except ImportError:
+        return tiles
+
+    try:
+        aoi_shape = _shapely_shape(geometry)
+        if not aoi_shape.is_valid:
+            aoi_shape = aoi_shape.buffer(0)
+    except Exception:
+        return tiles
+
+    filtered = []
+    for tile_bbox in tiles:
+        west, south, east, north = tile_bbox
+        try:
+            if aoi_shape.intersects(_shapely_box(west, south, east, north)):
+                filtered.append(tile_bbox)
+        except Exception:
+            # Şüpheli durumda tile'ı elemek yerine korumak (eksik tarama
+            # yerine gereksiz bir sorgu yapmak) daha güvenli.
+            filtered.append(tile_bbox)
+
+    # Beklenmedik şekilde hepsi elenirse (ör. geometri/CRS uyuşmazlığı),
+    # tamamen boş sonuç dönmek yerine orijinal (filtresiz) listeye düş.
+    return filtered if filtered else tiles
+
+
+# ════════════════════════════════════════════════════════════════
+# 🏠 TILE BAZLI ÖNBELLEK — Aşama 6 (tile bazlı cache stratejisi)
+# ════════════════════════════════════════════════════════════════
+# Eski önbellek tüm AOI'yi tek anahtar olarak tutuyordu (_building_cache_key);
+# her sorgu farklı bir poligon/tarama olabileceği için bu yaklaşım tile
+# taramasında işe yaramaz. Bunun yerine her tile kendi (grid-aligned) bbox'ına
+# göre ayrı önbelleklenir. Kullanıcı komşu/örtüşen bir alan tekrar
+# çizdiğinde, daha önce taranmış tile'lar tekrar Overpass'a gitmeden
+# önbellekten gelir. OSM verisi sık değişmediği için TTL, eski 60 sn'lik
+# AOI önbelleğine göre çok daha uzun (15 dk) tutulur; tile sayısı da binlerce
+# tile'ı kapsayacak şekilde ayarlanır.
+_TILE_CACHE_TTL_SECONDS = 15 * 60
+_TILE_CACHE_MAX_ITEMS = 8000
+_tile_cache = {}
+_tile_cache_lock = threading.RLock()
+
+
+def _tile_cache_key(tile_bbox):
+    return tuple(round(v, 6) for v in tile_bbox)
+
+
+def _get_cached_tile(tile_bbox):
+    key = _tile_cache_key(tile_bbox)
+    now = time.monotonic()
+    with _tile_cache_lock:
+        entry = _tile_cache.get(key)
+        if not entry:
+            return None
+        if now - entry['created_at'] > _TILE_CACHE_TTL_SECONDS:
+            _tile_cache.pop(key, None)
+            return None
+        entry['last_used_at'] = now
+        return copy.deepcopy(entry['features'])
+
+
+def _cache_tile(tile_bbox, features):
+    key = _tile_cache_key(tile_bbox)
+    now = time.monotonic()
+    with _tile_cache_lock:
+        _tile_cache[key] = {
+            'created_at': now,
+            'last_used_at': now,
+            'features': copy.deepcopy(features),
+        }
+        if len(_tile_cache) > _TILE_CACHE_MAX_ITEMS:
+            oldest_key = min(
+                _tile_cache,
+                key=lambda cache_key: _tile_cache[cache_key]['last_used_at'],
+            )
+            _tile_cache.pop(oldest_key, None)
+
+
+def _osm_buildings_from_tile(tile_bbox):
+    """Tek bir tile için Overpass sorgusu (önbellek yardımcıları ile birlikte kullanılır)."""
+    west, south, east, north = tile_bbox
+    return _overpass_query_bbox(west, south, east, north, timeout=25)
+
+
+def _scan_tile_recursive(tile_bbox, depth=0):
+    """
+    Aşama 2 — tek bir tile'ı (önbellek + retry ile) tarar; tile zaman
+    aşımına uğrarsa veya Overpass'tan hata dönerse (ör. 'elman'/bellek
+    limiti), tile'ı 4 küçük parçaya bölüp her birini ayrı ayrı tekrar
+    dener (recursive tile-splitting) — böylece en yoğun bölgeler bile
+    tamamen atlanmak yerine parça parça taranır. Döndürür: (features, hata_sayısı).
+    """
+    cached = _get_cached_tile(tile_bbox)
+    if cached is not None:
+        return cached, 0
+
+    try:
+        features = _call_with_retry(
+            lambda tb=tile_bbox: _osm_buildings_from_tile(tb),
+            retries=1,
+            base_delay=1.0,
+        )
+        _cache_tile(tile_bbox, features)
+        return features, 0
+    except Exception as tile_error:
+        west, south, east, north = tile_bbox
+        width = east - west
+        height = north - south
+        if (
+            depth >= _OSM_TILE_RECURSE_MAX_DEPTH
+            or width <= _OSM_TILE_RECURSE_MIN_DEG
+            or height <= _OSM_TILE_RECURSE_MIN_DEG
+        ):
+            print(
+                '[SylvaGIS] Tile taraması kalıcı olarak başarısız (derinlik {}): '
+                '{} — {}'.format(depth, tile_bbox, tile_error)
+            )
+            return [], 1
+
+        mid_x = (west + east) / 2.0
+        mid_y = (south + north) / 2.0
+        quadrants = (
+            (west, south, mid_x, mid_y),
+            (mid_x, south, east, mid_y),
+            (west, mid_y, mid_x, north),
+            (mid_x, mid_y, east, north),
+        )
+        print(
+            '[SylvaGIS] Tile başarısız, 4 alt-tile\'a bölünüp tekrar deneniyor '
+            '(derinlik {}): {} — {}'.format(depth + 1, tile_bbox, tile_error)
+        )
+        combined_features = []
+        combined_errors = 0
+        for quadrant in quadrants:
+            sub_features, sub_errors = _scan_tile_recursive(quadrant, depth=depth + 1)
+            combined_features.extend(sub_features)
+            combined_errors += sub_errors
+        return combined_features, combined_errors
+
+
+# ════════════════════════════════════════════════════════════════
+# ⚙️ ARKA PLAN İŞ (JOB) KUYRUĞU — Aşama 4 (asenkron iş kuyruğu)
+# ════════════════════════════════════════════════════════════════
+# Tek istek/tek yanıt modeli yerine iş (job) tabanlı akışa geçiliyor:
+#   POST /api/building-footprints/start   -> jobId döner, tarama arkada başlar
+#   GET  /api/building-footprints/status/<job_id> -> ilerleme + (bitince) sonuç
+#   POST /api/building-footprints/cancel/<job_id> -> devam eden taramayı durdurur
+# Basit bir bellek-içi job registry (dict + kilit), mevcut
+# _building_cache_lock mantığına benzer şekilde kullanılır; iş bitince veya
+# zaman aşımına uğrayınca otomatik temizlenir.
+_building_jobs = {}
+_building_jobs_lock = threading.RLock()
+_BUILDING_JOB_TTL_SECONDS = 30 * 60  # bitmiş işler 30 dk sonra temizlenir
+_BUILDING_JOB_MAX_ITEMS = 200
+
+
+def _new_building_job(geometry):
+    job_id = uuid.uuid4().hex
+    now = time.monotonic()
+    job = {
+        'id': job_id,
+        'status': 'running',            # running | done | error | cancelled
+        'geometry': geometry,
+        'tilesDone': 0,
+        'totalTiles': 0,
+        'buildingCountSoFar': 0,
+        'totalAreaM2SoFar': 0.0,
+        'buildingCount': 0,
+        'totalAreaM2': 0.0,
+        'finalGeojson': None,
+        'partialFeatures': {},          # id -> feature (dedup için dict)
+        'dataset': None,
+        'coverageNote': '',
+        'error': None,
+        'cancelRequested': False,
+        'createdAt': now,
+        'updatedAt': now,
+    }
+    with _building_jobs_lock:
+        _building_jobs[job_id] = job
+        _cleanup_building_jobs_locked()
+    return job_id
+
+
+def _cleanup_building_jobs_locked():
+    """Çağıran zaten _building_jobs_lock tutuyor olmalı."""
+    now = time.monotonic()
+    finished_states = ('done', 'error', 'cancelled')
+    stale_keys = [
+        job_id for job_id, job in _building_jobs.items()
+        if job['status'] in finished_states
+        and now - job['updatedAt'] > _BUILDING_JOB_TTL_SECONDS
+    ]
+    for job_id in stale_keys:
+        _building_jobs.pop(job_id, None)
+    if len(_building_jobs) > _BUILDING_JOB_MAX_ITEMS:
+        oldest_ids = sorted(
+            _building_jobs, key=lambda jid: _building_jobs[jid]['updatedAt']
+        )[: len(_building_jobs) - _BUILDING_JOB_MAX_ITEMS]
+        for job_id in oldest_ids:
+            _building_jobs.pop(job_id, None)
+
+
+def _job_is_cancelled(job_id):
+    with _building_jobs_lock:
+        job = _building_jobs.get(job_id)
+        return bool(job and job['cancelRequested'])
+
+
+def _gee_buildings_paginated(buildings, expected_count, page_size=4000):
+    """
+    GEE Open Buildings koleksiyonunu tek bir getInfo() ile çekmek yerine
+    sayfalayarak (ee.FeatureCollection.toList) çeker. Aşama 7: GEE'nin
+    getInfo eleman limiti (varsayılan ~5000) aşıldığında sonuç sessizce
+    kesilebiliyordu; burada gerçek bir 'truncated' bayrağı hesaplanır ve
+    tüm elemanlar sayfalanarak toplanır.
+    """
+    features = []
+    offset = 0
+    while True:
+        page = _call_with_retry(
+            lambda off=offset: buildings.toList(page_size, off).getInfo(),
+            retries=2,
+        ) or []
+        if not page:
+            break
+        for raw in page:
+            geom = raw.get('geometry')
+            props = raw.get('properties') or {}
+            features.append({
+                'type': 'Feature',
+                'id': raw.get('id'),
+                'properties': props,
+                'geometry': geom,
+            })
+        offset += len(page)
+        if len(page) < page_size or offset >= expected_count:
+            break
+    truncated = len(features) < expected_count
+    return features, truncated
+
+
+def _run_building_job(job_id):
+    """Arka plan thread'inde çalışır: önce GEE Open Buildings dener, sonuç
+    yoksa tile bazlı OSM taramasına geçer. `_new_building_job` içinde
+    kurulan job dict'ini kilitle güncelleyerek ilerlemeyi dışarı açar."""
+    with _building_jobs_lock:
+        job = _building_jobs.get(job_id)
+        geometry = job['geometry'] if job else None
+    if job is None or geometry is None:
+        return
+
+    try:
+        # ── 1) Önce GEE Open Buildings dene (Türkiye kapsam dışı olsa da
+        #      diğer projeler/ülkeler için hızlı yol budur) ──────────────
+        building_count = 0
+        gee_features = []
+        gee_truncated = False
+        gee_error = None
+        try:
+            aoi = make_roi(geometry)
+            buildings = ee.FeatureCollection(_BUILDING_DATASET_ID).filterBounds(aoi)
+            buildings_with_area = buildings.map(
+                lambda feature: feature.set(
+                    '_sylva_area_m2', feature.geometry().area(maxError=1)
+                )
+            )
+            stats = _call_with_retry(
+                lambda: ee.Dictionary({
+                    'buildingCount': buildings.size(),
+                    'totalAreaM2': buildings_with_area.aggregate_sum('_sylva_area_m2'),
+                }).getInfo(),
+                retries=2,
+            ) or {}
+            try:
+                building_count = int(stats.get('buildingCount') or 0)
+            except (TypeError, ValueError):
+                building_count = 0
+            gee_total_area = 0.0
+            try:
+                gee_total_area = float(stats.get('totalAreaM2') or 0)
+            except (TypeError, ValueError):
+                gee_total_area = 0.0
+
+            if building_count > 0:
+                with _building_jobs_lock:
+                    job['totalTiles'] = 1
+                gee_features, gee_truncated = _gee_buildings_paginated(
+                    buildings, building_count
+                )
+        except Exception as e:
+            gee_error = str(e)
+            print('[SylvaGIS] Bina job — GEE denemesi başarısız:', gee_error)
+
+        if _job_is_cancelled(job_id):
+            with _building_jobs_lock:
+                job['status'] = 'cancelled'
+                job['updatedAt'] = time.monotonic()
+            return
+
+        if building_count > 0 and gee_features:
+            coverage_note = _BUILDING_DATASET_COVERAGE_NOTE
+            if gee_truncated:
+                coverage_note += (
+                    ' Uyarı: bina sayısı çok yüksek olduğu için sonuçlar '
+                    'sayfalanarak tamamlandı.'
+                )
+            with _building_jobs_lock:
+                job['tilesDone'] = 1
+                job['totalTiles'] = 1
+                job['buildingCountSoFar'] = len(gee_features)
+                job['buildingCount'] = len(gee_features)
+                job['totalAreaM2SoFar'] = gee_total_area
+                job['totalAreaM2'] = gee_total_area
+                job['finalGeojson'] = {
+                    'type': 'FeatureCollection',
+                    'features': gee_features,
+                }
+                job['dataset'] = _BUILDING_DATASET_NAME
+                job['coverageNote'] = coverage_note
+                job['status'] = 'done'
+                job['updatedAt'] = time.monotonic()
+            return
+
+        # ── 2) GEE boş/kapsam dışı ise tile bazlı OSM taramasına geç ────
+        west, south, east, north = _geojson_bbox(geometry)
+
+        # Aşama 1 — tile boyutu alana göre otomatik seçilir, sadece AOI
+        # poligonuyla kesişen tile'lar tutulur (bbox-only değil).
+        tile_size = _auto_tile_size(west, south, east, north)
+        tiles = _split_bbox_into_tiles(west, south, east, north, tile_size)
+        tiles = _filter_tiles_by_polygon(tiles, geometry)
+
+        # Aşırı tile sayısına karşı güvenlik: eşik aşılırsa hemen hata
+        # vermek yerine önce tile boyutu kademeli büyütülür (üst limit
+        # _OSM_TILE_SIZE_MAX_DEG); sonsuz büyümeyi önlemek için deneme
+        # sayısı ve mutlak tile-sayısı tavanı (_OSM_TILE_MAX_COUNT) korunur.
+        grow_attempts = 0
+        while (
+            len(tiles) > _OSM_TILE_MAX_COUNT
+            and tile_size < _OSM_TILE_SIZE_MAX_DEG
+            and grow_attempts < 6
+        ):
+            tile_size = min(_OSM_TILE_SIZE_MAX_DEG, tile_size * _OSM_TILE_GROW_FACTOR)
+            tiles = _split_bbox_into_tiles(west, south, east, north, tile_size)
+            tiles = _filter_tiles_by_polygon(tiles, geometry)
+            grow_attempts += 1
+
+        if len(tiles) > _OSM_TILE_MAX_COUNT:
+            with _building_jobs_lock:
+                job['status'] = 'error'
+                job['error'] = (
+                    'Seçilen alan çok büyük ({} tile, azami tile boyutunda bile). '
+                    'Lütfen daha küçük bir alan seçin.'.format(len(tiles))
+                )
+                job['updatedAt'] = time.monotonic()
+            return
+
+        with _building_jobs_lock:
+            job['totalTiles'] = len(tiles)
+            job['dataset'] = 'OpenStreetMap / Overpass API'
+            job['coverageNote'] = _OSM_FALLBACK_NOTE
+
+        seen_features = {}
+        total_area_m2 = 0.0
+        tile_errors = 0
+        tiles_done = 0
+        was_cancelled = False
+
+        # Aşama 2 — Overpass'ın adil kullanım kurallarına uymak için
+        # eşzamanlı istek sayısı sınırlanır (_OSM_TILE_MAX_WORKERS, 4-6);
+        # her tile kendi içinde önbellek + retry + gerekirse recursive
+        # tile-splitting (_scan_tile_recursive) ile taranır.
+        with ThreadPoolExecutor(max_workers=_OSM_TILE_MAX_WORKERS) as executor:
+            future_to_tile = {
+                executor.submit(_scan_tile_recursive, tile_bbox): tile_bbox
+                for tile_bbox in tiles
+            }
+            for future in as_completed(future_to_tile):
+                if _job_is_cancelled(job_id):
+                    was_cancelled = True
+                    for pending_future in future_to_tile:
+                        pending_future.cancel()
+                    break
+
+                try:
+                    tile_features, tile_error_count = future.result()
+                except Exception as tile_error:
+                    tile_features, tile_error_count = [], 1
+                    print(
+                        '[SylvaGIS] Tile taraması beklenmeyen hatayla '
+                        'sonuçlandı ({}): {}'.format(
+                            future_to_tile[future], tile_error
+                        )
+                    )
+                tile_errors += tile_error_count
+
+                # 20 — dedup: aynı bina birden fazla tile sınırında görünebilir,
+                # way id'sine göre tekilleştir.
+                for feature in tile_features:
+                    fid = feature.get('id')
+                    if fid not in seen_features:
+                        seen_features[fid] = feature
+                        total_area_m2 += feature['properties'].get('area_m2', 0.0)
+
+                tiles_done += 1
+                with _building_jobs_lock:
+                    job['tilesDone'] = tiles_done
+                    job['buildingCountSoFar'] = len(seen_features)
+                    job['totalAreaM2SoFar'] = total_area_m2
+                    job['updatedAt'] = time.monotonic()
+
+        if was_cancelled:
+            with _building_jobs_lock:
+                job['status'] = 'cancelled'
+                job['updatedAt'] = time.monotonic()
+            return
+
+        coverage_note = _OSM_FALLBACK_NOTE
+        if tile_errors:
+            coverage_note += (
+                ' {} alt-tile birkaç bölünme denemesinden sonra da '
+                'taranamadı; sonuçlar o noktalarda eksik olabilir.'
+                .format(tile_errors)
+            )
+
+        with _building_jobs_lock:
+            job['finalGeojson'] = {
+                'type': 'FeatureCollection',
+                'features': list(seen_features.values()),
+            }
+            job['buildingCount'] = len(seen_features)
+            job['totalAreaM2'] = total_area_m2
+            job['coverageNote'] = coverage_note
+            job['status'] = 'done'
+            job['updatedAt'] = time.monotonic()
+
+    except Exception as e:
+        traceback.print_exc()
+        with _building_jobs_lock:
+            job['status'] = 'error'
+            job['error'] = str(e)
+            job['updatedAt'] = time.monotonic()
+
+
+def _building_cache_key(geometry):
+    """Aynı GeoJSON için kararlı, hassas olmayan bir anahtar üretir."""
     canonical = json.dumps(
         geometry,
         sort_keys=True,
@@ -139,7 +666,7 @@ def _building_cache_key(geometry, max_features):
         ensure_ascii=False,
     )
     digest = hashlib.sha256(canonical.encode('utf-8')).hexdigest()
-    return '{}:{}'.format(digest, max_features)
+    return digest
 
 
 def _get_cached_buildings(key):
@@ -253,26 +780,15 @@ def _geojson_area_m2(geometry):
     return 0.0
 
 
-def _osm_buildings_from_bbox(geometry, max_features):
+def _overpass_query_bbox(west, south, east, north, timeout=30):
     """
-    GEE'nin kapsamadığı bölgeler için küçük AOI'lerde OSM bina ayak izlerini
-    Overpass API'den alır. Overpass yükünü sınırlamak için büyük AOI'lerde
-    sorgu yapılmaz.
+    Verilen bbox içindeki `building` etiketli OSM way'lerini Overpass
+    API'den çeker ve GeoJSON Feature listesine dönüştürür. Tile bazlı
+    tarama (Aşama 1-3) ve eski tek-AOI sorgusu (`_osm_buildings_from_bbox`)
+    bu ortak yardımcıyı paylaşır — böylece Overpass istemci mantığı tek
+    yerde tutulur.
     """
-    west, south, east, north = _geojson_bbox(geometry)
-    bbox_area_degrees = max(0.0, east - west) * max(0.0, north - south)
-    if (east - west) > 0.08 or (north - south) > 0.08 or bbox_area_degrees > 0.004:
-        return {
-            'features': [],
-            'totalAreaM2': 0.0,
-            'skipped': True,
-            'note': (
-                'OpenStreetMap yedeği yalnızca küçük çalışma alanlarında '
-                'kullanılır. Daha küçük bir alan seçerek tekrar deneyin.'
-            ),
-        }
-
-    query = f'''[out:json][timeout:30];
+    query = f'''[out:json][timeout:{int(timeout)}];
 (
   way["building"]({south},{west},{north},{east});
 );
@@ -322,7 +838,6 @@ out body geom;'''
         )
 
     all_features = []
-    total_area_m2 = 0.0
     for element in result.get('elements', []):
         if element.get('type') != 'way':
             continue
@@ -354,10 +869,37 @@ out body geom;'''
             'geometry': feature_geometry,
         }
         all_features.append(feature)
-        total_area_m2 += area_m2
+
+    return all_features
+
+
+def _osm_buildings_from_bbox(geometry):
+    """
+    GEE'nin kapsamadığı bölgeler için küçük AOI'lerde OSM bina ayak izlerini
+    Overpass API'den alır. Overpass yükünü sınırlamak için büyük AOI'lerde
+    sorgu yapılmaz. (Tek seferlik/eski davranış — büyük alanlar için
+    `_run_building_job` içindeki tile bazlı tarama kullanılır.)
+    """
+    west, south, east, north = _geojson_bbox(geometry)
+    bbox_area_degrees = max(0.0, east - west) * max(0.0, north - south)
+    if (east - west) > 0.08 or (north - south) > 0.08 or bbox_area_degrees > 0.004:
+        return {
+            'features': [],
+            'totalAreaM2': 0.0,
+            'skipped': True,
+            'note': (
+                'OpenStreetMap yedeği yalnızca küçük çalışma alanlarında '
+                'kullanılır. Daha küçük bir alan seçerek tekrar deneyin.'
+            ),
+        }
+
+    all_features = _overpass_query_bbox(west, south, east, north)
+    total_area_m2 = sum(f['properties'].get('area_m2', 0.0) for f in all_features)
 
     return {
-        'features': all_features[:max_features],
+        # Kullanıcı bina gösteriminde bir üst sınır istemediği için OSM'den
+        # alınan tüm geçerli bina poligonlarını döndür.
+        'features': all_features,
         'totalCount': len(all_features),
         'totalAreaM2': total_area_m2,
         'skipped': False,
@@ -1557,14 +2099,13 @@ def building_footprints():
 
     İstek gövdesi:
       {
-        "geometry": <GeoJSON Polygon/MultiPolygon>,
-        "maxFeatures": 2000  # isteğe bağlı, en fazla 5000
+        "geometry": <GeoJSON Polygon/MultiPolygon>
       }
 
     `roi` alanı da geriye dönük/istemci uyumluluğu için `geometry` yerine
     kullanılabilir. Bina sayısı ve toplam alan bütün filtrelenmiş koleksiyon
-    üzerinden hesaplanır; GeoJSON yanıtı ise haritada güvenli şekilde
-    gösterilebilmesi için sınırlı sayıda bina içerir.
+    üzerinden hesaplanır ve aynı koleksiyondaki tüm bina poligonları
+    GeoJSON olarak haritaya gönderilir.
     """
     try:
         data = request.get_json(silent=True) or {}
@@ -1586,19 +2127,8 @@ def building_footprints():
                 'error': 'Geçerli bir çalışma alanı geometrisi gönderilmedi.'
             }), 400
 
-        try:
-            max_features = int(data.get('maxFeatures', 2000))
-        except (TypeError, ValueError):
-            return jsonify({
-                'success': False,
-                'error': 'maxFeatures pozitif bir tam sayı olmalıdır.'
-            }), 400
-        # Büyük bir poligon listesini istemeden indirmemek ve GEE/istemci
-        # belleğini korumak için sunucu tarafında kesin bir üst sınır uygula.
-        max_features = max(1, min(max_features, 5000))
-
         aoi = make_roi(geometry)
-        cache_key = _building_cache_key(geometry, max_features)
+        cache_key = _building_cache_key(geometry)
         cached_payload = _get_cached_buildings(cache_key)
         if cached_payload is not None:
             cached_payload['cached'] = True
@@ -1638,10 +2168,11 @@ def building_footprints():
                 'features': [],
             }
         else:
-            # Haritaya gönderilecek GeoJSON'u ayrı ve sınırlı bir getInfo
-            # çağrısıyla al. İstatistikler yine de tüm koleksiyon içindir.
+            # İstatistiklerle aynı koleksiyonun tamamını GeoJSON olarak al.
+            # Böylece haritada gösterilen poligon sayısı ile toplam bina
+            # sayısı arasında fark oluşmaz.
             feature_collection_info = _call_with_retry(
-                lambda: buildings.limit(max_features).getInfo(),
+                lambda: buildings.getInfo(),
                 retries=2
             ) or {'type': 'FeatureCollection', 'features': []}
         features = feature_collection_info.get('features', [])
@@ -1659,7 +2190,7 @@ def building_footprints():
         # boş döndüğünde aynı küçük AOI'yi OSM bina ayak izleriyle kontrol et.
         if building_count <= 0:
             try:
-                osm_result = _osm_buildings_from_bbox(geometry, max_features)
+                osm_result = _osm_buildings_from_bbox(geometry)
                 osm_features = osm_result.get('features') or []
                 if osm_features:
                     features = osm_features
@@ -1685,7 +2216,7 @@ def building_footprints():
             'buildingCount': building_count,
             'totalAreaM2': total_area_m2,
             'returnedFeatureCount': len(features),
-            'truncated': building_count > len(features),
+            'truncated': False,
             'cached': False,
             'dataset': source,
             'coverageNote': coverage_note,
@@ -1705,6 +2236,107 @@ def building_footprints():
             'success': False,
             'error': f'Bina verileri alınamadı: {str(e)}'
         }), 500
+
+
+def _parse_building_geometry_from_request(data):
+    """`/start` endpoint'i için ortak geometri ayrıştırma/doğrulama."""
+    geometry = data.get('geometry')
+    if geometry is None:
+        geometry = data.get('roi')
+    if isinstance(geometry, dict) and geometry.get('type') == 'Feature':
+        geometry = geometry.get('geometry')
+    return geometry
+
+
+@app.route('/api/building-footprints/start', methods=['POST'])
+def building_footprints_start():
+    """
+    Aşama 4 — asenkron iş kuyruğu: geometriyi alır, bir job_id üretir,
+    taramayı arka plan thread'inde başlatır ve hemen {jobId} döner.
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        geometry = _parse_building_geometry_from_request(data)
+        if not geometry:
+            return jsonify({
+                'success': False,
+                'error': 'Çalışma alanı geometrisi gönderilmedi.'
+            }), 400
+
+        try:
+            # Geometri erken doğrulanır — hatalı geometriyle boşuna thread
+            # başlatılmaz.
+            make_roi(geometry)
+        except Exception as geom_error:
+            return jsonify({'success': False, 'error': str(geom_error)}), 400
+
+        job_id = _new_building_job(geometry)
+        thread = threading.Thread(
+            target=_run_building_job, args=(job_id,), daemon=True
+        )
+        thread.start()
+
+        return jsonify({'success': True, 'jobId': job_id})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': f'Bina taraması başlatılamadı: {str(e)}'
+        }), 500
+
+
+@app.route('/api/building-footprints/status/<job_id>', methods=['GET'])
+def building_footprints_status(job_id):
+    """
+    Aşama 4 — {progress: taranan/tile toplam, buildingCountSoFar, done,
+    partialGeojson veya finalGeojson, error} döner. Kullanıcı arayüzü bu
+    endpoint'i periyodik olarak (polling) çağırarak canlı ilerleme gösterir.
+    """
+    with _building_jobs_lock:
+        job = _building_jobs.get(job_id)
+        if not job:
+            return jsonify({
+                'success': False,
+                'error': 'İş bulunamadı (zaman aşımına uğramış olabilir).'
+            }), 404
+
+        status = job['status']
+        done = status in ('done', 'error', 'cancelled')
+        payload = {
+            'success': True,
+            'jobId': job_id,
+            'status': status,
+            'done': done,
+            'progress': {
+                'tilesDone': job['tilesDone'],
+                'totalTiles': job['totalTiles'],
+            },
+            'buildingCountSoFar': job['buildingCountSoFar'],
+            'totalAreaM2SoFar': job['totalAreaM2SoFar'],
+            'dataset': job['dataset'],
+            'coverageNote': job['coverageNote'],
+            'error': job['error'],
+        }
+        if status == 'done':
+            payload['buildingCount'] = job['buildingCount']
+            payload['totalAreaM2'] = job['totalAreaM2']
+            payload['finalGeojson'] = job['finalGeojson']
+        return jsonify(payload)
+
+
+@app.route('/api/building-footprints/cancel/<job_id>', methods=['POST'])
+def building_footprints_cancel(job_id):
+    """Aşama 5 — kullanıcı analiz sürerken taramayı iptal edebilsin diye."""
+    with _building_jobs_lock:
+        job = _building_jobs.get(job_id)
+        if not job:
+            return jsonify({
+                'success': False,
+                'error': 'İş bulunamadı (zaten bitmiş/temizlenmiş olabilir).'
+            }), 404
+        if job['status'] == 'running':
+            job['cancelRequested'] = True
+        return jsonify({'success': True, 'status': job['status']})
 
 
 def build_classified_image(result, class_breaks):
