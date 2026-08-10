@@ -3215,6 +3215,15 @@ def build_result_image(data, for_export=False):
         else:
             display_result = result
 
+        # 🆕 GÜNCELLEME: Eş Yükselti (TOPO_CONTOUR) katmanının "altlığı"
+        # (kontur çizgisi olmayan değer=0 pikseller) artık SİYAH değil,
+        # TAMAMEN SAYDAM gösterilir — yalnızca kontur çizgileri (değer=1)
+        # görünür kalır ve altındaki uydu/harita altlığı olduğu gibi görünür.
+        # Yalnızca harita önizlemesinde uygulanır (for_export=True iken ham
+        # 0/1 raster GeoTIFF'e değişmeden yazılmaya devam eder).
+        if index == 'TOPO_CONTOUR' and not for_export:
+            display_result = display_result.updateMask(result)
+
         final_display = display_result.clip(roi) if clip_mode == 'clip' else display_result
         return final_display, roi, result, vis, None
 
@@ -3981,8 +3990,34 @@ def analyze():
             combined_reducer = ee.Reducer.minMax().combine(
                 reducer2=ee.Reducer.mean(), sharedInputs=True
             )
+
+            # 🆕 GÜNCELLEME: Eş Yükselti (TOPO_CONTOUR) için 'result' burada
+            # 0/1'lik İKİLİ bir kontur maskesidir — min/max her zaman 0/1
+            # çıkar ve lejant kutusunda kullanıcıya hiçbir anlamlı bilgi
+            # vermez. Bunun yerine, çalışma alanının GERÇEK yükselti
+            # (elevation) min/max değerleri hesaplanır — aynı DEM kaynağı
+            # seçim mantığı (SRTM/ALOS/Copernicus/NASADEM) burada tekrar
+            # uygulanarak.
+            _stats_img = result
+            if data.get('index') == 'TOPO_CONTOUR':
+                _stats_dem_source = data.get('demSource', 'SRTM')
+                _stats_srtm_fallback = ee.Image('USGS/SRTMGL1_003').select('elevation')
+                if _stats_dem_source == 'ALOS':
+                    _stats_dem = (ee.ImageCollection('JAXA/ALOS/AW3D30/V3_2')
+                                  .filterBounds(roi).mosaic().select('DSM').rename('elevation'))
+                    _stats_dem = _stats_dem.unmask(_stats_srtm_fallback)
+                elif _stats_dem_source == 'Copernicus':
+                    _stats_dem = (ee.ImageCollection('COPERNICUS/DEM/GLO30')
+                                  .filterBounds(roi).mosaic().select('DEM').rename('elevation'))
+                    _stats_dem = _stats_dem.unmask(_stats_srtm_fallback)
+                elif _stats_dem_source == 'NASADEM':
+                    _stats_dem = ee.Image('NASA/NASADEM_HGT/001').select('elevation')
+                else:
+                    _stats_dem = ee.Image('USGS/SRTMGL1_003').select('elevation')
+                _stats_img = _stats_dem.rename('value')
+
             mm = _call_with_retry(
-                lambda: result.reduceRegion(
+                lambda: _stats_img.reduceRegion(
                     reducer    = combined_reducer,
                     geometry   = roi,
                     scale      = 30,
