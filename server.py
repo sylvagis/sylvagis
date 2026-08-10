@@ -2131,6 +2131,167 @@ def _rgb_scene_metadata(data, roi, image, ds):
     return meta
 
 
+# ════════════════════════════════════════════════════════════════
+# 📈 /api/timeseries — GERÇEK Zaman Serisi ve Değişim Analizi
+# ════════════════════════════════════════════════════════════════
+# SORUN: Eskiden "📈 Zaman Serisi ve Değişim Analizi" tamamen İSTEMCİ
+# tarafında (JavaScript'te Math.random() ile) SAHTE veri üretiyordu —
+# hiçbir GEE çağrısı yapılmıyordu. Kullanıcı 10 yıllık bir aralık ve
+# aylık/yıllık periyot seçtiğinde, hem çizgi grafikteki değerler hem de
+# üstteki uydu görüntü galerisi gerçek uydu verisiyle hiç ilişkili
+# değildi.
+#
+# ÇÖZÜM: Bu endpoint, seçilen tarih aralığını periyotlara (ay ya da yıl)
+# böler; HER periyot için build_result_image() (yani /api/analyze ile
+# BİREBİR aynı indeks formülleri, bulut/gölge maskesi, Landsat DN→yansıma
+# dönüşümü) yeniden kullanılarak o periyodun GERÇEK ortalama indeks
+# değeri hesaplanır (reduceRegion + Reducer.mean). Ayrıca her periyot için
+# en az bulutlu GERÇEK sahne (Image ID + tarih + bulutluluk) bulunup
+# 'gallery' dizisinde döndürülür — istemci bunu üstteki uydu görüntü
+# galerisine yazar ve kullanıcı o periyotlar arasında geçiş yapabilir.
+def _sylva_period_ranges(start_year, end_year, period):
+    """Başlangıç/bitiş yılı ve periyot tipine göre (label, startDate, endDate)
+    üçlülerinden oluşan sıralı bir liste üretir. 'endDate' üst sınır HARİÇ
+    (GEE filterDate ile uyumlu — bir sonraki periyodun ilk günü)."""
+    ranges = []
+    if period == 'monthly':
+        for y in range(start_year, end_year + 1):
+            for m in range(1, 13):
+                start = '%04d-%02d-01' % (y, m)
+                if m == 12:
+                    end = '%04d-01-01' % (y + 1)
+                else:
+                    end = '%04d-%02d-01' % (y, m + 1)
+                ranges.append(('%04d-%02d' % (y, m), start, end))
+    else:  # 'yearly'
+        for y in range(start_year, end_year + 1):
+            ranges.append((str(y), '%04d-01-01' % y, '%04d-01-01' % (y + 1)))
+    return ranges
+
+
+def _sylva_least_cloud_scene(roi, satellite, start_date, end_date, max_cloud):
+    """Verilen AOI + tarih aralığında, seçilen uydu için EN AZ bulutlu
+    gerçek sahnenin metadata'sını (sceneId, timestamp, bulutluluk %) döner.
+    Uygun sahne bulunamazsa None döner — galeri o periyodu atlar."""
+    ds = SATELLITE_DATASETS.get(satellite)
+    if not ds:
+        return None
+    cloud_prop = ds.get('cloudProp')
+    try:
+        col = None
+        for coll_id in ds.get('collections', []):
+            c = ee.ImageCollection(coll_id).filterBounds(roi).filterDate(start_date, end_date)
+            col = c if col is None else col.merge(c)
+        if col is None:
+            return None
+        if cloud_prop:
+            col = col.filter(ee.Filter.lt(cloud_prop, max_cloud)).sort(cloud_prop)
+        else:
+            col = col.sort('system:time_start')
+        first = col.first()
+        props = _call_with_retry(
+            lambda: first.toDictionary(['system:index', 'system:time_start', cloud_prop] if cloud_prop
+                                        else ['system:index', 'system:time_start']).getInfo(),
+            retries=1
+        )
+        if not props or 'system:index' not in props:
+            return None
+        return {
+            'sceneId':   props.get('system:index'),
+            'timestamp': props.get('system:time_start'),
+            'cloud':     props.get(cloud_prop) if cloud_prop else None,
+        }
+    except Exception:
+        return None
+
+
+@app.route('/api/timeseries', methods=['POST'])
+def timeseries():
+    try:
+        data = request.get_json(silent=True) or {}
+
+        satellite  = (data.get('satellite') or 's2-l2a').strip()
+        period     = (data.get('period') or 'yearly').strip().lower()
+        max_cloud  = int(data.get('maxCloud', 30))
+        # Birden fazla indeks seçilebilir (Kullanılabilir Analizler'deki
+        # işaretli kutular) — her biri grafikte ayrı bir çizgi olur.
+        indices = data.get('indices')
+        if not indices:
+            indices = [data.get('index', 'NDVI')]
+
+        try:
+            start_year = int(data.get('startYear'))
+            end_year   = int(data.get('endYear'))
+        except (TypeError, ValueError):
+            return jsonify({'success': False, 'error': 'Geçersiz başlangıç/bitiş yılı.'}), 400
+
+        if period not in ('monthly', 'yearly'):
+            return jsonify({'success': False, 'error': 'Geçersiz periyot (monthly/yearly olmalı).'}), 400
+        if end_year <= start_year:
+            return jsonify({'success': False, 'error': 'Bitiş yılı başlangıç yılından büyük olmalı.'}), 400
+
+        ranges = _sylva_period_ranges(start_year, end_year, period)
+        # Güvenlik sınırı: çok uzun aralık + aylık periyot GEE'ye çok
+        # sayıda ardışık istek anlamına gelir (timeout/limit riski).
+        MAX_PERIODS = 240
+        if len(ranges) > MAX_PERIODS:
+            return jsonify({
+                'success': False,
+                'error': 'Seçilen aralık çok geniş (%d periyot). Daha kısa bir aralık seçin ya da Yıllık periyodu kullanın.' % len(ranges)
+            }), 400
+
+        roi = make_roi(data.get('roi'))
+
+        series = []
+        for idx in indices:
+            pts = []
+            for label, sdate, edate in ranges:
+                period_data = dict(data)
+                period_data['index']     = idx
+                period_data['startDate'] = sdate
+                period_data['endDate']   = edate
+                period_data['sceneId']   = None
+                period_data['classBreaks'] = None
+                try:
+                    _final, p_roi, p_result, _vis, _probe = _call_with_retry(
+                        build_result_image, period_data, for_export=False
+                    )
+                    mean_val = _call_with_retry(
+                        lambda: p_result.reduceRegion(
+                            reducer=ee.Reducer.mean(), geometry=p_roi,
+                            scale=30, maxPixels=1e9, bestEffort=True,
+                        ).get('value').getInfo(),
+                        retries=1
+                    )
+                except Exception as _pe:
+                    print('[SylvaGIS] ⚠️ Zaman serisi periyodu hesaplanamadı (%s, %s): %s' % (idx, label, _pe))
+                    mean_val = None
+                pts.append({'date': label, 'value': round(float(mean_val), 4) if mean_val is not None else None})
+            series.append({'index': idx, 'points': pts})
+
+        # ── Galeri: her periyot için en az bulutlu gerçek sahne ──────
+        # (yalnızca ilk seçilen indeksin uydu koleksiyonuna göre — galeri
+        # tek bir sahne akışı gösterir, indeks başına ayrı galeri yoktur)
+        gallery = []
+        for label, sdate, edate in ranges:
+            scene = _sylva_least_cloud_scene(roi, satellite, sdate, edate, max_cloud)
+            if scene:
+                scene['label'] = label
+                gallery.append(scene)
+
+        return jsonify({
+            'success':  True,
+            'period':   period,
+            'satellite': satellite,
+            'series':   series,
+            'gallery':  gallery,
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/analyze', methods=['POST'])
 def analyze():
     global _last_analyze_params, _last_analyze_native_crs
