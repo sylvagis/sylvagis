@@ -13575,10 +13575,28 @@ function selectRamp(name) {
                             ? turf.flatten(sourceFeature).features
                             : [sourceFeature];
                         pieces.forEach(function (piece) {
-                            var clipped = turf.intersect(piece, roiFeature);
-                            if (!clipped || !clipped.geometry) return;
-                            if (clipped.geometry.type !== 'Polygon' &&
-                                clipped.geometry.type !== 'MultiPolygon') return;
+                            // 🐛 DÜZELTME: turf.intersect, gerçek OSM bina
+                            // geometrilerinde sık görülen özkesişim/hassasiyet
+                            // sorunlarında null döner ya da hata fırlatır.
+                            // Eskiden bu durumda bina SESSİZCE tamamen
+                            // düşürülüyordu — çalışma alanı içindeki geçerli
+                            // çatılar da bu yüzden haritadan kayboluyordu.
+                            // Sunucu tarafı zaten gerçek/yetkili kırpmayı
+                            // yaptığı için, istemci tarafındaki bu ikinci
+                            // güvenlik katmanı başarısız olursa binayı atmak
+                            // yerine sunucudan gelen (zaten AOI'ye kırpılmış)
+                            // orijinal parçayı korur.
+                            var clipped = null;
+                            try {
+                                clipped = turf.intersect(piece, roiFeature);
+                            } catch (intersectError) {
+                                clipped = null;
+                            }
+                            if (!clipped || !clipped.geometry ||
+                                (clipped.geometry.type !== 'Polygon' &&
+                                 clipped.geometry.type !== 'MultiPolygon')) {
+                                clipped = piece;
+                            }
                             clipped.properties = Object.assign(
                                 {},
                                 sourceFeature.properties || {}
