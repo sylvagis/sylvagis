@@ -10844,6 +10844,34 @@ function selectRamp(name) {
         }
         window._sylvaRestoreEditorStateForLayer = _sylvaRestoreEditorStateForLayer;
 
+        // 🛠️ BUG FİX (Üst Üste Analiz — Bilgi Kutusu pasif kalıyordu):
+        // "Üstte Gösterilecek Katman" kutusundan NDVI/NDWI gibi bir zaman
+        // serisi analizinden 🏔️ Topografik Analizler / 🏘️ Arazi Kullanımı
+        // (statik veri seti) katmanına geçildiğinde, Bilgi Kutusu checkbox'ı
+        // _sylvaRenderIndexAnalysisResult() içinde bir kez aktif edilmeye
+        // çalışılıyordu; ancak katman DAHA ÖNCE bir kez görüntülenmiş
+        // (lejant anlık görüntüsü — _legendSnap — mevcut) ya da editör
+        // durumu geri yüklenirken bu adımın atlandığı bazı yollarda
+        // checkbox pasif/işaretsiz kalmaya devam ediyordu. Artık, katman
+        // geçişinin HER çıkış noktasında (snapshot'lı veya snapshot'sız),
+        // hedef katman statik bir veri seti (LULC/TOPO) ve Bilgi Kutusu'nda
+        // gerçekten içerik varsa, checkbox açıkça etkinleştirilip işaretlenir.
+        function _sylvaForceInfoBoxIfEligible(paneId, analysisName) {
+            if (typeof _STATIC_DATASETS === 'undefined' || !analysisName) return;
+            if (_STATIC_DATASETS.indexOf(analysisName) === -1) return;
+            var cb   = document.getElementById('toggle-info-box');
+            var wrap = document.getElementById('info-box-toggle-wrap');
+            var box  = document.getElementById(paneId === 'map2' ? 'map2-info-box' : 'map-info-box');
+            if (!cb || !box || !box.innerHTML.trim()) return;
+            cb.disabled = false;
+            cb.checked = true;
+            box.style.display = 'block';
+            if (wrap) wrap.style.opacity = '1';
+            if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[paneId]) {
+                window._sylvaLegendInfoByPane[paneId].infoDisplay = 'block';
+            }
+        }
+
         function _sylvaBringGeeLayerToFront(paneId, layerKey) {
             var key = (paneId === 'map2') ? 'map2' : 'map';
             var store = window._geeLayersByPane[key];
@@ -11029,6 +11057,11 @@ function selectRamp(name) {
                     } catch (err) {
                         console.error('[Sylva] Katman geçişinde analiz sonucu (istatistik/grafik) yeniden çizilirken hata:', err);
                     }
+                    // Yukarıdaki çağrı bir hata yüzünden erken kesilmiş olsa bile
+                    // (ör. bir alt fonksiyon istisna fırlattıysa), Bilgi Kutusu
+                    // checkbox'ının statik veri setlerinde (LULC/TOPO) her zaman
+                    // doğru şekilde etkinleşmesini garanti et.
+                    _sylvaForceInfoBoxIfEligible(paneId, _iaState.meta.analysisName);
 
                     // 🛠️ BUG FİX: Harita/lejant kutusu doğru katmana ait değeri
                     // gösterse bile, sağdaki "Lejant ve Semboloji" DÜZENLEME
@@ -11091,6 +11124,7 @@ function selectRamp(name) {
                         // Bilgi kutusu hâlâ güncel kalsın (renk dışındaki içerik),
                         // ama lejant rengi/sınıfları yeniden hesaplanmasın diye
                         // geri kalan bloğu atla.
+                        _sylvaForceInfoBoxIfEligible(paneId, _iaState.meta.analysisName);
                         _sylvaMirrorLayerSwitch();
                         return;
                     }
@@ -11120,6 +11154,7 @@ function selectRamp(name) {
                     } catch (err2) {
                         console.error('[Sylva] Lejant/Bilgi Kutusu garanti güncellemesi başarısız oldu:', err2);
                     }
+                    _sylvaForceInfoBoxIfEligible(paneId, _iaState.meta.analysisName);
                 }
             }
 
