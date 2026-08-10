@@ -4059,20 +4059,20 @@ tr.class-highlight-active {
                         <!-- Eş Yükselti Eğrileri -->
                         <div class="sensor-group-label" style="margin-top:8px;" data-i18n="topo_contour_group">📏 Eş Yükselti Eğrileri</div>
                         <div style="display:flex; align-items:center; gap:8px; padding:4px 2px;">
-                            <label style="display:flex; align-items:center; gap:6px; font-size:0.82rem; color:#334155; cursor:pointer; flex:1;">
-                                <input type="checkbox" id="chk-contour" name="contour-lines" checked style="width:15px;height:15px;cursor:pointer;">
+                            <label class="option-item" style="display:flex; align-items:center; gap:6px; font-size:0.82rem; color:#334155; cursor:pointer; flex:1; margin:0;">
+                                <input type="checkbox" id="chk-contour" name="sylva-module" data-analysis="TOPO_CONTOUR" data-ramp-key="gray" data-legend-type="stretched" data-legend-min="0" data-legend-max="1" style="width:15px;height:15px;cursor:pointer;">
                                 <span><span data-i18n="topo_contour_label">Eş Yükseltiler</span> (Contour)</span>
                             </label>
                             <select id="sel-contour-interval" style="font-size:0.78rem; padding:3px 6px; border:1px solid #cbd5e1; border-radius:4px; background:#fff; color:#334155; cursor:pointer;">
-                                <option value="500">500 m</option>
-                                <option value="250">250 m</option>
-                                <option value="200">200 m</option>
-                                <option value="100">100 m</option>
-                                <option value="50">50 m</option>
-                                <option value="25">25 m</option>
-                                <option value="20">20 m</option>
-                                <option value="10">10 m</option>
                                 <option value="5">5 m</option>
+                                <option value="10">10 m</option>
+                                <option value="20">20 m</option>
+                                <option value="25">25 m</option>
+                                <option value="50" selected>50 m</option>
+                                <option value="100">100 m</option>
+                                <option value="200">200 m</option>
+                                <option value="250">250 m</option>
+                                <option value="500">500 m</option>
                             </select>
                         </div>
                     </div>
@@ -9314,7 +9314,7 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
             'TOPO_CURVATURE', 'TOPO_PLAN_CURV', 'TOPO_PROFILE_CURV',
             'TOPO_FLOWDIR', 'TOPO_FLOWACC', 'TOPO_STREAM',
             'TOPO_TWI', 'TOPO_SPI', 'TOPO_STI',
-            'TOPO_HILLSHADE_MULTI', 'TOPO_SOLAR', 'TOPO_SHADOW',
+            'TOPO_HILLSHADE_MULTI', 'TOPO_SOLAR', 'TOPO_SHADOW', 'TOPO_CONTOUR',
         ];
         function isTopoAnalysis(name) {
             return _TOPO_FAMILY_ANALYSES.indexOf(name) !== -1;
@@ -13347,6 +13347,13 @@ function selectRamp(name) {
                     demSource: demSourceRadio ? demSourceRadio.value : 'SRTM',
                     months:    window.sylvaSelectedMonths || [],
                 };
+                // 📏 Eş Yükselti (Kontur) analizinde, kullanıcının seçtiği aralık
+                // (5-500 m) da isteğe eklenir — backend bu değeri kullanarak DEM'i
+                // ilgili yükselti bantlarına ayırıp kontur maskesini üretir.
+                if (meta.analysisName === 'TOPO_CONTOUR') {
+                    var _contourSel = document.getElementById('sel-contour-interval');
+                    analyzePayload.contourInterval = _contourSel ? parseFloat(_contourSel.value) : 50;
+                }
                 window._lastAnalyzePayloadByPane[_pane] = analyzePayload;
                 var _runGen = _analysisGeneration;
 
@@ -14345,6 +14352,7 @@ function selectRamp(name) {
             if (n === 'TOPO_STI')                            return '🏜️';
             if (n === 'TOPO_SOLAR')                          return '☀️';
             if (n === 'TOPO_SHADOW')                         return '🌑';
+            if (n === 'TOPO_CONTOUR')                        return '📏';
             if (n === 'SAR')        return '📡';
             if (n.includes('RGB') || n.includes('IMAGE')) return '🖼️';
             if (n.includes('DEM') || n.includes('ELEVATION')) return '🏔️';
@@ -14361,7 +14369,7 @@ function selectRamp(name) {
             'TOPO_CURVATURE', 'TOPO_PLAN_CURV', 'TOPO_PROFILE_CURV',
             'TOPO_FLOWDIR', 'TOPO_FLOWACC', 'TOPO_STREAM',
             'TOPO_TWI', 'TOPO_SPI', 'TOPO_STI',
-            'TOPO_HILLSHADE_MULTI', 'TOPO_SOLAR', 'TOPO_SHADOW',
+            'TOPO_HILLSHADE_MULTI', 'TOPO_SOLAR', 'TOPO_SHADOW', 'TOPO_CONTOUR',
             'SAR', 'BUILDING_FOOTPRINT',
         ];
 
@@ -14494,6 +14502,10 @@ function selectRamp(name) {
                 title: '🌑 Gölge Analizi (Shadow Analysis)',
                 rows: [['ib_source','vi_shadow_src'],['ib_method','vi_shadow_method'],['ib_value_range','vi_shadow_range'],['ib_desc','vi_shadow_desc']]
             },
+            TOPO_CONTOUR: {
+                title: '📏 Eş Yükselti (İzohips) Çizgileri',
+                rows: [['ib_source','SRTM / ALOS / Copernicus / NASADEM'],['ib_method','Seçilen aralığa göre yükselti bandı sınır tespiti'],['ib_value_range','Seçilen aralığa göre değişir (5–500 m)'],['ib_desc','Arazi yüzeyinde eşit yükseklikteki noktaları birleştiren çizgiler.']]
+            },
             SAR: {
                 title: '📡 Sentinel-1 GRD – VV Backscatter',
                 rows: [
@@ -14532,7 +14544,8 @@ function selectRamp(name) {
             'TOPO_STI':          { key: 'topo_item_sti',            emoji: '🏜️ ' },
             'TOPO_HILLSHADE_MULTI': { key: 'topo_item_hillshade_multi', emoji: '🌗 ' },
             'TOPO_SOLAR':        { key: 'topo_item_solar',          emoji: '☀️ ' },
-            'TOPO_SHADOW':       { key: 'topo_item_shadow',         emoji: '🌑 ' }
+            'TOPO_SHADOW':       { key: 'topo_item_shadow',         emoji: '🌑 ' },
+            'TOPO_CONTOUR':      { key: 'topo_contour_label',       emoji: '📏 ' }
         };
 
         // ── LULC sınıf tanımları — kod (sunucudan dönen histogram anahtarı),
@@ -39287,7 +39300,7 @@ function applySylvaLang(lang) {
       'TOPO_CURVATURE', 'TOPO_PLAN_CURV', 'TOPO_PROFILE_CURV',
       'TOPO_FLOWDIR', 'TOPO_FLOWACC', 'TOPO_STREAM',
       'TOPO_TWI', 'TOPO_SPI', 'TOPO_STI',
-      'TOPO_HILLSHADE_MULTI', 'TOPO_SOLAR', 'TOPO_SHADOW', 'SAR'
+      'TOPO_HILLSHADE_MULTI', 'TOPO_SOLAR', 'TOPO_SHADOW', 'TOPO_CONTOUR', 'SAR'
     ];
     if (_staticInfoDs.indexOf(_lastAnalyzeMeta.analysisName) !== -1) {
       if (typeof renderDatasetInfoCard === 'function') {
