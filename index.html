@@ -3956,6 +3956,15 @@ tr.class-highlight-active {
                 </div>
             </details>
 
+            <!-- 🆕 Önceki Analizin Üzerine Ekle: işaretliyken "Analizi Çalıştır"
+                 mevcut katman(lar)ı SİLMEZ; farklı tarih/bulutluluk ile aynı
+                 (veya farklı) analiz türü ayrı bir katman olarak üste eklenir.
+                 Böylece Katman Sıyırıcı (⇔) ile eski/yeni karşılaştırması
+                 yapılabilir. -->
+            <label class="option-item" id="stack-analysis-toggle-wrap" style="grid-column: span 2; margin: 6px 0 2px; display:flex; align-items:center; gap:6px; font-size:0.85rem;">
+                <input type="checkbox" id="toggle-stack-analysis">
+                <span>🗂️ Önceki Analizin Üzerine Ekle (Zaman Kıyaslaması)</span>
+            </label>
             <button class="btn-primary" id="btn-run-analysis" data-i18n="run_analysis" style="width: 50%; align-self: center; margin-top: 15px;" onclick="runAnalysis()">🚀 Analizi Çalıştır</button>
         </div>
 
@@ -11873,6 +11882,22 @@ function selectRamp(name) {
             // sürekli birbiriyle güncel kalır.
             var _sylvaMirrorThisRun = !!(window._sylvaWorkspaceSyncActive || window._sylvaDualScreenSyncActive);
 
+            // 🆕 "Önceki Analizin Üzerine Ekle" işaretliyse, bu çalıştırma
+            // mevcut katman(lar)ı SİLMEZ; her yeni katman kendine özel benzersiz
+            // bir anahtarla (aynı analiz türü olsa bile) AYRI olarak eklenir —
+            // Katman Sıyırıcı ile eski/yeni karşılaştırması yapılabilsin diye.
+            var _stackToggleEl = document.getElementById('toggle-stack-analysis');
+            var _stackMode = !!(_stackToggleEl && _stackToggleEl.checked);
+            var _stackSuffix = _stackMode ? ('__t' + Date.now()) : '';
+            // Kıyaslamada okunabilir olması için tarih aralığını da etiket olarak sakla.
+            var _stackDateLabel = _stackMode ? (function () {
+                var dS = document.getElementById('date-start');
+                var dE = document.getElementById('date-end');
+                var s = dS && dS.value ? dS.value : '';
+                var e = dE && dE.value ? dE.value : '';
+                return (s || e) ? (' (' + s + (e ? (' – ' + e) : '') + ')') : '';
+            })() : '';
+
             // 🛰️ Uydu Görüntüsü Galerisi (RGB) — işaretli HER görüntü için ayrı
             // istek atılır; sonuçlar haritaya üst üste eklenir (diğer analizlerle aynı mantık).
             if (metaList[0].isRgbGallery) {
@@ -11882,8 +11907,10 @@ function selectRamp(name) {
                 if (!startInputG || !startInputG.value || !endInputG || !endInputG.value) {
                     sylvaAlert(t('no_date'), 'warning'); return;
                 }
-                _clearAllAnalysisOutputs(_pane);
-                _sylvaClearGeeLayers(_pane);
+                if (!_stackMode) {
+                    _clearAllAnalysisOutputs(_pane);
+                    _sylvaClearGeeLayers(_pane);
+                }
                 // 🛠️ BUG FİX (Ekran 2'nin "Üstte Gösterilecek Katman" kutusunda
                 // eski/artık seçili olmayan analizler birikip kalıyordu): Ekran 1
                 // (map) senkronizasyon açıkken YENİ bir "Analizi Çalıştır" başlattığında
@@ -11897,7 +11924,7 @@ function selectRamp(name) {
                 // senkronizasyon açıksa Ekran 2'nin deposu da AYNI ANDA temizlenir —
                 // böylece Ekran 2'nin kutusu her zaman sadece bu son çalıştırmadan
                 // gelen (mevcut işaretli) analizleri gösterir.
-                if (_sylvaMirrorThisRun && _pane === 'map' && window.map2) {
+                if (_sylvaMirrorThisRun && !_stackMode && _pane === 'map' && window.map2) {
                     _clearAllAnalysisOutputs('map2');
                     _sylvaClearGeeLayers('map2');
                 }
@@ -11921,7 +11948,10 @@ function selectRamp(name) {
                 window._sylvaRgbTopSeqByPane[_pane] = -1;
                 metaList.forEach(function (meta, _mIdx) {
                     meta._seq = _mIdx;
-                    if (meta.isRgbGallery) fetchRgbGallery(meta, _pane, _sylvaMirrorThisRun);
+                    if (meta.isRgbGallery) {
+                        var _stackKey = _stackMode ? (meta.datasetKey + _stackSuffix) : meta.datasetKey;
+                        fetchRgbGallery(meta, _pane, _sylvaMirrorThisRun, _stackKey, _stackMode ? ((meta.datasetLabel || meta.datasetKey) + _stackDateLabel) : null);
+                    }
                 });
                 return;
             }
@@ -12004,6 +12034,12 @@ function selectRamp(name) {
             metaList.forEach(function (meta) {
                 renderAnalysisLegend(meta, true);
 
+                // 🆕 Stack modundayken bu analiz için benzersiz bir depolama
+                // anahtarı kullanılır — aynı analiz türü (ör. NDVI) tekrar
+                // çalıştırılsa bile önceki katmanın ÜZERİNE YAZMAZ, ayrı bir
+                // katman olarak eklenir (Katman Sıyırıcı ile kıyaslanabilir).
+                var _thisLayerKey = _stackMode ? (meta.analysisName + _stackSuffix) : meta.analysisName;
+
                 var analyzePayload = {
                     roi:       _roi,
                     clipMode:  clipMode,
@@ -12038,9 +12074,13 @@ function selectRamp(name) {
                     }
                     if (data.nativeCrs) window._lastAnalyzeNativeCrs = data.nativeCrs;
 
-                    _sylvaAddGeeLayer(_pane, meta.analysisName, data.tileUrl, { opacity: 1 });
+                    _sylvaAddGeeLayer(_pane, _thisLayerKey, data.tileUrl, { opacity: 1 });
                     window._sylvaTopGeeLayerByPane = window._sylvaTopGeeLayerByPane || { map: null, map2: null };
-                    window._sylvaTopGeeLayerByPane[_pane === 'map2' ? 'map2' : 'map'] = meta.analysisName;
+                    window._sylvaTopGeeLayerByPane[_pane === 'map2' ? 'map2' : 'map'] = _thisLayerKey;
+                    if (_stackMode) {
+                        window._sylvaLayerFriendlyNames = window._sylvaLayerFriendlyNames || {};
+                        window._sylvaLayerFriendlyNames[_thisLayerKey] = _sylvaLayerFriendlyName(meta.analysisName) + _stackDateLabel;
+                    }
                     if (typeof _sylvaRenderLayerSwitchBox === 'function') _sylvaRenderLayerSwitchBox(_pane);
                     _applyGeeLayerClipMode(clipMode, _pane);
                     _sylvaApplyAutoOpacity(_pane, meta);
@@ -12085,7 +12125,7 @@ function selectRamp(name) {
                     // geçiş yapılırken AYNI fonksiyon çağrılır. Böylece analiz
                     // değiştirildiğinde Lejant ve Uydu Görüntü Galerisi de o
                     // analize göre otomatik güncellenir; sabit kalmaz.
-                    _sylvaRenderIndexAnalysisResult(meta, data, _pane);
+                    _sylvaRenderIndexAnalysisResult(meta, data, _pane, false, _thisLayerKey);
 
                     // 🛠️ KÖK NEDEN DÜZELTMESİ: Karşı ekrana yansıtma (mirror)
                     // eskiden BURADAN ÖNCE, yani lejant/galeri/bilgi kutusu bu
@@ -12117,8 +12157,12 @@ function selectRamp(name) {
         // bir analiz öne getirildiğinde, o analizin saklı verisiyle bu fonksiyon
         // tekrar çağrılarak Lejant ve Galeri otomatik güncellenir — RGB uydu
         // görüntü galerisiyle birebir aynı mantık.
-        function _sylvaRenderIndexAnalysisResult(meta, data, _pane, skipClassifyRecalc) {
+        function _sylvaRenderIndexAnalysisResult(meta, data, _pane, skipClassifyRecalc, layerKeyOverride) {
             if (!meta || !data) return;
+            // 🆕 Stack modunda çalıştırılan analizler kendi benzersiz depolama
+            // anahtarını (layerKeyOverride) kullanır; aksi halde her zamanki
+            // gibi meta.analysisName kullanılır (geriye dönük uyumlu).
+            var _lk = layerKeyOverride || meta.analysisName;
             var _ibCb = _updateLulcRestrictedUI(isLulcAnalysis(meta.analysisName));
             if (isTopoAnalysis(meta.analysisName)) { _setGalleryPanelRestricted(true); }
             (function() {
@@ -12204,7 +12248,7 @@ function selectRamp(name) {
             window._sylvaIndexAnalysisStates = window._sylvaIndexAnalysisStates || { map: {}, map2: {} };
             var _iaKey = (_pane === 'map2') ? 'map2' : 'map';
             if (!window._sylvaIndexAnalysisStates[_iaKey]) window._sylvaIndexAnalysisStates[_iaKey] = {};
-            window._sylvaIndexAnalysisStates[_iaKey][meta.analysisName] = { meta: meta, data: data };
+            window._sylvaIndexAnalysisStates[_iaKey][_lk] = { meta: meta, data: data };
 
             // 🛠️ BUG FİX: Katmanlar arası geçişte (Analiz Geçiş kutusu) lejant
             // rengi, o an geçerli olan GENEL/PAYLAŞILAN sınıflandırma ayarlarına
@@ -12219,7 +12263,7 @@ function selectRamp(name) {
             window._sylvaLayerLegendSnapshotByPane = window._sylvaLayerLegendSnapshotByPane || { map: {}, map2: {} };
             var _snapBox = document.getElementById(_pane === 'map2' ? 'map2-legend-box' : 'map-legend-box');
             if (_snapBox) {
-                window._sylvaLayerLegendSnapshotByPane[_iaKey][meta.analysisName] = {
+                window._sylvaLayerLegendSnapshotByPane[_iaKey][_lk] = {
                     html: _snapBox.innerHTML,
                     display: _snapBox.style.display
                 };
@@ -13145,13 +13189,14 @@ function selectRamp(name) {
         // AOI + tarih + bulutluluk kriterine uyan gerçek sahneleri (thumbnail
         // önizlemeleriyle birlikte) sunucudan/GEE'den çeker ve galeriyi doldurur.
         // paneId: 'map' (Ekran 1) | 'map2' (Ekran 2) — verilmezse aktif ekran kullanılır.
-        function fetchRgbGallery(meta, paneId, mirrorThisRun) {
+        function fetchRgbGallery(meta, paneId, mirrorThisRun, stackKey, friendlyLabel) {
             paneId = (paneId === 'map2') ? 'map2' : 'map';
+            var _rgbStateKey = stackKey || meta.datasetKey;
             var galleryEl = _sylvaGalleryEl(paneId);
             if (!galleryEl) return;
             // Yarış koşulu: bu fetch'e ait jenerasyon numarasını yakala
             var _rgbGen = _analysisGeneration;
-            var _gState = _rgbGalleryStateFor(paneId, meta.datasetKey);
+            var _gState = _rgbGalleryStateFor(paneId, _rgbStateKey);
             var _aoiForPane = (paneId === 'map2') ? currentLayer2 : currentLayer;
 
             var startInput = document.getElementById('date-start');
@@ -13212,8 +13257,8 @@ function selectRamp(name) {
                 renderRgbGalleryCards(paneId);
 
                 // Galeri açılınca bu veri setinin en güncel sahnesi otomatik gösterilir.
-                var first = _sortedRgbScenes(paneId, meta.datasetKey)[0];
-                if (first) loadRgbScene(first.sceneId, meta, data.dataset, paneId, true, mirrorThisRun);
+                var first = _sortedRgbScenes(paneId, _rgbStateKey)[0];
+                if (first) loadRgbScene(first.sceneId, meta, data.dataset, paneId, true, mirrorThisRun, stackKey, friendlyLabel);
                 _ensureDefaultVisibility();
             })
             .catch(function(err) {
@@ -13302,7 +13347,7 @@ function selectRamp(name) {
                     galleryEl.querySelectorAll('.gallery-item[data-dataset-key="' + dk + '"]').forEach(function(i) { i.classList.remove('active'); });
                     div.classList.add('active');
                     _gState.activeSceneId = scene.sceneId;
-                    loadRgbScene(scene.sceneId, meta, ds, paneId);
+                    loadRgbScene(scene.sceneId, meta, ds, paneId, false, false, dk, window._sylvaLayerFriendlyNames && window._sylvaLayerFriendlyNames['RGB::' + dk]);
                 });
                 galleryEl.appendChild(div);
             });
@@ -13335,13 +13380,14 @@ function selectRamp(name) {
         // AOI'ye odaklar ve dinamik bilgi kutusu/lejantı + Görüntü Bilgileri
         // panelini günceller. paneId verilmezse aktif ekran kullanılır — bu
         // sayede aynı akış Ekran 1 ve Ekran 2'de birebir aynı şekilde çalışır.
-        function loadRgbScene(sceneId, meta, dsInfo, paneId, _isInitialRun, _mirrorThisRun) {
+        function loadRgbScene(sceneId, meta, dsInfo, paneId, _isInitialRun, _mirrorThisRun, stackKey, friendlyLabel) {
             paneId = (paneId === 'map2') ? 'map2' : 'map';
+            var _rgbStateKey = stackKey || meta.datasetKey;
             var _aoiForPane = (paneId === 'map2') ? currentLayer2 : currentLayer;
             if (!_aoiForPane) return;
             _sylvaSceneIdSet(paneId, sceneId);
 
-            var _gState = _rgbGalleryStateFor(paneId, meta.datasetKey);
+            var _gState = _rgbGalleryStateFor(paneId, _rgbStateKey);
             _gState.activeSceneId = sceneId;
 
             var startInput = document.getElementById('date-start');
@@ -13381,9 +13427,9 @@ function selectRamp(name) {
                 // ve kuzey okunun yanındaki katman kutusundan aralarında geçiş
                 // yapılabiliyor (diğer analizlerle birebir aynı davranış).
                 var _targetMap = _sylvaTargetMap(paneId);
-                var _layerKey = 'RGB::' + meta.datasetKey;
+                var _layerKey = 'RGB::' + _rgbStateKey;
                 window._sylvaLayerFriendlyNames = window._sylvaLayerFriendlyNames || {};
-                window._sylvaLayerFriendlyNames[_layerKey] = meta.datasetLabel || meta.datasetKey;
+                window._sylvaLayerFriendlyNames[_layerKey] = friendlyLabel || meta.datasetLabel || meta.datasetKey;
                 _sylvaAddGeeLayer(paneId, _layerKey, data.tileUrl, { opacity: 1 });
                 window._sylvaTopGeeLayerByPane = window._sylvaTopGeeLayerByPane || { map: null, map2: null };
                 // 🛠️ BUG FİX (Sensör/Etiket Karışıklığı — bkz. dispatch noktasındaki
@@ -13430,7 +13476,7 @@ function selectRamp(name) {
                 // kartları arasında (diğer veri setlerinin seçili kartını bozmaz).
                 var galleryEl = _sylvaGalleryEl(paneId);
                 if (galleryEl) {
-                    galleryEl.querySelectorAll('.gallery-item[data-dataset-key="' + meta.datasetKey + '"]').forEach(function(i) {
+                    galleryEl.querySelectorAll('.gallery-item[data-dataset-key="' + _rgbStateKey + '"]').forEach(function(i) {
                         i.classList.toggle('active', i.getAttribute('data-scene-id') === sceneId);
                     });
                 }
