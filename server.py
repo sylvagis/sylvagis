@@ -366,11 +366,82 @@ _building_jobs = {}
 _building_jobs_lock = threading.RLock()
 _BUILDING_JOB_TTL_SECONDS = 30 * 60  # bitmiş işler 30 dk sonra temizlenir
 _BUILDING_JOB_MAX_ITEMS = 200
+_BUILDING_JOB_DIR = os.environ.get(
+    'SYLVA_BUILDING_JOB_DIR',
+    os.path.join(tempfile.gettempdir(), 'sylvagis-building-jobs'),
+)
+
+
+def _building_job_path(job_id):
+    """İş durumunun tüm sunucu worker'ları tarafından paylaşılacağı dosya."""
+    if not re.fullmatch(r'[a-f0-9]{32}', str(job_id or '')):
+        return None
+    return os.path.join(_BUILDING_JOB_DIR, 'job-{}.json'.format(job_id))
+
+
+def _read_persisted_building_job(job_id):
+    path = _building_job_path(job_id)
+    if not path:
+        return None
+    try:
+        with open(path, 'r', encoding='utf-8') as handle:
+            return json.load(handle)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+
+
+def _persist_building_job(job):
+    """Job'u atomik olarak ortak diske yazar.
+
+    Gunicorn/uWSGI gibi çok worker'lı sunucularda POST /start ile sonraki
+    GET /status istekleri farklı process'lere gidebilir. Sadece process
+    belleğinde tutulan dict bu durumda kaybolur; atomik JSON dosyası tüm
+    worker'ların aynı durumu görmesini sağlar.
+    """
+    path = _building_job_path(job.get('id'))
+    if not path:
+        return
+    temporary_path = None
+    try:
+        os.makedirs(_BUILDING_JOB_DIR, exist_ok=True)
+        # Başka bir worker iptal bayrağını yazdıysa yerel snapshot bunu
+        # yanlışlıkla silmesin.
+        latest = _read_persisted_building_job(job.get('id'))
+        if latest and latest.get('cancelRequested'):
+            job['cancelRequested'] = True
+        fd, temporary_path = tempfile.mkstemp(
+            prefix='.job-', suffix='.json', dir=_BUILDING_JOB_DIR
+        )
+        with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+            json.dump(job, handle, ensure_ascii=False, separators=(',', ':'))
+        os.replace(temporary_path, path)
+        temporary_path = None
+    except Exception as persist_error:
+        # Analiz bellekte devam edebilsin; durum endpoint'i yine de aynı
+        # worker'da çalışır. Ortak diske yazma hatası log'a açıkça düşer.
+        print('[SylvaGIS] Bina iş durumu diske yazılamadı:', persist_error)
+    finally:
+        if temporary_path:
+            try:
+                os.unlink(temporary_path)
+            except OSError:
+                pass
+
+
+def _get_building_job(job_id):
+    """Önce ortak snapshot'ı, yoksa mevcut process belleğini okur."""
+    persisted = _read_persisted_building_job(job_id)
+    if persisted:
+        with _building_jobs_lock:
+            _building_jobs[job_id] = persisted
+        return persisted
+    with _building_jobs_lock:
+        return _building_jobs.get(job_id)
 
 
 def _new_building_job(geometry):
     job_id = uuid.uuid4().hex
-    now = time.monotonic()
+    now = time.time()
     job = {
         'id': job_id,
         'status': 'running',            # running | done | error | cancelled
@@ -393,12 +464,13 @@ def _new_building_job(geometry):
     with _building_jobs_lock:
         _building_jobs[job_id] = job
         _cleanup_building_jobs_locked()
+        _persist_building_job(job)
     return job_id
 
 
 def _cleanup_building_jobs_locked():
     """Çağıran zaten _building_jobs_lock tutuyor olmalı."""
-    now = time.monotonic()
+    now = time.time()
     finished_states = ('done', 'error', 'cancelled')
     stale_keys = [
         job_id for job_id, job in _building_jobs.items()
@@ -407,18 +479,49 @@ def _cleanup_building_jobs_locked():
     ]
     for job_id in stale_keys:
         _building_jobs.pop(job_id, None)
+        path = _building_job_path(job_id)
+        if path:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
     if len(_building_jobs) > _BUILDING_JOB_MAX_ITEMS:
         oldest_ids = sorted(
             _building_jobs, key=lambda jid: _building_jobs[jid]['updatedAt']
         )[: len(_building_jobs) - _BUILDING_JOB_MAX_ITEMS]
         for job_id in oldest_ids:
             _building_jobs.pop(job_id, None)
+            path = _building_job_path(job_id)
+            if path:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+
+    # Önceki process kapanmış olsa bile dosya snapshot'ları birikmesin.
+    try:
+        for filename in os.listdir(_BUILDING_JOB_DIR):
+            if not (filename.startswith('job-') and filename.endswith('.json')):
+                continue
+            path = os.path.join(_BUILDING_JOB_DIR, filename)
+            persisted = _read_persisted_building_job(filename[4:-5])
+            if (
+                persisted
+                and persisted.get('status') in ('done', 'error', 'cancelled')
+                and now - float(persisted.get('updatedAt') or now)
+                    > _BUILDING_JOB_TTL_SECONDS
+            ):
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+    except OSError:
+        pass
 
 
 def _job_is_cancelled(job_id):
-    with _building_jobs_lock:
-        job = _building_jobs.get(job_id)
-        return bool(job and job['cancelRequested'])
+    job = _get_building_job(job_id)
+    return bool(job and job.get('cancelRequested'))
 
 
 def _gee_buildings_paginated(buildings, expected_count, page_size=4000):
@@ -458,9 +561,8 @@ def _run_building_job(job_id):
     """Arka plan thread'inde çalışır: önce GEE Open Buildings dener, sonuç
     yoksa tile bazlı OSM taramasına geçer. `_new_building_job` içinde
     kurulan job dict'ini kilitle güncelleyerek ilerlemeyi dışarı açar."""
-    with _building_jobs_lock:
-        job = _building_jobs.get(job_id)
-        geometry = job['geometry'] if job else None
+    job = _get_building_job(job_id)
+    geometry = job.get('geometry') if job else None
     if job is None or geometry is None:
         return
 
@@ -509,7 +611,8 @@ def _run_building_job(job_id):
         if _job_is_cancelled(job_id):
             with _building_jobs_lock:
                 job['status'] = 'cancelled'
-                job['updatedAt'] = time.monotonic()
+                job['updatedAt'] = time.time()
+                _persist_building_job(job)
             return
 
         if building_count > 0 and gee_features:
@@ -533,7 +636,8 @@ def _run_building_job(job_id):
                 job['dataset'] = _BUILDING_DATASET_NAME
                 job['coverageNote'] = coverage_note
                 job['status'] = 'done'
-                job['updatedAt'] = time.monotonic()
+                job['updatedAt'] = time.time()
+                _persist_building_job(job)
             return
 
         # ── 2) GEE boş/kapsam dışı ise tile bazlı OSM taramasına geç ────
@@ -567,7 +671,8 @@ def _run_building_job(job_id):
                     'Seçilen alan çok büyük ({} tile, azami tile boyutunda bile). '
                     'Lütfen daha küçük bir alan seçin.'.format(len(tiles))
                 )
-                job['updatedAt'] = time.monotonic()
+                job['updatedAt'] = time.time()
+                _persist_building_job(job)
             return
 
         with _building_jobs_lock:
@@ -622,12 +727,14 @@ def _run_building_job(job_id):
                     job['tilesDone'] = tiles_done
                     job['buildingCountSoFar'] = len(seen_features)
                     job['totalAreaM2SoFar'] = total_area_m2
-                    job['updatedAt'] = time.monotonic()
+                    job['updatedAt'] = time.time()
+                    _persist_building_job(job)
 
         if was_cancelled:
             with _building_jobs_lock:
                 job['status'] = 'cancelled'
-                job['updatedAt'] = time.monotonic()
+                job['updatedAt'] = time.time()
+                _persist_building_job(job)
             return
 
         coverage_note = _OSM_FALLBACK_NOTE
@@ -647,14 +754,16 @@ def _run_building_job(job_id):
             job['totalAreaM2'] = total_area_m2
             job['coverageNote'] = coverage_note
             job['status'] = 'done'
-            job['updatedAt'] = time.monotonic()
+            job['updatedAt'] = time.time()
+            _persist_building_job(job)
 
     except Exception as e:
         traceback.print_exc()
         with _building_jobs_lock:
             job['status'] = 'error'
             job['error'] = str(e)
-            job['updatedAt'] = time.monotonic()
+            job['updatedAt'] = time.time()
+            _persist_building_job(job)
 
 
 def _building_cache_key(geometry):
@@ -2292,8 +2401,8 @@ def building_footprints_status(job_id):
     partialGeojson veya finalGeojson, error} döner. Kullanıcı arayüzü bu
     endpoint'i periyodik olarak (polling) çağırarak canlı ilerleme gösterir.
     """
+    job = _get_building_job(job_id)
     with _building_jobs_lock:
-        job = _building_jobs.get(job_id)
         if not job:
             return jsonify({
                 'success': False,
@@ -2327,8 +2436,8 @@ def building_footprints_status(job_id):
 @app.route('/api/building-footprints/cancel/<job_id>', methods=['POST'])
 def building_footprints_cancel(job_id):
     """Aşama 5 — kullanıcı analiz sürerken taramayı iptal edebilsin diye."""
+    job = _get_building_job(job_id)
     with _building_jobs_lock:
-        job = _building_jobs.get(job_id)
         if not job:
             return jsonify({
                 'success': False,
@@ -2336,6 +2445,8 @@ def building_footprints_cancel(job_id):
             }), 404
         if job['status'] == 'running':
             job['cancelRequested'] = True
+            job['updatedAt'] = time.time()
+            _persist_building_job(job)
         return jsonify({'success': True, 'status': job['status']})
 
 
