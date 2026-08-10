@@ -904,6 +904,21 @@ tr.class-highlight-active {
         .map-legend { background: #ffffff; padding: 4px 6px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); font-size: 0.74rem; pointer-events: auto; min-width: 0; width: fit-content; box-sizing: border-box; max-height: 200px; overflow-y: auto; }
         .map-legend.detached { min-width: 0; min-height: 36px; overflow: auto; position: relative; box-sizing: border-box; }
         .map-top-left-infobox { position: absolute; top: 86px; left: 15px; right: 15px; z-index: 520; pointer-events: none; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+
+        /* ── Konum Arama (Geocoding) kutusu — haritanın üstünde, ortalanmış ── */
+        .map-search-box { position: absolute; top: 15px; left: 50%; transform: translateX(-50%); z-index: 650; width: 320px; max-width: calc(100% - 30px); pointer-events: auto; font-family: inherit; }
+        .map-search-input-wrap { display: flex; align-items: center; background: #ffffff; border: 1.5px solid #1e3a8a; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.22); overflow: hidden; }
+        .map-search-input { flex: 1; min-width: 0; border: none; outline: none; padding: 8px 4px 8px 12px; font-size: 0.82rem; color: #1e293b; background: transparent; }
+        .map-search-btn, .map-search-clear { border: none; background: transparent; cursor: pointer; padding: 0 10px; height: 36px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 0.95rem; color: #1e3a8a; }
+        .map-search-btn:hover, .map-search-clear:hover { background: #f1f5f9; }
+        .map-search-results { margin-top: 4px; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; box-shadow: 0 3px 10px rgba(0,0,0,0.18); max-height: 260px; overflow-y: auto; }
+        .map-search-result-item { padding: 8px 10px; font-size: 0.78rem; color: #334155; cursor: pointer; border-bottom: 1px solid #f1f5f9; }
+        .map-search-result-item:last-child { border-bottom: none; }
+        .map-search-result-item:hover, .map-search-result-item.active { background: #eff6ff; }
+        .map-search-result-empty { padding: 8px 10px; font-size: 0.78rem; color: #94a3b8; }
+        @media (max-width: 720px) {
+            .map-search-box { width: 250px; top: 10px; }
+        }
         .ws-click-info { pointer-events: auto; }
         .map-bottom-right { position: absolute; bottom: 15px; right: 15px; z-index: 500; pointer-events: none; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
         .map-bottom-right .ws-click-info { max-width: 230px; }
@@ -4163,6 +4178,39 @@ tr.class-highlight-active {
         <div class="map-wrapper" id="map-wrapper-inner">
 
             <div id="map" tabindex="-1" aria-label="Harita" role="application"></div>
+
+            <!-- ══ Konum Arama (Geocoding) ═════════════════════════════ -->
+            <div class="map-search-box" id="map-search-box">
+                <div class="map-search-input-wrap">
+                    <input type="text" id="map-search-input" class="map-search-input"
+                           data-i18n-placeholder="map_search_placeholder"
+                           placeholder="İl / ilçe / adres ara..." autocomplete="off"
+                           aria-label="Konum ara">
+                    <button type="button" id="map-search-btn" class="map-search-btn"
+                            data-i18n-title="map_search_btn" data-i18n-aria-label="map_search_btn"
+                            title="Ara" aria-label="Ara">🔍</button>
+                    <button type="button" id="map-search-clear" class="map-search-clear"
+                            data-i18n-title="map_search_clear" data-i18n-aria-label="map_search_clear"
+                            title="Temizle" aria-label="Temizle" style="display:none;">✕</button>
+                </div>
+                <div id="map-search-results" class="map-search-results" style="display:none;"></div>
+            </div>
+
+            <!-- ══ Arama sonucu sınır poligonu → çalışma alanı onay penceresi ══ -->
+            <div id="sylva-search-boundary-modal" class="sylva-sync-modal" role="dialog"
+                 aria-modal="true" aria-labelledby="sylva-search-boundary-title"
+                 aria-describedby="sylva-search-boundary-message" hidden>
+                <div class="sylva-sync-modal-backdrop" data-sylva-search-boundary-cancel></div>
+                <div class="sylva-sync-modal-card">
+                    <div class="sylva-sync-modal-icon" aria-hidden="true">📍</div>
+                    <h3 id="sylva-search-boundary-title" data-i18n="search_boundary_modal_title">Sınır bulundu</h3>
+                    <p id="sylva-search-boundary-message" data-i18n="search_boundary_modal_message">Bu alanı çalışma alanı olarak kullanmak ister misiniz?</p>
+                    <div class="sylva-sync-modal-actions">
+                        <button type="button" class="sylva-sync-cancel" data-sylva-search-boundary-cancel data-i18n="btn_no">Hayır</button>
+                        <button type="button" class="sylva-sync-confirm" data-sylva-search-boundary-confirm data-i18n="btn_yes">Evet</button>
+                    </div>
+                </div>
+            </div>
 
             <!-- ══ Before/After Swipe Overlay ═════════════════════════════ -->
             <div id="before-after-overlay" style="display:none;position:absolute;inset:0;z-index:450;pointer-events:none;">
@@ -7659,6 +7707,256 @@ tr.class-highlight-active {
                 map.setView(HOME_VIEW.center, HOME_VIEW.zoom);
             }
         });
+
+        // ---------------------------------------------------------
+        // Konum Arama (Geocoding) — OpenStreetMap Nominatim
+        // Kullanıcının yazdığı il/ilçe/adres metni Nominatim'in ücretsiz
+        // arama servisine gönderilir; dönen sonuçlar bir açılır listede
+        // gösterilir ve seçildiğinde harita o konuma kaydırılır/yakınlaştırılır.
+        // ---------------------------------------------------------
+        (function () {
+            var searchInput = document.getElementById('map-search-input');
+            var searchBtn   = document.getElementById('map-search-btn');
+            var clearBtn    = document.getElementById('map-search-clear');
+            var resultsBox  = document.getElementById('map-search-results');
+            if (!searchInput || !searchBtn || !resultsBox) return;
+
+            var NOMINATIM_URL = 'https://nominatim.openstreetmap.org/search';
+            var debounceTimer = null;
+            var activeIndex = -1;
+            var currentResults = [];
+            var searchMarker = null;
+            var lastQuery = '';
+            var lastFetchController = null;
+
+            function _t(key, fallback) {
+                return (typeof t === 'function') ? (t(key, fallback) || fallback) : fallback;
+            }
+
+            function clearResults() {
+                resultsBox.innerHTML = '';
+                resultsBox.style.display = 'none';
+                currentResults = [];
+                activeIndex = -1;
+            }
+
+            function showMessage(text) {
+                var msg = document.createElement('div');
+                msg.className = 'map-search-result-empty';
+                msg.textContent = text;
+                resultsBox.innerHTML = '';
+                resultsBox.appendChild(msg);
+                resultsBox.style.display = 'block';
+            }
+
+            function highlightActive() {
+                var rows = resultsBox.querySelectorAll('.map-search-result-item');
+                rows.forEach(function (row, idx) {
+                    row.classList.toggle('active', idx === activeIndex);
+                    if (idx === activeIndex) row.scrollIntoView({ block: 'nearest' });
+                });
+            }
+
+            function renderResults(items) {
+                currentResults = items;
+                activeIndex = -1;
+                if (!items.length) {
+                    showMessage(_t('map_search_no_result', 'Sonuç bulunamadı'));
+                    return;
+                }
+                resultsBox.innerHTML = '';
+                items.forEach(function (item, idx) {
+                    var row = document.createElement('div');
+                    row.className = 'map-search-result-item';
+                    row.textContent = item.display_name;
+                    row.addEventListener('click', function () { selectResult(idx); });
+                    resultsBox.appendChild(row);
+                });
+                resultsBox.style.display = 'block';
+            }
+
+            // 🆕 Arama sonucu bir sınır poligonu (GeoJSON) içeriyorsa, kullanıcıya
+            // bu poligonu doğrudan "çalışma alanı" (AOI) olarak kullanmak isteyip
+            // istemediği sorulur. Onaylanırsa mevcut uygulama akışındaki
+            // setCurrentLayer() ile aynı şekilde haritaya eklenir (KML/SHP yükleme
+            // ile birebir aynı davranış).
+            var _pendingBoundaryGeoJSON = null;
+
+            function _boundaryModalEls() {
+                return {
+                    modal: document.getElementById('sylva-search-boundary-modal'),
+                    confirmBtn: document.querySelector('[data-sylva-search-boundary-confirm]'),
+                    cancelBtns: document.querySelectorAll('[data-sylva-search-boundary-cancel]')
+                };
+            }
+
+            function _closeBoundaryModal() {
+                var els = _boundaryModalEls();
+                if (els.modal) els.modal.hidden = true;
+                _pendingBoundaryGeoJSON = null;
+            }
+
+            function _openBoundaryModal(geojson) {
+                var els = _boundaryModalEls();
+                if (!els.modal) return;
+                _pendingBoundaryGeoJSON = geojson;
+                if (els.modal.parentElement !== document.body) {
+                    document.body.appendChild(els.modal);
+                }
+                els.modal.hidden = false;
+                if (els.confirmBtn) setTimeout(function () { els.confirmBtn.focus(); }, 0);
+            }
+
+            (function bindBoundaryModal() {
+                document.addEventListener('click', function (e) {
+                    if (e.target.closest && e.target.closest('[data-sylva-search-boundary-cancel]')) {
+                        _closeBoundaryModal();
+                    } else if (e.target.closest && e.target.closest('[data-sylva-search-boundary-confirm]')) {
+                        var geojson = _pendingBoundaryGeoJSON;
+                        _closeBoundaryModal();
+                        if (!geojson || typeof L.geoJSON !== 'function' || typeof setCurrentLayer !== 'function') return;
+                        try {
+                            var layer = L.geoJSON(geojson);
+                            setCurrentLayer(layer);
+                        } catch (err) {
+                            console.warn('[SylvaGIS] Arama sınırı çalışma alanına dönüştürülemedi:', err);
+                        }
+                    }
+                });
+                document.addEventListener('keydown', function (e) {
+                    var els = _boundaryModalEls();
+                    if (els.modal && !els.modal.hidden && e.key === 'Escape') _closeBoundaryModal();
+                });
+            })();
+
+            function selectResult(idx) {
+                var item = currentResults[idx];
+                if (!item) return;
+                var lat = parseFloat(item.lat);
+                var lon = parseFloat(item.lon);
+                if (isNaN(lat) || isNaN(lon)) return;
+
+                searchInput.value = item.display_name;
+                clearResults();
+                clearBtn.style.display = 'flex';
+
+                if (searchMarker) { map.removeLayer(searchMarker); searchMarker = null; }
+                searchMarker = L.marker([lat, lon]).addTo(map);
+                if (typeof searchMarker.bindPopup === 'function') {
+                    searchMarker.bindPopup(item.display_name);
+                }
+
+                // Zoom ve Odaklanma: mümkünse dönen sınır geometrisinin (GeoJSON)
+                // tam sınırlarına, yoksa Nominatim'in bounding box'ına göre uçarak
+                // yakınlaştır.
+                var boundaryLayer = null;
+                if (item.geojson && item.geojson.type && /Polygon/.test(item.geojson.type)) {
+                    try { boundaryLayer = L.geoJSON(item.geojson); } catch (e) { boundaryLayer = null; }
+                }
+
+                if (boundaryLayer) {
+                    map.flyToBounds(boundaryLayer.getBounds(), { maxZoom: 15, duration: 0.75 });
+                } else if (item.boundingbox && item.boundingbox.length === 4) {
+                    var bb = item.boundingbox.map(parseFloat);
+                    var bounds = L.latLngBounds([bb[0], bb[2]], [bb[1], bb[3]]);
+                    map.flyToBounds(bounds, { maxZoom: 15, duration: 0.75 });
+                } else {
+                    map.flyTo([lat, lon], 14, { duration: 0.75 });
+                }
+
+                // Poligon Üretimi ve Onay: sınır bulunduysa çalışma alanı olarak
+                // kullanılmak istenip istenmediği sorulur.
+                if (item.geojson && item.geojson.type && /Polygon/.test(item.geojson.type)) {
+                    _openBoundaryModal(item.geojson);
+                }
+            }
+
+            function runSearch(query) {
+                query = (query || '').trim();
+                if (!query) { clearResults(); return; }
+                if (query === lastQuery && currentResults.length) {
+                    resultsBox.style.display = 'block';
+                    return;
+                }
+                lastQuery = query;
+                showMessage(_t('map_search_loading', 'Aranıyor...'));
+
+                if (lastFetchController && typeof lastFetchController.abort === 'function') {
+                    lastFetchController.abort();
+                }
+                var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+                lastFetchController = controller;
+
+                var url = NOMINATIM_URL + '?format=json&addressdetails=0&limit=6&polygon_geojson=1&accept-language=tr&q=' + encodeURIComponent(query);
+                fetch(url, {
+                    headers: { 'Accept': 'application/json' },
+                    signal: controller ? controller.signal : undefined
+                })
+                    .then(function (res) {
+                        if (!res.ok) throw new Error('Nominatim isteği başarısız: ' + res.status);
+                        return res.json();
+                    })
+                    .then(function (data) {
+                        if (lastQuery !== query) return; // eskimiş sonuç, yok say
+                        renderResults(Array.isArray(data) ? data : []);
+                    })
+                    .catch(function (err) {
+                        if (err && err.name === 'AbortError') return;
+                        console.warn('[SylvaGIS] Geocoding hatası:', err);
+                        if (lastQuery === query) showMessage(_t('map_search_error', 'Arama sırasında bir hata oluştu'));
+                    });
+            }
+
+            searchInput.addEventListener('input', function () {
+                var val = searchInput.value;
+                clearBtn.style.display = val ? 'flex' : 'none';
+                clearTimeout(debounceTimer);
+                if (!val.trim()) { clearResults(); return; }
+                debounceTimer = setTimeout(function () { runSearch(val); }, 450);
+            });
+
+            searchInput.addEventListener('keydown', function (e) {
+                if (e.key === 'ArrowDown') {
+                    if (!currentResults.length) return;
+                    e.preventDefault();
+                    activeIndex = Math.min(activeIndex + 1, currentResults.length - 1);
+                    highlightActive();
+                } else if (e.key === 'ArrowUp') {
+                    if (!currentResults.length) return;
+                    e.preventDefault();
+                    activeIndex = Math.max(activeIndex - 1, 0);
+                    highlightActive();
+                } else if (e.key === 'Enter') {
+                    e.preventDefault();
+                    clearTimeout(debounceTimer);
+                    if (activeIndex >= 0 && currentResults[activeIndex]) {
+                        selectResult(activeIndex);
+                    } else {
+                        runSearch(searchInput.value);
+                    }
+                } else if (e.key === 'Escape') {
+                    clearResults();
+                }
+            });
+
+            searchBtn.addEventListener('click', function () {
+                clearTimeout(debounceTimer);
+                runSearch(searchInput.value);
+            });
+
+            clearBtn.addEventListener('click', function () {
+                searchInput.value = '';
+                clearBtn.style.display = 'none';
+                lastQuery = '';
+                clearResults();
+                if (searchMarker) { map.removeLayer(searchMarker); searchMarker = null; }
+                searchInput.focus();
+            });
+
+            document.addEventListener('click', function (e) {
+                if (!e.target.closest || !e.target.closest('#map-search-box')) clearResults();
+            });
+        })();
 
         // ---------------------------------------------------------
         // Zoom Yüzde Göstergesi (0–100, 5'er adım)
@@ -21887,6 +22185,7 @@ var SYLVA_TRANSLATIONS = {
     server_online: 'Online', server_offline: 'Offline',
     chart_dl_title: '🖼️ Download Chart', lbl_format: 'Format', lbl_filename: 'File Name',
     btn_cancel: 'Cancel', btn_ok: 'OK', btn_download: '⬇️ Download',
+    btn_yes: 'Yes', btn_no: 'No', search_boundary_modal_title: 'Boundary found', search_boundary_modal_message: 'Would you like to use this area as your working area?',
     contact_btn_label: '💬 Contact', contact_btn_title: 'Contact Us', privacy_policy_btn: 'Privacy Policy', privacy_policy_text: '<strong>SylvaGIS Terms of Service and Privacy Policy</strong><br><br>SylvaGIS is committed to transparency, data security and scientific ethics in the global services we provide on satellite imagery and spatial analysis. This document explains how your data is processed and protected when using our platform, and outlines the general terms of use of the system.<br><br><strong>1. Scope and Purpose of the Service</strong><br>SylvaGIS is a professional web platform designed to perform geographic data processing, remote sensing operations and spatial analyses. The system provides users with cloud-based mapping and data visualisation tools.<br><br><strong>2. Data Processing Principles</strong><br>Data in raster, vector or tabular formats uploaded by users to the system is processed solely for the purpose of performing the requested spatial analyses. SylvaGIS will not sell uploaded datasets to third parties or use them for other commercial purposes under any circumstances.<br><br><strong>3. Third-Party Authentication (SSO)</strong><br>Authorised third-party authentication services such as Google (Gmail) are used to provide seamless and secure access to the platform. This integration uses only basic identity data such as your email address to create your isolated workspace and verify your account; your passwords are not stored in our system.<br><br><strong>4. External Data Sources and Cloud Integrations</strong><br>If users connect their own cloud storage accounts (e.g. external drives or integrated data storage services) to the platform, SylvaGIS only accesses the specific files authorised for analysis. No files are copied, scanned or permanently archived on our servers without your permission.<br><br><strong>5. Spatial Data Isolation and Security</strong><br>Data transferred to the system and the analysis results generated are protected by encryption algorithms compliant with international cloud computing standards. Each user\'s workspace is isolated from others, and the privacy of data is guaranteed by our technical infrastructure.<br><br><strong>6. Intellectual Property and Content Ownership</strong><br>All analysis outputs, maps and graphics obtained using the SylvaGIS infrastructure are entirely the intellectual property of the user. The user declares that they hold the copyright and usage rights of all source data uploaded to or exported from the system.<br><br><strong>7. Analysis Accuracy and Professional Responsibility</strong><br>Platform algorithms operate using scientifically proven methods. However, deviations may occur due to satellite sensor errors, cloud cover, atmospheric conditions or source data deficiencies. SylvaGIS does not guarantee 100% absolute accuracy of analysis results; the responsibility for using data in academic, legal or professional decisions lies entirely with the user.<br><br><strong>8. System Updates and Accessibility</strong><br>System updates, integration of new GIS tools and performance improvements are carried out regularly to improve service quality and speed. Short-term interruptions that may occur during these improvements are considered normal.<br><br><strong>9. Multilingual Use and International Universality</strong><br>Our platform serves in 30 languages in accordance with the principle of global accessibility. Accordingly, our policies are interpreted within the framework of international software ethics and Global Data Privacy Standards, rather than the local laws of any single country.<br><br><strong>10. Cookie and Session Management</strong><br>The platform uses only mandatory technical cookies to maintain uninterrupted user sessions, to remember map layer preferences and the interface language. Tracking cookies for advertising purposes or personal profiling are not present in our system.<br><br><strong>11. Misuse and Account Restriction</strong><br>SylvaGIS reserves the right to suspend access to the relevant account in the event of reverse engineering of the platform, loading of malicious software or cyber actions that would manipulate server capacity.<br><br><strong>12. Policy Changes</strong><br>SylvaGIS may make updates to these terms of service depending on technological developments, new GIS modules to be added or global software requirements. Important changes will be notified to users via the platform interface.', all_rights_reserved: 'All rights reserved.',
     contact_welcome: 'You can share your feedback, questions and suggestions with us.',
     lbl_fullname: 'Full Name', lbl_email: 'Email Address', lbl_subject: 'Subject', lbl_message: 'Description / Message',
@@ -23902,6 +24201,7 @@ var SYLVA_TRANSLATIONS = {
     server_online: 'Çevrimiçi', server_offline: 'Çevrimdışı',
     chart_dl_title: '🖼️ Grafiği İndir', lbl_format: 'Format', lbl_filename: 'Dosya Adı',
     btn_cancel: 'İptal', btn_ok: 'Tamam', btn_download: '⬇️ İndir',
+    btn_yes: 'Evet', btn_no: 'Hayır', search_boundary_modal_title: 'Sınır bulundu', search_boundary_modal_message: 'Bu alanı çalışma alanı olarak kullanmak ister misiniz?',
     contact_btn_label: '💬 İletişim', contact_btn_title: 'İletişim', privacy_policy_btn: 'Gizlilik Politikası', privacy_policy_text: '<strong>SylvaGIS Hizmet Şartları ve Gizlilik Politikası</strong><br><br>SylvaGIS olarak, uydu görüntüleri ve mekânsal analizler üzerine sunduğumuz küresel hizmetlerde şeffaflık, veri güvenliği ve bilimsel etiği esas alıyoruz. Bu metin, platformumuzu kullanırken verilerinizin nasıl işlendiğini, korunduğunu ve sistemin genel kullanım koşullarını açıklamaktadır.<br><br><strong>1. Hizmetin Kapsamı ve Amacı</strong><br>SylvaGIS, coğrafi veri işleme, uzaktan algılama operasyonları ve mekânsal analizler gerçekleştirmek üzere tasarlanmış profesyonel bir web platformudur. Sistem, kullanıcılara bulut tabanlı haritalama ve veri görselleştirme araçları sunar.<br><br><strong>2. Veri İşleme Prensipleri</strong><br>Kullanıcılar tarafından sisteme yüklenen raster, vektör veya tablo formatındaki veriler yalnızca talep edilen mekânsal analizlerin yapılması amacıyla işlenir. SylvaGIS, yüklenen veri setlerini hiçbir koşulda üçüncü taraflara satmaz veya farklı ticari amaçlarla kullanmaz.<br><br><strong>3. Üçüncü Taraf Kimlik Doğrulama (SSO)</strong><br>Platforma kesintisiz ve güvenli erişim sağlamak için Google (Gmail) gibi yetkilendirilmiş üçüncü taraf kimlik doğrulama servisleri kullanılmaktadır. Bu entegrasyon, yalnızca size özel izole çalışma alanınızı oluşturmak ve hesabınızı doğrulamak amacıyla e-posta adresi gibi temel kimlik verilerini kullanır; şifreleriniz sistemimizde tutulmaz.<br><br><strong>4. Harici Veri Kaynakları ve Bulut Entegrasyonları</strong><br>Kullanıcıların kendi bulut depolama hesaplarını (örn. harici sürücüler veya entegre veri depolama servisleri) platforma bağlaması durumunda, SylvaGIS yalnızca analiz için yetki verilen spesifik dosyalara erişim sağlar. İzniniz dışında hiçbir dosya kopyalanmaz, taranmaz veya sunucularımızda kalıcı olarak arşivlenmez.<br><br><strong>5. Mekânsal Veri İzolasyonu ve Güvenlik</strong><br>Sisteme aktarılan veriler ve üretilen analiz sonuçları, uluslararası bulut bilişim standartlarına uygun şifreleme algoritmalarıyla korunur. Her kullanıcının çalışma alanı diğerlerinden izole edilmiştir ve verilerin mahremiyeti teknik altyapımızla garanti altına alınmıştır.<br><br><strong>6. Fikri Mülkiyet ve İçerik Sahipliği</strong><br>SylvaGIS altyapısı kullanılarak elde edilen tüm analiz çıktıları, haritalar ve grafikler tamamen kullanıcının fikri mülkiyetindedir. Kullanıcı, sisteme yüklediği veya dışa aktardığı tüm kaynak verilerin telif ve kullanım haklarına sahip olduğunu beyan eder.<br><br><strong>7. Analiz Doğruluğu ve Profesyonel Sorumluluk</strong><br>Platform algoritmaları, bilimsel olarak kanıtlanmış yöntemlerle çalışır. Ancak uydu sensör hataları, bulutluluk oranı, atmosferik koşullar veya kaynak veri kusurlarından doğabilecek sapmalar mümkündür. SylvaGIS analiz sonuçlarının %100 mutlak doğruluğunu taahhüt etmez; verilerin akademik, hukuki veya profesyonel kararlarda kullanım sorumluluğu tamamen kullanıcıya aittir.<br><br><strong>8. Sistem Güncellemeleri ve Erişilebilirlik</strong><br>Hizmet kalitesini ve hızını artırmak amacıyla sistemsel güncellemeler, yeni CBS araçlarının entegrasyonu ve performans iyileştirmeleri düzenli olarak yapılır. Bu iyileştirmeler sırasında oluşabilecek kısa süreli kesintiler olağan kabul edilir.<br><br><strong>9. Çok Dilli Kullanım ve Uluslararası Evrensellik</strong><br>Platformumuz, küresel erişilebilirlik ilkesi gereği 30 dilde hizmet vermektedir. Bu doğrultuda politikalarımız, tek bir ülkenin yerel kanunlarından ziyade uluslararası yazılım etiği ve küresel veri koruma standartları (Global Data Privacy Standards) çerçevesinde yorumlanır.<br><br><strong>10. Çerez (Cookie) ve Oturum Yönetimi</strong><br>Platform, yalnızca kullanıcı oturumunun kesintisiz sürmesi, harita katmanı tercihlerinin ve arayüz dilinin hatırlanması için zorunlu teknik çerezleri kullanır. Reklam amaçlı veya kişisel profilleme yapmaya yönelik takip çerezleri (tracking cookies) sistemimizde yer almaz.<br><br><strong>11. Kötüye Kullanım ve Hesap Sınırlandırması</strong><br>Platformun tersine mühendislik (reverse engineering) yöntemleriyle incelenmesi, zararlı yazılım yüklenmesi veya sunucu kapasitesini manipüle edecek siber eylemlerde bulunulması durumunda SylvaGIS, ilgili hesabın erişimini durdurma hakkını saklı tutar.<br><br><strong>12. Politika Değişiklikleri</strong><br>Teknolojik gelişmelere, yeni eklenecek CBS modüllerine veya global yazılım gereksinimlerine bağlı olarak SylvaGIS, bu hizmet şartlarında güncellemeler yapabilir. Önemli değişiklikler kullanıcılara platform arayüzü üzerinden bildirilir.', all_rights_reserved: 'Tüm hakları saklıdır.',
     contact_welcome: 'Bilgi, görüş ve önerilerinizi bizimle paylaşabilirsiniz.',
     lbl_fullname: 'Ad Soyad', lbl_email: 'E-posta Adresi', lbl_subject: 'Konu', lbl_message: 'Açıklama / Mesaj',
