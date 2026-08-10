@@ -119,6 +119,11 @@ _BUILDING_DATASET_COVERAGE_NOTE = (
     'Haritada görünen yapılar altlık/uydu görüntüsünde olabilir; Google Open '
     'Buildings v3 veri kümesi tüm ülkeleri kapsamaz.'
 )
+_OSM_OVERPASS_ENDPOINT = 'https://overpass-api.de/api/interpreter'
+_OSM_FALLBACK_NOTE = (
+    'Google Open Buildings v3 sonuç vermediği için aynı alan OpenStreetMap '
+    'bina ayak izleriyle kontrol edildi.'
+)
 
 
 def _building_cache_key(geometry, max_features):
@@ -161,6 +166,167 @@ def _cache_buildings(key, payload):
                 key=lambda cache_key: _building_cache[cache_key]['last_used_at'],
             )
             _building_cache.pop(oldest_key, None)
+
+
+def _geojson_bbox(geometry):
+    """GeoJSON Polygon/MultiPolygon koordinatlarından WGS84 bbox çıkarır."""
+    points = []
+
+    def collect(value):
+        if isinstance(value, (list, tuple)):
+            if (
+                len(value) >= 2
+                and isinstance(value[0], (int, float))
+                and isinstance(value[1], (int, float))
+            ):
+                points.append((float(value[0]), float(value[1])))
+            else:
+                for child in value:
+                    collect(child)
+
+    if isinstance(geometry, dict):
+        geom_type = geometry.get('type')
+        if geom_type == 'Feature':
+            geometry = geometry.get('geometry')
+        if isinstance(geometry, dict):
+            collect(geometry.get('coordinates', []))
+
+    if not points:
+        raise ValueError('Çalışma alanı koordinatları bulunamadı.')
+
+    west = min(point[0] for point in points)
+    south = min(point[1] for point in points)
+    east = max(point[0] for point in points)
+    north = max(point[1] for point in points)
+    if not all(math.isfinite(value) for value in (west, south, east, north)):
+        raise ValueError('Çalışma alanı koordinatları geçersiz.')
+    if west < -180 or east > 180 or south < -90 or north > 90:
+        raise ValueError('Çalışma alanı WGS84 koordinat sınırları dışında.')
+    return west, south, east, north
+
+
+def _ring_area_m2(ring):
+    """Küçük AOI'lerde lon/lat halkasını yaklaşık m² alanına çevirir."""
+    if not isinstance(ring, list) or len(ring) < 3:
+        return 0.0
+    coords = [
+        (float(point[0]), float(point[1]))
+        for point in ring
+        if isinstance(point, (list, tuple)) and len(point) >= 2
+    ]
+    if len(coords) < 3:
+        return 0.0
+    mean_lat = math.radians(sum(point[1] for point in coords) / len(coords))
+    meters_per_degree_lat = 111132.92
+    meters_per_degree_lon = 111412.84 * math.cos(mean_lat)
+    area = 0.0
+    for index, (lon_a, lat_a) in enumerate(coords):
+        lon_b, lat_b = coords[(index + 1) % len(coords)]
+        x_a = lon_a * meters_per_degree_lon
+        y_a = lat_a * meters_per_degree_lat
+        x_b = lon_b * meters_per_degree_lon
+        y_b = lat_b * meters_per_degree_lat
+        area += (x_a * y_b) - (x_b * y_a)
+    return abs(area) / 2.0
+
+
+def _geojson_area_m2(geometry):
+    if not isinstance(geometry, dict):
+        return 0.0
+    geom_type = geometry.get('type')
+    coords = geometry.get('coordinates') or []
+    if geom_type == 'Polygon':
+        if not coords:
+            return 0.0
+        return max(
+            0.0,
+            _ring_area_m2(coords[0]) -
+            sum(_ring_area_m2(ring) for ring in coords[1:]),
+        )
+    if geom_type == 'MultiPolygon':
+        return sum(_geojson_area_m2({'type': 'Polygon', 'coordinates': polygon})
+                   for polygon in coords)
+    return 0.0
+
+
+def _osm_buildings_from_bbox(geometry, max_features):
+    """
+    GEE'nin kapsamadığı bölgeler için küçük AOI'lerde OSM bina ayak izlerini
+    Overpass API'den alır. Overpass yükünü sınırlamak için büyük AOI'lerde
+    sorgu yapılmaz.
+    """
+    west, south, east, north = _geojson_bbox(geometry)
+    bbox_area_degrees = max(0.0, east - west) * max(0.0, north - south)
+    if (east - west) > 0.08 or (north - south) > 0.08 or bbox_area_degrees > 0.004:
+        return {
+            'features': [],
+            'totalAreaM2': 0.0,
+            'skipped': True,
+            'note': (
+                'OpenStreetMap yedeği yalnızca küçük çalışma alanlarında '
+                'kullanılır. Daha küçük bir alan seçerek tekrar deneyin.'
+            ),
+        }
+
+    query = f'''[out:json][timeout:30];
+(
+  way["building"]({south},{west},{north},{east});
+);
+out body geom;'''
+    response = requests.post(
+        _OSM_OVERPASS_ENDPOINT,
+        data=query.encode('utf-8'),
+        headers={
+            'Content-Type': 'text/plain; charset=utf-8',
+            'User-Agent': 'SylvaGIS/1.0 building-footprint-fallback',
+        },
+        timeout=40,
+    )
+    response.raise_for_status()
+    result = response.json() or {}
+
+    all_features = []
+    total_area_m2 = 0.0
+    for element in result.get('elements', []):
+        if element.get('type') != 'way':
+            continue
+        geometry_points = element.get('geometry') or []
+        coordinates = [
+            [point.get('lon'), point.get('lat')]
+            for point in geometry_points
+            if isinstance(point, dict)
+            and isinstance(point.get('lon'), (int, float))
+            and isinstance(point.get('lat'), (int, float))
+        ]
+        if len(coordinates) < 3:
+            continue
+        if coordinates[0] != coordinates[-1]:
+            coordinates.append(coordinates[0])
+        feature_geometry = {
+            'type': 'Polygon',
+            'coordinates': [coordinates],
+        }
+        area_m2 = _geojson_area_m2(feature_geometry)
+        feature = {
+            'type': 'Feature',
+            'id': 'osm-way/{}'.format(element.get('id')),
+            'properties': {
+                'source': 'OpenStreetMap',
+                'building': (element.get('tags') or {}).get('building', 'yes'),
+                'area_m2': area_m2,
+            },
+            'geometry': feature_geometry,
+        }
+        all_features.append(feature)
+        total_area_m2 += area_m2
+
+    return {
+        'features': all_features[:max_features],
+        'totalCount': len(all_features),
+        'totalAreaM2': total_area_m2,
+        'skipped': False,
+        'note': '',
+    }
 
 
 # ════════════════════════════════════════════════════════════════
@@ -1449,6 +1615,35 @@ def building_footprints():
         except (TypeError, ValueError):
             total_area_m2 = 0.0
 
+        source = _BUILDING_DATASET_NAME
+        coverage_note = _BUILDING_DATASET_COVERAGE_NOTE
+        osm_fallback_used = False
+        osm_fallback_skipped = False
+        # Open Buildings ülke kapsamı dışında kalabiliyor. GEE başarılı ama
+        # boş döndüğünde aynı küçük AOI'yi OSM bina ayak izleriyle kontrol et.
+        if building_count <= 0:
+            try:
+                osm_result = _osm_buildings_from_bbox(geometry, max_features)
+                osm_features = osm_result.get('features') or []
+                if osm_features:
+                    features = osm_features
+                    building_count = int(
+                        osm_result.get('totalCount') or len(osm_features)
+                    )
+                    total_area_m2 = float(osm_result.get('totalAreaM2') or 0)
+                    source = 'OpenStreetMap / Overpass API'
+                    coverage_note = _OSM_FALLBACK_NOTE
+                    osm_fallback_used = True
+                else:
+                    osm_fallback_skipped = bool(osm_result.get('skipped'))
+                    if osm_result.get('note'):
+                        coverage_note += ' ' + str(osm_result['note'])
+            except Exception as osm_error:
+                # OSM geçici olarak erişilemezse GEE'nin geçerli boş sonucu
+                # bozulmasın; nedenini yalnızca yanıt notuna ekle.
+                coverage_note += ' OSM yedeği şu anda kullanılamadı.'
+                print('[SylvaGIS] OSM bina yedeği kullanılamadı:', osm_error)
+
         payload = {
             'success': True,
             'buildingCount': building_count,
@@ -1456,8 +1651,10 @@ def building_footprints():
             'returnedFeatureCount': len(features),
             'truncated': building_count > len(features),
             'cached': False,
-            'dataset': _BUILDING_DATASET_NAME,
-            'coverageNote': _BUILDING_DATASET_COVERAGE_NOTE,
+            'dataset': source,
+            'coverageNote': coverage_note,
+            'osmFallbackUsed': osm_fallback_used,
+            'osmFallbackSkipped': osm_fallback_skipped,
             'geojson': {
                 'type': 'FeatureCollection',
                 'features': features,
