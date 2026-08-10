@@ -11996,16 +11996,26 @@ function selectRamp(name) {
                 demSource:  _demSrcRadioNow ? _demSrcRadioNow.value : 'SRTM'
             });
 
-            _clearAllAnalysisOutputs(_pane);
-            _sylvaClearGeeLayers(_pane);
-            // 🛠️ BUG FİX: bkz. yukarıdaki aynı isimli not (Uydu Görüntüsü Galerisi
-            // dalı) — indeks/modül (NDVI, LULC, DEM/Topografya vb.) analizleri için
-            // de aynı sorun geçerliydi: Ekran 1'de yeni bir analiz çalıştırıldığında
-            // Ekran 2'nin eski/artık seçili olmayan katmanları hiç temizlenmiyor,
-            // Ekran 2'nin "Üstte Gösterilecek Katman" kutusunda birikip kalıyordu.
-            // Senkronizasyon açıkken Ekran 1'den başlatılan HER yeni analiz artık
-            // Ekran 2'nin deposunu da temizleyerek başlar.
-            if (_sylvaMirrorThisRun && _pane === 'map' && window.map2) {
+            // 🛠️ BUG FİX (Zaman Kıyaslaması indeks/modül analizlerinde çalışmıyordu):
+            // Bu iki temizleme çağrısı eskiden HİÇBİR KOŞULA BAĞLI OLMADAN her
+            // "Analizi Çalıştır" çalıştırmasında (NDVI/NDWI/LST/LULC/TOPO vb.
+            // indeks/modül analizleri için) çalışıyordu — "Önceki Analizin
+            // Üzerine Ekle (Zaman Kıyaslaması)" işaretli olsa bile önceki tüm
+            // katmanlar siliniyor, yeni analiz eskisinin üzerine EKLENMİYOR,
+            // sanki sıfırdan yeni bir analiz yapılmış gibi eskisinin yerini
+            // alıyordu. Uydu Görüntüsü Galerisi (RGB) dalında bu çağrılar zaten
+            // !_stackMode ile korunuyordu (bkz. yukarıdaki aynı isimli not) —
+            // indeks/modül analizleri de artık BİREBİR AYNI mantığı izliyor:
+            // stack modu işaretliyse mevcut katmanlar silinmez, yeni analiz
+            // ayrı bir katman olarak üste eklenir (bkz. _thisLayerKey/_stackSuffix).
+            if (!_stackMode) {
+                _clearAllAnalysisOutputs(_pane);
+                _sylvaClearGeeLayers(_pane);
+            }
+            // Senkronizasyon açıkken Ekran 1'den başlatılan yeni analiz, stack
+            // modu KAPALIYKEN Ekran 2'nin deposunu da temizleyerek başlar —
+            // stack modu açıkken Ekran 2'nin birikmiş katmanları da korunur.
+            if (_sylvaMirrorThisRun && !_stackMode && _pane === 'map' && window.map2) {
                 _clearAllAnalysisOutputs('map2');
                 _sylvaClearGeeLayers('map2');
             }
