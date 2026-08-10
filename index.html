@@ -11388,8 +11388,35 @@ function selectRamp(name) {
             // PİKSEL cinsinden (yüzde değil) hesaplar — bu sayede katmanın
             // Leaflet tarafından ne kadar büyük/kaymış konumlandırıldığından
             // bağımsız olarak, kesme çizgisi her zaman fareyle tam hizalı kalır.
-            function _sylvaSwipeApplyClip(targetEl, clientX, clientY, orientation) {
+            //
+            // 🛠️ KÖK NEDEN DÜZELTMESİ 6 (Sıyırırken Katman Kademeli Değil, TAMAMEN
+            // Bir Anda Kayboluyordu): Leaflet'in her katman konteyneri
+            // (.leaflet-layer, layer.getContainer() ile dönen eleman) kendi CSS
+            // genişlik/yüksekliğini HİÇ belirtmez — içindeki TÜM karolar (tiles)
+            // da "position:absolute" olduğundan (normal akıştan çıkmış), W3C CSS
+            // kurallarına göre bu konteynerin "shrink-to-fit" genişliği/yüksekliği
+            // İÇERİK KATKISI SIFIR olduğu için 0×0 hesaplanır. Bu GERÇEK bir
+            // tarayıcı davranışıdır (Chromium'da bizzat test edilip doğrulandı).
+            // 0×0 boyutlu bir kutuya clip-path uygulandığında, inset değeri ne
+            // olursa olsun (fare nerede olursa olsun) görünür alan HER ZAMAN
+            // "hiçbir şey" olur — yani katman, fare konumundan tamamen BAĞIMSIZ
+            // olarak, sürüklemeye başlar başlamaz bir anda komple kayboluyordu
+            // (kademeli/kısmi bir sıyırma değil). Kullanıcının bildirdiği "üstteki
+            // analiz tamamen kalkıyor, çizginin geçtiği kadarı değil" sorunu
+            // TAM OLARAK buydu.
+            // Düzeltme: clip uygulamadan HEMEN ÖNCE, konteynere haritanın
+            // (viewport'un) GERÇEK piksel boyutunu (containerRect.width/height)
+            // açıkça veriyoruz. Bu, içindeki karoların kendi left/top ile
+            // konumlanmasını hiçbir şekilde etkilemez — sadece clip-path'in
+            // referans kutusunu geçerli/doğru boyutlu hale getirir, böylece
+            // kırpma artık gerçekten fareyle aynı hizada, kademeli olarak
+            // ilerler.
+            function _sylvaSwipeApplyClip(targetEl, clientX, clientY, orientation, containerRect) {
                 if (!targetEl) return;
+                if (containerRect) {
+                    targetEl.style.width = containerRect.width + 'px';
+                    targetEl.style.height = containerRect.height + 'px';
+                }
                 var r = targetEl.getBoundingClientRect();
                 if (orientation === 'horizontal') {
                     var localY = Math.max(0, Math.min(r.height, clientY - r.top));
@@ -11401,15 +11428,22 @@ function selectRamp(name) {
             }
 
             function _sylvaSwipeResetClip(targetEl) {
-                if (targetEl) targetEl.style.clipPath = '';
+                if (targetEl) {
+                    targetEl.style.clipPath = '';
+                    // 🛠️ Sürükleme bitince, kırpma için zorladığımız explicit
+                    // width/height de temizlenir — katman Leaflet'in kendi
+                    // yönettiği orijinal (otomatik) boyutlandırmasına döner.
+                    targetEl.style.width = '';
+                    targetEl.style.height = '';
+                }
             }
 
             // 🆕 Aynı anda kırpılması gereken BİRDEN FAZLA katman (ana + vurgulama
             // + diğer veri setleri) olabildiğinden, tek elemanlık uygula/sıfırla
             // yardımcılarını bir DİZİ üzerinde döngüyle çağıran sarmalayıcılar:
-            function _sylvaSwipeApplyClipAll(targetEls, clientX, clientY, orientation) {
+            function _sylvaSwipeApplyClipAll(targetEls, clientX, clientY, orientation, containerRect) {
                 if (!targetEls) return;
-                for (var i = 0; i < targetEls.length; i++) _sylvaSwipeApplyClip(targetEls[i], clientX, clientY, orientation);
+                for (var i = 0; i < targetEls.length; i++) _sylvaSwipeApplyClip(targetEls[i], clientX, clientY, orientation, containerRect);
             }
             function _sylvaSwipeResetClipAll(targetEls) {
                 if (!targetEls) return;
@@ -11505,7 +11539,7 @@ function selectRamp(name) {
                         line.style.width = '3px'; line.style.height = 'auto';
                         line.style.left = Math.max(0, Math.min(rect.width, x - rect.left)) + 'px';
                     }
-                    _sylvaSwipeApplyClipAll(targetEls, x, y, orientation);
+                    _sylvaSwipeApplyClipAll(targetEls, x, y, orientation, rect);
                     e.preventDefault();
                 }
                 function onUp() {
