@@ -13800,6 +13800,7 @@ function selectRamp(name) {
             var _buildingJobId = null;
             var _buildingPollTimer = null;
             var _buildingCancelRequested = false;
+            var _buildingStatusMisses = 0;
 
             function _stopBuildingPolling() {
                 if (_buildingPollTimer) {
@@ -13939,11 +13940,28 @@ function selectRamp(name) {
                             );
                         }
                         if (!response.ok) {
+                            // /start ile ilk /status isteği farklı bir worker'a
+                            // düşebilir. Sunucu ortak job snapshot'ını yeni
+                            // worker'a aktarırken kısa süreli 404 oluşursa
+                            // analizi hemen başarısız sayma; birkaç polling
+                            // döngüsü boyunca bekle.
+                            if (response.status === 404 && _buildingStatusMisses < 10) {
+                                _buildingStatusMisses += 1;
+                                return {
+                                    success: true,
+                                    _transientMissing: true,
+                                    status: 'running',
+                                    progress: { tilesDone: 0, totalTiles: 0 },
+                                    buildingCountSoFar: 0,
+                                    totalAreaM2SoFar: 0
+                                };
+                            }
                             throw new Error(
                                 (data && data.error) ||
                                 ('Durum sorgusu başarısız oldu (HTTP ' + response.status + ').')
                             );
                         }
+                        _buildingStatusMisses = 0;
                         return data;
                     });
                 })
@@ -13951,6 +13969,12 @@ function selectRamp(name) {
                     if (!_isCurrentBuildingRun()) { _stopBuildingPolling(); return; }
                     if (!statusData || !statusData.success) {
                         throw new Error((statusData && statusData.error) || 'Durum sorgusu başarısız.');
+                    }
+                    if (statusData._transientMissing) {
+                        if (_progressLabel) {
+                            _progressLabel.textContent = 'Analiz sunucuya bağlanıyor...';
+                        }
+                        return;
                     }
 
                     var progress = statusData.progress || { tilesDone: 0, totalTiles: 0 };
