@@ -910,6 +910,102 @@ def build_rgb_collection(ds, roi, max_cloud):
     return col
 
 
+_TR_MONTH_NAMES = {
+    'ocak': 1, 'şubat': 2, 'subat': 2, 'mart': 3, 'nisan': 4, 'mayıs': 5,
+    'mayis': 5, 'haziran': 6, 'temmuz': 7, 'ağustos': 8, 'agustos': 8,
+    'eylül': 9, 'eylul': 9, 'ekim': 10, 'kasım': 11, 'kasim': 11,
+    'aralık': 12, 'aralik': 12,
+}
+
+
+def _parse_months_param(data):
+    """İstemciden gelen 'Ay Seçimi' filtresini (varsa) ayrıştırır.
+    Hem sayısal liste ([7, 8]) hem de Türkçe ay ismi listesi
+    (['Temmuz', 'Ağustos']) destekler. Çeşitli olası alan adlarına bakar
+    ('months', 'selectedMonths', 'monthNames', 'ay', 'ayListesi').
+    Filtre yoksa/boşsa None döner (tüm aylar dahil demektir)."""
+    raw = None
+    for key in ('months', 'selectedMonths', 'monthNames', 'ay', 'ayListesi'):
+        val = data.get(key)
+        if val:
+            raw = val
+            break
+    if not raw:
+        return None
+    months = set()
+    for item in raw:
+        if isinstance(item, (int, float)):
+            m = int(item)
+            if 1 <= m <= 12:
+                months.add(m)
+        elif isinstance(item, str):
+            s = item.strip().lower()
+            if s.isdigit():
+                m = int(s)
+                if 1 <= m <= 12:
+                    months.add(m)
+            elif s in _TR_MONTH_NAMES:
+                months.add(_TR_MONTH_NAMES[s])
+    return sorted(months) if months else None
+
+
+def _calendar_month_filter(months):
+    """months: 1-12 arası tam sayı listesi. Herhangi birine uyan bir
+    ee.Filter.Or(calendarRange(...)) döner. Liste boş/None ise None döner."""
+    if not months:
+        return None
+    filters = [ee.Filter.calendarRange(m, m, 'month') for m in months]
+    return filters[0] if len(filters) == 1 else ee.Filter.Or(*filters)
+
+
+# ════════════════════════════════════════════════════════════════
+# 🗓️ ÇOK YILLI TARİH ARALIKLARINDA SAHNE TOPLAMA — YIL ÖNYARGISI DÜZELTMESİ
+# ════════════════════════════════════════════════════════════════
+# SORUN: Önceden sahne/galeri sorguları şu şekildeydi:
+#     col.filterDate(start_date, end_date).sort('system:time_start').limit(N)
+# Bu, TÜM tarih aralığını (ör. 2024-2026) tek bir koleksiyonda filtreleyip
+# ardından kronolojik olarak İLK N sahneyi alır. Sentinel-2 gibi sık
+# tekrar ziyaretli (5 günde bir) bir uydu için, aralık birden fazla yıl
+# kapsadığında bu İLK N sahne neredeyse her zaman aralığın BAŞLADIĞI YILIN
+# içinde tükenir — böylece kullanıcı "Temmuz, Ağustos" gibi bir ay filtresi
+# seçse bile (bu filtre önceden hiç uygulanmıyordu) ya da sadece geniş bir
+# tarih aralığı seçse bile, galeri/zaman serisi SADECE aralığın ilk yılına
+# ait veri gösterir; sonraki yıllardaki aynı aya/kritere uyan görüntüler
+# hiçbir zaman sorguya dahi girmez (çünkü limit() onlara ulaşmadan önce
+# dolar). "Analiz yaparken de aynı sorunu yaşıyorum" şikayeti de aynı kök
+# nedenden kaynaklanıyordu (bkz. /api/analyze zaman serisi galerisi).
+#
+# ÇÖZÜM: Aralıktaki HER YIL için AYRI AYRI filterDate (+ varsa ay filtresi)
+# uygulanır ve o yıldan en fazla `per_year_limit` sahne alınır; sonra tüm
+# yılların sonuçları birleştirilir. Böylece her yıl galeri/zaman serisinde
+# adil şekilde temsil edilir, tarih aralığı kaç yıl kapsarsa kapsasın.
+def _collect_scenes_across_years(col, start_date, end_date, months=None,
+                                  per_year_limit=12, total_limit=60):
+    sdt = datetime.datetime.strptime(str(start_date)[:10], '%Y-%m-%d')
+    edt = datetime.datetime.strptime(str(end_date)[:10], '%Y-%m-%d')
+    month_filter = _calendar_month_filter(months)
+
+    merged = None
+    for year in range(sdt.year, edt.year + 1):
+        year_start = datetime.datetime(year, 1, 1)
+        year_end = datetime.datetime(year + 1, 1, 1)
+        clip_start = max(sdt, year_start)
+        clip_end = min(edt, year_end)
+        if clip_start >= clip_end:
+            continue
+        yr_col = col.filterDate(clip_start.strftime('%Y-%m-%d'), clip_end.strftime('%Y-%m-%d'))
+        if month_filter is not None:
+            yr_col = yr_col.filter(month_filter)
+        yr_col = yr_col.sort('system:time_start').limit(per_year_limit)
+        merged = yr_col if merged is None else merged.merge(yr_col)
+
+    if merged is None:
+        # Geçersiz/ters aralık — boş koleksiyon döndür
+        return col.filterDate(start_date, start_date)
+
+    return merged.sort('system:time_start').limit(total_limit)
+
+
 def _mask_clouds(image, satellite):
     """Bulut / bulut gölgesi / sirrus piksellerini updateMask() ile NoData
     yaparak indeks hesaplamalarından (NDVI, NDWI, vb.) ve GeoTIFF
@@ -2509,7 +2605,11 @@ def analyze():
                             .filterBounds(roi_geo)
                             .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', max_cloud)))
                 cloud_prop = 'CLOUDY_PIXEL_PERCENTAGE' if satellite.startswith('s2') else 'CLOUD_COVER'
-                limited    = col2.filterDate(start_date, end_date).sort('system:time_start').limit(10)
+                months_filter = _parse_months_param(data)
+                limited    = _collect_scenes_across_years(
+                    col2, start_date, end_date, months=months_filter,
+                    per_year_limit=10, total_limit=60,
+                )
                 scene_ids  = _call_with_retry(lambda: limited.aggregate_array('system:index').getInfo(), retries=1)
                 timestamps = _call_with_retry(lambda: limited.aggregate_array('system:time_start').getInfo(), retries=1)
                 clouds_arr = _call_with_retry(lambda: limited.aggregate_array(cloud_prop).getInfo(), retries=1)
@@ -3614,9 +3714,17 @@ def rgb_scenes():
         start_date = data.get('startDate')
         end_date   = data.get('endDate')
         max_cloud  = int(data.get('maxCloud', 100))
+        months     = _parse_months_param(data)
 
         col = build_rgb_collection(ds, roi, max_cloud)
-        limited = col.filterDate(start_date, end_date).sort('system:time_start').limit(12)
+        # Thumbnail üretimi pahalı olduğundan yıl başına makul bir sınır
+        # (8) ve toplamda 40 sahne ile sınırlıyoruz — ama artık SADECE
+        # aralığın ilk yılından değil, aralıktaki HER yıldan (ve varsa
+        # seçilen aylardan) adil şekilde örnekliyoruz.
+        limited = _collect_scenes_across_years(
+            col, start_date, end_date, months=months,
+            per_year_limit=8, total_limit=40,
+        )
 
         scene_ids  = limited.aggregate_array('system:index').getInfo()
         timestamps = limited.aggregate_array('system:time_start').getInfo()
@@ -3743,7 +3851,11 @@ def get_scenes():
                    .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', max_cloud)))
             cloud_prop = 'CLOUDY_PIXEL_PERCENTAGE'
 
-        limited = col.sort('system:time_start').limit(10)
+        months = _parse_months_param(data)
+        limited = _collect_scenes_across_years(
+            col, start_date, end_date, months=months,
+            per_year_limit=10, total_limit=60,
+        )
 
         scene_ids  = limited.aggregate_array('system:index').getInfo()
         timestamps = limited.aggregate_array('system:time_start').getInfo()
