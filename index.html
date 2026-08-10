@@ -11661,6 +11661,15 @@ function selectRamp(name) {
                     _sylvaSwipeResetClipAll(targetEls);
                     SWIPE[paneId].clippedEls = [];
                     targetEls = [];
+                    // 🛠️ DÜZELTME: Yukarıdaki sıfırlama, katmanın clip-path'ini
+                    // TAMAMEN boşaltır (AOI/Çalışma Alanı şekilli maske dahil).
+                    // Bu maske normalde SADECE harita hareket/zoom olaylarında
+                    // yeniden hesaplanıp uygulandığından, kullanıcı sürüklemeyi
+                    // bırakıp haritayı hiç oynatmazsa katman(lar) bir süre
+                    // maskesiz/köşeli görünüyordu. Artık bırakma anında AOI
+                    // maskesi haritayı hareket ettirmeye gerek kalmadan hemen
+                    // yeniden uygulanır.
+                    if (typeof _updateGeeLayerAoiClip === 'function') _updateGeeLayerAoiClip(paneId);
                 }
 
                 container.addEventListener('mousedown', onDown);
@@ -12193,6 +12202,31 @@ function selectRamp(name) {
                     _sylvaAddGeeLayer(_pane, _thisLayerKey, data.tileUrl, { opacity: 1 });
                     window._sylvaTopGeeLayerByPane = window._sylvaTopGeeLayerByPane || { map: null, map2: null };
                     window._sylvaTopGeeLayerByPane[_pane === 'map2' ? 'map2' : 'map'] = _thisLayerKey;
+                    // 🛠️ DÜZELTME (Katman Sıyırıcı "Önceki Analizin Üzerine Ekle"
+                    // ile birlikte yanlış/eksik çalışıyordu): Bu satırdan önce yeni
+                    // eklenen katman, DOM'da HER ZAMAN varsayılan zIndex (10) ile
+                    // kalıyordu — sadece "Üstte Gösterilecek Katman" kutusundan elle
+                    // seçim yapıldığında (_sylvaBringGeeLayerToFront) gerçek zIndex 20
+                    // veriliyordu. Stack modunda üst üste birkaç analiz eklendiğinde
+                    // TÜM katmanlar zIndex 10'da eşit kalıyor, Katman Sıyırıcı'nın
+                    // "ekranda gerçekten üstte olan katman" tespiti DOM ekleme
+                    // sırasına (tesadüfen doğru olabilecek, garanti olmayan bir
+                    // varsayıma) bağımlı kalıyordu. Artık her yeni katman eklendiğinde
+                    // o katman açıkça zIndex 20'ye, aynı ekrandaki diğer TÜM
+                    // katmanlar açıkça zIndex 10'a ayarlanır — sıyırıcı her zaman
+                    // doğru/güncel üst katmanı bulur.
+                    (function () {
+                        var _zKey = (_pane === 'map2') ? 'map2' : 'map';
+                        var _zStore = window._geeLayersByPane && window._geeLayersByPane[_zKey];
+                        if (!_zStore) return;
+                        Object.keys(_zStore).forEach(function (k) {
+                            try {
+                                if (typeof _zStore[k].setZIndex === 'function') {
+                                    _zStore[k].setZIndex(k === _thisLayerKey ? 20 : 10);
+                                }
+                            } catch (e) {}
+                        });
+                    })();
                     // 🆕 Katman adı artık her zaman (stack modu kapalıyken de)
                     // tarih aralığıyla birlikte saklanır — "Üstte Gösterilecek
                     // Katman" kutusunda hangi analiz hangi tarihe ait olduğu
@@ -12285,6 +12319,32 @@ function selectRamp(name) {
         // bir analiz öne getirildiğinde, o analizin saklı verisiyle bu fonksiyon
         // tekrar çağrılarak Lejant ve Galeri otomatik güncellenir — RGB uydu
         // görüntü galerisiyle birebir aynı mantık.
+        // 🛠️ DÜZELTME (Katman geçişinde eski Galeri/Bilgi Kutusu içeriği
+        // ekranda kalıyordu): Üst üste eklenen (stack) analizler arasında
+        // geçiş yapıldığında — ör. NDVI'dan (zaman serisi galerisi olan bir
+        // analiz) ESA WorldCover'a (statik veri seti, sadece bilgi kartı
+        // olan) veya tam tersine geçildiğinde — bir önceki katmana ait
+        // Galeri/Bilgi Kutusu içeriği hiç temizlenmiyordu; yeni katman
+        // sadece kendi türüne uygun kutuyu dolduruyor, DİĞER kutuyu olduğu
+        // gibi (eski/yanlış içerikle) bırakıyordu. Bu yüzden ör. ESA
+        // WorldCover görüntülenirken NDVI'nin sahne galerisi ekranda asılı
+        // kalıyor, ya da NDVI'ye dönüldüğünde ESA'nın bilgi kartı kapanmıyordu.
+        // Bu iki yardımcı fonksiyon, ilgili kutuyu TAMAMEN boşaltıp kapatır.
+        function _sylvaClearGalleryBox(paneId) {
+            paneId = (paneId === 'map2') ? 'map2' : 'map';
+            var el = document.getElementById(paneId === 'map2' ? 'map2-gallery' : 'map-gallery');
+            if (el) { el.innerHTML = ''; el.style.display = 'none'; }
+        }
+        function _sylvaClearInfoBox(paneId) {
+            paneId = (paneId === 'map2') ? 'map2' : 'map';
+            var el = document.getElementById(paneId === 'map2' ? 'map2-info-box' : 'map-info-box');
+            if (el) { el.innerHTML = ''; el.style.display = 'none'; }
+            if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[paneId]) {
+                window._sylvaLegendInfoByPane[paneId].infoHTML = '';
+                window._sylvaLegendInfoByPane[paneId].infoDisplay = 'none';
+            }
+        }
+
         function _sylvaRenderIndexAnalysisResult(meta, data, _pane, skipClassifyRecalc, layerKeyOverride) {
             if (!meta || !data) return;
             // 🆕 Stack modunda çalıştırılan analizler kendi benzersiz depolama
@@ -12341,11 +12401,26 @@ function selectRamp(name) {
                     }
                 }
             }
+            // 🛠️ DÜZELTME: Statik veri setleri (ESA WorldCover, LULC, TOPO, SAR)
+            // sadece Bilgi Kutusu kartını kullanır — Galeri'yi (bir önceki
+            // analizden kalmış olabilecek sahne kartlarıyla birlikte) kapatır.
+            // Zaman serisi analizleri (NDVI/NDWI/EVI vb.) ise sadece Galeri'yi
+            // kullanır — Bilgi Kutusu'nu (bir önceki statik veri setinden
+            // kalmış olabilecek "Kaynak/Çözünürlük/Sınıflar" kartıyla
+            // birlikte) kapatır. Böylece hangi katman öne getirilirse
+            // getirilsin, ekranda SADECE o katmana ait Galeri/Bilgi Kutusu
+            // görünür — diğerinin eski içeriği hiçbir zaman asılı kalmaz.
             if (_STATIC_DATASETS.indexOf(meta.analysisName) !== -1) {
                 if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(_pane);
                 renderDatasetInfoCard(meta.analysisName, _pane);
-            } else if (data.scenes && data.scenes.length) {
-                renderGalleryFromScenes(data.scenes, _pane, meta);
+                _sylvaClearGalleryBox(_pane);
+            } else {
+                _sylvaClearInfoBox(_pane);
+                if (data.scenes && data.scenes.length) {
+                    renderGalleryFromScenes(data.scenes, _pane, meta);
+                } else {
+                    _sylvaClearGalleryBox(_pane);
+                }
             }
             if (isLulcAnalysis(meta.analysisName)) {
                 if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(_pane);
@@ -12405,6 +12480,17 @@ function selectRamp(name) {
             // gösterir — başka bir katmanın ayarlarını değil.
             if (!skipClassifyRecalc && typeof _sylvaSaveEditorStateForLayer === 'function') {
                 _sylvaSaveEditorStateForLayer(_pane, meta.analysisName);
+            }
+            // 🛠️ DÜZELTME: Yukarıdaki Galeri/Bilgi Kutusu temizleme-doldurma
+            // işleminden sonra "Uydu Görüntü Galerisi" / "Bilgi Kutusu"
+            // aç-kapa kutucukları (checkbox) hiç güncellenmiyordu — bu yüzden
+            // ör. Galeri kapatılıp içeriği boşaltıldığında checkbox hâlâ
+            // işaretli/etkin görünebiliyordu. Bu ekran o an aktif ekransa,
+            // checkbox'lar kutuların GERÇEK (az önce güncellenmiş) içeriğine
+            // göre yeniden hesaplanır.
+            if (typeof _sylvaActivePaneId === 'function' && _pane === _sylvaActivePaneId()
+                && typeof window._sylvaSyncActivePaneControls === 'function') {
+                window._sylvaSyncActivePaneControls();
             }
         }
 
@@ -12954,21 +13040,52 @@ function selectRamp(name) {
             return rings;
         }
 
+        // 🛠️ KÖK NEDEN DÜZELTMESİ (Katman Sıyırıcı + "Önceki Analizin Üzerine
+        // Ekle": sıyırırken sadece ekranın bir kısmı çıkıyordu): AOI/Çalışma
+        // Alanı şekilli maske (path() clip-path) eskiden SADECE o an en son
+        // eklenen/aktif TEK katmana (_geeLayer / _geeLayer2) uygulanıyordu.
+        // Stack modunda (birden fazla analiz üst üste eklendiğinde) alttaki
+        // ESKİ katmanlara bu maske HİÇ uygulanmıyordu — onlar üstteki opak
+        // katmanın altında saklı olduğu için normalde bu fark görünmüyordu.
+        // Ama Katman Sıyırıcı üstteki katmanı kırpıp altındakini ortaya
+        // çıkardığında, o alttaki katman hâlâ maskesiz/şekilsiz haliyle
+        // (yalnızca sunucudan gelen ham karo dikdörtgeniyle) görünüyor, bu da
+        // "ekranın sadece bir kısmı çıkıyor / düzensiz görünüyor" sorununa yol
+        // açıyordu. Artık maske, o pane'deki TÜM yığılmış katmanlara (+ sınıf
+        // vurgulama katmanına) birlikte uygulanır — sıyırıcı hangi katmanı
+        // ortaya çıkarırsa çıkarsın, o katman her zaman doğru AOI şekliyle
+        // kırpılmış olarak görünür.
+        function _sylvaGeeClipTargetContainers(paneId) {
+            var containers = [];
+            var key = (paneId === 'map2') ? 'map2' : 'map';
+            var store = (window._geeLayersByPane && window._geeLayersByPane[key]) || null;
+            if (store) {
+                Object.keys(store).forEach(function (k) {
+                    var l = store[k];
+                    if (l && l._container) containers.push(l._container);
+                });
+            }
+            try {
+                var hl = window._classHighlightLayerByPane && window._classHighlightLayerByPane[key];
+                if (hl && hl._container) containers.push(hl._container);
+            } catch (e) {}
+            return containers;
+        }
+
         function _clearGeeLayerAoiClip(paneId) {
             paneId = (paneId === 'map2') ? 'map2' : 'map';
-            var layer = (paneId === 'map2') ? window._geeLayer2 : _geeLayer;
-            if (layer && layer._container) {
-                layer._container.style.clipPath = '';
-                layer._container.style.webkitClipPath = '';
-            }
+            _sylvaGeeClipTargetContainers(paneId).forEach(function (c) {
+                c.style.clipPath = '';
+                c.style.webkitClipPath = '';
+            });
         }
 
         function _updateGeeLayerAoiClip(paneId) {
             paneId = (paneId === 'map2') ? 'map2' : 'map';
             var lmap = (paneId === 'map2') ? map2 : map;
-            var layer = (paneId === 'map2') ? window._geeLayer2 : _geeLayer;
             var aoiLayer = (paneId === 'map2') ? currentLayer2 : currentLayer;
-            if (!_geeClipActive[paneId] || !layer || !layer._container || !aoiLayer || !lmap) return;
+            var containers = _sylvaGeeClipTargetContainers(paneId);
+            if (!_geeClipActive[paneId] || !containers.length || !aoiLayer || !lmap) return;
             try {
                 var roi = _extractROIGeometry(aoiLayer);
                 var rings = _geoRoiToLatLngRings(roi);
@@ -12981,8 +13098,10 @@ function selectRamp(name) {
                     return 'M ' + pts.join(' L ') + ' Z';
                 });
                 var pathStr = 'path(evenodd, "' + pathParts.join(' ') + '")';
-                layer._container.style.clipPath = pathStr;
-                layer._container.style.webkitClipPath = pathStr;
+                containers.forEach(function (c) {
+                    c.style.clipPath = pathStr;
+                    c.style.webkitClipPath = pathStr;
+                });
             } catch (e) { /* clip-path desteklenmiyorsa sessizce orijinal görüntü kalır */ }
         }
 
