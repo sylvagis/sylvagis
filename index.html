@@ -11889,14 +11889,17 @@ function selectRamp(name) {
             var _stackToggleEl = document.getElementById('toggle-stack-analysis');
             var _stackMode = !!(_stackToggleEl && _stackToggleEl.checked);
             var _stackSuffix = _stackMode ? ('__t' + Date.now()) : '';
-            // Kıyaslamada okunabilir olması için tarih aralığını da etiket olarak sakla.
-            var _stackDateLabel = _stackMode ? (function () {
+            // 🆕 Tarih etiketi artık SADECE stack modunda değil, her zaman
+            // hesaplanır — "Üstte Gösterilecek Katman" kutusundaki her analiz
+            // adının yanında (stack modu kapalı/tek katman olsa bile) hangi
+            // tarih aralığına ait olduğu her zaman görünsün diye.
+            var _stackDateLabel = (function () {
                 var dS = document.getElementById('date-start');
                 var dE = document.getElementById('date-end');
                 var s = dS && dS.value ? dS.value : '';
                 var e = dE && dE.value ? dE.value : '';
                 return (s || e) ? (' (' + s + (e ? (' – ' + e) : '') + ')') : '';
-            })() : '';
+            })();
 
             // 🛰️ Uydu Görüntüsü Galerisi (RGB) — işaretli HER görüntü için ayrı
             // istek atılır; sonuçlar haritaya üst üste eklenir (diğer analizlerle aynı mantık).
@@ -11950,7 +11953,10 @@ function selectRamp(name) {
                     meta._seq = _mIdx;
                     if (meta.isRgbGallery) {
                         var _stackKey = _stackMode ? (meta.datasetKey + _stackSuffix) : meta.datasetKey;
-                        fetchRgbGallery(meta, _pane, _sylvaMirrorThisRun, _stackKey, _stackMode ? ((meta.datasetLabel || meta.datasetKey) + _stackDateLabel) : null);
+                        // 🆕 Etiket (tarih dahil) artık her zaman gönderilir —
+                        // stack modu kapalıyken de "Üstte Gösterilecek Katman"
+                        // kutusunda hangi tarihe ait olduğu görünsün diye.
+                        fetchRgbGallery(meta, _pane, _sylvaMirrorThisRun, _stackKey, (meta.datasetLabel || meta.datasetKey) + _stackDateLabel);
                     }
                 });
                 return;
@@ -12087,10 +12093,20 @@ function selectRamp(name) {
                     _sylvaAddGeeLayer(_pane, _thisLayerKey, data.tileUrl, { opacity: 1 });
                     window._sylvaTopGeeLayerByPane = window._sylvaTopGeeLayerByPane || { map: null, map2: null };
                     window._sylvaTopGeeLayerByPane[_pane === 'map2' ? 'map2' : 'map'] = _thisLayerKey;
-                    if (_stackMode) {
-                        window._sylvaLayerFriendlyNames = window._sylvaLayerFriendlyNames || {};
-                        window._sylvaLayerFriendlyNames[_thisLayerKey] = _sylvaLayerFriendlyName(meta.analysisName) + _stackDateLabel;
-                    }
+                    // 🆕 Katman adı artık her zaman (stack modu kapalıyken de)
+                    // tarih aralığıyla birlikte saklanır — "Üstte Gösterilecek
+                    // Katman" kutusunda hangi analiz hangi tarihe ait olduğu
+                    // her zaman görünsün diye.
+                    // 🛠️ BUG FİX: Taban ad burada _sylvaLayerFriendlyName(meta.analysisName)
+                    // ile DEĞİL, doğrudan ham kaynaktan (_LULC_SWITCH_TITLES/analysisName)
+                    // alınır. Aksi halde stack modu kapalıyken aynı katman anahtarı
+                    // (meta.analysisName) her seferinde yeniden kullanıldığından,
+                    // _sylvaLayerFriendlyName() bir önceki çalıştırmada ZATEN tarih
+                    // etiketi eklenmiş ismi geri döndürür ve üzerine bir tarih etiketi
+                    // DAHA eklenir — "NDVI (t1) (t2) (t3)..." şeklinde katlanarak büyürdü.
+                    window._sylvaLayerFriendlyNames = window._sylvaLayerFriendlyNames || {};
+                    var _baseLayerLabel = _LULC_SWITCH_TITLES[meta.analysisName] || meta.analysisName;
+                    window._sylvaLayerFriendlyNames[_thisLayerKey] = _baseLayerLabel + _stackDateLabel;
                     if (typeof _sylvaRenderLayerSwitchBox === 'function') _sylvaRenderLayerSwitchBox(_pane);
                     _applyGeeLayerClipMode(clipMode, _pane);
                     _sylvaApplyAutoOpacity(_pane, meta);
