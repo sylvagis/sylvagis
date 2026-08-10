@@ -7740,6 +7740,9 @@ tr.class-highlight-active {
                 window._sylvaMirrorWorkspaceLayer();
                 return;
             }
+            if (typeof window._sylvaInvalidateBuildingAnalysis === 'function') {
+                window._sylvaInvalidateBuildingAnalysis(paneId, paneId === 'map');
+            }
             var targetMap = paneId === 'map2' && map2 ? map2 : map;
             var previous = paneId === 'map2' ? currentLayer2 : currentLayer;
             if (previous && targetMap && targetMap.hasLayer(previous)) targetMap.removeLayer(previous);
@@ -7793,6 +7796,9 @@ tr.class-highlight-active {
         // Böylece aktif ekran ne olursa olsun Ekran 1 ve Ekran 2 aynı anda
         // temizlenir; eski katman referansları da haritada asılı kalmaz.
         window._sylvaClearAllAreaLayers = function () {
+            if (typeof window._sylvaInvalidateBuildingAnalysis === 'function') {
+                window._sylvaInvalidateBuildingAnalysis('map', true);
+            }
             // 🛠️ BUG FİX: Senkronizasyon açıkken Ekran 2'ye çizilen şekil normal
             // takip sistemine (VAW / _sylvaWsId) dahil olmuyor ve bu yüzden hiçbir
             // silme butonu onu bulamıyordu. Bu yüzden burada, hangi çöp kutusu
@@ -13507,16 +13513,64 @@ function selectRamp(name) {
             map: null,
             map2: null
         };
+        window._sylvaBuildingStateByPane = window._sylvaBuildingStateByPane || {
+            map: { active: false, pending: false },
+            map2: { active: false, pending: false }
+        };
+        window._sylvaBuildingDataByPane = window._sylvaBuildingDataByPane || {
+            map: null,
+            map2: null
+        };
 
         function _sylvaClearBuildingLayer(paneId) {
             var key = (paneId === 'map2') ? 'map2' : 'map';
             var layer = window._sylvaBuildingLayerByPane[key];
-            var targetMap = (key === 'map2') ? window.map2 : window.map;
-            if (layer && targetMap && typeof targetMap.removeLayer === 'function') {
-                try { targetMap.removeLayer(layer); } catch (e) {}
-            }
+            [window.map, window.map2].forEach(function (targetMap) {
+                if (layer && targetMap && typeof targetMap.removeLayer === 'function') {
+                    try { targetMap.removeLayer(layer); } catch (e) {}
+                }
+            });
             window._sylvaBuildingLayerByPane[key] = null;
         }
+
+        function _sylvaClearBuildingInfo(paneId) {
+            var key = (paneId === 'map2') ? 'map2' : 'map';
+            var box = document.getElementById(key === 'map2' ? 'map2-info-box' : 'map-info-box');
+            if (box) {
+                box.innerHTML = '';
+                box.style.display = 'none';
+            }
+            if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[key]) {
+                window._sylvaLegendInfoByPane[key].infoHTML = '';
+                window._sylvaLegendInfoByPane[key].infoDisplay = 'none';
+            }
+        }
+
+        // Çalışma alanı değiştiğinde önceki bina sonucunu geçersiz kılar.
+        // Böylece eski sonuç yeni AOI'nin üstünde kalmaz ve devam eden istek
+        // tamamlandığında artık geçersiz olan poligonları geri getiremez.
+        window._sylvaInvalidateBuildingAnalysis = function (paneId, mirror) {
+            var key = (paneId === 'map2') ? 'map2' : 'map';
+            var state = window._sylvaBuildingStateByPane[key];
+            var hadResult = !!(
+                (state && (state.active || state.pending)) ||
+                window._sylvaBuildingLayerByPane[key]
+            );
+            _sylvaClearBuildingLayer(key);
+            window._sylvaBuildingDataByPane[key] = null;
+            if (state) {
+                state.active = false;
+                state.pending = false;
+            }
+            if (hadResult) {
+                _sylvaClearBuildingInfo(key);
+                _analysisGeneration++;
+            }
+            if (mirror && key === 'map' &&
+                (window._sylvaWorkspaceSyncActive || window._sylvaDualScreenSyncActive)) {
+                window._sylvaInvalidateBuildingAnalysis('map2', false);
+            }
+        };
 
         function _sylvaRenderBuildingFootprints(data, paneId) {
             var key = (paneId === 'map2') ? 'map2' : 'map';
@@ -13545,6 +13599,20 @@ function selectRamp(name) {
             if (typeof buildingLayer.bringToFront === 'function') buildingLayer.bringToFront();
             window._sylvaBuildingLayerByPane[key] = buildingLayer;
             return buildingLayer;
+        }
+
+        function _sylvaMirrorBuildingFootprints(data, sourcePaneId) {
+            var sourceKey = (sourcePaneId === 'map2') ? 'map2' : 'map';
+            var targetKey = sourceKey === 'map2' ? 'map' : 'map2';
+            var targetMap = targetKey === 'map2' ? window.map2 : window.map;
+            if (!targetMap || !data || !data.geojson) return;
+            _sylvaRenderBuildingFootprints(data, targetKey);
+            _sylvaRenderBuildingInfo(data, targetKey);
+            window._sylvaBuildingDataByPane[targetKey] = data;
+            window._sylvaBuildingStateByPane[targetKey] = { active: true, pending: false };
+            if (typeof window._sylvaTagContentPane === 'function') {
+                window._sylvaTagContentPane(targetKey);
+            }
         }
 
         function _sylvaRenderBuildingInfo(data, paneId) {
@@ -13594,7 +13662,13 @@ function selectRamp(name) {
         function _sylvaRunBuildingFootprintAnalysis(roi, paneId, mirrorActive, stackMode) {
             var runBtn = document.getElementById('btn-run-analysis');
             var loadingOverlay = document.getElementById('analysis-loading-overlay');
-            var _buildingWorkspaceLayer = null;
+            // Temizleme fonksiyonları currentLayer/currentLayer2 referansını
+            // sıfırlayabildiği için AOI katmanını temizlemeden önce sakla.
+            var _initialMapKey = (paneId === 'map2') ? 'map2' : 'map';
+            var _buildingWorkspaceLayer =
+                _initialMapKey === 'map2'
+                    ? (currentLayer2 || window._workspaceLayer2 || null)
+                    : (currentLayer || window._workspaceLayer || null);
 
             // Analiz temizliği, çalışma alanı görünürlük kutusunu geçici olarak
             // kapatabilir. Analiz sonucu boş veya hata olsa bile AOI kaybolmasın.
@@ -13608,6 +13682,7 @@ function selectRamp(name) {
                     })
                     : null;
                 _buildingWorkspaceLayer = (_ws && _ws.layer)
+                    || _buildingWorkspaceLayer
                     || (_mapKey === 'map2' ? window._workspaceLayer2 : window._workspaceLayer)
                     || null;
                 if (!_buildingWorkspaceLayer) return;
@@ -13661,6 +13736,21 @@ function selectRamp(name) {
                     _sylvaClearGeeLayers('map2');
                 }
             }
+            // Aynı kullanıcı yeni bir analizi başlatmadan önce eski istek
+            // tamamlanabilir. Eski yanıtın yeni sonuçların üzerine bina
+            // poligonu yazmasını ve eski isteğin buton/overlay durumunu
+            // bozmasını engellemek için bu çalıştırmaya ait nesil saklanır.
+            var _buildingRunGeneration = _analysisGeneration;
+            function _isCurrentBuildingRun() {
+                return _analysisGeneration === _buildingRunGeneration;
+            }
+            var _buildingState = window._sylvaBuildingStateByPane[
+                paneId === 'map2' ? 'map2' : 'map'
+            ];
+            if (_buildingState) {
+                _buildingState.pending = true;
+                _buildingState.active = false;
+            }
             _restoreBuildingWorkspace();
             if (runBtn) {
                 runBtn.disabled = true;
@@ -13695,21 +13785,78 @@ function selectRamp(name) {
                 });
             })
             .then(function (data) {
+                if (!_isCurrentBuildingRun()) return;
                 if (!data || !data.success) {
                     throw new Error((data && data.error) || 'Bina verileri alınamadı.');
                 }
+                var geojson = data.geojson || {};
+                var returnedFeatures = Array.isArray(geojson.features) ? geojson.features : [];
+                var buildingCount = Number(data.buildingCount);
+
+                // Başarılı HTTP yanıtını boş veriyle karıştırma: kullanıcıya
+                // açıkça bilgi ver, AOI'yi koru ve eski poligonları gösterme.
+                _sylvaClearBuildingLayer(paneId);
+                if (returnedFeatures.length === 0 || (isFinite(buildingCount) && buildingCount <= 0)) {
+                    if (_buildingState) {
+                        _buildingState.pending = false;
+                        _buildingState.active = false;
+                    }
+                    window._sylvaBuildingDataByPane[paneId === 'map2' ? 'map2' : 'map'] = null;
+                    _sylvaClearBuildingInfo(paneId);
+                    _restoreBuildingWorkspace();
+                    sylvaAlert(
+                        'Seçilen çalışma alanında gösterilecek bina/çatı poligonu bulunamadı. ' +
+                        'Alanı büyüterek veya farklı bir bölge seçerek tekrar deneyin.',
+                        'warning'
+                    );
+                    return;
+                }
+
                 _sylvaRenderBuildingFootprints(data, paneId);
                 _sylvaRenderBuildingInfo(data, paneId);
+                if (_buildingState) {
+                    _buildingState.pending = false;
+                    _buildingState.active = true;
+                }
+                window._sylvaBuildingDataByPane[paneId === 'map2' ? 'map2' : 'map'] = data;
                 if (typeof window._sylvaTagContentPane === 'function') {
                     window._sylvaTagContentPane(paneId);
                 }
+                if (mirrorActive && paneId === 'map' && window.map2) {
+                    _sylvaMirrorBuildingFootprints(data, paneId);
+                }
+                var _buildingTotalLabel = Math.round(
+                    isFinite(buildingCount) ? buildingCount : returnedFeatures.length
+                ).toLocaleString('tr-TR');
+                var _buildingReturnedLabel = returnedFeatures.length.toLocaleString('tr-TR');
+                var _buildingToast = 'Bina analizi tamamlandı: ' + _buildingTotalLabel + ' poligon bulundu.';
+                if (data.truncated) {
+                    _buildingToast += ' Haritada ilk ' + _buildingReturnedLabel +
+                        ' poligon gösteriliyor; toplam bina ve alan bilgisi eksiksizdir.';
+                }
+                showAnalysisToast(
+                    _buildingToast,
+                    data.truncated ? 'info' : 'success'
+                );
                 if (typeof playSylvaChime === 'function') playSylvaChime('analysis');
             })
             .catch(function (err) {
+                if (!_isCurrentBuildingRun()) return;
+                if (_buildingState) {
+                    _buildingState.pending = false;
+                    _buildingState.active = false;
+                }
+                window._sylvaBuildingDataByPane[paneId === 'map2' ? 'map2' : 'map'] = null;
                 _restoreBuildingWorkspace();
-                showAnalysisToast('Bina analizi başarısız: ' + err.message, 'error');
+                _sylvaClearBuildingInfo(paneId);
+                var _errorMessage = err && err.message
+                    ? err.message
+                    : 'Sunucudan beklenmeyen bir yanıt alındı.';
+                showAnalysisToast('Bina analizi başarısız: ' + _errorMessage, 'error');
             })
             .finally(function () {
+                if (!_isCurrentBuildingRun()) return;
+                if (_buildingState) _buildingState.pending = false;
                 if (runBtn) {
                     runBtn.disabled = false;
                     runBtn.textContent = typeof t === 'function' ? t('run_analysis') : '🚀 Analizi Çalıştır';
@@ -22691,7 +22838,17 @@ function cancelGeoTiffDownload() {
 
         function showAnalysisToast(msg, type) {
             var container = document.getElementById('sylva-toast-container');
-            if (!container) return;
+            // Bazı HTML dışa aktarımlarında toast kapsayıcısı bulunmayabilir.
+            // Bu durumda hata sessizce kaybolmamalı; mevcut modal uyarı
+            // mekanizmasına düşmelidir.
+            if (!container) {
+                if (typeof sylvaAlert === 'function') {
+                    sylvaAlert(String(msg || ''), type === 'error' ? 'error' : (type || 'warning'));
+                } else if (typeof window._nativeAlert === 'function') {
+                    window._nativeAlert(String(msg || ''));
+                }
+                return;
+            }
 
             var toast = document.createElement('div');
             toast.className = 'sylva-toast sylva-toast-' + (type || 'warning');
@@ -44474,6 +44631,9 @@ function _vdlFallbackDownload(blob, name) {
         // Ekran 2'de sonuç üretirken Ekran 1'in çalışma alanına dokunma.
         var targetPaneId = forcedPaneId ||
             ((typeof map2 !== 'undefined' && map2 && lmap === map2) ? 'map2' : 'map');
+        if (typeof window._sylvaInvalidateBuildingAnalysis === 'function') {
+            window._sylvaInvalidateBuildingAnalysis(targetPaneId, targetPaneId === 'map');
+        }
         var previousWorkspace = targetPaneId === 'map2'
             ? (window._workspaceLayer2 || (typeof currentLayer2 !== 'undefined' ? currentLayer2 : null))
             : (window._workspaceLayer || (typeof currentLayer !== 'undefined' ? currentLayer : null));
@@ -44611,6 +44771,9 @@ renderWorkspaceList();
         var idx = VAW.workspaces.findIndex(function(w){ return w.id === id; });
         if (idx === -1) return;
         var removedWs = VAW.workspaces[idx];
+        if (typeof window._sylvaInvalidateBuildingAnalysis === 'function') {
+            window._sylvaInvalidateBuildingAnalysis(removedWs.paneId, removedWs.paneId === 'map');
+        }
         _removeWsLayerEverywhere(removedWs);
         VAW.workspaces.splice(idx, 1);
         _sweepOrphanWorkspaceLayers(VAW.workspaces.map(function(w){ return w.id; }));
