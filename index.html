@@ -3019,6 +3019,26 @@ tr.class-highlight-active {
             margin-bottom: 2px;
             font-weight: 600;
         }
+        /* 🛠️ BUG FİX: 12 ay tek sütunda alt alta (her biri tam genişlikte)
+           dizildiği için panel gereksiz uzun ve dağınık görünüyordu. Artık
+           normal Tarih Aralığı takvimindeki (sylva-dp-grid) gibi çok sütunlu
+           bir ızgarada (masaüstünde 4, dar panellerde otomatik daralan)
+           gösteriliyor — "(tümü)" satırı yine tam genişlikte, ayrı kalıyor. */
+        .sylva-month-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 0 2px;
+            padding: 2px 6px 4px;
+        }
+        .sylva-month-grid .sylva-month-option {
+            padding: 5px 4px;
+            gap: 4px;
+            font-size: 0.74rem;
+            white-space: nowrap;
+        }
+        @media (max-width: 340px) {
+            .sylva-month-grid { grid-template-columns: repeat(3, 1fr); }
+        }
 
 </style>
 <style id="sylva-datepicker-css">
@@ -8724,9 +8744,13 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
             analizCheckboxes.forEach(function (cb) {
                 cb.addEventListener('change', function () {
                     if (cb.checked) {
-                        // 🛠️ DÜZELTME: Aynı gruptaki diğer analiz kutuları (NDVI, NDWI, EVI...)
-                        // artık otomatik kaldırılmıyor — kullanıcı birden fazla indeks seçebilsin
-                        // (Zaman Serisi karşılaştırması zaten çoklu seçim bekliyor).
+                        // 🛠️ DÜZELTME (geri alındı): Zaman Serisi ve Değişim Analizi
+                        // bölümü tek analiz üzerinden çalışır — aynı gruptaki diğer
+                        // analiz kutuları (NDVI, NDWI, EVI...) artık ÇOKLU seçime
+                        // izin vermiyor. Bir kutu işaretlenince, aynı gruptaki
+                        // önceki işaretli kutu (varsa) otomatik olarak kaldırılır;
+                        // böylece her zaman en fazla TEK analiz seçili kalır.
+                        analizCheckboxes.forEach(function (other) { if (other !== cb) other.checked = false; });
                         // Diğer modül gruplarıyla (Arazi Kullanımı, Uydu Görüntüsü Galerisi)
                         // hâlâ karşılıklı dışlama uygulanır — aynı anda tek "tür" katman aktif olsun.
                         document.querySelectorAll('input[name="sylva-module"]:checked').forEach(function (sm) { sm.checked = false; });
@@ -37828,8 +37852,13 @@ var DP_LOCALE={
       fmt:_fmtDMY_slash, parse:_parseDMY, fmtHint:'GG/MM/AAAA',
       ph:'GG/MM/AAAA'}
 };
-
-var _pk={};
+// 🛠️ BUG FİX: DP_LOCALE bu IIFE'nin kapalı (local) kapsamında tanımlıydı;
+// sayfanın SONUNDAKİ Ay Seçimi (sylva-month-select-js) script'i FARKLI bir
+// <script> bloğunda olduğu için DP_LOCALE'a hiç erişemiyor, "typeof DP_LOCALE
+// !== 'undefined'" her zaman false dönüyor ve 30 dilde çevrilmiş ay isimleri
+// yerine sabit İngilizce yedek listeye ("January", "February"...) düşülüyordu.
+// Artık window'a bağlanarak diğer script'lerden de erişilebilir hale getirildi.
+window.DP_LOCALE = DP_LOCALE;
 var _lang='en';
 
 /* ── Day grid ────────────────────────────────────────────── */
@@ -45649,12 +45678,30 @@ function downloadTimeSliderVideo() {
         }
     };
 
-    rec.start();
+    // ════════════════════════════════════════════════════════════════════
+    // 🆕 İKİ AŞAMALI VİDEO ÜRETİMİ (indirme → kayıt)
+    // Eskiden her kare kayıt SIRASINDA canlı olarak yükleniyordu (sahne
+    // değiştir → bekle → yakala → tekrar); bu hem analizden analize
+    // geçişte zaman kaybına hem de o an ekranın küçük/gerçek boyutuna
+    // bağlı düşük çözünürlüklü (bulanık) görüntüye yol açıyordu.
+    // Artık:
+    //   AŞAMA 1 — HAZIRLIK (arka planda "indirme"): Her periyodun/sahnenin
+    //     GERÇEK verisi sırayla yüklenir ve export motoruyla (WYSIWYG,
+    //     lejant/kuzey oku/logo dahil) TAM çözünürlükte (vScale) bir
+    //     <canvas> karesi olarak belleğe alınır. Bu aşamada henüz video
+    //     kaydı BAŞLAMAMIŞTIR — kullanıcı yalnızca "İndiriliyor" ilerlemesini
+    //     görür.
+    //   AŞAMA 2 — KAYIT: Tüm kareler hazır olduğunda MediaRecorder başlatılır
+    //     ve önceden hazırlanmış yüksek çözünürlüklü kareler ağ/GEE
+    //     beklemesi OLMADAN art arda çizilir — bu sayede kayıt aşamasında
+    //     hiçbir zaman kaybı yaşanmaz ve çıktı videosu her zaman AŞAMA 1'de
+    //     yakalanan tam çözünürlükte kalır.
+    // ════════════════════════════════════════════════════════════════════
+    var framesCache = [];
 
-    var idx = 0;
-    function captureNext() {
+    function prefetchNext(idx) {
         if (idx >= sceneIds.length) {
-            setTimeout(function() { rec.stop(); }, FRAME_HOLD_MS);
+            startRecordingFromCache();
             return;
         }
         var sceneId = sceneIds[idx];
@@ -45662,24 +45709,46 @@ function downloadTimeSliderVideo() {
         if (lbl) lbl.textContent = dates[idx] || '—';
         var sl = document.getElementById('sylva-time-slider');
         if (sl) sl.value = idx;
-        if (btn) btn.innerHTML = '⏳ ' + (idx + 1) + '/' + sceneIds.length;
+        if (btn) btn.innerHTML = '⬇️ ' + (idx + 1) + '/' + sceneIds.length;
 
-        // 🎬 Kayıt her zaman sessiz (silent) modda çalışır — yükleme ekranı
+        // 🎬 Hazırlık her zaman sessiz (silent) modda çalışır — yükleme ekranı
         // videoya karışmaz. Kare, veri+lejant TAM ekrana yansıdıktan (onDone)
-        // SONRA yakalanır — böylece video hiçbir zaman eksik/boş kare içermez.
+        // SONRA yakalanır — böylece hiçbir kare eksik/boş olmaz.
         loadSpecificScene(sceneId, pane, { silent: true, onDone: function() {
             window.sylvaCaptureFrameCanvas(vScale).then(function(frameCanvas) {
-                recCtx.clearRect(0, 0, outW, outH);
-                recCtx.drawImage(frameCanvas, 0, 0, outW, outH);
-                idx++;
-                setTimeout(captureNext, FRAME_HOLD_MS);
+                framesCache.push(frameCanvas);
+                prefetchNext(idx + 1);
             }).catch(function() {
-                idx++;
-                setTimeout(captureNext, FRAME_HOLD_MS);
+                // Bu kareyi atla, videonun geri kalanı bozulmasın
+                prefetchNext(idx + 1);
             });
         }});
     }
-    captureNext();
+
+    function startRecordingFromCache() {
+        if (!framesCache.length) {
+            _tsVideoExporting = false;
+            if (btn) { btn.disabled = false; btn.innerHTML = btnOrigHTML; }
+            if (typeof showAnalysisToast === 'function') showAnalysisToast('Hiçbir kare yakalanamadı, video oluşturulamadı.', 'error');
+            return;
+        }
+        rec.start();
+        var i = 0;
+        function drawNext() {
+            if (i >= framesCache.length) {
+                setTimeout(function() { rec.stop(); }, FRAME_HOLD_MS);
+                return;
+            }
+            if (btn) btn.innerHTML = '⏳ ' + (i + 1) + '/' + framesCache.length;
+            recCtx.clearRect(0, 0, outW, outH);
+            recCtx.drawImage(framesCache[i], 0, 0, outW, outH);
+            i++;
+            setTimeout(drawNext, FRAME_HOLD_MS);
+        }
+        drawNext();
+    }
+
+    prefetchNext(0);
 }
 
 function _tsVideoFallbackDownload(blob, name) {
@@ -46396,13 +46465,17 @@ document.addEventListener('keydown', function(e) {
         var allCb   = allRow.querySelector('input');
         var allSpan = allRow.querySelector('span');
 
+        var monthGrid = document.createElement('div');
+        monthGrid.className = 'sylva-month-grid';
+        panel.appendChild(monthGrid);
+
         var monthCbs = [];
         var monthSpans = [];
         for (var idx = 0; idx < 12; idx++) {
             var row = document.createElement('label');
             row.className = 'sylva-month-option';
             row.innerHTML = '<input type="checkbox" class="sylva-month-cb" value="' + (idx + 1) + '" checked><span></span>';
-            panel.appendChild(row);
+            monthGrid.appendChild(row);
             monthCbs.push(row.querySelector('input'));
             monthSpans.push(row.querySelector('span'));
         }
