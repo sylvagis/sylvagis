@@ -4104,7 +4104,7 @@ tr.class-highlight-active {
                         <div class="sensor-group-label" style="margin-top:8px;" data-i18n="env_urban_dev_group">🏙️ Kentsel Gelişim ve Arazi Değişimi</div>
                         <label class="option-item env-disabled-item"><input type="checkbox" name="sylva-module" disabled data-analysis="URBAN_GROWTH" data-ramp-key="rainbow" data-legend-type="classified" data-legend-classes='[{"color":"#94a3b8","label":"Değişmeyen"},{"color":"#c4281b","label":"Yeni Kentsel Alan"}]'> <span data-i18n="env_urban_growth">Kentsel Genişleme Analizi (Çok-zamanlı LULC Farkı)</span></label>
                         <label class="option-item env-disabled-item"><input type="checkbox" name="sylva-module" disabled data-analysis="IMPERVIOUS_CHANGE" data-ramp-key="gray" data-legend-type="stretched" data-legend-min="0%" data-legend-max="100%"> <span data-i18n="env_impervious">Geçirimsiz Yüzey Değişimi (Impervious Surface)</span></label>
-                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="BUILDING_FOOTPRINT" data-ramp-key="gray" data-legend-type="classified" data-legend-classes='[{"color":"#dc2626","label":"Bina Çatı Poligonu"},{"color":"#cbd5e1","label":"Bina Dışı Alan"}]'> <span>Bina Çatı Tespiti / Poligon Oluşturma</span></label>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="BUILDING_FOOTPRINT" data-ramp-key="gray" data-legend-type="classified" data-legend-classes='[{"color":"#dc2626","label":"Bina Çatı Poligonu"},{"color":"#cbd5e1","label":"Bina Dışı Alan"}]'> <span data-i18n="building_footprint_title">Bina Çatı Tespiti</span></label>
 
                         <!-- Çevresel Risk ve İzleme -->
                         <div class="sensor-group-label" style="margin-top:8px;" data-i18n="env_risk_group">⚠️ Çevresel Risk ve İzleme</div>
@@ -13622,26 +13622,26 @@ function selectRamp(name) {
 
             var buildingCount = Number(data && data.buildingCount);
             var totalAreaM2 = Number(data && data.totalAreaM2);
-            var datasetName = data && data.dataset ? String(data.dataset) : 'Bina veri kümesi';
+            var datasetName = data && data.dataset ? String(data.dataset) : t('building_footprint_dataset_default', 'Bina veri kümesi');
             if (!isFinite(buildingCount)) buildingCount = 0;
             if (!isFinite(totalAreaM2)) totalAreaM2 = 0;
 
             box.innerHTML =
                 '<div style="font-size:0.77rem;font-weight:700;color:#991b1b;margin-bottom:5px;">' +
-                    '🏠 Bina Çatı Tespiti / Poligon Oluşturma' +
+                    '🏠 ' + escapeHtml(t('building_footprint_title', 'Bina Çatı Tespiti')) +
                 '</div>' +
-                '<div style="font-size:0.65rem;color:#64748b;margin-bottom:5px;">Kaynak: ' +
+                '<div style="font-size:0.65rem;color:#64748b;margin-bottom:5px;">' + escapeHtml(t('building_footprint_source', 'Kaynak:')) + ' ' +
                     escapeHtml(datasetName) +
                 '</div>' +
                 '<table style="border-collapse:collapse;width:100%;table-layout:fixed;"><tbody>' +
                     '<tr>' +
-                        '<td style="padding:2px 5px 2px 0;color:#64748b;font-size:0.69rem;font-weight:600;vertical-align:top;">Toplam Bina/Çatı Sayısı (Adet)</td>' +
+                        '<td style="padding:2px 5px 2px 0;color:#64748b;font-size:0.69rem;font-weight:600;vertical-align:top;">' + escapeHtml(t('building_footprint_count_lbl', 'Toplam Bina/Çatı Sayısı (Adet)')) + '</td>' +
                         '<td style="padding:2px 0;color:#1e293b;font-size:0.72rem;font-weight:700;text-align:right;">' +
                             escapeHtml(Math.round(buildingCount).toLocaleString('tr-TR')) +
                         '</td>' +
                     '</tr>' +
                     '<tr>' +
-                        '<td style="padding:2px 5px 2px 0;color:#64748b;font-size:0.69rem;font-weight:600;vertical-align:top;">Toplam Çatı Alanı (m²)</td>' +
+                        '<td style="padding:2px 5px 2px 0;color:#64748b;font-size:0.69rem;font-weight:600;vertical-align:top;">' + escapeHtml(t('building_footprint_area_lbl', 'Toplam Çatı Alanı (m²)')) + '</td>' +
                         '<td style="padding:2px 0;color:#1e293b;font-size:0.72rem;font-weight:700;text-align:right;">' +
                             escapeHtml(totalAreaM2.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })) +
                         '</td>' +
@@ -13765,7 +13765,9 @@ function selectRamp(name) {
             fetch(API_BASE + '/api/building-footprints', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ geometry: roi, maxFeatures: 2000 })
+                // Bina poligonları için istemci tarafında yapay bir sınır
+                // uygulanmaz; API çalışma alanındaki tüm poligonları döndürür.
+                body: JSON.stringify({ geometry: roi })
             })
             .then(function (response) {
                 return response.text().then(function (rawText) {
@@ -13850,15 +13852,10 @@ function selectRamp(name) {
                 var _buildingTotalLabel = Math.round(
                     isFinite(buildingCount) ? buildingCount : returnedFeatures.length
                 ).toLocaleString('tr-TR');
-                var _buildingReturnedLabel = returnedFeatures.length.toLocaleString('tr-TR');
                 var _buildingToast = 'Bina analizi tamamlandı: ' + _buildingTotalLabel + ' poligon bulundu.';
-                if (data.truncated) {
-                    _buildingToast += ' Haritada ilk ' + _buildingReturnedLabel +
-                        ' poligon gösteriliyor; toplam bina ve alan bilgisi eksiksizdir.';
-                }
                 showAnalysisToast(
                     _buildingToast,
-                    data.truncated ? 'info' : 'success'
+                    'success'
                 );
                 if (typeof playSylvaChime === 'function') playSylvaChime('analysis');
             })
@@ -38052,6 +38049,52 @@ var SYLVA_TRANSLATIONS = {
     before_after_title: 'Scorrimento Livello',
   },
 };
+
+// Bina Çatı Tespiti modülü metinleri için 30 dil desteği.
+(function () {
+  var buildingLabels = {
+    en: { title: 'Building Roof Detection', source: 'Source:', dataset: 'Building dataset', count: 'Total Buildings/Roofs (Count)', area: 'Total Roof Area (m²)' },
+    uz: { title: 'Bino tomini aniqlash', source: 'Manba:', dataset: 'Binolar maʼlumotlar toʻplami', count: 'Jami bino/tom soni (dona)', area: 'Jami tom maydoni (m²)' },
+    el: { title: 'Ανίχνευση Στέγης Κτιρίου', source: 'Πηγή:', dataset: 'Σύνολο δεδομένων κτιρίων', count: 'Σύνολο Κτιρίων/Στεγών (Αριθμός)', area: 'Συνολική Επιφάνεια Στέγης (m²)' },
+    bg: { title: 'Откриване на Покриви на Сгради', source: 'Източник:', dataset: 'Набор от данни за сгради', count: 'Общ брой сгради/покриви (бр.)', area: 'Обща площ на покривите (m²)' },
+    tr: { title: 'Bina Çatı Tespiti', source: 'Kaynak:', dataset: 'Bina veri kümesi', count: 'Toplam Bina/Çatı Sayısı (Adet)', area: 'Toplam Çatı Alanı (m²)' },
+    az: { title: 'Bina Damının Aşkarlanması', source: 'Mənbə:', dataset: 'Bina məlumat dəsti', count: 'Ümumi Bina/Dam Sayı (Ədəd)', area: 'Ümumi Dam Sahəsi (m²)' },
+    hu: { title: 'Épülettető-felismerés', source: 'Forrás:', dataset: 'Épület adatkészlet', count: 'Épületek/Tetők Összesen (Db)', area: 'Teljes Tetőterület (m²)' },
+    kk: { title: 'Ғимарат шатырын анықтау', source: 'Дереккөз:', dataset: 'Ғимараттар деректер жиынтығы', count: 'Барлық ғимарат/шатыр саны (дана)', area: 'Жалпы шатыр ауданы (м²)' },
+    de: { title: 'Gebäudedach-Erkennung', source: 'Quelle:', dataset: 'Gebäude-Datensatz', count: 'Gebäude/Dächer Gesamt (Anzahl)', area: 'Gesamte Dachfläche (m²)' },
+    fr: { title: 'Détection des Toits de Bâtiments', source: 'Source :', dataset: 'Jeu de données des bâtiments', count: 'Total Bâtiments/Toits (Nombre)', area: 'Surface Totale de Toiture (m²)' },
+    es: { title: 'Detección de Techos de Edificios', source: 'Fuente:', dataset: 'Conjunto de datos de edificios', count: 'Total Edificios/Techos (Cantidad)', area: 'Área Total de Techo (m²)' },
+    pt: { title: 'Detecção de Telhados de Edifícios', source: 'Fonte:', dataset: 'Conjunto de dados de edifícios', count: 'Total de Edifícios/Telhados (Qtd.)', area: 'Área Total de Telhado (m²)' },
+    ar: { title: 'الكشف عن أسطح المباني', source: 'المصدر:', dataset: 'مجموعة بيانات المباني', count: 'إجمالي عدد المباني/الأسطح', area: 'إجمالي مساحة السطح (م²)' },
+    fa: { title: 'شناسایی سقف ساختمان', source: 'منبع:', dataset: 'مجموعه داده ساختمان', count: 'تعداد کل ساختمان/سقف', area: 'مساحت کل سقف (متر مربع)' },
+    zh: { title: '建筑屋顶检测', source: '来源：', dataset: '建筑数据集', count: '建筑/屋顶总数（个）', area: '屋顶总面积（m²）' },
+    ja: { title: '建物屋根の検出', source: '出典：', dataset: '建物データセット', count: '建物・屋根の総数（棟）', area: '屋根の総面積（m²）' },
+    ko: { title: '건물 지붕 탐지', source: '출처:', dataset: '건물 데이터셋', count: '총 건물/지붕 수 (개)', area: '총 지붕 면적 (m²)' },
+    hi: { title: 'भवन छत पहचान', source: 'स्रोत:', dataset: 'भवन डेटासेट', count: 'कुल भवन/छत संख्या (गिनती)', area: 'कुल छत क्षेत्रफल (m²)' },
+    id: { title: 'Deteksi Atap Bangunan', source: 'Sumber:', dataset: 'Kumpulan data bangunan', count: 'Total Bangunan/Atap (Jumlah)', area: 'Total Luas Atap (m²)' },
+    ru: { title: 'Обнаружение Крыш Зданий', source: 'Источник:', dataset: 'Набор данных о зданиях', count: 'Всего зданий/крыш (шт.)', area: 'Общая площадь крыш (м²)' },
+    th: { title: 'การตรวจจับหลังคาอาคาร', source: 'แหล่งที่มา:', dataset: 'ชุดข้อมูลอาคาร', count: 'จำนวนอาคาร/หลังคาทั้งหมด (หลัง)', area: 'พื้นที่หลังคารวม (m²)' },
+    bn: { title: 'ভবনের ছাদ শনাক্তকরণ', source: 'উৎস:', dataset: 'ভবন ডেটাসেট', count: 'মোট ভবন/ছাদ সংখ্যা', area: 'মোট ছাদের ক্ষেত্রফল (m²)' },
+    vi: { title: 'Phát hiện Mái Nhà', source: 'Nguồn:', dataset: 'Bộ dữ liệu tòa nhà', count: 'Tổng số Nhà/Mái (Số lượng)', area: 'Tổng Diện tích Mái (m²)' },
+    ur: { title: 'عمارت کی چھت کی شناخت', source: 'ماخذ:', dataset: 'عمارتوں کا ڈیٹا سیٹ', count: 'کل عمارتیں/چھتیں (تعداد)', area: 'کل چھت کا رقبہ (m²)' },
+    pl: { title: 'Wykrywanie Dachów Budynków', source: 'Źródło:', dataset: 'Zbiór danych budynków', count: 'Łączna Liczba Budynków/Dachów (Szt.)', area: 'Łączna Powierzchnia Dachów (m²)' },
+    ms: { title: 'Pengesanan Bumbung Bangunan', source: 'Sumber:', dataset: 'Set data bangunan', count: 'Jumlah Bangunan/Bumbung (Bilangan)', area: 'Jumlah Keluasan Bumbung (m²)' },
+    ky: { title: 'Имараттын чатырын аныктоо', source: 'Булак:', dataset: 'Имараттар маалымат жыйындысы', count: 'Жалпы имарат/чатыр саны (даана)', area: 'Жалпы чатыр аянты (м²)' },
+    mn: { title: 'Барилгын дээврийг илрүүлэх', source: 'Эх сурвалж:', dataset: 'Барилгын өгөгдлийн сан', count: 'Нийт барилга/дээвэр (тоо)', area: 'Нийт дээврийн талбай (м²)' },
+    ka: { title: 'შენობის სახურავის აღმოჩენა', source: 'წყარო:', dataset: 'შენობების მონაცემთა ბაზა', count: 'სულ შენობა/სახურავი (რაოდ.)', area: 'სახურავის საერთო ფართობი (მ²)' },
+    it: { title: 'Rilevamento Tetti degli Edifici', source: 'Fonte:', dataset: 'Set di dati sugli edifici', count: 'Totale Edifici/Tetti (N.)', area: 'Superficie Totale del Tetto (m²)' }
+  };
+
+  Object.keys(buildingLabels).forEach(function (lang) {
+    if (!SYLVA_TRANSLATIONS[lang]) return;
+    var labels = buildingLabels[lang];
+    SYLVA_TRANSLATIONS[lang].building_footprint_title = labels.title;
+    SYLVA_TRANSLATIONS[lang].building_footprint_source = labels.source;
+    SYLVA_TRANSLATIONS[lang].building_footprint_dataset_default = labels.dataset;
+    SYLVA_TRANSLATIONS[lang].building_footprint_count_lbl = labels.count;
+    SYLVA_TRANSLATIONS[lang].building_footprint_area_lbl = labels.area;
+  });
+})();
 
 // Arama kutusu ve arama durumları için 30 dil desteği.
 (function () {
