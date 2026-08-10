@@ -3118,27 +3118,40 @@ def build_result_image(data, for_export=False):
 
         elif index == 'TOPO_CONTOUR':
             # 📏 Eş Yükselti (İzohips/Kontur) Çizgileri
-            # Frontend'deki "Eş Yükseltiler" kutusu işaretlenip aralık (contourInterval,
-            # varsayılan 50 m) seçildiğinde çalışır. Earth Engine'de gerçek vektör
-            # izohips (isoline) üretimi istemci tarafında çok ağır olduğundan, DEM
-            # önce seçilen aralığa göre yükselti bantlarına ayrılır (ör. 50 m'de bir
-            # basamaklanan bir "merdiven" yüzeyi); ardından her pikselin 4 komşusuyla
-            # (üst/alt/sağ/sol) bant değeri karşılaştırılır — komşusundan FARKLI bant
-            # değerine sahip pikseller tam olarak bant sınırından geçer, yani bir eş
-            # yükselti çizgisi üzerindedir. Sonuç ikili (0/1) bir maskedir; diğer
-            # ikili TOPO ürünleriyle (ör. TOPO_STREAM) aynı görüntüleme/lejant
-            # deseniyle (min 0 – maks 1, gri palet) haritada anında gösterilebilir.
+            #
+            # 🛠️ BUG FİX (kalın/gürültülü "benek" görünümü — dağlık arazide
+            # neredeyse tüm alanı kaplayan beyaz bulanıklık): Önceki sürüm,
+            # DEM'i yükselti bantlarına ayırıp KOMŞU piksel bant değeri
+            # farklıysa çizgi sayıyordu. Dik yamaçlarda (30 m SRTM pikseli
+            # başına onlarca metre yükselti farkı olabilir) bu, tek bir
+            # pikselin birden fazla bant sınırını "atlamasına" ve komşu
+            # karşılaştırmasının neredeyse HER pikselde tetiklenmesine yol
+            # açıyordu — sonuçta ince çizgiler yerine kalın, NDVI benzeri
+            # sürekli bir gri/beyaz doku ortaya çıkıyordu.
+            #
+            # ÇÖZÜM — klasik "sinüs dalgası / sıfır geçişi" izohips tekniği:
+            # DEM değeri 2π/interval ile ölçeklenip sinüse çevrilir. Bu
+            # sinyal TAM OLARAK rakımın "interval"in her katından geçtiği
+            # noktada işaret değiştirir (sıfırı keser) — araziden veya
+            # eğimden bağımsız olarak. ee.Image.zeroCrossing(), komşu
+            # piksellerin işaret değiştirdiği yerleri bulur; bu da düz
+            # ovalarda da dik dağ yamaçlarında da HER ZAMAN ~1 piksel
+            # kalınlığında, gerçek eş yükselti çizgilerine benzeyen ince ve
+            # temiz bir sonuç verir.
             try:
                 _contour_interval = float(data.get('contourInterval', 50) or 50)
             except (TypeError, ValueError):
                 _contour_interval = 50.0
             if _contour_interval <= 0:
                 _contour_interval = 50.0
-            _banded  = dem.divide(_contour_interval).floor().multiply(_contour_interval)
-            _kernel4 = ee.Kernel.plus(1)
-            _max_n   = _banded.reduceNeighborhood(reducer=ee.Reducer.max(), kernel=_kernel4)
-            _min_n   = _banded.reduceNeighborhood(reducer=ee.Reducer.min(), kernel=_kernel4)
-            result = _max_n.neq(_min_n).rename('value')
+            # SRTM/ALOS/Copernicus/NASADEM'in piksel bazlı ~1 m dikey
+            # kuantizasyon gürültüsü, ham DEM üzerinde doğrudan sinüs
+            # dönüşümü uygulanırsa sahte/kırık mikro-çizgilere yol açar.
+            # Hafif bir odak-ortalama bu gürültüyü büyük ölçüde temizler
+            # (gerçek eş yükselti geometrisini bozmadan).
+            _dem_smooth = dem.focalMean(radius=45, units='meters')
+            _signal = _dem_smooth.multiply(2 * _math.pi / _contour_interval).sin()
+            result = _signal.zeroCrossing().rename('value')
             vis = {'min': 0, 'max': 1, 'palette': ['black', 'white']}
 
         else:
