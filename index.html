@@ -4060,7 +4060,7 @@ tr.class-highlight-active {
                         <div class="sensor-group-label" style="margin-top:8px;" data-i18n="topo_contour_group">📏 Eş Yükselti Eğrileri</div>
                         <div style="display:flex; align-items:center; gap:8px; padding:4px 2px;">
                             <label class="option-item" style="display:flex; align-items:center; gap:6px; font-size:0.82rem; color:#334155; cursor:pointer; flex:1; margin:0;">
-                                <input type="checkbox" id="chk-contour" name="sylva-module" data-analysis="TOPO_CONTOUR" data-ramp-key="gray" data-legend-type="stretched" data-legend-min="0" data-legend-max="1" style="width:15px;height:15px;cursor:pointer;">
+                                <input type="checkbox" id="chk-contour" name="sylva-module" data-analysis="TOPO_CONTOUR" data-ramp-key="gray" data-legend-type="stretched" data-legend-min="—" data-legend-max="—" style="width:15px;height:15px;cursor:pointer;">
                                 <span><span data-i18n="topo_contour_label">Eş Yükseltiler</span> (Contour)</span>
                             </label>
                             <select id="sel-contour-interval" style="font-size:0.78rem; padding:3px 6px; border:1px solid #cbd5e1; border-radius:4px; background:#fff; color:#334155; cursor:pointer;">
@@ -4074,10 +4074,65 @@ tr.class-highlight-active {
                                 <option value="250">250 m</option>
                                 <option value="500">500 m</option>
                             </select>
+                            <!-- 🆕 GÜNCELLEME: Eş Yükselti çizgi rengi kutusu — lejant kutusundaki
+                                 gradyan renk çubuğu YERİNE, tıklanarak istenen çizgi renginin
+                                 seçilebildiği doğrudan bir renk kutusu (native color picker). -->
+                            <input type="color" id="contour-line-color" class="sylva-contour-color-input"
+                                   value="#ffffff" title="Kontur çizgi rengini seç"
+                                   style="width:28px;height:28px;padding:0;border:1px solid #cbd5e1;border-radius:4px;cursor:pointer;background:#fff;flex-shrink:0;">
                         </div>
                     </div>
                 </div>
             </details>
+
+            <script>
+            // 🆕 GÜNCELLEME: Eş Yükselti çizgi rengi kutuları (kenar çubuğundaki
+            // ve lejant kutusundaki .sylva-contour-color-input elemanları) birbiriyle
+            // senkron tutulur; renk değiştiğinde, o an ekranda çalışan bir Eş Yükselti
+            // katmanı varsa yeni renk sunucuya gönderilip katman canlı güncellenir.
+            (function () {
+                function _sylvaSyncContourColorInputs(val, exceptEl) {
+                    document.querySelectorAll('.sylva-contour-color-input').forEach(function (el) {
+                        if (el !== exceptEl && el.value !== val) el.value = val;
+                    });
+                }
+                function _sylvaApplyContourColorLive(val) {
+                    if (!window._lastAnalyzePayloadByPane || typeof API_BASE === 'undefined') return;
+                    ['map', 'map2'].forEach(function (pane) {
+                        var _lastPayload = window._lastAnalyzePayloadByPane[pane];
+                        if (!_lastPayload || _lastPayload.index !== 'TOPO_CONTOUR') return;
+                        var _roi = (typeof _sylvaLastRoiGet === 'function') ? _sylvaLastRoiGet(pane) : null;
+                        if (!_roi) return;
+                        var _payload = Object.assign({}, _lastPayload, { palette: [val] });
+                        window._lastAnalyzePayloadByPane[pane] = _payload;
+                        fetch(API_BASE + '/api/analyze', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(_payload)
+                        })
+                        .then(function (r) { return r.json(); })
+                        .then(function (data) {
+                            if (!data.success) return;
+                            if (typeof _sylvaReplaceGeeLayer === 'function') {
+                                _sylvaReplaceGeeLayer(pane, data.tileUrl, { opacity: 1 });
+                            }
+                        })
+                        .catch(function () {});
+                    });
+                }
+                document.addEventListener('input', function (e) {
+                    if (e.target && e.target.classList && e.target.classList.contains('sylva-contour-color-input')) {
+                        _sylvaSyncContourColorInputs(e.target.value, e.target);
+                    }
+                });
+                document.addEventListener('change', function (e) {
+                    if (e.target && e.target.classList && e.target.classList.contains('sylva-contour-color-input')) {
+                        _sylvaSyncContourColorInputs(e.target.value, e.target);
+                        _sylvaApplyContourColorLive(e.target.value);
+                    }
+                });
+            })();
+            </script>
 
 
             <details class="main-module-details">
@@ -9419,7 +9474,11 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
             }
 
             _updateInfoBoxAvailability(isStatic);
-            _updateLulcRestrictedUI(!!(meta && isLulcAnalysis(meta.analysisName)));
+            // 🆕 GÜNCELLEME: Eş Yükselti (TOPO_CONTOUR) seçiliyken de LULC ile
+            // aynı şekilde Lejant ve Semboloji paneli (gradyan/sınıf düzenleyici)
+            // pasif hale getirilir — bu katmanın rengi artık kendi renk kutusundan
+            // seçilir, gradyan/sınıf düzenleyicisinin bu katmanla bir ilgisi yoktur.
+            _updateLulcRestrictedUI(!!(meta && (isLulcAnalysis(meta.analysisName) || meta.analysisName === 'TOPO_CONTOUR')));
             _setGalleryPanelRestricted(isStatic);
             _updateTsSubsectionAvailability();
         }
@@ -11280,6 +11339,23 @@ function selectRamp(name) {
             if (legendType === 'image') {
                 html += '<div style="margin-top:4px;font-size:0.68rem;color:#64748b;">RGB band composite</div>'
                     + '<div style="height:10px;border-radius:3px;border:1px solid #cbd5e1;margin-top:3px;background:' + rampCss + ';"></div>';
+            } else if (meta.analysisName === 'TOPO_CONTOUR') {
+                // 🆕 GÜNCELLEME: Eş Yükselti — klasik gradyan renk çubuğu ve
+                // sembol listesi YERİNE, tıklanabilir bir "çizgi rengi" kutusu
+                // ve çalışma alanı içindeki GERÇEK min/max yükselti değerleri
+                // (bkz. applyRealStatsToLegendUI) gösterilir. Renk kutusuna
+                // tıklanınca tarayıcının doğal renk seçicisi açılır.
+                var _contourColorNow = (document.getElementById('contour-line-color') || {}).value || '#ffffff';
+                html += '<div style="display:flex;align-items:center;gap:6px;margin-top:5px;">'
+                    + '<input type="color" class="sylva-contour-color-input" value="' + _contourColorNow + '" '
+                    + 'title="' + escapeHtml(t('contour_color_title') || 'Kontur çizgi rengini seç') + '" '
+                    + 'style="width:22px;height:22px;padding:0;border:1px solid #cbd5e1;border-radius:4px;cursor:pointer;background:#fff;flex-shrink:0;">'
+                    + '<span style="font-size:0.65rem;color:#64748b;">' + escapeHtml(t('contour_color_label') || 'Çizgi Rengi') + '</span>'
+                    + '</div>'
+                    + '<div style="display:flex;justify-content:space-between;gap:8px;min-width:110px;font-size:0.68rem;margin-top:5px;color:#475569;">'
+                    + '<span class="legend-min-label">' + escapeHtml(meta.legendMin) + '</span>'
+                    + '<span class="legend-max-label">' + escapeHtml(meta.legendMax) + '</span></div>'
+                    + '<div style="font-size:0.6rem;color:#94a3b8;margin-top:2px;">' + escapeHtml(t('contour_elev_range_label') || 'Yükselti (m) — çalışma alanı') + '</div>';
             } else if (legendType !== 'classified' || !meta.classesRaw) {
                 html += '<div style="display:flex;justify-content:space-between;gap:8px;min-width:110px;font-size:0.68rem;margin-top:4px;color:#475569;">'
                     + '<span class="legend-min-label">' + escapeHtml(meta.legendMin) + '</span>'
@@ -13353,6 +13429,11 @@ function selectRamp(name) {
                 if (meta.analysisName === 'TOPO_CONTOUR') {
                     var _contourSel = document.getElementById('sel-contour-interval');
                     analyzePayload.contourInterval = _contourSel ? parseFloat(_contourSel.value) : 50;
+                    // 🆕 GÜNCELLEME: kullanıcının renk kutusundan seçtiği kontur çizgi
+                    // rengi — altlık (değer=0) zaten saydam döner, yalnızca bu renk
+                    // kontur çizgisi (değer=1) için kullanılır.
+                    var _contourColorEl = document.getElementById('contour-line-color');
+                    analyzePayload.palette = [_contourColorEl ? _contourColorEl.value : '#ffffff'];
                 }
                 window._lastAnalyzePayloadByPane[_pane] = analyzePayload;
                 var _runGen = _analysisGeneration;
@@ -14168,11 +14249,12 @@ function selectRamp(name) {
             // anahtarını (layerKeyOverride) kullanır; aksi halde her zamanki
             // gibi meta.analysisName kullanılır (geriye dönük uyumlu).
             var _lk = layerKeyOverride || meta.analysisName;
-            var _ibCb = _updateLulcRestrictedUI(isLulcAnalysis(meta.analysisName));
+            var _isContourResultMeta = (meta.analysisName === 'TOPO_CONTOUR');
+            var _ibCb = _updateLulcRestrictedUI(isLulcAnalysis(meta.analysisName) || _isContourResultMeta);
             if (isTopoAnalysis(meta.analysisName)) { _setGalleryPanelRestricted(true); }
             (function() {
                 var _lsp = document.getElementById('legend-symbology-panel');
-                if (_lsp && !isLulcAnalysis(meta.analysisName)) {
+                if (_lsp && !isLulcAnalysis(meta.analysisName) && !_isContourResultMeta) {
                     _lsp.style.opacity = '1';
                     _lsp.style.pointerEvents = '';
                     _lsp.style.userSelect = '';
@@ -16393,11 +16475,15 @@ function selectRamp(name) {
             if (legendBox) {
                 var minSpan = legendBox.querySelector('.legend-min-label');
                 var maxSpan = legendBox.querySelector('.legend-max-label');
-                if (minSpan) minSpan.textContent = formatLegendVal(mn);
-                if (maxSpan) maxSpan.textContent = formatLegendVal(mx);
-
                 // Gerçek veri satırını güncelle (TOPO analizlerinde tarih gösterilmez)
                 var _rsMeta = (typeof getSelectedAnalysisMeta === 'function') ? getSelectedAnalysisMeta() : null;
+                // 📏 Eş Yükselti: min/max artık gerçek yükselti (m) değerleridir —
+                // etikete birim ekle ki kullanıcı bunun bir yükselti aralığı
+                // olduğunu (0-1 gibi anlamsız bir kontur maskesi değil) anlasın.
+                var _rsIsContour = !!(_rsMeta && _rsMeta.analysisName === 'TOPO_CONTOUR');
+                if (minSpan) minSpan.textContent = formatLegendVal(mn) + (_rsIsContour ? ' m' : '');
+                if (maxSpan) maxSpan.textContent = formatLegendVal(mx) + (_rsIsContour ? ' m' : '');
+
                 var _rsSkip = _rsMeta && (typeof isTopoAnalysis === 'function') && isTopoAnalysis(_rsMeta.analysisName);
                 if (!_rsSkip) {
                     var row = legendBox.querySelector('.real-stats-row');
