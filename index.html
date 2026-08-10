@@ -4112,7 +4112,7 @@ tr.class-highlight-active {
                         <div class="sensor-group-label" style="margin-top:8px;" data-i18n="env_urban_dev_group">🏙️ Kentsel Gelişim ve Arazi Değişimi</div>
                         <label class="option-item env-disabled-item"><input type="checkbox" name="sylva-module" disabled data-analysis="URBAN_GROWTH" data-ramp-key="rainbow" data-legend-type="classified" data-legend-classes='[{"color":"#94a3b8","label":"Değişmeyen"},{"color":"#c4281b","label":"Yeni Kentsel Alan"}]'> <span data-i18n="env_urban_growth">Kentsel Genişleme Analizi (Çok-zamanlı LULC Farkı)</span></label>
                         <label class="option-item env-disabled-item"><input type="checkbox" name="sylva-module" disabled data-analysis="IMPERVIOUS_CHANGE" data-ramp-key="gray" data-legend-type="stretched" data-legend-min="0%" data-legend-max="100%"> <span data-i18n="env_impervious">Geçirimsiz Yüzey Değişimi (Impervious Surface)</span></label>
-                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="BUILDING_FOOTPRINT" data-ramp-key="gray" data-legend-type="classified" data-legend-classes='[{"color":"#dc2626","label":"Bina Çatı Poligonu"},{"color":"#cbd5e1","label":"Bina Dışı Alan"}]'> <span>Bina Çatı Tespiti / Poligon Oluşturma</span></label>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="BUILDING_FOOTPRINT" data-ramp-key="gray" data-legend-type="classified" data-legend-classes='[{"color":"#dc2626","label":"Bina Çatı Poligonu"},{"color":"#cbd5e1","label":"Bina Dışı Alan"}]'> <span data-i18n="building_roof_detection">Bina Çatı Tespiti</span></label>
 
                         <!-- Çevresel Risk ve İzleme -->
                         <div class="sensor-group-label" style="margin-top:8px;" data-i18n="env_risk_group">⚠️ Çevresel Risk ve İzleme</div>
@@ -13554,6 +13554,61 @@ function selectRamp(name) {
             }
         }
 
+        function _sylvaClipBuildingDataToRoi(data, roi) {
+            // Sunucu tarafındaki gerçek kesişimin ikinci güvenlik katmanı.
+            // filterBounds/bbox ile gelen bir çatı AOI sınırını aşıyorsa,
+            // Leaflet'e göndermeden önce yalnızca AOI içindeki parçasını bırak.
+            if (!data || !data.geojson || !roi ||
+                typeof turf === 'undefined' ||
+                typeof turf.intersect !== 'function') {
+                return data;
+            }
+            try {
+                var roiFeature = turf.feature(roi);
+                var clippedFeatures = [];
+                var sourceFeatures = data.geojson.features || [];
+                sourceFeatures.forEach(function (sourceFeature) {
+                    if (!sourceFeature || !sourceFeature.geometry) return;
+                    try {
+                        var pieces = sourceFeature.geometry.type === 'MultiPolygon' &&
+                            typeof turf.flatten === 'function'
+                            ? turf.flatten(sourceFeature).features
+                            : [sourceFeature];
+                        pieces.forEach(function (piece) {
+                            var clipped = turf.intersect(piece, roiFeature);
+                            if (!clipped || !clipped.geometry) return;
+                            if (clipped.geometry.type !== 'Polygon' &&
+                                clipped.geometry.type !== 'MultiPolygon') return;
+                            clipped.properties = Object.assign(
+                                {},
+                                sourceFeature.properties || {}
+                            );
+                            clippedFeatures.push(clipped);
+                        });
+                    } catch (clipError) {
+                        // Bozuk tek bir bina tüm analiz sonucunu düşürmesin.
+                    }
+                });
+
+                var clippedData = Object.assign({}, data, {
+                    buildingCount: clippedFeatures.length,
+                    returnedFeatureCount: clippedFeatures.length,
+                    geojson: {
+                        type: 'FeatureCollection',
+                        features: clippedFeatures
+                    }
+                });
+                if (typeof turf.area === 'function') {
+                    clippedData.totalAreaM2 = turf.area(
+                        turf.featureCollection(clippedFeatures)
+                    );
+                }
+                return clippedData;
+            } catch (clipError) {
+                return data;
+            }
+        }
+
         // Çalışma alanı değiştiğinde önceki bina sonucunu geçersiz kılar.
         // Böylece eski sonuç yeni AOI'nin üstünde kalmaz ve devam eden istek
         // tamamlandığında artık geçersiz olan poligonları geri getiremez.
@@ -13639,13 +13694,14 @@ function selectRamp(name) {
 
             box.innerHTML =
                 '<div style="font-size:0.77rem;font-weight:700;color:#991b1b;margin-bottom:5px;">' +
-                    '🏠 Bina Çatı Tespiti / Poligon Oluşturma' +
+                    '🏠 ' + escapeHtml(t('building_roof_detection')) +
                 '</div>' +
-                '<div style="font-size:0.65rem;color:#64748b;margin-bottom:5px;">Kaynak: ' +
-                    escapeHtml(datasetName) +
+                '<div style="font-size:0.65rem;color:#64748b;margin-bottom:5px;">' +
+                    escapeHtml(t('building_source')) + ': ' + escapeHtml(datasetName) +
                 '</div>' +
                 (_isPartial ?
-                    '<div style="font-size:0.65rem;color:#b45309;font-weight:600;margin-bottom:5px;">⏳ Tarama devam ediyor' +
+                    '<div style="font-size:0.65rem;color:#b45309;font-weight:600;margin-bottom:5px;">⏳ ' +
+                        escapeHtml(t('building_scan_in_progress')) +
                         (_progress && _progress.totalTiles ?
                             ' (' + escapeHtml(String(_progress.tilesDone)) + ' / ' + escapeHtml(String(_progress.totalTiles)) + ' tile)'
                             : '') +
@@ -13653,13 +13709,13 @@ function selectRamp(name) {
                     : '') +
                 '<table style="border-collapse:collapse;width:100%;table-layout:fixed;"><tbody>' +
                     '<tr>' +
-                        '<td style="padding:2px 5px 2px 0;color:#64748b;font-size:0.69rem;font-weight:600;vertical-align:top;">Toplam Bina/Çatı Sayısı (Adet)</td>' +
+                        '<td style="padding:2px 5px 2px 0;color:#64748b;font-size:0.69rem;font-weight:600;vertical-align:top;">' + escapeHtml(t('building_total_count')) + '</td>' +
                         '<td style="padding:2px 0;color:#1e293b;font-size:0.72rem;font-weight:700;text-align:right;">' +
                             escapeHtml(Math.round(buildingCount).toLocaleString('tr-TR')) +
                         '</td>' +
                     '</tr>' +
                     '<tr>' +
-                        '<td style="padding:2px 5px 2px 0;color:#64748b;font-size:0.69rem;font-weight:600;vertical-align:top;">Toplam Çatı Alanı (m²)</td>' +
+                        '<td style="padding:2px 5px 2px 0;color:#64748b;font-size:0.69rem;font-weight:600;vertical-align:top;">' + escapeHtml(t('building_total_roof_area')) + '</td>' +
                         '<td style="padding:2px 0;color:#1e293b;font-size:0.72rem;font-weight:700;text-align:right;">' +
                             escapeHtml(totalAreaM2.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })) +
                         '</td>' +
@@ -13851,7 +13907,11 @@ function selectRamp(name) {
                     return;
                 }
 
-                var data = finalData;
+                // Önce mutlaka AOI ile kesiştir; boş sonuç ve bina sayısı
+                // kontrolleri kırpılmış geometri üzerinden yapılmalı.
+                // Böylece alanın içinde kalan çatılar, sunucunun bbox/çoklu
+                // worker davranışından etkilenmeden korunur.
+                var data = _sylvaClipBuildingDataToRoi(finalData, roi);
                 var geojson = data.geojson || {};
                 var returnedFeatures = Array.isArray(geojson.features) ? geojson.features : [];
                 var buildingCount = Number(data.buildingCount);
@@ -13900,7 +13960,7 @@ function selectRamp(name) {
                 var _buildingTotalLabel = Math.round(
                     isFinite(buildingCount) ? buildingCount : returnedFeatures.length
                 ).toLocaleString('tr-TR');
-                var _buildingToast = 'Bina analizi tamamlandı: ' + _buildingTotalLabel + ' poligon bulundu.';
+                var _buildingToast = t('building_analysis_done') + ': ' + _buildingTotalLabel + ' ' + t('building_roof_polygons_found') + '.';
                 showAnalysisToast(
                     _buildingToast,
                     'success'
@@ -13990,7 +14050,7 @@ function selectRamp(name) {
                     if (_progressBar) _progressBar.style.width = pct + '%';
                     var _countSoFarLabel = Math.round(statusData.buildingCountSoFar || 0).toLocaleString('tr-TR');
                     if (_progressLabel) {
-                        _progressLabel.textContent = 'Taranıyor: %' + pct + ' — ' + _countSoFarLabel + ' bina bulundu' +
+                        _progressLabel.textContent = t('building_scan_progress') + ': %' + pct + ' — ' + _countSoFarLabel + ' ' + t('building_count_found') +
                             (progress.totalTiles ? ' (' + progress.tilesDone + ' / ' + progress.totalTiles + ' tile)' : '');
                     }
                     if (_cancelBtn && !_buildingCancelRequested && statusData.status === 'running') {
@@ -38242,6 +38302,58 @@ var SYLVA_TRANSLATIONS = {
     before_after_title: 'Scorrimento Livello',
   },
 };
+
+// Bina çatı analizi için kullanıcıya görünen metinler — desteklenen 30 dil.
+(function () {
+  var buildingRoofLabels = {
+    en: { title: 'Building Roof Detection', source: 'Source', dataset: 'Building dataset', scan: 'Scan in progress', count: 'Total building/roof count (number)', area: 'Total roof area (m²)', done: 'Building analysis completed', found: 'roof polygons found', progress: 'Scanning', countFound: 'buildings found', roofPolygon: 'Building roof polygon', outside: 'Outside building area' },
+    tr: { title: 'Bina Çatı Tespiti', source: 'Kaynak', dataset: 'Bina veri kümesi', scan: 'Tarama devam ediyor', count: 'Toplam Bina/Çatı Sayısı (Adet)', area: 'Toplam Çatı Alanı (m²)', done: 'Bina analizi tamamlandı', found: 'çatı poligonu bulundu', progress: 'Taranıyor', countFound: 'bina bulundu', roofPolygon: 'Bina Çatı Poligonu', outside: 'Bina Dışı Alan' },
+    de: { title: 'Gebäudedacherkennung', source: 'Quelle', dataset: 'Gebäudedatensatz', scan: 'Scan läuft', count: 'Gesamtzahl der Gebäude/Dächer', area: 'Gesamte Dachfläche (m²)', done: 'Gebäudeanalyse abgeschlossen', found: 'Dachpolygone gefunden', progress: 'Scan läuft', countFound: 'Gebäude gefunden', roofPolygon: 'Gebäudedachpolygon', outside: 'Gebäudeaußenbereich' },
+    fr: { title: 'Détection des toits des bâtiments', source: 'Source', dataset: 'Jeu de données des bâtiments', scan: 'Analyse en cours', count: 'Nombre total de bâtiments/toits', area: 'Surface totale des toits (m²)', done: 'Analyse des bâtiments terminée', found: 'polygones de toit trouvés', progress: 'Analyse', countFound: 'bâtiments trouvés', roofPolygon: 'Polygone de toit', outside: 'Zone hors bâtiment' },
+    es: { title: 'Detección de tejados de edificios', source: 'Fuente', dataset: 'Conjunto de datos de edificios', scan: 'Escaneo en curso', count: 'Número total de edificios/tejados', area: 'Área total de tejados (m²)', done: 'Análisis de edificios completado', found: 'polígonos de tejado encontrados', progress: 'Escaneando', countFound: 'edificios encontrados', roofPolygon: 'Polígono de tejado', outside: 'Área fuera del edificio' },
+    pt: { title: 'Deteção de telhados de edifícios', source: 'Fonte', dataset: 'Conjunto de dados de edifícios', scan: 'Digitalização em curso', count: 'Número total de edifícios/telhados', area: 'Área total dos telhados (m²)', done: 'Análise de edifícios concluída', found: 'polígonos de telhado encontrados', progress: 'A digitalizar', countFound: 'edifícios encontrados', roofPolygon: 'Polígono de telhado', outside: 'Área fora do edifício' },
+    it: { title: 'Rilevamento dei tetti degli edifici', source: 'Fonte', dataset: 'Dataset degli edifici', scan: 'Scansione in corso', count: 'Numero totale di edifici/tetti', area: 'Area totale dei tetti (m²)', done: 'Analisi degli edifici completata', found: 'poligoni dei tetti trovati', progress: 'Scansione', countFound: 'edifici trovati', roofPolygon: 'Poligono del tetto', outside: 'Area esterna agli edifici' },
+    ru: { title: 'Определение крыш зданий', source: 'Источник', dataset: 'Набор данных зданий', scan: 'Сканирование выполняется', count: 'Общее количество зданий/крыш', area: 'Общая площадь крыш (м²)', done: 'Анализ зданий завершён', found: 'полигонов крыш найдено', progress: 'Сканирование', countFound: 'зданий найдено', roofPolygon: 'Полигон крыши здания', outside: 'Территория вне зданий' },
+    ar: { title: 'اكتشاف أسطح المباني', source: 'المصدر', dataset: 'مجموعة بيانات المباني', scan: 'جارٍ الفحص', count: 'إجمالي عدد المباني/الأسطح', area: 'إجمالي مساحة الأسطح (م²)', done: 'اكتمل تحليل المباني', found: 'من مضلعات الأسطح', progress: 'جارٍ الفحص', countFound: 'مبانٍ تم العثور عليها', roofPolygon: 'مضلع سطح المبنى', outside: 'منطقة خارج المبنى' },
+    fa: { title: 'تشخیص سقف ساختمان‌ها', source: 'منبع', dataset: 'مجموعه‌داده ساختمان‌ها', scan: 'اسکن در حال انجام است', count: 'تعداد کل ساختمان‌ها/سقف‌ها', area: 'مساحت کل سقف‌ها (مترمربع)', done: 'تحلیل ساختمان‌ها تکمیل شد', found: 'چندضلعی سقف پیدا شد', progress: 'در حال اسکن', countFound: 'ساختمان پیدا شد', roofPolygon: 'چندضلعی سقف ساختمان', outside: 'ناحیه خارج از ساختمان' },
+    zh: { title: '建筑屋顶检测', source: '来源', dataset: '建筑数据集', scan: '正在扫描', count: '建筑/屋顶总数（个）', area: '屋顶总面积（平方米）', done: '建筑分析完成', found: '个屋顶多边形', progress: '扫描中', countFound: '个建筑已找到', roofPolygon: '建筑屋顶多边形', outside: '建筑外区域' },
+    ja: { title: '建物屋根検出', source: 'ソース', dataset: '建物データセット', scan: 'スキャン中', count: '建物・屋根の総数（件）', area: '屋根の総面積（m²）', done: '建物解析が完了しました', found: '件の屋根ポリゴンが見つかりました', progress: 'スキャン中', countFound: '件の建物が見つかりました', roofPolygon: '建物屋根ポリゴン', outside: '建物外エリア' },
+    ko: { title: '건물 지붕 탐지', source: '출처', dataset: '건물 데이터셋', scan: '스캔 진행 중', count: '전체 건물/지붕 수(개)', area: '전체 지붕 면적(m²)', done: '건물 분석이 완료되었습니다', found: '개의 지붕 폴리곤을 찾았습니다', progress: '스캔 중', countFound: '개의 건물을 찾았습니다', roofPolygon: '건물 지붕 폴리곤', outside: '건물 외부 영역' },
+    hi: { title: 'भवन छत पहचान', source: 'स्रोत', dataset: 'भवन डेटासेट', scan: 'स्कैन जारी है', count: 'कुल भवन/छत संख्या', area: 'कुल छत क्षेत्रफल (m²)', done: 'भवन विश्लेषण पूरा हुआ', found: 'छत बहुभुज मिले', progress: 'स्कैन हो रहा है', countFound: 'भवन मिले', roofPolygon: 'भवन छत बहुभुज', outside: 'भवन के बाहर का क्षेत्र' },
+    id: { title: 'Deteksi Atap Bangunan', source: 'Sumber', dataset: 'Dataset bangunan', scan: 'Pemindaian berlangsung', count: 'Jumlah total bangunan/atap', area: 'Luas total atap (m²)', done: 'Analisis bangunan selesai', found: 'poligon atap ditemukan', progress: 'Memindai', countFound: 'bangunan ditemukan', roofPolygon: 'Poligon atap bangunan', outside: 'Area di luar bangunan' },
+    az: { title: 'Bina damlarının aşkarlanması', source: 'Mənbə', dataset: 'Bina məlumat dəsti', scan: 'Skan edilir', count: 'Ümumi bina/dam sayı', area: 'Ümumi dam sahəsi (m²)', done: 'Bina analizi tamamlandı', found: 'dam poliqonu tapıldı', progress: 'Skan edilir', countFound: 'bina tapıldı', roofPolygon: 'Bina damı poliqonu', outside: 'Bina xarici sahə' },
+    kk: { title: 'Ғимарат шатырларын анықтау', source: 'Дереккөз', dataset: 'Ғимараттар деректер жиыны', scan: 'Сканерлеу жүріп жатыр', count: 'Ғимараттар/шатырлардың жалпы саны', area: 'Шатырлардың жалпы ауданы (м²)', done: 'Ғимараттарды талдау аяқталды', found: 'шатыр полигоны табылды', progress: 'Сканерленуде', countFound: 'ғимарат табылды', roofPolygon: 'Ғимарат шатырының полигоны', outside: 'Ғимараттан тыс аумақ' },
+    uz: { title: 'Bino tomlarini aniqlash', source: 'Manba', dataset: 'Binolar maʼlumotlar toʻplami', scan: 'Skanerlash davom etmoqda', count: 'Jami bino/tomlar soni', area: 'Jami tom maydoni (m²)', done: 'Bino tahlili yakunlandi', found: 'ta tom poligoni topildi', progress: 'Skanerlanmoqda', countFound: 'ta bino topildi', roofPolygon: 'Bino tomi poligoni', outside: 'Bino tashqarisidagi hudud' },
+    ky: { title: 'Имарат чатырларын аныктоо', source: 'Булак', dataset: 'Имараттардын маалымат топтому', scan: 'Скандоо жүрүп жатат', count: 'Имараттардын/чатырлардын жалпы саны', area: 'Чатырлардын жалпы аянты (м²)', done: 'Имараттарды талдоо аяктады', found: 'чатыр полигоны табылды', progress: 'Сканерленүүдө', countFound: 'имарат табылды', roofPolygon: 'Имарат чатырынын полигоны', outside: 'Имараттан тышкары аймак' },
+    pl: { title: 'Wykrywanie dachów budynków', source: 'Źródło', dataset: 'Zbiór danych budynków', scan: 'Trwa skanowanie', count: 'Łączna liczba budynków/dachów', area: 'Łączna powierzchnia dachów (m²)', done: 'Analiza budynków zakończona', found: 'znaleziono poligonów dachów', progress: 'Skanowanie', countFound: 'znaleziono budynków', roofPolygon: 'Poligon dachu budynku', outside: 'Obszar poza budynkiem' },
+    el: { title: 'Εντοπισμός στεγών κτιρίων', source: 'Πηγή', dataset: 'Σύνολο δεδομένων κτιρίων', scan: 'Η σάρωση βρίσκεται σε εξέλιξη', count: 'Συνολικός αριθμός κτιρίων/στεγών', area: 'Συνολική επιφάνεια στεγών (m²)', done: 'Η ανάλυση κτιρίων ολοκληρώθηκε', found: 'πολύγωνα στεγών βρέθηκαν', progress: 'Σάρωση', countFound: 'κτίρια βρέθηκαν', roofPolygon: 'Πολύγωνο στέγης κτιρίου', outside: 'Περιοχή εκτός κτιρίου' },
+    bg: { title: 'Откриване на покриви на сгради', source: 'Източник', dataset: 'Набор от данни за сгради', scan: 'Сканирането продължава', count: 'Общ брой сгради/покриви', area: 'Обща площ на покривите (m²)', done: 'Анализът на сградите завърши', found: 'намерени покривни полигони', progress: 'Сканиране', countFound: 'намерени сгради', roofPolygon: 'Полигон на покрив на сграда', outside: 'Зона извън сградата' },
+    hu: { title: 'Épülettetők felismerése', source: 'Forrás', dataset: 'Épületadatkészlet', scan: 'A vizsgálat folyamatban', count: 'Épületek/tetők teljes száma', area: 'Tetők teljes területe (m²)', done: 'Az épületelemzés befejeződött', found: 'tetőpoligon található', progress: 'Vizsgálat', countFound: 'épület található', roofPolygon: 'Épülettető-poligon', outside: 'Épületen kívüli terület' },
+    th: { title: 'การตรวจจับหลังคาอาคาร', source: 'แหล่งที่มา', dataset: 'ชุดข้อมูลอาคาร', scan: 'กำลังสแกน', count: 'จำนวนอาคาร/หลังคาทั้งหมด', area: 'พื้นที่หลังคารวม (ตร.ม.)', done: 'การวิเคราะห์อาคารเสร็จสมบูรณ์', found: 'พบรูปหลายเหลี่ยมหลังคา', progress: 'กำลังสแกน', countFound: 'พบอาคาร', roofPolygon: 'รูปหลายเหลี่ยมหลังคาอาคาร', outside: 'พื้นที่นอกอาคาร' },
+    vi: { title: 'Phát hiện mái nhà', source: 'Nguồn', dataset: 'Bộ dữ liệu tòa nhà', scan: 'Đang quét', count: 'Tổng số tòa nhà/mái nhà', area: 'Tổng diện tích mái (m²)', done: 'Đã hoàn tất phân tích tòa nhà', found: 'đa giác mái được tìm thấy', progress: 'Đang quét', countFound: 'tòa nhà được tìm thấy', roofPolygon: 'Đa giác mái tòa nhà', outside: 'Khu vực ngoài tòa nhà' },
+    bn: { title: 'ভবনের ছাদ শনাক্তকরণ', source: 'উৎস', dataset: 'ভবন ডেটাসেট', scan: 'স্ক্যান চলছে', count: 'মোট ভবন/ছাদের সংখ্যা', area: 'মোট ছাদের ক্ষেত্রফল (m²)', done: 'ভবন বিশ্লেষণ সম্পন্ন হয়েছে', found: 'টি ছাদ বহুভুজ পাওয়া গেছে', progress: 'স্ক্যান করা হচ্ছে', countFound: 'টি ভবন পাওয়া গেছে', roofPolygon: 'ভবনের ছাদ বহুভুজ', outside: 'ভবনের বাইরের এলাকা' },
+    ur: { title: 'عمارت کی چھتوں کی شناخت', source: 'ماخذ', dataset: 'عمارتوں کا ڈیٹاسیٹ', scan: 'اسکین جاری ہے', count: 'عمارتوں/چھتوں کی کل تعداد', area: 'چھتوں کا کل رقبہ (m²)', done: 'عمارتوں کا تجزیہ مکمل ہو گیا', found: 'چھت کے کثیرالاضلاع ملے', progress: 'اسکین ہو رہا ہے', countFound: 'عمارتیں ملیں', roofPolygon: 'عمارت کی چھت کا کثیرالاضلاع', outside: 'عمارت سے باہر کا علاقہ' },
+    ms: { title: 'Pengesanan Bumbung Bangunan', source: 'Sumber', dataset: 'Set data bangunan', scan: 'Pengimbasan sedang dijalankan', count: 'Jumlah bangunan/bumbung', area: 'Jumlah kawasan bumbung (m²)', done: 'Analisis bangunan selesai', found: 'poligon bumbung ditemui', progress: 'Mengimbas', countFound: 'bangunan ditemui', roofPolygon: 'Poligon bumbung bangunan', outside: 'Kawasan luar bangunan' },
+    mn: { title: 'Барилгын дээвэр илрүүлэх', source: 'Эх сурвалж', dataset: 'Барилгын өгөгдлийн багц', scan: 'Скан хийж байна', count: 'Барилга/дээврийн нийт тоо', area: 'Дээврийн нийт талбай (м²)', done: 'Барилгын шинжилгээ дууслаа', found: 'дээврийн полигон олдлоо', progress: 'Скан хийж байна', countFound: 'барилга олдлоо', roofPolygon: 'Барилгын дээврийн полигон', outside: 'Барилгын гаднах талбай' },
+    ka: { title: 'შენობების სახურავების გამოვლენა', source: 'წყარო', dataset: 'შენობების მონაცემთა ნაკრები', scan: 'სკანირება მიმდინარეობს', count: 'შენობების/სახურავების სრული რაოდენობა', area: 'სახურავების სრული ფართობი (მ²)', done: 'შენობების ანალიზი დასრულდა', found: 'სახურავის პოლიგონი მოიძებნა', progress: 'სკანირება', countFound: 'შენობა მოიძებნა', roofPolygon: 'შენობის სახურავის პოლიგონი', outside: 'შენობის გარე ტერიტორია' }
+  };
+  Object.keys(buildingRoofLabels).forEach(function (lang) {
+    if (!SYLVA_TRANSLATIONS[lang]) return;
+    var labels = buildingRoofLabels[lang];
+    SYLVA_TRANSLATIONS[lang].building_roof_detection = labels.title;
+    SYLVA_TRANSLATIONS[lang].building_source = labels.source;
+    SYLVA_TRANSLATIONS[lang].building_dataset = labels.dataset;
+    SYLVA_TRANSLATIONS[lang].building_scan_in_progress = labels.scan;
+    SYLVA_TRANSLATIONS[lang].building_total_count = labels.count;
+    SYLVA_TRANSLATIONS[lang].building_total_roof_area = labels.area;
+    SYLVA_TRANSLATIONS[lang].building_analysis_done = labels.done;
+    SYLVA_TRANSLATIONS[lang].building_roof_polygons_found = labels.found;
+    SYLVA_TRANSLATIONS[lang].building_scan_progress = labels.progress;
+    SYLVA_TRANSLATIONS[lang].building_count_found = labels.countFound;
+    SYLVA_TRANSLATIONS[lang].building_roof_polygon = labels.roofPolygon;
+    SYLVA_TRANSLATIONS[lang].building_outside_area = labels.outside;
+  });
+})();
 
 // Arama kutusu ve arama durumları için 30 dil desteği.
 (function () {
