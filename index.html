@@ -2583,7 +2583,9 @@ tr.class-highlight-active {
 <style>
 
         /* ══ SylvaGIS — Zaman Serisi + Before/After CSS ════════════════════ */
-        #btn-chart-line.disabled-chart { opacity: 0.45; cursor: not-allowed; }
+        #btn-chart-line.disabled-chart,
+        #btn-chart-bar.disabled-chart,
+        #btn-chart-pie.disabled-chart { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
         #btn-before-after.active, #btn-before-after-map2.active { background:#1e3a8a !important; color:#fff !important; border-color:#1e3a8a !important; }
         #before-after-divider { touch-action: none; }
         #sylva-time-slider-bar { box-shadow: 0 -2px 8px rgba(30,58,138,0.08); }
@@ -12039,6 +12041,22 @@ function selectRamp(name) {
             if (_tsPeriodActive) {
                 runTimeSeriesAnalysis();
                 return;
+            }
+
+            // 🆕 Zaman Serisi dışındaki HER analiz türü (indeks/modül veya Uydu
+            // Görüntüsü Galerisi) "🚀 Analizi Çalıştır" ile başlatıldığında Çizgi
+            // Grafik butonu pasifleştirilir — çizgi grafik yalnızca Zaman Serisi
+            // ve Değişim Analizi sonuçları için anlamlıdır. Sütun/Pasta grafik
+            // butonları (varsa önceki bir Zaman Serisi çalıştırmasından kalan
+            // pasif durumdan) tekrar aktif hale getirilir.
+            var _lineChartBtn = document.getElementById('btn-chart-line');
+            if (_lineChartBtn) { _lineChartBtn.classList.add('disabled-chart'); _lineChartBtn.disabled = true; }
+            var _barChartBtn = document.getElementById('btn-chart-bar');
+            var _pieChartBtn = document.getElementById('btn-chart-pie');
+            if (_barChartBtn) { _barChartBtn.classList.remove('disabled-chart'); _barChartBtn.disabled = false; }
+            if (_pieChartBtn) { _pieChartBtn.classList.remove('disabled-chart'); _pieChartBtn.disabled = false; }
+            if (typeof window.setChartType === 'function' && _lineChartBtn && _lineChartBtn.classList.contains('active')) {
+                window.setChartType('bar');
             }
 
             if (window._sylvaUserDone === false) {
@@ -45157,7 +45175,20 @@ function runTimeSeriesAnalysis() {
     // butonda gösterilir.
     var btn = document.getElementById('btn-run-analysis');
     var _btnOrigLabel = btn ? btn.innerHTML : null;
-    if (btn) { btn.disabled = true; btn.textContent = t('ts_running'); }
+    if (btn) { btn.disabled = true; }
+    // 🆕 Diğer analizlerde olduğu gibi, buton metnini "Hesaplanıyor…" yapmak
+    // yerine ekranda yanıp sönen SylvaGIS logolu ortak yükleniyor overlay'i
+    // gösterilir (bkz. runAnalysis() içindeki aynı mekanizma).
+    var _tsLoadingOverlay = document.getElementById('analysis-loading-overlay');
+    if (_tsLoadingOverlay) _tsLoadingOverlay.classList.add('active');
+
+    // 🆕 Zaman Serisi analizi başlatıldığında Sütun/Pasta grafik butonları
+    // pasifleştirilir — bu analiz türünde sonuç yalnızca Çizgi Grafik
+    // olarak gösterildiği için diğer iki grafik türü anlamsızdır.
+    var _tsBarBtn = document.getElementById('btn-chart-bar');
+    var _tsPieBtn = document.getElementById('btn-chart-pie');
+    if (_tsBarBtn) { _tsBarBtn.classList.add('disabled-chart'); _tsBarBtn.disabled = true; }
+    if (_tsPieBtn) { _tsPieBtn.classList.add('disabled-chart'); _tsPieBtn.disabled = true; }
 
     fetch(API_BASE + '/api/timeseries', {
         method: 'POST',
@@ -45175,6 +45206,7 @@ function runTimeSeriesAnalysis() {
     .then(function(r) { return r.json(); })
     .then(function(data) {
         if (btn) { btn.disabled = false; btn.innerHTML = _btnOrigLabel; }
+        if (_tsLoadingOverlay) _tsLoadingOverlay.classList.remove('active');
 
         if (!data.success) {
             var errMsg = data.error || 'Zaman serisi hesaplanamadı.';
@@ -45208,6 +45240,21 @@ function runTimeSeriesAnalysis() {
             });
             var _meta = (typeof getSelectedAnalysisMeta === 'function') ? getSelectedAnalysisMeta() : null;
             renderGalleryFromScenes(scenesArr, _pane, _meta);
+
+            // 🛠️ BUG FİX (KÖK NEDEN): Zaman Serisi tamamlandığında galeri ve
+            // çizgi grafik doluyor ama haritaya/lejanta HİÇBİR sahne hiç
+            // yüklenmiyordu — "ekrana veri ve lejant gelmiyor" hatasının
+            // birebir nedeni buydu. Artık galerideki ilk (varsayılan olarak
+            // "active" işaretli) periyodun GERÇEK sahnesi otomatik olarak
+            // haritaya ve lejanta yüklenir.
+            loadSpecificScene(scenesArr[0][0], _pane);
+
+            // 🛠️ BUG FİX: Zaman kaydırıcısının (video oynatma dahil) hangi
+            // periyotta hangi GERÇEK sahnenin gösterileceğini bilmesi için
+            // sahne ID listesi ve ait olduğu ekran globalde saklanır — bkz.
+            // onTimeSliderChange().
+            window._tsSliderSceneIds = data.gallery.map(function(g) { return g.sceneId; });
+            window._tsSliderPane = _pane;
         }
 
         // Time Slider — gerçek periyot etiketleri (2015-03, 2015-04, ... veya 2015, 2016, ...)
@@ -45228,6 +45275,7 @@ function runTimeSeriesAnalysis() {
     })
     .catch(function(err) {
         if (btn) { btn.disabled = false; btn.innerHTML = _btnOrigLabel; }
+        if (_tsLoadingOverlay) _tsLoadingOverlay.classList.remove('active');
         var errMsg = 'Zaman serisi hesaplanamadı: ' + err;
         if (typeof showAnalysisToast === 'function') showAnalysisToast(errMsg, 'error');
         else alert(errMsg);
@@ -45236,11 +45284,33 @@ function runTimeSeriesAnalysis() {
 
 /* ── 5. Time Slider ─────────────────────────────────────────────────────── */
 window._tsSliderDates = [];
+window._tsSliderSceneIds = [];
+window._tsSliderPane = null;
 var _tsPlayTimer = null, _tsPlaying = false;
 
 function onTimeSliderChange(val) {
+    var idx = parseInt(val, 10);
     var lbl = document.getElementById('ts-date-label');
-    if (lbl) lbl.textContent = (window._tsSliderDates || [])[parseInt(val,10)] || '—';
+    if (lbl) lbl.textContent = (window._tsSliderDates || [])[idx] || '—';
+
+    // 🛠️ BUG FİX (KÖK NEDEN): Kaydırıcı — ve "▶" ile başlatılan video
+    // oynatma — eskiden SADECE üstteki tarih etiketini güncelliyordu;
+    // haritadaki veri/lejant hiç değişmiyordu ("video kısmında ekranda
+    // veri olmadan devam ediyor" hatası). Artık kaydırıcının gösterdiği
+    // periyoda ait GERÇEK sahne haritaya ve lejanta yüklenir.
+    var sceneIds = window._tsSliderSceneIds || [];
+    var sceneId  = sceneIds[idx];
+    if (!sceneId) return;
+    var pane = window._tsSliderPane || ((typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map');
+    loadSpecificScene(sceneId, pane);
+
+    // Galeri kartındaki "active" vurgusunu kaydırıcı ile senkron tut
+    var galleryEl = (typeof _sylvaGalleryEl === 'function') ? _sylvaGalleryEl(pane) : null;
+    if (galleryEl) {
+        galleryEl.querySelectorAll('.gallery-item').forEach(function(i) {
+            i.classList.toggle('active', i.getAttribute('data-scene-id') === String(sceneId));
+        });
+    }
 }
 function toggleTimeSliderPlay() {
     _tsPlaying = !_tsPlaying;
