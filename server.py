@@ -19,6 +19,29 @@ CORS(app)
 print('SylvaGIS server.py yüklendi — versiyon: zip-export-v2-tiling')
 
 
+# API istemcisi JSON bekler. Flask'in varsayılan HTML 404/405 sayfaları,
+# yanlış endpoint veya proxy yönlendirmesi olduğunda istemcide
+# "Unexpected token 'T'" gibi yanıltıcı bir parse hatasına dönüşmesin.
+@app.errorhandler(404)
+def _api_not_found(error):
+    if request.path.startswith('/api/'):
+        return jsonify({
+            'success': False,
+            'error': f'API endpoint bulunamadı: {request.path}'
+        }), 404
+    return error
+
+
+@app.errorhandler(405)
+def _api_method_not_allowed(error):
+    if request.path.startswith('/api/'):
+        return jsonify({
+            'success': False,
+            'error': f'Bu API endpoint için HTTP metodu desteklenmiyor: {request.method}'
+        }), 405
+    return error
+
+
 # ════════════════════════════════════════════════════════════════
 # 🔁 GEE / AĞ ÇAĞRILARI İÇİN OTOMATİK TEKRAR DENEME (RETRY)
 # ════════════════════════════════════════════════════════════════
