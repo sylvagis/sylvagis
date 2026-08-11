@@ -1016,7 +1016,9 @@ tr.class-highlight-active {
            html2canvas ve @media print çıktısında lejant boşluğu/kayması önlenir. */
         .map-legend { background: #ffffff; padding: 4px 6px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); font-size: 0.74rem; pointer-events: auto; min-width: 0; width: fit-content; box-sizing: border-box; max-height: 200px; overflow-y: auto; }
         .map-legend.detached { min-width: 0; min-height: 36px; overflow: auto; position: relative; box-sizing: border-box; }
-        .map-top-left-infobox { position: absolute; top: 86px; left: 15px; right: 15px; z-index: 520; pointer-events: none; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+        /* Harita bilgi ve iklim kutuları sağ üstte, sağ araç grubunun
+           altında ve her ekranın kendi overlay'i içinde tutulur. */
+        .map-top-right-infobox { position: absolute; top: 86px; right: 15px; left: auto; z-index: 520; pointer-events: none; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
 
         /* ── Konum Arama (Geocoding) — yan kontrol grubunun en altında ── */
         .map-search-control { position: relative; width: 35px; height: 35px; flex: 0 0 35px; }
@@ -1126,10 +1128,12 @@ tr.class-highlight-active {
             }
 
             /* Bilgi kutusu: sabit konum, sabit iç boşluk */
-            .map-top-left-infobox {
+            .map-top-right-infobox {
                 position: absolute !important;
                 top: 70px !important;
-                left: 15px !important;
+                right: 15px !important;
+                left: auto !important;
+                align-items: flex-end !important;
             }
             .map-info-box {
                 padding: 6px 10px !important;
@@ -4643,7 +4647,7 @@ tr.class-highlight-active {
 
             <div class="map-gallery" id="map-gallery" style="display:none;opacity:0.45;transition:opacity 0.35s ease;"></div>
 
-            <div class="map-top-left-infobox">
+            <div class="map-top-right-infobox">
                 <div class="map-info-box" id="map-info-box" style="display:none;"></div>
                 <div class="sylva-climate-charts" id="map-climate-charts" aria-label="İklim grafikleri">
                     <div class="sylva-climate-chart-block">
@@ -4978,7 +4982,7 @@ tr.class-highlight-active {
             <!-- Ekran 2 için lejant/bilgi kutusu aynası: sol haritadaki
                  #map-info-box / #map-legend-box içeriği ile senkronize
                  tutulur (bkz. script: sylvaMirrorLegendInfoToMap2). -->
-            <div class="map2-overlay map-top-left-infobox">
+            <div class="map2-overlay map-top-right-infobox">
                 <div class="map-info-box" id="map2-info-box" style="display:none;"></div>
                 <div class="sylva-climate-charts" id="map2-climate-charts" aria-label="İklim grafikleri">
                     <div class="sylva-climate-chart-block">
@@ -7074,6 +7078,9 @@ tr.class-highlight-active {
             if (secondPane) secondPane.classList.toggle('sylva-active-map-pane', id === 'map2');
             if (typeof window._sylvaUseMarkupPane === 'function') window._sylvaUseMarkupPane(id);
             if (typeof window._sylvaSyncActivePaneControls === 'function') window._sylvaSyncActivePaneControls();
+            if (typeof window.sylvaRefreshClimateForActivePane === 'function') {
+                window.sylvaRefreshClimateForActivePane();
+            }
             if (typeof _sylvaUpdateBeforeAfterButtons === 'function') {
                 _sylvaUpdateBeforeAfterButtons(!!window._sylvaDualScreenActive, id);
             }
@@ -13501,7 +13508,15 @@ function selectRamp(name) {
         // Hava Durumu kontrolü yalnızca geçerli bir analiz sonucu olduğunda
         // kullanılabilir. Yeni analiz başlarken veya sonuçlar temizlenirken
         // kontrol tekrar tamamen pasif duruma alınır.
-        function _sylvaSetWeatherControlActive(active) {
+        function _sylvaSetWeatherControlActive(active, paneId) {
+            var targetPane = paneId === 'map2' ? 'map2' : (paneId === 'map' ? 'map' : null);
+            var activePane = typeof _sylvaActivePaneId === 'function'
+                ? _sylvaActivePaneId()
+                : 'map';
+            // Ortak kontrol yalnızca hedef pane aktifken güncellenir.
+            // Böylece Ekran 2 temizlenirken Ekran 1'in hava durumu kontrolü
+            // yanlışlıkla devre dışı kalmaz.
+            if (targetPane && targetPane !== activePane) return;
             var weatherCb = document.getElementById('toggle-weather');
             var weatherWrap = document.getElementById('weather-toggle-wrap');
             if (!weatherCb) return;
@@ -13518,12 +13533,253 @@ function selectRamp(name) {
             }
         }
 
+        // ── Hava Durumu: iki ekran için bağımsız günlük seri ve grafikler ──
+        // Her ekranın verisi, Chart.js örnekleri ve panel görünürlüğü ayrı
+        // tutulur. Ekranlar arasında geçiş diğer ekranın sonucunu silmez.
+        window._sylvaClimateDataByPane = window._sylvaClimateDataByPane || { map: null, map2: null };
+        window._sylvaClimateChartsByPane = window._sylvaClimateChartsByPane || { map: {}, map2: {} };
+        window._sylvaClimateRequestByPane = window._sylvaClimateRequestByPane || { map: 0, map2: 0 };
+        window._sylvaClimateVisibleByPane = window._sylvaClimateVisibleByPane || { map: false, map2: false };
+
+        function _sylvaClimatePaneKey(paneId) {
+            return paneId === 'map2' ? 'map2' : 'map';
+        }
+
+        function _sylvaClimateChartId(paneId, kind) {
+            var key = _sylvaClimatePaneKey(paneId);
+            return document.getElementById(
+                key === 'map2'
+                    ? (kind === 'precipitation'
+                        ? 'map2-climate-precipitation-chart'
+                        : 'map2-climate-temperature-chart')
+                    : (kind === 'precipitation'
+                        ? 'map-climate-precipitation-chart'
+                        : 'map-climate-temperature-chart')
+            );
+        }
+
+        function _sylvaClimatePanelId(paneId) {
+            return _sylvaClimatePaneKey(paneId) === 'map2'
+                ? 'map2-climate-charts'
+                : 'map-climate-charts';
+        }
+
+        function _sylvaClimateSetPanelVisible(paneId, visible) {
+            var key = _sylvaClimatePaneKey(paneId);
+            var panel = document.getElementById(_sylvaClimatePanelId(key));
+            window._sylvaClimateVisibleByPane[key] = !!visible;
+            if (panel) {
+                panel.style.display = visible ? 'block' : 'none';
+                panel.setAttribute('aria-hidden', visible ? 'false' : 'true');
+            }
+        }
+
+        window.sylvaRefreshClimateForActivePane = function () {
+            var key = _sylvaClimatePaneKey(
+                typeof _sylvaActivePaneId === 'function' ? _sylvaActivePaneId() : 'map'
+            );
+            _sylvaClimateSetPanelVisible(key, !!window._sylvaClimateVisibleByPane[key]);
+            var weatherCb = document.getElementById('toggle-weather');
+            if (weatherCb) weatherCb.checked = !!window._sylvaClimateVisibleByPane[key];
+        };
+
+        function _sylvaClimateDestroyCharts(paneId) {
+            var key = _sylvaClimatePaneKey(paneId);
+            var charts = window._sylvaClimateChartsByPane[key] || {};
+            Object.keys(charts).forEach(function (chartKey) {
+                if (charts[chartKey] && typeof charts[chartKey].destroy === 'function') {
+                    charts[chartKey].destroy();
+                }
+            });
+            window._sylvaClimateChartsByPane[key] = {};
+        }
+
+        function _sylvaClimateDailyRows(payload) {
+            var rows = payload && (payload.daily || payload.dailyData || payload.dailySeries);
+            if (!Array.isArray(rows)) return [];
+            return rows.map(function (row) {
+                return {
+                    date: row.date || row.day || '',
+                    precipitationMm: row.precipitationMm !== undefined
+                        ? row.precipitationMm
+                        : row.precipitation,
+                    temperatureC: row.temperatureC !== undefined
+                        ? row.temperatureC
+                        : row.temperature
+                };
+            });
+        }
+
+        function _sylvaRenderClimateCharts(paneId, payload) {
+            var key = _sylvaClimatePaneKey(paneId);
+            if (!window.Chart) return;
+
+            var rows = _sylvaClimateDailyRows(payload);
+            if (!rows.length) return;
+
+            var labels = rows.map(function (row) { return row.date; });
+            var precipitation = rows.map(function (row) {
+                return row.precipitationMm === null || row.precipitationMm === undefined
+                    ? null : Number(row.precipitationMm);
+            });
+            var temperature = rows.map(function (row) {
+                return row.temperatureC === null || row.temperatureC === undefined
+                    ? null : Number(row.temperatureC);
+            });
+
+            _sylvaClimateDestroyCharts(key);
+
+            var precipitationCanvas = _sylvaClimateChartId(key, 'precipitation');
+            var temperatureCanvas = _sylvaClimateChartId(key, 'temperature');
+            if (!precipitationCanvas || !temperatureCanvas) return;
+
+            var commonOptions = {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: { duration: 350 },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: { intersect: false, mode: 'index' }
+                },
+                scales: {
+                    x: {
+                        ticks: { maxTicksLimit: 6, maxRotation: 0, font: { size: 8 } },
+                        grid: { display: false }
+                    },
+                    y: {
+                        beginAtZero: true,
+                        ticks: { font: { size: 8 } }
+                    }
+                }
+            };
+
+            window._sylvaClimateChartsByPane[key] = {
+                precipitation: new Chart(precipitationCanvas, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Yağış (mm)',
+                            data: precipitation,
+                            backgroundColor: 'rgba(14, 165, 233, 0.62)',
+                            borderColor: '#0284c7',
+                            borderWidth: 1,
+                            borderRadius: 2
+                        }]
+                    },
+                    options: Object.assign({}, commonOptions, {
+                        scales: Object.assign({}, commonOptions.scales, {
+                            y: Object.assign({}, commonOptions.scales.y, {
+                                title: { display: true, text: 'mm', font: { size: 8 } }
+                            })
+                        })
+                    })
+                }),
+                temperature: new Chart(temperatureCanvas, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Sıcaklık (°C)',
+                            data: temperature,
+                            borderColor: '#ef4444',
+                            backgroundColor: 'rgba(239, 68, 68, 0.14)',
+                            borderWidth: 2,
+                            pointRadius: 1.5,
+                            pointHoverRadius: 3,
+                            tension: 0.25,
+                            fill: true,
+                            spanGaps: true
+                        }]
+                    },
+                    options: Object.assign({}, commonOptions, {
+                        scales: Object.assign({}, commonOptions.scales, {
+                            y: Object.assign({}, commonOptions.scales.y, {
+                                beginAtZero: false,
+                                title: { display: true, text: '°C', font: { size: 8 } }
+                            })
+                        })
+                    })
+                })
+            };
+        }
+
+        function _sylvaLoadClimateForPane(paneId) {
+            var key = _sylvaClimatePaneKey(paneId);
+            var aoiLayer = key === 'map2' ? currentLayer2 : currentLayer;
+            var roi = (aoiLayer && typeof _extractROIGeometry === 'function')
+                ? _extractROIGeometry(aoiLayer)
+                : null;
+            if (!roi) return Promise.reject(new Error('Çalışma alanı bulunamadı.'));
+
+            var requestId = (window._sylvaClimateRequestByPane[key] || 0) + 1;
+            window._sylvaClimateRequestByPane[key] = requestId;
+            return fetch((window.API_BASE || '') + '/api/climate-data', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ roi: roi })
+            }).then(function (response) {
+                if (!response.ok) throw new Error('İklim verisi alınamadı (' + response.status + ').');
+                return response.json();
+            }).then(function (payload) {
+                if (window._sylvaClimateRequestByPane[key] !== requestId) return payload;
+                if (!payload || !payload.success) {
+                    throw new Error((payload && payload.error) || 'İklim verisi alınamadı.');
+                }
+                window._sylvaClimateDataByPane[key] = payload;
+                _sylvaRenderClimateCharts(key, payload);
+                _sylvaClimateSetPanelVisible(key, true);
+                var activeKey = _sylvaClimatePaneKey(
+                    typeof _sylvaActivePaneId === 'function' ? _sylvaActivePaneId() : 'map'
+                );
+                if (activeKey === key) {
+                    var weatherCb = document.getElementById('toggle-weather');
+                    if (weatherCb) weatherCb.checked = true;
+                }
+                return payload;
+            });
+        }
+
+        window.sylvaLoadClimateForPane = _sylvaLoadClimateForPane;
+
+        (function bindClimateToggle() {
+            function bind() {
+                var weatherCb = document.getElementById('toggle-weather');
+                if (!weatherCb || weatherCb._sylvaClimateBound) return;
+                weatherCb._sylvaClimateBound = true;
+                weatherCb.addEventListener('change', function () {
+                    var pane = (typeof _sylvaActivePaneId === 'function')
+                        ? _sylvaActivePaneId() : 'map';
+                    if (!weatherCb.checked) {
+                        _sylvaClimateSetPanelVisible(pane, false);
+                        return;
+                    }
+                    _sylvaLoadClimateForPane(pane).catch(function (error) {
+                        weatherCb.checked = false;
+                        _sylvaClimateSetPanelVisible(pane, false);
+                        if (typeof showAnalysisToast === 'function') {
+                            showAnalysisToast(error.message, 'error');
+                        } else {
+                            alert(error.message);
+                        }
+                    });
+                });
+            }
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', bind);
+            } else {
+                bind();
+            }
+            window.addEventListener('load', bind);
+        })();
+
         // ── Analiz çıktılarını sıfırla ─────────────────────────────────────────
         // Yeni bir analiz başlatılmadan önce önceki analize ait tüm sonuçları
         // (GEE katmanı, galeri, lejant, grafik, tablo, bilgi kutusu) temizler.
         // LULC / TOPO akışında galeri, galeri içeriği boşaltılarak tamamen gizlenir.
         function _clearAllAnalysisOutputs(paneId) {
-            _sylvaSetWeatherControlActive(false);
+            paneId = (paneId === 'map2') ? 'map2' : 'map';
+            _sylvaSetWeatherControlActive(false, paneId);
             // 🛠️ BUG FİX: "Sürekli/Stretched" min-max kutularına kullanıcı bir kez
             // elle değer girdiğinde, bu kutulara işaretlenen _userEdited bayrağı
             // hiçbir zaman sıfırlanmıyordu. Bu yüzden currentClassRangeMin/Max
@@ -13542,7 +13798,17 @@ function selectRamp(name) {
                 if (_el) _el._userEdited = false;
             });
 
-            paneId = (paneId === 'map2') ? 'map2' : 'map';
+            // İklim sonucunu yalnızca temizlenen ekran için sıfırla.
+            if (typeof window._sylvaClimateDataByPane !== 'undefined') {
+                window._sylvaClimateDataByPane[paneId] = null;
+                window._sylvaClimateVisibleByPane[paneId] = false;
+                if (typeof _sylvaClimateDestroyCharts === 'function') {
+                    _sylvaClimateDestroyCharts(paneId);
+                }
+                if (typeof _sylvaClimateSetPanelVisible === 'function') {
+                    _sylvaClimateSetPanelVisible(paneId, false);
+                }
+            }
             // 1. Haritadaki önceki GEE tile katmanını kaldır (yalnızca ilgili ekran)
             if (paneId === 'map2') {
                 if (window._geeLayer2) {
@@ -18802,8 +19068,8 @@ function selectRamp(name) {
             // "Analizi Çalıştır" başlarken çağrılır; böylece her yeni analiz
             // bilgi kutusunu aynı boyut ve konumdan başlatır.
             window._resetInfoBoxPosition = function() {
-                var topLeftContainer = document.querySelector('.map-top-left-infobox');
-                if (!topLeftContainer) return;
+                var topRightContainer = document.querySelector('.map-top-right-infobox');
+                if (!topRightContainer) return;
                 boxEl.classList.remove('detached');
                 boxEl.style.position = '';
                 boxEl.style.left     = '';
@@ -18816,7 +19082,7 @@ function selectRamp(name) {
                 boxEl.style.height   = '';
                 boxEl._lockedMinW    = 0;
                 detached = false;
-                topLeftContainer.appendChild(boxEl);
+                topRightContainer.appendChild(boxEl);
             };
 
             boxEl.addEventListener('mousedown', function(e) {
@@ -21647,7 +21913,7 @@ function selectRamp(name) {
                                 // ──────────────────────────────────────────────────────────
                                 // Sadece html2canvas'ın GERÇEKTEN render edeceği öğeler
                                 // düzeltiliyor. Lejant (#map-legend-box) ve bilgi kutusu
-                                // (.map-top-left-infobox) ignoreElements listesinde hariç
+                                        // (.map-top-right-infobox) ignoreElements listesinde hariç
                                 // tutulduğundan o CSS override'ları burada gereksizdir;
                                 // onlar drawOverlaysOnCanvas() ile native canvas'a çiziliyor.
                                 // Bu callback'de yalnızca iki şey yapılıyor:
@@ -21709,7 +21975,7 @@ function selectRamp(name) {
                                        // yakalanır; ana yakalamada atlanır.
                                        // NOT: konteyner bir CLASS'a sahip, ID'ye değil —
                                        // el.id yerine classList.contains kullanılmalı.
-                                       el.classList.contains('map-top-left-infobox') ||
+                                        el.classList.contains('map-top-right-infobox') ||
                                        // Lejant ayrı h2c çağrısıyla piksel-mükemmel yakalanır.
                                        el.id === 'map-legend-box' ||
                                        // Kuzey oku ve ölçek çubuğu drawOverlaysOnCanvas ile
@@ -21813,7 +22079,7 @@ function selectRamp(name) {
                         var markupSVG = document.getElementById('markup-svg');
 
                         // Bilgi kutusunu ayrı html2canvas çağrısıyla piksel-mükemmel yakala.
-                        // Ana h2c render'da map-top-left-infobox ignoreElements'te hariç tutulur;
+                            // Ana h2c render'da map-top-right-infobox ignoreElements'te hariç tutulur;
                         // burada overflow/table-layout CSS'i doğru render etmek için ayrı
                         // html2canvas çağrısı kullanılır ve sonuç doğru konuma yapıştırılır.
                         function captureLegendOverlay() {
