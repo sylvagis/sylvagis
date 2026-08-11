@@ -5732,21 +5732,32 @@ tr.class-highlight-active {
         // 1. Haritayı oluştur ve Türkiye merkezli olarak başlat
         // ---------------------------------------------------------
         var HOME_VIEW = { center: [20.0, 0.0], zoom: 2 };
-        // 🛠️ KÖK NEDEN DÜZELTMESİ (Zoom Sırasında Veri "İç İçe Geçmesi"/Hayalet
-        // Karo Görünümü): Leaflet, her zoom işleminde önce ESKİ zoom
-        // seviyesinin karo grid'ini CSS transform (scale/translate) ile
-        // "ölçekleyip" YENİ karolar gelene kadar ekranda yumuşak bir geçiş
-        // izlenimi verir (zoomAnimation). Bu, saniyeler içinde yenilenen
-        // sıradan harita altlıklarında görünmez ama GEE karoları çok daha
-        // yavaş üretildiği için, ölçeklenmiş ESKİ karo grid'i YENİ karolar
-        // gelene kadar (birkaç saniye) ekranda asılı kalıyor — ekranda
-        // görülen çapraz/kesişen kenarlı "iç içe geçmiş" ikinci bir kopya
-        // TAM OLARAK budur (aynı katmanın eski/ölçeklenmiş hâli + yeni hâli
-        // aynı anda görünüyor). zoomAnimation kapatılınca zoom artık
-        // animasyonlu değil "anında" gerçekleşiyor — bu küçük bir görsel
-        // zarafet kaybı ama karşılığında bu hayalet/çakışma sorunu tamamen
-        // ortadan kalkıyor.
-        var map = L.map('map', { zoomControl: false, zoomAnimation: false }).setView(HOME_VIEW.center, HOME_VIEW.zoom);
+        // ════════════════════════════════════════════════════════════════
+        // 🛠️ DÜZELTME (Zoom Animasyonu Geri Getirildi — "Basit Site Gibi
+        // Oldu" Şikayeti): Bir önceki sürümde ghosting/çakışma sorununu
+        // çözmek için zoomAnimation TAMAMEN kapatılmıştı — bu da zoom'un
+        // Google Earth Pro'daki gibi yumuşak geçiş yapmak yerine sert/ani
+        // "sıçramalar" hâlinde çalışmasına yol açtı. Artık zoomAnimation
+        // TEKRAR açık (varsayılan davranış) — yumuşak zoom geri geldi.
+        // Ghosting sorunu bunun yerine aşağıdaki 'zoomstart'/'zoomend'
+        // dinleyicileriyle çözülüyor: yalnızca GEE analiz katmanlarının
+        // bulunduğu pane, zoom animasyonu SIRASINDA geçici olarak
+        // gizleniyor (temel harita/uydu görüntüsü yine yumuşakça
+        // animasyonlu zoom yapıyor) — böylece eski/ölçeklenmiş analiz
+        // karo grid'i asla yeni karolarla çakışıp "iç içe geçmiş" görünmüyor;
+        // zoom bitince analiz katmanı doğru karolarıyla birlikte tekrar
+        // görünür olur (bkz. aşağıdaki showSylvaLoading tabanlı bekleme).
+        var map = L.map('map', { zoomControl: false }).setView(HOME_VIEW.center, HOME_VIEW.zoom);
+        (function () {
+            var _pane = null;
+            map.on('zoomstart', function () {
+                _pane = map.getPane('geeAnalysisPane');
+                if (_pane) _pane.style.visibility = 'hidden';
+            });
+            map.on('zoomend', function () {
+                if (_pane) _pane.style.visibility = 'visible';
+            });
+        })();
         window._sylvaMap = map; // global referans – cetvel/ölçüm için
 
         // 🛠️ BUG FİX (Analiz sonucu/rasteri ekranda görünmüyor):
@@ -7143,9 +7154,20 @@ tr.class-highlight-active {
 
         function _sylvaEnsureMap2() {
             if (map2) return map2;
-            // 🛠️ bkz. yukarıdaki 'map' başlatmasındaki zoomAnimation:false açıklaması —
-            // aynı hayalet/çakışma sorunu Ekran 2 için de geçerli.
-            map2 = L.map('map2', { zoomControl: false, zoomAnimation: false }).setView(map.getCenter(), map.getZoom());
+            // 🛠️ bkz. yukarıdaki 'map' başlatmasındaki zoomAnimation açıklaması —
+            // Ekran 2'de de zoom animasyonu AÇIK kalır (yumuşak zoom); ghosting
+            // sorunu 'geeAnalysisPane'i zoom sırasında geçici gizleyerek çözülür.
+            map2 = L.map('map2', { zoomControl: false }).setView(map.getCenter(), map.getZoom());
+            (function () {
+                var _pane2 = null;
+                map2.on('zoomstart', function () {
+                    _pane2 = map2.getPane('geeAnalysisPane');
+                    if (_pane2) _pane2.style.visibility = 'hidden';
+                });
+                map2.on('zoomend', function () {
+                    if (_pane2) _pane2.style.visibility = 'visible';
+                });
+            })();
             window._sylvaMap2 = map2;
             _sylvaBindMapViewSync(map, map2);
             _sylvaBindMapViewSync(map2, map);
@@ -12203,6 +12225,37 @@ function selectRamp(name) {
             });
             layer.on('tileload', function (e) {
                 _sylvaUntintTile(e && e.tile);
+            });
+            // ════════════════════════════════════════════════════════════
+            // 🛠️ DÜZELTME ("Ekrana Tam Gelmeden Ekran Açılmasın" İsteği):
+            // Eskiden "logo yanıp sönen" tam ekran yükleme perdesi
+            // (showSylvaLoading/hideSylvaLoading) SADECE "Analiz Et"
+            // butonuna basılan İLK yüklemede devreye giriyordu. Kullanıcı
+            // daha sonra pan/zoom yapıp bu katmanın DAHA ÖNCE HİÇ
+            // görüntülenmemiş yeni bir bölgesine geldiğinde artık hiçbir
+            // uyarı/perde yoktu — o bölge, karoları gelene kadar SESSİZCE
+            // eksik/uydu görüntüsü olarak görünüyordu (bkz. kullanıcının
+            // gönderdiği NDVI ekran görüntüsü — çalışma alanının bir kısmı
+            // hâlâ ham uydu görüntüsüydü). Artık HER katman için (ilk analiz,
+            // sonraki her pan/zoom, ekran 1/ekran 2 fark etmez) Leaflet'in
+            // 'loading' olayı (bu katman için YENİ karo isteği başladığında
+            // ateşlenir) yükleme perdesini AÇAR; 'load' olayı (o an
+            // görünümdeki TÜM karolar — retry'ler dahil — bitince) perdeyi
+            // KAPATIR. 'loading' hiç ateşlenmezse (ör. tüm karolar zaten
+            // önbellekte/yüklüyse) perde de hiç açılmaz — gereksiz yere
+            // ekran kilitlenmez.
+            layer.on('loading', function () {
+                if (typeof showSylvaLoading === 'function') showSylvaLoading();
+            });
+            layer.on('load', function () {
+                var _tryHide = function () {
+                    if ((layer._sylvaPendingRetries || 0) > 0) {
+                        setTimeout(_tryHide, 300);
+                        return;
+                    }
+                    if (typeof hideSylvaLoading === 'function') hideSylvaLoading();
+                };
+                _tryHide();
             });
             layer.on('tileerror', function (e) {
                 var tile = e && e.tile;
