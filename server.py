@@ -2801,6 +2801,18 @@ def _cv_build_clean_dem(roi, dem_source):
         dem = ee.Image('NASA/NASADEM_HGT/001').select('elevation')
     else:
         dem = ee.Image('USGS/SRTMGL1_003').select('elevation')
+    # 🛠️ BUG FİX (siyah/boş harita kareleri — tile sınırlarına oturan):
+    # Aşağıdaki focalMean() çağrıları reproject() ile sabit bir ölçeğe
+    # kilitlenmeden çalışıyordu. GEE'de bu durumda odak-ortalama, kaynak
+    # görüntünün DOĞAL 30 m çözünürlüğüne göre değil, kullanıcının o anki
+    # zoom seviyesindeki EKRAN piksel çözünürlüğüne göre hesaplanıyor —
+    # yakınlaştıkça "150/450 m" yarıçapın taranması gereken piksel sayısı
+    # katlanarak büyüyor ve bazı kareler GEE'nin sunucu-taraflı zaman
+    # sınırını aşıp boş/siyah dönüyor. Çözüm: focalMean'den ÖNCE DEM'i
+    # sabit 30 m / EPSG:4326 piksel ızgarasına kilitliyoruz — böylece
+    # yarıçap her zaman gerçek 150/450 metreye karşılık gelir, zoom
+    # seviyesinden bağımsız olarak.
+    dem = dem.reproject(crs='EPSG:4326', scale=30)
     dem = dem.unmask(dem.focalMean(radius=150, units='meters'))
     dem = dem.unmask(dem.focalMean(radius=450, units='meters'))
     return dem
@@ -3305,6 +3317,26 @@ def build_result_image(data, for_export=False):
         # bir "güvenlik ağı" geçişi uyguluyoruz — ilk geçişte dolmayan
         # (çevresi de void olan) nadir pikseller ikinci, daha geniş
         # pencerede kesinlikle geçerli komşu bulur.
+        # 🛠️ BUG FİX (siyah/boş harita kareleri — tam olarak tile sınırlarına
+        # oturan): Aşağıdaki focalMean() (ve ee.Terrain.products() içindeki
+        # kendi komşuluk hesabı) reproject() ile sabit bir ölçeğe
+        # kilitlenmeden çalışıyordu. GEE'de odak-ortalama gibi komşuluk
+        # tabanlı işlemler, ayrıca sabitlenmediği sürece kullanıcının o anki
+        # zoom seviyesindeki EKRAN piksel çözünürlüğüne göre hesaplanır —
+        # yakınlaştıkça (zoom arttıkça) aynı "150/450 m" yarıçap, GEE'nin
+        # taraması gereken piksel sayısı olarak katlanarak büyür. Belirli bir
+        # tile için bu hesap GEE'nin sunucu-taraflı zaman sınırını aşınca, o
+        # tek kare boş/siyah dönüyordu (TOPO_SLOPE'ta en ağır zincir olduğu
+        # için en çok kare bunda görülüyordu — art arda 150m+450m focalMean
+        # + Terrain.products'ın kendi komşuluk hesabı).
+        #
+        # ÇÖZÜM: DEM'i, focalMean/Terrain.products çağrılmadan ÖNCE sabit
+        # 30 m / EPSG:4326 piksel ızgarasına kilitliyoruz (native_scale ile
+        # aynı değer — bkz. export akışındaki reproject(crs=..., scale=...)
+        # kullanımı, satır ~5662). Böylece yarıçaplar her zaman gerçek
+        # metreye karşılık gelir ve hesap yükü zoom seviyesinden bağımsız,
+        # sabit kalır.
+        dem = dem.reproject(crs='EPSG:4326', scale=30)
         dem = dem.unmask(dem.focalMean(radius=150, units='meters'))
         dem = dem.unmask(dem.focalMean(radius=450, units='meters'))
 
@@ -3785,6 +3817,22 @@ def build_result_image(data, for_export=False):
     # kalır (yanlışlıkla "bulut altı veri" uydurulmaz). İki aşamalı
     # (60 m + 200 m) geçiş, hem S2 (10 m) hem Landsat (30 m) çözünürlüğünde
     # tipik bulut-kenarı beneklerini kapatmaya yeter.
+    # 🛠️ BUG FİX (siyah/boş harita kareleri — tile sınırlarına oturan,
+    # DEM void-fill ile AYNI kök neden): Aşağıdaki focalMean() çağrıları da
+    # reproject() ile sabit bir ölçeğe kilitlenmeden çalışıyordu; bu yüzden
+    # 60/200 m yarıçaplar, kullanıcının o anki zoom seviyesine göre katlanan
+    # bir piksel sayısı olarak hesaplanıyor ve bazı tile'lar GEE'nin
+    # sunucu-taraflı zaman sınırını aşıp boş dönebiliyordu (DEM'deki
+    # 150m+450m+Terrain.products zincirinden daha hafif olduğu için burada
+    # görülme sıklığı çok daha düşüktü — "NDVI'de sadece 1 kare siyah").
+    # ÇÖZÜM: focalMean'den önce bileşik görüntüyü, sensörün gerçek doğal
+    # çözünürlüğüne (S2: 10 m, Landsat: 30 m, MSS: 60 m — SATELLITE_DATASETS)
+    # ve native CRS'ine (_crs_probe_img'den, reduce edilmemiş kaynak
+    # görüntüden) kilitliyoruz. ee.Projection nesnesi doğrudan verildiği
+    # için ekstra bir getInfo() sunucu çağrısına gerek kalmıyor.
+    _native_res = SATELLITE_DATASETS.get(satellite, SATELLITE_DATASETS['s2-l2a'])['resolution']
+    _native_proj = _crs_probe_img.select(0).projection()
+    image = image.reproject(crs=_native_proj, scale=_native_res)
     image = image.unmask(image.focalMean(radius=60, units='meters'))
     image = image.unmask(image.focalMean(radius=200, units='meters'))
 
