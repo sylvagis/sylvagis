@@ -4145,6 +4145,14 @@ tr.class-highlight-active {
                             palette: [val]
                         });
                         window._lastAnalyzePayloadByPane[pane] = _payload;
+                        // 🆕 Vektör çizgi katmanı zaten haritadaysa, sunucuya tekrar
+                        // gitmeye gerek kalmadan rengini anında güncelle (geometri
+                        // değişmiyor, yalnızca çizgi rengi değişiyor).
+                        try {
+                            var _cvKey = (pane === 'map2') ? 'map2' : 'map';
+                            var _cvLayer = window._contourVectorLayerByPane && window._contourVectorLayerByPane[_cvKey];
+                            if (_cvLayer && typeof _cvLayer.setStyle === 'function') _cvLayer.setStyle({ color: val });
+                        } catch (e) {}
                         fetch(API_BASE + '/api/analyze', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
@@ -4153,8 +4161,11 @@ tr.class-highlight-active {
                         .then(function (r) { return r.json(); })
                         .then(function (data) {
                             if (!data.success) return;
+                            // Raster katman yalnızca sunucu tarafında (dışa aktarım/istatistik
+                            // uyumluluğu için) güncellenir; ekranda görünmez tutulur çünkü
+                            // görünen çizgiler artık yukarıda anında renklendirilen vektör katmandır.
                             if (typeof _sylvaReplaceGeeLayer === 'function') {
-                                _sylvaReplaceGeeLayer(pane, data.tileUrl, { opacity: 1 });
+                                _sylvaReplaceGeeLayer(pane, data.tileUrl, { opacity: 0 });
                             }
                         })
                         .catch(function () {});
@@ -11820,6 +11831,52 @@ function selectRamp(name) {
             return _geeLayer;
         }
 
+        // 🆕 GÜNCELLEME: Vektör (LineString) eş yükselti çizgileri.
+        // /api/contour-vector uç noktasından gelen GeoJSON, doğrudan bir
+        // L.geoJSON katmanı olarak çizilir — bu RASTER bir karo DEĞİLDİR,
+        // bu yüzden hiçbir zoom seviyesinde piksel/merdiven görünümü
+        // oluşmaz; çizgiler her zoom'da akıcı/pürüzsüz kalır.
+        window._contourVectorLayerByPane = window._contourVectorLayerByPane || { map: null, map2: null };
+        function _sylvaLoadVectorContours(paneId, payload, color) {
+            if (typeof API_BASE === 'undefined' || !payload || !payload.roi) return;
+            var targetMap = _sylvaTargetMap(paneId);
+            var pKey = (paneId === 'map2') ? 'map2' : 'map';
+            var _reqGen = _analysisGeneration;
+            fetch(API_BASE + '/api/contour-vector', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    roi: payload.roi,
+                    demSource: payload.demSource,
+                    contourInterval: payload.contourInterval
+                })
+            })
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+                if (typeof _analysisGeneration !== 'undefined' && _analysisGeneration !== _reqGen) return;
+                if (!res || !res.success || !res.geojson) return;
+                if (window._contourVectorLayerByPane[pKey]) {
+                    try { targetMap.removeLayer(window._contourVectorLayerByPane[pKey]); } catch (e) {}
+                    window._contourVectorLayerByPane[pKey] = null;
+                }
+                var layer = L.geoJSON(res.geojson, {
+                    pane: 'geeAnalysisPane',
+                    interactive: false,
+                    style: function () { return { color: color, weight: 1.5, opacity: 0.95 }; }
+                }).addTo(targetMap);
+                window._contourVectorLayerByPane[pKey] = layer;
+            })
+            .catch(function () {});
+        }
+        function _sylvaClearVectorContours(paneId) {
+            var pKey = (paneId === 'map2') ? 'map2' : 'map';
+            var targetMap = _sylvaTargetMap(paneId);
+            if (window._contourVectorLayerByPane && window._contourVectorLayerByPane[pKey]) {
+                try { targetMap.removeLayer(window._contourVectorLayerByPane[pKey]); } catch (e) {}
+                window._contourVectorLayerByPane[pKey] = null;
+            }
+        }
+
         window._geeLayersByPane = window._geeLayersByPane || { map: {}, map2: {} };
         function _sylvaAddGeeLayer(paneId, layerKey, tileUrl, options) {
             var targetMap = _sylvaTargetMap(paneId);
@@ -11855,6 +11912,8 @@ function selectRamp(name) {
                 try { targetMap.removeLayer(store[k]); } catch (e) {}
             });
             window._geeLayersByPane[key] = {};
+            // 🆕 Vektör eş yükselti çizgileri de (varsa) raster katmanlarla birlikte temizlenir.
+            if (typeof _sylvaClearVectorContours === 'function') _sylvaClearVectorContours(paneId);
             // 🛠️ BUG FİX: Yeni bir analiz çalıştırıldığında görünürlük hafızası da
             // sıfırlanmalı — aksi halde önceki analizden kalan "gizli" bilgisi
             // yeni katmanlara yanlışlıkla uygulanabiliyor, checkbox durumu ile
@@ -13536,6 +13595,25 @@ function selectRamp(name) {
                     if (data.nativeCrs) window._lastAnalyzeNativeCrs = data.nativeCrs;
 
                     _sylvaAddGeeLayer(_pane, _thisLayerKey, data.tileUrl, { opacity: 1 });
+
+                    // 🆕 GÜNCELLEME: Eş Yükselti (TOPO_CONTOUR) artık RASTER karo yerine
+                    // gerçek VEKTÖR (LineString) çizgiler olarak çizilir — bu, yakınlaştırıldığında
+                    // görülen "merdiven basamağı" görünümünü tamamen ortadan kaldırır.
+                    // Yukarıda eklenen raster katman yalnızca lejant/istatistik/GeoTIFF dışa
+                    // aktarım akışlarının bozulmaması için sunucu tarafında hesaplanmaya devam
+                    // eder, ama ekranda görünmez yapılır (opacity 0); onun yerine
+                    // /api/contour-vector'dan gelen gerçek çizgiler haritaya eklenir.
+                    if (meta.analysisName === 'TOPO_CONTOUR') {
+                        try {
+                            var _cvRasterStore = window._geeLayersByPane && window._geeLayersByPane[_pane === 'map2' ? 'map2' : 'map'];
+                            var _cvRasterLayer = _cvRasterStore && _cvRasterStore[_thisLayerKey];
+                            if (_cvRasterLayer && typeof _cvRasterLayer.setOpacity === 'function') _cvRasterLayer.setOpacity(0);
+                        } catch (e) {}
+                        if (typeof _sylvaLoadVectorContours === 'function') {
+                            _sylvaLoadVectorContours(_pane, analyzePayload, window._sylvaContourLineColor || '#1e3a8a');
+                        }
+                    }
+
                     window._sylvaTopGeeLayerByPane = window._sylvaTopGeeLayerByPane || { map: null, map2: null };
                     window._sylvaTopGeeLayerByPane[_pane === 'map2' ? 'map2' : 'map'] = _thisLayerKey;
                     // 🛠️ DÜZELTME (Katman Sıyırıcı "Önceki Analizin Üzerine Ekle"
