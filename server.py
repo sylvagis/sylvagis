@@ -4483,6 +4483,143 @@ def analyze():
         return jsonify({'success': False, 'error': str(e)})
 
 
+# ════════════════════════════════════════════════════════════════
+# 🌦️ HAVA DURUMU MODÜLÜ — İklimsel Doğrulama
+# ════════════════════════════════════════════════════════════════
+# AMAÇ: Haritadaki fiziksel değişimlerin (kuraklık, bitki örtüsü kaybı vb.)
+# iklimsel nedenlerini, son 30 günlük yağış ve sıcaklık verileriyle
+# kullanıcının başka bir siteye gitmesine gerek kalmadan doğrudan sistem
+# içinde doğrulamasını sağlar.
+#
+# İdari sınır genişletmesi neden gerekli?
+# Çizilen çalışma alanı (roi) çoğu zaman küçük/dar bir poligon olabilir.
+# CHIRPS (~5.5 km) ve ERA5-Land (~11 km) gibi iklim veri setleri kaba
+# çözünürlüklüdür — çok küçük bir alanda reduceRegion çoğu zaman anlamsız
+# ya da eksik (null) piksel örneklemi verir. Bu yüzden önce çizilen alanın
+# merkez noktası bulunur, FAO/GAUL/2015/level2 idari sınır veri setiyle
+# kesiştirilir ve iklim istatistikleri ilgili il/ilçe sınırına göre
+# GENİŞLETİLMİŞ bir alan üzerinden hesaplanır (bulunamazsa orijinal roi'ye
+# geri düşülür).
+_GAUL_LEVEL2 = 'FAO/GAUL/2015/level2'
+_CHIRPS_COLLECTION = 'UCSB-CHG/CHIRPS/DAILY'          # Günlük yağış (mm/gün)
+_ERA5_LAND_COLLECTION = 'ECMWF/ERA5_LAND/DAILY_AGGR'  # Günlük 2m sıcaklık (K)
+_CHIRPS_SCALE = 5566
+_ERA5_LAND_SCALE = 11132
+
+
+@app.route('/api/climate-data', methods=['POST'])
+def climate_data():
+    try:
+        data = request.get_json(silent=True) or {}
+
+        # Ön yüzden 'roi' ya da 'geometry' anahtarlarından herhangi biriyle
+        # gelebilir — ikisi de desteklenir.
+        raw_geom = data.get('roi') if data.get('roi') is not None else data.get('geometry')
+        if not raw_geom:
+            return jsonify({'success': False, 'error': 'Çalışma alanı (roi/geometry) bulunamadı.'}), 400
+
+        # make_roi(): KML/KMZ veya elle çizilen alanlarda görülen kendi
+        # kendini kesme, kapanmamış halka, MultiPolygon vb. yapısal
+        # sorunları otomatik onararak güvenli bir ee.Geometry üretir.
+        try:
+            roi = make_roi(raw_geom)
+        except Exception as ge:
+            return jsonify({'success': False, 'error': 'Geometri işlenemedi: ' + str(ge)}), 400
+
+        # ── 1) İdari Sınır Tespiti (il/ilçe düzeyine genişletme) ─────
+        analysis_geom = roi           # varsayılan: idari sınır bulunamazsa orijinal roi kullanılır
+        admin_name = None
+        admin_level1 = None
+        try:
+            centroid = _call_with_retry(lambda: roi.centroid(maxError=100))
+
+            gaul_matches = ee.FeatureCollection(_GAUL_LEVEL2).filterBounds(centroid)
+            match_count = _call_with_retry(lambda: gaul_matches.size().getInfo())
+
+            if match_count and match_count > 0:
+                admin_feature = ee.Feature(gaul_matches.first())
+                admin_props = _call_with_retry(
+                    lambda: admin_feature.toDictionary(['ADM1_NAME', 'ADM2_NAME']).getInfo()
+                )
+                admin_name = admin_props.get('ADM2_NAME') or admin_props.get('ADM1_NAME')
+                admin_level1 = admin_props.get('ADM1_NAME')
+                # Analiz sınırı idari sınıra (il/ilçe) genişletiliyor.
+                analysis_geom = admin_feature.geometry()
+            else:
+                print('[SylvaGIS] ℹ️ Hava Durumu: idari sınır bulunamadı, orijinal roi kullanılacak.')
+        except Exception as _admin_err:
+            print('[SylvaGIS] ⚠️ Hava Durumu: idari sınır tespiti başarısız, orijinal roi ile devam ediliyor: {}'.format(_admin_err))
+            analysis_geom = roi
+
+        # ── 2) Son 30 Günlük Tarih Aralığı ────────────────────────────
+        end_dt = datetime.datetime.utcnow().date()
+        start_dt = end_dt - datetime.timedelta(days=30)
+        start_str = start_dt.isoformat()
+        end_str = end_dt.isoformat()
+
+        # ── 3) CHIRPS (Yağış) — Tüm GEE ağ çağrıları _call_with_retry
+        #      sarmalayıcısı içinde: geçici bağlantı hataları / timeout'lar
+        #      otomatik olarak tekrar denenir. ────────────────────────
+        def _fetch_precipitation_mean():
+            chirps = (
+                ee.ImageCollection(_CHIRPS_COLLECTION)
+                .filterDate(start_str, end_str)
+                .filterBounds(analysis_geom)
+                .select('precipitation')
+            )
+            daily_mean_img = chirps.mean().rename('precipitation')
+            value = daily_mean_img.reduceRegion(
+                reducer=ee.Reducer.mean(),
+                geometry=analysis_geom,
+                scale=_CHIRPS_SCALE,
+                maxPixels=1e9,
+                bestEffort=True,
+            ).get('precipitation').getInfo()
+            return value
+
+        precipitation_mean = _call_with_retry(_fetch_precipitation_mean)
+
+        # ── 4) ERA5-LAND (Sıcaklık) — aynı şekilde retry ile korunuyor ─
+        def _fetch_temperature_mean():
+            era5 = (
+                ee.ImageCollection(_ERA5_LAND_COLLECTION)
+                .filterDate(start_str, end_str)
+                .filterBounds(analysis_geom)
+                .select('temperature_2m')
+            )
+            daily_mean_img = era5.mean().rename('temperature_2m')
+            value = daily_mean_img.reduceRegion(
+                reducer=ee.Reducer.mean(),
+                geometry=analysis_geom,
+                scale=_ERA5_LAND_SCALE,
+                maxPixels=1e9,
+                bestEffort=True,
+            ).get('temperature_2m').getInfo()
+            return value
+
+        temperature_mean_kelvin = _call_with_retry(_fetch_temperature_mean)
+        temperature_mean_celsius = (
+            round(float(temperature_mean_kelvin) - 273.15, 2)
+            if temperature_mean_kelvin is not None else None
+        )
+
+        return jsonify({
+            'success': True,
+            'startDate': start_str,
+            'endDate': end_str,
+            'adminName': admin_name,
+            'adminLevel1': admin_level1,
+            'precipitationMeanMmPerDay': (
+                round(float(precipitation_mean), 3) if precipitation_mean is not None else None
+            ),
+            'temperatureMeanC': temperature_mean_celsius,
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/highlight-class', methods=['POST'])
 def highlight_class():
     """
