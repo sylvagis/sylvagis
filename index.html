@@ -9628,28 +9628,16 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
             return !!((btnM && btnM.classList.contains('active')) || (btnY && btnY.classList.contains('active')));
         }
 
-        // 🛠️ BUG FİX: Üstteki (ana) Tarih Seçimi / Ay Seçimi / Bulutluluk Oranı
-        // alanları hem 🌍 Uydu Analizleri'ndeki Zaman Serisi (ts-btn-monthly/
-        // yearly) hem de 🛰️ Uydu Görüntüsü'ndeki Periyot (sat-ts-btn-monthly/
-        // yearly) tarafından PAYLAŞILAN 'sylva-ts-passive' sınıfını kullanır.
-        // Eskiden her iki kademelendirme fonksiyonu da (_updateTsSubsectionAvailability
-        // ve _updateSatTsSubsectionAvailability) bu sınıfı birbirinden habersiz
-        // şekilde doğrudan ekleyip/kaldırıyordu — biri "benim tarafım pasif değil"
-        // deyip sınıfı kaldırırken, DİĞER periyot hâlâ aktif olsa bile ana alanlar
-        // yanlışlıkla tekrar aktif/tıklanabilir hale geliyordu (ör. Uydu Analizleri
-        // tarafında Yıllık seçiliyken bir Uydu Görüntüsü kontrolü tetiklenince ana
-        // Tarih Seçimi pasiflikten çıkıyor, kullanıcı orada değer değiştirse bile
-        // Zaman Serisi analizi kendi ts-start-year/ts-end-year/ts-cloud-pct
-        // alanlarını kullanmaya devam ediyordu — kafa karıştırıcıydı). Artık TEK
-        // bir merkezi fonksiyon var: ana alanlar, İKİ periyottan HERHANGİ BİRİ
-        // aktifse pasif, ikisi de aktif değilse aktif olur.
+        // 🛠️ İZOLASYON: Üstteki genel Tarih Seçimi / Ay Seçimi /
+        // Bulutluluk Oranı artık iki zaman serisi tarafından ortaklaşa
+        // kilitlenmez. Her zaman serisi kendi başlığı altındaki alanları
+        // kullanır:
+        //   🌍 Uydu Analizleri  → #ts-datecloud-wrap
+        //   🛰️ Uydu Görüntüsü   → #sat-ts-datecloud-wrap
+        // Bu fonksiyon geriye dönük çağrılar için tutulur; ana kontrollerin
+        // durumuna dokunmaz.
         function _sylvaSyncMainDateCloudPassive() {
-            var anyActive = _tsPeriodSelected() ||
-                (typeof _sylvaSatTsPeriodSelected === 'function' && _sylvaSatTsPeriodSelected());
-            ['date-section-title', 'date-range-row', 'cloud-control-group', 'month-control-group'].forEach(function (id) {
-                var el = document.getElementById(id);
-                if (el) el.classList.toggle('sylva-ts-passive', !!anyActive);
-            });
+            return;
         }
 
         // Kademe 1 → 2: uygun bir analiz (NDVI vb.) seçilince Periyot butonlarını
@@ -9674,9 +9662,9 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
                 if (btnY) btnY.classList.remove('active');
                 _sylvaSyncTsDateCloudLock();
             }
-            // 🛠️ BUG FİX: ana alanların pasifliği artık DAİMA merkezi fonksiyondan
-            // (diğer periyodun durumunu da dikkate alarak) senkronize edilir.
-            _sylvaSyncMainDateCloudPassive();
+            // Bu bölümün pasifliği yalnızca kendi zaman serisi alanlarına
+            // uygulanır; Uydu Görüntüsü periyodu bu durumu değiştiremez.
+            _sylvaSyncTsDateCloudLock();
         }
 
         // #ts-datecloud-wrap (Tarih Aralığı + Bulutluluk Oranı burada) yalnızca
@@ -9709,10 +9697,9 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
                 if (btnY) btnY.classList.remove('active');
                 _sylvaSyncSatTsDateCloudLock();
             }
-            // 🛠️ BUG FİX: ana alanların pasifliği artık DAİMA merkezi fonksiyondan
-            // (diğer periyodun — Uydu Analizleri Zaman Serisi'nin — durumunu da
-            // dikkate alarak) senkronize edilir; kör bir şekilde kaldırılmaz.
-            _sylvaSyncMainDateCloudPassive();
+            // Bu bölümün pasifliği yalnızca kendi tarih/bulutluluk alanlarına
+            // uygulanır; Uydu Analizleri zaman serisi bu durumu değiştiremez.
+            _sylvaSyncSatTsDateCloudLock();
         }
 
         // Periyot (Aylık/Yıllık) butonlarından biri seçili mi? (🛰️ Uydu Görüntüsü)
@@ -9722,12 +9709,37 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
             return !!((btnM && btnM.classList.contains('active')) || (btnY && btnY.classList.contains('active')));
         }
 
+        // 🆕 Periyot olarak özellikle "Yıllık" mı seçili? (🛰️ Uydu Görüntüsü)
+        // Aylık seçimde günlük sahnelerin TAMAMI listelenmeye devam eder;
+        // Yıllık seçimde ise galeri/harita/sahne geçişi TEKİLLEŞTİRİLMİŞ
+        // (her yıl + seçilen ay için tek temsilci görüntü) listeyi kullanır.
+        function _sylvaSatTsYearlyModeActive() {
+            var btnY = document.getElementById('sat-ts-btn-yearly');
+            return !!(btnY && btnY.classList.contains('active'));
+        }
+
         // #sat-ts-datecloud-wrap (Tarih Aralığı + Ay + Bulutluluk Oranı) yalnızca
         // bir Periyot (Aylık/Yıllık) seçiliyken aktif olur.
         function _sylvaSyncSatTsDateCloudLock() {
             var wrap = document.getElementById('sat-ts-datecloud-wrap');
             if (!wrap) return;
             wrap.classList.toggle('sylva-ts-passive', !_sylvaSatTsPeriodSelected());
+        }
+
+        // İki zaman serisi birbirinden bağımsızdır. Kullanıcı bir modül
+        // seçtiğinde diğer modülde daha önce kalmış bir periyot varsa onu
+        // temizle; böylece ortak "Analizi Çalıştır" butonu yanlış bölüme
+        // yönlenmez.
+        function _sylvaResetTsPeriod(kind) {
+            var ids = kind === 'sat'
+                ? ['sat-ts-btn-monthly', 'sat-ts-btn-yearly']
+                : ['ts-btn-monthly', 'ts-btn-yearly'];
+            ids.forEach(function (id) {
+                var btn = document.getElementById(id);
+                if (btn) btn.classList.remove('active');
+            });
+            if (kind === 'sat') _sylvaSyncSatTsDateCloudLock();
+            else _sylvaSyncTsDateCloudLock();
         }
 
         function _updateDateCloudControlsVisibility() {
@@ -9908,6 +9920,9 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
             sensorRadios.forEach(function (r) {
                 r.addEventListener('change', function () {
                     updateAvailableAnalyses();
+                    // Uydu Analizleri seçildiğinde Uydu Görüntüsü'nün
+                    // zaman serisi periyodu artık geçerli değildir.
+                    _sylvaResetTsPeriod('sat');
                     // Farklı bir sensör seçilince eski "Uydu Görüntüsü/Land Cover/DEM vb." seçimini iptal et
                     document.querySelectorAll('input[name="sylva-module"]:checked').forEach(function (sm) { sm.checked = false; });
                     document.querySelectorAll('.uydu-goruntu-radio:checked').forEach(function (gm) { gm.checked = false; });
@@ -9982,11 +9997,28 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
             document.querySelectorAll('.uydu-goruntu-radio').forEach(function (r) {
                 r.addEventListener('change', function () {
                     if (r.checked) {
+                        // Uydu Görüntüsü seçildiğinde Uydu Analizleri'nin
+                        // zaman serisi periyodu artık geçerli değildir.
+                        _sylvaResetTsPeriod('analysis');
                         analizCheckboxes.forEach(function (cb) { cb.checked = false; });
                         document.querySelectorAll('input[name="sylva-module"]:checked').forEach(function (sm) { sm.checked = false; });
                         _rgbGalleryReset();
                         // Uydu görüntüsü modülü seçilince galeri panelini serbest bırak
                         _setGalleryPanelRestricted(false);
+                    }
+                    // 🆕 Zaman Serisi periyodu (Aylık/Yıllık) zaten aktifken sensör
+                    // seçimi değişip tam olarak 1 olmaktan çıkarsa (2. bir sensör
+                    // işaretlendi ya da tek işaretli sensör kaldırıldı), aktif periyot
+                    // ve buna bağlı tarih/ay/bulut alanları otomatik olarak sıfırlanır —
+                    // Uydu Analizleri'ndeki aynı analiz-sayısı kuralıyla birebir aynı
+                    // mantık (bkz. yukarıdaki analizCheckboxes dinleyicisi).
+                    var _satTsBtnM = document.getElementById('sat-ts-btn-monthly');
+                    var _satTsBtnY = document.getElementById('sat-ts-btn-yearly');
+                    var _satTsWasActive = !!((_satTsBtnM && _satTsBtnM.classList.contains('active')) || (_satTsBtnY && _satTsBtnY.classList.contains('active')));
+                    if (_satTsWasActive && document.querySelectorAll('.uydu-goruntu-radio:checked').length !== 1) {
+                        if (_satTsBtnM) _satTsBtnM.classList.remove('active');
+                        if (_satTsBtnY) _satTsBtnY.classList.remove('active');
+                        if (typeof _sylvaSyncSatTsDateCloudLock === 'function') _sylvaSyncSatTsDateCloudLock();
                     }
                     _updateDateCloudControlsVisibility();
                 });
@@ -13374,6 +13406,27 @@ function selectRamp(name) {
             }
             setTimeout(finish, 12000); // güvenlik ağı
         }
+        // RGB galerisi için lejant/bilgi kutusu, karo gerçekten hazır olmadan
+        // gösterilmez. Genel _waitForTileReady eski analizlerin hata toleransını
+        // koruduğu için burada tileerror bir başarı gibi kabul edilmez.
+        function _waitForRgbTileReady(layer, onReady, onTimeout) {
+            var done = false;
+            function finishReady() {
+                if (done) return;
+                done = true;
+                if (typeof onReady === 'function') onReady();
+            }
+            if (!layer || typeof layer.once !== 'function') {
+                if (typeof onTimeout === 'function') onTimeout();
+                return;
+            }
+            layer.once('load', finishReady);
+            setTimeout(function () {
+                if (done) return;
+                done = true;
+                if (typeof onTimeout === 'function') onTimeout();
+            }, 12000);
+        }
 
         // ── Analiz çıktılarını sıfırla ─────────────────────────────────────────
         // Yeni bir analiz başlatılmadan önce önceki analize ait tüm sonuçları
@@ -15731,9 +15784,112 @@ function selectRamp(name) {
             var paneStates = window._rgbGalleryStates[paneId];
             if (!datasetKey) return paneStates; // datasetKey verilmezse tüm pane'in haritasını döndür
             if (!paneStates[datasetKey]) {
-                paneStates[datasetKey] = { scenes: [], dataset: null, meta: null, sortKey: 'date', sortAsc: false, activeSceneId: null };
+                paneStates[datasetKey] = {
+                    scenes: [], dataset: null, meta: null, filters: null,
+                    sortKey: 'date', sortAsc: false, activeSceneId: null,
+                    scMeta: null, dsInfo: null, sceneMetaSceneId: null
+                };
             }
             return paneStates[datasetKey];
+        }
+
+        // /api/rgb-scenes farklı sürümlerde tuple veya nesne döndürebilir.
+        // Galeri, istek ve lejantın tamamı aynı normalize edilmiş kaydı kullanır;
+        // böylece kartta görünen tarih/bulutluluk, tıklanan sceneId'den kopmaz.
+        function _rgbGallerySceneRecord(scene, datasetKey, dsInfo, meta, filters) {
+            var rec = {};
+            if (Array.isArray(scene)) {
+                rec.sceneId = scene[0];
+                rec.timestamp = scene[1];
+                rec.cloud = scene[2];
+                if (scene[3] && typeof scene[3] === 'object') Object.assign(rec, scene[3]);
+            } else if (scene && typeof scene === 'object') {
+                rec = Object.assign({}, scene);
+            }
+            rec.sceneId = rec.sceneId || rec.id || rec.imageId || '';
+            rec.datasetKey = rec.datasetKey || datasetKey;
+            rec.dataset = rec.dataset || dsInfo || null;
+            rec.meta = rec.meta || meta || null;
+            rec.filters = Object.assign({}, filters || {});
+            if (rec.timestamp == null && rec.acquisitionTimestamp != null) rec.timestamp = rec.acquisitionTimestamp;
+            if (rec.timestamp == null && rec.date) rec.timestamp = rec.date;
+            if (rec.cloud == null && rec.cloudCover != null) rec.cloud = rec.cloudCover;
+            if (rec.cloud == null && rec.cloudPercentage != null) rec.cloud = rec.cloudPercentage;
+            rec.sensor = rec.sensor || (dsInfo && dsInfo.sensor) || (meta && meta.sensor) || rec.datasetKey;
+            rec.datasetName = rec.datasetName || (dsInfo && dsInfo.datasetName) || (meta && meta.datasetName) || rec.datasetKey;
+            // Sahne timestamp'i, genel analiz meta'sındaki olası eski tarihten
+            // önceliklidir; kartlar farklı tarihlerdeki sahneleri gösterebilir.
+            if (!rec.acquisitionDate && rec.timestamp) {
+                try { rec.acquisitionDate = new Date(rec.timestamp).toISOString().slice(0, 10); } catch (e) {}
+            }
+            if (!rec.acquisitionDate) rec.acquisitionDate = (meta && meta.acquisitionDate) || '';
+            if (rec.cloud != null && !isNaN(Number(rec.cloud))) rec.cloud = Number(rec.cloud);
+            rec.cloudCover = (rec.cloud != null && !isNaN(Number(rec.cloud))) ? Number(rec.cloud) :
+                (rec.cloudCover != null && !isNaN(Number(rec.cloudCover)) ? Number(rec.cloudCover) : null);
+            return rec;
+        }
+
+        function _rgbGallerySceneDate(scene) {
+            if (!scene) return '';
+            if (scene.acquisitionDate && /^\d{4}-\d{2}-\d{2}/.test(String(scene.acquisitionDate))) {
+                return String(scene.acquisitionDate).slice(0, 10);
+            }
+            if (scene.timestamp) {
+                try { return new Date(scene.timestamp).toISOString().slice(0, 10); } catch (e) {}
+            }
+            return '';
+        }
+
+        // 🆕 Yıllık periyotta (sat-ts-btn-yearly aktifken) her yıl + seçilen ay
+        // kombinasyonu için sunucudan dönen tüm günlük sahneler arasından
+        // yalnızca EN DÜŞÜK bulutluluk oranına sahip TEK bir temsilci sahne
+        // bırakılır. Girdi listesindeki sıralama (en güncel önce/sonra) korunur;
+        // yalnızca aynı (yıl, ay) grubundaki fazladan sahneler elenir. Tarihi
+        // olmayan/okunamayan kayıtlar güvenlik amacıyla kendi başına bir grup
+        // sayılıp listede tutulur (elenmez).
+        function _sylvaDedupeScenesYearly(records) {
+            if (!Array.isArray(records) || records.length < 2) return records || [];
+            var byKey = {};
+            var order = [];
+            records.forEach(function (rec, idx) {
+                var d = _rgbGallerySceneDate(rec);
+                var key = d ? d.slice(0, 7) /* YYYY-MM */ : ('__nodate_' + idx);
+                var existing = byKey[key];
+                if (!existing) {
+                    byKey[key] = rec;
+                    order.push(key);
+                } else {
+                    var existingCloud = (typeof existing.cloud === 'number') ? existing.cloud : Infinity;
+                    var recCloud = (typeof rec.cloud === 'number') ? rec.cloud : Infinity;
+                    if (recCloud < existingCloud) byKey[key] = rec;
+                }
+            });
+            return order.map(function (k) { return byKey[k]; });
+        }
+
+        function _sylvaClearRgbPresentation(paneId, datasetKey) {
+            paneId = (paneId === 'map2') ? 'map2' : 'map';
+            var legendBox = document.getElementById(paneId === 'map2' ? 'map2-legend-box' : 'map-legend-box');
+            var infoBox = document.getElementById(paneId === 'map2' ? 'map2-info-box' : 'map-info-box');
+            if (legendBox) { legendBox.innerHTML = ''; legendBox.style.display = 'none'; }
+            if (infoBox) { infoBox.innerHTML = ''; infoBox.style.display = 'none'; }
+            if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[paneId]) {
+                window._sylvaLegendInfoByPane[paneId].legendHTML = '';
+                window._sylvaLegendInfoByPane[paneId].legendDisplay = 'none';
+                window._sylvaLegendInfoByPane[paneId].infoHTML = '';
+                window._sylvaLegendInfoByPane[paneId].infoDisplay = 'none';
+            }
+            if (window._lastRgbLegendArgs && window._lastRgbLegendArgs.paneId === paneId) {
+                window._lastRgbLegendArgs = null;
+            }
+            // Yeni RGB isteği hazırlanırken aynı veri setinin eski görüntüsünü
+            // görünür bırakma; diğer veri setlerinin katmanları etkilenmez.
+            if (datasetKey && window._geeLayersByPane && window._geeLayersByPane[paneId]) {
+                var oldLayer = window._geeLayersByPane[paneId]['RGB::' + datasetKey];
+                if (oldLayer && typeof oldLayer.setOpacity === 'function') {
+                    try { oldLayer.setOpacity(0); } catch (e) {}
+                }
+            }
         }
 
         function _rgbGalleryReset(paneId) {
@@ -15850,7 +16006,18 @@ function selectRamp(name) {
                     showNoDataModal(_TOAST_NO_DATA_MSG, meta.datasetLabel || meta.datasetKey || '');
                     return;
                 }
-                _gState.scenes  = data.scenes;
+                _gState.filters = Object.assign({}, _satFilters);
+                _gState.scenes  = data.scenes.map(function(scene) {
+                    return _rgbGallerySceneRecord(scene, _rgbStateKey, data.dataset, meta, _gState.filters);
+                });
+                // 🆕 Yıllık periyot seçiliyken (Aylık periyotta davranış aynen
+                // korunur) sunucudan dönen günlük sahneler, her yıl + seçilen ay
+                // için tek (en düşük bulutluluklu) temsilci sahneye indirgenir.
+                // Galeri, harita ve sahne değiştirme aynı tekilleştirilmiş
+                // listeyi (_gState.scenes) kullandığı için üçü de tutarlı kalır.
+                if (_sylvaSatTsYearlyModeActive()) {
+                    _gState.scenes = _sylvaDedupeScenesYearly(_gState.scenes);
+                }
                 _gState.dataset = data.dataset;
                 _gState.meta    = meta;
                 _gState.sortKey = 'date';
@@ -15859,7 +16026,7 @@ function selectRamp(name) {
 
                 // Galeri açılınca bu veri setinin en güncel sahnesi otomatik gösterilir.
                 var first = _sortedRgbScenes(paneId, _rgbStateKey)[0];
-                if (first) loadRgbScene(first.sceneId, meta, data.dataset, paneId, true, mirrorThisRun, stackKey, friendlyLabel);
+                if (first) loadRgbScene(first.sceneId, first.meta || meta, first.dataset || data.dataset, paneId, true, mirrorThisRun, stackKey, friendlyLabel, first);
                 _ensureDefaultVisibility();
             })
             .catch(function(err) {
@@ -15931,8 +16098,10 @@ function selectRamp(name) {
             var scenes = _sortedRgbScenes(paneId, dk);
 
             scenes.forEach(function(scene) {
-                var dateLabel = scene.timestamp ? new Date(scene.timestamp).toLocaleDateString('tr-TR') : '—';
-                var cloudLabel = (typeof scene.cloud === 'number') ? ('☁ %' + scene.cloud.toFixed(1)) : '☁ —';
+                var sceneDate = _rgbGallerySceneDate(scene);
+                var dateLabel = sceneDate ? new Date(sceneDate + 'T00:00:00').toLocaleDateString('tr-TR') : '—';
+                var cloudLabel = (scene.cloudCover !== null && scene.cloudCover !== undefined && !isNaN(Number(scene.cloudCover)))
+                    ? ('☁ %' + Number(scene.cloudCover).toFixed(1)) : '☁ —';
                 var thumbHtml = scene.thumbnailUrl
                     ? '<img src="' + scene.thumbnailUrl + '" alt="' + escapeHtml(dateLabel) + '" style="width:100%;height:100%;object-fit:cover;">'
                     : '🛰️';
@@ -15948,7 +16117,8 @@ function selectRamp(name) {
                     galleryEl.querySelectorAll('.gallery-item[data-dataset-key="' + dk + '"]').forEach(function(i) { i.classList.remove('active'); });
                     div.classList.add('active');
                     _gState.activeSceneId = scene.sceneId;
-                    loadRgbScene(scene.sceneId, meta, ds, paneId, false, false, dk, window._sylvaLayerFriendlyNames && window._sylvaLayerFriendlyNames['RGB::' + dk]);
+                    loadRgbScene(scene.sceneId, scene.meta || meta, scene.dataset || ds, paneId, false, false, dk,
+                        window._sylvaLayerFriendlyNames && window._sylvaLayerFriendlyNames['RGB::' + dk], scene);
                 });
                 galleryEl.appendChild(div);
             });
@@ -15981,20 +16151,53 @@ function selectRamp(name) {
         // AOI'ye odaklar ve dinamik bilgi kutusu/lejantı + Görüntü Bilgileri
         // panelini günceller. paneId verilmezse aktif ekran kullanılır — bu
         // sayede aynı akış Ekran 1 ve Ekran 2'de birebir aynı şekilde çalışır.
-        function loadRgbScene(sceneId, meta, dsInfo, paneId, _isInitialRun, _mirrorThisRun, stackKey, friendlyLabel) {
+        function loadRgbScene(sceneId, meta, dsInfo, paneId, _isInitialRun, _mirrorThisRun, stackKey, friendlyLabel, selectedScene) {
             paneId = (paneId === 'map2') ? 'map2' : 'map';
-            var _rgbStateKey = stackKey || meta.datasetKey;
+            meta = meta || {};
+            var _gStateLookupKey = stackKey || meta.datasetKey;
+            var _lookupState = _rgbGalleryStateFor(paneId, _gStateLookupKey);
+            var _sceneRecord = selectedScene && selectedScene.sceneId === sceneId
+                ? selectedScene
+                : ((_lookupState.scenes || []).filter(function (s) { return s.sceneId === sceneId; })[0] || null);
+            var _rgbStateKey = (_sceneRecord && _sceneRecord.datasetKey) || stackKey || meta.datasetKey;
+            var _sceneMeta = _sceneRecord || _rgbGallerySceneRecord(
+                { sceneId: sceneId }, _rgbStateKey, dsInfo, meta, _lookupState.filters || _sylvaGetSatGalleryFilters()
+            );
+            var _sceneFilters = _sceneMeta.filters && Object.keys(_sceneMeta.filters).length
+                ? _sceneMeta.filters
+                : (_lookupState.filters || _sylvaGetSatGalleryFilters());
+            // Kartın veri kimliği ve metadata'sı, o an formda seçili olan
+            // sensör/tarih/bulutluluk değerlerinden önceliklidir.
+            var _requestDatasetKey = _sceneMeta.datasetKey || meta.datasetKey || (dsInfo && dsInfo.key);
+            meta = Object.assign({}, meta, {
+                datasetKey: _requestDatasetKey,
+                sensor: _sceneMeta.sensor || meta.sensor,
+                datasetName: _sceneMeta.datasetName || meta.datasetName,
+                acquisitionDate: _sceneMeta.acquisitionDate || meta.acquisitionDate,
+                cloudCover: _sceneMeta.cloudCover != null ? _sceneMeta.cloudCover : meta.cloudCover
+            });
             var _aoiForPane = (paneId === 'map2') ? currentLayer2 : currentLayer;
             if (!_aoiForPane) return;
             _sylvaSceneIdSet(paneId, sceneId);
 
             var _gState = _rgbGalleryStateFor(paneId, _rgbStateKey);
             _gState.activeSceneId = sceneId;
+            _gState.selectedScene = _sceneMeta;
+            _sylvaClearRgbPresentation(paneId, _rgbStateKey);
+            window._sylvaRgbLoadSeqByPane = window._sylvaRgbLoadSeqByPane || { map: {}, map2: {} };
+            // Aynı dataset içindeki hızlı kart değişimleri birbirini geçersiz
+            // kılar; farklı dataset'lerin eşzamanlı ilk yüklemeleri korunur.
+            window._sylvaRgbLoadSeqByPane[paneId] = window._sylvaRgbLoadSeqByPane[paneId] || {};
+            var _rgbPreviousLoadSeq = Number(window._sylvaRgbLoadSeqByPane[paneId][_rgbStateKey]) || 0;
+            var _rgbLoadSeq = window._sylvaRgbLoadSeqByPane[paneId][_rgbStateKey] = _rgbPreviousLoadSeq + 1;
+            function _rgbRequestIsCurrent() {
+                return window._sylvaRgbLoadSeqByPane[paneId][_rgbStateKey] === _rgbLoadSeq;
+            }
 
-            var startInput = document.getElementById('date-start');
-            var endInput   = document.getElementById('date-end');
+            // Sahne tıklanarak yeniden yüklenirken de Uydu Görüntüsü'nün
+            // kendi zaman serisi filtrelerini koru; Uydu Analizleri'nin
+            // alanlarına veya genel tarih alanlarına düşme.
             var viewModeEl = document.getElementById('viewMode');
-            var cloudSliderEl = document.getElementById('cloud-slider');
             var _roi = _extractROIGeometry(_aoiForPane);
             if (!_roi) return;
             var _rgbClipMode = viewModeEl ? viewModeEl.value : 'clip';
@@ -16007,16 +16210,21 @@ function selectRamp(name) {
                 body: JSON.stringify({
                     roi:       _roi,
                     clipMode:  _rgbClipMode,
-                    startDate: startInput ? startInput.value : '',
-                    endDate:   endInput   ? endInput.value   : '',
-                    satellite: meta.datasetKey,
+                    startDate: _sceneFilters.startDate || '',
+                    endDate:   _sceneFilters.endDate || '',
+                    satellite: _requestDatasetKey,
                     index:     'RGB',
-                    maxCloud:  cloudSliderEl ? parseInt(cloudSliderEl.value, 10) : 100,
-                    sceneId:   sceneId
+                    maxCloud:  _sceneFilters.maxCloud != null ? _sceneFilters.maxCloud : 100,
+                    sceneId:   sceneId,
+                    // Backend eski sürümlerinde bu alanlar yoksa yok sayılır;
+                    // destekleyen sürümlerde sahne metadata'sını kesinleştirir.
+                    sceneTimestamp: _sceneMeta.timestamp || null,
+                    sceneCloud: _sceneMeta.cloudCover
                 })
             })
             .then(function(r) { return r.json(); })
             .then(function(data) {
+                if (!_rgbRequestIsCurrent()) { hideSylvaLoading(); return; }
                 if (!data.success) { hideSylvaLoading(); showNoDataModal(_TOAST_NO_DATA_MSG, meta.datasetLabel || meta.datasetKey || ''); return; }
                 if (data.nativeCrs || (data.meta && data.meta.crs)) {
                     window._lastAnalyzeNativeCrs = data.nativeCrs || data.meta.crs;
@@ -16067,7 +16275,6 @@ function selectRamp(name) {
                 _applyGeeLayerClipMode(_rgbClipMode, paneId);
                 // 🎚️ Gerçek renk (RGB) görüntüsü — tam opaklık en okunaklı sonucu verir
                 _sylvaApplyAutoOpacity(paneId, { isRgbGallery: true });
-                _hideLoadingWhenTileReady(_sylvaCurrentGeeLayer(paneId));
 
                 // Harita AOI'ye odaklanır
                 try {
@@ -16092,43 +16299,43 @@ function selectRamp(name) {
                 _gState.scMeta = data.meta || {};
                 _gState.dsInfo = dsInfo;
                 _gState.sceneMetaSceneId = sceneId;
-                // Lejant/bilgi kutusu ve Ham Veri paneli SADECE bu veri seti
-                // gerçekten üstteki katmansa güncellenir (bkz. yukarıdaki BUG FİX notu).
-                if (_isTopForPane) {
-                    renderRgbLegend(data.meta || {}, dsInfo, paneId);
-                    // 🛠️ BUG FİX (Üst Katman/Galeri Uyuşmazlığı): Galeri kutusu artık
-                    // bu veri seti GERÇEKTEN üstteki katman haline geldiğinde de
-                    // yeniden çizilir. Eskiden galeri sadece sahne listesi ilk
-                    // geldiğinde (fetchRgbGallery) çiziliyordu; birden fazla uydu
-                    // görüntüsü veri seti aynı anda çalıştırıldığında ağ yanıtları
-                    // farklı sırada dönebildiği için galeri bazen "üstteki katman"
-                    // kutusuyla (ör. Sentinel) uyuşmayan, başka bir veri setine
-                    // (ör. Landsat) ait sahneleri göstermeye devam edebiliyordu.
-                    if (typeof renderRgbGalleryCards === 'function') renderRgbGalleryCards(paneId);
-                    // 📡 Ham Veri (Bantlar) paneli tek/paylaşılan bir kontrol panelidir;
-                    // yalnızca o an odaklı/aktif ekran için güncellenir.
-                    if (paneId === _sylvaActivePaneId()) {
-                        onRawBandsSceneSelected(sceneId, meta, dsInfo, data.meta || {});
+                // Lejant/bilgi kutusu ve Ham Veri paneli, RGB tile gerçekten
+                // hazır olduktan sonra ve hâlâ güncel istek üstteyse güncellenir.
+                // Böylece eski yanıt veya eski analiz yeni görüntüyü ezemez.
+                var _rgbTileLayer = _sylvaCurrentGeeLayer(paneId);
+                _waitForRgbTileReady(_rgbTileLayer, function () {
+                    if (!_rgbRequestIsCurrent()) { hideSylvaLoading(); return; }
+                    var _topNow = (window._sylvaTopGeeLayerByPane[paneId] === _layerKey);
+                    var _responseMeta = Object.assign({}, data.meta || {}, {
+                        // Kartın sceneId'si RGB görünümünün kanonik kimliğidir.
+                        // Backend ek metadata döndürse bile başka bir sahnenin
+                        // kimliği/tarihi/bulutluluğu bu kartı ezemez.
+                        imageId: sceneId,
+                        acquisitionDate: _sceneMeta.acquisitionDate || (data.meta && data.meta.acquisitionDate) || '',
+                        cloudCover: _sceneMeta.cloudCover != null
+                            ? _sceneMeta.cloudCover
+                            : (data.meta && data.meta.cloudCover),
+                        sensor: _sceneMeta.sensor || (data.meta && data.meta.sensor) || meta.sensor,
+                        datasetName: _sceneMeta.datasetName || (data.meta && data.meta.datasetName) || meta.datasetName
+                    });
+                    _gState.scMeta = _responseMeta;
+                    if (_topNow) {
+                        renderRgbLegend(_responseMeta, dsInfo, paneId);
+                        if (typeof renderRgbGalleryCards === 'function') renderRgbGalleryCards(paneId);
+                        if (paneId === _sylvaActivePaneId()) {
+                            onRawBandsSceneSelected(sceneId, meta, dsInfo, _responseMeta);
+                        }
                     }
-                }
-                // 🛠️ BUG FİX (Ekran 2'de İlk Açılışta Lejant Görünmüyordu — özellikle
-                // Sentinel seçiliyken): Bu mirror çağrısı eskiden renderRgbLegend()'den
-                // ÖNCE çalışıyordu. window._sylvaMirrorDataLayer(), hedef ekranın
-                // lejantını kaynak ekranın o anki window._sylvaLegendInfoByPane[srcId]
-                // ANLIK GÖRÜNTÜSÜNDEN kopyalar — ama renderRgbLegend() henüz
-                // çalışmadığı için bu anlık görüntü bu sahneye ait YENİ lejant
-                // HTML'ini değil, bir önceki (çoğu zaman boş/hiç) içeriği taşıyordu.
-                // Sonuç: senkronizasyon açıkken "Analizi Çalıştır" ile başlatılan
-                // İLK Uydu Görüntüsü yüklemesinde Ekran 2'nin lejant kutusu ya boş
-                // kalıyor ya da bir önceki analizin lejantını gösteriyordu — tam
-                // olarak bildirilen "Ekran 2'de ilk açılışta lejant görünmüyor"
-                // belirtisi. Artık mirror çağrısı, bu sahnenin GERÇEK lejant
-                // içeriği (renderRgbLegend) ekrana yazıldıktan SONRA yapılıyor —
-                // Ekran 2 artık ilk açılıştan itibaren doğru lejantla geliyor.
-                if (_isInitialRun && _mirrorThisRun && window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') {
-                    window._sylvaMirrorDataLayer({ force: true, srcId: paneId, layerKey: _layerKey, tileUrl: data.tileUrl, isTop: _isTopForPane });
-                }
-                _ensureDefaultVisibility();
+                    hideSylvaLoading();
+                    if (_isInitialRun && _mirrorThisRun && window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') {
+                        window._sylvaMirrorDataLayer({ force: true, srcId: paneId, layerKey: _layerKey, tileUrl: data.tileUrl, isTop: _topNow });
+                    }
+                    _ensureDefaultVisibility();
+                }, function () {
+                    if (!_rgbRequestIsCurrent()) { hideSylvaLoading(); return; }
+                    hideSylvaLoading();
+                    showAnalysisToast('Uydu görüntüsü karoları yüklenemedi.', 'error');
+                });
             })
             .catch(function(err) { hideSylvaLoading(); showAnalysisToast('Görüntü yüklenemedi: ' + err.message, 'error'); });
         }
@@ -16148,10 +16355,12 @@ function selectRamp(name) {
             var sensor      = scMeta.sensor      || (dsInfo && dsInfo.sensor)      || '—';
             var bandsInfo   = translateBandsInfo(scMeta.bandsInfo   || (dsInfo && dsInfo.bandsInfo)   || '—');
             var resolution  = scMeta.resolution  || (dsInfo && dsInfo.resolution)  || '—';
-            var cloud       = (typeof scMeta.cloudCover === 'number') ? scMeta.cloudCover.toFixed(1) + '%' : '—';
+            var cloud       = (scMeta.cloudCover !== null && scMeta.cloudCover !== undefined && scMeta.cloudCover !== '')
+                ? (isNaN(Number(scMeta.cloudCover)) ? String(scMeta.cloudCover) : Number(scMeta.cloudCover).toFixed(1) + '%')
+                : '—';
             var date        = scMeta.acquisitionDate || '—';
             var crs         = scMeta.crs || '—';
-            var imageId     = scMeta.imageId || _sylvaSceneIdGet(_sylvaActivePaneId()) || '—';
+            var imageId     = scMeta.imageId || _sylvaSceneIdGet(paneId) || '—';
 
             function row(label, value) {
                 return '<div style="display:flex;justify-content:space-between;gap:8px;font-size:0.7rem;margin-top:3px;">'
@@ -16170,6 +16379,30 @@ function selectRamp(name) {
                 + row(t('lbl_bands'), bandsInfo)
                 + row(t('lbl_image_id','Image ID'), imageId)
                 + '</div>';
+
+            // RGB görüntüleri de normal analizler gibi kendi pane'ine ait
+            // bilgi kutusunu doldurur. Ekran 1 ve Ekran 2'nin kutuları hiçbir
+            // zaman aktif pane'in DOM seçicisiyle birbirine karıştırılmaz.
+            var infoBox = document.getElementById(paneId === 'map2' ? 'map2-info-box' : 'map-info-box');
+            if (infoBox) {
+                infoBox.innerHTML =
+                    '<div style="font-size:0.77rem;font-weight:700;color:#0369a1;margin-bottom:5px;">🛰️ ' + escapeHtml(datasetName) + '</div>'
+                    + '<div style="font-size:0.68rem;color:#475569;">📡 ' + t('lbl_date') + ' ' + escapeHtml(date) + '</div>'
+                    + '<div style="font-size:0.68rem;color:#475569;margin-top:3px;">' + escapeHtml(t('lbl_sat_sensor')) + ': <b>' + escapeHtml(sensor) + '</b></div>'
+                    + '<div style="font-size:0.68rem;color:#475569;margin-top:3px;">' + escapeHtml(t('lbl_cloud_pct')) + ': <b>' + escapeHtml(cloud) + '</b></div>'
+                    + '<div style="font-size:0.65rem;color:#64748b;margin-top:4px;word-break:break-all;">🆔 ' + escapeHtml(imageId) + '</div>';
+                var infoCb = document.getElementById('toggle-info-box');
+                var infoIsActivePane = paneId === ((typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map');
+                if (infoCb && infoIsActivePane) {
+                    infoCb.disabled = false;
+                    infoCb.checked = true;
+                }
+                infoBox.style.display = (!infoCb || infoCb.checked) ? 'block' : 'none';
+                if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[paneId]) {
+                    window._sylvaLegendInfoByPane[paneId].infoHTML = infoBox.innerHTML;
+                    window._sylvaLegendInfoByPane[paneId].infoDisplay = infoBox.style.display;
+                }
+            }
 
             // DÜZELTİLDİ: Yeni görüntü yüklenince lejant konumu sıfırlanır.
             // sylvaRefreshRgbLegend() (dil değişikliği yenileme) sırasında
@@ -24331,6 +24564,7 @@ var SYLVA_TRANSLATIONS = {
     ts_alert_only_one: 'You must select only 1 analysis to run the time series analysis.',
     sat_ts_select_hint: '(select a sensor first)',
     sat_ts_alert_select_sensor: 'Please select a satellite/sensor first.',
+    sat_ts_alert_only_one: 'You must select only 1 satellite/sensor to run the time series.',
     sat_ts_title: '📈 Time Series & Gallery Filters',
     sat_ts_desc: '(Lets you filter scenes for the selected satellite/sensor by monthly or annual periods within a date range.)',
     ts_running: '⏳ Calculating…',
@@ -26347,6 +26581,7 @@ var SYLVA_TRANSLATIONS = {
     ts_alert_only_one: 'Zaman serisi analizini çalıştırmak için yalnızca 1 analiz seçmelisiniz.',
     sat_ts_select_hint: '(önce bir sensör seçin)',
     sat_ts_alert_select_sensor: 'Önce bir uydu/sensör seçmelisiniz.',
+    sat_ts_alert_only_one: 'Zaman serisini çalıştırmak için yalnızca 1 uydu/sensör seçmelisiniz.',
     sat_ts_title: '📈 Zaman Serisi ve Galeri Filtreleri',
     sat_ts_desc: '(Seçilen uydu/sensöre ait sahneleri belirli bir tarih aralığında aylık veya yıllık periyotlarla filtrelemenizi sağlar.)',
     ts_running: '⏳ Hesaplanıyor…',
@@ -46860,8 +47095,15 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape')closePrivacy
     var _orig = window.setChartType;
     var _tsData = null;
 
+    // 🆕 _tsData artık window._sylvaTsData üzerinden de erişilebilir — böylece
+    // Sembloji panelindeki selectRamp() gibi başka script blokları, o an
+    // ekranda olan Uydu Analizleri zaman serisi grafiğinin rengini/lejantını
+    // canlı güncelleyebilir. Bu veri SADECE Uydu Analizleri zaman serisine
+    // aittir; Uydu Görüntüsü (RGB) zaman serisinin kendi lejant durumu
+    // (harita lejant kutusu + galeri) tamamen ayrı ve bağımsız kalır.
     window._setTsLineData = function (data) {
         _tsData = data;
+        window._sylvaTsData = data;
     };
 
     window.setChartType = function (type) {
@@ -47505,14 +47747,8 @@ function toggleTsPeriod(type) {
         else                    { btnY.classList.add('active'); }
     }
 
-    // 🛠️ BUG FİX: Üstteki (ana) Tarih Seçimi/Ay Seçimi/Bulutluluk Oranı
-    // alanları artık MERKEZİ fonksiyondan senkronize edilir — bu sayede
-    // 🛰️ Uydu Görüntüsü'ndeki Periyot durumunu da dikkate alır ve onu
-    // yanlışlıkla ezmez (bkz. _sylvaSyncMainDateCloudPassive).
-    if (typeof _sylvaSyncMainDateCloudPassive === 'function') _sylvaSyncMainDateCloudPassive();
-
-    // Zaman Serisi'ne özel Tarih Aralığı / Bulutluluk Oranı alanlarını
-    // (#ts-datecloud-wrap) tam tersi yönde aç/kapat.
+    // Uydu Analizleri zaman serisinin kendi tarih/bulutluluk alanlarını
+    // yalnızca o bölümün periyoduna göre yönet.
     if (typeof _sylvaSyncTsDateCloudLock === 'function') _sylvaSyncTsDateCloudLock();
 }
 
@@ -47538,6 +47774,22 @@ function toggleSatTsPeriod(type) {
         return;
     }
 
+    // 🆕 Normal Uydu Görüntüsü galerisinde birden fazla sensör (ör. Sentinel-2
+    // + Landsat) birlikte seçilebilir; ancak zaman serisi tek veri kaynağı
+    // gerektirir — 🌍 Uydu Analizleri'ndeki "yalnızca 1 analiz seçin" kuralıyla
+    // (toggleTsPeriod → _tsCheckedCount !== 1) BİREBİR aynı mantık. Birden
+    // fazla sensör işaretliyken Aylık/Yıllık'a basılırsa: uyarı gösterilir,
+    // periyot AKTİFLEŞMEZ ve sunucuya hiçbir zaman serisi isteği gitmez.
+    // Kullanıcı normal galeri analizine (birden fazla sensörle) devam edebilir;
+    // bu kısıtlama yalnızca zaman serisi periyodu içindir.
+    var checkedSensorCount = document.querySelectorAll('.uydu-goruntu-radio:checked').length;
+    if (checkedSensorCount !== 1) {
+        if (typeof sylvaAlert === 'function') {
+            sylvaAlert(t('sat_ts_alert_only_one', 'Zaman serisini çalıştırmak için yalnızca 1 uydu/sensör seçmelisiniz.'), 'info');
+        }
+        return;
+    }
+
     // Her iki buton da zaten aktifse (aynına tekrar basıldı) → seçimi kaldır
     var alreadyActive = (type === 'monthly' && btnM.classList.contains('active')) ||
                         (type === 'yearly'  && btnY.classList.contains('active'));
@@ -47550,14 +47802,8 @@ function toggleSatTsPeriod(type) {
         else                    { btnY.classList.add('active'); }
     }
 
-    // 🛠️ BUG FİX: Üstteki (ana) Tarih Seçimi/Ay Seçimi/Bulutluluk Oranı
-    // alanları artık MERKEZİ fonksiyondan senkronize edilir — bu sayede
-    // 🌍 Uydu Analizleri'ndeki Zaman Serisi periyodunun durumunu da dikkate
-    // alır ve onu yanlışlıkla ezmez (bkz. _sylvaSyncMainDateCloudPassive).
-    if (typeof _sylvaSyncMainDateCloudPassive === 'function') _sylvaSyncMainDateCloudPassive();
-
-    // #sat-ts-datecloud-wrap'ı (Tarih Aralığı + Ay + Bulutluluk Oranı) tam
-    // tersi yönde aç/kapat.
+    // Uydu Analizleri zaman serisinin kendi alanlarına dokunma; bu bölüm
+    // yalnızca #sat-ts-datecloud-wrap'ı yönetir.
     if (typeof _sylvaSyncSatTsDateCloudLock === 'function') _sylvaSyncSatTsDateCloudLock();
 }
 
@@ -47615,6 +47861,34 @@ function _buildTsStatsHtml(data, colors) {
     return any ? html : '';
 }
 
+// ── 🆕 Zaman serisi renk/lejant entegrasyonu ─────────────────────────────
+// Çizgi grafik ve lejantı artık normal analizlerde kullanılan görsel
+// ayarlardan (renk paleti/gradyan, indeks adı, min–max aralığı) bağımsız
+// değildir. Basit, sabit bir hash — bir indeksin renk paleti hiçbir yerden
+// bulunamazsa bile aynı indeks HER ZAMAN aynı yedek rengi alır (tutarlı
+// renk eşlemesi).
+function _sylvaTsStrHash(s) {
+    var h = 0;
+    s = String(s || '');
+    for (var i = 0; i < s.length; i++) { h = ((h << 5) - h) + s.charCodeAt(i); h |= 0; }
+    return Math.abs(h);
+}
+var _SYLVA_TS_FALLBACK_COLORS = ['#22c55e', '#1e3a8a', '#f97316', '#ef4444', '#a855f7', '#06b6d4', '#f59e0b', '#84cc16'];
+var _SYLVA_TS_CMAP_LEGACY = { NDVI: '#22c55e', NDWI: '#1e3a8a', NBR: '#f97316', LST: '#ef4444', EVI: '#84cc16', SAVI: '#a3e635', BSI: '#fb923c', SMI: '#38bdf8' };
+// Bir indeks + renk paleti anahtarından tek bir "temsilci" renk üretir —
+// paletin (ramps[rampKey]) son durağı kullanılır, böylece harita
+// lejantındaki gradyanla görsel olarak tutarlı kalır.
+function _sylvaTsSeriesColor(indexName, rampKey) {
+    try {
+        if (rampKey && typeof ramps !== 'undefined' && ramps[rampKey] && typeof extractRampStopTokens === 'function') {
+            var stops = extractRampStopTokens(ramps[rampKey]);
+            if (stops && stops.length) return stops[stops.length - 1];
+        }
+    } catch (e) { /* ramp çözümlenemedi — yedek renge düş */ }
+    if (_SYLVA_TS_CMAP_LEGACY[indexName]) return _SYLVA_TS_CMAP_LEGACY[indexName];
+    return _SYLVA_TS_FALLBACK_COLORS[_sylvaTsStrHash(indexName) % _SYLVA_TS_FALLBACK_COLORS.length];
+}
+
 function _renderLineChart(data) {
     var wrap = document.getElementById('stats-chart-svg-wrap');
     if (!wrap || !data || !data.series || !data.series.length) return;
@@ -47655,9 +47929,63 @@ function _renderLineChart(data) {
     });
     var statsHtml = _buildTsStatsHtml(data, COLORS);
 
+    // 🆕 Lejant başlığı — normal analiz lejantındaki (.map-legend) başlık
+    // mantığıyla aynı: tek indeks seçiliyse indeks adı, birden fazla
+    // seçiliyse hepsi tek satırda listelenir.
+    var _tsTitle = data.series.map(function (s) { return escapeHtml(s.index); }).join(' · ');
+    var titleHtml = '<div style="font-weight:700;font-size:0.78rem;color:#1e293b;">' + _tsTitle + '</div>';
+
+    // 🆕 Her seri için: kullanılan renk paletinin gradyan çubuğu + o
+    // indeksin tanımlı min–max aralığı. Bu, çizgi grafik lejantını normal
+    // analizde kullanılan Renk Paleti/Min-Max ayarlarına bağlar; birden
+    // fazla seri varsa her biri kendi (tutarlı) renk eşlemesiyle listelenir.
+    var rangeRows = data.series.map(function (s) {
+        var col = s.color || COLORS[0];
+        var rampCss = (s.rampKey && typeof ramps !== 'undefined' && ramps[s.rampKey]) ? ramps[s.rampKey] : '';
+        var rampBar = rampCss
+            ? '<div style="height:5px;width:44px;border-radius:2px;border:1px solid #cbd5e1;background:' + rampCss + ';flex-shrink:0;"></div>'
+            : '';
+        var rangeLbl = (s.legendMin || s.legendMax) ? (escapeHtml(s.legendMin || '') + ' – ' + escapeHtml(s.legendMax || '')) : '';
+        return '<div style="display:flex;align-items:center;gap:5px;font-size:0.65rem;color:#64748b;margin-top:3px;">'
+            + '<span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:' + col + ';flex-shrink:0;"></span>'
+            + '<span style="flex-shrink:0;">' + escapeHtml(s.index) + (rangeLbl ? ' (' + rangeLbl + ')' : '') + '</span>'
+            + rampBar
+            + '</div>';
+    }).join('');
+
     wrap.className='';
-    wrap.innerHTML='<svg viewBox="0 0 '+W+' '+H+'" width="100%" height="180" style="display:block;">'+grid+xLbls+svg+leg+'</svg>' + statsHtml;
+    wrap.innerHTML = titleHtml
+        + '<svg viewBox="0 0 '+W+' '+H+'" width="100%" height="180" style="display:block;margin-top:2px;">'+grid+xLbls+svg+leg+'</svg>'
+        + rangeRows + statsHtml;
 }
+
+/* ── 3b. selectRamp() genişletme ───────────────────────────────────────────
+   "Normal analizde palet değiştirildiğinde zaman serisi lejantı da
+   güncellenecek": kullanıcı Sembloji panelinden yeni bir renk paleti
+   seçtiğinde ve o an ekranda TEK indeksli bir Uydu Analizleri zaman serisi
+   çizgi grafiği gösteriliyorsa, grafiğin/lejantın rengi tekrar analiz
+   çalıştırmaya gerek kalmadan anında güncellenir. Birden fazla seri varken
+   dokunulmaz (her serinin kendi paleti vardır — tek bir canlı palet hepsine
+   uygulanamaz). Bu, sadece Uydu Analizleri zaman serisi durumunu
+   (window._sylvaTsData) etkiler; Uydu Görüntüsü zaman serisinin ayrı lejant
+   durumuna dokunmaz. ─────────────────────────────────────────────────── */
+(function () {
+    var _origSelectRampForTs = window.selectRamp;
+    if (typeof _origSelectRampForTs !== 'function') return;
+    window.selectRamp = function (name) {
+        _origSelectRampForTs.apply(this, arguments);
+        var _tsLive = window._sylvaTsData;
+        if (_tsLive && _tsLive.kind === 'analysis' && _tsLive.series && _tsLive.series.length === 1 && name && name !== '__gee__') {
+            var _s = _tsLive.series[0];
+            _s.color = _sylvaTsSeriesColor(_s.index, name);
+            _s.rampKey = name;
+            var _btnLineLive = document.getElementById('btn-chart-line');
+            if (_btnLineLive && _btnLineLive.classList.contains('active')) {
+                _renderLineChart(_tsLive);
+            }
+        }
+    };
+})();
 
 /* ── 4. Zaman Serisi Analizi — GERÇEK GEE verisi ──────────────────────────
    🛠️ Eskiden bu fonksiyon Math.random() ile SAHTE veri üretiyordu, hiçbir
@@ -47722,6 +48050,11 @@ function runTimeSeriesAnalysis() {
     if (_tsBarBtn) { _tsBarBtn.classList.add('disabled-chart'); _tsBarBtn.disabled = true; }
     if (_tsPieBtn) { _tsPieBtn.classList.add('disabled-chart'); _tsPieBtn.disabled = true; }
 
+    // 🛠️ Yeni bir Zaman Serisi çalıştırıldığında önceki çalıştırmadan kalan
+    // grafik/lejant verisi temizlenir — sunucudan yanıt gelene kadar (veya
+    // istek başarısız olursa) eski/yanlış lejantın ekranda kalması engellenir.
+    if (typeof window._setTsLineData === 'function') window._setTsLineData(null);
+
     fetch(API_BASE + '/api/timeseries', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -47748,12 +48081,32 @@ function runTimeSeriesAnalysis() {
             return;
         }
 
-        var CMAP = { NDVI:'#22c55e', NDWI:'#1e3a8a', NBR:'#f97316', LST:'#ef4444', EVI:'#84cc16', SAVI:'#a3e635', BSI:'#fb923c', SMI:'#38bdf8' };
+        // 🆕 Renk artık harita analizlerinde kullanılan Renk Paleti/Sembloji
+        // sisteminden türetilir (bkz. _sylvaTsSeriesColor). Tek indeks
+        // seçiliyse kullanıcının o an Sembloji panelinde AKTİF olan (canlı)
+        // paleti kullanılır — böylece palet değiştirilip zaman serisi tekrar
+        // çalıştırıldığında grafik/lejant otomatik güncellenir. Birden fazla
+        // indeks seçiliyse her biri KENDİ varsayılan paletini kullanır
+        // (aksi halde tüm seriler aynı renkte görünürdü).
+        var _tsCheckedArr = Array.prototype.slice.call(checkedBoxes);
+        var _tsLiveRampEl = document.getElementById('selectedRamp');
+        var _tsLiveRampKey = _tsLiveRampEl ? (_tsLiveRampEl.getAttribute('data-ramp') || null) : null;
+        if (_tsLiveRampKey === '__gee__') _tsLiveRampKey = null;
         var series = (data.series || []).map(function(s) {
-            return { index: s.index, color: CMAP[s.index] || '#6366f1', points: s.points || [] };
+            var _cb = _tsCheckedArr.filter(function (cb) { return cb.getAttribute('data-analysis') === s.index; })[0];
+            var _defaultRampKey = _cb ? (_cb.getAttribute('data-ramp-key') || 'black-white') : 'black-white';
+            var _rampKeyForColor = (_tsCheckedArr.length === 1 && _tsLiveRampKey) ? _tsLiveRampKey : _defaultRampKey;
+            return {
+                index: s.index,
+                color: _sylvaTsSeriesColor(s.index, _rampKeyForColor),
+                rampKey: _rampKeyForColor,
+                legendMin: _cb ? (_cb.getAttribute('data-legend-min') || '') : '',
+                legendMax: _cb ? (_cb.getAttribute('data-legend-max') || '') : '',
+                points: s.points || []
+            };
         });
 
-        window._setTsLineData({ series: series });
+        window._setTsLineData({ series: series, kind: 'analysis' });
         window.setChartType('line');
 
         // Sağ paneli aç
