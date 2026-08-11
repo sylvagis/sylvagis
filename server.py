@@ -3189,6 +3189,11 @@ def build_result_image(data, for_export=False):
         # ve palette/min/max TAMAMEN atlanır. Piksel değerleri değişmez.
         # for_export=False (harita önizleme) → önceki davranış aynen korunur.
         custom_palette = data.get('palette')
+        # Kontur rengi, diğer analizlerdeki sürekli renk paletinden farklıdır:
+        # yalnızca maskenin değeri 1 olan eş yükselti çizgilerine uygulanır.
+        # Ayrı alan adı kullanılması, genel semboloji paletinin kontur
+        # çizgisini yanlışlıkla bir dolgu/alan rengine dönüştürmesini önler.
+        contour_line_color = data.get('contourLineColor')
         custom_min     = data.get('min')
         custom_max     = data.get('max')
 
@@ -3203,6 +3208,24 @@ def build_result_image(data, for_export=False):
                 vis = classified_vis
             else:
                 display_result = result
+        elif index == 'TOPO_CONTOUR':
+            # 0 değerli pikselleri selfMask ile tamamen saydamlaştır.
+            # Böylece seçilen renk yalnızca eş yükselti çizgisinde görünür;
+            # kontur olmayan alan kesinlikle boyanmaz.
+            display_result = result.selfMask()
+            if isinstance(contour_line_color, str) and contour_line_color.strip():
+                _line_color = contour_line_color.strip().lstrip('#')
+            elif isinstance(custom_palette, list) and custom_palette and isinstance(custom_palette[0], str):
+                # Eski istemcilerle geriye dönük uyumluluk.
+                _line_color = custom_palette[0].strip().lstrip('#')
+            else:
+                _line_color = 'ffffff'
+            if not re.fullmatch(r'[0-9a-fA-F]{6}', _line_color):
+                _line_color = 'ffffff'
+            # GEE görselleştirmesinde tek renk yerine aynı rengin iki durağını
+            # kullanmak, çizginin maske değerine göre kesin olarak aynı renkte
+            # çizilmesini sağlar.
+            vis = {'min': 0, 'max': 1, 'palette': [_line_color, _line_color]}
         elif custom_palette and isinstance(custom_palette, list) and len(custom_palette):
             display_result = result
             vis = dict(vis)
@@ -3215,14 +3238,10 @@ def build_result_image(data, for_export=False):
         else:
             display_result = result
 
-        # 🆕 GÜNCELLEME: Eş Yükselti (TOPO_CONTOUR) katmanının "altlığı"
-        # (kontur çizgisi olmayan değer=0 pikseller) artık SİYAH değil,
-        # TAMAMEN SAYDAM gösterilir — yalnızca kontur çizgileri (değer=1)
-        # görünür kalır ve altındaki uydu/harita altlığı olduğu gibi görünür.
-        # Yalnızca harita önizlemesinde uygulanır (for_export=True iken ham
-        # 0/1 raster GeoTIFF'e değişmeden yazılmaya devam eder).
-        if index == 'TOPO_CONTOUR' and not for_export:
-            display_result = display_result.updateMask(result)
+        # 🆕 GÜNCELLEME: Eş Yükselti katmanında selfMask() yalnızca harita
+        # önizlemesinde değil, yukarıdaki kontur görselleştirme dalında
+        # uygulanır. Böylece genel palette/alan renklendirme kodu kontura
+        # hiçbir zaman dolgu olarak sızamaz.
 
         final_display = display_result.clip(roi) if clip_mode == 'clip' else display_result
         return final_display, roi, result, vis, None
