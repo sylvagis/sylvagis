@@ -5658,6 +5658,203 @@ def _geojson_to_features(geom):
 
 
 # ════════════════════════════════════════════════════════════════
+# 📏 /api/topo-contour-vector — GERÇEK VEKTÖR eş yükselti çizgileri
+# ════════════════════════════════════════════════════════════════
+# SORUN: TOPO_CONTOUR analizi eskiden yalnızca bir RASTER karo (tile)
+# görüntüsü döndürüyordu — bu görüntü ekranda "merdiven basamağı" gibi
+# piksel kenarlarını takip ediyordu, çünkü aslında bir vektör çizgi
+# değil, siyah/beyaz bir maske görüntüsüydü. Bu maskeye tıklamak,
+# üzerine rakım yazmak ya da tek bir çizgiyi vurgulamak (highlight)
+# mümkün DEĞİLDİ, çünkü haritada tek bir "obje" yoktu, sadece pikseller
+# vardı.
+#
+# ÇÖZÜM: Bu fonksiyon, DEM'i seçilen aralığa göre yükselti eşiklerine
+# (levels) ayırır ve HER eşik için ayrı bir reduceToVectors() çağrısı
+# yapar. `dem >= level` maskesinin dış/iç halkalarının kendisi, tam
+# olarak o yükseklikteki eş yükselti eğrisidir — GEE bunu vektör
+# poligon olarak döndürür, biz de halkaları (ring) LineString'e
+# çeviririz. Sonuç: her biri gerçek bir GeoJSON çizgi objesi olan,
+# "elevation" (rakım, m) özelliği taşıyan, akıcı/pürüzsüz eğriler.
+# Bu obje frontend'de Leaflet ile L.geoJSON() olarak çizilir; böylece
+# tıklama, vurgulama (sarı) ve rakım etiketi gösterme MÜMKÜN olur.
+def _generate_contour_vectors(data):
+    import math as _math
+
+    roi_coords = data.get('roi')
+    if not roi_coords:
+        return {'success': False, 'error': 'Çalışma alanı geometrisi bulunamadı. Haritada bir alan çizin.'}
+    roi = make_roi(roi_coords)
+
+    # ── DEM kaynağı seç (build_result_image ile birebir aynı mantık) ──
+    _srtm_fallback = ee.Image('USGS/SRTMGL1_003').select('elevation')
+    dem_source = data.get('demSource', 'SRTM')
+    if dem_source == 'ALOS':
+        dem = (ee.ImageCollection('JAXA/ALOS/AW3D30/V3_2')
+               .filterBounds(roi).mosaic().select('DSM').rename('elevation'))
+        dem = dem.unmask(_srtm_fallback)
+    elif dem_source == 'Copernicus':
+        dem = (ee.ImageCollection('COPERNICUS/DEM/GLO30')
+               .filterBounds(roi).mosaic().select('DEM').rename('elevation'))
+        dem = dem.unmask(_srtm_fallback)
+    elif dem_source == 'NASADEM':
+        dem = ee.Image('NASA/NASADEM_HGT/001').select('elevation')
+    else:  # SRTM (varsayılan)
+        dem = ee.Image('USGS/SRTMGL1_003').select('elevation')
+
+    try:
+        interval = float(data.get('contourInterval', 50) or 50)
+    except (TypeError, ValueError):
+        interval = 50.0
+    if interval <= 0:
+        interval = 50.0
+
+    # Kesik/merdiven görünümünü önlemek için TOPO_CONTOUR'daki (raster
+    # önizleme) ile AYNI yumuşatma + bicubic yeniden örnekleme uygulanır.
+    # Bu, seviye eşiklerinin piksel kenarlarına değil, pürüzsüz bir ara
+    # değer yüzeyine göre hesaplanmasını sağlar.
+    dem_smooth = dem.focalMean(radius=45, units='meters').resample('bicubic')
+
+    # ── Gerçek min/max yükseltiyi al → seviye (level) listesini oluştur ──
+    stats = _call_with_retry(lambda: dem_smooth.clip(roi).reduceRegion(
+        reducer=ee.Reducer.minMax(), geometry=roi, scale=30,
+        maxPixels=1e9, bestEffort=True
+    ).getInfo())
+    e_min = stats.get('elevation_min') if stats else None
+    e_max = stats.get('elevation_max') if stats else None
+    if e_min is None or e_max is None:
+        return {'success': False, 'error': 'Bu alanda yükselti verisi bulunamadı.'}
+
+    level_start = _math.floor(e_min / interval) * interval
+    level_end   = _math.ceil(e_max / interval) * interval
+    levels = []
+    lv = level_start
+    while lv <= level_end + 1e-9:
+        if e_min < lv < e_max:   # sadece AOI içinde gerçekten geçilen seviyeler
+            levels.append(round(lv, 4))
+        lv += interval
+
+    # Performans/okunabilirlik: aşırı sık aralıkta (ör. 5 m, dağlık arazi)
+    # yüzlerce seviye oluşabilir — her biri ayrı bir GEE isteği olduğundan
+    # bu, isteği çok yavaşlatır/timeout'a yol açar. Azami seviye sayısını
+    # sınırlayıp eşit aralıklarla seyrekleştiriyoruz.
+    _MAX_LEVELS = 60
+    if len(levels) > _MAX_LEVELS:
+        step = _math.ceil(len(levels) / _MAX_LEVELS)
+        levels = levels[::step]
+
+    if not levels:
+        return {
+            'success': False,
+            'error': 'Seçilen aralıkta eş yükselti seviyesi bulunamadı '
+                     '(alan çok küçük/düz olabilir). Aralığı küçültmeyi deneyin.'
+        }
+
+    vec_scale = 30  # SRTM/ALOS/Copernicus/NASADEM hepsi ~30 m nominal çözünürlük
+
+    def _vectorize_level(level):
+        mask = dem_smooth.gte(level).selfMask()
+        fc = mask.reduceToVectors(
+            reducer=ee.Reducer.countEvery(),
+            geometry=roi,
+            scale=vec_scale,
+            geometryType='polygon',
+            eightConnected=True,
+            maxPixels=1e8,
+        )
+        info = _call_with_retry(lambda: fc.getInfo())
+        return level, (info.get('features', []) if info else [])
+
+    level_results = []
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        futures = {ex.submit(_vectorize_level, lv): lv for lv in levels}
+        for fut in as_completed(futures):
+            try:
+                level_results.append(fut.result())
+            except Exception as e:
+                print('[SylvaGIS] ⚠️ Kontur seviyesi üretilemedi ({} m): {}'.format(futures[fut], e))
+
+    # AOI sınırına denk gelen halka kısımları GERÇEK eş yükselti çizgisi
+    # DEĞİLDİR (poligon vektörleştirme her zaman kapalı bir halka üretir;
+    # halkanın AOI kenarını takip eden kısmı sadece kırpma sınırıdır).
+    # Shapely ile bu kısımlar çıkarılır — geriye yalnızca gerçek arazi
+    # geçişlerini temsil eden eğri parçaları kalır.
+    features_out = []
+    try:
+        from shapely.geometry import shape as _shp_shape, LineString as _ShpLine
+        roi_geom_dict = _normalize_to_geojson(roi_coords)
+        roi_shape = _shp_shape(roi_geom_dict).buffer(0)
+        roi_boundary = roi_shape.boundary.buffer(0.00004)  # ~4 m tolerans
+        _trim_ok = True
+    except Exception:
+        _trim_ok = False
+
+    for level, feats in level_results:
+        for feat in feats:
+            geom = feat.get('geometry') or {}
+            gtype = geom.get('type')
+            rings = []
+            if gtype == 'Polygon':
+                rings = geom.get('coordinates', [])
+            elif gtype == 'MultiPolygon':
+                for poly in geom.get('coordinates', []):
+                    rings.extend(poly)
+            for ring in rings:
+                if len(ring) < 3:
+                    continue
+                parts = [ring]
+                if _trim_ok:
+                    try:
+                        line = _ShpLine(ring)
+                        trimmed = line.difference(roi_boundary)
+                        if trimmed.is_empty:
+                            continue
+                        if trimmed.geom_type == 'LineString':
+                            parts = [list(trimmed.coords)]
+                        elif trimmed.geom_type == 'MultiLineString':
+                            parts = [list(g.coords) for g in trimmed.geoms]
+                        else:
+                            parts = [ring]
+                    except Exception:
+                        parts = [ring]
+                for part_coords in parts:
+                    if len(part_coords) < 2:
+                        continue
+                    features_out.append({
+                        'type': 'Feature',
+                        'geometry': {'type': 'LineString', 'coordinates': part_coords},
+                        'properties': {'elevation': level},
+                    })
+
+    return {
+        'success': True,
+        'type': 'FeatureCollection',
+        'features': features_out,
+        'elevMin': e_min,
+        'elevMax': e_max,
+        'interval': interval,
+    }
+
+
+@app.route('/api/topo-contour-vector', methods=['POST'])
+def topo_contour_vector():
+    """
+    Gerçek vektör eş yükselti çizgilerini GeoJSON FeatureCollection olarak
+    döndürür (bkz. _generate_contour_vectors üstündeki açıklama). Frontend
+    bunu Leaflet L.geoJSON() ile çizer; TOPO_CONTOUR'un eski raster
+    karo katmanı (data.tileUrl) yerine/üzerine bu katman kullanılır.
+    """
+    req_data = request.get_json(silent=True) or {}
+    try:
+        result = _generate_contour_vectors(req_data)
+        if not result.get('success'):
+            return jsonify(result), 400
+        return jsonify(result)
+    except Exception as ex:
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
+# ════════════════════════════════════════════════════════════════
 # 📥 /api/vector-download — Raster → Vektör dışa aktarımı
 # ════════════════════════════════════════════════════════════════
 # Üç veri kaynağını destekler:
