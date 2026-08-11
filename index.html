@@ -12738,21 +12738,8 @@ function selectRamp(name) {
                      // Bina çatısı GeoJSON/SVG olarak çizildiği için raster
                      // katmanları gibi getContainer() sağlamaz. Renderer'ın
                      // SVG konteynerini doğrudan sıyırma hedeflerine ekle.
-                     try {
-                         var buildingLayer = window._sylvaBuildingLayerByPane &&
-                             window._sylvaBuildingLayerByPane[key];
-                         if (!buildingLayer || typeof buildingLayer.eachLayer !== 'function') return;
-                         var rendererContainer = null;
-                         buildingLayer.eachLayer(function (featureLayer) {
-                             if (rendererContainer || !featureLayer) return;
-                             var renderer = featureLayer._renderer ||
-                                 (featureLayer._map && featureLayer._map._renderer);
-                             if (renderer && renderer._container) {
-                                 rendererContainer = renderer._container;
-                             }
-                         });
-                         pushEl(rendererContainer);
-                     } catch (e) {}
+                     if (typeof _sylvaBuildingRendererContainers !== 'function') return;
+                     _sylvaBuildingRendererContainers(key).forEach(pushEl);
                  }
                 // 1) Ekranda GERÇEKTEN üstte görünen (en yüksek z-index'li,
                 //    görünür) tek katman konteyneri — kırpma hedefi budur,
@@ -12812,6 +12799,18 @@ function selectRamp(name) {
             // ilerler.
             function _sylvaSwipeApplyClip(targetEl, clientX, clientY, orientation, containerRect) {
                 if (!targetEl) return;
+                 // Sıyırıcı sırasında zorlanan boyut ve clip değerleri,
+                 // katmanın zaten sahip olduğu AOI maskesini/Leaflet ölçüsünü
+                 // ezmemeli. Sürükleme bitince tam olarak bu özgün değerler
+                 // geri yüklenir; ardından AOI maskesi ayrıca tazelenir.
+                 if (!targetEl._sylvaSwipeOriginalStyle) {
+                     targetEl._sylvaSwipeOriginalStyle = {
+                         width: targetEl.style.width || '',
+                         height: targetEl.style.height || '',
+                         clipPath: targetEl.style.clipPath || '',
+                         webkitClipPath: targetEl.style.webkitClipPath || ''
+                     };
+                 }
                 if (containerRect) {
                     targetEl.style.width = containerRect.width + 'px';
                     targetEl.style.height = containerRect.height + 'px';
@@ -12819,21 +12818,32 @@ function selectRamp(name) {
                 var r = targetEl.getBoundingClientRect();
                 if (orientation === 'horizontal') {
                     var localY = Math.max(0, Math.min(r.height, clientY - r.top));
-                    targetEl.style.clipPath = 'inset(0 0 ' + (r.height - localY) + 'px 0)';
+                     var horizontalClip = 'inset(0 0 ' + (r.height - localY) + 'px 0)';
+                     targetEl.style.clipPath = horizontalClip;
+                     targetEl.style.webkitClipPath = horizontalClip;
                 } else {
                     var localX = Math.max(0, Math.min(r.width, clientX - r.left));
-                    targetEl.style.clipPath = 'inset(0 ' + (r.width - localX) + 'px 0 0)';
+                     var verticalClip = 'inset(0 ' + (r.width - localX) + 'px 0 0)';
+                     targetEl.style.clipPath = verticalClip;
+                     targetEl.style.webkitClipPath = verticalClip;
                 }
             }
 
             function _sylvaSwipeResetClip(targetEl) {
                 if (targetEl) {
-                    targetEl.style.clipPath = '';
-                    // 🛠️ Sürükleme bitince, kırpma için zorladığımız explicit
-                    // width/height de temizlenir — katman Leaflet'in kendi
-                    // yönettiği orijinal (otomatik) boyutlandırmasına döner.
-                    targetEl.style.width = '';
-                    targetEl.style.height = '';
+                     var original = targetEl._sylvaSwipeOriginalStyle;
+                     if (original) {
+                         targetEl.style.clipPath = original.clipPath;
+                         targetEl.style.webkitClipPath = original.webkitClipPath;
+                         targetEl.style.width = original.width;
+                         targetEl.style.height = original.height;
+                     } else {
+                         targetEl.style.clipPath = '';
+                         targetEl.style.webkitClipPath = '';
+                     }
+                     try { delete targetEl._sylvaSwipeOriginalStyle; } catch (e) {
+                         targetEl._sylvaSwipeOriginalStyle = null;
+                     }
                 }
             }
 
@@ -12990,6 +13000,9 @@ function selectRamp(name) {
                 if (!s.active && s.clippedEls && s.clippedEls.length) {
                     _sylvaSwipeResetClipAll(s.clippedEls);
                     s.clippedEls = [];
+                    if (typeof _updateGeeLayerAoiClip === 'function') {
+                        _updateGeeLayerAoiClip(paneId);
+                    }
                 }
             };
 
@@ -13006,7 +13019,13 @@ function selectRamp(name) {
                 if (button) button.classList.remove('active');
                 var lmap = paneId === 'map2' ? map2 : map;
                 if (lmap && lmap.dragging) lmap.dragging.enable();
-                if (s.clippedEls && s.clippedEls.length) { _sylvaSwipeResetClipAll(s.clippedEls); s.clippedEls = []; }
+                if (s.clippedEls && s.clippedEls.length) {
+                    _sylvaSwipeResetClipAll(s.clippedEls);
+                    s.clippedEls = [];
+                    if (typeof _updateGeeLayerAoiClip === 'function') {
+                        _updateGeeLayerAoiClip(paneId);
+                    }
+                }
             }
 
             function wrapSetActiveMapForSwipe() {
@@ -13778,6 +13797,31 @@ function selectRamp(name) {
                 }
             });
             window._sylvaBuildingLayerByPane[key] = null;
+        }
+
+        // Bina GeoJSON katmanı özel SVG renderer ile çizildiği için raster
+        // GEE katmanları gibi getContainer() sağlamaz. Aynı renderer'a bağlı
+        // SVG konteynerlerini ortak AOI/kaydırıcı maskesine dahil eder.
+        function _sylvaBuildingRendererContainers(paneId) {
+            var key = (paneId === 'map2') ? 'map2' : 'map';
+            var layer = window._sylvaBuildingLayerByPane[key];
+            var containers = [];
+            var seen = [];
+            function push(container) {
+                if (!container || seen.indexOf(container) !== -1) return;
+                seen.push(container);
+                containers.push(container);
+            }
+            if (!layer || typeof layer.eachLayer !== 'function') return containers;
+            try {
+                layer.eachLayer(function (featureLayer) {
+                    if (!featureLayer) return;
+                    var renderer = featureLayer._renderer ||
+                        (featureLayer._map && featureLayer._map._renderer);
+                    if (renderer && renderer._container) push(renderer._container);
+                });
+            } catch (e) {}
+            return containers;
         }
 
         function _sylvaClearBuildingInfo(paneId) {
@@ -15334,6 +15378,11 @@ function selectRamp(name) {
                 var hl = window._classHighlightLayerByPane && window._classHighlightLayerByPane[key];
                 if (hl && hl._container) containers.push(hl._container);
             } catch (e) {}
+            if (typeof _sylvaBuildingRendererContainers === 'function') {
+                _sylvaBuildingRendererContainers(key).forEach(function (container) {
+                    if (containers.indexOf(container) === -1) containers.push(container);
+                });
+            }
             return containers;
         }
 
@@ -39877,6 +39926,20 @@ function applySylvaLang(lang) {
       }
     }
   }
+
+    // Bina analizi raster analizlerinden farklı olarak bilgi kutusunu
+    // dinamik HTML olarak oluşturur. Sonuç zaten ekrandaysa dil değişiminde
+    // kutuyu yeniden çiz; böylece başlık, kaynak, tarama durumu ve tablo
+    // etiketleri eski dilde kalmaz. İki ekranın bina sonuçları bağımsızdır.
+    if (typeof _sylvaRenderBuildingInfo === 'function' &&
+        window._sylvaBuildingDataByPane) {
+      ['map', 'map2'].forEach(function (_buildingPaneId) {
+        var _buildingData = window._sylvaBuildingDataByPane[_buildingPaneId];
+        if (_buildingData) {
+          _sylvaRenderBuildingInfo(_buildingData, _buildingPaneId);
+        }
+      });
+    }
   } finally {
     if (typeof sylvaRestoreLegendFixedState === 'function') sylvaRestoreLegendFixedState(_sylvaLegendFixedState);
     window._sylvaLangChanging = false;
