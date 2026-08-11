@@ -6015,9 +6015,19 @@ tr.class-highlight-active {
             var infoWrapSync = document.getElementById('info-box-toggle-wrap');
             var infoBoxSync = document.getElementById(id === 'map2' ? 'map2-info-box' : 'map-info-box');
             if (infoCbSync && infoBoxSync) {
-                var infoHasContent = infoBoxSync.innerHTML.trim().length > 0;
+                // Analiz sonucunun bilgi kartı DOM'a yazıldıktan hemen sonra
+                // başka bir senkronizasyon turu çalışabilir. Bu kısa aralıkta
+                // kutu henüz boş okunursa kontrolün tekrar pasifleşmesi,
+                // kullanıcının ancak başka bir analize geçince kutuyu görmesine
+                // neden oluyordu. Analiz sonucu tarafından kaydedilen hazır
+                // durumunu da dikkate al; gerçek içerik geldiğinde kutuyu açık
+                // tut.
+                var _infoReadyByPane = window._sylvaInfoBoxReadyByPane || {};
+                var infoHasContent = infoBoxSync.innerHTML.trim().length > 0 ||
+                    !!_infoReadyByPane[id];
                 infoCbSync.disabled = !infoHasContent;
-                infoCbSync.checked = infoHasContent && infoBoxSync.style.display !== 'none';
+                infoCbSync.checked = infoHasContent &&
+                    (infoBoxSync.style.display !== 'none' || !!_infoReadyByPane[id]);
                 if (infoWrapSync) infoWrapSync.style.opacity = infoHasContent ? '1' : '0.4';
             }
 
@@ -9868,12 +9878,44 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
             var box  = document.getElementById(_ibaPane === 'map2' ? 'map2-info-box' : 'map-info-box');
             if (!cb) return;
             if (!eligible) {
+                window._sylvaInfoBoxReadyByPane = window._sylvaInfoBoxReadyByPane || { map: false, map2: false };
+                window._sylvaInfoBoxReadyByPane[_ibaPane === 'map2' ? 'map2' : 'map'] = false;
                 cb.disabled = true;
                 cb.checked = false;
                 if (wrap) wrap.style.opacity = '0.4';
                 if (box) box.style.display = 'none';
             }
         }
+
+        // Analiz sonucundan sonra Bilgi Kutusu'nu tek bir güvenilir noktadan
+        // etkinleştirir. İlk analizde render fonksiyonu ile panel senkronizasyonu
+        // aynı event döngüsünde yarışabildiği için bu işlem yalnızca seçim
+        // değişiminde değil, sonuç DOM'a yazıldıktan sonra da yapılmalıdır.
+        function _sylvaEnsureInfoBoxVisible(paneId) {
+            paneId = paneId === 'map2' ? 'map2' : 'map';
+            var box = document.getElementById(paneId === 'map2' ? 'map2-info-box' : 'map-info-box');
+            if (!box || !box.innerHTML.trim()) return false;
+
+            window._sylvaInfoBoxReadyByPane = window._sylvaInfoBoxReadyByPane || { map: false, map2: false };
+            window._sylvaInfoBoxReadyByPane[paneId] = true;
+
+            var activePane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+            var cb = document.getElementById('toggle-info-box');
+            var wrap = document.getElementById('info-box-toggle-wrap');
+            if (cb && paneId === activePane) {
+                cb.disabled = false;
+                cb.checked = true;
+                if (wrap) wrap.style.opacity = '1';
+                box.style.display = 'block';
+            }
+
+            if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[paneId]) {
+                window._sylvaLegendInfoByPane[paneId].infoHTML = box.innerHTML;
+                window._sylvaLegendInfoByPane[paneId].infoDisplay = box.style.display;
+            }
+            return true;
+        }
+        window._sylvaEnsureInfoBoxVisible = _sylvaEnsureInfoBoxVisible;
 
         // Bilgi Kutusu checkbox'ı elle değiştirildiğinde kutunun görünürlüğünü günceller
         function _onInfoBoxToggleChange(cb) {
@@ -15314,15 +15356,11 @@ function selectRamp(name) {
             // içerik varsa VE bu, hedef ekranın (paneId) o an aktif ekran
             // olduğu durumdaysa checkbox doğrudan etkinleştirilip işaretlenir,
             // ardından kutu buna göre gösterilir.
-            var cb = document.getElementById('toggle-info-box');
-            var wrap = document.getElementById('info-box-toggle-wrap');
-            var isActivePaneForInfo = paneId === ((typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map');
-            if (cb && isActivePaneForInfo) {
-                cb.disabled = false;
-                cb.checked = true;
-                if (wrap) wrap.style.opacity = '1';
+            if (typeof window._sylvaEnsureInfoBoxVisible === 'function') {
+                window._sylvaEnsureInfoBoxVisible(paneId);
+            } else {
+                box.style.display = 'block';
             }
-            box.style.display = (!cb || cb.checked) ? 'block' : 'none';
 
             if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[paneId]) {
                 window._sylvaLegendInfoByPane[paneId].infoHTML = box.innerHTML;
@@ -15457,15 +15495,11 @@ function selectRamp(name) {
             // çıkıyordu. Artık RGB bilgi kartıyla (renderRgbLegend) aynı desen
             // kullanılıyor: hedef ekran (paneId) o an aktif ekransa, checkbox
             // doğrudan burada etkinleştirilip işaretlenir, kutu buna göre gösterilir.
-            var cb = document.getElementById('toggle-info-box');
-            var wrap = document.getElementById('info-box-toggle-wrap');
-            var isActivePaneForInfo = paneId === ((typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map');
-            if (cb && isActivePaneForInfo) {
-                cb.disabled = false;
-                cb.checked = true;
-                if (wrap) wrap.style.opacity = '1';
+            if (typeof window._sylvaEnsureInfoBoxVisible === 'function') {
+                window._sylvaEnsureInfoBoxVisible(paneId);
+            } else {
+                box.style.display = 'block';
             }
-            box.style.display = (!cb || cb.checked) ? 'block' : 'none';
 
             if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[paneId]) {
                 window._sylvaLegendInfoByPane[paneId].infoHTML = box.innerHTML;
