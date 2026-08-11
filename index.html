@@ -12117,8 +12117,24 @@ function selectRamp(name) {
         //     olayında (görünümdeki TÜM karolar sonuçlanınca) kapanıyor.
         var _SYLVA_TILE_RETRY_MAX = 4;
         var _SYLVA_TILE_RETRY_BASE_MS = 1200;
+        // ════════════════════════════════════════════════════════════════
+        // 🛠️ KÖK NEDEN DÜZELTMESİ (Ekran veri tam gelmeden "normale" dönüyor)
+        // ════════════════════════════════════════════════════════════════
+        // Leaflet, bir tile 'tileerror' verdiğinde bile o karoyu "sonuçlandı"
+        // sayıp kendi iç sayacından düşürür — hata da olsa Leaflet için "iş
+        // bitti" demektir. Görünümdeki TÜM tile'lar bu şekilde sonuçlanınca
+        // Leaflet katmanın 'load' event'ini ateşler — bizim aşağıdaki retry
+        // (yeniden deneme) işimizin bitmesini BEKLEMEDEN. Sonuç: _waitForTileReady()
+        // 'load' event'ini görüp yükleme ekranını kapatıyor ama hata alıp
+        // arka planda yeniden denenen kareler haritaya henüz gelmemiş oluyor
+        // — o bölgeler boş kalıyor.
+        // ÇÖZÜM: her katman için "hâlâ retry bekleyen tile sayısı" tutan bir
+        // sayaç (layer._sylvaPendingRetries) ekliyoruz. _waitForTileReady()
+        // artık yalnızca Leaflet'in 'load' event'ine değil, bu sayacın da
+        // sıfıra dönmesine bakıyor (bkz. aşağıdaki _waitForTileReady).
         function _sylvaAttachTileRetry(layer) {
             if (!layer || typeof layer.on !== 'function') return layer;
+            layer._sylvaPendingRetries = 0;
             layer.on('tileerror', function (e) {
                 var tile = e && e.tile;
                 if (!tile || !tile.src) return;
@@ -12128,11 +12144,36 @@ function selectRamp(name) {
                 var baseSrc = tile._sylvaBaseSrc || tile.src;
                 tile._sylvaBaseSrc = baseSrc;
                 var delay = _SYLVA_TILE_RETRY_BASE_MS * Math.pow(1.7, attempt - 1);
+
+                // Bu tile artık "retry bekliyor" — sayaç +1. Bu denemenin
+                // nihai sonucu (başarı / tekrar hata / pes ediş) ne olursa
+                // olsun sayaç MUTLAKA -1 düşürülmeli — yoksa _waitForTileReady()
+                // sonsuza dek "hâlâ bekleniyor" sanıp ekranı hiç kapatmaz.
+                layer._sylvaPendingRetries = (layer._sylvaPendingRetries || 0) + 1;
+                var _settled = false;
+                function _settleRetry() {
+                    if (_settled) return;
+                    _settled = true;
+                    layer._sylvaPendingRetries = Math.max(0, (layer._sylvaPendingRetries || 0) - 1);
+                    tile.removeEventListener('load', _settleRetry);
+                    tile.removeEventListener('error', _settleRetry);
+                }
+
                 setTimeout(function () {
                     // Aynı src'yi doğrudan tekrar atamak bazı tarayıcılarda
                     // isteği yenilemeyebilir (önbellek/başarısız istek durumu);
                     // benzersiz bir sorgu parametresi ekleyerek GERÇEK bir yeni
                     // ağ isteği zorlanır.
+                    // NOT: 'load'/'error' dinleyicilerini burada, src atanmadan
+                    // HEMEN ÖNCE ekliyoruz — böylece bu deneme sonuçlandığında
+                    // (Leaflet'in kendi dinleyicilerinden bağımsız olarak) sayaç
+                    // doğru şekilde düşürülür. Eğer bu deneme de hata verirse ve
+                    // deneme hakkı kaldıysa, Leaflet'in kendi 'tileerror'
+                    // event'i yeniden ateşlenip üstteki handler'ı tekrar
+                    // çalıştıracak (yeni bir +1/-1 çifti açılacak) — bu yüzden
+                    // burada 'error' için ayrıca yeni bir deneme başlatmıyoruz.
+                    tile.addEventListener('load', _settleRetry);
+                    tile.addEventListener('error', _settleRetry);
                     var sep = baseSrc.indexOf('?') === -1 ? '?' : '&';
                     tile.src = baseSrc + sep + '_sylvaRetry=' + attempt;
                 }, delay);
@@ -13453,23 +13494,53 @@ function selectRamp(name) {
                 done = true;
                 if (typeof cb === 'function') cb();
             }
+
+            // 🛠️ KÖK NEDEN DÜZELTMESİ (2/2): Leaflet'in 'load' event'i, bir
+            // tile hata alsa bile o kareyi "sonuçlandı" sayıp fırlatılır —
+            // _sylvaAttachTileRetry() tarafından arka planda yeniden denenen
+            // (henüz sonuçlanmamış) kareleri BEKLEMEDEN. Bu yüzden 'load'
+            // geldiğinde tek başına yetinmiyoruz; katmanın
+            // _sylvaPendingRetries sayacı da sıfıra dönene kadar kısa
+            // aralıklarla kontrol edip gerçekten "hiçbir kare eksik değil"
+            // olduğundan emin oluyoruz. Sayaç zaten sıfırsa (retry hiç
+            // gerekmediyse) bu, normal akışta hiçbir gecikme eklemez.
+            function _checkTrulyDone() {
+                if (done) return;
+                if (layer && (layer._sylvaPendingRetries || 0) > 0) {
+                    setTimeout(_checkTrulyDone, 300);
+                    return;
+                }
+                finish();
+            }
+
             if (layer && typeof layer.once === 'function') {
-                // 🛠️ KÖK NEDEN DÜZELTMESİ: Eskiden 'tileerror' de "tamamlandı"
-                // sayılıp yükleme ekranı HEMEN kapatılıyordu — görünümdeki
-                // onlarca kareden SADECE BİRİ hata verse bile (ki GEE'de bu
-                // sık rastlanan geçici bir durumdur), geri kalan kareler henüz
-                // inmeden spinner kayboluyor, kullanıcı yarım/eksik bir analiz
-                // görüyordu. Artık yalnızca 'load' olayı (Leaflet bu olayı,
-                // görünümdeki TÜM karolar — başarılı ya da art arda tekrar
-                // denemeleri tükenmiş başarısız — sonuçlanınca tetikler)
-                // yükleme ekranını kapatır; tek bir hatalı kare artık spinner'ı
-                // erken kapatmıyor. Kare bazındaki hatalar zaten
-                // _sylvaAttachTileRetry() ile otomatik olarak yeniden deneniyor.
-                layer.once('load', finish);
+                layer.once('load', _checkTrulyDone);
             } else {
                 setTimeout(finish, 0);
             }
-            setTimeout(finish, 12000); // güvenlik ağı — asla sonsuza dek takılı kalmaz
+
+            // Güvenlik ağı — asla sonsuza dek takılı kalmaz. Sabit 12 sn
+            // eskiden retry olmayan akış için yeterliydi; artık retry'ler
+            // bazen bunu aştığı için taban süre yükseltildi VE retry hâlâ
+            // sürüyorsa (pending > 0) güvenlik ağı, mutlak bir tavana kadar
+            // kendini otomatik uzatıyor — böylece büyük alan / yoğun retry
+            // durumunda ekran erken kapanıp veri eksik göstermiyor, ama
+            // retry'ler tamamen dursa/pes edilse bile ekran sonsuza dek
+            // takılı kalmıyor.
+            var _SYLVA_SAFETY_BASE_MS = 18000;
+            var _SYLVA_SAFETY_HARD_CAP_MS = 40000;
+            var _safetyStart = Date.now();
+            function _safetyTick() {
+                if (done) return;
+                var pending = layer ? (layer._sylvaPendingRetries || 0) : 0;
+                var elapsed = Date.now() - _safetyStart;
+                if (pending > 0 && elapsed < _SYLVA_SAFETY_HARD_CAP_MS) {
+                    setTimeout(_safetyTick, 1000);
+                    return;
+                }
+                finish();
+            }
+            setTimeout(_safetyTick, _SYLVA_SAFETY_BASE_MS);
         }
 
         // ── Analiz çıktılarını sıfırla ─────────────────────────────────────────
