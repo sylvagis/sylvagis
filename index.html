@@ -49068,6 +49068,137 @@ document.addEventListener('keydown', function(e) {
 })();
 </script>
 
-</body>
+
+<style id="replit-sylva-timeseries-fix">
+  #sylva-time-slider-bar {
+    z-index: 12000 !important;
+    min-height: 42px;
+    visibility: visible;
+  }
+  #sylva-time-slider-bar input[type="range"] { min-width: 80px; }
+</style>
+<script>
+(function () {
+  'use strict';
+  var originalRun = window.runTimeSeriesAnalysis;
+  var originalLoad = window.loadSpecificScene;
+  var originalSliderChange = window.onTimeSliderChange;
+
+  function readTimeSeriesContext() {
+    var monthly = document.getElementById('ts-btn-monthly');
+    var yearly = document.getElementById('ts-btn-yearly');
+    var start = document.getElementById('ts-start-year');
+    var end = document.getElementById('ts-end-year');
+    var cloud = document.getElementById('ts-cloud-pct');
+    var sensor = document.querySelector('.uydu-sensor-radio:checked');
+    var period = monthly && monthly.classList.contains('active') ? 'monthly'
+      : yearly && yearly.classList.contains('active') ? 'yearly' : null;
+    var sy = start ? parseInt(start.value, 10) : NaN;
+    var ey = end ? parseInt(end.value, 10) : NaN;
+    if (!period || !sy || !ey) return null;
+    return {
+      satellite: sensor ? sensor.value : 's2-l2a',
+      startDate: sy + '-01-01',
+      endDate: ey + '-12-31',
+      maxCloud: cloud ? parseInt(cloud.value, 10) : 100,
+      period: period
+    };
+  }
+
+  if (typeof originalLoad === 'function') {
+    window.loadSpecificScene = function (sceneId, paneId, opts) {
+      var context = window._sylvaTimeSeriesSceneContext;
+      var sceneIds = window._tsSliderSceneIds || [];
+      var live = window._sylvaTsData && window._sylvaTsData.kind === 'analysis';
+      /*
+       * The first scene is loaded by the original time-series function just
+       * before that function publishes _tsSliderSceneIds. Treat that one
+       * request as a time-series scene too; once the list exists, require an
+       * exact ID match so ordinary gallery clicks are not affected.
+       */
+      var isTimeSeriesScene = live && (
+        !sceneIds.length ||
+        sceneIds.some(function (id) {
+          return String(id) === String(sceneId);
+        })
+      );
+      if (!context || !isTimeSeriesScene) {
+        return originalLoad.apply(this, arguments);
+      }
+
+      var dateStart = document.getElementById('date-start');
+      var dateEnd = document.getElementById('date-end');
+      var cloudSlider = document.getElementById('cloud-slider');
+      var sensorInputs = document.querySelectorAll('.uydu-sensor-radio');
+      var previous = {
+        start: dateStart && dateStart.value,
+        end: dateEnd && dateEnd.value,
+        cloud: cloudSlider && cloudSlider.value,
+        sensors: Array.prototype.map.call(sensorInputs, function (input) {
+          return { input: input, checked: input.checked };
+        })
+      };
+
+      if (dateStart) dateStart.value = context.startDate;
+      if (dateEnd) dateEnd.value = context.endDate;
+      if (cloudSlider) cloudSlider.value = String(context.maxCloud);
+      Array.prototype.forEach.call(sensorInputs, function (input) {
+        input.checked = input.value === context.satellite;
+      });
+
+      try {
+        return originalLoad.apply(this, arguments);
+      } finally {
+        if (dateStart) dateStart.value = previous.start;
+        if (dateEnd) dateEnd.value = previous.end;
+        if (cloudSlider) cloudSlider.value = previous.cloud;
+        previous.sensors.forEach(function (item) {
+          item.input.checked = item.checked;
+        });
+      }
+    };
+  }
+
+  if (typeof originalRun === 'function') {
+    window.runTimeSeriesAnalysis = function () {
+      window._sylvaTimeSeriesSceneContext = readTimeSeriesContext();
+      return originalRun.apply(this, arguments);
+    };
+  }
+
+  function syncPlaybackBar() {
+    var bar = document.getElementById('sylva-time-slider-bar');
+    var slider = document.getElementById('sylva-time-slider');
+    var ids = window._tsSliderSceneIds || [];
+    if (!bar || !slider || !ids.length) return;
+
+    bar.style.display = 'block';
+    bar.style.visibility = 'visible';
+    bar.style.zIndex = '12000';
+    slider.max = String(Math.max(ids.length - 1, 0));
+
+    var label = document.getElementById('ts-date-label');
+    var dates = window._tsSliderDates || [];
+    var current = Math.min(parseInt(slider.value || '0', 10), ids.length - 1);
+    if (label && dates[current]) label.textContent = dates[current];
+  }
+
+  if (typeof originalSliderChange === 'function') {
+    window.onTimeSliderChange = function (value, callback) {
+      syncPlaybackBar();
+      return originalSliderChange.call(this, value, callback);
+    };
+  }
+
+  var observer = new MutationObserver(syncPlaybackBar);
+  observer.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['style', 'class']
+  });
+  setInterval(syncPlaybackBar, 250);
+})();
+</script></body>
 
 </html>
