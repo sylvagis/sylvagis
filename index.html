@@ -12132,14 +12132,58 @@ function selectRamp(name) {
         // sayaç (layer._sylvaPendingRetries) ekliyoruz. _waitForTileReady()
         // artık yalnızca Leaflet'in 'load' event'ine değil, bu sayacın da
         // sıfıra dönmesine bakıyor (bkz. aşağıdaki _waitForTileReady).
+        // ════════════════════════════════════════════════════════════════
+        // 🛠️ KÖK NEDEN DÜZELTMESİ (Pan/Zoom Sırasında Yanlış Katman/Boşluk
+        // Görünmesi — "ESA üstte olması lazım ama CORINE görünüyor" şikayeti)
+        // ════════════════════════════════════════════════════════════════
+        // z-index sıralaması (bkz. _sylvaBringGeeLayerToFront) HER ZAMAN doğru
+        // uygulanıyor — üstteki katman DOM'da gerçekten daha yüksek z-index'e
+        // sahip. Ancak GEE karoları, sıradan bir harita altlığı karosundan çok
+        // daha YAVAŞ üretilir (her karo sunucuda anlık hesaplanır). Kullanıcı
+        // haritada gezinip (pan) veya yakınlaştırıp (zoom) daha önce hiç
+        // görüntülenmemiş yeni bir alana geldiğinde, üstteki katmanın o
+        // bölgeye ait karoları GELENE KADAR tarayıcıda o karo alanı tamamen
+        // BOŞ/SAYDAM'dır — bu da altındaki katmanın (ör. CORINE) ya da hiç
+        // katman yoksa uydu temel haritasının o boşluktan "sızarak" görünmesine
+        // yol açar. Karo birkaç saniye içinde gelince o bölge "kendiliğinden
+        // düzeliyormuş" gibi görünür — kullanıcının bildirdiği "zoom yapınca
+        // tek tük düzeliyor" davranışı tam olarak budur; z-index bozuk değildir,
+        // sadece karo henüz gelmemiştir.
+        // ÇÖZÜM: her karo, ağ isteği başlar başlamaz (tileloadstart) nötr/
+        // yarı saydam bir "yükleniyor" tonuyla boyanır — bu ton, karo
+        // tamamlanana kadar ALTTAKİ katmanın/temel haritanın o hücreden
+        // görünmesini FİZİKSEL olarak engeller (artık boşluk yerine tutarlı
+        // bir yükleniyor efekti görülür). Karo başarıyla inince ton kaldırılır
+        // ve gerçek veri sorunsuzca ortaya çıkar. Ayrıca keepBuffer artırılıp
+        // updateWhenZooming kapatılarak, görünüme yeni giren alanların karoları
+        // mümkün olduğunca ÖNCEDEN (görünür olmadan) istenir — bu da boş kalan
+        // alan sayısını baştan azaltır.
+        var _SYLVA_TILE_LOADING_TINT = 'rgba(148,163,184,0.45)';
+        function _sylvaTintTile(tile) {
+            if (tile && tile.style) tile.style.backgroundColor = _SYLVA_TILE_LOADING_TINT;
+        }
+        function _sylvaUntintTile(tile) {
+            if (tile && tile.style) tile.style.backgroundColor = '';
+        }
         function _sylvaAttachTileRetry(layer) {
             if (!layer || typeof layer.on !== 'function') return layer;
             layer._sylvaPendingRetries = 0;
+            // Daha fazla karo, görünüme girmeden ÖNCE arka planda istensin ve
+            // zoom animasyonu sırasında ara kareler boş bırakılmasın.
+            layer.options = layer.options || {};
+            layer.options.keepBuffer = Math.max(layer.options.keepBuffer || 0, 4);
+            layer.options.updateWhenZooming = false;
+            layer.on('tileloadstart', function (e) {
+                _sylvaTintTile(e && e.tile);
+            });
+            layer.on('tileload', function (e) {
+                _sylvaUntintTile(e && e.tile);
+            });
             layer.on('tileerror', function (e) {
                 var tile = e && e.tile;
                 if (!tile || !tile.src) return;
                 var attempt = (tile._sylvaRetryCount || 0) + 1;
-                if (attempt > _SYLVA_TILE_RETRY_MAX) return; // pes edildi — çok nadir, kalıcı sunucu hatası
+                if (attempt > _SYLVA_TILE_RETRY_MAX) { _sylvaUntintTile(tile); return; } // pes edildi — çok nadir, kalıcı sunucu hatası
                 tile._sylvaRetryCount = attempt;
                 var baseSrc = tile._sylvaBaseSrc || tile.src;
                 tile._sylvaBaseSrc = baseSrc;
