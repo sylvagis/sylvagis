@@ -4557,50 +4557,95 @@ def climate_data():
         start_str = start_dt.isoformat()
         end_str = end_dt.isoformat()
 
-        # ── 3) CHIRPS (Yağış) — Tüm GEE ağ çağrıları _call_with_retry
-        #      sarmalayıcısı içinde: geçici bağlantı hataları / timeout'lar
-        #      otomatik olarak tekrar denenir. ────────────────────────
-        def _fetch_precipitation_mean():
+        # ── 3/4) CHIRPS + ERA5-LAND — günlük seri ─────────────────────
+        # Grafiklerin yalnızca 30 günlük bir ortalama ile çizilememesi için
+        # iki koleksiyondan aynı tarih eksenine sahip günlük alan ortalamaları
+        # üretilir. FeatureCollection tek bir getInfo() ile çekildiğinden,
+        # her gün için Python tarafında ayrı bir GEE isteği yapılmaz.
+        def _fetch_daily_climate_series():
             chirps = (
                 ee.ImageCollection(_CHIRPS_COLLECTION)
                 .filterDate(start_str, end_str)
                 .filterBounds(analysis_geom)
                 .select('precipitation')
             )
-            daily_mean_img = chirps.mean().rename('precipitation')
-            value = daily_mean_img.reduceRegion(
-                reducer=ee.Reducer.mean(),
-                geometry=analysis_geom,
-                scale=_CHIRPS_SCALE,
-                maxPixels=1e9,
-                bestEffort=True,
-            ).get('precipitation').getInfo()
-            return value
-
-        precipitation_mean = _call_with_retry(_fetch_precipitation_mean)
-
-        # ── 4) ERA5-LAND (Sıcaklık) — aynı şekilde retry ile korunuyor ─
-        def _fetch_temperature_mean():
             era5 = (
                 ee.ImageCollection(_ERA5_LAND_COLLECTION)
                 .filterDate(start_str, end_str)
                 .filterBounds(analysis_geom)
                 .select('temperature_2m')
             )
-            daily_mean_img = era5.mean().rename('temperature_2m')
-            value = daily_mean_img.reduceRegion(
-                reducer=ee.Reducer.mean(),
-                geometry=analysis_geom,
-                scale=_ERA5_LAND_SCALE,
-                maxPixels=1e9,
-                bestEffort=True,
-            ).get('temperature_2m').getInfo()
-            return value
 
-        temperature_mean_kelvin = _call_with_retry(_fetch_temperature_mean)
+            day_count = (end_dt - start_dt).days
+            offsets = ee.List.sequence(0, max(day_count - 1, 0))
+
+            def _daily_feature(offset):
+                day = ee.Date(start_str).advance(offset, 'day')
+                next_day = day.advance(1, 'day')
+
+                precipitation_image = chirps.filterDate(day, next_day).mean()
+                temperature_image = era5.filterDate(day, next_day).mean()
+
+                precipitation = precipitation_image.reduceRegion(
+                    reducer=ee.Reducer.mean(),
+                    geometry=analysis_geom,
+                    scale=_CHIRPS_SCALE,
+                    maxPixels=1e9,
+                    bestEffort=True,
+                ).get('precipitation')
+                temperature = temperature_image.reduceRegion(
+                    reducer=ee.Reducer.mean(),
+                    geometry=analysis_geom,
+                    scale=_ERA5_LAND_SCALE,
+                    maxPixels=1e9,
+                    bestEffort=True,
+                ).get('temperature_2m')
+
+                return ee.Feature(None, {
+                    'date': day.format('YYYY-MM-dd'),
+                    'precipitationMm': precipitation,
+                    'temperatureC': ee.Algorithms.If(
+                        temperature,
+                        ee.Number(temperature).subtract(273.15),
+                        None,
+                    ),
+                })
+
+            return ee.FeatureCollection(offsets.map(_daily_feature)).getInfo()
+
+        daily_features = _call_with_retry(_fetch_daily_climate_series) or {}
+        daily_series = []
+        for feature in daily_features.get('features', []):
+            properties = feature.get('properties') or {}
+            precipitation = properties.get('precipitationMm')
+            temperature = properties.get('temperatureC')
+            daily_series.append({
+                'date': properties.get('date'),
+                'precipitationMm': (
+                    round(float(precipitation), 3)
+                    if precipitation is not None else None
+                ),
+                'temperatureC': (
+                    round(float(temperature), 2)
+                    if temperature is not None else None
+                ),
+            })
+
+        precipitation_values = [
+            item['precipitationMm'] for item in daily_series
+            if item['precipitationMm'] is not None
+        ]
+        temperature_values = [
+            item['temperatureC'] for item in daily_series
+            if item['temperatureC'] is not None
+        ]
+        precipitation_mean = (
+            sum(precipitation_values) / len(precipitation_values)
+            if precipitation_values else None
+        )
         temperature_mean_celsius = (
-            round(float(temperature_mean_kelvin) - 273.15, 2)
-            if temperature_mean_kelvin is not None else None
+            sum(temperature_values) / len(temperature_values)
+            if temperature_values else None
         )
 
         return jsonify({
@@ -4612,7 +4657,11 @@ def climate_data():
             'precipitationMeanMmPerDay': (
                 round(float(precipitation_mean), 3) if precipitation_mean is not None else None
             ),
-            'temperatureMeanC': temperature_mean_celsius,
+            'temperatureMeanC': (
+                round(float(temperature_mean_celsius), 2)
+                if temperature_mean_celsius is not None else None
+            ),
+            'daily': daily_series,
         })
 
     except Exception as e:
