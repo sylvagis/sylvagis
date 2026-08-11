@@ -3149,7 +3149,22 @@ def build_result_image(data, for_export=False):
             # dönüşümü uygulanırsa sahte/kırık mikro-çizgilere yol açar.
             # Hafif bir odak-ortalama bu gürültüyü büyük ölçüde temizler
             # (gerçek eş yükselti geometrisini bozmadan).
-            _dem_smooth = dem.focalMean(radius=45, units='meters')
+            # 🛠️ BUG FİX (kesik/merdiven/piksel basamaklı çizgi görünümü):
+            # GEE, harita önizleme kutucuklarını (tile) varsayılan olarak
+            # EN YAKIN KOMŞU (nearest-neighbor) örneklemeyle üretir. DEM'in
+            # doğal piksel boyutu (~30 m SRTM/ALOS/Copernicus/NASADEM) ekran
+            # üzerindeki bir piksele göre çok daha büyük olduğundan, zeroCrossing
+            # ile bulunan çizgi tam olarak piksel KENARLARINI takip eder — bu da
+            # düz/eğrisel bir eş yükselti yerine "merdiven basamağı" gibi kesik,
+            # köşeli bir görünüme yol açar (ekran görüntüsünde görülen sorun).
+            #
+            # ÇÖZÜM: .resample('bicubic') ile DEM, tile'a render edilirken
+            # piksel-kenarı sıçramaları yerine YUMUŞAK ARA DEĞERLERLE (bicubic
+            # interpolasyon) örneklenir. Böylece sinüs sinyali ve onun sıfır
+            # geçişleri artık pürüzsüz, sürekli bir yüzey üzerinden hesaplanır
+            # ve kontur çizgisi gerçek bir eş yükselti eğrisi gibi akıcı/düz
+            # görünür — hangi zoom seviyesinde bakılırsa bakılsın.
+            _dem_smooth = dem.focalMean(radius=45, units='meters').resample('bicubic')
             _signal = _dem_smooth.multiply(2 * _math.pi / _contour_interval).sin()
             result = _signal.zeroCrossing().rename('value')
             vis = {'min': 0, 'max': 1, 'palette': ['black', 'white']}
