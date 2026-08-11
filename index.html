@@ -4425,9 +4425,11 @@ tr.class-highlight-active {
                  (veya farklı) analiz türü ayrı bir katman olarak üste eklenir.
                  Böylece Katman Sıyırıcı (⇔) ile eski/yeni karşılaştırması
                  yapılabilir. -->
-            <label class="option-item" id="stack-analysis-toggle-wrap" style="grid-column: span 2; margin: 6px 0 2px; display:flex; align-items:center; gap:6px; font-size:0.85rem;">
-                <input type="checkbox" id="toggle-stack-analysis">
-                <span data-i18n="stack_analysis_toggle">🗂️ Önceki Analizin Üzerine Ekle</span>
+            <label class="option-item" id="stack-analysis-toggle-wrap" style="grid-column: span 2; margin: 8px 0 4px; display:flex; align-items:center; gap:8px; font-size:0.85rem; padding:8px 10px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; cursor:pointer; transition:background .15s,border-color .15s;"
+                   onmouseover="this.style.background='#f1f5f9';this.style.borderColor='#cbd5e1';"
+                   onmouseout="this.style.background='#f8fafc';this.style.borderColor='#e2e8f0';">
+                <input type="checkbox" id="toggle-stack-analysis" style="width:15px;height:15px;cursor:pointer;accent-color:#1e3a8a;flex-shrink:0;">
+                <span data-i18n="stack_analysis_toggle" style="color:#334155;font-weight:500;">🗂️ Önceki Analizin Üzerine Ekle</span>
             </label>
             <button class="btn-primary" id="btn-run-analysis" data-i18n="run_analysis" style="width: 50%; align-self: center; margin-top: 15px;" onclick="runAnalysis()">🚀 Analizi Çalıştır</button>
         </div>
@@ -12005,6 +12007,17 @@ function selectRamp(name) {
                     }
                 }
 
+                // 🆕 ETİKET SIKLIĞI (zoom'a göre): tüm çalışma alanı ekranda
+                // görünürken (uzak zoom) her çizginin rakımını aynı anda
+                // göstermek okunmaz/göz yorucu bir görüntü oluşturuyordu.
+                // Çözüm: her etiket katmanına sabit bir sıra numarası (idx)
+                // verilir; harita uzaklaştıkça yalnızca N'de bir etiket
+                // gösterilir (ör. 1/8), yakınlaştıkça N azalır ve en yakın
+                // zoom'da (veya üzerinde) TÜM etiketler görünür. Çizgilerin
+                // kendisi bu işlemden etkilenmez — sadece rakım yazıları.
+                var _labelLayers = [];
+                var _labelIdx = 0;
+
                 var geoLayer = L.geoJSON(data, {
                     style: function () { return baseStyle; },
                     onEachFeature: function (feature, layer) {
@@ -12015,6 +12028,8 @@ function selectRamp(name) {
                             className: 'sylva-contour-label', direction: 'center',
                             permanent: true, interactive: false
                         });
+                        layer._sylvaLabelIdx = _labelIdx++;
+                        _labelLayers.push(layer);
                         layer.on('click', function (e) {
                             if (activeLayer && activeLayer !== layer) _resetActive();
                             layer.setStyle(hiliteStyle);
@@ -12038,6 +12053,36 @@ function selectRamp(name) {
                 var storeKey = (paneId === 'map2') ? 'map2' : 'map';
                 window._sylvaContourVectorByPane[storeKey] = window._sylvaContourVectorByPane[storeKey] || {};
                 window._sylvaContourVectorByPane[storeKey][layerKey] = geoLayer;
+
+                // Referans zoom: tüm eş yükselti katmanının haritaya SIĞDIĞI
+                // (yani "tüm çalışma alanı görünür") zoom seviyesi. Kullanıcı
+                // bu zoom'da veya daha uzaktaysa etiketler seyrekleştirilir;
+                // yakınlaştıkça kademeli olarak sıklaşır.
+                var _fitZoom;
+                try {
+                    var _b = geoLayer.getBounds();
+                    _fitZoom = _b.isValid() ? targetMap.getBoundsZoom(_b) : targetMap.getZoom();
+                } catch (e) { _fitZoom = targetMap.getZoom(); }
+
+                function _sylvaUpdateContourLabelDensity() {
+                    var zoom = targetMap.getZoom();
+                    var diff = zoom - _fitZoom;
+                    var showEvery;
+                    if (diff <= 0)      showEvery = 8;  // tüm alan görünürken: 1/8 etiket
+                    else if (diff === 1) showEvery = 4;
+                    else if (diff === 2) showEvery = 2;
+                    else                  showEvery = 1; // yeterince yakın: tüm etiketler
+                    _labelLayers.forEach(function (lyr) {
+                        var tt = lyr.getTooltip && lyr.getTooltip();
+                        if (!tt || !tt._container) return;
+                        var show = (lyr._sylvaLabelIdx % showEvery === 0);
+                        tt._container.style.display = show ? '' : 'none';
+                    });
+                }
+
+                targetMap.on('zoomend', _sylvaUpdateContourLabelDensity);
+                geoLayer.on('remove', function () { targetMap.off('zoomend', _sylvaUpdateContourLabelDensity); });
+                _sylvaUpdateContourLabelDensity();
             })
             .catch(function (err) { console.warn('[SylvaGIS] Vektör kontur isteği başarısız:', err); });
         }
