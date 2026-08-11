@@ -2838,12 +2838,34 @@ def build_result_image(data, for_export=False):
             eff_end   = today.isoformat()
             eff_start = (today - datetime.timedelta(days=365)).isoformat()
 
-        dw = (ee.ImageCollection('GOOGLE/DYNAMICWORLD/V1')
-              .filterBounds(roi)
-              .filterDate(eff_start, eff_end)
-              .select('label')
-              .reduce(ee.Reducer.mode())
-              .rename('value'))
+        def _dw_mode(s, e):
+            return (ee.ImageCollection('GOOGLE/DYNAMICWORLD/V1')
+                    .filterBounds(roi)
+                    .filterDate(s, e)
+                    .select('label')
+                    .reduce(ee.Reducer.mode())
+                    .rename('value'))
+
+        dw = _dw_mode(eff_start, eff_end)
+
+        # 🛠️ BUG FİX (AOI'nin bir kısmı boş kalıyor — UYDU ANALİZLERİYLE
+        # AYNI KÖK NEDEN): Dynamic World, Sentinel-2 sahnelerinden türetilir
+        # ve Sentinel-2'nin MGRS tile ızgarasını miras alır. Dar bir tarih
+        # penceresinde (ör. son 365 gün yerine daha kısa bir aralık frontend'den
+        # geldiyse) AOI'yi kesen komşu tile'lardan biri o pencerede yeterli
+        # bulutsuz geçiş yapmamış olabilir — sonuçta o tile'ın kapladığı
+        # AOI kısmı boş/maskesiz kalır ve temel harita görünür.
+        # ÇÖZÜM: birincil pencerede boş kalan pikseller, ÇOK DAHA GENİŞ bir
+        # pencerede (son 3 yıl) hesaplanan aynı mod-kompozitle doldurulur.
+        # Sentinel-2'nin küresel düzenli tekrar-geçiş kaydı 3 yıl içinde her
+        # yeri defalarca kapsadığından bu, pratikte tüm boşlukları kapatır.
+        today = datetime.date.today()
+        _wide_end   = eff_end
+        _wide_start = (today - datetime.timedelta(days=3 * 365)).isoformat()
+        if _wide_start < eff_start:
+            dw_wide = _dw_mode(_wide_start, _wide_end)
+            dw = dw.unmask(dw_wide)
+
         palette = ['#419bdf', '#397d49', '#88b053', '#7a87c6',
                    '#e49635', '#dfc35a', '#c4281b', '#a59b8f', '#b39fe1']
         vis = {'min': 0, 'max': 8, 'palette': palette}
@@ -3014,6 +3036,26 @@ def build_result_image(data, for_export=False):
         # pencerede kesinlikle geçerli komşu bulur.
         dem = dem.unmask(dem.focalMean(radius=150, units='meters'))
         dem = dem.unmask(dem.focalMean(radius=450, units='meters'))
+
+        # 🛠️ BUG FİX (AOI'nin bir kısmı hâlâ boş kalabiliyor — BÜYÜK void/
+        # kapsama boşlukları): Yukarıdaki odak-ortalama doldurma yalnızca
+        # KÜÇÜK (birkaç piksel genişliğinde) void kümelerini kapatır. SRTM/
+        # NASADEM gibi kaynaklarda çok daha BÜYÜK boşluklar (kıyı şeridi
+        # yakını, dik yamaç radar gölgesi, bazı adalar/göller) kalabilir —
+        # bu pikseller çevresinde de hiç geçerli komşu bulunamadığından
+        # focalMean bunları dolduramaz; sonuç AOI'nin o kısmının haritada
+        # boş/temel harita olarak görünmesidir (uydu analizlerindeki AYNI
+        # "AOI'yi tam doldurmuyor" şikayetiyle aynı kök neden sınıfı).
+        # ÇÖZÜM: kalan tüm boşluklar, dünya genelinde en eksiksiz kapsamaya
+        # sahip küresel DEM kaynağı olan Copernicus GLO-30 mozağiyle
+        # doldurulur (seçili kaynak zaten Copernicus ise bu adım etkisizdir,
+        # zarar vermez). O da boşsa (son derece nadir, ör. açık deniz) son
+        # çare olarak 0 m (deniz seviyesi) atanır — böylece AOI içinde
+        # kesinlikle hiçbir NoData piksel kalmaz.
+        _copernicus_global_fallback = (ee.ImageCollection('COPERNICUS/DEM/GLO30')
+                                        .filterBounds(roi).mosaic().select('DEM'))
+        dem = dem.unmask(_copernicus_global_fallback)
+        dem = dem.unmask(0)
 
         terrain = ee.Terrain.products(dem)
         slope   = terrain.select('slope')
