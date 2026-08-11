@@ -17,21 +17,12 @@ import traceback
 import urllib.parse
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from flask import Flask, request, jsonify, Response, send_from_directory
+from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
 print('SylvaGIS server.py yüklendi — versiyon: zip-export-v2-tiling')
-
-# Arayüz ve API aynı uygulamadan sunulur. Böylece index.html ayrı açıldığında
-# eski/uzak bir sunucuya bağlanıp eksik karo göstermesi engellenir.
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-
-
-@app.get('/')
-def serve_frontend():
-    return send_from_directory(APP_DIR, 'index.html')
 
 
 # API istemcisi JSON bekler. Flask'in varsayılan HTML 404/405 sayfaları,
@@ -1690,21 +1681,7 @@ def ping():
 #                        şifresi SMTP için çalışmaz, 2 Adımlı Doğrulama açıp
 #                        myaccount.google.com/apppasswords adresinden alınır)
 # Bu değişkenler tanımlı değilse endpoint açık/anlaşılır bir hata döner.
-CONTACT_RECEIVER_EMAIL = os.environ.get(
-    'SYLVA_OWNER_EMAIL',
-    'sylvagis.world@gmail.com',
-).strip()
-SYLVA_SMTP_USER = os.environ.get('SYLVA_SMTP_USER', '').strip()
-SYLVA_SMTP_PASS = os.environ.get('SYLVA_SMTP_PASS', '')
-
-
-def _smtp_credentials():
-    if not SYLVA_SMTP_USER or not SYLVA_SMTP_PASS:
-        raise RuntimeError(
-            'E-posta gönderimi için SYLVA_SMTP_USER ve '
-            'SYLVA_SMTP_PASS ortam değişkenleri tanımlanmalıdır.'
-        )
-    return SYLVA_SMTP_USER, SYLVA_SMTP_PASS
+CONTACT_RECEIVER_EMAIL = 'sylvagis.world@gmail.com'
 
 
 @app.route('/api/contact', methods=['POST'])
@@ -1726,7 +1703,8 @@ def send_contact_message():
     if not email_re.match(email):
         return jsonify({'success': False, 'error': 'Geçersiz e-posta adresi.'}), 400
 
-    smtp_user, smtp_pass = _smtp_credentials()
+    smtp_user = 'sylvagis.world@gmail.com'
+    smtp_pass = 'ksfnkvwcutrawcih'
 
     body = (
         'SylvaGIS İletişim Formu üzerinden yeni bir mesaj gönderildi.\n\n'
@@ -2998,7 +2976,8 @@ def build_result_image(data, for_export=False):
         # bir "güvenlik ağı" geçişi uyguluyoruz — ilk geçişte dolmayan
         # (çevresi de void olan) nadir pikseller ikinci, daha geniş
         # pencerede kesinlikle geçerli komşu bulur.
-        dem = dem.unmask(dem.focal_mean(radius=3, units='pixels'))
+        dem = dem.unmask(dem.focalMean(radius=150, units='meters'))
+        dem = dem.unmask(dem.focalMean(radius=450, units='meters'))
 
         terrain = ee.Terrain.products(dem)
         slope   = terrain.select('slope')
@@ -3477,7 +3456,8 @@ def build_result_image(data, for_export=False):
     # kalır (yanlışlıkla "bulut altı veri" uydurulmaz). İki aşamalı
     # (60 m + 200 m) geçiş, hem S2 (10 m) hem Landsat (30 m) çözünürlüğünde
     # tipik bulut-kenarı beneklerini kapatmaya yeter.
-    image = image.unmask(image.focal_mean(radius=2, units='pixels'))
+    image = image.unmask(image.focalMean(radius=60, units='meters'))
+    image = image.unmask(image.focalMean(radius=200, units='meters'))
 
     # 🛠️ BUG FİX (KÖK NEDEN — Landsat tabanlı TÜM indeksler yanlış
     # hesaplanıyordu): Landsat Collection 2 Level-2 (l89-l2, l7-l2,
@@ -5425,10 +5405,11 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-SYLVA_OWNER_EMAIL = CONTACT_RECEIVER_EMAIL
+SYLVA_OWNER_EMAIL = 'sylvagis.world@gmail.com'
 
 def _send_registration_email(ad, soyad, email, meslek, ulke):
-    smtp_user, smtp_pass = _smtp_credentials()
+    smtp_user = 'sylvagis.world@gmail.com'
+    smtp_pass = 'ksfnkvwcutrawcih'
 
     msg = MIMEMultipart('alternative')
     msg['Subject'] = f'[SylvaGIS] Yeni Kayıt — {ad} {soyad}'
