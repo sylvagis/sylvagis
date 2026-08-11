@@ -2074,6 +2074,42 @@ def build_rgb_collection(ds, roi, max_cloud):
     return col
 
 
+# 🛠️ BUG FİX (KÖK NEDEN — Tek sahne seçildiğinde AOI'nin bir kısmı
+# doldurulmuyordu): Kullanıcı Uydu Görüntüsü Galerisi'nden belirli bir
+# tarihe ait TEK bir sahne (scene_id) seçtiğinde, eskiden doğrudan
+# `col.filter(eq scene_id).first()` ile o TEK görüntü kullanılıyordu.
+# Ancak uydu sahneleri/tile'ları (Landsat WRS path/row şeridi ~185 km,
+# Sentinel-2 MGRS tile'ı ~110 km) sabit bir coğrafi ızgaraya göre kesilir;
+# çalışma alanı (AOI) iki komşu şerit/tile sınırına denk gelirse, seçilen
+# TEK sahne AOI'nin yalnızca bir kısmını kapsar — kalan kısımda hiç piksel
+# verisi olmadığı için harita o bölgede boş/temel harita olarak görünür
+# ("veri çalışma alanını tam doldurmuyor" şikayeti).
+#
+# ÇÖZÜM: Seçilen sahneyle AYNI GÜNE ait ve AOI'yi kesen TÜM diğer
+# sahneler (komşu path/row veya komşu MGRS tile) bulunur ve mozaiklenir.
+# ee.ImageCollection.mosaic() önceliği "sondan başa" uyguladığı için
+# (bkz. GEE dokümantasyonu: son eklenen görüntü en üstte/öncelikli olur),
+# seçilen sahne mozağa EN SONA eklenir — böylece kullanıcının seçtiği
+# görüntü öncelikli/değişmeden kalır, komşu sahneler yalnızca onun
+# kapsamadığı boşlukları doldurur. Aynı güne ait başka sahne yoksa (AOI
+# zaten tek sahne içinde tamamen kapsanıyorsa) sonuç, orijinal tek
+# görüntüyle birebir aynıdır.
+def _fill_scene_gaps_with_same_day_mosaic(col, selected_image, scene_id, roi):
+    try:
+        img_date = ee.Date(selected_image.get('system:time_start'))
+        day_start = ee.Date(img_date.format('yyyy-MM-dd'))
+        day_end = day_start.advance(1, 'day')
+        same_day_others = (col.filterDate(day_start, day_end)
+                               .filterBounds(roi)
+                               .filter(ee.Filter.neq('system:index', scene_id)))
+        merged = same_day_others.merge(ee.ImageCollection([selected_image]))
+        return merged.mosaic()
+    except Exception:
+        # Herhangi bir sorunda (ör. system:time_start eksik) güvenli
+        # şekilde orijinal tek görüntüye geri dön — davranış eskisiyle aynı kalır.
+        return selected_image
+
+
 _TR_MONTH_NAMES = {
     'ocak': 1, 'şubat': 2, 'subat': 2, 'mart': 3, 'nisan': 4, 'mayıs': 5,
     'mayis': 5, 'haziran': 6, 'temmuz': 7, 'ağustos': 8, 'agustos': 8,
@@ -3273,7 +3309,11 @@ def build_result_image(data, for_export=False):
         col = build_rgb_collection(ds, roi, max_cloud)
 
         if scene_id:
-            image = col.filter(ee.Filter.eq('system:index', scene_id)).first()
+            _selected_image = col.filter(ee.Filter.eq('system:index', scene_id)).first()
+            # 🛠️ AOI, seçilen tek sahnenin/tile'ın dışına taşıyorsa aynı
+            # güne ait komşu sahnelerle boşluk doldurulur (bkz. yukarıdaki
+            # _fill_scene_gaps_with_same_day_mosaic docstring'i).
+            image = _fill_scene_gaps_with_same_day_mosaic(col, _selected_image, scene_id, roi)
         else:
             image = col.filterDate(start_date, end_date).sort('system:time_start', False).first()
 
@@ -3419,8 +3459,17 @@ def build_result_image(data, for_export=False):
 
     # ── 2. Tarih filtresi veya belirli sahne ────────────────────
     if scene_id:
-        image = col.filter(ee.Filter.eq('system:index', scene_id)).first()
-        _crs_probe_img = image
+        _selected_image = col.filter(ee.Filter.eq('system:index', scene_id)).first()
+        # CRS'i her zaman KULLANICININ SEÇTİĞİ gerçek sahneden okuyoruz —
+        # boşluk doldurma için eklenen komşu sahne(ler) farklı bir UTM
+        # diliminde olabilir; bu, indirme/lejant CRS'ini yanlış saptırmasın.
+        _crs_probe_img = _selected_image
+        # 🛠️ AOI, seçilen tek sahnenin/tile'ın dışına taşıyorsa aynı güne
+        # ait komşu sahnelerle boşluk doldurulur (bkz. yukarıdaki
+        # _fill_scene_gaps_with_same_day_mosaic docstring'i). Bu adım
+        # cloud-masking'den (yukarıdaki col.map) SONRA çalıştığı için
+        # doldurma sahnelerinde de bulut/gölge pikselleri zaten maskelidir.
+        image = _fill_scene_gaps_with_same_day_mosaic(col, _selected_image, scene_id, roi)
     else:
         image = col.filterDate(start_date, end_date).median()
         # 🛠️ BUG FİX (KÖK NEDEN — CRS seçici HER ZAMAN "WGS 84" gösteriyordu):
