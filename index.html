@@ -6554,7 +6554,7 @@ tr.class-highlight-active {
                 var srcLayer = srcStore[key];
                 if (!srcLayer || !srcLayer._url) return;
                 var clone = L.tileLayer(srcLayer._url, {
-                    opacity: 1, zIndex: (key === srcTopKey ? 20 : 10), crossOrigin: true, pane: 'geeAnalysisPane',
+                    opacity: 0, zIndex: (key === srcTopKey ? 20 : 10), crossOrigin: true, pane: 'geeAnalysisPane',
                     // 🛠️ DÜZELTME (Zoom'da Veri Kaybolması): bkz. _sylvaReplaceGeeLayer — maxNativeZoom
                     // artık 16'da tutuluyor, GEE sunucusunun derin zoom'da hesaplanmış
                     // karoları güvenilir üretemediği durumlarda veri kaybolmasın diye.
@@ -6571,7 +6571,7 @@ tr.class-highlight-active {
 
                 if (srcVisible) {
                     clone.addTo(map2);
-                    _sylvaSetLayerOpacity(clone, srcOpacity);
+                    _sylvaRevealGeeLayerWhenLoaded(clone, srcOpacity);
                 }
 
                 // 🆕 Katmana ÖZEL lejant/bilgi kutusu/galeri verisi de Ekran 2'nin
@@ -6944,7 +6944,7 @@ tr.class-highlight-active {
                 var mirrorKey = explicitLayerKey || ((window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[srcKey]) || 'mirrored');
 
                 var clone = L.tileLayer(effectiveUrl, {
-                    opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane',
+                    opacity: 0, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane',
                     // 🛠️ DÜZELTME (Zoom'da Veri Kaybolması): bkz. _sylvaReplaceGeeLayer — maxNativeZoom
                     // artık 16'da tutuluyor, GEE sunucusunun derin zoom'da hesaplanmış
                     // karoları güvenilir üretemediği durumlarda veri kaybolmasın diye.
@@ -7019,7 +7019,7 @@ tr.class-highlight-active {
                     clone.addTo(dstMap);
                 }
                 try { if (typeof clone.setZIndex === 'function') clone.setZIndex(isTop ? 20 : 10); } catch (eZ) {}
-                _sylvaSetLayerOpacity(clone, dataState.dataEnabled === false ? 0 : dataState.dataOpacity);
+                _sylvaRevealGeeLayerWhenLoaded(clone, dataState.dataEnabled === false ? 0 : dataState.dataOpacity);
 
                 if (isTop) {
                     var oldDst = dstId === 'map2' ? window._geeLayer2 : (typeof _geeLayer !== 'undefined' ? _geeLayer : null);
@@ -12090,6 +12090,36 @@ function selectRamp(name) {
         function _sylvaCurrentGeeLayer(paneId) {
             return (paneId === 'map2') ? (window._geeLayer2 || null) : (typeof _geeLayer !== 'undefined' ? _geeLayer : null);
         }
+        // 🛠️ DÜZELTME (Karo Karo/Kesik Kesik Yükleme Görünümü): NDVI/NDWI/LST
+        // gibi analiz katmanları GEE sunucusunda anlık hesaplanan yüzlerce
+        // küçük karo (256×256) halinde geliyor; katman eklenir eklenmez tam
+        // opaklıkla gösterildiği için henüz gelmemiş karoların olduğu alanlar
+        // boş/eksik görünüyor, kullanıcıya "parça parça doluyor" hissi
+        // veriyordu. Artık katman ekrana 0 opaklıkla eklenip GİZLİ tutuluyor;
+        // o an ekranda görünmesi gereken TÜM karolar yüklenip Leaflet'in
+        // 'load' olayı tetiklendiğinde katman tek seferde (kısa bir
+        // yumuşak geçişle) tam opaklığa getiriliyor — böylece kullanıcı
+        // artık kesik kesik değil, "anında bütün alana gelmiş" tamamlanmış
+        // hâli görüyor. Ağ/tarayıcı koşulları yüzünden 'load' hiç
+        // tetiklenmezse (çok nadir) katman süresiz gizli kalmasın diye 6
+        // saniyelik bir emniyet zaman aşımı da devrede.
+        function _sylvaRevealGeeLayerWhenLoaded(layer, targetOpacity) {
+            if (!layer) return;
+            var opacity = (targetOpacity === undefined || targetOpacity === null) ? 1 : targetOpacity;
+            var revealed = false;
+            function reveal() {
+                if (revealed) return;
+                revealed = true;
+                try {
+                    var container = layer.getContainer && layer.getContainer();
+                    if (container) container.style.transition = 'opacity 220ms ease-out';
+                } catch (e) {}
+                try { layer.setOpacity(opacity); } catch (e) {}
+            }
+            try { layer.once('load', reveal); } catch (e) {}
+            setTimeout(reveal, 6000);
+        }
+
         function _sylvaReplaceGeeLayer(paneId, tileUrl, options) {
             var targetMap = _sylvaTargetMap(paneId);
             // 🛠️ DÜZELTME (Zoom'da Veri Kaybolması): GEE analiz katmanları
@@ -12115,6 +12145,8 @@ function selectRamp(name) {
             // zoom yapsa bile veri ARTIK HİÇBİR ZAMAN sunucu hatası yüzünden
             // kaybolmaz; sadece çok aşırı yakınlaşmada hafif bulanıklaşır.
             var opts = Object.assign({ opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane', maxZoom: 24, maxNativeZoom: 16 }, options || {});
+            var _rgTargetOpacity = opts.opacity;
+            opts.opacity = 0; // tüm karolar hazır olana kadar gizli; bkz. _sylvaRevealGeeLayerWhenLoaded
             var _rgKey = (paneId === 'map2') ? 'map2' : 'map';
             // 🛠️ BUG FİX: Sınıflandırma/Stretched/Sahne değişimi bu fonksiyonu
             // çağırarak katmanı yeniden boyanmış haliyle değiştiriyordu, ama
@@ -12132,6 +12164,7 @@ function selectRamp(name) {
             if (paneId === 'map2') {
                 if (window._geeLayer2) { try { map2.removeLayer(window._geeLayer2); } catch (e) {} window._geeLayer2 = null; }
                 window._geeLayer2 = L.tileLayer(tileUrl, opts).addTo(targetMap);
+                _sylvaRevealGeeLayerWhenLoaded(window._geeLayer2, _rgTargetOpacity);
                 if (_rgTopKey && window._geeLayersByPane && window._geeLayersByPane[_rgKey]) {
                     window._geeLayersByPane[_rgKey][_rgTopKey] = window._geeLayer2;
                 }
@@ -12139,6 +12172,7 @@ function selectRamp(name) {
             }
             if (typeof _geeLayer !== 'undefined' && _geeLayer) { try { map.removeLayer(_geeLayer); } catch (e) {} _geeLayer = null; }
             _geeLayer = L.tileLayer(tileUrl, opts).addTo(targetMap);
+            _sylvaRevealGeeLayerWhenLoaded(_geeLayer, _rgTargetOpacity);
             if (_rgTopKey && window._geeLayersByPane && window._geeLayersByPane[_rgKey]) {
                 window._geeLayersByPane[_rgKey][_rgTopKey] = _geeLayer;
             }
@@ -12285,9 +12319,12 @@ function selectRamp(name) {
             // içindeki açıklama — aynı maxZoom/maxNativeZoom eksikliği burada
             // eklenen katmanlar için de geçerliydi.
             var opts = Object.assign({ opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane', maxZoom: 24, maxNativeZoom: 16 }, options || {});
+            var _agTargetOpacity = opts.opacity;
+            opts.opacity = 0; // tüm karolar hazır olana kadar gizli; bkz. _sylvaRevealGeeLayerWhenLoaded
             var store = window._geeLayersByPane[(paneId === 'map2') ? 'map2' : 'map'];
             if (store[layerKey]) { try { targetMap.removeLayer(store[layerKey]); } catch (e) {} delete store[layerKey]; }
             var layer = L.tileLayer(tileUrl, opts).addTo(targetMap);
+            _sylvaRevealGeeLayerWhenLoaded(layer, _agTargetOpacity);
             store[layerKey] = layer;
             if (paneId === 'map2') { window._geeLayer2 = layer; } else { _geeLayer = layer; }
 
@@ -17861,7 +17898,8 @@ function selectRamp(name) {
                 }
                 var _oldLayer = window._classHighlightLayerByPane[_pane];
                 if (_oldLayer) { try { _sylvaTargetMap(_pane).removeLayer(_oldLayer); } catch (e) {} }
-                window._classHighlightLayerByPane[_pane] = L.tileLayer(data.tileUrl, { opacity: 0.95, zIndex: 20, crossOrigin: true, pane: 'geeAnalysisPane', maxZoom: 24, maxNativeZoom: 16 }).addTo(_sylvaTargetMap(_pane));
+                window._classHighlightLayerByPane[_pane] = L.tileLayer(data.tileUrl, { opacity: 0, zIndex: 20, crossOrigin: true, pane: 'geeAnalysisPane', maxZoom: 24, maxNativeZoom: 16 }).addTo(_sylvaTargetMap(_pane));
+                _sylvaRevealGeeLayerWhenLoaded(window._classHighlightLayerByPane[_pane], 0.95);
             })
             .catch(function (err) {
                 if (window._classHighlightIndexByPane[_pane] === idx) window._classHighlightIndexByPane[_pane] = null;
