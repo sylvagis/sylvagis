@@ -15305,8 +15305,24 @@ function selectRamp(name) {
                 + '<table style="border-collapse:collapse;width:100%;table-layout:fixed;"><tbody>' + rows + '</tbody></table>'
                 + '<div style="margin-top:5px;font-size:0.65rem;color:#94a3b8;border-top:1px solid #bae6fd;padding-top:4px;">' + t('ib_no_timeseries') + '</div>';
 
+            // 🛠️ BUG FİX (İlk analizde Bilgi Kutusu pasif/gizli kalıyordu):
+            // Bu fonksiyon eskiden kutunun görünürlüğünü checkbox'ın O ANKİ
+            // (henüz hiç etkinleştirilmemiş, disabled+unchecked) durumuna göre
+            // belirliyordu — bu yüzden ilk analizde kutu dolu olsa bile
+            // checkbox hâlâ pasif olduğundan kutu gizli kalıyordu. Galeri/RGB
+            // bilgi kartıyla (renderRgbLegend) birebir aynı mantığa geçildi:
+            // içerik varsa VE bu, hedef ekranın (paneId) o an aktif ekran
+            // olduğu durumdaysa checkbox doğrudan etkinleştirilip işaretlenir,
+            // ardından kutu buna göre gösterilir.
             var cb = document.getElementById('toggle-info-box');
-            box.style.display = (cb && cb.checked) ? 'block' : 'none';
+            var wrap = document.getElementById('info-box-toggle-wrap');
+            var isActivePaneForInfo = paneId === ((typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map');
+            if (cb && isActivePaneForInfo) {
+                cb.disabled = false;
+                cb.checked = true;
+                if (wrap) wrap.style.opacity = '1';
+            }
+            box.style.display = (!cb || cb.checked) ? 'block' : 'none';
 
             if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[paneId]) {
                 window._sylvaLegendInfoByPane[paneId].infoHTML = box.innerHTML;
@@ -15356,6 +15372,23 @@ function selectRamp(name) {
             'Sentinel-1 GRD (IW VV)':        { VV: 'VV' }
         };
 
+        // 🆕 Bilgi Kutusu'na eklenen "Çözünürlük" satırı için sensöre göre
+        // yer çözünürlüğü (metre). Sentinel-2 için görünür/NIR bantlar 10 m
+        // temel alınır (SWIR bantları 20 m'dir, ancak kutuda tek bir özet
+        // değer gösterilir); Landsat MSS hariç diğer Landsat serileri 30 m.
+        var _SENSOR_RESOLUTION = {
+            'Sentinel-2 L1C (TOA)':          '10',
+            'Sentinel-2 L2A (BOA)':          '10',
+            'Landsat 8-9 OLI/TIRS (C2 L2)':  '30',
+            'Landsat 7 ETM+ (C2 L2)':        '30',
+            'Landsat 4-5 TM (C2 L2)':        '30',
+            'Landsat 8-9 OLI/TIRS (C2 L1)':  '30',
+            'Landsat 7 ETM+ (C2 L1)':        '30',
+            'Landsat 4-5 TM (C2 L1)':        '30',
+            'Landsat 1-5 MSS (C2 L1)':       '60',
+            'Sentinel-1 GRD (IW VV)':        '10'
+        };
+
         // Uydu analizi (NDVI/NDWI/... — statik olmayan) sonucu için Bilgi
         // Kutusu'na formül + kullanılan bantlar + sensör bilgisini yazar.
         // Zaman serisi sahneleri de (aynı analiz adıyla) bu fonksiyonu kullanır,
@@ -15397,6 +15430,12 @@ function selectRamp(name) {
                         + '<td style="padding:2px 0;color:#1e293b;font-size:0.69rem;word-break:break-word;">' + escapeHtml(sensorLabel) + '</td>'
                         + '</tr>')
                     : '')
+                + (sensorLabel && _SENSOR_RESOLUTION[sensorLabel]
+                    ? ('<tr>'
+                        + '<td style="padding:2px 5px 2px 0;color:#64748b;font-size:0.69rem;white-space:nowrap;font-weight:600;vertical-align:top;">📐 ' + escapeHtml(t('lbl_resolution', 'Çözünürlük (m)')) + '</td>'
+                        + '<td style="padding:2px 0;color:#1e293b;font-size:0.69rem;word-break:break-word;">' + escapeHtml(_SENSOR_RESOLUTION[sensorLabel]) + ' m</td>'
+                        + '</tr>')
+                    : '')
                 + (info.desc
                     ? ('<tr>'
                         + '<td style="padding:2px 5px 2px 0;color:#64748b;font-size:0.69rem;white-space:nowrap;font-weight:600;vertical-align:top;">ℹ️ Açıklama</td>'
@@ -15408,8 +15447,25 @@ function selectRamp(name) {
                 '<div style="font-size:0.77rem;font-weight:700;color:#0369a1;margin-bottom:5px;">' + info.title + '</div>'
                 + '<table style="border-collapse:collapse;width:100%;table-layout:fixed;"><tbody>' + rows + '</tbody></table>';
 
+            // 🛠️ BUG FİX (İlk analizde Bilgi Kutusu pasif/gizli kalıyordu):
+            // Eskiden kutunun görünürlüğü checkbox'ın henüz hiç etkinleştirilmemiş
+            // (disabled+unchecked) O ANKİ durumuna göre belirleniyordu — bu yüzden
+            // ilk çalıştırılan analizde kart tamamen dolu üretilmesine rağmen
+            // checkbox pasif kaldığından kutu ekranda hiç görünmüyordu; ancak
+            // başka bir analize/tarihe geçilip _sylvaRenderIndexAnalysisResult
+            // içindeki ayrı bir "zorla etkinleştir" bloğu devreye girince ortaya
+            // çıkıyordu. Artık RGB bilgi kartıyla (renderRgbLegend) aynı desen
+            // kullanılıyor: hedef ekran (paneId) o an aktif ekransa, checkbox
+            // doğrudan burada etkinleştirilip işaretlenir, kutu buna göre gösterilir.
             var cb = document.getElementById('toggle-info-box');
-            box.style.display = (cb && cb.checked) ? 'block' : 'none';
+            var wrap = document.getElementById('info-box-toggle-wrap');
+            var isActivePaneForInfo = paneId === ((typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map');
+            if (cb && isActivePaneForInfo) {
+                cb.disabled = false;
+                cb.checked = true;
+                if (wrap) wrap.style.opacity = '1';
+            }
+            box.style.display = (!cb || cb.checked) ? 'block' : 'none';
 
             if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[paneId]) {
                 window._sylvaLegendInfoByPane[paneId].infoHTML = box.innerHTML;
