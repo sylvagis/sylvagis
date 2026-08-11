@@ -15912,6 +15912,16 @@ function selectRamp(name) {
                 if (legendBox) { legendBox.innerHTML = ''; legendBox.style.display = 'none'; }
             }
             if (typeof window.sylvaMirrorLegendInfoToMap2 === 'function') window.sylvaMirrorLegendInfoToMap2();
+
+            // 🆕 Bu ekranın RGB galerisi sıfırlanınca, kaydırıcı hâlâ o galeriye
+            // (bu pane'e) aitse alt Zaman Kaydırıcısı da gizlenir ve durumu temizlenir.
+            if (window._tsSliderMode === 'rgb' && window._tsSliderPane === paneId) {
+                var _sliderBarReset = document.getElementById('sylva-time-slider-bar');
+                if (_sliderBarReset) _sliderBarReset.style.display = 'none';
+                window._tsSliderMode = null;
+                window._tsSliderSceneIds = [];
+                window._tsSliderDates = [];
+            }
         }
 
         // 🛰️ Uydu Görüntüsü galerisi için hangi tarih/ay/bulutluluk kriterinin
@@ -15999,7 +16009,16 @@ function selectRamp(name) {
                 // Geciken yanıt: kullanıcı yeni bir analiz başlattıysa bu yanıtı yoksay
                 if (_analysisGeneration !== _rgbGen) return;
                 if (!data.success) {
-                    showNoDataModal(_TOAST_NO_DATA_MSG, meta.datasetLabel || meta.datasetKey || '');
+                    // 🛠️ BUG FİX (KÖK NEDEN): Sunucu tarafında GERÇEK bir hata oluşsa
+                    // bile (ör. geometri/kota/bağlantı hatası — "veri yok" ile
+                    // İLGİSİZ) kullanıcıya her zaman aynı genel "veri bulunamadı"
+                    // mesajı gösteriliyordu. Bu da galeri thumbnail'leri zaten
+                    // ekranda dururken bile kafa karıştırıcı bir "Uyarı" penceresi
+                    // çıkmasına yol açıyordu. Artık sunucudan gelen GERÇEK hata
+                    // metni varsa doğrudan gösterilir; yalnızca sunucu gerçekten
+                    // "success:false, error yok" ya da sahne bulamadıysa genel
+                    // mesaj kullanılır.
+                    showNoDataModal(data.error || _TOAST_NO_DATA_MSG, meta.datasetLabel || meta.datasetKey || '');
                     return;
                 }
                 if (!data.scenes || !data.scenes.length) {
@@ -16028,6 +16047,43 @@ function selectRamp(name) {
                 var first = _sortedRgbScenes(paneId, _rgbStateKey)[0];
                 if (first) loadRgbScene(first.sceneId, first.meta || meta, first.dataset || data.dataset, paneId, true, mirrorThisRun, stackKey, friendlyLabel, first);
                 _ensureDefaultVisibility();
+
+                // 🆕 Alt Zaman Kaydırıcısı (Time Slider) — Uydu Görüntüsü galerisi
+                // için de 🌍 Uydu Analizleri'ndeki Zaman Serisi ile BİREBİR aynı
+                // alt kaydırıcı çubuğu (#sylva-time-slider-bar) kullanılır. Yalnızca
+                // "Zaman Serisi ve Galeri Filtreleri" periyodu (Aylık/Yıllık) seçiliyken
+                // ve birden fazla gerçek sahne varken gösterilir; galeri sadece
+                // normal (tek tarih aralığı) modundaysa kaydırıcı gizli kalır.
+                var _tsPeriodOn = (typeof _sylvaSatTsPeriodSelected === 'function') && _sylvaSatTsPeriodSelected();
+                var _sliderBar  = document.getElementById('sylva-time-slider-bar');
+                var _sliderEl   = document.getElementById('sylva-time-slider');
+                var _sliderLbl  = document.getElementById('ts-date-label');
+                if (_tsPeriodOn && _sliderBar && _sliderEl && _gState.scenes.length > 1) {
+                    // Kaydırıcı, en eski → en yeni doğal zaman akışında ilerler
+                    // (galeri kartlarının kendisi hâlâ "en güncel önce" sıralı kalır).
+                    var _chrono = _gState.scenes.slice().sort(function(a, b) { return (a.timestamp || 0) - (b.timestamp || 0); });
+                    window._tsSliderMode          = 'rgb';
+                    window._tsSliderSceneIds      = _chrono.map(function(s) { return s.sceneId; });
+                    window._tsSliderDates         = _chrono.map(function(s) { return s.acquisitionDate || _rgbGallerySceneDate(s); });
+                    window._tsSliderPane          = paneId;
+                    window._tsSliderRgbStateKey   = _rgbStateKey;
+                    window._tsSliderRgbMeta       = meta;
+                    window._tsSliderRgbDsInfo     = data.dataset;
+                    window._tsSliderRgbStackKey   = stackKey;
+                    window._tsSliderRgbFriendlyLabel = friendlyLabel;
+                    // En güncel sahne zaten haritaya yüklendiği için kaydırıcı da
+                    // listenin SON (en yeni) karesinde başlar.
+                    var _lastIdx = window._tsSliderSceneIds.length - 1;
+                    _sliderEl.max   = _lastIdx;
+                    _sliderEl.value = _lastIdx;
+                    if (_sliderLbl) _sliderLbl.textContent = window._tsSliderDates[_lastIdx] || '—';
+                    _sliderBar.style.display = 'block';
+                } else if (_sliderBar && window._tsSliderMode === 'rgb') {
+                    // Zaman Serisi kapatıldıysa veya tek sahne varsa, önceki RGB
+                    // kaydırıcı durumunu temizleyip çubuğu gizle.
+                    _sliderBar.style.display = 'none';
+                    window._tsSliderMode = null;
+                }
             })
             .catch(function(err) {
                 if (runBtn) { runBtn.disabled = false; runBtn.textContent = t('run_analysis'); }
@@ -16151,7 +16207,15 @@ function selectRamp(name) {
         // AOI'ye odaklar ve dinamik bilgi kutusu/lejantı + Görüntü Bilgileri
         // panelini günceller. paneId verilmezse aktif ekran kullanılır — bu
         // sayede aynı akış Ekran 1 ve Ekran 2'de birebir aynı şekilde çalışır.
-        function loadRgbScene(sceneId, meta, dsInfo, paneId, _isInitialRun, _mirrorThisRun, stackKey, friendlyLabel, selectedScene) {
+        function loadRgbScene(sceneId, meta, dsInfo, paneId, _isInitialRun, _mirrorThisRun, stackKey, friendlyLabel, selectedScene, opts) {
+            // 🆕 opts.silent / opts.onDone — Zaman kaydırıcısının (ve "▶" video
+            // oynatımının) Uydu Görüntüsü (RGB) galerisindeki GERÇEK sahneler
+            // arasında da loadSpecificScene ile BİREBİR aynı mekanizmayla
+            // (sessiz yükleme + karo tam hazır olunca callback) geçiş yapabilmesi
+            // için eklendi. Var olan tüm çağrılar opts olmadan çalışmaya devam eder.
+            opts = opts || {};
+            var _rgbSilent = !!opts.silent;
+            var _rgbOnDone = (typeof opts.onDone === 'function') ? opts.onDone : null;
             paneId = (paneId === 'map2') ? 'map2' : 'map';
             meta = meta || {};
             var _gStateLookupKey = stackKey || meta.datasetKey;
@@ -16202,7 +16266,7 @@ function selectRamp(name) {
             if (!_roi) return;
             var _rgbClipMode = viewModeEl ? viewModeEl.value : 'clip';
 
-            showSylvaLoading();
+            if (!_rgbSilent) showSylvaLoading();
 
             fetch(API_BASE + '/api/analyze', {
                 method: 'POST',
@@ -16224,8 +16288,18 @@ function selectRamp(name) {
             })
             .then(function(r) { return r.json(); })
             .then(function(data) {
-                if (!_rgbRequestIsCurrent()) { hideSylvaLoading(); return; }
-                if (!data.success) { hideSylvaLoading(); showNoDataModal(_TOAST_NO_DATA_MSG, meta.datasetLabel || meta.datasetKey || ''); return; }
+                if (!_rgbRequestIsCurrent()) { if (!_rgbSilent) hideSylvaLoading(); if (_rgbOnDone) _rgbOnDone(); return; }
+                if (!data.success) {
+                    if (!_rgbSilent) {
+                        hideSylvaLoading();
+                        // 🛠️ BUG FİX: Sunucudan dönen GERÇEK hata (ör. geometri/kota/
+                        // bağlantı hatası) artık her zaman "veri bulunamadı" genel
+                        // mesajının ARDINDA gizlenmiyor — varsa doğrudan gösterilir.
+                        showNoDataModal(data.error || _TOAST_NO_DATA_MSG, meta.datasetLabel || meta.datasetKey || '');
+                    }
+                    if (_rgbOnDone) _rgbOnDone();
+                    return;
+                }
                 if (data.nativeCrs || (data.meta && data.meta.crs)) {
                     window._lastAnalyzeNativeCrs = data.nativeCrs || data.meta.crs;
                 }
@@ -16304,7 +16378,7 @@ function selectRamp(name) {
                 // Böylece eski yanıt veya eski analiz yeni görüntüyü ezemez.
                 var _rgbTileLayer = _sylvaCurrentGeeLayer(paneId);
                 _waitForRgbTileReady(_rgbTileLayer, function () {
-                    if (!_rgbRequestIsCurrent()) { hideSylvaLoading(); return; }
+                    if (!_rgbRequestIsCurrent()) { if (!_rgbSilent) hideSylvaLoading(); if (_rgbOnDone) _rgbOnDone(); return; }
                     var _topNow = (window._sylvaTopGeeLayerByPane[paneId] === _layerKey);
                     var _responseMeta = Object.assign({}, data.meta || {}, {
                         // Kartın sceneId'si RGB görünümünün kanonik kimliğidir.
@@ -16326,18 +16400,25 @@ function selectRamp(name) {
                             onRawBandsSceneSelected(sceneId, meta, dsInfo, _responseMeta);
                         }
                     }
-                    hideSylvaLoading();
                     if (_isInitialRun && _mirrorThisRun && window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') {
                         window._sylvaMirrorDataLayer({ force: true, srcId: paneId, layerKey: _layerKey, tileUrl: data.tileUrl, isTop: _topNow });
                     }
                     _ensureDefaultVisibility();
+                    if (!_rgbSilent) hideSylvaLoading();
+                    if (_rgbOnDone) _rgbOnDone();
                 }, function () {
-                    if (!_rgbRequestIsCurrent()) { hideSylvaLoading(); return; }
-                    hideSylvaLoading();
-                    showAnalysisToast('Uydu görüntüsü karoları yüklenemedi.', 'error');
+                    if (!_rgbRequestIsCurrent()) { if (!_rgbSilent) hideSylvaLoading(); if (_rgbOnDone) _rgbOnDone(); return; }
+                    if (!_rgbSilent) {
+                        hideSylvaLoading();
+                        showAnalysisToast('Uydu görüntüsü karoları yüklenemedi.', 'error');
+                    }
+                    if (_rgbOnDone) _rgbOnDone();
                 });
             })
-            .catch(function(err) { hideSylvaLoading(); showAnalysisToast('Görüntü yüklenemedi: ' + err.message, 'error'); });
+            .catch(function(err) {
+                if (!_rgbSilent) { hideSylvaLoading(); showAnalysisToast('Görüntü yüklenemedi: ' + err.message, 'error'); }
+                if (_rgbOnDone) _rgbOnDone();
+            });
         }
 
         // Dinamik bilgi kutusu / lejant: sınıflandırılmış bir lejant yerine,
@@ -48144,6 +48225,7 @@ function runTimeSeriesAnalysis() {
             // onTimeSliderChange().
             window._tsSliderSceneIds = data.gallery.map(function(g) { return g.sceneId; });
             window._tsSliderPane = _pane;
+            window._tsSliderMode = 'analysis';
         }
 
         // Time Slider — gerçek periyot etiketleri (2015-03, 2015-04, ... veya 2015, 2016, ...)
@@ -48196,7 +48278,30 @@ function onTimeSliderChange(val, onSceneReady) {
     // 🎬 Oynatma sırasında (_tsPlaying) yükleme ekranı sessize alınır —
     // her karede yanıp sönen "SylvaGIS" overlay'i akıcı video hissini
     // bozuyordu. Elle sürüklemede overlay eskisi gibi görünür.
-    loadSpecificScene(sceneId, pane, { silent: _tsPlaying, onDone: onSceneReady });
+
+    // 🆕 Kaydırıcı hem 🌍 Uydu Analizleri'ndeki (indeks) Zaman Serisi hem de
+    // 🛰️ Uydu Görüntüsü galerisindeki Zaman Serisi tarafından paylaşılıyor.
+    // window._tsSliderMode hangi akışın aktif olduğunu belirler — 'rgb' ise
+    // gerçek RGB sahnesi loadRgbScene ile, aksi halde (indeks analizleri)
+    // loadSpecificScene ile yüklenir. Böylece "Uydu Görüntüsü" galerisi de
+    // "Uydu Analizleri" Zaman Serisi ile BİREBİR aynı video/kaydırıcı
+    // mekanizmasını kullanır.
+    if (window._tsSliderMode === 'rgb') {
+        loadRgbScene(
+            sceneId,
+            window._tsSliderRgbMeta || {},
+            window._tsSliderRgbDsInfo || null,
+            pane,
+            false,
+            false,
+            window._tsSliderRgbStackKey,
+            window._tsSliderRgbFriendlyLabel,
+            null,
+            { silent: _tsPlaying, onDone: onSceneReady }
+        );
+    } else {
+        loadSpecificScene(sceneId, pane, { silent: _tsPlaying, onDone: onSceneReady });
+    }
 
     // Galeri kartındaki "active" vurgusunu kaydırıcı ile senkron tut
     var galleryEl = (typeof _sylvaGalleryEl === 'function') ? _sylvaGalleryEl(pane) : null;
