@@ -1017,6 +1017,44 @@ tr.class-highlight-active {
              height: 0;
              border-top: 3px solid var(--sylva-contour-color, #1e3a8a);
          }
+         /* 🆕 Gerçek vektör eş yükselti çizgileri: normal durumda ince/düz
+            çizgi, tıklanınca sarı ve kalın "parlayan" vurgu + rakım etiketi.
+            (bkz. _sylvaLoadContourVectorLayer) */
+         .sylva-contour-vector-path { cursor: pointer; transition: none; }
+         /* 🆕 KALICI rakım etiketi — her eş yükselti çizgisinin üzerinde her
+            zaman görünür (topografik harita mantığı). Kutu/arka plan yok;
+            zemin ne renk olursa olsun okunsun diye metnin çevresine beyaz
+            "hale" (text-shadow) uygulanır. Tıklamayı engellememesi için
+            pointer-events kapalı — kullanıcı etiketin altındaki çizgiye
+            sorunsuz tıklayabilir. */
+         .sylva-contour-label {
+             background: transparent !important;
+             border: none !important;
+             box-shadow: none !important;
+             padding: 0 !important;
+             margin: 0 !important;
+             color: #1e293b;
+             font-size: 0.66rem !important;
+             font-weight: 700 !important;
+             font-family: inherit;
+             text-shadow: -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff,
+                          1px 1px 0 #fff, 0 0 3px #fff, 0 0 3px #fff;
+             pointer-events: none !important;
+             white-space: nowrap;
+         }
+         .sylva-contour-label::before { display: none !important; }
+         /* Tıklanan çizginin etiketi: sarı rozet haline döner (vurgu). */
+         .sylva-contour-label-active {
+             background: rgba(17, 24, 39, 0.92) !important;
+             color: #fef9c3 !important;
+             border: 1px solid #facc15 !important;
+             border-radius: 4px !important;
+             padding: 2px 6px !important;
+             font-size: 0.76rem !important;
+             text-shadow: none !important;
+             box-shadow: 0 2px 6px rgba(0,0,0,0.35) !important;
+             z-index: 10000 !important;
+         }
         .map-top-left-infobox { position: absolute; top: 86px; left: 15px; right: 15px; z-index: 520; pointer-events: none; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
 
         /* ── Konum Arama (Geocoding) — yan kontrol grubunun en altında ── */
@@ -4168,6 +4206,23 @@ tr.class-highlight-active {
                             palette: [val]
                         });
                         window._lastAnalyzePayloadByPane[pane] = _payload;
+
+                        // 🆕 Ekranda görünen artık gerçek VEKTÖR çizgiler olduğu
+                        // için, renk değişiminde ağır bir GEE yeniden hesaplaması/
+                        // yeni karo beklemek yerine mevcut vektör katmanı YERİNDE
+                        // (anlık, ağ isteği olmadan) yeniden renklendirilir.
+                        var _cvKey = (pane === 'map2') ? 'map2' : 'map';
+                        var _cvStore = window._sylvaContourVectorByPane && window._sylvaContourVectorByPane[_cvKey];
+                        if (_cvStore) {
+                            Object.keys(_cvStore).forEach(function (lk) {
+                                try { _cvStore[lk].setStyle({ color: val }); } catch (e) {}
+                            });
+                        }
+
+                        // Sunucudaki "son analiz" kaydını (GeoTIFF indirme vb. için)
+                        // güncel tutmak amacıyla raster karo arka planda GÖRÜNMEZ
+                        // (opacity 0) olarak yeniden hesaplanır — ekranda bir
+                        // değişiklik yaratmaz, vektör çizgiler tek görünen kalır.
                         fetch(API_BASE + '/api/analyze', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
@@ -4177,7 +4232,7 @@ tr.class-highlight-active {
                         .then(function (data) {
                             if (!data.success) return;
                             if (typeof _sylvaReplaceGeeLayer === 'function') {
-                                _sylvaReplaceGeeLayer(pane, data.tileUrl, { opacity: 1 });
+                                _sylvaReplaceGeeLayer(pane, data.tileUrl, { opacity: 0 });
                             }
                         })
                         .catch(function () {});
@@ -11876,6 +11931,118 @@ function selectRamp(name) {
             return _geeLayer;
         }
 
+        // ════════════════════════════════════════════════════════════════
+        // 📏 GERÇEK VEKTÖR EŞ YÜKSELTİ (KONTUR) KATMANI
+        // ════════════════════════════════════════════════════════════════
+        // Eskiden TOPO_CONTOUR yalnızca bir GEE raster karosu (siyah/beyaz
+        // maske görüntüsü) olarak çiziliyordu — piksel kenarlarını takip
+        // ettiği için "merdiven basamağı" gibi kesik görünüyordu ve tek bir
+        // çizgiye tıklamak/vurgulamak mümkün değildi (tek bir görüntü,
+        // ayrı objeler değil).
+        //
+        // ÇÖZÜM: Sunucudan (/api/topo-contour-vector) her biri "elevation"
+        // (rakım, m) özelliği taşıyan GERÇEK GeoJSON LineString nesneleri
+        // istenir ve Leaflet'in vektör çizim motoruyla (L.geoJSON) normal,
+        // akıcı/düz çizgiler olarak çizilir. Bu sayede:
+        //   • Çizgiler artık düz vektör (raster değil)
+        //   • Bir çizgiye tıklanınca o çizgi sarı renkte "parlar" (vurgu)
+        //   • Tıklanan çizginin üzerinde rakım (m) etiketi belirir
+        // Orijinal raster katmanı (data.tileUrl) haritada GİZLİ (opacity 0)
+        // olarak tutulur — böylece "Katman Geçiş" kutusu, mirror/dual-screen
+        // ve lejant/istatistik mantığı hiç bozulmadan aynen çalışmaya devam
+        // eder; kullanıcı yalnızca üstteki vektör çizgileri GÖRÜR.
+        window._sylvaContourVectorByPane = window._sylvaContourVectorByPane || { map: {}, map2: {} };
+
+        function _sylvaClearContourVectorLayer(paneId, layerKey) {
+            var key = (paneId === 'map2') ? 'map2' : 'map';
+            var store = window._sylvaContourVectorByPane[key];
+            if (store && store[layerKey]) {
+                try { _sylvaTargetMap(paneId).removeLayer(store[layerKey]); } catch (e) {}
+                delete store[layerKey];
+            }
+        }
+
+        function _sylvaClearAllContourVectorLayers(paneId) {
+            var key = (paneId === 'map2') ? 'map2' : 'map';
+            var store = window._sylvaContourVectorByPane[key] || {};
+            Object.keys(store).forEach(function (k) { _sylvaClearContourVectorLayer(paneId, k); });
+            window._sylvaContourVectorByPane[key] = {};
+        }
+        window._sylvaClearAllContourVectorLayers = _sylvaClearAllContourVectorLayers;
+
+        function _sylvaLoadContourVectorLayer(paneId, layerKey, payload) {
+            var targetMap = _sylvaTargetMap(paneId);
+            var lineColor = (payload && payload.contourLineColor) || window._sylvaContourLineColor || '#1e3a8a';
+            var HILITE_COLOR = '#ffd400'; // sarı — kullanıcı isteği: tıklanınca sarı "parlama"
+
+            fetch(API_BASE + '/api/topo-contour-vector', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (!data || !data.success) {
+                    console.warn('[SylvaGIS] Vektör kontur üretilemedi:', data && data.error);
+                    return;
+                }
+                _sylvaClearContourVectorLayer(paneId, layerKey);
+
+                var baseStyle  = { color: lineColor, weight: 1.6, opacity: 0.95, className: 'sylva-contour-vector-path' };
+                var hiliteStyle = { color: HILITE_COLOR, weight: 4, opacity: 1 };
+                var activeLayer = null;
+
+                // 🆕 Etiket artık KALICI (permanent) — her çizginin rakımı her
+                // zaman görünür, topografik haritalardaki gibi. Tıklama sadece
+                // ilgili etiketi/çizgiyi sarı "aktif" rozete çevirir; etiket
+                // tıklama olmadan da zaten oradadır, kaybolmaz.
+                function _resetActive() {
+                    if (activeLayer) {
+                        try { activeLayer.setStyle(baseStyle); } catch (e) {}
+                        var _tt = activeLayer.getTooltip && activeLayer.getTooltip();
+                        if (_tt && _tt._container) _tt._container.classList.remove('sylva-contour-label-active');
+                        activeLayer = null;
+                    }
+                }
+
+                var geoLayer = L.geoJSON(data, {
+                    style: function () { return baseStyle; },
+                    onEachFeature: function (feature, layer) {
+                        var elev = feature.properties && feature.properties.elevation;
+                        var elevTxt = (elev !== undefined && elev !== null)
+                            ? (Math.round(elev * 10) / 10) + ' m' : '';
+                        layer.bindTooltip(elevTxt, {
+                            className: 'sylva-contour-label', direction: 'center',
+                            permanent: true, interactive: false
+                        });
+                        layer.on('click', function (e) {
+                            if (activeLayer && activeLayer !== layer) _resetActive();
+                            layer.setStyle(hiliteStyle);
+                            if (typeof layer.bringToFront === 'function') layer.bringToFront();
+                            var _tt = layer.getTooltip && layer.getTooltip();
+                            if (_tt && _tt._container) _tt._container.classList.add('sylva-contour-label-active');
+                            activeLayer = layer;
+                            if (window.L && L.DomEvent) L.DomEvent.stopPropagation(e);
+                        });
+                        layer.on('mouseover', function () { if (layer !== activeLayer) layer.setStyle({ weight: 2.6 }); });
+                        layer.on('mouseout', function () { if (layer !== activeLayer) layer.setStyle(baseStyle); });
+                    }
+                });
+
+                // Haritanın boş bir yerine tıklanınca vurguyu (sarı rozeti) kaldır
+                // — ama etiket permanent olduğu için görünür kalmaya devam eder.
+                geoLayer.on('remove', _resetActive);
+                targetMap.on('click', _resetActive);
+
+                geoLayer.addTo(targetMap);
+                var storeKey = (paneId === 'map2') ? 'map2' : 'map';
+                window._sylvaContourVectorByPane[storeKey] = window._sylvaContourVectorByPane[storeKey] || {};
+                window._sylvaContourVectorByPane[storeKey][layerKey] = geoLayer;
+            })
+            .catch(function (err) { console.warn('[SylvaGIS] Vektör kontur isteği başarısız:', err); });
+        }
+        window._sylvaLoadContourVectorLayer = _sylvaLoadContourVectorLayer;
+
         window._geeLayersByPane = window._geeLayersByPane || { map: {}, map2: {} };
         function _sylvaAddGeeLayer(paneId, layerKey, tileUrl, options) {
             var targetMap = _sylvaTargetMap(paneId);
@@ -11911,6 +12078,10 @@ function selectRamp(name) {
                 try { targetMap.removeLayer(store[k]); } catch (e) {}
             });
             window._geeLayersByPane[key] = {};
+            // 🆕 Raster katmanlarla birlikte gerçek vektör eş yükselti
+            // (kontur) katmanları da temizlenir — aksi halde yeni bir analiz
+            // çalıştırıldığında önceki konturlar haritada asılı kalır.
+            if (typeof _sylvaClearAllContourVectorLayers === 'function') _sylvaClearAllContourVectorLayers(paneId);
             // 🛠️ BUG FİX: Yeni bir analiz çalıştırıldığında görünürlük hafızası da
             // sıfırlanmalı — aksi halde önceki analizden kalan "gizli" bilgisi
             // yeni katmanlara yanlışlıkla uygulanabiliyor, checkbox durumu ile
@@ -12467,6 +12638,21 @@ function selectRamp(name) {
                 var vVisible = e.target.checked;
                 window._sylvaLayerVisibleByPane[vKey] = window._sylvaLayerVisibleByPane[vKey] || {};
                 window._sylvaLayerVisibleByPane[vKey][vLayerKey] = vVisible;
+                // 🆕 Bu katman gerçek vektör eş yükselti (kontur) katmanıysa
+                // (raster'ın YANINDA/gizli eşleniği), görünürlük checkbox'ı
+                // vektör çizgi katmanını da birlikte göstersin/gizlesin —
+                // aksi halde raster gizli kalırken vektör çizgiler ekranda
+                // yanlışlıkla görünmeye devam ederdi.
+                (function () {
+                    var _cvStore = window._sylvaContourVectorByPane && window._sylvaContourVectorByPane[vKey];
+                    var _cvLayer = _cvStore && _cvStore[vLayerKey];
+                    if (_cvLayer && vTargetMap) {
+                        try {
+                            if (vVisible) { if (!vTargetMap.hasLayer(_cvLayer)) _cvLayer.addTo(vTargetMap); }
+                            else { if (vTargetMap.hasLayer(_cvLayer)) vTargetMap.removeLayer(_cvLayer); }
+                        } catch (eCv) {}
+                    }
+                })();
                 if (vLayer && vTargetMap) {
                     try {
                         if (vVisible) {
@@ -12811,10 +12997,31 @@ function selectRamp(name) {
                          webkitClipPath: targetEl.style.webkitClipPath || ''
                      };
                  }
-                if (containerRect) {
-                    targetEl.style.width = containerRect.width + 'px';
-                    targetEl.style.height = containerRect.height + 'px';
-                }
+                 // 🛠️ KÖK NEDEN DÜZELTMESİ 8 (Bina Analizinde Sıyırıcı Basılır
+                 // Basılmaz TÜM Katmanı Kaldırıyordu): Yukarıdaki width/height
+                 // zorlaması SADECE raster tile katmanları için güvenlidir —
+                 // onların konteyneri CSS "shrink-to-fit" nedeniyle doğal olarak
+                 // 0×0 ölçülür (içindeki karolar position:absolute olduğundan)
+                 // ve zorlama bunu düzeltir. Ama bina katmanı GeoJSON/SVG
+                 // renderer'ı (L.svg, padding:0.5) ile çiziliyor; bu <svg>
+                 // konteynerinin KENDİ doğal (Leaflet tarafından padding'li
+                 // ayarlanmış) width/height'ı zaten vardır ve içindeki poligonlar
+                 // o boyuta göre konumlanır. Buraya farklı bir CSS width/height
+                 // zorlandığında (viewBox ile uyuşmadığı için) SVG içeriği
+                 // otomatik olarak yeni kutuya sıkıştırılıp ölçekleniyor —
+                 // görünürde poligonlar aniden ekran dışına kayıyor/kayboluyor.
+                 // Bu da "sürüklemeye başlar başlamaz kademeli değil, bina
+                 // katmanının TAMAMI bir anda kalkıyor" sorununa yol açıyordu.
+                 // Düzeltme: zorlama artık yalnızca konteynerin GERÇEKTEN 0×0
+                 // ölçüldüğü (asıl 0×0 hatasının olduğu) durumlarda uygulanır;
+                 // SVG gibi zaten doğru boyutlu konteynerlere dokunulmaz.
+                 if (containerRect) {
+                     var _naturalRect = targetEl.getBoundingClientRect();
+                     if (!_naturalRect.width || !_naturalRect.height) {
+                         targetEl.style.width = containerRect.width + 'px';
+                         targetEl.style.height = containerRect.height + 'px';
+                     }
+                 }
                 var r = targetEl.getBoundingClientRect();
                 if (orientation === 'horizontal') {
                     var localY = Math.max(0, Math.min(r.height, clientY - r.top));
@@ -13629,7 +13836,18 @@ function selectRamp(name) {
                     }
                     if (data.nativeCrs) window._lastAnalyzeNativeCrs = data.nativeCrs;
 
-                    _sylvaAddGeeLayer(_pane, _thisLayerKey, data.tileUrl, { opacity: 1 });
+                    // 🆕 Eş Yükselti (TOPO_CONTOUR): eski raster/basamaklı karo
+                    // GÖRÜNMEZ (opacity 0) eklenir — "Katman Geçiş" kutusu,
+                    // mirror/dual-screen ve lejant/istatistik altyapısı hiç
+                    // bozulmadan çalışmaya devam eder — ama kullanıcı artık onu
+                    // GÖRMEZ. Görünen şey, hemen altta yüklenen GERÇEK VEKTÖR
+                    // eş yükselti çizgileridir (düz/akıcı, tıklanınca sarı
+                    // parlayan, üzerinde rakım yazan).
+                    var _isVectorContour = (meta.analysisName === 'TOPO_CONTOUR');
+                    _sylvaAddGeeLayer(_pane, _thisLayerKey, data.tileUrl, { opacity: _isVectorContour ? 0 : 1 });
+                    if (_isVectorContour && typeof _sylvaLoadContourVectorLayer === 'function') {
+                        _sylvaLoadContourVectorLayer(_pane, _thisLayerKey, analyzePayload);
+                    }
                     window._sylvaTopGeeLayerByPane = window._sylvaTopGeeLayerByPane || { map: null, map2: null };
                     window._sylvaTopGeeLayerByPane[_pane === 'map2' ? 'map2' : 'map'] = _thisLayerKey;
                     // 🛠️ DÜZELTME (Katman Sıyırıcı "Önceki Analizin Üzerine Ekle"
@@ -14833,7 +15051,7 @@ function selectRamp(name) {
             },
             TOPO_CONTOUR: {
                 title: '📏 Eş Yükselti (İzohips) Çizgileri',
-                rows: [['ib_source','SRTM / ALOS / Copernicus / NASADEM'],['ib_method','Seçilen aralığa göre yükselti bandı sınır tespiti'],['ib_value_range','Seçilen aralığa göre değişir (5–500 m)'],['ib_desc','Arazi yüzeyinde eşit yükseklikteki noktaları birleştiren çizgiler.']]
+                rows: [['ib_source','contour_source_val'],['ib_method','contour_method_val'],['ib_value_range','contour_value_range_val'],['ib_desc','contour_desc_val']]
             },
             SAR: {
                 title: '📡 Sentinel-1 GRD – VV Backscatter',
@@ -39447,6 +39665,53 @@ var SYLVA_TRANSLATIONS = {
     if (SYLVA_TRANSLATIONS[lang]) {
       Object.keys(contourLabels[lang]).forEach(function (key) {
         SYLVA_TRANSLATIONS[lang][key] = contourLabels[lang][key];
+      });
+    }
+  });
+})();
+
+// ── Eş yükselti BİLGİ KUTUSU (Source/Method/Value Range/Description) satır
+// değerleri: 30 dilde çeviri anahtarları. Önceden bu değerler sabit Türkçe
+// metin olarak yazılıydı (t() bir çeviri anahtarı bekler, düz metin değil),
+// bu yüzden dil değiştirildiğinde kutu hep Türkçe kalıyordu. Artık her satır
+// bu bloktaki bir anahtara referans veriyor (bkz. _DATASET_INFO.TOPO_CONTOUR).
+(function () {
+  var contourInfoLabels = {
+    en: { contour_source_val: 'SRTM / ALOS / Copernicus / NASADEM', contour_method_val: 'Elevation band boundary detection based on the selected interval', contour_value_range_val: 'Varies based on the selected interval (5–500 m)', contour_desc_val: 'Lines connecting points of equal elevation on the land surface.' },
+    tr: { contour_source_val: 'SRTM / ALOS / Copernicus / NASADEM', contour_method_val: 'Seçilen aralığa göre yükselti bandı sınır tespiti', contour_value_range_val: 'Seçilen aralığa göre değişir (5–500 m)', contour_desc_val: 'Arazi yüzeyinde eşit yükseklikteki noktaları birleştiren çizgiler.' },
+    de: { contour_source_val: 'SRTM / ALOS / Copernicus / NASADEM', contour_method_val: 'Erkennung von Höhenbandgrenzen basierend auf dem gewählten Intervall', contour_value_range_val: 'Variiert je nach gewähltem Intervall (5–500 m)', contour_desc_val: 'Linien, die Punkte gleicher Höhe auf der Landoberfläche verbinden.' },
+    fr: { contour_source_val: 'SRTM / ALOS / Copernicus / NASADEM', contour_method_val: 'Détection des limites de bandes d\'altitude selon l\'intervalle sélectionné', contour_value_range_val: 'Varie selon l\'intervalle sélectionné (5–500 m)', contour_desc_val: 'Lignes reliant les points de même altitude à la surface du terrain.' },
+    es: { contour_source_val: 'SRTM / ALOS / Copernicus / NASADEM', contour_method_val: 'Detección de límites de bandas de elevación según el intervalo seleccionado', contour_value_range_val: 'Varía según el intervalo seleccionado (5–500 m)', contour_desc_val: 'Líneas que conectan puntos de igual elevación en la superficie del terreno.' },
+    pt: { contour_source_val: 'SRTM / ALOS / Copernicus / NASADEM', contour_method_val: 'Deteção de limites de faixas de elevação com base no intervalo selecionado', contour_value_range_val: 'Varia consoante o intervalo selecionado (5–500 m)', contour_desc_val: 'Linhas que ligam pontos de igual elevação na superfície do terreno.' },
+    it: { contour_source_val: 'SRTM / ALOS / Copernicus / NASADEM', contour_method_val: 'Rilevamento dei confini delle fasce altimetriche in base all\'intervallo selezionato', contour_value_range_val: 'Varia in base all\'intervallo selezionato (5–500 m)', contour_desc_val: 'Linee che collegano punti di uguale elevazione sulla superficie del terreno.' },
+    ru: { contour_source_val: 'SRTM / ALOS / Copernicus / NASADEM', contour_method_val: 'Определение границ высотных диапазонов на основе выбранного интервала', contour_value_range_val: 'Изменяется в зависимости от выбранного интервала (5–500 м)', contour_desc_val: 'Линии, соединяющие точки с одинаковой высотой на земной поверхности.' },
+    ar: { contour_source_val: 'SRTM / ALOS / Copernicus / NASADEM', contour_method_val: 'الكشف عن حدود نطاقات الارتفاع بناءً على الفاصل الزمني المحدد', contour_value_range_val: 'يختلف حسب الفاصل المحدد (5–500 م)', contour_desc_val: 'خطوط تربط النقاط ذات الارتفاع المتساوي على سطح الأرض.' },
+    fa: { contour_source_val: 'SRTM / ALOS / Copernicus / NASADEM', contour_method_val: 'تشخیص مرز باندهای ارتفاعی بر اساس بازه انتخاب‌شده', contour_value_range_val: 'بسته به بازه انتخاب‌شده متفاوت است (۵ تا ۵۰۰ متر)', contour_desc_val: 'خطوطی که نقاط با ارتفاع یکسان روی سطح زمین را به هم متصل می‌کنند.' },
+    zh: { contour_source_val: 'SRTM / ALOS / Copernicus / NASADEM', contour_method_val: '根据所选间隔检测高程带边界', contour_value_range_val: '根据所选间隔而变化（5–500 米）', contour_desc_val: '连接地表相同高程点的线。' },
+    ja: { contour_source_val: 'SRTM / ALOS / Copernicus / NASADEM', contour_method_val: '選択した間隔に基づく標高帯境界の検出', contour_value_range_val: '選択した間隔により異なります（5～500 m）', contour_desc_val: '地表上の同じ標高の点を結ぶ線。' },
+    ko: { contour_source_val: 'SRTM / ALOS / Copernicus / NASADEM', contour_method_val: '선택한 간격에 따른 고도대 경계 탐지', contour_value_range_val: '선택한 간격에 따라 다름 (5–500 m)', contour_desc_val: '지표면에서 동일한 고도의 지점을 연결한 선.' },
+    hi: { contour_source_val: 'SRTM / ALOS / Copernicus / NASADEM', contour_method_val: 'चयनित अंतराल के आधार पर ऊंचाई बैंड सीमा पहचान', contour_value_range_val: 'चयनित अंतराल के अनुसार भिन्न होता है (5–500 मी.)', contour_desc_val: 'भूतल पर समान ऊंचाई वाले बिंदुओं को जोड़ने वाली रेखाएं।' },
+    id: { contour_source_val: 'SRTM / ALOS / Copernicus / NASADEM', contour_method_val: 'Deteksi batas pita ketinggian berdasarkan interval yang dipilih', contour_value_range_val: 'Bervariasi sesuai interval yang dipilih (5–500 m)', contour_desc_val: 'Garis yang menghubungkan titik-titik dengan ketinggian yang sama di permukaan tanah.' },
+    th: { contour_source_val: 'SRTM / ALOS / Copernicus / NASADEM', contour_method_val: 'ตรวจจับขอบเขตแถบระดับความสูงตามช่วงที่เลือก', contour_value_range_val: 'แตกต่างกันไปตามช่วงที่เลือก (5–500 ม.)', contour_desc_val: 'เส้นที่เชื่อมจุดที่มีระดับความสูงเท่ากันบนพื้นผิวดิน' },
+    bn: { contour_source_val: 'SRTM / ALOS / Copernicus / NASADEM', contour_method_val: 'নির্বাচিত ব্যবধানের ভিত্তিতে উচ্চতা ব্যান্ড সীমানা সনাক্তকরণ', contour_value_range_val: 'নির্বাচিত ব্যবধানের ওপর নির্ভর করে পরিবর্তিত হয় (৫–৫০০ মি.)', contour_desc_val: 'ভূপৃষ্ঠে সমান উচ্চতার বিন্দুগুলিকে সংযুক্তকারী রেখা।' },
+    vi: { contour_source_val: 'SRTM / ALOS / Copernicus / NASADEM', contour_method_val: 'Phát hiện ranh giới dải độ cao dựa trên khoảng đã chọn', contour_value_range_val: 'Thay đổi theo khoảng đã chọn (5–500 m)', contour_desc_val: 'Các đường nối các điểm có cùng độ cao trên bề mặt đất.' },
+    ur: { contour_source_val: 'SRTM / ALOS / Copernicus / NASADEM', contour_method_val: 'منتخب وقفے کی بنیاد پر بلندی بینڈ کی حد کی نشاندہی', contour_value_range_val: 'منتخب وقفے کے مطابق مختلف ہوتا ہے (5–500 میٹر)', contour_desc_val: 'زمین کی سطح پر یکساں بلندی کے مقامات کو جوڑنے والی لائنیں۔' },
+    pl: { contour_source_val: 'SRTM / ALOS / Copernicus / NASADEM', contour_method_val: 'Wykrywanie granic pasm wysokościowych na podstawie wybranego interwału', contour_value_range_val: 'Zmienia się w zależności od wybranego interwału (5–500 m)', contour_desc_val: 'Linie łączące punkty o jednakowej wysokości na powierzchni terenu.' },
+    ms: { contour_source_val: 'SRTM / ALOS / Copernicus / NASADEM', contour_method_val: 'Pengesanan sempadan jalur ketinggian berdasarkan selang yang dipilih', contour_value_range_val: 'Berbeza mengikut selang yang dipilih (5–500 m)', contour_desc_val: 'Garisan yang menghubungkan titik dengan ketinggian yang sama di permukaan tanah.' },
+    el: { contour_source_val: 'SRTM / ALOS / Copernicus / NASADEM', contour_method_val: 'Εντοπισμός ορίων ζωνών υψομέτρου με βάση το επιλεγμένο διάστημα', contour_value_range_val: 'Διαφέρει ανάλογα με το επιλεγμένο διάστημα (5–500 m)', contour_desc_val: 'Γραμμές που συνδέουν σημεία ίδιου υψομέτρου στην επιφάνεια του εδάφους.' },
+    bg: { contour_source_val: 'SRTM / ALOS / Copernicus / NASADEM', contour_method_val: 'Откриване на граници на височинни ленти въз основа на избрания интервал', contour_value_range_val: 'Варира според избрания интервал (5–500 m)', contour_desc_val: 'Линии, свързващи точки с еднаква надморска височина на земната повърхност.' },
+    hu: { contour_source_val: 'SRTM / ALOS / Copernicus / NASADEM', contour_method_val: 'Magassági sáv határainak észlelése a kiválasztott intervallum alapján', contour_value_range_val: 'A kiválasztott intervallumtól függően változik (5–500 m)', contour_desc_val: 'A terepfelszín azonos magasságú pontjait összekötő vonalak.' },
+    kk: { contour_source_val: 'SRTM / ALOS / Copernicus / NASADEM', contour_method_val: 'Таңдалған аралыққа сәйкес биіктік белдеуінің шекарасын анықтау', contour_value_range_val: 'Таңдалған аралыққа қарай өзгереді (5–500 м)', contour_desc_val: 'Жер бетіндегі бірдей биіктіктегі нүктелерді біріктіретін сызықтар.' },
+    uz: { contour_source_val: 'SRTM / ALOS / Copernicus / NASADEM', contour_method_val: 'Tanlangan interval asosida balandlik zonasi chegarasini aniqlash', contour_value_range_val: 'Tanlangan intervalga qarab o\'zgaradi (5–500 m)', contour_desc_val: 'Yer yuzasidagi bir xil balandlikdagi nuqtalarni birlashtiruvchi chiziqlar.' },
+    ky: { contour_source_val: 'SRTM / ALOS / Copernicus / NASADEM', contour_method_val: 'Тандалган аралыкка жараша бийиктик тилкесинин чегин аныктоо', contour_value_range_val: 'Тандалган аралыкка жараша өзгөрөт (5–500 м)', contour_desc_val: 'Жер бетиндеги бирдей бийиктиктеги чекиттерди бириктирген сызыктар.' },
+    mn: { contour_source_val: 'SRTM / ALOS / Copernicus / NASADEM', contour_method_val: 'Сонгосон завсарт үндэслэн өндрийн бүсийн хилийг илрүүлэх', contour_value_range_val: 'Сонгосон завсараас хамааран өөрчлөгдөнө (5–500 м)', contour_desc_val: 'Газрын гадаргуу дээрх ижил өндөртэй цэгүүдийг холбосон шугамууд.' },
+    ka: { contour_source_val: 'SRTM / ALOS / Copernicus / NASADEM', contour_method_val: 'შერჩეული ინტერვალის მიხედვით სიმაღლის ზოლის საზღვრის გამოვლენა', contour_value_range_val: 'იცვლება შერჩეული ინტერვალის მიხედვით (5–500 მ)', contour_desc_val: 'ხაზები, რომლებიც აერთიანებენ ერთნაირი სიმაღლის წერტილებს მიწის ზედაპირზე.' },
+    az: { contour_source_val: 'SRTM / ALOS / Copernicus / NASADEM', contour_method_val: 'Seçilmiş intervala əsasən hündürlük zolağı sərhədinin aşkarlanması', contour_value_range_val: 'Seçilmiş intervala görə dəyişir (5–500 m)', contour_desc_val: 'Torpaq səthində bərabər hündürlükdəki nöqtələri birləşdirən xətlər.' }
+  };
+  Object.keys(contourInfoLabels).forEach(function (lang) {
+    if (SYLVA_TRANSLATIONS[lang]) {
+      Object.keys(contourInfoLabels[lang]).forEach(function (key) {
+        SYLVA_TRANSLATIONS[lang][key] = contourInfoLabels[lang][key];
       });
     }
   });
