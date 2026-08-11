@@ -268,6 +268,8 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <!-- Leaflet Geoman (gerçek poligon/dikdörtgen çizim motoru) -->
     <link rel="stylesheet" href="https://unpkg.com/@geoman-io/leaflet-geoman-free@latest/dist/leaflet-geoman.css" />
+    <!-- Chart.js — iklim çizgi ve sütun grafiklerinin render altyapısı -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.min.js"></script>
     <!-- Google Fonts: web-safe karşılıkları yazı tipi seçici için yükleniyor -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1067,6 +1069,12 @@ tr.class-highlight-active {
         .map-info-box table { width: 100%; table-layout: fixed; word-break: break-word; }
         .map-info-box td { word-break: break-word; padding: 2px 0; line-height: 1.4; }
         .map-info-box.detached { min-width: 140px; min-height: 50px; max-width: none; overflow: auto; position: relative; box-sizing: border-box; }
+        /* İklim grafik alanları: her harita bilgi kutusunda bağımsız tutulur. */
+        .sylva-climate-charts { display: none; margin-top: 0; width: 100%; max-width: 230px; background: #f4f5f6; border: 1px solid #bae6fd; border-radius: 8px; padding: 8px 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.18); pointer-events: auto; box-sizing: border-box; }
+        .sylva-climate-chart-block { margin-top: 8px; }
+        .sylva-climate-chart-block:first-child { margin-top: 0; }
+        .sylva-climate-chart-title { color: #1e3a8a; font-size: 0.7rem; font-weight: 700; margin-bottom: 3px; }
+        .sylva-climate-chart-canvas { display: block; width: 100% !important; height: 108px !important; max-height: 108px; }
 
         /* ── @media print: Tarayıcının native Yazdır / PDF dışa aktarımı ──────────
            Leaflet haritasının position:absolute öğeleri (lejant, bilgi kutusu)
@@ -4637,6 +4645,16 @@ tr.class-highlight-active {
 
             <div class="map-top-left-infobox">
                 <div class="map-info-box" id="map-info-box" style="display:none;"></div>
+                <div class="sylva-climate-charts" id="map-climate-charts" aria-label="İklim grafikleri">
+                    <div class="sylva-climate-chart-block">
+                        <div class="sylva-climate-chart-title">Yağış</div>
+                        <canvas class="sylva-climate-chart-canvas" id="map-climate-precipitation-chart"></canvas>
+                    </div>
+                    <div class="sylva-climate-chart-block">
+                        <div class="sylva-climate-chart-title">Sıcaklık</div>
+                        <canvas class="sylva-climate-chart-canvas" id="map-climate-temperature-chart"></canvas>
+                    </div>
+                </div>
             </div>
 
             <!-- ── Harita Cetveli (Mesafe Ölçme) Paneli ── -->
@@ -4962,6 +4980,16 @@ tr.class-highlight-active {
                  tutulur (bkz. script: sylvaMirrorLegendInfoToMap2). -->
             <div class="map2-overlay map-top-left-infobox">
                 <div class="map-info-box" id="map2-info-box" style="display:none;"></div>
+                <div class="sylva-climate-charts" id="map2-climate-charts" aria-label="İklim grafikleri">
+                    <div class="sylva-climate-chart-block">
+                        <div class="sylva-climate-chart-title">Yağış</div>
+                        <canvas class="sylva-climate-chart-canvas" id="map2-climate-precipitation-chart"></canvas>
+                    </div>
+                    <div class="sylva-climate-chart-block">
+                        <div class="sylva-climate-chart-title">Sıcaklık</div>
+                        <canvas class="sylva-climate-chart-canvas" id="map2-climate-temperature-chart"></canvas>
+                    </div>
+                </div>
             </div>
             <div class="map2-overlay map-left-mid map2-left-mid">
                 <div id="map2-zoom-pct-wrap" style="display:flex;flex-direction:row;align-items:stretch;">
@@ -5098,7 +5126,7 @@ tr.class-highlight-active {
                  style="display:none;position:absolute;top:22px;left:0;z-index:5000;background:#fff;border:1px solid #cbd5e1;border-radius:6px;padding:6px;box-shadow:0 4px 12px rgba(0,0,0,0.15);flex-wrap:wrap;gap:4px;width:170px;"
                  onclick="event.stopPropagation()"></div>
         </label>
-        <label class="option-item" style="padding:0;">
+        <label class="option-item" id="weather-toggle-wrap" style="padding:0;opacity:0.4;">
             <input type="checkbox" id="toggle-weather" disabled aria-disabled="true" style="flex-shrink:0;cursor:default;">
             <span data-i18n="weather">Hava Durumu</span>
         </label>
@@ -13470,11 +13498,32 @@ function selectRamp(name) {
             }, 12000);
         }
 
+        // Hava Durumu kontrolü yalnızca geçerli bir analiz sonucu olduğunda
+        // kullanılabilir. Yeni analiz başlarken veya sonuçlar temizlenirken
+        // kontrol tekrar tamamen pasif duruma alınır.
+        function _sylvaSetWeatherControlActive(active) {
+            var weatherCb = document.getElementById('toggle-weather');
+            var weatherWrap = document.getElementById('weather-toggle-wrap');
+            if (!weatherCb) return;
+
+            var isActive = !!active;
+            weatherCb.disabled = !isActive;
+            weatherCb.setAttribute('aria-disabled', isActive ? 'false' : 'true');
+            weatherCb.style.cursor = isActive ? 'pointer' : 'default';
+            if (!isActive) weatherCb.checked = false;
+
+            if (weatherWrap) {
+                weatherWrap.style.opacity = isActive ? '1' : '0.4';
+                weatherWrap.style.pointerEvents = isActive ? '' : 'none';
+            }
+        }
+
         // ── Analiz çıktılarını sıfırla ─────────────────────────────────────────
         // Yeni bir analiz başlatılmadan önce önceki analize ait tüm sonuçları
         // (GEE katmanı, galeri, lejant, grafik, tablo, bilgi kutusu) temizler.
         // LULC / TOPO akışında galeri, galeri içeriği boşaltılarak tamamen gizlenir.
         function _clearAllAnalysisOutputs(paneId) {
+            _sylvaSetWeatherControlActive(false);
             // 🛠️ BUG FİX: "Sürekli/Stretched" min-max kutularına kullanıcı bir kez
             // elle değer girdiğinde, bu kutulara işaretlenen _userEdited bayrağı
             // hiçbir zaman sıfırlanmıyordu. Bu yüzden currentClassRangeMin/Max
@@ -14585,6 +14634,7 @@ function selectRamp(name) {
 
                 _sylvaRenderBuildingFootprints(data, paneId);
                 _sylvaRenderBuildingInfo(data, paneId);
+                _sylvaSetWeatherControlActive(true);
                 if (_buildingState) _buildingState.active = true;
                 window._sylvaBuildingDataByPane[paneId === 'map2' ? 'map2' : 'map'] = data;
                 if (typeof window._sylvaTagContentPane === 'function') {
@@ -14739,6 +14789,7 @@ function selectRamp(name) {
 
         function _sylvaRenderIndexAnalysisResult(meta, data, _pane, skipClassifyRecalc, layerKeyOverride) {
             if (!meta || !data) return;
+            _sylvaSetWeatherControlActive(true);
             // 🆕 Stack modunda çalıştırılan analizler kendi benzersiz depolama
             // anahtarını (layerKeyOverride) kullanır; aksi halde her zamanki
             // gibi meta.analysisName kullanılır (geriye dönük uyumlu).
@@ -16226,6 +16277,7 @@ function selectRamp(name) {
                     showNoDataModal(_TOAST_NO_DATA_MSG, meta.datasetLabel || meta.datasetKey || '');
                     return;
                 }
+                _sylvaSetWeatherControlActive(true);
                 _gState.filters = Object.assign({}, _satFilters);
                 _gState.scenes  = data.scenes.map(function(scene) {
                     return _rgbGallerySceneRecord(scene, _rgbStateKey, data.dataset, meta, _gState.filters);
@@ -48317,6 +48369,7 @@ function runTimeSeriesAnalysis() {
     // butonda gösterilir.
     var btn = document.getElementById('btn-run-analysis');
     var _btnOrigLabel = btn ? btn.innerHTML : null;
+     _sylvaSetWeatherControlActive(false);
     if (btn) { btn.disabled = true; }
     // 🆕 Diğer analizlerde olduğu gibi, buton metnini "Hesaplanıyor…" yapmak
     // yerine ekranda yanıp sönen SylvaGIS logolu ortak yükleniyor overlay'i
@@ -48362,6 +48415,7 @@ function runTimeSeriesAnalysis() {
             else alert(errMsg);
             return;
         }
+        _sylvaSetWeatherControlActive(true);
 
         // 🆕 Renk artık harita analizlerinde kullanılan Renk Paleti/Sembloji
         // sisteminden türetilir (bkz. _sylvaTsSeriesColor). Tek indeks
