@@ -2801,18 +2801,6 @@ def _cv_build_clean_dem(roi, dem_source):
         dem = ee.Image('NASA/NASADEM_HGT/001').select('elevation')
     else:
         dem = ee.Image('USGS/SRTMGL1_003').select('elevation')
-    # 🛠️ BUG FİX (siyah/boş harita kareleri — tile sınırlarına oturan):
-    # Aşağıdaki focalMean() çağrıları reproject() ile sabit bir ölçeğe
-    # kilitlenmeden çalışıyordu. GEE'de bu durumda odak-ortalama, kaynak
-    # görüntünün DOĞAL 30 m çözünürlüğüne göre değil, kullanıcının o anki
-    # zoom seviyesindeki EKRAN piksel çözünürlüğüne göre hesaplanıyor —
-    # yakınlaştıkça "150/450 m" yarıçapın taranması gereken piksel sayısı
-    # katlanarak büyüyor ve bazı kareler GEE'nin sunucu-taraflı zaman
-    # sınırını aşıp boş/siyah dönüyor. Çözüm: focalMean'den ÖNCE DEM'i
-    # sabit 30 m / EPSG:4326 piksel ızgarasına kilitliyoruz — böylece
-    # yarıçap her zaman gerçek 150/450 metreye karşılık gelir, zoom
-    # seviyesinden bağımsız olarak.
-    dem = dem.reproject(crs='EPSG:4326', scale=30)
     dem = dem.unmask(dem.focalMean(radius=150, units='meters'))
     dem = dem.unmask(dem.focalMean(radius=450, units='meters'))
     return dem
@@ -3121,6 +3109,8 @@ def build_result_image(data, for_export=False):
     start_date = data.get('startDate')
     end_date   = data.get('endDate')
     max_cloud  = int(data.get('maxCloud', 20))
+    months     = _parse_months_param(data)
+    month_filter = _calendar_month_filter(months)
     scene_id   = data.get('sceneId')
     class_breaks = data.get('classBreaks')
     if for_export:
@@ -3143,9 +3133,12 @@ def build_result_image(data, for_export=False):
             eff_end   = today.isoformat()
             eff_start = (today - datetime.timedelta(days=365)).isoformat()
 
-        dw = (ee.ImageCollection('GOOGLE/DYNAMICWORLD/V1')
-              .filterBounds(roi)
-              .filterDate(eff_start, eff_end)
+        dw_collection = (ee.ImageCollection('GOOGLE/DYNAMICWORLD/V1')
+                         .filterBounds(roi)
+                         .filterDate(eff_start, eff_end))
+        if month_filter is not None:
+            dw_collection = dw_collection.filter(month_filter)
+        dw = (dw_collection
               .select('label')
               .reduce(ee.Reducer.mode())
               .rename('value'))
@@ -3317,26 +3310,6 @@ def build_result_image(data, for_export=False):
         # bir "güvenlik ağı" geçişi uyguluyoruz — ilk geçişte dolmayan
         # (çevresi de void olan) nadir pikseller ikinci, daha geniş
         # pencerede kesinlikle geçerli komşu bulur.
-        # 🛠️ BUG FİX (siyah/boş harita kareleri — tam olarak tile sınırlarına
-        # oturan): Aşağıdaki focalMean() (ve ee.Terrain.products() içindeki
-        # kendi komşuluk hesabı) reproject() ile sabit bir ölçeğe
-        # kilitlenmeden çalışıyordu. GEE'de odak-ortalama gibi komşuluk
-        # tabanlı işlemler, ayrıca sabitlenmediği sürece kullanıcının o anki
-        # zoom seviyesindeki EKRAN piksel çözünürlüğüne göre hesaplanır —
-        # yakınlaştıkça (zoom arttıkça) aynı "150/450 m" yarıçap, GEE'nin
-        # taraması gereken piksel sayısı olarak katlanarak büyür. Belirli bir
-        # tile için bu hesap GEE'nin sunucu-taraflı zaman sınırını aşınca, o
-        # tek kare boş/siyah dönüyordu (TOPO_SLOPE'ta en ağır zincir olduğu
-        # için en çok kare bunda görülüyordu — art arda 150m+450m focalMean
-        # + Terrain.products'ın kendi komşuluk hesabı).
-        #
-        # ÇÖZÜM: DEM'i, focalMean/Terrain.products çağrılmadan ÖNCE sabit
-        # 30 m / EPSG:4326 piksel ızgarasına kilitliyoruz (native_scale ile
-        # aynı değer — bkz. export akışındaki reproject(crs=..., scale=...)
-        # kullanımı, satır ~5662). Böylece yarıçaplar her zaman gerçek
-        # metreye karşılık gelir ve hesap yükü zoom seviyesinden bağımsız,
-        # sabit kalır.
-        dem = dem.reproject(crs='EPSG:4326', scale=30)
         dem = dem.unmask(dem.focalMean(radius=150, units='meters'))
         dem = dem.unmask(dem.focalMean(radius=450, units='meters'))
 
@@ -3632,6 +3605,8 @@ def build_result_image(data, for_export=False):
             raise ValueError('Bilinmeyen uydu görüntüsü veri seti: ' + str(satellite))
 
         col = build_rgb_collection(ds, roi, max_cloud)
+        if month_filter is not None:
+            col = col.filter(month_filter)
 
         if scene_id:
             image = col.filter(ee.Filter.eq('system:index', scene_id)).first()
@@ -3656,6 +3631,8 @@ def build_result_image(data, for_export=False):
                .filter(ee.Filter.eq('instrumentMode', 'IW'))
                .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VV'))
                .select('VV'))
+        if month_filter is not None:
+            _sar_col = _sar_col.filter(month_filter)
         sar = _sar_col.mean().rename('value')
         vis    = {'min': -25, 'max': 0,
                   'palette': ['black', 'white']}
@@ -3776,6 +3753,8 @@ def build_result_image(data, for_export=False):
     # görüntüye ayrı ayrı uygulanır ki hem tek sahne (scene_id) hem de
     # medyan kompozit (median()) modunda export edilen GeoTIFF'te AOI
     # içinde rastgele beyaz/boşluk (NoData) pikselleri kalmasın.
+    if month_filter is not None:
+        col = col.filter(month_filter)
     col = col.map(lambda img: _mask_clouds(img, satellite))
 
     # ── 2. Tarih filtresi veya belirli sahne ────────────────────
@@ -3817,22 +3796,6 @@ def build_result_image(data, for_export=False):
     # kalır (yanlışlıkla "bulut altı veri" uydurulmaz). İki aşamalı
     # (60 m + 200 m) geçiş, hem S2 (10 m) hem Landsat (30 m) çözünürlüğünde
     # tipik bulut-kenarı beneklerini kapatmaya yeter.
-    # 🛠️ BUG FİX (siyah/boş harita kareleri — tile sınırlarına oturan,
-    # DEM void-fill ile AYNI kök neden): Aşağıdaki focalMean() çağrıları da
-    # reproject() ile sabit bir ölçeğe kilitlenmeden çalışıyordu; bu yüzden
-    # 60/200 m yarıçaplar, kullanıcının o anki zoom seviyesine göre katlanan
-    # bir piksel sayısı olarak hesaplanıyor ve bazı tile'lar GEE'nin
-    # sunucu-taraflı zaman sınırını aşıp boş dönebiliyordu (DEM'deki
-    # 150m+450m+Terrain.products zincirinden daha hafif olduğu için burada
-    # görülme sıklığı çok daha düşüktü — "NDVI'de sadece 1 kare siyah").
-    # ÇÖZÜM: focalMean'den önce bileşik görüntüyü, sensörün gerçek doğal
-    # çözünürlüğüne (S2: 10 m, Landsat: 30 m, MSS: 60 m — SATELLITE_DATASETS)
-    # ve native CRS'ine (_crs_probe_img'den, reduce edilmemiş kaynak
-    # görüntüden) kilitliyoruz. ee.Projection nesnesi doğrudan verildiği
-    # için ekstra bir getInfo() sunucu çağrısına gerek kalmıyor.
-    _native_res = SATELLITE_DATASETS.get(satellite, SATELLITE_DATASETS['s2-l2a'])['resolution']
-    _native_proj = _crs_probe_img.select(0).projection()
-    image = image.reproject(crs=_native_proj, scale=_native_res)
     image = image.unmask(image.focalMean(radius=60, units='meters'))
     image = image.unmask(image.focalMean(radius=200, units='meters'))
 
@@ -4116,14 +4079,20 @@ def _rgb_scene_metadata(data, roi, image, ds):
 # en az bulutlu GERÇEK sahne (Image ID + tarih + bulutluluk) bulunup
 # 'gallery' dizisinde döndürülür — istemci bunu üstteki uydu görüntü
 # galerisine yazar ve kullanıcı o periyotlar arasında geçiş yapabilir.
-def _sylva_period_ranges(start_year, end_year, period):
+def _sylva_period_ranges(start_year, end_year, period, months=None):
     """Başlangıç/bitiş yılı ve periyot tipine göre (label, startDate, endDate)
     üçlülerinden oluşan sıralı bir liste üretir. 'endDate' üst sınır HARİÇ
-    (GEE filterDate ile uyumlu — bir sonraki periyodun ilk günü)."""
+    (GEE filterDate ile uyumlu — bir sonraki periyodun ilk günü).
+    Ay seçimi verilirse aylık periyotlarda yalnızca o aylar üretilir.
+    Yıllık periyotlarda aralık korunur; seçilen ay filtresi ilgili yıllık
+    koleksiyon kompozitine ayrıca uygulanır."""
     ranges = []
+    selected_months = set(months or [])
     if period == 'monthly':
         for y in range(start_year, end_year + 1):
             for m in range(1, 13):
+                if selected_months and m not in selected_months:
+                    continue
                 start = '%04d-%02d-01' % (y, m)
                 if m == 12:
                     end = '%04d-01-01' % (y + 1)
@@ -4136,7 +4105,8 @@ def _sylva_period_ranges(start_year, end_year, period):
     return ranges
 
 
-def _sylva_least_cloud_scene(roi, satellite, start_date, end_date, max_cloud):
+def _sylva_least_cloud_scene(roi, satellite, start_date, end_date, max_cloud,
+                             months=None):
     """Verilen AOI + tarih aralığında, seçilen uydu için EN AZ bulutlu
     gerçek sahnenin metadata'sını (sceneId, timestamp, bulutluluk %) döner.
     Uygun sahne bulunamazsa None döner — galeri o periyodu atlar."""
@@ -4148,6 +4118,9 @@ def _sylva_least_cloud_scene(roi, satellite, start_date, end_date, max_cloud):
         col = None
         for coll_id in ds.get('collections', []):
             c = ee.ImageCollection(coll_id).filterBounds(roi).filterDate(start_date, end_date)
+            month_filter = _calendar_month_filter(months)
+            if month_filter is not None:
+                c = c.filter(month_filter)
             col = c if col is None else col.merge(c)
         if col is None:
             return None
@@ -4197,7 +4170,8 @@ def timeseries():
         if end_year <= start_year:
             return jsonify({'success': False, 'error': 'Bitiş yılı başlangıç yılından büyük olmalı.'}), 400
 
-        ranges = _sylva_period_ranges(start_year, end_year, period)
+        months = _parse_months_param(data)
+        ranges = _sylva_period_ranges(start_year, end_year, period, months=months)
         # Güvenlik sınırı: çok uzun aralık + aylık periyot GEE'ye çok
         # sayıda ardışık istek anlamına gelir (timeout/limit riski).
         MAX_PERIODS = 240
@@ -4219,6 +4193,7 @@ def timeseries():
                 period_data['endDate']   = edate
                 period_data['sceneId']   = None
                 period_data['classBreaks'] = None
+                period_data['months']    = months or []
                 try:
                     _final, p_roi, p_result, _vis, _probe = _call_with_retry(
                         build_result_image, period_data, for_export=False
@@ -4241,7 +4216,9 @@ def timeseries():
         # tek bir sahne akışı gösterir, indeks başına ayrı galeri yoktur)
         gallery = []
         for label, sdate, edate in ranges:
-            scene = _sylva_least_cloud_scene(roi, satellite, sdate, edate, max_cloud)
+            scene = _sylva_least_cloud_scene(
+                roi, satellite, sdate, edate, max_cloud, months=months
+            )
             if scene:
                 scene['label'] = label
                 gallery.append(scene)
@@ -4279,6 +4256,9 @@ def analyze():
             roi = make_roi(data.get('roi'))
             max_cloud = int(data.get('maxCloud', 100))
             col = build_rgb_collection(ds, roi, max_cloud)
+            months_filter = _parse_months_param(data)
+            if months_filter is not None:
+                col = col.filter(_calendar_month_filter(months_filter))
             scene_id = data.get('sceneId')
             if scene_id:
                 image = col.filter(ee.Filter.eq('system:index', scene_id)).first()
@@ -4529,192 +4509,6 @@ def analyze():
 
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
-
-
-# ════════════════════════════════════════════════════════════════
-# 🌦️ HAVA DURUMU MODÜLÜ — İklimsel Doğrulama
-# ════════════════════════════════════════════════════════════════
-# AMAÇ: Haritadaki fiziksel değişimlerin (kuraklık, bitki örtüsü kaybı vb.)
-# iklimsel nedenlerini, son 30 günlük yağış ve sıcaklık verileriyle
-# kullanıcının başka bir siteye gitmesine gerek kalmadan doğrudan sistem
-# içinde doğrulamasını sağlar.
-#
-# İdari sınır genişletmesi neden gerekli?
-# Çizilen çalışma alanı (roi) çoğu zaman küçük/dar bir poligon olabilir.
-# CHIRPS (~5.5 km) ve ERA5-Land (~11 km) gibi iklim veri setleri kaba
-# çözünürlüklüdür — çok küçük bir alanda reduceRegion çoğu zaman anlamsız
-# ya da eksik (null) piksel örneklemi verir. Bu yüzden önce çizilen alanın
-# merkez noktası bulunur, FAO/GAUL/2015/level2 idari sınır veri setiyle
-# kesiştirilir ve iklim istatistikleri ilgili il/ilçe sınırına göre
-# GENİŞLETİLMİŞ bir alan üzerinden hesaplanır (bulunamazsa orijinal roi'ye
-# geri düşülür).
-_GAUL_LEVEL2 = 'FAO/GAUL/2015/level2'
-_CHIRPS_COLLECTION = 'UCSB-CHG/CHIRPS/DAILY'          # Günlük yağış (mm/gün)
-_ERA5_LAND_COLLECTION = 'ECMWF/ERA5_LAND/DAILY_AGGR'  # Günlük 2m sıcaklık (K)
-_CHIRPS_SCALE = 5566
-_ERA5_LAND_SCALE = 11132
-
-
-@app.route('/api/climate-data', methods=['POST'])
-def climate_data():
-    try:
-        data = request.get_json(silent=True) or {}
-
-        # Ön yüzden 'roi' ya da 'geometry' anahtarlarından herhangi biriyle
-        # gelebilir — ikisi de desteklenir.
-        raw_geom = data.get('roi') if data.get('roi') is not None else data.get('geometry')
-        if not raw_geom:
-            return jsonify({'success': False, 'error': 'Çalışma alanı (roi/geometry) bulunamadı.'}), 400
-
-        # make_roi(): KML/KMZ veya elle çizilen alanlarda görülen kendi
-        # kendini kesme, kapanmamış halka, MultiPolygon vb. yapısal
-        # sorunları otomatik onararak güvenli bir ee.Geometry üretir.
-        try:
-            roi = make_roi(raw_geom)
-        except Exception as ge:
-            return jsonify({'success': False, 'error': 'Geometri işlenemedi: ' + str(ge)}), 400
-
-        # ── 1) İdari Sınır Tespiti (il/ilçe düzeyine genişletme) ─────
-        analysis_geom = roi           # varsayılan: idari sınır bulunamazsa orijinal roi kullanılır
-        admin_name = None
-        admin_level1 = None
-        try:
-            centroid = _call_with_retry(lambda: roi.centroid(maxError=100))
-
-            gaul_matches = ee.FeatureCollection(_GAUL_LEVEL2).filterBounds(centroid)
-            match_count = _call_with_retry(lambda: gaul_matches.size().getInfo())
-
-            if match_count and match_count > 0:
-                admin_feature = ee.Feature(gaul_matches.first())
-                admin_props = _call_with_retry(
-                    lambda: admin_feature.toDictionary(['ADM1_NAME', 'ADM2_NAME']).getInfo()
-                )
-                admin_name = admin_props.get('ADM2_NAME') or admin_props.get('ADM1_NAME')
-                admin_level1 = admin_props.get('ADM1_NAME')
-                # Analiz sınırı idari sınıra (il/ilçe) genişletiliyor.
-                analysis_geom = admin_feature.geometry()
-            else:
-                print('[SylvaGIS] ℹ️ Hava Durumu: idari sınır bulunamadı, orijinal roi kullanılacak.')
-        except Exception as _admin_err:
-            print('[SylvaGIS] ⚠️ Hava Durumu: idari sınır tespiti başarısız, orijinal roi ile devam ediliyor: {}'.format(_admin_err))
-            analysis_geom = roi
-
-        # ── 2) Son 30 Günlük Tarih Aralığı ────────────────────────────
-        end_dt = datetime.datetime.utcnow().date()
-        start_dt = end_dt - datetime.timedelta(days=30)
-        start_str = start_dt.isoformat()
-        end_str = end_dt.isoformat()
-
-        # ── 3/4) CHIRPS + ERA5-LAND — günlük seri ─────────────────────
-        # Grafiklerin yalnızca 30 günlük bir ortalama ile çizilememesi için
-        # iki koleksiyondan aynı tarih eksenine sahip günlük alan ortalamaları
-        # üretilir. FeatureCollection tek bir getInfo() ile çekildiğinden,
-        # her gün için Python tarafında ayrı bir GEE isteği yapılmaz.
-        def _fetch_daily_climate_series():
-            chirps = (
-                ee.ImageCollection(_CHIRPS_COLLECTION)
-                .filterDate(start_str, end_str)
-                .filterBounds(analysis_geom)
-                .select('precipitation')
-            )
-            era5 = (
-                ee.ImageCollection(_ERA5_LAND_COLLECTION)
-                .filterDate(start_str, end_str)
-                .filterBounds(analysis_geom)
-                .select('temperature_2m')
-            )
-
-            day_count = (end_dt - start_dt).days
-            offsets = ee.List.sequence(0, max(day_count - 1, 0))
-
-            def _daily_feature(offset):
-                day = ee.Date(start_str).advance(offset, 'day')
-                next_day = day.advance(1, 'day')
-
-                precipitation_image = chirps.filterDate(day, next_day).mean()
-                temperature_image = era5.filterDate(day, next_day).mean()
-
-                precipitation = precipitation_image.reduceRegion(
-                    reducer=ee.Reducer.mean(),
-                    geometry=analysis_geom,
-                    scale=_CHIRPS_SCALE,
-                    maxPixels=1e9,
-                    bestEffort=True,
-                ).get('precipitation')
-                temperature = temperature_image.reduceRegion(
-                    reducer=ee.Reducer.mean(),
-                    geometry=analysis_geom,
-                    scale=_ERA5_LAND_SCALE,
-                    maxPixels=1e9,
-                    bestEffort=True,
-                ).get('temperature_2m')
-
-                return ee.Feature(None, {
-                    'date': day.format('YYYY-MM-dd'),
-                    'precipitationMm': precipitation,
-                    'temperatureC': ee.Algorithms.If(
-                        temperature,
-                        ee.Number(temperature).subtract(273.15),
-                        None,
-                    ),
-                })
-
-            return ee.FeatureCollection(offsets.map(_daily_feature)).getInfo()
-
-        daily_features = _call_with_retry(_fetch_daily_climate_series) or {}
-        daily_series = []
-        for feature in daily_features.get('features', []):
-            properties = feature.get('properties') or {}
-            precipitation = properties.get('precipitationMm')
-            temperature = properties.get('temperatureC')
-            daily_series.append({
-                'date': properties.get('date'),
-                'precipitationMm': (
-                    round(float(precipitation), 3)
-                    if precipitation is not None else None
-                ),
-                'temperatureC': (
-                    round(float(temperature), 2)
-                    if temperature is not None else None
-                ),
-            })
-
-        precipitation_values = [
-            item['precipitationMm'] for item in daily_series
-            if item['precipitationMm'] is not None
-        ]
-        temperature_values = [
-            item['temperatureC'] for item in daily_series
-            if item['temperatureC'] is not None
-        ]
-        precipitation_mean = (
-            sum(precipitation_values) / len(precipitation_values)
-            if precipitation_values else None
-        )
-        temperature_mean_celsius = (
-            sum(temperature_values) / len(temperature_values)
-            if temperature_values else None
-        )
-
-        return jsonify({
-            'success': True,
-            'startDate': start_str,
-            'endDate': end_str,
-            'adminName': admin_name,
-            'adminLevel1': admin_level1,
-            'precipitationMeanMmPerDay': (
-                round(float(precipitation_mean), 3) if precipitation_mean is not None else None
-            ),
-            'temperatureMeanC': (
-                round(float(temperature_mean_celsius), 2)
-                if temperature_mean_celsius is not None else None
-            ),
-            'daily': daily_series,
-        })
-
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/highlight-class', methods=['POST'])
