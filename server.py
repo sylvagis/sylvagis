@@ -16,14 +16,22 @@ import datetime
 import traceback
 import urllib.parse
 import requests
-import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify, Response, send_from_directory
 from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
 print('SylvaGIS server.py yüklendi — versiyon: zip-export-v2-tiling')
+
+# Arayüz ve API aynı uygulamadan sunulur. Böylece index.html ayrı açıldığında
+# eski/uzak bir sunucuya bağlanıp eksik karo göstermesi engellenir.
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+@app.get('/')
+def serve_frontend():
+    return send_from_directory(APP_DIR, 'index.html')
 
 
 # API istemcisi JSON bekler. Flask'in varsayılan HTML 404/405 sayfaları,
@@ -1682,7 +1690,21 @@ def ping():
 #                        şifresi SMTP için çalışmaz, 2 Adımlı Doğrulama açıp
 #                        myaccount.google.com/apppasswords adresinden alınır)
 # Bu değişkenler tanımlı değilse endpoint açık/anlaşılır bir hata döner.
-CONTACT_RECEIVER_EMAIL = 'sylvagis.world@gmail.com'
+CONTACT_RECEIVER_EMAIL = os.environ.get(
+    'SYLVA_OWNER_EMAIL',
+    'sylvagis.world@gmail.com',
+).strip()
+SYLVA_SMTP_USER = os.environ.get('SYLVA_SMTP_USER', '').strip()
+SYLVA_SMTP_PASS = os.environ.get('SYLVA_SMTP_PASS', '')
+
+
+def _smtp_credentials():
+    if not SYLVA_SMTP_USER or not SYLVA_SMTP_PASS:
+        raise RuntimeError(
+            'E-posta gönderimi için SYLVA_SMTP_USER ve '
+            'SYLVA_SMTP_PASS ortam değişkenleri tanımlanmalıdır.'
+        )
+    return SYLVA_SMTP_USER, SYLVA_SMTP_PASS
 
 
 @app.route('/api/contact', methods=['POST'])
@@ -1704,8 +1726,7 @@ def send_contact_message():
     if not email_re.match(email):
         return jsonify({'success': False, 'error': 'Geçersiz e-posta adresi.'}), 400
 
-    smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'ksfnkvwcutrawcih'
+    smtp_user, smtp_pass = _smtp_credentials()
 
     body = (
         'SylvaGIS İletişim Formu üzerinden yeni bir mesaj gönderildi.\n\n'
@@ -2757,334 +2778,6 @@ def _dynamic_stretch_vis(img, roi, scale, fallback_vis):
         return fallback_vis
 
 
-# ════════════════════════════════════════════════════════════════
-# 📏 VEKTÖR EŞ YÜKSELTİ (KONTUR) ÇİZGİLERİ — /api/contour-vector
-# ════════════════════════════════════════════════════════════════
-# SORUN: Eskiden eş yükselti çizgileri, GEE'de zeroCrossing() ile üretilen
-# bir RASTER maske olarak (getMapId → tile_fetcher) haritaya ekleniyordu.
-# Harita önizleme karoları (tile) piksel bazlı üretildiğinden, çizgiler
-# yakınlaştırıldığında (özellikle dar/dik AOI'lerde) piksel kenarlarını
-# takip eden "merdiven basamağı" görünümü ortaya çıkıyordu — .resample
-# ('bicubic') bunu bir miktar yumuşatsa da temelde HÂLÂ bir rasterdi.
-#
-# ÇÖZÜM: DEM, klasik "marching squares" algoritmasıyla GERÇEK vektör
-# çizgilere (LineString) dönüştürülür. Süreç:
-#   1) DEM, AOI'nin gerçek boyutuna göre otomatik ölçeklenmiş bir piksel
-#      ızgarasına (bicubic ile yumuşatılmış) indirilir (NPY formatı).
-#   2) Her yükselti bandı (interval'in katları) için marching squares
-#      algoritması, DEM yüzeyinin o değeri TAM OLARAK kestiği noktaları
-#      alt-piksel (sub-pixel) hassasiyetinde hesaplar ve bunları birbirine
-#      bağlı çizgi zincirlerine (polyline) dönüştürür.
-#   3) Zincirler hafif bir Douglas-Peucker sadeleştirmesinden geçirilip
-#      piksel koordinatlarından coğrafi (lon/lat) koordinatlara çevrilir.
-# Sonuç: piksel ızgarasından TAMAMEN bağımsız, düz/eğrisel görünen normal
-# çizgilerden oluşan bir GeoJSON FeatureCollection'dır — herhangi bir
-# zoom seviyesinde "merdiven" etkisi oluşmaz.
-_CONTOUR_VECTOR_TARGET_PX = 900      # hedef ızgara kenarı (piksel) — daha büyük = daha pürüzsüz ama daha yavaş
-_CONTOUR_VECTOR_MIN_SCALE_M = 5.0    # metre/piksel alt sınır (aşırı büyütmeyi önler)
-
-
-def _cv_build_clean_dem(roi, dem_source):
-    """build_result_image() içindeki DEM seçim/boşluk-doldurma mantığının
-    vektör kontur uç noktası için bağımsız (self-contained) kopyası —
-    mevcut raster analiz akışına dokunmadan aynı temiz DEM'i üretir."""
-    srtm_fallback = ee.Image('USGS/SRTMGL1_003').select('elevation')
-    if dem_source == 'ALOS':
-        dem = (ee.ImageCollection('JAXA/ALOS/AW3D30/V3_2')
-               .filterBounds(roi).mosaic().select('DSM').rename('elevation'))
-        dem = dem.unmask(srtm_fallback)
-    elif dem_source == 'Copernicus':
-        dem = (ee.ImageCollection('COPERNICUS/DEM/GLO30')
-               .filterBounds(roi).mosaic().select('DEM').rename('elevation'))
-        dem = dem.unmask(srtm_fallback)
-    elif dem_source == 'NASADEM':
-        dem = ee.Image('NASA/NASADEM_HGT/001').select('elevation')
-    else:
-        dem = ee.Image('USGS/SRTMGL1_003').select('elevation')
-    dem = dem.unmask(dem.focalMean(radius=150, units='meters'))
-    dem = dem.unmask(dem.focalMean(radius=450, units='meters'))
-    return dem
-
-
-def _cv_haversine_m(lon1, lat1, lon2, lat2):
-    """İki nokta arası kabaca büyük daire (great-circle) mesafesi (metre)."""
-    r = 6371000.0
-    p1 = math.radians(lat1)
-    p2 = math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlmb = math.radians(lon2 - lon1)
-    a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlmb / 2) ** 2
-    return 2 * r * math.asin(min(1.0, math.sqrt(a)))
-
-
-def _cv_marching_squares(field, level):
-    """Tek bir yükselti seviyesi için marching squares ile çizgi
-    segmentlerini (piksel row/col koordinatlarında) çıkarır ve bunları
-    bağlı polyline zincirlerine dönüştürür. Yalnızca değeri gerçekten
-    kesen ('active') hücreler taranır — bu yüzden büyük ızgaralarda bile
-    hızlıdır (tarama maliyeti çizgi uzunluğuyla orantılıdır, ızgaranın
-    toplam piksel sayısıyla değil)."""
-    a = field[:-1, :-1]
-    b = field[:-1, 1:]
-    d = field[1:, :-1]
-    c = field[1:, 1:]
-
-    valid = np.isfinite(a) & np.isfinite(b) & np.isfinite(c) & np.isfinite(d)
-    idx = (np.where(a >= level, 1, 0)
-           | np.where(b >= level, 2, 0)
-           | np.where(c >= level, 4, 0)
-           | np.where(d >= level, 8, 0)).astype(np.uint8)
-
-    active = valid & (idx != 0) & (idx != 15)
-    rows, cols = np.nonzero(active)
-    if rows.size == 0:
-        return []
-
-    def _t(v1, v2):
-        if v1 == v2:
-            return 0.5
-        tt = (level - v1) / (v2 - v1)
-        return 0.0 if tt < 0 else (1.0 if tt > 1 else tt)
-
-    segments = []
-    for i, j in zip(rows.tolist(), cols.tolist()):
-        av = float(field[i, j]); bv = float(field[i, j + 1])
-        cv = float(field[i + 1, j + 1]); dv = float(field[i + 1, j])
-        cell_idx = int(idx[i, j])
-
-        top    = (i, j + _t(av, bv))
-        right  = (i + _t(bv, cv), j + 1)
-        bottom = (i + 1, j + _t(dv, cv))
-        left   = (i + _t(av, dv), j)
-
-        if cell_idx in (1, 14):
-            segments.append((left, top))
-        elif cell_idx in (2, 13):
-            segments.append((top, right))
-        elif cell_idx in (3, 12):
-            segments.append((left, right))
-        elif cell_idx in (4, 11):
-            segments.append((right, bottom))
-        elif cell_idx in (6, 9):
-            segments.append((top, bottom))
-        elif cell_idx in (7, 8):
-            segments.append((left, bottom))
-        elif cell_idx == 5:
-            segments.append((left, top))
-            segments.append((right, bottom))
-        elif cell_idx == 10:
-            segments.append((top, right))
-            segments.append((left, bottom))
-
-    return _cv_chain_segments(segments)
-
-
-def _cv_chain_segments(segments):
-    """Ayrık çizgi segmentlerini (her biri iki uç noktadan oluşan) ortak
-    uç noktalarından birleştirerek sürekli polyline zincirlerine
-    dönüştürür (açık uçlu çizgiler önce, kapalı döngüler sonra işlenir)."""
-    def key(p):
-        return (round(p[0], 6), round(p[1], 6))
-
-    adj = {}
-    points = {}
-    for seg_idx, (p1, p2) in enumerate(segments):
-        k1, k2 = key(p1), key(p2)
-        points[k1] = p1
-        points[k2] = p2
-        adj.setdefault(k1, []).append((seg_idx, 0))
-        adj.setdefault(k2, []).append((seg_idx, 1))
-
-    used = [False] * len(segments)
-
-    def other_key(seg_idx, end):
-        p1, p2 = segments[seg_idx]
-        return key(p2) if end == 0 else key(p1)
-
-    def walk_from(k0):
-        chain = [points[k0]]
-        cur = k0
-        while True:
-            found = None
-            for seg_idx, end in adj.get(cur, []):
-                if not used[seg_idx]:
-                    found = (seg_idx, end)
-                    break
-            if not found:
-                break
-            seg_idx, end = found
-            used[seg_idx] = True
-            nxt = other_key(seg_idx, end)
-            chain.append(points[nxt])
-            cur = nxt
-        return chain
-
-    polylines = []
-    # Açık uçlu (bir ucu tek segmentli) zincirler önce
-    for k, entries in adj.items():
-        if len(entries) == 1 and any(not used[i] for i, _ in entries):
-            chain = walk_from(k)
-            if len(chain) >= 2:
-                polylines.append(chain)
-    # Kalan her şey kapalı döngü
-    for k, entries in adj.items():
-        if any(not used[i] for i, _ in entries):
-            chain = walk_from(k)
-            if len(chain) >= 2:
-                polylines.append(chain)
-
-    return polylines
-
-
-def _cv_simplify_polyline(coords, epsilon):
-    """Ramer–Douglas–Peucker sadeleştirmesi (iteratif — özyineleme derinliği
-    riski yok). GeoJSON boyutunu ve tarayıcıda çizim maliyetini azaltır;
-    çizginin görsel şeklini epsilon toleransı dahilinde korur."""
-    if len(coords) < 3 or epsilon <= 0:
-        return coords
-    pts = np.array(coords, dtype=np.float64)
-    keep = np.zeros(len(pts), dtype=bool)
-    keep[0] = True
-    keep[-1] = True
-    stack = [(0, len(pts) - 1)]
-    while stack:
-        start, end = stack.pop()
-        if end <= start + 1:
-            continue
-        p1, p2 = pts[start], pts[end]
-        seg = p2 - p1
-        seg_len2 = float(np.dot(seg, seg))
-        sub = pts[start + 1:end]
-        if seg_len2 == 0:
-            dists = np.linalg.norm(sub - p1, axis=1)
-        else:
-            t = np.clip(((sub - p1) @ seg) / seg_len2, 0, 1)
-            proj = p1 + t[:, None] * seg
-            dists = np.linalg.norm(sub - proj, axis=1)
-        if dists.size == 0:
-            continue
-        local_max = int(np.argmax(dists))
-        if dists[local_max] > epsilon:
-            idx = start + 1 + local_max
-            keep[idx] = True
-            stack.append((start, idx))
-            stack.append((idx, end))
-    return pts[keep].tolist()
-
-
-def _cv_generate_vector_contours(roi, dem_source, interval):
-    """AOI + DEM kaynağı + yükselti aralığına göre gerçek vektör (LineString)
-    eş yükselti çizgilerini üretir. Dönüş: (geojson_dict, {'min','max','mean'})."""
-    dem = _cv_build_clean_dem(roi, dem_source)
-    # Mevcut raster kontur ile aynı yumuşatma (odak-ortalama + bikübik):
-    # sinyalin kendisi zaten pürüzsüz olduğundan marching squares'in
-    # ürettiği çizgiler de akıcı/eğrisel çıkar.
-    dem_smooth = dem.focalMean(radius=45, units='meters').resample('bicubic').rename('elevation')
-
-    bounds_ring = roi.bounds(maxError=1).getInfo()['coordinates'][0]
-    lons = [p[0] for p in bounds_ring]
-    lats = [p[1] for p in bounds_ring]
-    west, east = min(lons), max(lons)
-    south, north = min(lats), max(lats)
-    if east <= west or north <= south:
-        raise ValueError('Çalışma alanı sınırları geçersiz.')
-
-    width_m  = _cv_haversine_m(west, south, east, south)
-    height_m = _cv_haversine_m(west, south, west, north)
-    longest_m = max(width_m, height_m, 1.0)
-    scale = max(_CONTOUR_VECTOR_MIN_SCALE_M, longest_m / _CONTOUR_VECTOR_TARGET_PX)
-
-    download_url = dem_smooth.getDownloadURL({
-        'region': roi,
-        'scale': scale,
-        'format': 'NPY',
-    })
-    resp = requests.get(download_url, timeout=120)
-    resp.raise_for_status()
-    struct = np.load(io.BytesIO(resp.content))
-    field = struct['elevation'].astype(np.float64)
-    nrows, ncols = field.shape
-    if nrows < 2 or ncols < 2:
-        raise ValueError('Çalışma alanı vektör konturu üretmek için çok küçük. Daha geniş bir alan seçin.')
-
-    finite = field[np.isfinite(field)]
-    if finite.size == 0:
-        raise ValueError('Seçilen alanda yükselti verisi bulunamadı.')
-    min_e = float(np.nanmin(finite))
-    max_e = float(np.nanmax(finite))
-    mean_e = float(np.nanmean(finite))
-
-    levels = []
-    lv = math.ceil(min_e / interval) * interval
-    while lv <= max_e + 1e-6:
-        levels.append(lv)
-        lv += interval
-    if not levels and max_e > min_e:
-        levels = [(min_e + max_e) / 2.0]
-
-    def px_to_lonlat(row, col):
-        lon = west + (col + 0.5) / ncols * (east - west)
-        lat = north - (row + 0.5) / nrows * (north - south)
-        return [lon, lat]
-
-    eps_deg = (east - west) / ncols * 0.6  # ~yarım piksel toleranslı sadeleştirme
-
-    features = []
-    for lv in levels:
-        for pl in _cv_marching_squares(field, lv):
-            if len(pl) < 2:
-                continue
-            coords = [px_to_lonlat(r, c) for (r, c) in pl]
-            coords = _cv_simplify_polyline(coords, eps_deg)
-            if len(coords) < 2:
-                continue
-            features.append({
-                'type': 'Feature',
-                'geometry': {'type': 'LineString', 'coordinates': coords},
-                'properties': {'elevation': round(lv, 3)},
-            })
-
-    geojson = {'type': 'FeatureCollection', 'features': features}
-    real_minmax = {'min': min_e, 'max': max_e, 'mean': mean_e}
-    return geojson, real_minmax
-
-
-@app.route('/api/contour-vector', methods=['POST'])
-def contour_vector():
-    """Eş yükselti (kontur) çizgilerini RASTER karo yerine gerçek vektör
-    (GeoJSON LineString) olarak döner — istemci bunu doğrudan bir Leaflet
-    L.geoJSON katmanı olarak çizer, bu yüzden herhangi bir zoom seviyesinde
-    piksel/merdiven basamağı görünümü OLUŞMAZ."""
-    req_data = request.get_json(silent=True) or {}
-    roi_coords = req_data.get('roi')
-    dem_source = req_data.get('demSource', 'SRTM')
-    try:
-        interval = float(req_data.get('contourInterval', 50) or 50)
-    except (TypeError, ValueError):
-        interval = 50.0
-    if interval <= 0:
-        interval = 50.0
-
-    if not roi_coords:
-        return jsonify({'success': False, 'error': 'Çalışma alanı geometrisi bulunamadı. Haritada bir alan çizin.'}), 400
-
-    try:
-        roi = make_roi(roi_coords)
-        geojson, real_minmax = _call_with_retry(
-            _cv_generate_vector_contours, roi, dem_source, interval
-        )
-        return jsonify({
-            'success': True,
-            'geojson': geojson,
-            'interval': interval,
-            'demSource': dem_source,
-            'realStats': real_minmax,
-        })
-    except Exception as ex:
-        traceback.print_exc()
-        return jsonify({'success': False, 'error': str(ex)}), 500
-
-
 def build_result_image(data, for_export=False):
     """
     Ortak analiz görüntüsü oluşturma mantığı.
@@ -3109,8 +2802,6 @@ def build_result_image(data, for_export=False):
     start_date = data.get('startDate')
     end_date   = data.get('endDate')
     max_cloud  = int(data.get('maxCloud', 20))
-    months     = _parse_months_param(data)
-    month_filter = _calendar_month_filter(months)
     scene_id   = data.get('sceneId')
     class_breaks = data.get('classBreaks')
     if for_export:
@@ -3133,12 +2824,9 @@ def build_result_image(data, for_export=False):
             eff_end   = today.isoformat()
             eff_start = (today - datetime.timedelta(days=365)).isoformat()
 
-        dw_collection = (ee.ImageCollection('GOOGLE/DYNAMICWORLD/V1')
-                         .filterBounds(roi)
-                         .filterDate(eff_start, eff_end))
-        if month_filter is not None:
-            dw_collection = dw_collection.filter(month_filter)
-        dw = (dw_collection
+        dw = (ee.ImageCollection('GOOGLE/DYNAMICWORLD/V1')
+              .filterBounds(roi)
+              .filterDate(eff_start, eff_end)
               .select('label')
               .reduce(ee.Reducer.mode())
               .rename('value'))
@@ -3310,8 +2998,7 @@ def build_result_image(data, for_export=False):
         # bir "güvenlik ağı" geçişi uyguluyoruz — ilk geçişte dolmayan
         # (çevresi de void olan) nadir pikseller ikinci, daha geniş
         # pencerede kesinlikle geçerli komşu bulur.
-        dem = dem.unmask(dem.focalMean(radius=150, units='meters'))
-        dem = dem.unmask(dem.focalMean(radius=450, units='meters'))
+        dem = dem.unmask(dem.focal_mean(radius=3, units='pixels'))
 
         terrain = ee.Terrain.products(dem)
         slope   = terrain.select('slope')
@@ -3605,8 +3292,6 @@ def build_result_image(data, for_export=False):
             raise ValueError('Bilinmeyen uydu görüntüsü veri seti: ' + str(satellite))
 
         col = build_rgb_collection(ds, roi, max_cloud)
-        if month_filter is not None:
-            col = col.filter(month_filter)
 
         if scene_id:
             image = col.filter(ee.Filter.eq('system:index', scene_id)).first()
@@ -3631,8 +3316,6 @@ def build_result_image(data, for_export=False):
                .filter(ee.Filter.eq('instrumentMode', 'IW'))
                .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VV'))
                .select('VV'))
-        if month_filter is not None:
-            _sar_col = _sar_col.filter(month_filter)
         sar = _sar_col.mean().rename('value')
         vis    = {'min': -25, 'max': 0,
                   'palette': ['black', 'white']}
@@ -3753,8 +3436,6 @@ def build_result_image(data, for_export=False):
     # görüntüye ayrı ayrı uygulanır ki hem tek sahne (scene_id) hem de
     # medyan kompozit (median()) modunda export edilen GeoTIFF'te AOI
     # içinde rastgele beyaz/boşluk (NoData) pikselleri kalmasın.
-    if month_filter is not None:
-        col = col.filter(month_filter)
     col = col.map(lambda img: _mask_clouds(img, satellite))
 
     # ── 2. Tarih filtresi veya belirli sahne ────────────────────
@@ -3796,8 +3477,7 @@ def build_result_image(data, for_export=False):
     # kalır (yanlışlıkla "bulut altı veri" uydurulmaz). İki aşamalı
     # (60 m + 200 m) geçiş, hem S2 (10 m) hem Landsat (30 m) çözünürlüğünde
     # tipik bulut-kenarı beneklerini kapatmaya yeter.
-    image = image.unmask(image.focalMean(radius=60, units='meters'))
-    image = image.unmask(image.focalMean(radius=200, units='meters'))
+    image = image.unmask(image.focal_mean(radius=2, units='pixels'))
 
     # 🛠️ BUG FİX (KÖK NEDEN — Landsat tabanlı TÜM indeksler yanlış
     # hesaplanıyordu): Landsat Collection 2 Level-2 (l89-l2, l7-l2,
@@ -4079,20 +3759,14 @@ def _rgb_scene_metadata(data, roi, image, ds):
 # en az bulutlu GERÇEK sahne (Image ID + tarih + bulutluluk) bulunup
 # 'gallery' dizisinde döndürülür — istemci bunu üstteki uydu görüntü
 # galerisine yazar ve kullanıcı o periyotlar arasında geçiş yapabilir.
-def _sylva_period_ranges(start_year, end_year, period, months=None):
+def _sylva_period_ranges(start_year, end_year, period):
     """Başlangıç/bitiş yılı ve periyot tipine göre (label, startDate, endDate)
     üçlülerinden oluşan sıralı bir liste üretir. 'endDate' üst sınır HARİÇ
-    (GEE filterDate ile uyumlu — bir sonraki periyodun ilk günü).
-    Ay seçimi verilirse aylık periyotlarda yalnızca o aylar üretilir.
-    Yıllık periyotlarda aralık korunur; seçilen ay filtresi ilgili yıllık
-    koleksiyon kompozitine ayrıca uygulanır."""
+    (GEE filterDate ile uyumlu — bir sonraki periyodun ilk günü)."""
     ranges = []
-    selected_months = set(months or [])
     if period == 'monthly':
         for y in range(start_year, end_year + 1):
             for m in range(1, 13):
-                if selected_months and m not in selected_months:
-                    continue
                 start = '%04d-%02d-01' % (y, m)
                 if m == 12:
                     end = '%04d-01-01' % (y + 1)
@@ -4105,8 +3779,7 @@ def _sylva_period_ranges(start_year, end_year, period, months=None):
     return ranges
 
 
-def _sylva_least_cloud_scene(roi, satellite, start_date, end_date, max_cloud,
-                             months=None):
+def _sylva_least_cloud_scene(roi, satellite, start_date, end_date, max_cloud):
     """Verilen AOI + tarih aralığında, seçilen uydu için EN AZ bulutlu
     gerçek sahnenin metadata'sını (sceneId, timestamp, bulutluluk %) döner.
     Uygun sahne bulunamazsa None döner — galeri o periyodu atlar."""
@@ -4118,9 +3791,6 @@ def _sylva_least_cloud_scene(roi, satellite, start_date, end_date, max_cloud,
         col = None
         for coll_id in ds.get('collections', []):
             c = ee.ImageCollection(coll_id).filterBounds(roi).filterDate(start_date, end_date)
-            month_filter = _calendar_month_filter(months)
-            if month_filter is not None:
-                c = c.filter(month_filter)
             col = c if col is None else col.merge(c)
         if col is None:
             return None
@@ -4170,8 +3840,7 @@ def timeseries():
         if end_year <= start_year:
             return jsonify({'success': False, 'error': 'Bitiş yılı başlangıç yılından büyük olmalı.'}), 400
 
-        months = _parse_months_param(data)
-        ranges = _sylva_period_ranges(start_year, end_year, period, months=months)
+        ranges = _sylva_period_ranges(start_year, end_year, period)
         # Güvenlik sınırı: çok uzun aralık + aylık periyot GEE'ye çok
         # sayıda ardışık istek anlamına gelir (timeout/limit riski).
         MAX_PERIODS = 240
@@ -4193,7 +3862,6 @@ def timeseries():
                 period_data['endDate']   = edate
                 period_data['sceneId']   = None
                 period_data['classBreaks'] = None
-                period_data['months']    = months or []
                 try:
                     _final, p_roi, p_result, _vis, _probe = _call_with_retry(
                         build_result_image, period_data, for_export=False
@@ -4216,9 +3884,7 @@ def timeseries():
         # tek bir sahne akışı gösterir, indeks başına ayrı galeri yoktur)
         gallery = []
         for label, sdate, edate in ranges:
-            scene = _sylva_least_cloud_scene(
-                roi, satellite, sdate, edate, max_cloud, months=months
-            )
+            scene = _sylva_least_cloud_scene(roi, satellite, sdate, edate, max_cloud)
             if scene:
                 scene['label'] = label
                 gallery.append(scene)
@@ -4256,9 +3922,6 @@ def analyze():
             roi = make_roi(data.get('roi'))
             max_cloud = int(data.get('maxCloud', 100))
             col = build_rgb_collection(ds, roi, max_cloud)
-            months_filter = _parse_months_param(data)
-            if months_filter is not None:
-                col = col.filter(_calendar_month_filter(months_filter))
             scene_id = data.get('sceneId')
             if scene_id:
                 image = col.filter(ee.Filter.eq('system:index', scene_id)).first()
@@ -5762,11 +5425,10 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-SYLVA_OWNER_EMAIL = 'sylvagis.world@gmail.com'
+SYLVA_OWNER_EMAIL = CONTACT_RECEIVER_EMAIL
 
 def _send_registration_email(ad, soyad, email, meslek, ulke):
-    smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'ksfnkvwcutrawcih'
+    smtp_user, smtp_pass = _smtp_credentials()
 
     msg = MIMEMultipart('alternative')
     msg['Subject'] = f'[SylvaGIS] Yeni Kayıt — {ad} {soyad}'
