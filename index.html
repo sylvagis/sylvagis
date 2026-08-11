@@ -3169,6 +3169,31 @@ tr.class-highlight-active {
             .sylva-month-grid { grid-template-columns: repeat(3, 1fr); }
         }
 
+        /* 📏 Eş Yükselti (Vektör Kontur) — rakım etiketleri ve tıklanabilir çizgi vurgusu */
+        .sylva-contour-label-wrap {
+            background: transparent !important;
+            border: none !important;
+            pointer-events: none !important;
+        }
+        .sylva-contour-label {
+            display: inline-block;
+            transform: translate(-50%, -50%);
+            white-space: nowrap;
+            font-size: 10.5px;
+            font-weight: 700;
+            line-height: 1;
+            padding: 1px 4px;
+            border-radius: 3px;
+            background: rgba(255, 255, 255, 0.86);
+            box-shadow: 0 1px 2px rgba(0,0,0,0.35);
+            font-family: inherit;
+            user-select: none;
+        }
+        .sylva-contour-line-path {
+            cursor: pointer;
+            transition: filter 0.15s ease-out;
+        }
+
 </style>
 <style id="sylva-datepicker-css">
 .sylva-dp-wrap{position:relative;}
@@ -4152,6 +4177,20 @@ tr.class-highlight-active {
                             var _cvKey = (pane === 'map2') ? 'map2' : 'map';
                             var _cvLayer = window._contourVectorLayerByPane && window._contourVectorLayerByPane[_cvKey];
                             if (_cvLayer && typeof _cvLayer.setStyle === 'function') _cvLayer.setStyle({ color: val });
+                            // Rakım etiketlerinin rengini de yeni renkle eşitle.
+                            var _cvLabels = window._contourLabelLayerByPane && window._contourLabelLayerByPane[_cvKey];
+                            if (_cvLabels && typeof _cvLabels.eachLayer === 'function') {
+                                _cvLabels.eachLayer(function (lm) {
+                                    var el = lm.getElement && lm.getElement();
+                                    var span = el && el.querySelector ? el.querySelector('.sylva-contour-label') : null;
+                                    if (span) span.style.color = val;
+                                });
+                            }
+                            // Şu an vurgulu (parlayan) bir çizgi varsa, "orijinal renk"
+                            // referansı da yeni renkle güncellenir — vurgu kalktığında
+                            // eski renge değil yeni seçilen renge dönsün.
+                            var _cvHi = window._contourHighlightByPane && window._contourHighlightByPane[_cvKey];
+                            if (_cvHi) _cvHi.originalStyle.color = val;
                         } catch (e) {}
                         fetch(API_BASE + '/api/analyze', {
                             method: 'POST',
@@ -11836,7 +11875,44 @@ function selectRamp(name) {
         // L.geoJSON katmanı olarak çizilir — bu RASTER bir karo DEĞİLDİR,
         // bu yüzden hiçbir zoom seviyesinde piksel/merdiven görünümü
         // oluşmaz; çizgiler her zoom'da akıcı/pürüzsüz kalır.
+        //
+        // 🆕 GÜNCELLEME: Her çizginin yaklaşık orta noktasına rakım (m)
+        // etiketi eklenir; bir çizgiye tıklandığında yalnızca o eş
+        // yükselti kalın/parlak (glow) bir vurguyla öne çıkarılır — harita
+        // boş bir yere tıklanınca vurgu kalkar.
         window._contourVectorLayerByPane = window._contourVectorLayerByPane || { map: null, map2: null };
+        window._contourLabelLayerByPane  = window._contourLabelLayerByPane  || { map: null, map2: null };
+        window._contourHighlightByPane   = window._contourHighlightByPane   || { map: null, map2: null };
+        window._contourMapClickBound     = window._contourMapClickBound     || { map: false, map2: false };
+
+        function _sylvaContourResetHighlight(paneId) {
+            var pKey = (paneId === 'map2') ? 'map2' : 'map';
+            var h = window._contourHighlightByPane[pKey];
+            if (h && h.layer) {
+                try {
+                    h.layer.setStyle(h.originalStyle);
+                    if (h.layer._path) h.layer._path.style.filter = '';
+                } catch (e) {}
+            }
+            window._contourHighlightByPane[pKey] = null;
+        }
+
+        function _sylvaContourHighlight(paneId, layer, baseColor) {
+            var pKey = (paneId === 'map2') ? 'map2' : 'map';
+            _sylvaContourResetHighlight(paneId);
+            try {
+                layer.setStyle({ color: '#ffee58', weight: 4.5, opacity: 1 });
+                if (layer._path) {
+                    layer._path.style.filter = 'drop-shadow(0 0 5px #ffee58) drop-shadow(0 0 11px #ffee58)';
+                }
+                if (typeof layer.bringToFront === 'function') layer.bringToFront();
+            } catch (e) {}
+            window._contourHighlightByPane[pKey] = {
+                layer: layer,
+                originalStyle: { color: baseColor, weight: 1.5, opacity: 0.95 }
+            };
+        }
+
         function _sylvaLoadVectorContours(paneId, payload, color) {
             if (typeof API_BASE === 'undefined' || !payload || !payload.roi) return;
             var targetMap = _sylvaTargetMap(paneId);
@@ -11855,16 +11931,61 @@ function selectRamp(name) {
             .then(function (res) {
                 if (typeof _analysisGeneration !== 'undefined' && _analysisGeneration !== _reqGen) return;
                 if (!res || !res.success || !res.geojson) return;
+
                 if (window._contourVectorLayerByPane[pKey]) {
                     try { targetMap.removeLayer(window._contourVectorLayerByPane[pKey]); } catch (e) {}
                     window._contourVectorLayerByPane[pKey] = null;
                 }
+                if (window._contourLabelLayerByPane[pKey]) {
+                    try { targetMap.removeLayer(window._contourLabelLayerByPane[pKey]); } catch (e) {}
+                    window._contourLabelLayerByPane[pKey] = null;
+                }
+                window._contourHighlightByPane[pKey] = null;
+
+                var labelGroup = L.layerGroup();
+
                 var layer = L.geoJSON(res.geojson, {
                     pane: 'geeAnalysisPane',
-                    interactive: false,
-                    style: function () { return { color: color, weight: 1.5, opacity: 0.95 }; }
+                    interactive: true,
+                    style: function () { return { color: color, weight: 1.5, opacity: 0.95, className: 'sylva-contour-line-path' }; },
+                    onEachFeature: function (feature, lyr) {
+                        lyr.on('click', function (e) {
+                            L.DomEvent.stop(e);
+                            _sylvaContourHighlight(paneId, lyr, color);
+                        });
+
+                        var elev = feature && feature.properties ? feature.properties.elevation : null;
+                        var coords = feature && feature.geometry && feature.geometry.coordinates;
+                        if (elev !== null && elev !== undefined && coords && coords.length) {
+                            var mid = coords[Math.floor(coords.length / 2)];
+                            if (mid && mid.length >= 2) {
+                                var lm = L.marker([mid[1], mid[0]], {
+                                    icon: L.divIcon({
+                                        className: 'sylva-contour-label-wrap',
+                                        html: '<span class="sylva-contour-label" style="color:' + color + ';">' + Math.round(elev) + ' m</span>',
+                                        iconSize: null
+                                    }),
+                                    interactive: false,
+                                    keyboard: false,
+                                    pane: 'geeAnalysisPane'
+                                });
+                                labelGroup.addLayer(lm);
+                            }
+                        }
+                    }
                 }).addTo(targetMap);
+                labelGroup.addTo(targetMap);
+
+                // Boş bir yere (çizgi dışında) tıklanınca vurguyu kaldır — bu
+                // dinleyici harita başına yalnızca BİR kez bağlanır (tekrarlanan
+                // analiz çalıştırmalarında dinleyici çoğalmaz).
+                if (!window._contourMapClickBound[pKey]) {
+                    targetMap.on('click', function () { _sylvaContourResetHighlight(paneId); });
+                    window._contourMapClickBound[pKey] = true;
+                }
+
                 window._contourVectorLayerByPane[pKey] = layer;
+                window._contourLabelLayerByPane[pKey] = labelGroup;
             })
             .catch(function () {});
         }
@@ -11875,6 +11996,11 @@ function selectRamp(name) {
                 try { targetMap.removeLayer(window._contourVectorLayerByPane[pKey]); } catch (e) {}
                 window._contourVectorLayerByPane[pKey] = null;
             }
+            if (window._contourLabelLayerByPane && window._contourLabelLayerByPane[pKey]) {
+                try { targetMap.removeLayer(window._contourLabelLayerByPane[pKey]); } catch (e) {}
+                window._contourLabelLayerByPane[pKey] = null;
+            }
+            if (window._contourHighlightByPane) window._contourHighlightByPane[pKey] = null;
         }
 
         window._geeLayersByPane = window._geeLayersByPane || { map: {}, map2: {} };
