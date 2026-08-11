@@ -2091,22 +2091,75 @@ def build_rgb_collection(ds, roi, max_cloud):
 # (bkz. GEE dokümantasyonu: son eklenen görüntü en üstte/öncelikli olur),
 # seçilen sahne mozağa EN SONA eklenir — böylece kullanıcının seçtiği
 # görüntü öncelikli/değişmeden kalır, komşu sahneler yalnızca onun
-# kapsamadığı boşlukları doldurur. Aynı güne ait başka sahne yoksa (AOI
-# zaten tek sahne içinde tamamen kapsanıyorsa) sonuç, orijinal tek
-# görüntüyle birebir aynıdır.
-def _fill_scene_gaps_with_same_day_mosaic(col, selected_image, scene_id, roi):
+# kapsamadığı boşlukları doldurur.
+#
+# 🛠️ GÜNCELLEME (madde 1 — hâlâ boşluk kalıyordu): "Aynı gün" arama
+# çoğu zaman komşu sahneyi BULAMIYORDU, çünkü komşu MGRS tile/path-row
+# genelde AYNI gün değil, uydunun tekrar-geçiş döngüsüne göre birkaç
+# gün önce/sonra geçiyor (Sentinel-2 için tipik olarak ~5 gün). Bu
+# durumda fonksiyon sessizce boş dönüp orijinal tek sahneye geri
+# düşüyor, boşluk hiç dolmuyordu. Arama penceresi artık seçilen tarihin
+# ETRAFINDA ±_SCENE_GAP_FILL_DAY_WINDOW gün olacak şekilde genişletildi;
+# aynı gün içinde komşu sahne varsa öncelik yine ona (en yakın tarihe)
+# verilir, yoksa pencere içindeki en yakın tarihli sahne kullanılır.
+_SCENE_GAP_FILL_DAY_WINDOW = 5  # gün — hem yönde (önce/sonra) arama genişliği
+def _fill_scene_gaps_with_same_day_mosaic(col, selected_image, scene_id, roi,
+                                           day_window=_SCENE_GAP_FILL_DAY_WINDOW):
     try:
         img_date = ee.Date(selected_image.get('system:time_start'))
-        day_start = ee.Date(img_date.format('yyyy-MM-dd'))
-        day_end = day_start.advance(1, 'day')
-        same_day_others = (col.filterDate(day_start, day_end)
-                               .filterBounds(roi)
-                               .filter(ee.Filter.neq('system:index', scene_id)))
-        merged = same_day_others.merge(ee.ImageCollection([selected_image]))
+        # Genişletilmiş arama penceresi: seçilen tarihten day_window gün
+        # önce ile day_window gün sonra arasında, AOI'yi kesen ve seçilen
+        # sahnenin kendisi olmayan tüm komşu sahneler.
+        window_start = img_date.advance(-day_window, 'day')
+        window_end = img_date.advance(day_window + 1, 'day')  # advance(+1) = gün sonu dahil
+        nearby_others = (col.filterDate(window_start, window_end)
+                             .filterBounds(roi)
+                             .filter(ee.Filter.neq('system:index', scene_id)))
+        # mosaic() önceliği koleksiyondaki SIRAYA göre uygular (son eklenen
+        # en üstte); nearby_others'ı seçilen tarihe en YAKIN olandan en
+        # UZAK olana doğru sıralıyoruz ki en son eklenen (dolayısıyla en
+        # öncelikli komşu, seçilen sahnenin altında kalan katman) tarihçe
+        # en yakın olsun — görsel tutarlılık için.
+        nearby_others = nearby_others.map(lambda img: img.set(
+            'sylva_day_distance', ee.Number(img.get('system:time_start'))
+                .subtract(selected_image.get('system:time_start')).abs()
+        )).sort('sylva_day_distance', False)  # en uzak önce → en yakın en son (mosaic'te en üstte)
+
+        # 🛠️ MADDE 4 — SESSİZ BAŞARISIZLIĞI LOGLAMA: Eskiden bu fonksiyon
+        # komşu sahne bulunamasa bile hiçbir iz bırakmadan orijinal tek
+        # sahneye "sessizce" geri dönüyordu — sunucu loglarında bunu görmek
+        # imkânsızdı. Artık kaç komşu sahne bulunduğu (varsa) loglanıyor.
+        # NOT: nearby_others.size().getInfo() ekstra bir GEE ağ çağrısı
+        # gerektirir — bu SADECE loglama amaçlı, sonucu etkilemez; bu
+        # yüzden kendi try/except'i içinde, ana akışı ASLA bloklamayacak
+        # ya da bozmayacak şekilde izole edilmiştir.
+        try:
+            _neighbor_count = _call_with_retry(
+                lambda: nearby_others.size().getInfo(), retries=1
+            )
+            if _neighbor_count > 0:
+                print('[SylvaGIS] ✅ Boşluk doldurma: scene_id={} için {} gün penceresinde '
+                      '{} komşu sahne bulundu ve mozaiklendi.'.format(
+                          scene_id, day_window, _neighbor_count))
+            else:
+                print('[SylvaGIS] ⚠️ Boşluk doldurma: scene_id={} için ±{} gün penceresinde '
+                      'HİÇ komşu sahne bulunamadı — AOI bu sahne dışında boş kalabilir. '
+                      'Pencereyi genişletmek (_SCENE_GAP_FILL_DAY_WINDOW) gerekebilir.'.format(
+                          scene_id, day_window))
+        except Exception as _log_err:
+            # Loglama başarısız olsa bile (ör. geçici ağ hatası) asıl
+            # mozaikleme işlemi ETKİLENMEMELİ — sadece durumu bildiriyoruz.
+            print('[SylvaGIS] ℹ️ Boşluk doldurma komşu-sahne sayısı loglanamadı '
+                  '(işlem yine de devam ediyor): {}'.format(_log_err))
+
+        merged = nearby_others.merge(ee.ImageCollection([selected_image]))
         return merged.mosaic()
-    except Exception:
+    except Exception as e:
         # Herhangi bir sorunda (ör. system:time_start eksik) güvenli
         # şekilde orijinal tek görüntüye geri dön — davranış eskisiyle aynı kalır.
+        # 🛠️ MADDE 4: bu durum da artık loglanıyor — eskiden tamamen sessizdi.
+        print('[SylvaGIS] ⚠️ Boşluk doldurma başarısız oldu (scene_id={}), orijinal tek '
+              'sahneye geri dönülüyor: {}'.format(scene_id, e))
         return selected_image
 
 
