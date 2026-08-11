@@ -4074,27 +4074,64 @@ tr.class-highlight-active {
                                 <option value="250">250 m</option>
                                 <option value="500">500 m</option>
                             </select>
-                            <!-- 🆕 GÜNCELLEME: Eş Yükselti çizgi rengi kutusu — lejant kutusundaki
-                                 gradyan renk çubuğu YERİNE, tıklanarak istenen çizgi renginin
-                                 seçilebildiği doğrudan bir renk kutusu (native color picker). -->
-                            <input type="color" id="contour-line-color" class="sylva-contour-color-input"
-                                   value="#ffffff" title="Kontur çizgi rengini seç"
-                                   style="width:28px;height:28px;padding:0;border:1px solid #cbd5e1;border-radius:4px;cursor:pointer;background:#fff;flex-shrink:0;">
+                            <!-- Eş yükselti çizgisi rengi: çalışma alanı ve tablo
+                                 renk seçicileriyle aynı açılır palet mantığı. -->
+                            <span id="contour-line-color-preview"
+                                  class="sylva-contour-color-input"
+                                  aria-label="Eş yükselti çizgisi rengi"
+                                  onclick="event.preventDefault(); event.stopPropagation(); window._toggleContourPalette(event, this);"
+                                  style="display:inline-block;width:28px;height:18px;border:0;border-top:3px solid #1e3a8a;border-radius:2px;cursor:pointer;background:transparent;flex-shrink:0;"></span>
+                            <div id="contour-line-color-palette"
+                                 style="display:none;position:fixed;z-index:99999;background:#fff;border:1px solid #cbd5e1;border-radius:6px;padding:7px;box-shadow:0 4px 14px rgba(0,0,0,0.18);flex-wrap:wrap;gap:4px;width:170px;"
+                                 onclick="event.stopPropagation()"></div>
                         </div>
                     </div>
                 </div>
             </details>
 
             <script>
-            // 🆕 GÜNCELLEME: Eş Yükselti çizgi rengi kutuları (kenar çubuğundaki
-            // ve lejant kutusundaki .sylva-contour-color-input elemanları) birbiriyle
-            // senkron tutulur; renk değiştiğinde, o an ekranda çalışan bir Eş Yükselti
-            // katmanı varsa yeni renk sunucuya gönderilip katman canlı güncellenir.
+            // Eş yükselti çizgisi için çalışma alanı ve sınıflandırma tablosundaki
+            // renk paleti davranışı kullanılır: seçilen renk bir çizgi örneğinde
+            // gösterilir, tüm örnekler senkron kalır ve aktif katman canlı yenilenir.
             (function () {
-                function _sylvaSyncContourColorInputs(val, exceptEl) {
+                var _contourColors = [
+                    '#1e3a8a','#1e3a8a','#06b6d4','#0891b2',
+                    '#22c55e','#16a34a','#14532d','#10b981',
+                    '#ef4444','#dc2626','#991b1b','#f97316',
+                    '#eab308','#d97706','#a855f7','#7c3aed',
+                    '#ec4899','#be185d','#64748b','#000000',
+                    '#ffffff','#94a3b8','#f43f5e','#fb923c',
+                    '#fbbf24','#84cc16','#2dd4bf','#818cf8',
+                    '#c084fc','#f472b6','#78350f','#166534',
+                    '#0c4a6e','#581c87'
+                ];
+                window._sylvaContourLineColor = window._sylvaContourLineColor || '#1e3a8a';
+
+                window._sylvaContourText = function (key) {
+                    var lang = (typeof window._sylvaLang !== 'undefined' && window._sylvaLang) || 'en';
+                    var dict = window.SYLVA_TRANSLATIONS && window.SYLVA_TRANSLATIONS[lang];
+                    return (dict && dict[key]) || '';
+                }
+                function _sylvaSetContourPreview(el, val) {
+                    if (!el) return;
+                    el.style.background = 'transparent';
+                    el.style.border = '0';
+                    el.style.borderTop = '3px solid ' + val;
+                    el.setAttribute('data-color', val);
+                    el.title = window._sylvaContourText('contour_color_title');
+                }
+                function _sylvaSyncContourColorInputs(val) {
+                    window._sylvaContourLineColor = val;
                     document.querySelectorAll('.sylva-contour-color-input').forEach(function (el) {
-                        if (el !== exceptEl && el.value !== val) el.value = val;
+                        _sylvaSetContourPreview(el, val);
                     });
+                    var palette = document.getElementById('contour-line-color-palette');
+                    if (palette) {
+                        palette.querySelectorAll('[data-color]').forEach(function (el) {
+                            el.style.borderColor = (el.getAttribute('data-color').toLowerCase() === val.toLowerCase())
+                                ? '#1e3a8a' : 'transparent';
+                        });
+                    }
                 }
                 function _sylvaApplyContourColorLive(val) {
                     if (!window._lastAnalyzePayloadByPane || typeof API_BASE === 'undefined') return;
@@ -4103,7 +4140,10 @@ tr.class-highlight-active {
                         if (!_lastPayload || _lastPayload.index !== 'TOPO_CONTOUR') return;
                         var _roi = (typeof _sylvaLastRoiGet === 'function') ? _sylvaLastRoiGet(pane) : null;
                         if (!_roi) return;
-                        var _payload = Object.assign({}, _lastPayload, { palette: [val] });
+                        var _payload = Object.assign({}, _lastPayload, {
+                            contourLineColor: val,
+                            palette: [val]
+                        });
                         window._lastAnalyzePayloadByPane[pane] = _payload;
                         fetch(API_BASE + '/api/analyze', {
                             method: 'POST',
@@ -4120,17 +4160,55 @@ tr.class-highlight-active {
                         .catch(function () {});
                     });
                 }
-                document.addEventListener('input', function (e) {
-                    if (e.target && e.target.classList && e.target.classList.contains('sylva-contour-color-input')) {
-                        _sylvaSyncContourColorInputs(e.target.value, e.target);
+                var _palette = document.getElementById('contour-line-color-palette');
+                if (_palette) {
+                    _contourColors.forEach(function (hex) {
+                        var sw = document.createElement('div');
+                        sw.setAttribute('data-color', hex);
+                        sw.title = hex;
+                        sw.style.cssText = 'width:18px;height:18px;border-radius:3px;cursor:pointer;border:2px solid ' +
+                            (hex.toLowerCase() === window._sylvaContourLineColor.toLowerCase() ? '#1e3a8a' : 'transparent') +
+                            ';background:' + hex + ';flex-shrink:0;';
+                        sw.addEventListener('click', function (e) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            _palette.querySelectorAll('[data-color]').forEach(function (el) {
+                                el.style.borderColor = 'transparent';
+                            });
+                            sw.style.borderColor = '#1e3a8a';
+                            _sylvaSyncContourColorInputs(hex);
+                            _sylvaApplyContourColorLive(hex);
+                            _palette.style.display = 'none';
+                        });
+                        _palette.appendChild(sw);
+                    });
+                }
+                window._toggleContourPalette = function (e, triggerEl) {
+                    if (e) e.stopPropagation();
+                    if (!_palette) return;
+                    if (_palette.style.display !== 'none') {
+                        _palette.style.display = 'none';
+                        return;
+                    }
+                    var btn = triggerEl || (e && e.currentTarget);
+                    if (btn) {
+                        var rect = btn.getBoundingClientRect();
+                        var left = Math.max(8, rect.right - 170);
+                        var top = rect.bottom + 4;
+                        if (top + 170 > window.innerHeight) top = rect.top - 174;
+                        _palette.style.left = left + 'px';
+                        _palette.style.top = Math.max(8, top) + 'px';
+                    }
+                    _palette.style.display = 'flex';
+                };
+                document.addEventListener('click', function (e) {
+                    if (_palette && _palette.style.display !== 'none' &&
+                        !_palette.contains(e.target) &&
+                        !(e.target && e.target.classList && e.target.classList.contains('sylva-contour-color-input'))) {
+                        _palette.style.display = 'none';
                     }
                 });
-                document.addEventListener('change', function (e) {
-                    if (e.target && e.target.classList && e.target.classList.contains('sylva-contour-color-input')) {
-                        _sylvaSyncContourColorInputs(e.target.value, e.target);
-                        _sylvaApplyContourColorLive(e.target.value);
-                    }
-                });
+                _sylvaSyncContourColorInputs(window._sylvaContourLineColor);
             })();
             </script>
 
@@ -11340,22 +11418,20 @@ function selectRamp(name) {
                 html += '<div style="margin-top:4px;font-size:0.68rem;color:#64748b;">RGB band composite</div>'
                     + '<div style="height:10px;border-radius:3px;border:1px solid #cbd5e1;margin-top:3px;background:' + rampCss + ';"></div>';
             } else if (meta.analysisName === 'TOPO_CONTOUR') {
-                // 🆕 GÜNCELLEME: Eş Yükselti — klasik gradyan renk çubuğu ve
-                // sembol listesi YERİNE, tıklanabilir bir "çizgi rengi" kutusu
-                // ve çalışma alanı içindeki GERÇEK min/max yükselti değerleri
-                // (bkz. applyRealStatsToLegendUI) gösterilir. Renk kutusuna
-                // tıklanınca tarayıcının doğal renk seçicisi açılır.
-                var _contourColorNow = (document.getElementById('contour-line-color') || {}).value || '#ffffff';
+                // Eş yükselti için alanı doldurmayan gerçek bir çizgi örneği
+                // ve çalışma alanı renkleriyle aynı açılır palet gösterilir.
+                var _contourColorNow = window._sylvaContourLineColor || '#1e3a8a';
                 html += '<div style="display:flex;align-items:center;gap:6px;margin-top:5px;">'
-                    + '<input type="color" class="sylva-contour-color-input" value="' + _contourColorNow + '" '
-                    + 'title="' + escapeHtml(t('contour_color_title') || 'Kontur çizgi rengini seç') + '" '
-                    + 'style="width:22px;height:22px;padding:0;border:1px solid #cbd5e1;border-radius:4px;cursor:pointer;background:#fff;flex-shrink:0;">'
-                    + '<span style="font-size:0.65rem;color:#64748b;">' + escapeHtml(t('contour_color_label') || 'Çizgi Rengi') + '</span>'
+                    + '<span class="sylva-contour-color-input" data-color="' + escapeHtml(_contourColorNow) + '" '
+                    + 'onclick="event.preventDefault();event.stopPropagation();window._toggleContourPalette(event,this);" '
+                    + 'title="' + escapeHtml((typeof window._sylvaContourText === 'function' ? window._sylvaContourText('contour_color_title') : '')) + '" '
+                    + 'style="display:inline-block;width:28px;height:18px;border:0;border-top:3px solid ' + escapeHtml(_contourColorNow) + ';border-radius:2px;cursor:pointer;background:transparent;flex-shrink:0;"></span>'
+                    + '<span style="font-size:0.65rem;color:#64748b;">' + escapeHtml((typeof window._sylvaContourText === 'function' ? window._sylvaContourText('contour_color_label') : '')) + '</span>'
                     + '</div>'
                     + '<div style="display:flex;justify-content:space-between;gap:8px;min-width:110px;font-size:0.68rem;margin-top:5px;color:#475569;">'
                     + '<span class="legend-min-label">' + escapeHtml(meta.legendMin) + '</span>'
                     + '<span class="legend-max-label">' + escapeHtml(meta.legendMax) + '</span></div>'
-                    + '<div style="font-size:0.6rem;color:#94a3b8;margin-top:2px;">' + escapeHtml(t('contour_elev_range_label') || 'Yükselti (m) — çalışma alanı') + '</div>';
+                    + '<div style="font-size:0.6rem;color:#94a3b8;margin-top:2px;">' + escapeHtml((typeof window._sylvaContourText === 'function' ? window._sylvaContourText('contour_elev_range_label') : '')) + '</div>';
             } else if (legendType !== 'classified' || !meta.classesRaw) {
                 html += '<div style="display:flex;justify-content:space-between;gap:8px;min-width:110px;font-size:0.68rem;margin-top:4px;color:#475569;">'
                     + '<span class="legend-min-label">' + escapeHtml(meta.legendMin) + '</span>'
@@ -13429,11 +13505,11 @@ function selectRamp(name) {
                 if (meta.analysisName === 'TOPO_CONTOUR') {
                     var _contourSel = document.getElementById('sel-contour-interval');
                     analyzePayload.contourInterval = _contourSel ? parseFloat(_contourSel.value) : 50;
-                    // 🆕 GÜNCELLEME: kullanıcının renk kutusundan seçtiği kontur çizgi
-                    // rengi — altlık (değer=0) zaten saydam döner, yalnızca bu renk
-                    // kontur çizgisi (değer=1) için kullanılır.
-                    var _contourColorEl = document.getElementById('contour-line-color');
-                    analyzePayload.palette = [_contourColorEl ? _contourColorEl.value : '#ffffff'];
+                    // Renk yalnızca eş yükselti çizgisine uygulanır; alan
+                    // dolgusu için kullanılmaz. Seçim sonraki analizlerde korunur.
+                    analyzePayload.contourLineColor = window._sylvaContourLineColor || '#1e3a8a';
+                    // Eski sunucu sürümleriyle geriye dönük uyumluluk.
+                    analyzePayload.palette = [analyzePayload.contourLineColor];
                 }
                 window._lastAnalyzePayloadByPane[_pane] = analyzePayload;
                 var _runGen = _analysisGeneration;
@@ -38921,6 +38997,49 @@ var SYLVA_TRANSLATIONS = {
   Object.keys(updatingLabels).forEach(function (lang) {
     if (SYLVA_TRANSLATIONS[lang]) {
       SYLVA_TRANSLATIONS[lang].updating_label = updatingLabels[lang];
+    }
+  });
+})();
+
+// ── Eş yükselti lejantı: 30 dilde UI metinleri ─────────────────────────────
+(function () {
+  var contourLabels = {
+    en: { contour_color_label: 'Line color', contour_color_title: 'Choose contour line color', contour_elev_range_label: 'Elevation (m) — study area' },
+    uz: { contour_color_label: 'Chiziq rangi', contour_color_title: 'Gorizontaliya chizig‘i rangini tanlang', contour_elev_range_label: 'Balandlik (m) — o‘rganish hududi' },
+    el: { contour_color_label: 'Χρώμα γραμμής', contour_color_title: 'Επιλέξτε χρώμα γραμμής ισοϋψών', contour_elev_range_label: 'Υψόμετρο (m) — περιοχή μελέτης' },
+    bg: { contour_color_label: 'Цвят на линията', contour_color_title: 'Изберете цвят на контурната линия', contour_elev_range_label: 'Надморска височина (m) — изследвана зона' },
+    tr: { contour_color_label: 'Çizgi rengi', contour_color_title: 'Eş yükselti çizgisi rengini seç', contour_elev_range_label: 'Yükselti (m) — çalışma alanı' },
+    az: { contour_color_label: 'Xətt rəngi', contour_color_title: 'Kontur xəttinin rəngini seçin', contour_elev_range_label: 'Hündürlük (m) — tədqiqat sahəsi' },
+    hu: { contour_color_label: 'Vonal színe', contour_color_title: 'Szintvonal színének kiválasztása', contour_elev_range_label: 'Tengerszint feletti magasság (m) — vizsgált terület' },
+    kk: { contour_color_label: 'Сызық түсі', contour_color_title: 'Горизонталь сызығының түсін таңдаңыз', contour_elev_range_label: 'Биіктік (м) — зерттеу аумағы' },
+    de: { contour_color_label: 'Linienfarbe', contour_color_title: 'Farbe der Höhenlinie auswählen', contour_elev_range_label: 'Höhe (m) — Untersuchungsgebiet' },
+    fr: { contour_color_label: 'Couleur de ligne', contour_color_title: 'Choisir la couleur des courbes de niveau', contour_elev_range_label: 'Altitude (m) — zone d’étude' },
+    es: { contour_color_label: 'Color de línea', contour_color_title: 'Elegir color de la línea de contorno', contour_elev_range_label: 'Elevación (m) — área de estudio' },
+    pt: { contour_color_label: 'Cor da linha', contour_color_title: 'Escolher a cor da linha de contorno', contour_elev_range_label: 'Elevação (m) — área de estudo' },
+    ar: { contour_color_label: 'لون الخط', contour_color_title: 'اختر لون خط الكنتور', contour_elev_range_label: 'الارتفاع (م) — منطقة الدراسة' },
+    fa: { contour_color_label: 'رنگ خط', contour_color_title: 'رنگ خط تراز را انتخاب کنید', contour_elev_range_label: 'ارتفاع (متر) — محدوده مطالعه' },
+    zh: { contour_color_label: '线条颜色', contour_color_title: '选择等高线颜色', contour_elev_range_label: '高程（米）— 研究区域' },
+    ja: { contour_color_label: '線の色', contour_color_title: '等高線の色を選択', contour_elev_range_label: '標高（m）— 調査区域' },
+    ko: { contour_color_label: '선 색상', contour_color_title: '등고선 색상 선택', contour_elev_range_label: '고도(m) — 연구 영역' },
+    hi: { contour_color_label: 'रेखा का रंग', contour_color_title: 'समोच्च रेखा का रंग चुनें', contour_elev_range_label: 'ऊंचाई (m) — अध्ययन क्षेत्र' },
+    id: { contour_color_label: 'Warna garis', contour_color_title: 'Pilih warna garis kontur', contour_elev_range_label: 'Ketinggian (m) — area studi' },
+    ru: { contour_color_label: 'Цвет линии', contour_color_title: 'Выберите цвет горизонтали', contour_elev_range_label: 'Высота (м) — область исследования' },
+    th: { contour_color_label: 'สีเส้น', contour_color_title: 'เลือกสีเส้นชั้นความสูง', contour_elev_range_label: 'ระดับความสูง (ม.) — พื้นที่ศึกษา' },
+    bn: { contour_color_label: 'রেখার রং', contour_color_title: 'কনট্যুর রেখার রং বেছে নিন', contour_elev_range_label: 'উচ্চতা (মি.) — অধ্যয়ন এলাকা' },
+    vi: { contour_color_label: 'Màu đường', contour_color_title: 'Chọn màu đường đồng mức', contour_elev_range_label: 'Độ cao (m) — khu vực nghiên cứu' },
+    ur: { contour_color_label: 'لائن کا رنگ', contour_color_title: 'کونٹور لائن کا رنگ منتخب کریں', contour_elev_range_label: 'بلندی (میٹر) — مطالعاتی علاقہ' },
+    pl: { contour_color_label: 'Kolor linii', contour_color_title: 'Wybierz kolor linii poziomic', contour_elev_range_label: 'Wysokość (m) — obszar badań' },
+    ms: { contour_color_label: 'Warna garisan', contour_color_title: 'Pilih warna garisan kontur', contour_elev_range_label: 'Ketinggian (m) — kawasan kajian' },
+    ky: { contour_color_label: 'Сызыктын түсү', contour_color_title: 'Горизонталь сызыгынын түсүн тандаңыз', contour_elev_range_label: 'Бийиктик (м) — изилдөө аймагы' },
+    mn: { contour_color_label: 'Шугамын өнгө', contour_color_title: 'Контурын шугамын өнгө сонгох', contour_elev_range_label: 'Өндөршил (м) — судалгааны бүс' },
+    ka: { contour_color_label: 'ხაზის ფერი', contour_color_title: 'კონტურული ხაზის ფერის არჩევა', contour_elev_range_label: 'სიმაღლე (მ) — საკვლევი ტერიტორია' },
+    it: { contour_color_label: 'Colore linea', contour_color_title: 'Scegli il colore delle curve di livello', contour_elev_range_label: 'Elevazione (m) — area di studio' }
+  };
+  Object.keys(contourLabels).forEach(function (lang) {
+    if (SYLVA_TRANSLATIONS[lang]) {
+      Object.keys(contourLabels[lang]).forEach(function (key) {
+        SYLVA_TRANSLATIONS[lang][key] = contourLabels[lang][key];
+      });
     }
   });
 })();
