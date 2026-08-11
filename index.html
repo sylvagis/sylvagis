@@ -202,16 +202,14 @@
         // relative /api adresi sayfanın HTML hata çıktısını döndürebilir.
         // Aynı Flask sunucusundan yayınlanan sayfada relative adres kullan;
         // diğer durumlarda SylvaGIS API sunucusuna bağlan.
-        // SylvaGIS Cloud Run backend adresi. Frontend (bu dosya) Vercel'de,
-        // backend (server.py) Cloud Run'da ayrı ayrı barındırıldığı için
-        // relative '/api/...' istekleri yanlışlıkla Vercel'e gidiyordu.
-        window.SYLVA_API_BASE = window.SYLVA_API_BASE || 'https://sylvagis-237489186187.europe-west1.run.app';
-
         window.API_BASE = (typeof window !== 'undefined' && window.SYLVA_API_BASE)
-    ? String(window.SYLVA_API_BASE).replace(/\/+$/, '')
+    ? window.SYLVA_API_BASE
     : ((typeof location !== 'undefined' && location.protocol === 'file:')
         ? 'http://127.0.0.1:5000'
-        : '');
+        : ((typeof location !== 'undefined' &&
+            location.hostname === 'sylvagis-237489186187.europe-west1.run.app')
+            ? ''
+            : 'https://sylvagis-237489186187.europe-west1.run.app'));
 
         if (typeof window.t !== 'function') {
             window.t = function(key, fallback) { return fallback || key; };
@@ -11767,50 +11765,6 @@ function selectRamp(name) {
         function _sylvaCurrentGeeLayer(paneId) {
             return (paneId === 'map2') ? (window._geeLayer2 || null) : (typeof _geeLayer !== 'undefined' ? _geeLayer : null);
         }
-
-        // GEE karo sunucusu geçici olarak 429/5xx veya ağ hatası döndürürse
-        // Leaflet varsayılan olarak karoyu yalnızca bir kez ister ve
-        // tileerror ile devam eder. Bu durumda AOI'nin bir kısmı basemap
-        // olarak kalır; kullanıcı da verinin eksik geldiğini görür.
-        // Her GEE katmanı için hatalı karoları sınırlı ve gecikmeli olarak
-        // yeniden isteriz. Bu yalnızca analiz katmanına uygulanır; basemap
-        // davranışı değişmez.
-        function _sylvaReliableGeeTileLayer(tileUrl, options) {
-            var layer = L.tileLayer(tileUrl, Object.assign({
-                opacity: 1,
-                zIndex: 10,
-                crossOrigin: true,
-                pane: 'geeAnalysisPane',
-                maxZoom: 24,
-                maxNativeZoom: 16,
-                updateWhenZooming: false,
-                keepBuffer: 3
-            }, options || {}));
-
-            layer.on('tileerror', function (event) {
-                var tile = event && event.tile;
-                if (!tile || !layer._map) return;
-                var retryCount = Number(tile._sylvaRetryCount || 0);
-                var maxRetries = 5;
-                if (retryCount >= maxRetries) return;
-                tile._sylvaRetryCount = retryCount + 1;
-                var delay = Math.min(800 * Math.pow(2, retryCount), 8000);
-                setTimeout(function () {
-                    if (!layer._map || !tile) return;
-                    try {
-                        // GEE karo URL'leri imzalı/token'lı olabilir; URL'ye
-                        // rastgele query parametresi eklemek imzayı bozabilir.
-                        // Hatalı img elementini aynı gerçek URL ile yeniden
-                        // yüklemek güvenlidir ve geçici ağ hatalarını düzeltir.
-                        tile.src = layer.getTileUrl(event.coords);
-                    } catch (error) {
-                        // Katman kaldırılmışsa yeniden denemeyi sessizce bırak.
-                    }
-                }, delay);
-            });
-            return layer;
-        }
-
         function _sylvaReplaceGeeLayer(paneId, tileUrl, options) {
             var targetMap = _sylvaTargetMap(paneId);
             // 🛠️ DÜZELTME (Zoom'da Veri Kaybolması): GEE analiz katmanları
@@ -11852,14 +11806,14 @@ function selectRamp(name) {
             var _rgTopKey = (window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[_rgKey]) || null;
             if (paneId === 'map2') {
                 if (window._geeLayer2) { try { map2.removeLayer(window._geeLayer2); } catch (e) {} window._geeLayer2 = null; }
-                window._geeLayer2 = _sylvaReliableGeeTileLayer(tileUrl, opts).addTo(targetMap);
+                window._geeLayer2 = L.tileLayer(tileUrl, opts).addTo(targetMap);
                 if (_rgTopKey && window._geeLayersByPane && window._geeLayersByPane[_rgKey]) {
                     window._geeLayersByPane[_rgKey][_rgTopKey] = window._geeLayer2;
                 }
                 return window._geeLayer2;
             }
             if (typeof _geeLayer !== 'undefined' && _geeLayer) { try { map.removeLayer(_geeLayer); } catch (e) {} _geeLayer = null; }
-            _geeLayer = _sylvaReliableGeeTileLayer(tileUrl, opts).addTo(targetMap);
+            _geeLayer = L.tileLayer(tileUrl, opts).addTo(targetMap);
             if (_rgTopKey && window._geeLayersByPane && window._geeLayersByPane[_rgKey]) {
                 window._geeLayersByPane[_rgKey][_rgTopKey] = _geeLayer;
             }
@@ -11875,7 +11829,7 @@ function selectRamp(name) {
             var opts = Object.assign({ opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane', maxZoom: 24, maxNativeZoom: 16 }, options || {});
             var store = window._geeLayersByPane[(paneId === 'map2') ? 'map2' : 'map'];
             if (store[layerKey]) { try { targetMap.removeLayer(store[layerKey]); } catch (e) {} delete store[layerKey]; }
-            var layer = _sylvaReliableGeeTileLayer(tileUrl, opts).addTo(targetMap);
+            var layer = L.tileLayer(tileUrl, opts).addTo(targetMap);
             store[layerKey] = layer;
             if (paneId === 'map2') { window._geeLayer2 = layer; } else { _geeLayer = layer; }
 
@@ -13056,48 +13010,18 @@ function selectRamp(name) {
         // kullanılır.
         function _waitForTileReady(layer, cb) {
             var done = false;
-            var startedAt = Date.now();
-            var maxWaitMs = 30000;
             function finish() {
                 if (done) return;
                 done = true;
-                if (layer && typeof layer.off === 'function') {
-                    layer.off('load', check);
-                    layer.off('tileload', check);
-                    layer.off('tileerror', check);
-                }
                 if (typeof cb === 'function') cb();
             }
-            function hasPendingTiles() {
-                if (!layer || !layer._tiles) return false;
-                return Object.keys(layer._tiles).some(function (key) {
-                    var entry = layer._tiles[key];
-                    var img = entry && entry.el;
-                    return img && !img.complete;
-                });
-            }
-            function check() {
-                if (done) return;
-                // tileerror artık hemen tamamlandı kabul edilmez; reliable
-                // layer yeniden deneme yaparken bekleme devam eder.
-                if (!hasPendingTiles() && Date.now() - startedAt > 120) {
-                    finish();
-                    return;
-                }
-                if (Date.now() - startedAt >= maxWaitMs) {
-                    finish();
-                    return;
-                }
-                setTimeout(check, 180);
-            }
-            if (layer && typeof layer.on === 'function') {
-                layer.on('load', check);
-                layer.on('tileload', check);
-                layer.on('tileerror', check);
-                setTimeout(check, 180);
+            if (layer && typeof layer.once === 'function') {
+                layer.once('load', finish);
+                layer.once('tileerror', finish);
             } else {
-                finish();
+                setTimeout(finish, 0);
             }
+            setTimeout(finish, 12000); // güvenlik ağı
         }
 
         // ── Analiz çıktılarını sıfırla ─────────────────────────────────────────
@@ -16755,14 +16679,7 @@ function selectRamp(name) {
                 }
                 var _oldLayer = window._classHighlightLayerByPane[_pane];
                 if (_oldLayer) { try { _sylvaTargetMap(_pane).removeLayer(_oldLayer); } catch (e) {} }
-                var highlightLayer = L.tileLayer(data.tileUrl, { opacity: 0.95, zIndex: 20, crossOrigin: true, pane: 'geeAnalysisPane', maxZoom: 24, maxNativeZoom: 16 });
-
-highlightLayer.on('tileerror', function(error) {
-    setTimeout(function() { error.tile.src = error.tile.src; }, 1500);
-});
-
-highlightLayer.addTo(_sylvaTargetMap(_pane));
-window._classHighlightLayerByPane[_pane] = highlightLayer;
+                window._classHighlightLayerByPane[_pane] = L.tileLayer(data.tileUrl, { opacity: 0.95, zIndex: 20, crossOrigin: true, pane: 'geeAnalysisPane', maxZoom: 24, maxNativeZoom: 16 }).addTo(_sylvaTargetMap(_pane));
             })
             .catch(function (err) {
                 if (window._classHighlightIndexByPane[_pane] === idx) window._classHighlightIndexByPane[_pane] = null;
