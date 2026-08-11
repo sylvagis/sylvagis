@@ -9628,6 +9628,30 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
             return !!((btnM && btnM.classList.contains('active')) || (btnY && btnY.classList.contains('active')));
         }
 
+        // 🛠️ BUG FİX: Üstteki (ana) Tarih Seçimi / Ay Seçimi / Bulutluluk Oranı
+        // alanları hem 🌍 Uydu Analizleri'ndeki Zaman Serisi (ts-btn-monthly/
+        // yearly) hem de 🛰️ Uydu Görüntüsü'ndeki Periyot (sat-ts-btn-monthly/
+        // yearly) tarafından PAYLAŞILAN 'sylva-ts-passive' sınıfını kullanır.
+        // Eskiden her iki kademelendirme fonksiyonu da (_updateTsSubsectionAvailability
+        // ve _updateSatTsSubsectionAvailability) bu sınıfı birbirinden habersiz
+        // şekilde doğrudan ekleyip/kaldırıyordu — biri "benim tarafım pasif değil"
+        // deyip sınıfı kaldırırken, DİĞER periyot hâlâ aktif olsa bile ana alanlar
+        // yanlışlıkla tekrar aktif/tıklanabilir hale geliyordu (ör. Uydu Analizleri
+        // tarafında Yıllık seçiliyken bir Uydu Görüntüsü kontrolü tetiklenince ana
+        // Tarih Seçimi pasiflikten çıkıyor, kullanıcı orada değer değiştirse bile
+        // Zaman Serisi analizi kendi ts-start-year/ts-end-year/ts-cloud-pct
+        // alanlarını kullanmaya devam ediyordu — kafa karıştırıcıydı). Artık TEK
+        // bir merkezi fonksiyon var: ana alanlar, İKİ periyottan HERHANGİ BİRİ
+        // aktifse pasif, ikisi de aktif değilse aktif olur.
+        function _sylvaSyncMainDateCloudPassive() {
+            var anyActive = _tsPeriodSelected() ||
+                (typeof _sylvaSatTsPeriodSelected === 'function' && _sylvaSatTsPeriodSelected());
+            ['date-section-title', 'date-range-row', 'cloud-control-group', 'month-control-group'].forEach(function (id) {
+                var el = document.getElementById(id);
+                if (el) el.classList.toggle('sylva-ts-passive', !!anyActive);
+            });
+        }
+
         // Kademe 1 → 2: uygun bir analiz (NDVI vb.) seçilince Periyot butonlarını
         // etkinleştirir, ipucu metnini gizler. Seçim kalkarsa her şeyi baştaki
         // pasif duruma döndürür (seçili periyot ve üstteki tarih/bulut pasifliği dahil).
@@ -9649,11 +9673,10 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
                 if (btnM) btnM.classList.remove('active');
                 if (btnY) btnY.classList.remove('active');
                 _sylvaSyncTsDateCloudLock();
-                ['date-section-title', 'date-range-row', 'cloud-control-group', 'month-control-group'].forEach(function (id) {
-                    var el = document.getElementById(id);
-                    if (el) el.classList.remove('sylva-ts-passive');
-                });
             }
+            // 🛠️ BUG FİX: ana alanların pasifliği artık DAİMA merkezi fonksiyondan
+            // (diğer periyodun durumunu da dikkate alarak) senkronize edilir.
+            _sylvaSyncMainDateCloudPassive();
         }
 
         // #ts-datecloud-wrap (Tarih Aralığı + Bulutluluk Oranı burada) yalnızca
@@ -9685,11 +9708,18 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
                 if (btnM) btnM.classList.remove('active');
                 if (btnY) btnY.classList.remove('active');
                 _sylvaSyncSatTsDateCloudLock();
-                ['date-section-title', 'date-range-row', 'cloud-control-group', 'month-control-group'].forEach(function (id) {
-                    var el = document.getElementById(id);
-                    if (el) el.classList.remove('sylva-ts-passive');
-                });
             }
+            // 🛠️ BUG FİX: ana alanların pasifliği artık DAİMA merkezi fonksiyondan
+            // (diğer periyodun — Uydu Analizleri Zaman Serisi'nin — durumunu da
+            // dikkate alarak) senkronize edilir; kör bir şekilde kaldırılmaz.
+            _sylvaSyncMainDateCloudPassive();
+        }
+
+        // Periyot (Aylık/Yıllık) butonlarından biri seçili mi? (🛰️ Uydu Görüntüsü)
+        function _sylvaSatTsPeriodSelected() {
+            var btnM = document.getElementById('sat-ts-btn-monthly');
+            var btnY = document.getElementById('sat-ts-btn-yearly');
+            return !!((btnM && btnM.classList.contains('active')) || (btnY && btnY.classList.contains('active')));
         }
 
         // #sat-ts-datecloud-wrap (Tarih Aralığı + Ay + Bulutluluk Oranı) yalnızca
@@ -9697,10 +9727,7 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
         function _sylvaSyncSatTsDateCloudLock() {
             var wrap = document.getElementById('sat-ts-datecloud-wrap');
             if (!wrap) return;
-            var btnM = document.getElementById('sat-ts-btn-monthly');
-            var btnY = document.getElementById('sat-ts-btn-yearly');
-            var periodSelected = !!((btnM && btnM.classList.contains('active')) || (btnY && btnY.classList.contains('active')));
-            wrap.classList.toggle('sylva-ts-passive', !periodSelected);
+            wrap.classList.toggle('sylva-ts-passive', !_sylvaSatTsPeriodSelected());
         }
 
         function _updateDateCloudControlsVisibility() {
@@ -47473,25 +47500,16 @@ function toggleTsPeriod(type) {
     btnM.classList.remove('active');
     btnY.classList.remove('active');
 
-    var anyActive = false;
     if (!alreadyActive) {
-        if (type === 'monthly') { btnM.classList.add('active'); anyActive = true; }
-        else                    { btnY.classList.add('active'); anyActive = true; }
+        if (type === 'monthly') { btnM.classList.add('active'); }
+        else                    { btnY.classList.add('active'); }
     }
 
-    // Üstteki (diğer analizler için kullanılan) tarih ve bulutluluk
-    // kontrollerini pasif yap / aktif et
-    var targets = [
-        document.getElementById('date-section-title'),
-        document.getElementById('date-range-row'),
-        document.getElementById('cloud-control-group'),
-        document.getElementById('month-control-group')
-    ];
-    targets.forEach(function (el) {
-        if (!el) return;
-        if (anyActive) el.classList.add('sylva-ts-passive');
-        else           el.classList.remove('sylva-ts-passive');
-    });
+    // 🛠️ BUG FİX: Üstteki (ana) Tarih Seçimi/Ay Seçimi/Bulutluluk Oranı
+    // alanları artık MERKEZİ fonksiyondan senkronize edilir — bu sayede
+    // 🛰️ Uydu Görüntüsü'ndeki Periyot durumunu da dikkate alır ve onu
+    // yanlışlıkla ezmez (bkz. _sylvaSyncMainDateCloudPassive).
+    if (typeof _sylvaSyncMainDateCloudPassive === 'function') _sylvaSyncMainDateCloudPassive();
 
     // Zaman Serisi'ne özel Tarih Aralığı / Bulutluluk Oranı alanlarını
     // (#ts-datecloud-wrap) tam tersi yönde aç/kapat.
@@ -47527,25 +47545,16 @@ function toggleSatTsPeriod(type) {
     btnM.classList.remove('active');
     btnY.classList.remove('active');
 
-    var anyActive = false;
     if (!alreadyActive) {
-        if (type === 'monthly') { btnM.classList.add('active'); anyActive = true; }
-        else                    { btnY.classList.add('active'); anyActive = true; }
+        if (type === 'monthly') { btnM.classList.add('active'); }
+        else                    { btnY.classList.add('active'); }
     }
 
-    // Üstteki (diğer modüller için kullanılan) tarih/ay/bulutluluk
-    // kontrollerini pasif yap / aktif et
-    var targets = [
-        document.getElementById('date-section-title'),
-        document.getElementById('date-range-row'),
-        document.getElementById('cloud-control-group'),
-        document.getElementById('month-control-group')
-    ];
-    targets.forEach(function (el) {
-        if (!el) return;
-        if (anyActive) el.classList.add('sylva-ts-passive');
-        else           el.classList.remove('sylva-ts-passive');
-    });
+    // 🛠️ BUG FİX: Üstteki (ana) Tarih Seçimi/Ay Seçimi/Bulutluluk Oranı
+    // alanları artık MERKEZİ fonksiyondan senkronize edilir — bu sayede
+    // 🌍 Uydu Analizleri'ndeki Zaman Serisi periyodunun durumunu da dikkate
+    // alır ve onu yanlışlıkla ezmez (bkz. _sylvaSyncMainDateCloudPassive).
+    if (typeof _sylvaSyncMainDateCloudPassive === 'function') _sylvaSyncMainDateCloudPassive();
 
     // #sat-ts-datecloud-wrap'ı (Tarih Aralığı + Ay + Bulutluluk Oranı) tam
     // tersi yönde aç/kapat.
