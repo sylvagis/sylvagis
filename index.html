@@ -5732,7 +5732,21 @@ tr.class-highlight-active {
         // 1. Haritayı oluştur ve Türkiye merkezli olarak başlat
         // ---------------------------------------------------------
         var HOME_VIEW = { center: [20.0, 0.0], zoom: 2 };
-        var map = L.map('map', { zoomControl: false }).setView(HOME_VIEW.center, HOME_VIEW.zoom);
+        // 🛠️ KÖK NEDEN DÜZELTMESİ (Zoom Sırasında Veri "İç İçe Geçmesi"/Hayalet
+        // Karo Görünümü): Leaflet, her zoom işleminde önce ESKİ zoom
+        // seviyesinin karo grid'ini CSS transform (scale/translate) ile
+        // "ölçekleyip" YENİ karolar gelene kadar ekranda yumuşak bir geçiş
+        // izlenimi verir (zoomAnimation). Bu, saniyeler içinde yenilenen
+        // sıradan harita altlıklarında görünmez ama GEE karoları çok daha
+        // yavaş üretildiği için, ölçeklenmiş ESKİ karo grid'i YENİ karolar
+        // gelene kadar (birkaç saniye) ekranda asılı kalıyor — ekranda
+        // görülen çapraz/kesişen kenarlı "iç içe geçmiş" ikinci bir kopya
+        // TAM OLARAK budur (aynı katmanın eski/ölçeklenmiş hâli + yeni hâli
+        // aynı anda görünüyor). zoomAnimation kapatılınca zoom artık
+        // animasyonlu değil "anında" gerçekleşiyor — bu küçük bir görsel
+        // zarafet kaybı ama karşılığında bu hayalet/çakışma sorunu tamamen
+        // ortadan kalkıyor.
+        var map = L.map('map', { zoomControl: false, zoomAnimation: false }).setView(HOME_VIEW.center, HOME_VIEW.zoom);
         window._sylvaMap = map; // global referans – cetvel/ölçüm için
 
         // 🛠️ BUG FİX (Analiz sonucu/rasteri ekranda görünmüyor):
@@ -7129,7 +7143,9 @@ tr.class-highlight-active {
 
         function _sylvaEnsureMap2() {
             if (map2) return map2;
-            map2 = L.map('map2', { zoomControl: false }).setView(map.getCenter(), map.getZoom());
+            // 🛠️ bkz. yukarıdaki 'map' başlatmasındaki zoomAnimation:false açıklaması —
+            // aynı hayalet/çakışma sorunu Ekran 2 için de geçerli.
+            map2 = L.map('map2', { zoomControl: false, zoomAnimation: false }).setView(map.getCenter(), map.getZoom());
             window._sylvaMap2 = map2;
             _sylvaBindMapViewSync(map, map2);
             _sylvaBindMapViewSync(map2, map);
@@ -12168,11 +12184,20 @@ function selectRamp(name) {
         function _sylvaAttachTileRetry(layer) {
             if (!layer || typeof layer.on !== 'function') return layer;
             layer._sylvaPendingRetries = 0;
-            // Daha fazla karo, görünüme girmeden ÖNCE arka planda istensin ve
-            // zoom animasyonu sırasında ara kareler boş bırakılmasın.
+            // Daha fazla karo, görünüme girmeden ÖNCE arka planda istensin.
+            // 🛠️ DÜZELTME: updateWhenZooming eskiden burada false yapılmıştı —
+            // bu, yeni zoom seviyesinin karolarının istenmesini zoom animasyonu
+            // TAMAMEN bitene kadar ERTELİYORDU. GEE karoları zaten yavaş
+            // geldiği için bu, eski zoom seviyesinin (CSS ile ölçeklenmiş,
+            // "hayalet") karo grid'inin ekranda OLDUĞUNDAN DA UZUN süre asılı
+            // kalmasına ve yeni gelen karolarla çapraz/kesişen bir görünüme
+            // (bkz. kullanıcının gönderdiği "iç içe geçmiş" ekran görüntüsü)
+            // yol açıyordu. Artık varsayılan (true) bırakılıyor — yeni
+            // seviyenin karoları zoom animasyonu BAŞLAR BAŞLAMAZ istenmeye
+            // başlanır, böylece hayalet karo süresi mümkün olduğunca kısalır.
             layer.options = layer.options || {};
             layer.options.keepBuffer = Math.max(layer.options.keepBuffer || 0, 4);
-            layer.options.updateWhenZooming = false;
+            layer.options.updateWhenZooming = true;
             layer.on('tileloadstart', function (e) {
                 _sylvaTintTile(e && e.tile);
             });
