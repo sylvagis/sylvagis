@@ -7036,6 +7036,9 @@ tr.class-highlight-active {
         // otomatik güncellenir. Eskiden panel ekran değiştirilince hiç
         // yenilenmiyordu — bu yüzden Ekran 2'ye geçilince panelde hâlâ
         // Ekran 1'in en son düzenlenen analizinin ayarları görünüyordu.
+        // 🆕 Aynı şekilde 📡 Ham Veri (Bantlar) paneli de artık aktif ekran
+        // değiştiğinde o ekranın kendi üstteki uydu görüntüsüyle güncellenir
+        // (bkz. window._sylvaRefreshRawBandsPanelForActivePane).
         (function () {
             function wrapSetActiveMapForEditorPanel() {
                 if (typeof window._sylvaSetActiveMap !== 'function' || window._sylvaActiveMapWrappedForEditorPanel) return;
@@ -7050,6 +7053,12 @@ tr.class-highlight-active {
                             _sylvaRestoreEditorStateForLayer(_newPaneId, _newTopKey);
                         }
                     } catch (eEditorSwitch) { /* panel yenilenemedi — sessizce geç */ }
+                    try {
+                        var _rawPaneId = (id === 'map2') ? 'map2' : 'map';
+                        if (typeof window._sylvaRefreshRawBandsPanelForActivePane === 'function') {
+                            window._sylvaRefreshRawBandsPanelForActivePane(_rawPaneId);
+                        }
+                    } catch (eRawSwitch) { /* Ham Veri paneli yenilenemedi — sessizce geç */ }
                     return _result;
                 };
                 window._sylvaActiveMapWrappedForEditorPanel = true;
@@ -20635,7 +20644,20 @@ function selectRamp(name) {
             window.syncExportDefaultFilename = syncDefaultFilename;
 
             // --- Modal aç/kapat ---
-            function openModal() { overlay.classList.add('open'); resetProgress(); syncDefaultFilename(); }
+            function openModal() {
+                overlay.classList.add('open');
+                resetProgress();
+                syncDefaultFilename();
+                // Çift ekran çıktısı seçeneği yalnızca Ekran 2 açık/görünürken sunulur.
+                var dsWrap  = document.getElementById('exp-dualscreen-wrap');
+                var dsCheck = document.getElementById('exp-dualscreen-check');
+                var map2Wrapper = document.getElementById('map2-wrapper');
+                var map2Visible = !!(window._sylvaDualScreenActive && map2Wrapper &&
+                    map2Wrapper.style.display !== 'none' &&
+                    map2Wrapper.offsetWidth > 0 && map2Wrapper.offsetHeight > 0);
+                if (dsWrap) dsWrap.style.display = map2Visible ? 'block' : 'none';
+                if (!map2Visible && dsCheck) dsCheck.checked = false;
+            }
             function closeModal() {
                 overlay.classList.remove('open');
                 resetProgress();
@@ -21419,9 +21441,10 @@ function selectRamp(name) {
 
             // --- Harita canvas'ını döndürür (GEE tile dahil) ---
             // Önce html2canvas denenir; başarısız olursa leaflet-image'a düşer.
-            function getLeafletCanvas(scaleFactor) {
+            function getLeafletCanvas(scaleFactor, paneIdOverride) {
                 return new Promise(function(resolve, reject) {
-                    var mapEl = (typeof _sylvaActivePaneId === 'function' && _sylvaActivePaneId() === 'map2') ? document.getElementById('map2') : document.getElementById('map');
+                    var targetPaneId = paneIdOverride || ((typeof _sylvaActivePaneId === 'function' && _sylvaActivePaneId() === 'map2') ? 'map2' : 'map');
+                    var mapEl = document.getElementById(targetPaneId);
 
                     // html2canvas: DOM tabanlı → GEE tile'larını da yakalar
                     if (typeof html2canvas !== 'undefined') {
@@ -21472,7 +21495,7 @@ function selectRamp(name) {
                                     '  animation-duration: 0s !important;',
                                     '}',
                                     /* Harita kapsayıcısını render anındaki gerçek boyuta sabitle */
-                                    '#map {',
+                                    '#' + mapEl.id + ' {',
                                     '  position: relative !important;',
                                     '  overflow: hidden !important;',
                                     '  width: ' + mapEl.offsetWidth  + 'px !important;',
@@ -21489,7 +21512,7 @@ function selectRamp(name) {
                                 if (el.tagName === 'svg' &&
                                     (el.classList.contains('leaflet-zoom-animated') ||
                                      el.classList.contains('leaflet-zoom-hide') ||
-                                     el.id === 'markup-svg')) return true;
+                                     el.id === 'markup-svg' || el.id === 'markup-svg2')) return true;
                                 return el.classList.contains('footer') ||
                                        el.classList.contains('navbar') ||
                                        el.id === 'export-modal-overlay' ||
@@ -21516,7 +21539,11 @@ function selectRamp(name) {
                                        // el.id yerine classList.contains kullanılmalı.
                                        el.classList.contains('map-top-left-infobox') ||
                                        // Lejant ayrı h2c çağrısıyla piksel-mükemmel yakalanır.
-                                       el.id === 'map-legend-box' ||
+                                       // Ekran 1 (#map-legend-box) ve Ekran 2 (#map2-legend-box)
+                                       // ikisi de burada hariç tutulmalı, aksi halde Ekran 2
+                                       // çıktısında lejant iki kez (hem html2canvas hem native
+                                       // canvas ile) çizilir.
+                                       el.id === 'map-legend-box' || el.id === 'map2-legend-box' ||
                                        // Kuzey oku ve ölçek çubuğu drawOverlaysOnCanvas ile
                                        // her zaman çizilir (kullanıcı gizlemiş olsa bile).
                                        // html2canvas'tan hariç tutularak çift çizim önlenir.
@@ -21529,25 +21556,188 @@ function selectRamp(name) {
                         }).catch(function() {
                             window._exportUsedHtml2canvas = false;
                             // html2canvas başarısız → leaflet-image'a düş
-                            tryLeafletImage(resolve, reject);
+                            tryLeafletImage(resolve, reject, targetPaneId);
                         });
                         return;
                     }
 
                     // Fallback: leaflet-image
-                    tryLeafletImage(resolve, reject);
+                    tryLeafletImage(resolve, reject, targetPaneId);
                 });
             }
 
-            function tryLeafletImage(resolve, reject) {
+            function tryLeafletImage(resolve, reject, paneIdOverride) {
                 if (typeof leafletImage !== 'undefined') {
-                    leafletImage((typeof _sylvaActivePaneMap === 'function' ? _sylvaActivePaneMap() : map), function(err, canvas) {
+                    var targetMap = (paneIdOverride === 'map2' && typeof map2 !== 'undefined' && map2) ? map2 :
+                                     ((paneIdOverride === 'map' && typeof map !== 'undefined') ? map :
+                                     (typeof _sylvaActivePaneMap === 'function' ? _sylvaActivePaneMap() : map));
+                    leafletImage(targetMap, function(err, canvas) {
                         if (err || !canvas) { reject(err || new Error('leaflet-image başarısız')); return; }
                         resolve(canvas);
                     });
                 } else {
                     reject(new Error('Hiçbir render kütüphanesi yüklenemedi'));
                 }
+            }
+
+            // ════════════════════════════════════════════════════════════
+            // 🖥️🖥️ ÇİFT EKRAN ÇIKTISI — bir ekranı (paneId: 'map' | 'map2')
+            // uçtan uca (karo + vektör + markup + kuzey oku/ölçek/lejant/
+            // bilgi kutusu/logo) yakalayıp tek bir <canvas> olarak döndürür.
+            // Tek ekran export motoruyla (buildFinalCanvas) birebir aynı
+            // adımları izler; tek fark sonucu indirmek yerine Promise ile
+            // döndürmesidir, böylece iki ekran yan yana birleştirilebilir.
+            // ════════════════════════════════════════════════════════════
+            function composeMapCanvas(paneId, scale) {
+                return new Promise(function(resolve) {
+                    var mapEl = document.getElementById(paneId);
+                    if (!mapEl) { resolve(null); return; }
+                    var W = mapEl.offsetWidth  || mapEl.getBoundingClientRect().width  || 800;
+                    var H = mapEl.offsetHeight || mapEl.getBoundingClientRect().height || 600;
+
+                    function finalizeWith(tileCanvas) {
+                        var final = document.createElement('canvas');
+                        final.width  = Math.max(1, Math.round(W * scale));
+                        final.height = Math.max(1, Math.round(H * scale));
+                        var ctx = final.getContext('2d');
+                        if (tileCanvas) ctx.drawImage(tileCanvas, 0, 0, final.width, final.height);
+
+                        var leafletSVGs = Array.from(mapEl.querySelectorAll('svg.leaflet-zoom-animated, svg.leaflet-zoom-hide'));
+                        var svgPromises = leafletSVGs.map(function(svg) { return drawSVGOnCanvas(ctx, svg, mapEl, scale); });
+
+                        Promise.all(svgPromises).then(function() {
+                            var markupSVG = document.getElementById(paneId === 'map2' ? 'markup-svg2' : 'markup-svg');
+                            function finish() {
+                                // Kuzey oku, ölçek, lejant, bilgi kutusu ve logo — bu ekrana
+                                // ait kendi elemanlarıyla (bkz. drawOverlaysOnCanvas'taki
+                                // mapEl.id === 'map2' ayrımı) native canvas ile çizilir.
+                                drawOverlaysOnCanvas(ctx, mapEl, scale);
+                                resolve(final);
+                            }
+                            if (markupSVG) drawSVGOnCanvas(ctx, markupSVG, mapEl, scale).then(finish);
+                            else finish();
+                        });
+                    }
+
+                    getLeafletCanvas(scale, paneId).then(finalizeWith).catch(function() {
+                        // Son çare: DOM'daki karo canvas/img'lerini elle topla
+                        var tileCanvas = document.createElement('canvas');
+                        tileCanvas.width  = Math.max(1, Math.round(W * scale));
+                        tileCanvas.height = Math.max(1, Math.round(H * scale));
+                        var tctx = tileCanvas.getContext('2d');
+                        var tilePanes = mapEl.querySelectorAll('.leaflet-tile-pane canvas, .leaflet-tile img');
+                        tilePanes.forEach(function(tile) {
+                            try {
+                                if (tile.tagName === 'CANVAS') {
+                                    tctx.drawImage(tile, 0, 0, tileCanvas.width, tileCanvas.height);
+                                } else {
+                                    var tr = tile.getBoundingClientRect();
+                                    var mr = mapEl.getBoundingClientRect();
+                                    tctx.drawImage(tile,
+                                        (tr.left - mr.left) * scale, (tr.top - mr.top) * scale,
+                                        tr.width * scale, tr.height * scale);
+                                }
+                            } catch (e) {} // cross-origin karolar atlanır
+                        });
+                        finalizeWith(tileCanvas);
+                    });
+                });
+            }
+
+            // İki ekranın tamamlanmış canvas'larını, aralarında belirgin beyaz
+            // bir ayraç şeridiyle (ince gri çerçeveli) tek bir canvas'ta birleştirir.
+            function combineDualScreenCanvas(c1, c2, scale) {
+                var dividerPx = Math.max(6, Math.round(10 * scale));
+                var h = Math.max(c1.height, c2.height);
+                var w = c1.width + dividerPx + c2.width;
+                var final = document.createElement('canvas');
+                final.width  = w;
+                final.height = h;
+                var ctx = final.getContext('2d');
+
+                // Beyaz zemin — yükseklik farkı olursa üst/alt boşluklar da beyaz kalır
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, w, h);
+
+                // Ekran 1 (sol)
+                ctx.drawImage(c1, 0, (h - c1.height) / 2);
+                // Ekran 2 (sağ)
+                var x2 = c1.width + dividerPx;
+                ctx.drawImage(c2, x2, (h - c2.height) / 2);
+
+                // Belirgin beyaz ayraç şeridi + ince gri kenar çizgileri (her zeminde net görünür)
+                ctx.save();
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(c1.width, 0, dividerPx, h);
+                ctx.strokeStyle = '#94a3b8';
+                ctx.lineWidth = Math.max(1, Math.round(1 * scale));
+                ctx.beginPath();
+                ctx.moveTo(c1.width + 0.5, 0);
+                ctx.lineTo(c1.width + 0.5, h);
+                ctx.moveTo(x2 + dividerPx - 0.5, 0);
+                ctx.lineTo(x2 + dividerPx - 0.5, h);
+                ctx.stroke();
+                ctx.restore();
+
+                return final;
+            }
+
+            // Çift ekran çıktısını baştan sona yürütür: her iki ekranı ayrı ayrı
+            // composeMapCanvas ile yakalar, yan yana birleştirir ve mevcut
+            // saveCanvas/savePDF motorlarıyla (PNG/JPEG/PDF) dışa aktarır.
+            function runDualScreenExport(filename, fmt, scale) {
+                setProgress(10, 'Ekran 1 hazırlanıyor…');
+                var _wsExportStateDual = (function() {
+                    var wl = window._workspaceLayer;
+                    if (!wl) return null;
+                    var onMap = typeof map !== 'undefined' && map.hasLayer(wl);
+                    var sA = !!window._wsStrokeActive;
+                    if (!sA) {
+                        if (onMap) map.removeLayer(wl);
+                        return { hidden: true, layer: wl, wasOnMap: onMap };
+                    }
+                    var expStyle = {
+                        stroke: sA, color: sA ? (window._wsStrokeColor || '#1e3a8a') : '#1e3a8a',
+                        weight: sA ? 2 : 0, opacity: sA ? 1 : 0,
+                        fill: false, fillColor: '#1e3a8a', fillOpacity: 0
+                    };
+                    try {
+                        if (typeof wl.setStyle === 'function') wl.setStyle(expStyle);
+                        else if (typeof wl.eachLayer === 'function') wl.eachLayer(function(l) { if (typeof l.setStyle === 'function') l.setStyle(expStyle); });
+                    } catch(e) {}
+                    return { hidden: false, layer: wl };
+                })();
+
+                Promise.all([
+                    composeMapCanvas('map', scale),
+                    composeMapCanvas('map2', scale)
+                ]).then(function(results) {
+                    var c1 = results[0], c2 = results[1];
+                    if (!c1 || !c2) {
+                        sylvaAlert(t('export_dualscreen_error') || 'Çift ekran çıktısı hazırlanamadı.', 'error');
+                        btnStart.disabled = false;
+                        btnStart.innerHTML = t('btn_download');
+                        return;
+                    }
+                    setProgress(85, 'Ekranlar birleştiriliyor…');
+                    var combined = combineDualScreenCanvas(c1, c2, scale);
+
+                    // Feature 7: Çalışma alanı stilini export öncesi hale geri getir
+                    if (_wsExportStateDual) {
+                        if (_wsExportStateDual.hidden && _wsExportStateDual.wasOnMap && _wsExportStateDual.layer) {
+                            try { _wsExportStateDual.layer.addTo(map); } catch(e) {}
+                        } else if (!_wsExportStateDual.hidden && typeof window._applyWorkspaceStyle === 'function') {
+                            window._applyWorkspaceStyle();
+                        }
+                    }
+
+                    setProgress(95, 'Dosya oluşturuluyor…');
+                    saveCanvas(combined, fmt, filename, scale, combined.width / scale, combined.height / scale);
+                }).catch(function() {
+                    sylvaAlert(t('export_dualscreen_error') || 'Çift ekran çıktısı hazırlanamadı.', 'error');
+                    btnStart.disabled = false;
+                    btnStart.innerHTML = t('btn_download');
+                });
             }
 
             // --- Ana export fonksiyonu ---
@@ -21564,6 +21754,17 @@ function selectRamp(name) {
                 btnStart.disabled = true;
                 btnStart.innerHTML = '⏳ Hazırlanıyor…';
                 setProgress(5, 'Harita katmanları yükleniyor…');
+
+                // 🖥️🖥️ Çift Ekran Çıktısı seçiliyse ayrı bir akışa yönlendir —
+                // her iki ekran kendi kuzey oku/ölçek/lejant/logosuyla ayrı ayrı
+                // yakalanır ve aralarında belirgin beyaz bir ayraçla birleştirilir.
+                var dsCheck = document.getElementById('exp-dualscreen-check');
+                var dsWrap  = document.getElementById('exp-dualscreen-wrap');
+                var wantsDualScreen = !!(dsCheck && dsCheck.checked && dsWrap && dsWrap.style.display !== 'none');
+                if (wantsDualScreen) {
+                    runDualScreenExport(filename, fmt, scale);
+                    return;
+                }
 
                 var mapEl = (typeof _sylvaActivePaneId === 'function' && _sylvaActivePaneId() === 'map2') ? document.getElementById('map2') : document.getElementById('map');
                 var W = mapEl.offsetWidth;
@@ -21916,6 +22117,17 @@ function selectRamp(name) {
                             <span class="exp-fmt-icon">📄</span>PDF
                         </button>
                     </div>
+                </div>
+
+                <!-- Çift Ekran Çıktısı -->
+                <div id="exp-dualscreen-wrap" style="display:none;">
+                    <label id="exp-dualscreen-label" style="display:flex;align-items:center;gap:9px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:8px;padding:10px 12px;cursor:pointer;">
+                        <input type="checkbox" id="exp-dualscreen-check" style="width:17px;height:17px;flex-shrink:0;cursor:pointer;">
+                        <span style="display:flex;flex-direction:column;gap:1px;">
+                            <span style="font-size:0.85rem;font-weight:700;color:#1e293b;" data-i18n="export_dualscreen_title">🖥️🖥️ Çift Ekran Çıktısı</span>
+                            <span style="font-size:0.72rem;color:#64748b;font-weight:500;" data-i18n="export_dualscreen_desc">İki ekranı da; kendi kuzey oku, ölçek, lejant ve logosuyla yan yana tek dosyada dışa aktarır.</span>
+                        </span>
+                    </label>
                 </div>
 
                 <!-- Dosya adı -->
@@ -23197,6 +23409,63 @@ function onRawBandsSceneSelected(sceneId, meta, dsInfo, sceneMeta) {
 
     fetchRawBandsCatalog(_rawBandsState.datasetKey);
 }
+
+// 🛠️ BUG FİX: Ekran 2 aktif ekran yapıldığında (Ekran 1 <-> Ekran 2 arasında
+// yalnızca odak değiştirilerek — katman kutusuna hiç dokunmadan), Ham Veri
+// (Bantlar) paneli eskiden hep bir önceki aktif ekranın (genelde Ekran 1'in)
+// sahne/bant bilgisini göstermeye devam ediyordu; çünkü _rawBandsState global
+// bir nesnedir ve yalnızca yeni bir GEE yanıtı geldiğinde güncelleniyordu.
+// Artık aktif ekran değiştiğinde (bkz. wrapSetActiveMapForEditorPanel), o
+// ekranın KENDİ üstteki uydu görüntüsü varsa panel onunla, yoksa panel
+// "henüz görüntü seçilmedi" durumuna sıfırlanarak güncellenir.
+function _sylvaResetRawBandsPanel() {
+    _rawBandsState.sceneId = null;
+    _rawBandsState.datasetKey = null;
+    _rawBandsState.sceneMeta = null;
+    var infoBox = document.getElementById('raw-bands-selected-info');
+    if (infoBox) {
+        infoBox.style.background = '#eff6ff';
+        infoBox.style.borderColor = '#bfdbfe';
+        infoBox.style.color = '#1e3a8a';
+        infoBox.innerHTML = '<span data-i18n="raw_no_img">' + t('raw_no_img', '⚠️ Henüz bir görüntü seçilmedi.') + '</span>';
+    }
+    var groupsContainer = document.getElementById('raw-bands-groups-container');
+    var actionsBar      = document.getElementById('raw-bands-actions');
+    var countInfo        = document.getElementById('raw-bands-count-info');
+    var aoiWrap          = document.getElementById('raw-bands-aoi-name-wrap');
+    var scopeWrap         = document.getElementById('raw-bands-scope-wrap');
+    var downloadBtn        = document.getElementById('btn-raw-bands-download');
+    var status              = document.getElementById('raw-bands-status');
+    if (groupsContainer) { groupsContainer.innerHTML = ''; groupsContainer.style.display = 'none'; }
+    if (actionsBar)  actionsBar.style.display  = 'none';
+    if (countInfo)   countInfo.style.display   = 'none';
+    if (aoiWrap)      aoiWrap.style.display     = 'none';
+    if (scopeWrap)    scopeWrap.style.display   = 'none';
+    if (downloadBtn)  downloadBtn.style.display = 'none';
+    if (status)        status.style.display     = 'none';
+}
+window._sylvaResetRawBandsPanel = _sylvaResetRawBandsPanel;
+
+// Aktif ekran değiştiğinde Ham Veri panelini o ekranın kendi üstteki uydu
+// görüntüsüyle (varsa) günceller; yoksa panel sıfırlanır.
+window._sylvaRefreshRawBandsPanelForActivePane = function (paneId) {
+    try {
+        paneId = (paneId === 'map2') ? 'map2' : 'map';
+        var topKey = (window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[paneId]) || null;
+        if (topKey && topKey.indexOf('RGB::') === 0 && typeof _rgbGalleryStateFor === 'function') {
+            var datasetKey = topKey.slice(5);
+            var gState = _rgbGalleryStateFor(paneId, datasetKey);
+            if (gState && gState.activeSceneId && gState.meta && gState.scMeta) {
+                onRawBandsSceneSelected(gState.activeSceneId, gState.meta, gState.dsInfo, gState.scMeta);
+                return;
+            }
+        }
+        // Bu ekranda üstte gösterilen bir uydu görüntüsü yok (ör. NDVI/başka
+        // analiz ya da hiç analiz yok) — panel yanlışlıkla diğer ekranın
+        // sahnesini göstermeye devam etmesin diye sıfırlanır.
+        _sylvaResetRawBandsPanel();
+    } catch (eRawSwitch) { /* panel yenilenemedi — sessizce geç */ }
+};
 
 // Seçili veri setinin TÜM orijinal bantlarını (çözünürlük gruplu) sunucudan çeker.
 function fetchRawBandsCatalog(datasetKey) {
