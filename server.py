@@ -3087,8 +3087,7 @@ def build_result_image(data, for_export=False):
         # bir "güvenlik ağı" geçişi uyguluyoruz — ilk geçişte dolmayan
         # (çevresi de void olan) nadir pikseller ikinci, daha geniş
         # pencerede kesinlikle geçerli komşu bulur.
-        dem = dem.unmask(dem.focalMean(radius=150, units='meters'))
-        dem = dem.unmask(dem.focalMean(radius=450, units='meters'))
+        dem = dem.unmask(dem.focal_mean(radius=3, units='pixels'))
 
         # 🛠️ BUG FİX (AOI'nin bir kısmı hâlâ boş kalabiliyor — BÜYÜK void/
         # kapsama boşlukları): Yukarıdaki odak-ortalama doldurma yalnızca
@@ -3600,8 +3599,7 @@ def build_result_image(data, for_export=False):
     # kalır (yanlışlıkla "bulut altı veri" uydurulmaz). İki aşamalı
     # (60 m + 200 m) geçiş, hem S2 (10 m) hem Landsat (30 m) çözünürlüğünde
     # tipik bulut-kenarı beneklerini kapatmaya yeter.
-    image = image.unmask(image.focalMean(radius=60, units='meters'))
-    image = image.unmask(image.focalMean(radius=200, units='meters'))
+    image = image.unmask(image.focal_mean(radius=2, units='pixels'))
 
     # 🛠️ BUG FİX (KÖK NEDEN — Landsat tabanlı TÜM indeksler yanlış
     # hesaplanıyordu): Landsat Collection 2 Level-2 (l89-l2, l7-l2,
