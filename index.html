@@ -6489,16 +6489,14 @@ tr.class-highlight-active {
             srcKeys.forEach(function (key) {
                 var srcLayer = srcStore[key];
                 if (!srcLayer || !srcLayer._url) return;
-                var clone = _sylvaAttachTileRetry(L.tileLayer(srcLayer._url, {
+                var clone = L.tileLayer(srcLayer._url, {
                     opacity: 1, zIndex: (key === srcTopKey ? 20 : 10), crossOrigin: true, pane: 'geeAnalysisPane',
                     // 🛠️ DÜZELTME (Zoom'da Veri Kaybolması): bkz. _sylvaReplaceGeeLayer — maxNativeZoom
                     // artık 16'da tutuluyor, GEE sunucusunun derin zoom'da hesaplanmış
                     // karoları güvenilir üretemediği durumlarda veri kaybolmasın diye.
                     maxZoom: 24, maxNativeZoom: 16,
-                    // GEE KOTASINI KORUYAN AYARLAR:
-                    updateWhenIdle: true, updateWhenZooming: false, keepBuffer: 3,
                     attribution: srcLayer.options && srcLayer.options.attribution
-                }));
+                });
                 window._geeLayersByPane.map2[key] = clone;
 
                 var srcVisible = !(window._sylvaLayerVisibleByPane.map && window._sylvaLayerVisibleByPane.map[key] === false);
@@ -6881,16 +6879,14 @@ tr.class-highlight-active {
 
                 var mirrorKey = explicitLayerKey || ((window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[srcKey]) || 'mirrored');
 
-                var clone = _sylvaAttachTileRetry(L.tileLayer(effectiveUrl, {
+                var clone = L.tileLayer(effectiveUrl, {
                     opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane',
                     // 🛠️ DÜZELTME (Zoom'da Veri Kaybolması): bkz. _sylvaReplaceGeeLayer — maxNativeZoom
                     // artık 16'da tutuluyor, GEE sunucusunun derin zoom'da hesaplanmış
                     // karoları güvenilir üretemediği durumlarda veri kaybolmasın diye.
                     maxZoom: 24, maxNativeZoom: 16,
-                    // GEE KOTASINI KORUYAN AYARLAR:
-                    updateWhenIdle: true, updateWhenZooming: false, keepBuffer: 3,
                     attribution: srcLayer && srcLayer.options && srcLayer.options.attribution
-                }));
+                });
 
                 // 🆕 Klonlanan katmanı hedef ekranın "Analiz Geçiş" kutusu
                 // deposuna (_geeLayersByPane) da kaydet — böylece hedef
@@ -11962,13 +11958,7 @@ function selectRamp(name) {
             // (upscale) gösterir — kullanıcı istediği kadar (maxZoom:24'e kadar)
             // zoom yapsa bile veri ARTIK HİÇBİR ZAMAN sunucu hatası yüzünden
             // kaybolmaz; sadece çok aşırı yakınlaşmada hafif bulanıklaşır.
-            var opts = Object.assign({
-                opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane', maxZoom: 24, maxNativeZoom: 16,
-                // GEE KOTASINI KORUYAN AYARLAR:
-                updateWhenIdle: true,       // Sadece harita kaydırma/zoom işlemi bittiğinde kareleri iste
-                updateWhenZooming: false,   // Zoom esnasında geçiş karelerini isteyip sunucuyu yorma
-                keepBuffer: 3               // Ekran dışına çıkan kareleri bellekte tut ki geri dönünce tekrar GEE'ye istek atmasın
-            }, options || {});
+            var opts = Object.assign({ opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane', maxZoom: 24, maxNativeZoom: 16 }, options || {});
             var _rgKey = (paneId === 'map2') ? 'map2' : 'map';
             // 🛠️ BUG FİX: Sınıflandırma/Stretched/Sahne değişimi bu fonksiyonu
             // çağırarak katmanı yeniden boyanmış haliyle değiştiriyordu, ama
@@ -11985,14 +11975,14 @@ function selectRamp(name) {
             var _rgTopKey = (window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[_rgKey]) || null;
             if (paneId === 'map2') {
                 if (window._geeLayer2) { try { map2.removeLayer(window._geeLayer2); } catch (e) {} window._geeLayer2 = null; }
-                window._geeLayer2 = _sylvaAttachTileRetry(L.tileLayer(tileUrl, opts)).addTo(targetMap);
+                window._geeLayer2 = L.tileLayer(tileUrl, opts).addTo(targetMap);
                 if (_rgTopKey && window._geeLayersByPane && window._geeLayersByPane[_rgKey]) {
                     window._geeLayersByPane[_rgKey][_rgTopKey] = window._geeLayer2;
                 }
                 return window._geeLayer2;
             }
             if (typeof _geeLayer !== 'undefined' && _geeLayer) { try { map.removeLayer(_geeLayer); } catch (e) {} _geeLayer = null; }
-            _geeLayer = _sylvaAttachTileRetry(L.tileLayer(tileUrl, opts)).addTo(targetMap);
+            _geeLayer = L.tileLayer(tileUrl, opts).addTo(targetMap);
             if (_rgTopKey && window._geeLayersByPane && window._geeLayersByPane[_rgKey]) {
                 window._geeLayersByPane[_rgKey][_rgTopKey] = _geeLayer;
             }
@@ -12154,199 +12144,16 @@ function selectRamp(name) {
         }
         window._sylvaLoadContourVectorLayer = _sylvaLoadContourVectorLayer;
 
-        // ════════════════════════════════════════════════════════════════
-        // 🔁 GEE KARO (TILE) HATALARI İÇİN OTOMATİK TEKRAR DENEME
-        // ════════════════════════════════════════════════════════════════
-        // SORUN: "Analiz ekrana tam yüklenmeden geliyor, sağa/sola kaydırınca
-        // bazen eksik olan yer kapanıyor, başka yerler boş kalıyor" şikayeti
-        // İKİ ayrı kök nedenden kaynaklanıyordu:
-        //
-        //  1) Bir GEE analiz karosu (tile) ağ/rate-limit kaynaklı geçici bir
-        //     hatayla (tileerror) başarısız olduğunda, eskiden HİÇBİR tekrar
-        //     deneme yapılmıyordu — o kare haritada KALICI olarak boş
-        //     kalıyordu. Kullanıcı o bölgeden uzaklaşıp geri döndüğünde
-        //     Leaflet karoyu yeniden istediği için "bazen dolduğu" izlenimi
-        //     oluyordu — oysa aslında rastgele başka karolar da aynı anda
-        //     başarısız olup boş kalabiliyordu. Aşağıdaki yardımcı, HER GEE
-        //     analiz katmanına otomatik olarak üstel geri çekilmeli (exponential
-        //     backoff) bir tekrar deneme mekanizması ekler; bir kare
-        //     başarısız olursa kısa bir süre sonra (cache-busting parametresiyle,
-        //     tarayıcının başarısız isteği tekrar sunucudan gerçekten istemesini
-        //     sağlayarak) otomatik olarak yeniden istenir.
-        //
-        //  2) _waitForTileReady() (aşağıda) eskiden 'tileerror' olayını da
-        //     "tamamlandı" sayıp yükleme ekranını (spinner) HEMEN kapatıyordu
-        //     — yani görünümdeki karoların SADECE biri hata verse bile, geri
-        //     kalan onlarca kare henüz inmeden spinner kayboluyor ve kullanıcı
-        //     yarım/eksik bir analiz görüyordu. Bu artık düzeltildi (bkz.
-        //     _waitForTileReady tanımı) — spinner yalnızca katmanın 'load'
-        //     olayında (görünümdeki TÜM karolar sonuçlanınca) kapanıyor.
-        var _SYLVA_TILE_RETRY_MAX = 4;
-        var _SYLVA_TILE_RETRY_BASE_MS = 1200;
-        // ════════════════════════════════════════════════════════════════
-        // 🛠️ KÖK NEDEN DÜZELTMESİ (Ekran veri tam gelmeden "normale" dönüyor)
-        // ════════════════════════════════════════════════════════════════
-        // Leaflet, bir tile 'tileerror' verdiğinde bile o karoyu "sonuçlandı"
-        // sayıp kendi iç sayacından düşürür — hata da olsa Leaflet için "iş
-        // bitti" demektir. Görünümdeki TÜM tile'lar bu şekilde sonuçlanınca
-        // Leaflet katmanın 'load' event'ini ateşler — bizim aşağıdaki retry
-        // (yeniden deneme) işimizin bitmesini BEKLEMEDEN. Sonuç: _waitForTileReady()
-        // 'load' event'ini görüp yükleme ekranını kapatıyor ama hata alıp
-        // arka planda yeniden denenen kareler haritaya henüz gelmemiş oluyor
-        // — o bölgeler boş kalıyor.
-        // ÇÖZÜM: her katman için "hâlâ retry bekleyen tile sayısı" tutan bir
-        // sayaç (layer._sylvaPendingRetries) ekliyoruz. _waitForTileReady()
-        // artık yalnızca Leaflet'in 'load' event'ine değil, bu sayacın da
-        // sıfıra dönmesine bakıyor (bkz. aşağıdaki _waitForTileReady).
-        // ════════════════════════════════════════════════════════════════
-        // 🛠️ KÖK NEDEN DÜZELTMESİ (Pan/Zoom Sırasında Yanlış Katman/Boşluk
-        // Görünmesi — "ESA üstte olması lazım ama CORINE görünüyor" şikayeti)
-        // ════════════════════════════════════════════════════════════════
-        // z-index sıralaması (bkz. _sylvaBringGeeLayerToFront) HER ZAMAN doğru
-        // uygulanıyor — üstteki katman DOM'da gerçekten daha yüksek z-index'e
-        // sahip. Ancak GEE karoları, sıradan bir harita altlığı karosundan çok
-        // daha YAVAŞ üretilir (her karo sunucuda anlık hesaplanır). Kullanıcı
-        // haritada gezinip (pan) veya yakınlaştırıp (zoom) daha önce hiç
-        // görüntülenmemiş yeni bir alana geldiğinde, üstteki katmanın o
-        // bölgeye ait karoları GELENE KADAR tarayıcıda o karo alanı tamamen
-        // BOŞ/SAYDAM'dır — bu da altındaki katmanın (ör. CORINE) ya da hiç
-        // katman yoksa uydu temel haritasının o boşluktan "sızarak" görünmesine
-        // yol açar. Karo birkaç saniye içinde gelince o bölge "kendiliğinden
-        // düzeliyormuş" gibi görünür — kullanıcının bildirdiği "zoom yapınca
-        // tek tük düzeliyor" davranışı tam olarak budur; z-index bozuk değildir,
-        // sadece karo henüz gelmemiştir.
-        // ÇÖZÜM: her karo, ağ isteği başlar başlamaz (tileloadstart) nötr/
-        // yarı saydam bir "yükleniyor" tonuyla boyanır — bu ton, karo
-        // tamamlanana kadar ALTTAKİ katmanın/temel haritanın o hücreden
-        // görünmesini FİZİKSEL olarak engeller (artık boşluk yerine tutarlı
-        // bir yükleniyor efekti görülür). Karo başarıyla inince ton kaldırılır
-        // ve gerçek veri sorunsuzca ortaya çıkar. Ayrıca keepBuffer artırılıp
-        // updateWhenZooming kapatılarak, görünüme yeni giren alanların karoları
-        // mümkün olduğunca ÖNCEDEN (görünür olmadan) istenir — bu da boş kalan
-        // alan sayısını baştan azaltır.
-        var _SYLVA_TILE_LOADING_TINT = 'rgba(148,163,184,0.45)';
-        function _sylvaTintTile(tile) {
-            if (tile && tile.style) tile.style.backgroundColor = _SYLVA_TILE_LOADING_TINT;
-        }
-        function _sylvaUntintTile(tile) {
-            if (tile && tile.style) tile.style.backgroundColor = '';
-        }
-        function _sylvaAttachTileRetry(layer) {
-            if (!layer || typeof layer.on !== 'function') return layer;
-            layer._sylvaPendingRetries = 0;
-            // Daha fazla karo, görünüme girmeden ÖNCE arka planda istensin.
-            // 🛠️ DÜZELTME: updateWhenZooming eskiden burada false yapılmıştı —
-            // bu, yeni zoom seviyesinin karolarının istenmesini zoom animasyonu
-            // TAMAMEN bitene kadar ERTELİYORDU. GEE karoları zaten yavaş
-            // geldiği için bu, eski zoom seviyesinin (CSS ile ölçeklenmiş,
-            // "hayalet") karo grid'inin ekranda OLDUĞUNDAN DA UZUN süre asılı
-            // kalmasına ve yeni gelen karolarla çapraz/kesişen bir görünüme
-            // (bkz. kullanıcının gönderdiği "iç içe geçmiş" ekran görüntüsü)
-            // yol açıyordu. Artık varsayılan (true) bırakılıyor — yeni
-            // seviyenin karoları zoom animasyonu BAŞLAR BAŞLAMAZ istenmeye
-            // başlanır, böylece hayalet karo süresi mümkün olduğunca kısalır.
-            layer.options = layer.options || {};
-            layer.options.keepBuffer = Math.max(layer.options.keepBuffer || 0, 4);
-            layer.options.updateWhenZooming = true;
-            layer.on('tileloadstart', function (e) {
-                _sylvaTintTile(e && e.tile);
-            });
-            layer.on('tileload', function (e) {
-                _sylvaUntintTile(e && e.tile);
-            });
-            // ════════════════════════════════════════════════════════════
-            // 🛠️ DÜZELTME ("Ekrana Tam Gelmeden Ekran Açılmasın" İsteği):
-            // Eskiden "logo yanıp sönen" tam ekran yükleme perdesi
-            // (showSylvaLoading/hideSylvaLoading) SADECE "Analiz Et"
-            // butonuna basılan İLK yüklemede devreye giriyordu. Kullanıcı
-            // daha sonra pan/zoom yapıp bu katmanın DAHA ÖNCE HİÇ
-            // görüntülenmemiş yeni bir bölgesine geldiğinde artık hiçbir
-            // uyarı/perde yoktu — o bölge, karoları gelene kadar SESSİZCE
-            // eksik/uydu görüntüsü olarak görünüyordu (bkz. kullanıcının
-            // gönderdiği NDVI ekran görüntüsü — çalışma alanının bir kısmı
-            // hâlâ ham uydu görüntüsüydü). Artık HER katman için (ilk analiz,
-            // sonraki her pan/zoom, ekran 1/ekran 2 fark etmez) Leaflet'in
-            // 'loading' olayı (bu katman için YENİ karo isteği başladığında
-            // ateşlenir) yükleme perdesini AÇAR; 'load' olayı (o an
-            // görünümdeki TÜM karolar — retry'ler dahil — bitince) perdeyi
-            // KAPATIR. 'loading' hiç ateşlenmezse (ör. tüm karolar zaten
-            // önbellekte/yüklüyse) perde de hiç açılmaz — gereksiz yere
-            // ekran kilitlenmez.
-            layer.on('loading', function () {
-                if (typeof showSylvaLoading === 'function') showSylvaLoading();
-            });
-            layer.on('load', function () {
-                var _tryHide = function () {
-                    if ((layer._sylvaPendingRetries || 0) > 0) {
-                        setTimeout(_tryHide, 300);
-                        return;
-                    }
-                    if (typeof hideSylvaLoading === 'function') hideSylvaLoading();
-                };
-                _tryHide();
-            });
-            layer.on('tileerror', function (e) {
-                var tile = e && e.tile;
-                if (!tile || !tile.src) return;
-                var attempt = (tile._sylvaRetryCount || 0) + 1;
-                if (attempt > _SYLVA_TILE_RETRY_MAX) { _sylvaUntintTile(tile); return; } // pes edildi — çok nadir, kalıcı sunucu hatası
-                tile._sylvaRetryCount = attempt;
-                var baseSrc = tile._sylvaBaseSrc || tile.src;
-                tile._sylvaBaseSrc = baseSrc;
-                var delay = _SYLVA_TILE_RETRY_BASE_MS * Math.pow(1.7, attempt - 1);
-
-                // Bu tile artık "retry bekliyor" — sayaç +1. Bu denemenin
-                // nihai sonucu (başarı / tekrar hata / pes ediş) ne olursa
-                // olsun sayaç MUTLAKA -1 düşürülmeli — yoksa _waitForTileReady()
-                // sonsuza dek "hâlâ bekleniyor" sanıp ekranı hiç kapatmaz.
-                layer._sylvaPendingRetries = (layer._sylvaPendingRetries || 0) + 1;
-                var _settled = false;
-                function _settleRetry() {
-                    if (_settled) return;
-                    _settled = true;
-                    layer._sylvaPendingRetries = Math.max(0, (layer._sylvaPendingRetries || 0) - 1);
-                    tile.removeEventListener('load', _settleRetry);
-                    tile.removeEventListener('error', _settleRetry);
-                }
-
-                setTimeout(function () {
-                    // Aynı src'yi doğrudan tekrar atamak bazı tarayıcılarda
-                    // isteği yenilemeyebilir (önbellek/başarısız istek durumu);
-                    // benzersiz bir sorgu parametresi ekleyerek GERÇEK bir yeni
-                    // ağ isteği zorlanır.
-                    // NOT: 'load'/'error' dinleyicilerini burada, src atanmadan
-                    // HEMEN ÖNCE ekliyoruz — böylece bu deneme sonuçlandığında
-                    // (Leaflet'in kendi dinleyicilerinden bağımsız olarak) sayaç
-                    // doğru şekilde düşürülür. Eğer bu deneme de hata verirse ve
-                    // deneme hakkı kaldıysa, Leaflet'in kendi 'tileerror'
-                    // event'i yeniden ateşlenip üstteki handler'ı tekrar
-                    // çalıştıracak (yeni bir +1/-1 çifti açılacak) — bu yüzden
-                    // burada 'error' için ayrıca yeni bir deneme başlatmıyoruz.
-                    tile.addEventListener('load', _settleRetry);
-                    tile.addEventListener('error', _settleRetry);
-                    var sep = baseSrc.indexOf('?') === -1 ? '?' : '&';
-                    tile.src = baseSrc + sep + '_sylvaRetry=' + attempt;
-                }, delay);
-            });
-            return layer;
-        }
-
         window._geeLayersByPane = window._geeLayersByPane || { map: {}, map2: {} };
         function _sylvaAddGeeLayer(paneId, layerKey, tileUrl, options) {
             var targetMap = _sylvaTargetMap(paneId);
             // 🛠️ DÜZELTME (Zoom'da Veri Kaybolması): bkz. _sylvaReplaceGeeLayer
             // içindeki açıklama — aynı maxZoom/maxNativeZoom eksikliği burada
             // eklenen katmanlar için de geçerliydi.
-            var opts = Object.assign({
-                opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane', maxZoom: 24, maxNativeZoom: 16,
-                // GEE KOTASINI KORUYAN AYARLAR:
-                updateWhenIdle: true,       // Sadece harita kaydırma/zoom işlemi bittiğinde kareleri iste
-                updateWhenZooming: false,   // Zoom esnasında geçiş karelerini isteyip sunucuyu yorma
-                keepBuffer: 3               // Ekran dışına çıkan kareleri bellekte tut ki geri dönünce tekrar GEE'ye istek atmasın
-            }, options || {});
+            var opts = Object.assign({ opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane', maxZoom: 24, maxNativeZoom: 16 }, options || {});
             var store = window._geeLayersByPane[(paneId === 'map2') ? 'map2' : 'map'];
             if (store[layerKey]) { try { targetMap.removeLayer(store[layerKey]); } catch (e) {} delete store[layerKey]; }
-            var layer = _sylvaAttachTileRetry(L.tileLayer(tileUrl, opts)).addTo(targetMap);
+            var layer = L.tileLayer(tileUrl, opts).addTo(targetMap);
             store[layerKey] = layer;
             if (paneId === 'map2') { window._geeLayer2 = layer; } else { _geeLayer = layer; }
 
@@ -13650,53 +13457,13 @@ function selectRamp(name) {
                 done = true;
                 if (typeof cb === 'function') cb();
             }
-
-            // 🛠️ KÖK NEDEN DÜZELTMESİ (2/2): Leaflet'in 'load' event'i, bir
-            // tile hata alsa bile o kareyi "sonuçlandı" sayıp fırlatılır —
-            // _sylvaAttachTileRetry() tarafından arka planda yeniden denenen
-            // (henüz sonuçlanmamış) kareleri BEKLEMEDEN. Bu yüzden 'load'
-            // geldiğinde tek başına yetinmiyoruz; katmanın
-            // _sylvaPendingRetries sayacı da sıfıra dönene kadar kısa
-            // aralıklarla kontrol edip gerçekten "hiçbir kare eksik değil"
-            // olduğundan emin oluyoruz. Sayaç zaten sıfırsa (retry hiç
-            // gerekmediyse) bu, normal akışta hiçbir gecikme eklemez.
-            function _checkTrulyDone() {
-                if (done) return;
-                if (layer && (layer._sylvaPendingRetries || 0) > 0) {
-                    setTimeout(_checkTrulyDone, 300);
-                    return;
-                }
-                finish();
-            }
-
             if (layer && typeof layer.once === 'function') {
-                layer.once('load', _checkTrulyDone);
+                layer.once('load', finish);
+                layer.once('tileerror', finish);
             } else {
                 setTimeout(finish, 0);
             }
-
-            // Güvenlik ağı — asla sonsuza dek takılı kalmaz. Sabit 12 sn
-            // eskiden retry olmayan akış için yeterliydi; artık retry'ler
-            // bazen bunu aştığı için taban süre yükseltildi VE retry hâlâ
-            // sürüyorsa (pending > 0) güvenlik ağı, mutlak bir tavana kadar
-            // kendini otomatik uzatıyor — böylece büyük alan / yoğun retry
-            // durumunda ekran erken kapanıp veri eksik göstermiyor, ama
-            // retry'ler tamamen dursa/pes edilse bile ekran sonsuza dek
-            // takılı kalmıyor.
-            var _SYLVA_SAFETY_BASE_MS = 18000;
-            var _SYLVA_SAFETY_HARD_CAP_MS = 40000;
-            var _safetyStart = Date.now();
-            function _safetyTick() {
-                if (done) return;
-                var pending = layer ? (layer._sylvaPendingRetries || 0) : 0;
-                var elapsed = Date.now() - _safetyStart;
-                if (pending > 0 && elapsed < _SYLVA_SAFETY_HARD_CAP_MS) {
-                    setTimeout(_safetyTick, 1000);
-                    return;
-                }
-                finish();
-            }
-            setTimeout(_safetyTick, _SYLVA_SAFETY_BASE_MS);
+            setTimeout(finish, 12000); // güvenlik ağı
         }
 
         // ── Analiz çıktılarını sıfırla ─────────────────────────────────────────
@@ -17604,11 +17371,9 @@ function selectRamp(name) {
                 }
                 var _oldLayer = window._classHighlightLayerByPane[_pane];
                 if (_oldLayer) { try { _sylvaTargetMap(_pane).removeLayer(_oldLayer); } catch (e) {} }
-                window._classHighlightLayerByPane[_pane] = _sylvaAttachTileRetry(L.tileLayer(data.tileUrl, {
-                    opacity: 0.95, zIndex: 20, crossOrigin: true, pane: 'geeAnalysisPane', maxZoom: 24, maxNativeZoom: 16,
-                    // GEE KOTASINI KORUYAN AYARLAR:
-                    updateWhenIdle: true, updateWhenZooming: false, keepBuffer: 3
-                })).addTo(_sylvaTargetMap(_pane));
+                window._classHighlightLayerByPane[_pane] = L.tileLayer(data.tileUrl, {
+                    opacity: 0.95, zIndex: 20, crossOrigin: true, pane: 'geeAnalysisPane', maxZoom: 24, maxNativeZoom: 16
+                }).addTo(_sylvaTargetMap(_pane));
             })
             .catch(function (err) {
                 if (window._classHighlightIndexByPane[_pane] === idx) window._classHighlightIndexByPane[_pane] = null;
