@@ -49160,21 +49160,42 @@ document.addEventListener('keydown', function(e) {
      aşımına uğrarsa, hiçbir müdahale olmadan o karo KALICI olarak boş
      kalır — "tüm veri geldi ama zoom yapınca bazı yerler gidiyor"
      şikayetinin doğrudan sebebi budur.
-     ÇÖZÜM: Sadece 'geeAnalysisPane' panelindeki katmanlarda, bir karo
-     hata verirse (tileerror) makul bir üstel geri-çekilmeli gecikmeyle
-     ve GERÇEK bir yeni ağ isteği zorlayan cache-busting parametresiyle
-     sessizce yeniden istenir. ÖNEMLİ: bu mekanizma HİÇBİR Leaflet
-     ayarını (updateWhenZooming/keepBuffer/updateWhenIdle) değiştirmez,
-     hiçbir görsel "tint" eklemez ve yükleme perdesi (showSylvaLoading/
-     hideSylvaLoading, _waitForTileReady) mantığına dokunmaz — tamamen
-     bağımsız ve arka planda çalışır; karo başarıyla gelince görünüme
-     kendiliğinden eklenir.
+     ÇÖZÜM (2 KATMANLI):
+     1) 'tileerror' — karo AÇIKÇA bir ağ/HTTP hatası verirse.
+     2) 🆕 'tileload' + İÇERİK KONTROLÜ — GEE'nin karo sunucusu, bir
+        kareyi hesaplayamadığında bazen HİÇBİR HTTP hatası DÖNDÜRMEDEN
+        (200 OK), TAMAMEN SAYDAM/boş bir görsel gönderir. Bu durumda
+        'tileerror' HİÇ ateşlenmez — Leaflet'e göre "başarıyla yüklendi"
+        sayılır, ama ekranda görünen hiçbir şey yoktur (temel harita/
+        altındaki katman "sızarak" görünür). Videoda görülen, hiçbir
+        zaman kendiliğinden dolmayan "delik" tam olarak bu durum.
+        Artık her karo yüklendiğinde küçük bir <canvas> üzerine çizilip
+        alfa (saydamlık) kanalı örneklenir; kare neredeyse tamamen
+        saydamsa (gerçek veri YOK sayılır) sanki hata almış gibi aynı
+        yeniden-deneme mekanizmasına sokulur.
+     ÖNEMLİ: bu mekanizma HİÇBİR Leaflet ayarını (updateWhenZooming/
+     keepBuffer/updateWhenIdle) değiştirmez, hiçbir görsel "tint"
+     eklemez ve yükleme perdesi (showSylvaLoading/hideSylvaLoading,
+     _waitForTileReady) mantığına dokunmaz — tamamen bağımsız ve arka
+     planda çalışır; karo başarıyla gelince görünüme kendiliğinden eklenir.
      ════════════════════════════════════════════════════════════════ -->
 <script>
 (function () {
     var _SYLVA_MAX_TILE_RETRIES = 8;      // önceki denemedeki 4'ten çok daha cömert
     var _SYLVA_RETRY_BASE_MS   = 1000;
     var _SYLVA_RETRY_CAP_MS    = 8000;    // tek bir denemenin üst gecikme sınırı
+    var _SYLVA_BLANK_ALPHA_THRESHOLD = 8;   // 0-255 arası; bunun altı "saydam" sayılır
+    var _SYLVA_BLANK_SAMPLE_GRID = 6;       // 6x6 = 36 örnek nokta (performans için yeterli)
+
+    var _sylvaProbeCanvas = null;
+    function _sylvaGetProbeCanvas() {
+        if (!_sylvaProbeCanvas) {
+            _sylvaProbeCanvas = document.createElement('canvas');
+            _sylvaProbeCanvas.width = _SYLVA_BLANK_SAMPLE_GRID;
+            _sylvaProbeCanvas.height = _SYLVA_BLANK_SAMPLE_GRID;
+        }
+        return _sylvaProbeCanvas;
+    }
 
     function _sylvaRetryTile(tile, attempt) {
         var baseSrc = tile._sylvaBaseSrc;
@@ -49192,17 +49213,59 @@ document.addEventListener('keydown', function(e) {
         }, delay);
     }
 
+    function _sylvaHandleFailure(tile) {
+        if (!tile || !tile.src) return;
+        var attempt = (tile._sylvaRetryCount || 0) + 1;
+        if (attempt > _SYLVA_MAX_TILE_RETRIES) return; // çok nadir, kalıcı sunucu hatası — sessizce bırak
+        tile._sylvaRetryCount = attempt;
+        _sylvaRetryTile(tile, attempt);
+    }
+
+    // Karo görseli TAMAMEN (ya da neredeyse tamamen) saydamsa true döner.
+    // CORS/tainted-canvas gibi bir sorun olursa (nadiren, bazı tarayıcı/
+    // sunucu kombinasyonlarında) sessizce false döner — hiçbir şeyi bozmaz.
+    function _sylvaTileLooksBlank(tile) {
+        try {
+            var c = _sylvaGetProbeCanvas();
+            var ctx = c.getContext('2d', { willReadFrequently: true });
+            ctx.clearRect(0, 0, c.width, c.height);
+            ctx.drawImage(tile, 0, 0, c.width, c.height);
+            var data = ctx.getImageData(0, 0, c.width, c.height).data;
+            for (var i = 3; i < data.length; i += 4) {
+                if (data[i] > _SYLVA_BLANK_ALPHA_THRESHOLD) return false; // en az bir görünür piksel var
+            }
+            return true;
+        } catch (e) {
+            return false; // kontrol edilemiyorsa müdahale etme
+        }
+    }
+
     document.addEventListener('DOMContentLoaded', function () {
         if (typeof L === 'undefined' || !L.TileLayer) return;
         L.TileLayer.addInitHook(function () {
             if (!this.options || this.options.pane !== 'geeAnalysisPane') return;
+
+            // 1) Açık HTTP/ağ hatası
             this.on('tileerror', function (e) {
+                _sylvaHandleFailure(e && e.tile);
+            });
+
+            // 2) Sessiz/boş (200 OK ama tamamen saydam) karo
+            this.on('tileload', function (e) {
                 var tile = e && e.tile;
-                if (!tile || !tile.src) return;
-                var attempt = (tile._sylvaRetryCount || 0) + 1;
-                if (attempt > _SYLVA_MAX_TILE_RETRIES) return; // çok nadir, kalıcı sunucu hatası — sessizce bırak
-                tile._sylvaRetryCount = attempt;
-                _sylvaRetryTile(tile, attempt);
+                if (!tile) return;
+                // Bir sonraki animasyon karesinde kontrol et — görsel henüz
+                // tam decode olmamışsa yanlış pozitif üretmesin.
+                requestAnimationFrame(function () {
+                    if (_sylvaTileLooksBlank(tile)) {
+                        _sylvaHandleFailure(tile);
+                    } else {
+                        // Başarılı içerik geldi — bu kareye ait deneme sayacı sıfırlanır
+                        // ki ileride (ör. pan sonrası) yeniden aynı DOM elemanı hatalı
+                        // içerik alırsa tekrar tam hak kullanabilsin.
+                        tile._sylvaRetryCount = 0;
+                    }
+                });
             });
         });
     });
