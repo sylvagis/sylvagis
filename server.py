@@ -83,7 +83,16 @@ def _call_with_retry(fn, *args, retries=3, base_delay=1.5, **kwargs):
     """
     _non_retryable_markers = (
         'invalid', 'must be', 'not found', 'permission', 'denied',
-        'unauthorized', 'bad request', 'parse', 'geometry for image clipping',
+        'unauthorized', 'bad request', 'geometry for image clipping',
+    )
+    # 🆕 Kota / eşzamanlılık hataları ("Too many concurrent aggregations",
+    # 429, "quota", "rate limit") GERÇEKTEN geçicidir ama normal ağ
+    # hatalarından DAHA UZUN beklemek gerekir: GEE'nin eşzamanlı istek
+    # penceresi boşalmadan tekrar denemek aynı hatayı üretir ve kotayı
+    # boşuna tüketir. Bu yüzden bu hatalarda gecikme 2 katına çıkarılır.
+    _rate_limit_markers = (
+        'too many', 'concurrent', 'quota', 'rate limit', 'ratelimit',
+        '429', 'resource_exhausted', 'exhausted', 'try again later',
     )
     last_err = None
     for attempt in range(retries + 1):
@@ -96,12 +105,238 @@ def _call_with_retry(fn, *args, retries=3, base_delay=1.5, **kwargs):
                 raise
             if attempt < retries:
                 delay = base_delay * (2 ** attempt)
+                if any(m in msg for m in _rate_limit_markers):
+                    delay *= 2.0
                 print('[SylvaGIS] ⚠️ Geçici hata (deneme {}/{}), {:.1f} sn sonra '
                       'tekrar denenecek: {}'.format(attempt + 1, retries + 1, delay, e))
                 time.sleep(delay)
             else:
                 raise
     raise last_err
+
+
+# ════════════════════════════════════════════════════════════════
+# 🧱 TILE PROXY — "haritanın yarısı boş kalıyor" sorununun çözümü
+# ════════════════════════════════════════════════════════════════
+# SORUN (ekran görüntüsüyle doğrulandı): Analiz katmanı haritada sadece
+# birkaç 256×256'lık karede görünüyor, geri kalan kareler boş kalıyordu.
+# Boş kalan alanların sınırları arazi örtüsü sınıflarını değil, TAM
+# EKSEN HİZALI tile kenarlarını takip ediyordu — yani CORINE sorgusu
+# doğruydu, veri AOI'nin tamamında vardı; teslim edilemeyen şey
+# TILE'LARDI.
+#
+# KÖK NEDEN: /api/analyze yanıtı istemciye ulaştığı anda tarayıcı,
+# earthengine.googleapis.com'a AYNI ANDA 15-20 tile isteği atar. Servis
+# hesabının eşzamanlı istek bütçesi (özellikle /api/analyze'ın kendi
+# getInfo çağrılarıyla zaten meşgulken) buna yetmez; GEE bir kısmına
+# 429 "Too many concurrent aggregations" döner. Leaflet başarısız bir
+# tile'ı VARSAYILAN OLARAK BİR DAHA DENEMEZ — kareyi kalıcı olarak boş
+# bırakır. Kullanıcı bunu "veri yüklenmedi" olarak görür.
+#
+# ÇÖZÜM: Tile'lar artık doğrudan GEE'den değil, bu sunucu üzerinden
+# geçer. Sunucu her tile için:
+#   1) başarısız isteği üstel geri çekilmeyle 3 kez tekrar dener,
+#   2) süresi dolmuş map id'yi (401/403/404) otomatik yeniler,
+#   3) başarılı tile'ı bellekte önbelleğe alır (aynı kare bir daha
+#      GEE'ye gitmez — pan/zoom sırasında kotayı ciddi ölçüde korur).
+# İstemci tarafında HİÇBİR DEĞİŞİKLİK GEREKMEZ: /api/analyze zaten
+# 'tileUrl' döndürüyordu, artık aynı alanda proxy adresi dönüyor.
+#
+# ⚠️ DAĞITIM NOTU: Proxy, tile'ları eşzamanlı sunabilmek için thread'li
+# worker ister. gunicorn komutunu şu şekilde güncelleyin:
+#     gunicorn -w 2 --threads 8 -b 0.0.0.0:5000 --timeout 120 server:app
+# Proxy'yi kapatıp eski davranışa (doğrudan GEE URL'i) dönmek için:
+#     export SYLVAGIS_TILE_PROXY=0
+TILE_PROXY_ENABLED = os.environ.get('SYLVAGIS_TILE_PROXY', '1').strip().lower() \
+    not in ('0', 'false', 'no', 'off')
+
+# Proxy adresleri mutlak (absolute) üretilir; frontend farklı bir origin'de
+# barındırılıyor olabilir (bkz. CORS(app)). Ters proxy arkasında host
+# yanlış tespit edilirse bu ortam değişkeniyle sabitlenebilir:
+#     export SYLVAGIS_PUBLIC_BASE_URL=https://api.sylvagis.com
+PUBLIC_BASE_URL = os.environ.get('SYLVAGIS_PUBLIC_BASE_URL', '').strip().rstrip('/')
+
+_TILE_SESSION_TTL_SECONDS = 3 * 3600   # map id oturumunun saklanma süresi
+_TILE_SESSION_MAX_ITEMS   = 64         # eşzamanlı tutulacak azami oturum
+_TILE_CACHE_MAX_ITEMS     = 2000       # bellekte tutulacak azami tile (~40 MB)
+_TILE_FETCH_RETRIES       = 3          # tek bir tile için tekrar deneme sayısı
+_TILE_FETCH_TIMEOUT       = 25         # saniye
+
+_tile_sessions = {}
+_tile_cache = {}
+_tile_cache_order = []
+_tile_lock = threading.RLock()
+
+# requests.Session + geniş connection pool: tarayıcı 15-20 tile'ı aynı anda
+# ister; varsayılan havuz (10) bunu darboğaza sokar.
+_tile_http = requests.Session()
+_tile_http.mount('https://', requests.adapters.HTTPAdapter(
+    pool_connections=32, pool_maxsize=32, max_retries=0
+))
+
+
+def _prune_tile_sessions_locked():
+    """TTL'i dolmuş veya sayı tavanını aşan oturumları temizler."""
+    now = time.time()
+    expired = [sid for sid, s in _tile_sessions.items()
+               if now - s['created'] > _TILE_SESSION_TTL_SECONDS]
+    for sid in expired:
+        _tile_sessions.pop(sid, None)
+    if len(_tile_sessions) > _TILE_SESSION_MAX_ITEMS:
+        # en eski kullanılanları at
+        for sid, _ in sorted(_tile_sessions.items(), key=lambda kv: kv[1]['last_used'])[
+                :len(_tile_sessions) - _TILE_SESSION_MAX_ITEMS]:
+            _tile_sessions.pop(sid, None)
+
+
+def _register_tile_session(url_format, params=None, kind='analyze', extra=None):
+    """
+    Bir GEE map id (tile url_format) için proxy oturumu açar ve oturum
+    kimliğini döndürür. params/kind, map id'nin süresi dolduğunda
+    görüntüyü yeniden üretebilmek için saklanır.
+    """
+    sid = uuid.uuid4().hex[:20]
+    now = time.time()
+    with _tile_lock:
+        _prune_tile_sessions_locked()
+        _tile_sessions[sid] = {
+            'url_format': url_format,
+            'params': copy.deepcopy(params) if params else None,
+            'kind': kind,
+            'extra': copy.deepcopy(extra) if extra else None,
+            'created': now,
+            'last_used': now,
+        }
+    return sid
+
+
+def _tile_url_for_client(sid, direct_url):
+    """
+    İstemciye verilecek tile şablonunu üretir. Proxy kapalıysa ya da
+    oturum açılamadıysa doğrudan GEE adresine geri düşer.
+    """
+    if not TILE_PROXY_ENABLED or not sid:
+        return direct_url
+    base = PUBLIC_BASE_URL
+    if not base:
+        try:
+            base = request.host_url.rstrip('/')
+            # Ters proxy arkasında şema http görünebilir; X-Forwarded-Proto'ya uy.
+            proto = request.headers.get('X-Forwarded-Proto')
+            if proto and base.startswith('http://') and proto.split(',')[0].strip() == 'https':
+                base = 'https://' + base[len('http://'):]
+        except Exception:
+            return direct_url
+    return '{}/api/tiles/{}/{{z}}/{{x}}/{{y}}.png'.format(base, sid)
+
+
+def _rebuild_tile_session_url(session):
+    """
+    Süresi dolmuş bir map id'yi, saklanan analiz parametrelerinden
+    görüntüyü yeniden kurarak tazeler. Yeni url_format'ı döndürür.
+    """
+    params = session.get('params')
+    if not params:
+        return None
+    final_display, roi, result, vis, _probe = build_result_image(params)
+    if session.get('kind') == 'highlight':
+        extra = session.get('extra') or {}
+        class_min = extra.get('classMin')
+        class_max = extra.get('classMax')
+        mask = result.gte(ee.Number(class_min)).And(result.lte(ee.Number(class_max)))
+        image = ee.Image(1).updateMask(mask).clip(roi)
+        vis = {'min': 0, 'max': 1, 'palette': ['#ffee00']}
+    else:
+        image = final_display
+    map_id = _call_with_retry(lambda: image.getMapId(vis), retries=1)
+    return map_id['tile_fetcher'].url_format
+
+
+def _cache_get_tile(key):
+    with _tile_lock:
+        return _tile_cache.get(key)
+
+
+def _cache_put_tile(key, content):
+    with _tile_lock:
+        if key in _tile_cache:
+            return
+        _tile_cache[key] = content
+        _tile_cache_order.append(key)
+        while len(_tile_cache_order) > _TILE_CACHE_MAX_ITEMS:
+            _tile_cache.pop(_tile_cache_order.pop(0), None)
+
+
+@app.route('/api/tiles/<sid>/<int:z>/<int:x>/<int:y>.png', methods=['GET'])
+def proxy_tile(sid, z, x, y):
+    """
+    Tek bir harita karesini GEE'den alıp istemciye iletir; geçici
+    hatalarda tekrar dener, süresi dolmuş map id'yi yeniler ve başarılı
+    kareleri önbelleğe alır. Leaflet tarafında hiçbir değişiklik gerekmez.
+    """
+    with _tile_lock:
+        session = _tile_sessions.get(sid)
+        if session:
+            session['last_used'] = time.time()
+    if not session:
+        # Oturum düştüyse istemcinin analizi yenilemesi gerekir.
+        return jsonify({'success': False, 'error': 'Tile oturumu süresi doldu.'}), 410
+
+    cache_key = (sid, z, x, y)
+    cached = _cache_get_tile(cache_key)
+    if cached is not None:
+        return Response(cached, mimetype='image/png', headers={
+            'Cache-Control': 'public, max-age=3600',
+            'X-SylvaGIS-Tile': 'cache',
+        })
+
+    refreshed_once = False
+    delay = 0.6
+    for attempt in range(_TILE_FETCH_RETRIES + 1):
+        url = (session['url_format']
+               .replace('{z}', str(z)).replace('{x}', str(x)).replace('{y}', str(y)))
+        try:
+            resp = _tile_http.get(url, timeout=_TILE_FETCH_TIMEOUT)
+        except Exception as err:
+            if attempt >= _TILE_FETCH_RETRIES:
+                print('[SylvaGIS] ❌ Tile alınamadı (ağ) z{}/x{}/y{}: {}'.format(z, x, y, err))
+                return Response(status=503)
+            time.sleep(delay)
+            delay *= 2
+            continue
+
+        if resp.status_code == 200:
+            _cache_put_tile(cache_key, resp.content)
+            return Response(resp.content, mimetype='image/png', headers={
+                'Cache-Control': 'public, max-age=3600',
+                'X-SylvaGIS-Tile': 'live',
+            })
+
+        # Map id'nin süresi dolmuş olabilir → bir kez yeniden üret.
+        if resp.status_code in (401, 403, 404) and not refreshed_once:
+            refreshed_once = True
+            try:
+                new_url = _rebuild_tile_session_url(session)
+                if new_url:
+                    with _tile_lock:
+                        session['url_format'] = new_url
+                        session['created'] = time.time()
+                    # Eski map id'ye ait önbellek kareleri geçersiz değil
+                    # (aynı görüntü) — bu yüzden temizlemeye gerek yok.
+                    continue
+            except Exception as err:
+                print('[SylvaGIS] ⚠️ Map id tazelenemedi: {}'.format(err))
+
+        # 429 / 5xx → geçici; bekle ve tekrar dene.
+        if resp.status_code in (429, 500, 502, 503, 504) and attempt < _TILE_FETCH_RETRIES:
+            time.sleep(delay)
+            delay *= 2
+            continue
+
+        print('[SylvaGIS] ❌ Tile hatası z{}/x{}/y{} → HTTP {}'.format(z, x, y, resp.status_code))
+        return Response(status=503)
+
+    return Response(status=503)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -1319,6 +1554,45 @@ LULC_FAMILY_INDICES = (
     'SAR',
 )
 
+
+# ════════════════════════════════════════════════════════════════
+# 📏 İSTATİSTİK ÇÖZÜNÜRLÜĞÜ — VERİ SETİNİN GERÇEK PİKSEL BOYUTU
+# ════════════════════════════════════════════════════════════════
+# SORUN: reduceRegion çağrıları HER analiz için sabit scale=30 kullanıyordu.
+# CORINE 100 m'lik bir üründür — 30 m'de örneklemek aynı sonucu üretir ama
+# GEE'ye yaklaşık 11 KAT fazla piksel işletir. MODIS (500 m) için bu oran
+# ~275 kata çıkar. bestEffort=True hatayı gizler, MALİYETİ gizlemez: bu
+# gereksiz yük, /api/analyze yanıt vermeden hemen önce servis hesabının
+# eşzamanlı istek bütçesini tüketir ve ardından gelen tile isteklerinin
+# 429 almasına doğrudan katkıda bulunur (bkz. TILE PROXY açıklaması).
+#
+# ÇÖZÜM: her veri seti kendi doğal piksel boyutunda istatistiklenir.
+_NATIVE_STATS_SCALE = {
+    'LULC':        10,   # Dynamic World V1
+    'LULC_ESA':    10,   # ESA WorldCover v200
+    'LULC_CORINE': 100,  # CORINE Land Cover 2018
+    'LULC_MODIS':  500,  # MODIS MCD12Q1
+}
+
+
+def _stats_scale_for(index, default=30):
+    """Verilen analiz için reduceRegion çözünürlüğünü (m) döndürür."""
+    return _NATIVE_STATS_SCALE.get(index, default)
+
+
+def _roi_center_lonlat(roi_coords):
+    """
+    AOI'nin yaklaşık merkezini (lon, lat) — GEE'ye HİÇ istek atmadan,
+    doğrudan GeoJSON koordinatlarından — hesaplar.
+
+    Bu merkez yalnızca doğru UTM dilimini seçmek için kullanılır; bbox
+    merkezi bu amaç için centroid kadar isabetlidir. Böylece her analizde
+    bir adet roi.centroid().getInfo() ağ çağrısı (ve onun retry bütçesi)
+    tamamen ortadan kalkar.
+    """
+    west, south, east, north = _geojson_bbox(_normalize_to_geojson(roi_coords))
+    return (west + east) / 2.0, (south + north) / 2.0
+
 # ════════════════════════════════════════════════════════════════
 # 🎨 LULC SINIF TANIMLARI — KOD, İSİM VE RESMİ RENK (Color Table / RAT)
 # ════════════════════════════════════════════════════════════════
@@ -1387,7 +1661,7 @@ LULC_CLASS_DEFS = {
         {'code': 5,  'label': 'Liman Alanları',            'color': '#e6cccc'},
         {'code': 6,  'label': 'Havalimanları',             'color': '#e6cce6'},
         {'code': 7,  'label': 'Maden Çıkarım Sahası',      'color': '#a600cc'},
-        {'code': 8,  'label': 'Döküm / Atık Sahası',       'color': '#a64d00'},
+        {'code': 8,  'label': 'Döküm / Atık Sahası',       'color': '#a64dcc'},
         {'code': 9,  'label': 'İnşaat Sahası',             'color': '#ff4dff'},
         {'code': 10, 'label': 'Kentsel Yeşil Alan',        'color': '#ffa6ff'},
         {'code': 11, 'label': 'Spor / Eğlence',            'color': '#ffe6ff'},
@@ -1665,7 +1939,18 @@ def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name):
 
 @app.route('/api/ping', methods=['GET'])
 def ping():
-    return jsonify({'ok': True, 'version': 'zip-export-v2-tiling'})
+    # Teşhis alanları: tile proxy'nin açık olup olmadığını ve önbellek
+    # doluluğunu tarayıcıdan tek istekle görebilmek için.
+    with _tile_lock:
+        session_count = len(_tile_sessions)
+        cached_tiles  = len(_tile_cache)
+    return jsonify({
+        'ok': True,
+        'version': 'tile-proxy-v3',
+        'tileProxy': TILE_PROXY_ENABLED,
+        'tileSessions': session_count,
+        'cachedTiles': cached_tiles,
+    })
 
 
 # ════════════════════════════════════════════════════════════════
@@ -1682,6 +1967,31 @@ def ping():
 #                        myaccount.google.com/apppasswords adresinden alınır)
 # Bu değişkenler tanımlı değilse endpoint açık/anlaşılır bir hata döner.
 CONTACT_RECEIVER_EMAIL = 'sylvagis.world@gmail.com'
+
+
+def _smtp_credentials():
+    """
+    SMTP kullanıcı adı ve parolasını YALNIZCA ortam değişkenlerinden okur.
+
+    ❗ ÖNEMLİ — ESKİ ŞİFREYİ İPTAL EDİN: Bu dosyanın önceki sürümünde Gmail
+    uygulama şifresi iki ayrı yerde açık metin olarak gömülüydü. Kod bir kez
+    paylaşıldığı/depoya girdiği için o şifre artık güvenli DEĞİLDİR.
+        1) myaccount.google.com/apppasswords → eski uygulama şifresini SİLİN
+        2) Yeni bir uygulama şifresi oluşturun
+        3) Sunucuda tanımlayın:
+             export SYLVA_SMTP_USER=sylvagis.world@gmail.com
+             export SYLVA_SMTP_PASS=<yeni-uygulama-şifresi>
+
+    Dönüş: (user, password, hata_mesajı_veya_None)
+    """
+    user = os.environ.get('SYLVA_SMTP_USER', '').strip()
+    password = os.environ.get('SYLVA_SMTP_PASS', '').strip()
+    if not user or not password:
+        return '', '', (
+            'E-posta gönderimi yapılandırılmamış. Sunucuda SYLVA_SMTP_USER ve '
+            'SYLVA_SMTP_PASS ortam değişkenlerini tanımlayın.'
+        )
+    return user, password, None
 
 
 @app.route('/api/contact', methods=['POST'])
@@ -1703,8 +2013,13 @@ def send_contact_message():
     if not email_re.match(email):
         return jsonify({'success': False, 'error': 'Geçersiz e-posta adresi.'}), 400
 
-    smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'ksfnkvwcutrawcih'
+    # ⚠️ GÜVENLİK DÜZELTMESİ: Gmail uygulama şifresi kaynak kodda AÇIK
+    # METİN olarak duruyordu — üstelik yukarıdaki yorum bloğu "kaynak kodda
+    # parola SAKLANMAZ" dediği hâlde. Artık yalnızca ortam değişkeninden
+    # okunur (bkz. _smtp_credentials).
+    smtp_user, smtp_pass, _cred_err = _smtp_credentials()
+    if _cred_err:
+        return jsonify({'success': False, 'error': _cred_err}), 503
 
     body = (
         'SylvaGIS İletişim Formu üzerinden yeni bir mesaj gönderildi.\n\n'
@@ -2939,7 +3254,12 @@ def build_result_image(data, for_export=False):
         # Orijinal (10,20,...,100) kodları, sırayla 1..11'e yeniden kodlanır —
         # böylece tile rengi/sınıf indeksi LULC ailesindeki diğer analizlerle
         # tutarlı, küçük ve ardışık bir aralıkta kalır.
-        remapped = worldcover.remap(wc_codes, list(range(1, len(wc_codes) + 1))).rename('value')
+        # defaultValue=0 + selfMask(): kapsam dışı / tanımsız kodlar açıkça
+        # maskelenir (bkz. LULC_CORINE bloğundaki ayrıntılı açıklama).
+        remapped = (worldcover
+                    .remap(wc_codes, list(range(1, len(wc_codes) + 1)), 0)
+                    .selfMask()
+                    .rename('value'))
 
         vis = {'min': 1, 'max': len(wc_codes), 'palette': wc_palette}
         result = remapped
@@ -2975,7 +3295,10 @@ def build_result_image(data, for_export=False):
                      .sort('system:time_start', False)
                      .first()
                      .select('LC_Type1'))
-        remapped_modis = modis_img.remap(modis_codes, list(range(1, 18))).rename('value')
+        remapped_modis = (modis_img
+                          .remap(modis_codes, list(range(1, 18)), 0)
+                          .selfMask()
+                          .rename('value'))
         vis    = {'min': 1, 'max': 17, 'palette': modis_palette}
         result = remapped_modis
         final_display = remapped_modis.clip(roi)
@@ -2994,7 +3317,7 @@ def build_result_image(data, for_export=False):
         ]
         corine_palette = [
             'e6004d', 'ff0000', 'cc4df2', 'cc0000', 'e6cccc', 'e6cce6',
-            'a600cc', 'a64d00', 'ff4dff', 'ffa6ff', 'ffe6ff',
+            'a600cc', 'a64dcc', 'ff4dff', 'ffa6ff', 'ffe6ff',
             'ffffa8', 'ffff00', 'e6e600', 'e68000', 'f2a64d', 'e6a600',
             'e6e64d', 'ffe6a6', 'ffe64d', 'e6cc4d', 'f2cca6',
             '80ff00', '00a600', '4dff00', 'ccf24d', 'a6ff80', 'a6e64d', 'a6f200',
@@ -3002,11 +3325,30 @@ def build_result_image(data, for_export=False):
             'a6a6ff', '4d4dff', 'ccccff', 'e6e6ff', 'a6a6e6',
             '00ccf2', '80f2e6', '00ffa6', 'a6ffe6', 'e6f2ff'
         ]
-        corine_img = (ee.ImageCollection('COPERNICUS/CORINE/V20/100m')
-                      .sort('system:time_start', False)
-                      .first()
-                      .select('landcover'))
-        remapped_corine = corine_img.remap(corine_codes, list(range(1, len(corine_codes) + 1))).rename('value')
+        # 🛠️ DÜZELTME (deterministik sürüm seçimi): daha önce koleksiyon
+        # system:time_start'a göre sıralanıp .first() alınıyordu. Bu, sıralama
+        # özelliği eksik/değişken olduğunda sessizce CLC2012 veya CLC1990'a
+        # düşebilir — CLC1990 Türkiye'yi HİÇ kapsamaz, dolayısıyla harita
+        # tamamen boş çıkardı. Arayüzde "2018 mosaic (CLC 2018)" yazdığı için
+        # doğrudan 2018 asset'i kullanılır; asset bulunamazsa (ileride yeniden
+        # adlandırılırsa) koleksiyondan en güncel görüntüye geri düşülür.
+        _clc_col  = ee.ImageCollection('COPERNICUS/CORINE/V20/100m')
+        _clc_2018 = _clc_col.filter(ee.Filter.eq('system:index', '2018'))
+        corine_img = ee.Image(ee.Algorithms.If(
+            _clc_2018.size().gt(0),
+            _clc_2018.first(),
+            _clc_col.sort('system:time_start', False).first()
+        )).select('landcover')
+        # 🛠️ DÜZELTME (defaultValue): remap'e varsayılan değer verilmediğinde
+        # 44 kodun dışındaki HER piksel (999 = NODATA dahil) sessizce maskelenir.
+        # Görsel sonuç aynıdır (şeffaf kalır) ancak bu durumda "gerçekten veri
+        # yok" ile "tile yüklenemedi" ayırt edilemez hale gelir — teşhisi
+        # zorlaştıran şey buydu. Artık kapsam dışı pikseller açıkça 0'a
+        # atanıp selfMask() ile maskeleniyor; niyet kodda görünür durumda.
+        remapped_corine = (corine_img
+                           .remap(corine_codes, list(range(1, len(corine_codes) + 1)), 0)
+                           .selfMask()
+                           .rename('value'))
         vis    = {'min': 1, 'max': len(corine_codes), 'palette': corine_palette}
         result = remapped_corine
         final_display = remapped_corine.clip(roi)
@@ -4051,8 +4393,10 @@ def analyze():
                 image = col.filterDate(data.get('startDate'), data.get('endDate')).sort('system:time_start', False).first()
 
             final_display, roi, result, vis, _unused_crs_probe = build_result_image(data)
-            map_id = final_display.getMapId(vis)
-            tile_url = map_id['tile_fetcher'].url_format
+            map_id = _call_with_retry(lambda: final_display.getMapId(vis))
+            tile_url_direct = map_id['tile_fetcher'].url_format
+            _sid = _register_tile_session(tile_url_direct, params=data, kind='analyze')
+            tile_url = _tile_url_for_client(_sid, tile_url_direct)
 
             meta = _rgb_scene_metadata(data, roi, image, ds)
 
@@ -4067,8 +4411,8 @@ def analyze():
             download_native_crs = meta.get('crs')
             if not download_native_crs or download_native_crs.strip().upper() == 'EPSG:4326':
                 try:
-                    centroid = roi.centroid(maxError=100).coordinates().getInfo()
-                    download_native_crs = _utm_epsg_from_lonlat(centroid[0], centroid[1])
+                    _lon, _lat = _roi_center_lonlat(data.get('roi'))
+                    download_native_crs = _utm_epsg_from_lonlat(_lon, _lat)
                 except Exception:
                     pass
             if download_native_crs:
@@ -4077,6 +4421,7 @@ def analyze():
             return jsonify({
                 'success':  True,
                 'tileUrl':  tile_url,
+                'tileUrlDirect': tile_url_direct,
                 'index':    'RGB',
                 'meta':     meta,
                 'nativeCrs': download_native_crs,
@@ -4085,6 +4430,29 @@ def analyze():
             })
 
         final_display, roi, result, vis, crs_probe_img = build_result_image(data)
+
+        # ── 🧱 Tile URL — İSTATİSTİKLERDEN ÖNCE üretilir ────────────
+        # 🛠️ BUG FİX (KÖK NEDEN — "harita verisi yüklenmiyor / yarısı boş"):
+        # getMapId() daha önce bu fonksiyonun EN SONUNDA, dört ayrı getInfo()
+        # çağrısından (CRS sondası, centroid, frequencyHistogram, minMax+mean)
+        # SONRA yapılıyordu. Bu sıralamanın iki zararlı sonucu vardı:
+        #   1) Yanıt istemciye ulaştığında servis hesabının eşzamanlı istek
+        #      bütçesi hâlâ o ağır reduceRegion işleriyle meşguldü; tarayıcı
+        #      aynı anda 15-20 tile isteyince GEE bir kısmına 429 döndü ve
+        #      Leaflet o kareleri kalıcı olarak boş bıraktı.
+        #   2) İstatistiklerden herhangi biri hata verirse (büyük AOI, kota)
+        #      TÜM istek çöküyor ve katman hiç oluşmuyordu — oysa tile'lar
+        #      pekâlâ üretilebilir durumdaydı.
+        # ÇÖZÜM: map id ilk sırada, istatistikler sonra. Böylece tile üretimi
+        # kotanın en boş olduğu anda gerçekleşir ve istatistik hataları
+        # katmanı artık düşüremez (aşağıda ayrıca güvenli varsayılana düşülür).
+        map_id = _call_with_retry(lambda: final_display.getMapId(vis))
+        tile_url_direct = map_id['tile_fetcher'].url_format
+        _sid = _register_tile_session(tile_url_direct, params=data, kind='analyze')
+        tile_url = _tile_url_for_client(_sid, tile_url_direct)
+
+        # Bu analizin doğal çözünürlüğü — tüm reduceRegion çağrıları bunu kullanır.
+        stats_scale = _stats_scale_for(data.get('index', 'NDVI'))
 
         # ── 🌐 Gerçek/doğal CRS tespiti ─────────────────────────────
         # 🛠️ BUG FİX (KÖK NEDEN — CRS seçici HER ZAMAN "WGS 84" gösteriyordu):
@@ -4108,6 +4476,11 @@ def analyze():
             native_crs = _call_with_retry(
                 lambda: _crs_source.projection().crs().getInfo(), retries=1
             )
+            # Savunmacı kontrol: beklenen tip str'dir. GEE beklenmedik bir
+            # yapı döndürürse (ör. sözlük) aşağıdaki .strip() çağrısı TÜM
+            # analizi 500 ile düşürüyordu; artık sessizce UTM yedeğine düşülür.
+            if native_crs is not None and not isinstance(native_crs, str):
+                native_crs = None
         except Exception as _crs_err:
             native_crs = None
             print('[SylvaGIS] ⚠️ nativeCrs doğrudan projeksiyon okuması başarısız '
@@ -4124,10 +4497,15 @@ def analyze():
         # (merkez boylam/enlemine) göre doğru UTM dilimi otomatik hesaplanıp
         # onun yerine kullanılır. Böylece indirme penceresi asla coğrafi bir
         # sistemle açılmaz; kullanıcı yine de dilerse elle WGS 84'e dönebilir.
+        # 🛠️ İYİLEŞTİRME: merkez artık roi.centroid().getInfo() ile GEE'ye
+        # sorulmuyor; AOI'nin GeoJSON'undan yerel olarak hesaplanıyor
+        # (_roi_center_lonlat). UTM dilimi seçimi için bbox merkezi
+        # centroid kadar isabetlidir ve bu, her analizden bir ağ çağrısını
+        # (ve onun retry bütçesini) tamamen kaldırır.
         if not native_crs or native_crs.strip().upper() == 'EPSG:4326':
             try:
-                centroid = roi.centroid(maxError=100).coordinates().getInfo()
-                native_crs = _utm_epsg_from_lonlat(centroid[0], centroid[1])
+                _lon, _lat = _roi_center_lonlat(data.get('roi'))
+                native_crs = _utm_epsg_from_lonlat(_lon, _lat)
             except Exception as _centroid_err:
                 print('[SylvaGIS] ❌ UTM merkez hesabı da başarısız oldu — nativeCrs '
                       'null/WGS84 olarak dönecek (istemci taraflı UTM yedeği devreye '
@@ -4145,15 +4523,28 @@ def analyze():
         # otomatik düşürür ama hesabı DAIMA tamamlar. NoData (maskeli) pikseller
         # GEE'nin reduceRegion'unda zaten otomatik olarak dışlanır; yani
         # istatistikler her zaman yalnızca geçerli/dolu piksellerden hesaplanır.
-        stats = _call_with_retry(
-            lambda: result.reduceRegion(
-                reducer    = ee.Reducer.frequencyHistogram(),
-                geometry   = roi,
-                scale      = 30,
-                maxPixels  = 1e9,
-                bestEffort = True,
-            ).getInfo()
-        )
+        #
+        # 🛠️ EK DÜZELTME: scale artık sabit 30 değil, veri setinin doğal
+        # piksel boyutu (bkz. _stats_scale_for). CORINE için 100 m — bu tek
+        # değişiklik histogramın işlediği piksel sayısını ~11 kat düşürür.
+        #
+        # 🛠️ EK DÜZELTME: histogram hatası artık TÜM isteği düşürmüyor.
+        # Lejant/grafik istatistiğe bağlıdır ama HARİTA KATMANI değildir;
+        # istatistik alınamasa bile tile'lar gösterilebilmelidir.
+        try:
+            stats = _call_with_retry(
+                lambda: result.reduceRegion(
+                    reducer    = ee.Reducer.frequencyHistogram(),
+                    geometry   = roi,
+                    scale      = stats_scale,
+                    maxPixels  = 1e9,
+                    bestEffort = True,
+                ).getInfo()
+            )
+        except Exception as _stats_err:
+            stats = {}
+            print('[SylvaGIS] ⚠️ Histogram hesaplanamadı — katman yine de '
+                  'gösterilecek: {}'.format(_stats_err))
 
         real_minmax = {}
         try:
@@ -4196,7 +4587,7 @@ def analyze():
                 lambda: _stats_img.reduceRegion(
                     reducer    = combined_reducer,
                     geometry   = roi,
-                    scale      = 30,
+                    scale      = stats_scale,
                     maxPixels  = 1e9,
                     bestEffort = True,
                 ).getInfo()
@@ -4209,9 +4600,10 @@ def analyze():
         except Exception:
             pass
 
-        # ── Tile URL ─────────────────────────────────────────────
-        map_id   = _call_with_retry(lambda: final_display.getMapId(vis))
-        tile_url = map_id['tile_fetcher'].url_format
+        # NOT: tile_url yukarıda, istatistiklerden ÖNCE üretildi — burada
+        # ikinci bir getMapId() çağrısı YOKTUR. (Eskiden bu satırda tekrar
+        # üretiliyordu; bu hem gereksiz bir GEE isteğiydi hem de tile'ların
+        # kotanın en dolu olduğu anda oluşturulmasına yol açıyordu.)
 
         # ── Zaman serisi galerisi ────────────────────────────────
         # LULC ailesi statik/tek-katmanlı veri setleridir; zaman serisi
@@ -4282,6 +4674,8 @@ def analyze():
         return jsonify({
             'success':   True,
             'tileUrl':   tile_url,
+            # Proxy'ye ulaşılamazsa istemcinin geri düşebileceği ham GEE adresi.
+            'tileUrlDirect': tile_url_direct,
             'stats':     stats,
             'realStats': real_minmax,
             'scenes':    scenes_list,
@@ -4325,10 +4719,19 @@ def highlight_class():
         highlighted_flat = ee.Image(1).updateMask(highlight_mask).clip(roi)
 
         highlight_vis = {'min': 0, 'max': 1, 'palette': ['#ffee00']}
-        map_id = highlighted_flat.getMapId(highlight_vis)
-        tile_url = map_id['tile_fetcher'].url_format
+        map_id = _call_with_retry(lambda: highlighted_flat.getMapId(highlight_vis))
+        tile_url_direct = map_id['tile_fetcher'].url_format
+        _sid = _register_tile_session(
+            tile_url_direct, params=data, kind='highlight',
+            extra={'classMin': class_min, 'classMax': class_max},
+        )
+        tile_url = _tile_url_for_client(_sid, tile_url_direct)
 
-        return jsonify({'success': True, 'tileUrl': tile_url})
+        return jsonify({
+            'success': True,
+            'tileUrl': tile_url,
+            'tileUrlDirect': tile_url_direct,
+        })
 
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -5550,8 +5953,13 @@ from email.mime.multipart import MIMEMultipart
 SYLVA_OWNER_EMAIL = 'sylvagis.world@gmail.com'
 
 def _send_registration_email(ad, soyad, email, meslek, ulke):
-    smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'ksfnkvwcutrawcih'
+    # ⚠️ GÜVENLİK DÜZELTMESİ: bkz. _smtp_credentials — parola artık kodda değil.
+    smtp_user, smtp_pass, _cred_err = _smtp_credentials()
+    if _cred_err:
+        # SMTP yapılandırılmamışsa yalnızca BİLDİRİM atlanır; kullanıcının
+        # kaydı düşmez (register_user bu fonksiyondan hata beklemez).
+        print('[SylvaGIS] ⚠️ Kayıt bildirimi e-postası atlandı: {}'.format(_cred_err))
+        return
 
     msg = MIMEMultipart('alternative')
     msg['Subject'] = f'[SylvaGIS] Yeni Kayıt — {ad} {soyad}'
@@ -6311,9 +6719,21 @@ def vector_download():
 
 
 if __name__ == '__main__':
-    # NOT: Bu satır sadece yerel (local) geliştirme/test içindir.
+    # NOT: Bu blok sadece yerel (local) geliştirme/test içindir.
     # VM'de 7/24 çalıştırırken bu dosya `python server.py` ile değil,
-    # gunicorn ile başlatılacak, bu yüzden bu blok VM'de hiç çalışmaz:
-    #   gunicorn -w 4 -b 0.0.0.0:5000 --timeout 120 server:app
+    # gunicorn ile başlatılır.
+    #
+    # ⚠️ ÖNEMLİ — GUNICORN KOMUTUNU GÜNCELLEYİN:
+    #   ESKİ:  gunicorn -w 4 -b 0.0.0.0:5000 --timeout 120 server:app
+    #   YENİ:  gunicorn -w 2 --threads 8 -b 0.0.0.0:5000 --timeout 120 server:app
+    #
+    # Gerekçe: tarayıcı bir haritayı çizerken 15-20 tile'ı AYNI ANDA ister.
+    # Tile'lar artık bu sunucu üzerinden geçtiği için (bkz. TILE PROXY),
+    # salt senkron worker'lar (-w 4, thread yok) aynı anda yalnızca 4 tile
+    # sunabilir ve harita gözle görülür şekilde yavaş boyanır. --threads 8
+    # ile 2 worker × 8 thread = 16 eşzamanlı tile karşılanır; tile'lar
+    # ağırlıklı olarak I/O beklediği için bu ek CPU maliyeti getirmez.
+    #
+    # Proxy'yi kapatıp eski davranışa dönmek isterseniz: SYLVAGIS_TILE_PROXY=0
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
