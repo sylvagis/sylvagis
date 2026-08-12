@@ -10724,7 +10724,7 @@ function selectRamp(name) {
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (!data.success) { hideSylvaLoading(); return; }
-                if (data.nativeCrs) window._lastAnalyzeNativeCrs = data.nativeCrs;
+                if (data.nativeCrs) { window._lastAnalyzeNativeCrs = data.nativeCrs; window._lastAnalyzeNativeCrsByPane[_pane] = data.nativeCrs; }
                 _sylvaReplaceGeeLayer(_pane, data.tileUrl, { opacity: 1 });
                 _applyGeeLayerClipMode(_clipMode, _pane);
                 _sylvaApplyAutoOpacity(_pane, meta);
@@ -11197,7 +11197,7 @@ function selectRamp(name) {
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (!data.success) { hideSylvaLoading(); return; }
-                if (data.nativeCrs) window._lastAnalyzeNativeCrs = data.nativeCrs;
+                if (data.nativeCrs) { window._lastAnalyzeNativeCrs = data.nativeCrs; window._lastAnalyzeNativeCrsByPane[_pane] = data.nativeCrs; }
                 _sylvaReplaceGeeLayer(_pane, data.tileUrl, { opacity: 1 });
                 _applyGeeLayerClipMode(_clipMode, _pane);
                 _sylvaApplyAutoOpacity(_pane, meta);
@@ -11896,7 +11896,11 @@ function selectRamp(name) {
         // güncellenir. "📥 Veriyi İndir (GeoTIFF)" penceresi açıldığında CRS
         // seçicisini sabit WGS 84 yerine bu değere otomatik ön-seçmek için
         // kullanılır — kullanıcı isterse yine de seçiciden değiştirebilir.
-        window._lastAnalyzeNativeCrs = null;  // global degisken kullanilir
+        window._lastAnalyzeNativeCrs = null;  // global degisken kullanilir (geriye dönük uyumluluk)
+        // 🆕 Çift ekranda her ekranın kendi analiz sonucunun native CRS'i
+        // ayrı tutulur; GeoTIFF indirme penceresi artık AKTİF ekranın
+        // CRS'ini kullanır (bkz. _applyNativeCrsDefault / _clientSideNativeCrsFallback).
+        window._lastAnalyzeNativeCrsByPane = window._lastAnalyzeNativeCrsByPane || { map: null, map2: null };
         // Yarış koşulu koruması: her yeni analiz başlatılınca artar;
         // geciken eski fetch yanıtları jenerasyon uyuşmazsa UI'ı ezmez.
         var _analysisGeneration = 0;
@@ -13975,7 +13979,7 @@ function selectRamp(name) {
                         showNoDataModal(t('topo_dem_no_data_warning'), (demSourceRadio ? demSourceRadio.value : '') || _sylvaLayerFriendlyName(meta.analysisName));
                         return;
                     }
-                    if (data.nativeCrs) window._lastAnalyzeNativeCrs = data.nativeCrs;
+                    if (data.nativeCrs) { window._lastAnalyzeNativeCrs = data.nativeCrs; window._lastAnalyzeNativeCrsByPane[_pane] = data.nativeCrs; }
 
                     // 🆕 Eş Yükselti (TOPO_CONTOUR): eski raster/basamaklı karo
                     // GÖRÜNMEZ (opacity 0) eklenir — "Katman Geçiş" kutusu,
@@ -14940,6 +14944,10 @@ function selectRamp(name) {
             })();
             window._lastAnalyzeMeta = meta;
             if (window._lastAnalyzeMeta) window._lastAnalyzeMeta._lastStats = (data && data.stats) || null;
+            // 🆕 Çift ekranda GeoTIFF/Vektör indirme pencereleri artık AKTİF
+            // ekranın analiz meta bilgisini gösterebilsin diye ekran bazlı da saklanır.
+            window._lastAnalyzeMetaByPane = window._lastAnalyzeMetaByPane || { map: null, map2: null };
+            window._lastAnalyzeMetaByPane[_pane] = window._lastAnalyzeMeta;
             _ensureDefaultVisibility();
 
             // Bu analizin (meta + sunucu yanıtı) verisini pane+analysisName
@@ -15587,11 +15595,17 @@ function selectRamp(name) {
              var description = (typeof t === 'function')
                  ? t(isNdwi ? 'ib_ndwi_desc_text' : 'ib_ndvi_desc_text',
                      isNdwi
-                         ? 'Açık su yüzeylerini ve su içeriğini, yeşil ile yakın kızılötesi (NIR) bant yansımalarını karşılaştırarak gösterir. Formül: (Green − NIR) / (Green + NIR).'
-                         : 'Bitki örtüsünün yoğunluğunu ve canlılığını, yakın kızılötesi (NIR) ile kırmızı bant yansımalarını karşılaştırarak gösterir. Formül: (NIR − Red) / (NIR + Red).')
+                         ? 'Açık su yüzeylerini ve su içeriğini, yeşil ile yakın kızılötesi (NIR) bant yansımalarını karşılaştırarak gösterir.'
+                         : 'Bitki örtüsünün yoğunluğunu ve canlılığını, yakın kızılötesi (NIR) ile kırmızı bant yansımalarını karşılaştırarak gösterir.')
                  : (isNdwi
-                     ? 'Açık su yüzeylerini ve su içeriğini, yeşil ile yakın kızılötesi (NIR) bant yansımalarını karşılaştırarak gösterir. Formül: (Green − NIR) / (Green + NIR).'
-                     : 'Bitki örtüsünün yoğunluğunu ve canlılığını, yakın kızılötesi (NIR) ile kırmızı bant yansımalarını karşılaştırarak gösterir. Formül: (NIR − Red) / (NIR + Red).');
+                     ? 'Açık su yüzeylerini ve su içeriğini, yeşil ile yakın kızılötesi (NIR) bant yansımalarını karşılaştırarak gösterir.'
+                     : 'Bitki örtüsünün yoğunluğunu ve canlılığını, yakın kızılötesi (NIR) ile kırmızı bant yansımalarını karşılaştırarak gösterir.');
+             // 🆕 Formül artık açıklama cümlesinin sonunda gizli kalmıyor;
+             // ayrı bir satır olarak (Açıklama satırının ÜSTÜNDE) gösterilir.
+             var formulaText = (typeof t === 'function')
+                 ? t(isNdwi ? 'ib_ndwi_formula_text' : 'ib_ndvi_formula_text',
+                     isNdwi ? '(Green − NIR) / (Green + NIR)' : '(NIR − Red) / (NIR + Red)')
+                 : (isNdwi ? '(Green − NIR) / (Green + NIR)' : '(NIR − Red) / (NIR + Red)');
              var title = isNdwi
                  ? '💧 NDWI – Normalized Difference Water Index'
                  : '🌿 NDVI – Normalized Difference Vegetation Index';
@@ -15600,6 +15614,7 @@ function selectRamp(name) {
                 ['ib_source', sensorInfo.source],
                 [bandLabel, sensorInfo.bands],
                 ['ib_resolution', sensorInfo.resolution],
+                 ['ib_formula', formulaText],
                  ['ib_desc', description]
             ].map(function (row) {
                 var label = row[0].indexOf('ib_') === 0 ? t(row[0]) : row[0];
@@ -16013,7 +16028,7 @@ function selectRamp(name) {
                     if (onDone) onDone();
                     return;
                 }
-                if (data.nativeCrs) window._lastAnalyzeNativeCrs = data.nativeCrs;
+                if (data.nativeCrs) { window._lastAnalyzeNativeCrs = data.nativeCrs; window._lastAnalyzeNativeCrsByPane[_pane] = data.nativeCrs; }
                 // Geciken yanıt: kullanıcı yeni bir analiz başlattıysa bu sahne sonucunu yoksay
                 if (_analysisGeneration !== _sceneGen) { if (!silent) hideSylvaLoading(); if (onDone) onDone(); return; }
                 // Harita katmanını güncelle (o an aktif olan ekranda)
@@ -16363,6 +16378,7 @@ function selectRamp(name) {
                 if (!data.success) { hideSylvaLoading(); showNoDataModal(_TOAST_NO_DATA_MSG, meta.datasetLabel || meta.datasetKey || ''); return; }
                 if (data.nativeCrs || (data.meta && data.meta.crs)) {
                     window._lastAnalyzeNativeCrs = data.nativeCrs || data.meta.crs;
+                    window._lastAnalyzeNativeCrsByPane[paneId] = window._lastAnalyzeNativeCrs;
                 }
 
                 // 🛠️ DÜZELTME: Önceki katman artık SİLİNMİYOR — her uydu görüntüsü
@@ -23427,7 +23443,11 @@ function downloadRawBands() {
     var status = document.getElementById('raw-bands-status');
     var btn    = document.getElementById('btn-raw-bands-download');
 
-    if (!currentLayer) { sylvaAlert(t('no_aoi'), 'warning'); return; }
+    // 🆕 AOI, sabit map1 yerine AKTİF ekranın katmanından alınır.
+    var _rawPane = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
+    var _rawAoiLayer = (_rawPane === 'map2' && typeof currentLayer2 !== 'undefined') ? currentLayer2 : currentLayer;
+
+    if (!_rawAoiLayer) { sylvaAlert(t('no_aoi'), 'warning'); return; }
     if (!_rawBandsState.datasetKey || !_rawBandsState.sceneId) {
         sylvaAlert(t('raw_no_scene'), 'warning');
         return;
@@ -23439,7 +23459,7 @@ function downloadRawBands() {
     var selectedBands = Array.prototype.slice.call(document.querySelectorAll('.raw-band-checkbox:checked')).map(function(cb) { return cb.value; });
     if (!selectedBands.length) { sylvaAlert(t('raw_select_min') || 'Please select at least one band to download.', 'warning'); return; }
 
-    var _roi = _extractROIGeometry(currentLayer);
+    var _roi = _extractROIGeometry(_rawAoiLayer);
     if (!_roi) { sylvaAlert(t('no_geom'), 'warning'); return; }
 
     var aoiNameInput  = document.getElementById('raw-bands-aoi-name');
@@ -23548,7 +23568,49 @@ var _geotiffAbortController = null;
 // global _applyNativeCrsDefault() fonksiyonu tarafindan okunur.
 window._lastAnalyzeNativeCrs = null;
 
+// 🆕 ÇİFT EKRAN — İNDİRME ÖNCESİ SUNUCU SENKRONİZASYONU
+// ────────────────────────────────────────────────────────────────
+// SORUN: GeoTIFF ve Vektör indirme uç noktaları (/api/download-geotiff,
+// /api/vector-download) hangi ekranın aktif olduğunu bilmez; sunucu
+// yalnızca EN SON /api/analyze çağrısıyla hesapladığı görüntüyü hatırlar.
+// Çift ekran açıkken kullanıcı önce Ekran 1'de, sonra Ekran 2'de farklı
+// analizler çalıştırıp Ekran 1'e geri tıkladığında (onu "aktif" yaptığında),
+// sunucudaki kayıt hâlâ Ekran 2'nin sonucudur — indirme yanlış ekranın
+// verisini verir.
+// ÇÖZÜM: İndirme penceresi açılır açılmaz, aktif ekranın son analiz
+// parametreleri (varsa, window._lastAnalyzePayloadByPane'den) sunucuya
+// SESSİZCE (ekranda hiçbir görsel değişiklik yaratmadan) tekrar gönderilip
+// "son analiz" kaydı aktif ekranla senkronize edilir. Bu, renk canlı
+// güncellemesinde kullanılan senkronizasyon deseniyle (_sylvaApplyContourColorLive)
+// aynı mantığı kullanır.
+function _sylvaSyncActivePaneForDownload(callback) {
+    var _pane = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
+    var _payload = window._lastAnalyzePayloadByPane && window._lastAnalyzePayloadByPane[_pane];
+    if (!_payload || typeof API_BASE === 'undefined') {
+        if (typeof callback === 'function') callback();
+        return;
+    }
+    fetch(API_BASE + '/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(_payload)
+    })
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+        if (data && data.nativeCrs) {
+            window._lastAnalyzeNativeCrs = data.nativeCrs;
+            window._lastAnalyzeNativeCrsByPane = window._lastAnalyzeNativeCrsByPane || { map: null, map2: null };
+            window._lastAnalyzeNativeCrsByPane[_pane] = data.nativeCrs;
+        }
+    })
+    .catch(function () { /* senkronizasyon başarısız olursa indirme yine de eski davranışla dener */ })
+    .then(function () { if (typeof callback === 'function') callback(); });
+}
+
 function openGeoTiffDownloadDialog() {
+    // Pencere açılır açılmaz aktif ekranın son analizini sunucuyla
+    // senkronize etmeye başla (arka planda, kullanıcı formu doldururken biter).
+    _sylvaSyncActivePaneForDownload();
     var modal = document.getElementById('geotiff-download-modal');
     var status = document.getElementById('geotiff-status');
     var btn = document.getElementById('btn-geotiff-execute');
@@ -23646,8 +23708,12 @@ function _utmEpsgFromLonLat(lon, lat) {
 
 function _clientSideNativeCrsFallback() {
     try {
-        if (!currentLayer || typeof currentLayer.getBounds !== 'function') return null;
-        var b = currentLayer.getBounds();
+        // 🆕 Aktif ekranın kendi AOI katmanı kullanılır (Ekran 2 aktifken
+        // Ekran 1'in currentLayer'ı değil, currentLayer2 esas alınır).
+        var _pane = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
+        var _layer = (_pane === 'map2' && typeof currentLayer2 !== 'undefined') ? currentLayer2 : currentLayer;
+        if (!_layer || typeof _layer.getBounds !== 'function') return null;
+        var b = _layer.getBounds();
         if (!b || !b.isValid || !b.isValid()) return null;
         var c = b.getCenter();
         if (!c || typeof c.lng !== 'number' || typeof c.lat !== 'number') return null;
@@ -23667,7 +23733,11 @@ function _applyNativeCrsDefault(forceWgs84) {
         onGeoTiffCrsChange();
         return;
     }
-    var native = window._lastAnalyzeNativeCrs;
+    // 🆕 Aktif ekranın kendi native CRS'i esas alınır; yoksa eski global
+    // değere (geriye dönük uyumluluk) düşülür.
+    var _crsPane = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
+    var native = (window._lastAnalyzeNativeCrsByPane && window._lastAnalyzeNativeCrsByPane[_crsPane])
+        || window._lastAnalyzeNativeCrs;
     // Sunucudan gerçek bir native CRS gelmediyse (null) VEYA sunucu
     // WGS84/coğrafi döndürdüyse (GEE tarafındaki UTM tespiti başarısız
     // olmuş olabilir), aktif AOI varsa istemci tarafı UTM hesabına
@@ -23762,7 +23832,10 @@ function executeGeoTiffDownload() {
     // dönüyor ve AOI dışı NoData/siyah alanlar kalıyordu. Diğer indirme
     // modülleriyle (ham bant indirme, analiz) aynı desen kullanılır:
     // _extractROIGeometry(currentLayer) → { roi: ... } gövdeye eklenir.
-    var _gtiffRoi = (_dlClipMode === 'clip') ? _extractROIGeometry(currentLayer) : null;
+    // 🆕 ROI, sabit map1 yerine AKTİF ekranın AOI katmanından çıkarılır.
+    var _gtiffPane = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
+    var _gtiffAoiLayer = (_gtiffPane === 'map2' && typeof currentLayer2 !== 'undefined') ? currentLayer2 : currentLayer;
+    var _gtiffRoi = (_dlClipMode === 'clip') ? _extractROIGeometry(_gtiffAoiLayer) : null;
     if (_dlClipMode === 'clip' && !_gtiffRoi) {
         if (btn) { btn.disabled = false; btn.textContent = t('gtiff_btn_download'); }
         if (cancelBtn) cancelBtn.disabled = false;
@@ -24469,7 +24542,7 @@ var SYLVA_TRANSLATIONS = {
     ib_formula: 'Formula', ib_azimuth_angles: 'Azimuth Angles', ib_note: 'Note',
     ib_polarization: 'Polarization', ib_frequency: 'Frequency', ib_independence: 'Independence',
     ib_no_timeseries: 'Time series scene selection is not supported.',
-    ib_bands: 'Bands', ib_timeseries_supported: 'Time series scene selection is supported.', ib_ndvi_desc_text: 'Shows vegetation density and vitality by comparing near-infrared (NIR) and red band reflectance. Formula: (NIR − Red) / (NIR + Red).', ib_ndwi_desc_text: 'Shows open water surfaces and water content by comparing green and near-infrared (NIR) band reflectance. Formula: (Green − NIR) / (Green + NIR).',
+    ib_bands: 'Bands', ib_timeseries_supported: 'Time series scene selection is supported.', ib_ndvi_formula_text: '(NIR − Red) / (NIR + Red)', ib_ndvi_desc_text: 'Shows vegetation density and vitality by comparing near-infrared (NIR) and red band reflectance.', ib_ndwi_formula_text: '(Green − NIR) / (Green + NIR)', ib_ndwi_desc_text: 'Shows open water surfaces and water content by comparing green and near-infrared (NIR) band reflectance.',
     vi_lulc_res: '10 m (Sentinel-2 based)',
     vi_lulc_update: 'Real-time (scene-based)',
     vi_lulc_classes: '9 classes',
@@ -24969,7 +25042,7 @@ var SYLVA_TRANSLATIONS = {
     ib_formula: 'Formula', ib_azimuth_angles: 'Azimut burchaklari', ib_note: 'Eslatma',
     ib_polarization: 'Polyarizatsiya', ib_frequency: 'Chastota', ib_independence: 'Mustaqillik',
     ib_no_timeseries: 'Vaqt qatorlari sahna tanlash qoʻllab-quvvatlanmaydi.',
-    ib_bands: 'Kanallar', ib_timeseries_supported: 'Vaqt qatorlari sahna tanlash qoʻllab-quvvatlanadi.', ib_ndvi_desc_text: 'Yaqin infraqizil (NIR) va qizil kanal aks etishini solishtirib, oʻsimlik qoplamining zichligi va tiriklik darajasini koʻrsatadi. Formula: (NIR − Qizil) / (NIR + Qizil).', ib_ndwi_desc_text: 'Yashil va yaqin infraqizil (NIR) kanal aks etishini solishtirib, ochiq suv yuzalari va suv miqdorini koʻrsatadi. Formula: (Yashil − NIR) / (Yashil + NIR).',
+    ib_bands: 'Kanallar', ib_timeseries_supported: 'Vaqt qatorlari sahna tanlash qoʻllab-quvvatlanadi.', ib_ndvi_formula_text: '(NIR − Qizil) / (NIR + Qizil)', ib_ndvi_desc_text: 'Yaqin infraqizil (NIR) va qizil kanal aks etishini solishtirib, oʻsimlik qoplamining zichligi va tiriklik darajasini koʻrsatadi.', ib_ndwi_formula_text: '(Yashil − NIR) / (Yashil + NIR)', ib_ndwi_desc_text: 'Yashil va yaqin infraqizil (NIR) kanal aks etishini solishtirib, ochiq suv yuzalari va suv miqdorini koʻrsatadi.',
     vi_lulc_res: '10 m (Sentinel-2 asosida)',
     vi_lulc_update: 'Real vaqt (sahna asosida)',
     vi_lulc_classes: '9 sinf',
@@ -25473,7 +25546,7 @@ var SYLVA_TRANSLATIONS = {
     ib_formula: 'Τύπος', ib_azimuth_angles: 'Γωνίες Αζιμουθίου', ib_note: 'Σημείωση',
     ib_polarization: 'Πόλωση', ib_frequency: 'Συχνότητα', ib_independence: 'Ανεξαρτησία',
     ib_no_timeseries: 'Η επιλογή σκηνής χρονοσειράς δεν υποστηρίζεται.',
-    ib_bands: 'Ζώνες', ib_timeseries_supported: 'Η επιλογή σκηνής χρονοσειράς υποστηρίζεται.', ib_ndvi_desc_text: 'Δείχνει την πυκνότητα και τη ζωτικότητα της βλάστησης συγκρίνοντας την ανάκλαση των ζωνών εγγύς υπερύθρου (NIR) και ερυθρού. Τύπος: (NIR − Ερυθρό) / (NIR + Ερυθρό).', ib_ndwi_desc_text: 'Δείχνει τις επιφάνειες ανοιχτού νερού και την περιεκτικότητα σε νερό συγκρίνοντας την ανάκλαση των ζωνών πράσινου και εγγύς υπερύθρου (NIR). Τύπος: (Πράσινο − NIR) / (Πράσινο + NIR).',
+    ib_bands: 'Ζώνες', ib_timeseries_supported: 'Η επιλογή σκηνής χρονοσειράς υποστηρίζεται.', ib_ndvi_formula_text: '(NIR − Ερυθρό) / (NIR + Ερυθρό)', ib_ndvi_desc_text: 'Δείχνει την πυκνότητα και τη ζωτικότητα της βλάστησης συγκρίνοντας την ανάκλαση των ζωνών εγγύς υπερύθρου (NIR) και ερυθρού.', ib_ndwi_formula_text: '(Πράσινο − NIR) / (Πράσινο + NIR)', ib_ndwi_desc_text: 'Δείχνει τις επιφάνειες ανοιχτού νερού και την περιεκτικότητα σε νερό συγκρίνοντας την ανάκλαση των ζωνών πράσινου και εγγύς υπερύθρου (NIR).',
     vi_lulc_res: '10 μ. (βασισμένο σε Sentinel-2)',
     vi_lulc_update: 'Σε πραγματικό χρόνο (βάσει σκηνής)',
     vi_lulc_classes: '9 κλάσεις',
@@ -25977,7 +26050,7 @@ var SYLVA_TRANSLATIONS = {
     ib_formula: 'Формула', ib_azimuth_angles: 'Азимутни ъгли', ib_note: 'Забележка',
     ib_polarization: 'Поляризация', ib_frequency: 'Честота', ib_independence: 'Независимост',
     ib_no_timeseries: 'Изборът на сцена за времеви ред не се поддържа.',
-    ib_bands: 'Ленти', ib_timeseries_supported: 'Изборът на сцена за времеви ред се поддържа.', ib_ndvi_desc_text: 'Показва гъстотата и жизнеността на растителността чрез сравняване на отражението в близката инфрачервена (NIR) и червената лента. Формула: (NIR − Червено) / (NIR + Червено).', ib_ndwi_desc_text: 'Показва откритите водни повърхности и съдържанието на вода чрез сравняване на отражението в зелената и близката инфрачервена (NIR) лента. Формула: (Зелено − NIR) / (Зелено + NIR).',
+    ib_bands: 'Ленти', ib_timeseries_supported: 'Изборът на сцена за времеви ред се поддържа.', ib_ndvi_formula_text: '(NIR − Червено) / (NIR + Червено)', ib_ndvi_desc_text: 'Показва гъстотата и жизнеността на растителността чрез сравняване на отражението в близката инфрачервена (NIR) и червената лента.', ib_ndwi_formula_text: '(Зелено − NIR) / (Зелено + NIR)', ib_ndwi_desc_text: 'Показва откритите водни повърхности и съдържанието на вода чрез сравняване на отражението в зелената и близката инфрачервена (NIR) лента.',
     vi_lulc_res: '10 м (базирано на Sentinel-2)',
     vi_lulc_update: 'В реално време (по сцени)',
     vi_lulc_classes: '9 класа',
@@ -26485,7 +26558,7 @@ var SYLVA_TRANSLATIONS = {
     ib_formula: 'Formül', ib_azimuth_angles: 'Azimuth Açıları', ib_note: 'Not',
     ib_polarization: 'Polarizasyon', ib_frequency: 'Frekans', ib_independence: 'Bağımsızlık',
     ib_no_timeseries: 'Zaman serisi sahne seçimi desteklenmez.',
-    ib_bands: 'Bantlar', ib_timeseries_supported: 'Zaman serisi sahne seçimi desteklenir.', ib_ndvi_desc_text: 'Bitki örtüsünün yoğunluğunu ve canlılığını, yakın kızılötesi (NIR) ile kırmızı bant yansımalarını karşılaştırarak gösterir. Formül: (NIR − Red) / (NIR + Red).', ib_ndwi_desc_text: 'Açık su yüzeylerini ve su içeriğini, yeşil ile yakın kızılötesi (NIR) bant yansımalarını karşılaştırarak gösterir. Formül: (Green − NIR) / (Green + NIR).',
+    ib_bands: 'Bantlar', ib_timeseries_supported: 'Zaman serisi sahne seçimi desteklenir.', ib_ndvi_formula_text: '(NIR − Red) / (NIR + Red)', ib_ndvi_desc_text: 'Bitki örtüsünün yoğunluğunu ve canlılığını, yakın kızılötesi (NIR) ile kırmızı bant yansımalarını karşılaştırarak gösterir.', ib_ndwi_formula_text: '(Green − NIR) / (Green + NIR)', ib_ndwi_desc_text: 'Açık su yüzeylerini ve su içeriğini, yeşil ile yakın kızılötesi (NIR) bant yansımalarını karşılaştırarak gösterir.',
     vi_lulc_res: '10 m (Sentinel-2 tabanlı)',
     vi_lulc_update: 'Gerçek zamanlı (sahne bazlı)',
     vi_lulc_classes: '9 sınıf',
@@ -26987,7 +27060,7 @@ var SYLVA_TRANSLATIONS = {
     ib_formula: 'Formul', ib_azimuth_angles: 'Azimuth Bucaqları', ib_note: 'Qeyd',
     ib_polarization: 'Polyarizasiya', ib_frequency: 'Tezlik', ib_independence: 'Asılılıqsızlıq',
     ib_no_timeseries: 'Zaman seriyası səhnə seçimi dəstəklənmir.',
-    ib_bands: 'Zolaqlar', ib_timeseries_supported: 'Zaman seriyası səhnə seçimi dəstəklənir.', ib_ndvi_desc_text: 'Yaxın infraqırmızı (NIR) və qırmızı zolaq əksini müqayisə edərək bitki örtüyünün sıxlığını və canlılığını göstərir. Düstur: (NIR − Qırmızı) / (NIR + Qırmızı).', ib_ndwi_desc_text: 'Yaşıl və yaxın infraqırmızı (NIR) zolaq əksini müqayisə edərək açıq su səthlərini və su tərkibini göstərir. Düstur: (Yaşıl − NIR) / (Yaşıl + NIR).',
+    ib_bands: 'Zolaqlar', ib_timeseries_supported: 'Zaman seriyası səhnə seçimi dəstəklənir.', ib_ndvi_formula_text: '(NIR − Qırmızı) / (NIR + Qırmızı)', ib_ndvi_desc_text: 'Yaxın infraqırmızı (NIR) və qırmızı zolaq əksini müqayisə edərək bitki örtüyünün sıxlığını və canlılığını göstərir.', ib_ndwi_formula_text: '(Yaşıl − NIR) / (Yaşıl + NIR)', ib_ndwi_desc_text: 'Yaşıl və yaxın infraqırmızı (NIR) zolaq əksini müqayisə edərək açıq su səthlərini və su tərkibini göstərir.',
     vi_lulc_res: '10 m (Sentinel-2 əsaslı)',
     vi_lulc_update: 'Real vaxt (səhnə əsaslı)',
     vi_lulc_classes: '9 sinif',
@@ -27487,7 +27560,7 @@ var SYLVA_TRANSLATIONS = {
     ib_formula: 'Formula', ib_azimuth_angles: 'Azimut Szögek', ib_note: 'Megjegyzés',
     ib_polarization: 'Polarizáció', ib_frequency: 'Frekvencia', ib_independence: 'Függetlenség',
     ib_no_timeseries: 'Az időbeli sorozat felvétel-kiválasztás nem támogatott.',
-    ib_bands: 'Sávok', ib_timeseries_supported: 'Az időbeli sorozat felvétel-kiválasztás támogatott.', ib_ndvi_desc_text: 'A közeli infravörös (NIR) és a vörös sáv visszaverődésének összehasonlításával mutatja a növényzet sűrűségét és életerejét. Képlet: (NIR − Vörös) / (NIR + Vörös).', ib_ndwi_desc_text: 'A zöld és a közeli infravörös (NIR) sáv visszaverődésének összehasonlításával mutatja a nyílt vízfelületeket és a víztartalmat. Képlet: (Zöld − NIR) / (Zöld + NIR).',
+    ib_bands: 'Sávok', ib_timeseries_supported: 'Az időbeli sorozat felvétel-kiválasztás támogatott.', ib_ndvi_formula_text: '(NIR − Vörös) / (NIR + Vörös)', ib_ndvi_desc_text: 'A közeli infravörös (NIR) és a vörös sáv visszaverődésének összehasonlításával mutatja a növényzet sűrűségét és életerejét.', ib_ndwi_formula_text: '(Zöld − NIR) / (Zöld + NIR)', ib_ndwi_desc_text: 'A zöld és a közeli infravörös (NIR) sáv visszaverődésének összehasonlításával mutatja a nyílt vízfelületeket és a víztartalmat.',
     vi_lulc_res: '10 m (Sentinel-2 alapú)',
     vi_lulc_update: 'Valós idejű (felvétel alapú)',
     vi_lulc_classes: '9 osztály',
@@ -27985,7 +28058,7 @@ var SYLVA_TRANSLATIONS = {
     ib_formula: 'Формула', ib_azimuth_angles: 'Азимут бұрыштары', ib_note: 'Ескерту',
     ib_polarization: 'Поляризация', ib_frequency: 'Жиілік', ib_independence: 'Тәуелсіздік',
     ib_no_timeseries: 'Уақыт сериясы сурет таңдауы қолданылмайды.',
-    ib_bands: 'Жолақтар', ib_timeseries_supported: 'Уақыт сериясы сурет таңдауы қолданылады.', ib_ndvi_desc_text: 'Жақын инфрақызыл (NIR) және қызыл жолақ шағылысуын салыстыру арқылы өсімдік жамылғысының тығыздығы мен тіршілігін көрсетеді. Формула: (NIR − Қызыл) / (NIR + Қызыл).', ib_ndwi_desc_text: 'Жасыл және жақын инфрақызыл (NIR) жолақ шағылысуын салыстыру арқылы ашық су беттері мен су мөлшерін көрсетеді. Формула: (Жасыл − NIR) / (Жасыл + NIR).',
+    ib_bands: 'Жолақтар', ib_timeseries_supported: 'Уақыт сериясы сурет таңдауы қолданылады.', ib_ndvi_formula_text: '(NIR − Қызыл) / (NIR + Қызыл)', ib_ndvi_desc_text: 'Жақын инфрақызыл (NIR) және қызыл жолақ шағылысуын салыстыру арқылы өсімдік жамылғысының тығыздығы мен тіршілігін көрсетеді.', ib_ndwi_formula_text: '(Жасыл − NIR) / (Жасыл + NIR)', ib_ndwi_desc_text: 'Жасыл және жақын инфрақызыл (NIR) жолақ шағылысуын салыстыру арқылы ашық су беттері мен су мөлшерін көрсетеді.',
     vi_lulc_res: '10 м (Sentinel-2 негізінде)',
     vi_lulc_update: 'Нақты уақытта (сурет негізінде)',
     vi_lulc_classes: '9 класс',
@@ -28481,7 +28554,7 @@ var SYLVA_TRANSLATIONS = {
     ib_formula: 'Formel', ib_azimuth_angles: 'Azimutwinkel', ib_note: 'Hinweis',
     ib_polarization: 'Polarisation', ib_frequency: 'Frequenz', ib_independence: 'Unabhängigkeit',
     ib_no_timeseries: 'Zeitreihen-Szenenauswahl wird nicht unterstützt.',
-    ib_bands: 'Bänder', ib_timeseries_supported: 'Zeitreihen-Szenenauswahl wird unterstützt.', ib_ndvi_desc_text: 'Zeigt die Dichte und Vitalität der Vegetation durch Vergleich der Reflexion im nahen Infrarot (NIR) und im roten Band. Formel: (NIR − Rot) / (NIR + Rot).', ib_ndwi_desc_text: 'Zeigt offene Wasserflächen und den Wassergehalt durch Vergleich der Reflexion im grünen und nahen Infrarot (NIR) Band. Formel: (Grün − NIR) / (Grün + NIR).',
+    ib_bands: 'Bänder', ib_timeseries_supported: 'Zeitreihen-Szenenauswahl wird unterstützt.', ib_ndvi_formula_text: '(NIR − Rot) / (NIR + Rot)', ib_ndvi_desc_text: 'Zeigt die Dichte und Vitalität der Vegetation durch Vergleich der Reflexion im nahen Infrarot (NIR) und im roten Band.', ib_ndwi_formula_text: '(Grün − NIR) / (Grün + NIR)', ib_ndwi_desc_text: 'Zeigt offene Wasserflächen und den Wassergehalt durch Vergleich der Reflexion im grünen und nahen Infrarot (NIR) Band.',
     vi_lulc_res: '10 m (Sentinel-2-basiert)',
     vi_lulc_update: 'Echtzeit (szenenbasiert)',
     vi_lulc_classes: '9 Klassen',
@@ -28986,7 +29059,7 @@ var SYLVA_TRANSLATIONS = {
     ib_formula: 'Formule', ib_azimuth_angles: "Angles d'azimut", ib_note: 'Remarque',
     ib_polarization: 'Polarisation', ib_frequency: 'Fréquence', ib_independence: 'Indépendance',
     ib_no_timeseries: "La sélection de scènes en série temporelle n'est pas prise en charge.",
-    ib_bands: 'Bandes', ib_timeseries_supported: 'La sélection de scènes en série temporelle est prise en charge.', ib_ndvi_desc_text: 'Montre la densité et la vitalité de la végétation en comparant la réflectance des bandes proche infrarouge (NIR) et rouge. Formule : (NIR − Rouge) / (NIR + Rouge).', ib_ndwi_desc_text: 'Montre les surfaces d\'eau libre et la teneur en eau en comparant la réflectance des bandes verte et proche infrarouge (NIR). Formule : (Vert − NIR) / (Vert + NIR).',
+    ib_bands: 'Bandes', ib_timeseries_supported: 'La sélection de scènes en série temporelle est prise en charge.', ib_ndvi_formula_text: '(NIR − Rouge) / (NIR + Rouge)', ib_ndvi_desc_text: 'Montre la densité et la vitalité de la végétation en comparant la réflectance des bandes proche infrarouge (NIR) et rouge.', ib_ndwi_formula_text: '(Vert − NIR) / (Vert + NIR)', ib_ndwi_desc_text: 'Montre les surfaces d\'eau libre et la teneur en eau en comparant la réflectance des bandes verte et proche infrarouge (NIR).',
     vi_lulc_res: '10 m (basé sur Sentinel-2)',
     vi_lulc_update: 'Temps réel (par scène)',
     vi_lulc_classes: '9 classes',
@@ -29491,7 +29564,7 @@ var SYLVA_TRANSLATIONS = {
     ib_formula: 'Fórmula', ib_azimuth_angles: 'Ángulos de acimut', ib_note: 'Nota',
     ib_polarization: 'Polarización', ib_frequency: 'Frecuencia', ib_independence: 'Independencia',
     ib_no_timeseries: 'La selección de escenas de series de tiempo no está soportada.',
-    ib_bands: 'Bandas', ib_timeseries_supported: 'La selección de escenas de series de tiempo está soportada.', ib_ndvi_desc_text: 'Muestra la densidad y vitalidad de la vegetación comparando la reflectancia de las bandas infrarroja cercana (NIR) y roja. Fórmula: (NIR − Rojo) / (NIR + Rojo).', ib_ndwi_desc_text: 'Muestra las superficies de agua abierta y el contenido de agua comparando la reflectancia de las bandas verde e infrarroja cercana (NIR). Fórmula: (Verde − NIR) / (Verde + NIR).',
+    ib_bands: 'Bandas', ib_timeseries_supported: 'La selección de escenas de series de tiempo está soportada.', ib_ndvi_formula_text: '(NIR − Rojo) / (NIR + Rojo)', ib_ndvi_desc_text: 'Muestra la densidad y vitalidad de la vegetación comparando la reflectancia de las bandas infrarroja cercana (NIR) y roja.', ib_ndwi_formula_text: '(Verde − NIR) / (Verde + NIR)', ib_ndwi_desc_text: 'Muestra las superficies de agua abierta y el contenido de agua comparando la reflectancia de las bandas verde e infrarroja cercana (NIR).',
     vi_lulc_res: '10 m (basado en Sentinel-2)',
     vi_lulc_update: 'Tiempo real (por escena)',
     vi_lulc_classes: '9 clases',
@@ -29996,7 +30069,7 @@ var SYLVA_TRANSLATIONS = {
     ib_formula: 'Fórmula', ib_azimuth_angles: 'Ângulos de azimute', ib_note: 'Nota',
     ib_polarization: 'Polarização', ib_frequency: 'Frequência', ib_independence: 'Independência',
     ib_no_timeseries: 'A seleção de cenas de séries temporais não é suportada.',
-    ib_bands: 'Bandas', ib_timeseries_supported: 'A seleção de cenas de séries temporais é suportada.', ib_ndvi_desc_text: 'Mostra a densidade e a vitalidade da vegetação comparando a refletância das bandas infravermelho próximo (NIR) e vermelha. Fórmula: (NIR − Vermelho) / (NIR + Vermelho).', ib_ndwi_desc_text: 'Mostra as superfícies de água aberta e o teor de água comparando a refletância das bandas verde e infravermelho próximo (NIR). Fórmula: (Verde − NIR) / (Verde + NIR).',
+    ib_bands: 'Bandas', ib_timeseries_supported: 'A seleção de cenas de séries temporais é suportada.', ib_ndvi_formula_text: '(NIR − Vermelho) / (NIR + Vermelho)', ib_ndvi_desc_text: 'Mostra a densidade e a vitalidade da vegetação comparando a refletância das bandas infravermelho próximo (NIR) e vermelha.', ib_ndwi_formula_text: '(Verde − NIR) / (Verde + NIR)', ib_ndwi_desc_text: 'Mostra as superfícies de água aberta e o teor de água comparando a refletância das bandas verde e infravermelho próximo (NIR).',
     vi_lulc_res: '10 m (baseado no Sentinel-2)',
     vi_lulc_update: 'Tempo real (por cena)',
     vi_lulc_classes: '9 classes',
@@ -30501,7 +30574,7 @@ var SYLVA_TRANSLATIONS = {
     ib_formula: 'الصيغة', ib_azimuth_angles: 'زوايا الزمت', ib_note: 'ملاحظة',
     ib_polarization: 'الاستقطاب', ib_frequency: 'التردد', ib_independence: 'الاستقلالية',
     ib_no_timeseries: 'اختيار مشاهد السلاسل الزمنية غير مدعوم.',
-    ib_bands: 'النطاقات', ib_timeseries_supported: 'اختيار مشاهد السلاسل الزمنية مدعوم.', ib_ndvi_desc_text: 'يُظهر كثافة وحيوية الغطاء النباتي من خلال مقارنة انعكاس نطاقي الأشعة تحت الحمراء القريبة (NIR) والأحمر. المعادلة: (NIR − الأحمر) / (NIR + الأحمر).', ib_ndwi_desc_text: 'يُظهر مسطحات المياه المفتوحة ومحتوى الماء من خلال مقارنة انعكاس النطاقين الأخضر والأشعة تحت الحمراء القريبة (NIR). المعادلة: (الأخضر − NIR) / (الأخضر + NIR).',
+    ib_bands: 'النطاقات', ib_timeseries_supported: 'اختيار مشاهد السلاسل الزمنية مدعوم.', ib_ndvi_formula_text: '(NIR − الأحمر) / (NIR + الأحمر)', ib_ndvi_desc_text: 'يُظهر كثافة وحيوية الغطاء النباتي من خلال مقارنة انعكاس نطاقي الأشعة تحت الحمراء القريبة (NIR) والأحمر.', ib_ndwi_formula_text: '(الأخضر − NIR) / (الأخضر + NIR)', ib_ndwi_desc_text: 'يُظهر مسطحات المياه المفتوحة ومحتوى الماء من خلال مقارنة انعكاس النطاقين الأخضر والأشعة تحت الحمراء القريبة (NIR).',
     vi_lulc_res: '10 م (مستند إلى Sentinel-2)',
     vi_lulc_update: 'وقت فعلي (مستند إلى المشهد)',
     vi_lulc_classes: '9 فئات',
@@ -31006,7 +31079,7 @@ var SYLVA_TRANSLATIONS = {
     ib_formula: 'فرمول', ib_azimuth_angles: 'زوایای آزیموت', ib_note: 'توجه',
     ib_polarization: 'پلاریزاسیون', ib_frequency: 'فرکانس', ib_independence: 'استقلال',
     ib_no_timeseries: 'انتخاب صحنه سری زمانی پشتیبانی نمی‌شود.',
-    ib_bands: 'باندها', ib_timeseries_supported: 'انتخاب صحنه سری زمانی پشتیبانی می‌شود.', ib_ndvi_desc_text: 'با مقایسه بازتاب باندهای مادون‌قرمز نزدیک (NIR) و قرمز، تراکم و شادابی پوشش گیاهی را نشان می‌دهد. فرمول: (NIR − قرمز) / (NIR + قرمز).', ib_ndwi_desc_text: 'با مقایسه بازتاب باندهای سبز و مادون‌قرمز نزدیک (NIR)، سطوح آب باز و میزان آب را نشان می‌دهد. فرمول: (سبز − NIR) / (سبز + NIR).',
+    ib_bands: 'باندها', ib_timeseries_supported: 'انتخاب صحنه سری زمانی پشتیبانی می‌شود.', ib_ndvi_formula_text: '(NIR − قرمز) / (NIR + قرمز)', ib_ndvi_desc_text: 'با مقایسه بازتاب باندهای مادون‌قرمز نزدیک (NIR) و قرمز، تراکم و شادابی پوشش گیاهی را نشان می‌دهد.', ib_ndwi_formula_text: '(سبز − NIR) / (سبز + NIR)', ib_ndwi_desc_text: 'با مقایسه بازتاب باندهای سبز و مادون‌قرمز نزدیک (NIR)، سطوح آب باز و میزان آب را نشان می‌دهد.',
     vi_lulc_res: '10 متر (مبتنی بر Sentinel-2)',
     vi_lulc_update: 'بلادرنگ (مبتنی بر صحنه)',
     vi_lulc_classes: '9 کلاس',
@@ -31511,7 +31584,7 @@ var SYLVA_TRANSLATIONS = {
     ib_formula: '公式', ib_azimuth_angles: '方位角列表', ib_note: '注意',
     ib_polarization: '极化', ib_frequency: '频率', ib_independence: '独立性',
     ib_no_timeseries: '不支持时间序列场景选择。',
-    ib_bands: '波段', ib_timeseries_supported: '支持时间序列场景选择。', ib_ndvi_desc_text: '通过比较近红外（NIR）与红光波段的反射率，显示植被密度和生长活力。公式：(NIR − 红) / (NIR + 红)。', ib_ndwi_desc_text: '通过比较绿光与近红外（NIR）波段的反射率，显示开阔水面和水含量。公式：(绿 − NIR) / (绿 + NIR)。',
+    ib_bands: '波段', ib_timeseries_supported: '支持时间序列场景选择。', ib_ndvi_formula_text: '(NIR − 红) / (NIR + 红)', ib_ndvi_desc_text: '通过比较近红外（NIR）与红光波段的反射率，显示植被密度和生长活力。', ib_ndwi_formula_text: '(绿 − NIR) / (绿 + NIR)', ib_ndwi_desc_text: '通过比较绿光与近红外（NIR）波段的反射率，显示开阔水面和水含量。',
     vi_lulc_res: '10 米（基于 Sentinel-2）',
     vi_lulc_update: '实时（逐景）',
     vi_lulc_classes: '9 类',
@@ -32016,7 +32089,7 @@ var SYLVA_TRANSLATIONS = {
     ib_formula: '式', ib_azimuth_angles: '方位角リスト', ib_note: '注意',
     ib_polarization: '偏波', ib_frequency: '周波数', ib_independence: '独立性',
     ib_no_timeseries: '時系列シーン選択はサポートされていません。',
-    ib_bands: 'バンド', ib_timeseries_supported: '時系列シーン選択はサポートされています。', ib_ndvi_desc_text: '近赤外（NIR）バンドと赤色バンドの反射率を比較して、植生の密度と活力を示します。式：(NIR − 赤) / (NIR + 赤)。', ib_ndwi_desc_text: '緑バンドと近赤外（NIR）バンドの反射率を比較して、開放水面と水分量を示します。式：(緑 − NIR) / (緑 + NIR)。',
+    ib_bands: 'バンド', ib_timeseries_supported: '時系列シーン選択はサポートされています。', ib_ndvi_formula_text: '(NIR − 赤) / (NIR + 赤)', ib_ndvi_desc_text: '近赤外（NIR）バンドと赤色バンドの反射率を比較して、植生の密度と活力を示します。', ib_ndwi_formula_text: '(緑 − NIR) / (緑 + NIR)', ib_ndwi_desc_text: '緑バンドと近赤外（NIR）バンドの反射率を比較して、開放水面と水分量を示します。',
     vi_lulc_res: '10 m（Sentinel-2 ベース）',
     vi_lulc_update: 'リアルタイム（シーンベース）',
     vi_lulc_classes: '9 クラス',
@@ -32521,7 +32594,7 @@ var SYLVA_TRANSLATIONS = {
     ib_formula: '공식', ib_azimuth_angles: '방위각 목록', ib_note: '참고',
     ib_polarization: '편광', ib_frequency: '주파수', ib_independence: '독립성',
     ib_no_timeseries: '시계열 장면 선택은 지원되지 않습니다.',
-    ib_bands: '밴드', ib_timeseries_supported: '시계열 장면 선택이 지원됩니다.', ib_ndvi_desc_text: '근적외선(NIR)과 적색 밴드의 반사율을 비교하여 식생 밀도와 활력을 나타냅니다. 공식: (NIR − 적색) / (NIR + 적색).', ib_ndwi_desc_text: '녹색과 근적외선(NIR) 밴드의 반사율을 비교하여 개방 수면과 수분 함량을 나타냅니다. 공식: (녹색 − NIR) / (녹색 + NIR).',
+    ib_bands: '밴드', ib_timeseries_supported: '시계열 장면 선택이 지원됩니다.', ib_ndvi_formula_text: '(NIR − 적색) / (NIR + 적색)', ib_ndvi_desc_text: '근적외선(NIR)과 적색 밴드의 반사율을 비교하여 식생 밀도와 활력을 나타냅니다.', ib_ndwi_formula_text: '(녹색 − NIR) / (녹색 + NIR)', ib_ndwi_desc_text: '녹색과 근적외선(NIR) 밴드의 반사율을 비교하여 개방 수면과 수분 함량을 나타냅니다.',
     vi_lulc_res: '10 m (Sentinel-2 기반)',
     vi_lulc_update: '실시간 (장면 기반)',
     vi_lulc_classes: '9 클래스',
@@ -32998,7 +33071,7 @@ var SYLVA_TRANSLATIONS = {
     ib_formula: 'सूत्र', ib_azimuth_angles: 'एज़िमुथ कोण', ib_note: 'नोट',
     ib_polarization: 'ध्रुवीकरण', ib_frequency: 'आवृत्ति', ib_independence: 'स्वतंत्रता',
     ib_no_timeseries: 'समय श्रृंखला दृश्य चयन समर्थित नहीं है।',
-    ib_bands: 'बैंड', ib_timeseries_supported: 'समय श्रृंखला दृश्य चयन समर्थित है।', ib_ndvi_desc_text: 'निकट अवरक्त (NIR) और लाल बैंड परावर्तन की तुलना करके वनस्पति घनत्व और जीवंतता दिखाता है। सूत्र: (NIR − लाल) / (NIR + लाल)।', ib_ndwi_desc_text: 'हरे और निकट अवरक्त (NIR) बैंड परावर्तन की तुलना करके खुले जल क्षेत्रों और जल सामग्री को दिखाता है। सूत्र: (हरा − NIR) / (हरा + NIR)।',
+    ib_bands: 'बैंड', ib_timeseries_supported: 'समय श्रृंखला दृश्य चयन समर्थित है।', ib_ndvi_formula_text: '(NIR − लाल) / (NIR + लाल)', ib_ndvi_desc_text: 'निकट अवरक्त (NIR) और लाल बैंड परावर्तन की तुलना करके वनस्पति घनत्व और जीवंतता दिखाता है।', ib_ndwi_formula_text: '(हरा − NIR) / (हरा + NIR)', ib_ndwi_desc_text: 'हरे और निकट अवरक्त (NIR) बैंड परावर्तन की तुलना करके खुले जल क्षेत्रों और जल सामग्री को दिखाता है।',
     vi_lulc_res: '10 मी (Sentinel-2 आधारित)',
     vi_lulc_update: 'रीयल-टाइम (दृश्य-आधारित)',
     vi_lulc_classes: '9 वर्ग',
@@ -33503,7 +33576,7 @@ var SYLVA_TRANSLATIONS = {
     ib_formula: 'Rumus', ib_azimuth_angles: 'Sudut Azimut', ib_note: 'Catatan',
     ib_polarization: 'Polarisasi', ib_frequency: 'Frekuensi', ib_independence: 'Independensi',
     ib_no_timeseries: 'Pemilihan adegan seri waktu tidak didukung.',
-    ib_bands: 'Pita', ib_timeseries_supported: 'Pemilihan adegan seri waktu didukung.', ib_ndvi_desc_text: 'Menunjukkan kepadatan dan vitalitas vegetasi dengan membandingkan reflektansi pita inframerah dekat (NIR) dan merah. Rumus: (NIR − Merah) / (NIR + Merah).', ib_ndwi_desc_text: 'Menunjukkan permukaan air terbuka dan kandungan air dengan membandingkan reflektansi pita hijau dan inframerah dekat (NIR). Rumus: (Hijau − NIR) / (Hijau + NIR).',
+    ib_bands: 'Pita', ib_timeseries_supported: 'Pemilihan adegan seri waktu didukung.', ib_ndvi_formula_text: '(NIR − Merah) / (NIR + Merah)', ib_ndvi_desc_text: 'Menunjukkan kepadatan dan vitalitas vegetasi dengan membandingkan reflektansi pita inframerah dekat (NIR) dan merah.', ib_ndwi_formula_text: '(Hijau − NIR) / (Hijau + NIR)', ib_ndwi_desc_text: 'Menunjukkan permukaan air terbuka dan kandungan air dengan membandingkan reflektansi pita hijau dan inframerah dekat (NIR).',
     vi_lulc_res: '10 m (berbasis Sentinel-2)',
     vi_lulc_update: 'Real-time (berbasis adegan)',
     vi_lulc_classes: '9 kelas',
@@ -34044,7 +34117,7 @@ var SYLVA_TRANSLATIONS = {
     ib_formula: 'Формула', ib_azimuth_angles: 'Углы азимута', ib_note: 'Примечание',
     ib_polarization: 'Поляризация', ib_frequency: 'Частота', ib_independence: 'Независимость',
     ib_no_timeseries: 'Выбор сцены для временного ряда не поддерживается.',
-    ib_bands: 'Каналы', ib_timeseries_supported: 'Выбор сцены для временного ряда поддерживается.', ib_ndvi_desc_text: 'Показывает плотность и жизнеспособность растительности, сравнивая отражение в ближнем инфракрасном (NIR) и красном каналах. Формула: (NIR − Красный) / (NIR + Красный).', ib_ndwi_desc_text: 'Показывает открытые водные поверхности и содержание воды, сравнивая отражение в зелёном и ближнем инфракрасном (NIR) каналах. Формула: (Зелёный − NIR) / (Зелёный + NIR).',
+    ib_bands: 'Каналы', ib_timeseries_supported: 'Выбор сцены для временного ряда поддерживается.', ib_ndvi_formula_text: '(NIR − Красный) / (NIR + Красный)', ib_ndvi_desc_text: 'Показывает плотность и жизнеспособность растительности, сравнивая отражение в ближнем инфракрасном (NIR) и красном каналах.', ib_ndwi_formula_text: '(Зелёный − NIR) / (Зелёный + NIR)', ib_ndwi_desc_text: 'Показывает открытые водные поверхности и содержание воды, сравнивая отражение в зелёном и ближнем инфракрасном (NIR) каналах.',
     vi_lulc_res: '10 м (на основе Sentinel-2)',
     vi_lulc_update: 'В реальном времени (по сценам)',
     vi_lulc_classes: '9 классов',
@@ -34542,7 +34615,7 @@ var SYLVA_TRANSLATIONS = {
     ib_formula: 'สูตร', ib_azimuth_angles: 'มุม Azimuth', ib_note: 'หมายเหตุ',
     ib_polarization: 'โพลาไรเซชัน', ib_frequency: 'ความถี่', ib_independence: 'ความเป็นอิสระ',
     ib_no_timeseries: 'ไม่รองรับการเลือกฉากอนุกรมเวลา',
-    ib_bands: 'แบนด์', ib_timeseries_supported: 'รองรับการเลือกฉากอนุกรมเวลา', ib_ndvi_desc_text: 'แสดงความหนาแน่นและความมีชีวิตชีวาของพืชพรรณโดยเปรียบเทียบการสะท้อนแสงของแบนด์อินฟราเรดใกล้ (NIR) และแบนด์สีแดง สูตร: (NIR − แดง) / (NIR + แดง)', ib_ndwi_desc_text: 'แสดงพื้นผิวน้ำเปิดและปริมาณน้ำโดยเปรียบเทียบการสะท้อนแสงของแบนด์สีเขียวและแบนด์อินฟราเรดใกล้ (NIR) สูตร: (เขียว − NIR) / (เขียว + NIR)',
+    ib_bands: 'แบนด์', ib_timeseries_supported: 'รองรับการเลือกฉากอนุกรมเวลา', ib_ndvi_formula_text: '(NIR − แดง) / (NIR + แดง)', ib_ndvi_desc_text: 'แสดงความหนาแน่นและความมีชีวิตชีวาของพืชพรรณโดยเปรียบเทียบการสะท้อนแสงของแบนด์อินฟราเรดใกล้ (NIR) และแบนด์สีแดง', ib_ndwi_formula_text: '(เขียว − NIR) / (เขียว + NIR)', ib_ndwi_desc_text: 'แสดงพื้นผิวน้ำเปิดและปริมาณน้ำโดยเปรียบเทียบการสะท้อนแสงของแบนด์สีเขียวและแบนด์อินฟราเรดใกล้ (NIR)',
     vi_lulc_res: '10 ม. (อิงจาก Sentinel-2)',
     vi_lulc_update: 'เรียลไทม์ (อิงจากฉาก)',
     vi_lulc_classes: '9 ประเภท',
@@ -35046,7 +35119,7 @@ var SYLVA_TRANSLATIONS = {
     ib_formula: 'সূত্র', ib_azimuth_angles: 'আজিমুথ কোণ', ib_note: 'নোট',
     ib_polarization: 'পোলারাইজেশন', ib_frequency: 'ফ্রিকোয়েন্সি', ib_independence: 'স্বাধীনতা',
     ib_no_timeseries: 'টাইম সিরিজ দৃশ্য নির্বাচন সমর্থিত নয়।',
-    ib_bands: 'ব্যান্ড', ib_timeseries_supported: 'টাইম সিরিজ দৃশ্য নির্বাচন সমর্থিত।', ib_ndvi_desc_text: 'নিকট ইনফ্রারেড (NIR) এবং লাল ব্যান্ডের প্রতিফলন তুলনা করে গাছপালার ঘনত্ব ও প্রাণবন্ততা দেখায়। সূত্র: (NIR − লাল) / (NIR + লাল)।', ib_ndwi_desc_text: 'সবুজ ও নিকট ইনফ্রারেড (NIR) ব্যান্ডের প্রতিফলন তুলনা করে উন্মুক্ত জলপৃষ্ঠ ও জলের পরিমাণ দেখায়। সূত্র: (সবুজ − NIR) / (সবুজ + NIR)।',
+    ib_bands: 'ব্যান্ড', ib_timeseries_supported: 'টাইম সিরিজ দৃশ্য নির্বাচন সমর্থিত।', ib_ndvi_formula_text: '(NIR − লাল) / (NIR + লাল)', ib_ndvi_desc_text: 'নিকট ইনফ্রারেড (NIR) এবং লাল ব্যান্ডের প্রতিফলন তুলনা করে গাছপালার ঘনত্ব ও প্রাণবন্ততা দেখায়।', ib_ndwi_formula_text: '(সবুজ − NIR) / (সবুজ + NIR)', ib_ndwi_desc_text: 'সবুজ ও নিকট ইনফ্রারেড (NIR) ব্যান্ডের প্রতিফলন তুলনা করে উন্মুক্ত জলপৃষ্ঠ ও জলের পরিমাণ দেখায়।',
     vi_lulc_res: '১০ মি (Sentinel-2 ভিত্তিক)',
     vi_lulc_update: 'রিয়েল-টাইম (দৃশ্য ভিত্তিক)',
     vi_lulc_classes: '৯টি শ্রেণি',
@@ -35514,7 +35587,7 @@ var SYLVA_TRANSLATIONS = {
     ib_formula: 'Công thức', ib_azimuth_angles: 'Các góc phương vị', ib_note: 'Ghi chú',
     ib_polarization: 'Phân cực', ib_frequency: 'Tần số', ib_independence: 'Tính độc lập',
     ib_no_timeseries: 'Không hỗ trợ chọn cảnh chuỗi thời gian.',
-    ib_bands: 'Băng tần', ib_timeseries_supported: 'Hỗ trợ chọn cảnh chuỗi thời gian.', ib_ndvi_desc_text: 'Hiển thị mật độ và sức sống của thảm thực vật bằng cách so sánh phản xạ của băng tần cận hồng ngoại (NIR) và băng đỏ. Công thức: (NIR − Đỏ) / (NIR + Đỏ).', ib_ndwi_desc_text: 'Hiển thị bề mặt nước hở và hàm lượng nước bằng cách so sánh phản xạ của băng tần xanh lục và cận hồng ngoại (NIR). Công thức: (Xanh lục − NIR) / (Xanh lục + NIR).',
+    ib_bands: 'Băng tần', ib_timeseries_supported: 'Hỗ trợ chọn cảnh chuỗi thời gian.', ib_ndvi_formula_text: '(NIR − Đỏ) / (NIR + Đỏ)', ib_ndvi_desc_text: 'Hiển thị mật độ và sức sống của thảm thực vật bằng cách so sánh phản xạ của băng tần cận hồng ngoại (NIR) và băng đỏ.', ib_ndwi_formula_text: '(Xanh lục − NIR) / (Xanh lục + NIR)', ib_ndwi_desc_text: 'Hiển thị bề mặt nước hở và hàm lượng nước bằng cách so sánh phản xạ của băng tần xanh lục và cận hồng ngoại (NIR).',
     vi_lulc_res: '10 m (dựa trên Sentinel-2)',
     vi_lulc_update: 'Thời gian thực (theo từng cảnh)',
     vi_lulc_classes: '9 lớp',
@@ -36037,7 +36110,7 @@ var SYLVA_TRANSLATIONS = {
     ib_formula: 'فارمولا', ib_azimuth_angles: 'سمت زاویے', ib_note: 'نوٹ',
     ib_polarization: 'پولرائزیشن', ib_frequency: 'تعدد', ib_independence: 'آزادی',
     ib_no_timeseries: 'ٹائم سیریز سین کا انتخاب معاون نہیں ہے۔',
-    ib_bands: 'بینڈز', ib_timeseries_supported: 'ٹائم سیریز سین کا انتخاب معاون ہے۔', ib_ndvi_desc_text: 'قریبی اورکت (NIR) اور سرخ بینڈ کے انعکاس کا موازنہ کرکے نباتات کی کثافت اور توانائی ظاہر کرتا ہے۔ فارمولا: (NIR − سرخ) / (NIR + سرخ)۔', ib_ndwi_desc_text: 'سبز اور قریبی اورکت (NIR) بینڈ کے انعکاس کا موازنہ کرکے کھلی پانی کی سطحوں اور پانی کی مقدار کو ظاہر کرتا ہے۔ فارمولا: (سبز − NIR) / (سبز + NIR)۔',
+    ib_bands: 'بینڈز', ib_timeseries_supported: 'ٹائم سیریز سین کا انتخاب معاون ہے۔', ib_ndvi_formula_text: '(NIR − سرخ) / (NIR + سرخ)', ib_ndvi_desc_text: 'قریبی اورکت (NIR) اور سرخ بینڈ کے انعکاس کا موازنہ کرکے نباتات کی کثافت اور توانائی ظاہر کرتا ہے۔', ib_ndwi_formula_text: '(سبز − NIR) / (سبز + NIR)', ib_ndwi_desc_text: 'سبز اور قریبی اورکت (NIR) بینڈ کے انعکاس کا موازنہ کرکے کھلی پانی کی سطحوں اور پانی کی مقدار کو ظاہر کرتا ہے۔',
     vi_lulc_res: '10 m (Sentinel-2 پر مبنی)',
     vi_lulc_update: 'ریئل ٹائم (سین کی بنیاد پر)',
     vi_lulc_classes: '9 درجات',
@@ -36557,7 +36630,7 @@ var SYLVA_TRANSLATIONS = {
     ib_formula: 'Formuła', ib_azimuth_angles: 'Kąty azymutu', ib_note: 'Uwaga',
     ib_polarization: 'Polaryzacja', ib_frequency: 'Częstotliwość', ib_independence: 'Niezależność',
     ib_no_timeseries: 'Wybór sceny szeregów czasowych nie jest obsługiwany.',
-    ib_bands: 'Pasma', ib_timeseries_supported: 'Wybór sceny szeregów czasowych jest obsługiwany.', ib_ndvi_desc_text: 'Pokazuje gęstość i witalność roślinności poprzez porównanie odbicia pasm bliskiej podczerwieni (NIR) i czerwonego. Wzór: (NIR − Czerwony) / (NIR + Czerwony).', ib_ndwi_desc_text: 'Pokazuje otwarte powierzchnie wodne i zawartość wody poprzez porównanie odbicia pasm zielonego i bliskiej podczerwieni (NIR). Wzór: (Zielony − NIR) / (Zielony + NIR).',
+    ib_bands: 'Pasma', ib_timeseries_supported: 'Wybór sceny szeregów czasowych jest obsługiwany.', ib_ndvi_formula_text: '(NIR − Czerwony) / (NIR + Czerwony)', ib_ndvi_desc_text: 'Pokazuje gęstość i witalność roślinności poprzez porównanie odbicia pasm bliskiej podczerwieni (NIR) i czerwonego.', ib_ndwi_formula_text: '(Zielony − NIR) / (Zielony + NIR)', ib_ndwi_desc_text: 'Pokazuje otwarte powierzchnie wodne i zawartość wody poprzez porównanie odbicia pasm zielonego i bliskiej podczerwieni (NIR).',
     vi_lulc_res: '10 m (bazuje na Sentinel-2)',
     vi_lulc_update: 'W czasie rzeczywistym (bazuje na scenie)',
     vi_lulc_classes: '9 klas',
@@ -37061,7 +37134,7 @@ var SYLVA_TRANSLATIONS = {
     ib_formula: 'Formula', ib_azimuth_angles: 'Sudut Azimut', ib_note: 'Nota',
     ib_polarization: 'Polarisasi', ib_frequency: 'Frekuensi', ib_independence: 'Kebebasan',
     ib_no_timeseries: 'Pemilihan adegan siri masa tidak disokong.',
-    ib_bands: 'Jalur', ib_timeseries_supported: 'Pemilihan adegan siri masa disokong.', ib_ndvi_desc_text: 'Menunjukkan kepadatan dan daya hidup tumbuhan dengan membandingkan pantulan jalur inframerah dekat (NIR) dan merah. Formula: (NIR − Merah) / (NIR + Merah).', ib_ndwi_desc_text: 'Menunjukkan permukaan air terbuka dan kandungan air dengan membandingkan pantulan jalur hijau dan inframerah dekat (NIR). Formula: (Hijau − NIR) / (Hijau + NIR).',
+    ib_bands: 'Jalur', ib_timeseries_supported: 'Pemilihan adegan siri masa disokong.', ib_ndvi_formula_text: '(NIR − Merah) / (NIR + Merah)', ib_ndvi_desc_text: 'Menunjukkan kepadatan dan daya hidup tumbuhan dengan membandingkan pantulan jalur inframerah dekat (NIR) dan merah.', ib_ndwi_formula_text: '(Hijau − NIR) / (Hijau + NIR)', ib_ndwi_desc_text: 'Menunjukkan permukaan air terbuka dan kandungan air dengan membandingkan pantulan jalur hijau dan inframerah dekat (NIR).',
     vi_lulc_res: '10 m (berasaskan Sentinel-2)',
     vi_lulc_update: 'Masa nyata (berasaskan adegan)',
     vi_lulc_classes: '9 kelas',
@@ -37559,7 +37632,7 @@ var SYLVA_TRANSLATIONS = {
       ib_formula: 'Формула', ib_azimuth_angles: 'Азимут бурчтары', ib_note: 'Эскертме',
       ib_polarization: 'Поляризация', ib_frequency: 'Жыштык', ib_independence: 'Көз карандысыздык',
       ib_no_timeseries: 'Убакыт сериясы сүрөт тандоосу колдоого алынбайт.',
-      ib_bands: 'Тилкелер', ib_timeseries_supported: 'Убакыт сериясы сүрөт тандоосу колдоого алынат.', ib_ndvi_desc_text: 'Жакын инфракызыл (NIR) жана кызыл тилкенин чагылышын салыштыруу менен өсүмдүк жамынычынын тыгыздыгын жана тирүүлүгүн көрсөтөт. Формула: (NIR − Кызыл) / (NIR + Кызыл).', ib_ndwi_desc_text: 'Жашыл жана жакын инфракызыл (NIR) тилкенин чагылышын салыштыруу менен ачык суу беттерин жана суу өлчөмүн көрсөтөт. Формула: (Жашыл − NIR) / (Жашыл + NIR).',
+      ib_bands: 'Тилкелер', ib_timeseries_supported: 'Убакыт сериясы сүрөт тандоосу колдоого алынат.', ib_ndvi_formula_text: '(NIR − Кызыл) / (NIR + Кызыл)', ib_ndvi_desc_text: 'Жакын инфракызыл (NIR) жана кызыл тилкенин чагылышын салыштыруу менен өсүмдүк жамынычынын тыгыздыгын жана тирүүлүгүн көрсөтөт.', ib_ndwi_formula_text: '(Жашыл − NIR) / (Жашыл + NIR)', ib_ndwi_desc_text: 'Жашыл жана жакын инфракызыл (NIR) тилкенин чагылышын салыштыруу менен ачык суу беттерин жана суу өлчөмүн көрсөтөт.',
       vi_lulc_res: '10 м (Sentinel-2 негизинде)',
       vi_lulc_update: 'Чыныгы убакытта (сүрөт негизинде)',
       vi_lulc_classes: '9 класс',
@@ -38020,7 +38093,7 @@ var SYLVA_TRANSLATIONS = {
     ib_formula: 'Томьёо', ib_azimuth_angles: 'Азимутын өнцгүүд', ib_note: 'Тэмдэглэл',
     ib_polarization: 'Туйлшрал', ib_frequency: 'Давтамж', ib_independence: 'Бие даасан байдал',
     ib_no_timeseries: 'Цагийн цувааны зурган сонголт дэмжигдэхгүй.',
-    ib_bands: 'Зурвасууд', ib_timeseries_supported: 'Цагийн цувааны зурган сонголт дэмжигдэнэ.', ib_ndvi_desc_text: 'Ойрын хэт улаан туяа (NIR) болон улаан зурвасын тусгалыг харьцуулснаар ургамлан бүрхэвчийн нягтрал, амьдрах чадварыг харуулна. Томъёо: (NIR − Улаан) / (NIR + Улаан).', ib_ndwi_desc_text: 'Ногоон болон ойрын хэт улаан туяа (NIR) зурвасын тусгалыг харьцуулснаар нээлттэй усны гадаргуу, усны агууламжийг харуулна. Томъёо: (Ногоон − NIR) / (Ногоон + NIR).',
+    ib_bands: 'Зурвасууд', ib_timeseries_supported: 'Цагийн цувааны зурган сонголт дэмжигдэнэ.', ib_ndvi_formula_text: '(NIR − Улаан) / (NIR + Улаан)', ib_ndvi_desc_text: 'Ойрын хэт улаан туяа (NIR) болон улаан зурвасын тусгалыг харьцуулснаар ургамлан бүрхэвчийн нягтрал, амьдрах чадварыг харуулна.', ib_ndwi_formula_text: '(Ногоон − NIR) / (Ногоон + NIR)', ib_ndwi_desc_text: 'Ногоон болон ойрын хэт улаан туяа (NIR) зурвасын тусгалыг харьцуулснаар нээлттэй усны гадаргуу, усны агууламжийг харуулна.',
     vi_lulc_res: '10 м (Sentinel-2 суурилсан)', vi_lulc_update: 'Бодит цаг (зурган суурилсан)',
     vi_lulc_classes: '9 анги', vi_lulc_classlist: 'Ус · Мод · Бэлчээр · Усны ургамал · Тариалан · Бут · Хот · Нүцгэн · Цас/Мөс',
     vi_lulc_range: '0 – 8 (ангийн индекс)',
@@ -38494,7 +38567,7 @@ var SYLVA_TRANSLATIONS = {
       ib_formula: 'ფორმულა', ib_azimuth_angles: 'აზიმუტის კუთხეები', ib_note: 'შენიშვნა',
       ib_polarization: 'პოლარიზაცია', ib_frequency: 'სიხშირე', ib_independence: 'დამოუკიდებლობა',
       ib_no_timeseries: 'დროითი მწკრივის სურათის შერჩევა არ არის მხარდაჭერილი.',
-      ib_bands: 'ზოლები', ib_timeseries_supported: 'დროითი მწკრივის სურათის შერჩევა მხარდაჭერილია.', ib_ndvi_desc_text: 'აჩვენებს მცენარეულობის სიმჭიდროვესა და სიცოცხლისუნარიანობას ახლო ინფრაწითელი (NIR) და წითელი ზოლების არეკვლის შედარებით. ფორმულა: (NIR − წითელი) / (NIR + წითელი).', ib_ndwi_desc_text: 'აჩვენებს ღია წყლის ზედაპირებსა და წყლის შემცველობას მწვანე და ახლო ინფრაწითელი (NIR) ზოლების არეკვლის შედარებით. ფორმულა: (მწვანე − NIR) / (მწვანე + NIR).',
+      ib_bands: 'ზოლები', ib_timeseries_supported: 'დროითი მწკრივის სურათის შერჩევა მხარდაჭერილია.', ib_ndvi_formula_text: '(NIR − წითელი) / (NIR + წითელი)', ib_ndvi_desc_text: 'აჩვენებს მცენარეულობის სიმჭიდროვესა და სიცოცხლისუნარიანობას ახლო ინფრაწითელი (NIR) და წითელი ზოლების არეკვლის შედარებით.', ib_ndwi_formula_text: '(მწვანე − NIR) / (მწვანე + NIR)', ib_ndwi_desc_text: 'აჩვენებს ღია წყლის ზედაპირებსა და წყლის შემცველობას მწვანე და ახლო ინფრაწითელი (NIR) ზოლების არეკვლის შედარებით.',
       vi_lulc_res: '10 მ (Sentinel-2 საფუძველზე)', vi_lulc_update: 'რეალური დროში (სურათის საფუძველზე)',
       vi_lulc_classes: '9 კლასი',
       vi_lulc_classlist: 'წყალი · ხე · მდელო · ჭაობის მცენარეობა · კულტურა · ბუჩქი · ქალაქი · შიშველი · თოვლი/ყინული',
@@ -38981,7 +39054,7 @@ var SYLVA_TRANSLATIONS = {
     ib_formula: 'Formula', ib_azimuth_angles: 'Angoli di Azimut', ib_note: 'Nota',
     ib_polarization: 'Polarizzazione', ib_frequency: 'Frequenza', ib_independence: 'Indipendenza',
     ib_no_timeseries: 'La selezione di scene in serie temporale non è supportata.',
-    ib_bands: 'Bande', ib_timeseries_supported: 'La selezione di scene in serie temporale è supportata.', ib_ndvi_desc_text: 'Mostra la densità e la vitalità della vegetazione confrontando la riflettanza delle bande infrarosso vicino (NIR) e rosso. Formula: (NIR − Rosso) / (NIR + Rosso).', ib_ndwi_desc_text: 'Mostra le superfici d\'acqua libera e il contenuto d\'acqua confrontando la riflettanza delle bande verde e infrarosso vicino (NIR). Formula: (Verde − NIR) / (Verde + NIR).',
+    ib_bands: 'Bande', ib_timeseries_supported: 'La selezione di scene in serie temporale è supportata.', ib_ndvi_formula_text: '(NIR − Rosso) / (NIR + Rosso)', ib_ndvi_desc_text: 'Mostra la densità e la vitalità della vegetazione confrontando la riflettanza delle bande infrarosso vicino (NIR) e rosso.', ib_ndwi_formula_text: '(Verde − NIR) / (Verde + NIR)', ib_ndwi_desc_text: 'Mostra le superfici d\'acqua libera e il contenuto d\'acqua confrontando la riflettanza delle bande verde e infrarosso vicino (NIR).',
     vi_lulc_res: '10 m (basato su Sentinel-2)',
     vi_lulc_update: 'In tempo reale (basato su scena)',
     vi_lulc_classes: '9 classi',
@@ -45008,7 +45081,12 @@ function _vdlT(key, fallback) {
 }
 
 function _vdlGetAnalysisLabel() {
-    var meta = (typeof window._lastAnalyzeMeta !== 'undefined') ? window._lastAnalyzeMeta : null;
+    // 🆕 Önce AKTİF ekranın kendi son analiz meta verisi denenir; yoksa eski
+    // global tekil değere (geriye dönük uyumluluk), o da yoksa seçili
+    // analiz meta verisine düşülür.
+    var _vdlPane = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
+    var meta = (window._lastAnalyzeMetaByPane && window._lastAnalyzeMetaByPane[_vdlPane]) || null;
+    if (!meta) meta = (typeof window._lastAnalyzeMeta !== 'undefined') ? window._lastAnalyzeMeta : null;
     if (!meta && typeof getSelectedAnalysisMeta === 'function') meta = getSelectedAnalysisMeta();
     if (!meta) return null;
     var name = meta.analysisName || '';
@@ -45056,12 +45134,20 @@ function _vdlUpdateWorkspaceDesc() {
 function _vdlPopulateWorkspaceSelect() {
     var sel = document.getElementById('vdl-workspace-select');
     if (!sel) return;
-    var workspaces = (window.SylvaVAW && window.SylvaVAW.workspaces) ? window.SylvaVAW.workspaces : [];
+    // 🆕 Tüm çalışma alanları yerine yalnızca AKTİF ekrana ait olanlar listelenir
+    // (Ekran 2 aktifken Ekran 1'in çalışma alanları karışıklık yaratmasın).
+    var _vdlWsPane = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
+    var _allWorkspaces = (window.SylvaVAW && window.SylvaVAW.workspaces) ? window.SylvaVAW.workspaces : [];
+    var workspaces = _allWorkspaces.filter(function (w) {
+        return (w.paneId === 'map2' ? 'map2' : 'map') === _vdlWsPane;
+    });
     sel.innerHTML = '';
 
     if (!workspaces.length) {
-        // VAW listesi boşsa, elde tek bir çizilmiş/yüklenmiş alan (window._workspaceLayer) olabilir
-        if (window._workspaceLayer) {
+        // VAW listesi boşsa, elde tek bir çizilmiş/yüklenmiş alan olabilir —
+        // bu da aktif ekranın kendi katmanından (map2 için _workspaceLayer2) alınır.
+        var _vdlCurrentLayer = (_vdlWsPane === 'map2') ? window._workspaceLayer2 : window._workspaceLayer;
+        if (_vdlCurrentLayer) {
             var opt = document.createElement('option');
             opt.value = '__current__';
             opt.textContent = _vdlT('vdl_current_area', '📍 Aktif çizilen alan');
@@ -45116,7 +45202,11 @@ function onVdlRasterChange() {
 function vdlResetCoords() {
     try {
         var ws = _vdlGetSelectedWorkspace();
-        var layer = ws ? ws.layer : window._workspaceLayer;
+        // 🆕 "__current__" seçiliyken veya hiç VAW yokken, sabit map1
+        // yerine AKTİF ekranın çalışma alanı katmanı kullanılır.
+        var _vdlRcPane = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
+        var _vdlRcCurrentLayer = (_vdlRcPane === 'map2') ? window._workspaceLayer2 : window._workspaceLayer;
+        var layer = ws ? ws.layer : _vdlRcCurrentLayer;
         if (!layer || !layer.getBounds) return;
         var b = layer.getBounds();
         var fn = document.getElementById('vdl-coord-north');
@@ -45140,6 +45230,10 @@ function selectVdlSource(src) {
 }
 
 function openVectorDownloadDialog() {
+    // 🆕 Pencere açılır açılmaz aktif ekranın son analizini sunucuyla
+    // senkronize etmeye başla (arka planda; kullanıcı formu doldururken biter).
+    // GeoTIFF penceresiyle aynı senkronizasyon yardımcı fonksiyonu kullanılır.
+    if (typeof _sylvaSyncActivePaneForDownload === 'function') _sylvaSyncActivePaneForDownload();
     var navLogo = document.querySelector('.logo-container img');
     var indLogo = document.getElementById('vdl-logo-img');
     if (navLogo && indLogo) indLogo.src = navLogo.src;
@@ -45245,11 +45339,15 @@ function executeVectorDownload() {
     var geomGeoJSON = null;
     try {
         var _vdlWs = _vdlGetSelectedWorkspace();
+        // 🆕 VAW listesinden seçim yoksa (ör. "__current__"), sabit map1
+        // yerine AKTİF ekranın çalışma alanı katmanına düşülür.
+        var _vdlExecPane = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
+        var _vdlExecCurrentLayer = (_vdlExecPane === 'map2') ? window._workspaceLayer2 : window._workspaceLayer;
         if (_vdlWs && _vdlWs.fc) {
             geomGeoJSON = JSON.stringify(_vdlWs.fc);
-        } else if (window._workspaceLayer) {
+        } else if (_vdlExecCurrentLayer) {
             geomGeoJSON = JSON.stringify(
-                window._workspaceLayer.toGeoJSON ? window._workspaceLayer.toGeoJSON() : null
+                _vdlExecCurrentLayer.toGeoJSON ? _vdlExecCurrentLayer.toGeoJSON() : null
             );
         }
     } catch(e) {}
