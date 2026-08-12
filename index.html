@@ -49149,6 +49149,67 @@ document.addEventListener('keydown', function(e) {
 })();
 </script>
 
+<!-- ════════════════════════════════════════════════════════════════
+     SYLVAGIS — GEE KARO (TILE) SESSİZ YENİDEN DENEME
+     ════════════════════════════════════════════════════════════════
+     SORUN: Her GEE analiz karosu, tarayıcı isteği yaptığı ANDA sunucu
+     tarafında anlık hesaplanır (getMapId sadece bir URL şablonu döndürür,
+     hiçbir şeyi önceden hesaplamaz). Zoom derinleştikçe aynı fiziksel
+     alanı kaplamak için ÇOK DAHA FAZLA (ve her biri ayrı hesaplanan)
+     karo istenir; bunlardan biri GEE tarafında geçici bir hata/zaman
+     aşımına uğrarsa, hiçbir müdahale olmadan o karo KALICI olarak boş
+     kalır — "tüm veri geldi ama zoom yapınca bazı yerler gidiyor"
+     şikayetinin doğrudan sebebi budur.
+     ÇÖZÜM: Sadece 'geeAnalysisPane' panelindeki katmanlarda, bir karo
+     hata verirse (tileerror) makul bir üstel geri-çekilmeli gecikmeyle
+     ve GERÇEK bir yeni ağ isteği zorlayan cache-busting parametresiyle
+     sessizce yeniden istenir. ÖNEMLİ: bu mekanizma HİÇBİR Leaflet
+     ayarını (updateWhenZooming/keepBuffer/updateWhenIdle) değiştirmez,
+     hiçbir görsel "tint" eklemez ve yükleme perdesi (showSylvaLoading/
+     hideSylvaLoading, _waitForTileReady) mantığına dokunmaz — tamamen
+     bağımsız ve arka planda çalışır; karo başarıyla gelince görünüme
+     kendiliğinden eklenir.
+     ════════════════════════════════════════════════════════════════ -->
+<script>
+(function () {
+    var _SYLVA_MAX_TILE_RETRIES = 8;      // önceki denemedeki 4'ten çok daha cömert
+    var _SYLVA_RETRY_BASE_MS   = 1000;
+    var _SYLVA_RETRY_CAP_MS    = 8000;    // tek bir denemenin üst gecikme sınırı
+
+    function _sylvaRetryTile(tile, attempt) {
+        var baseSrc = tile._sylvaBaseSrc;
+        if (!baseSrc) {
+            baseSrc = tile.src.replace(/([?&])_sylvaRetry=[^&]*/, '').replace(/[?&]$/, '');
+            tile._sylvaBaseSrc = baseSrc;
+        }
+        var delay = Math.min(_SYLVA_RETRY_CAP_MS, _SYLVA_RETRY_BASE_MS * Math.pow(1.6, attempt - 1));
+        setTimeout(function () {
+            var sep = baseSrc.indexOf('?') === -1 ? '?' : '&';
+            // Aynı src'yi doğrudan tekrar atamak bazı tarayıcılarda isteği
+            // yenilemeyebilir; benzersiz bir sorgu parametresi GERÇEK bir
+            // yeni ağ isteği zorlar.
+            tile.src = baseSrc + sep + '_sylvaRetry=' + attempt + '_' + Date.now();
+        }, delay);
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+        if (typeof L === 'undefined' || !L.TileLayer) return;
+        L.TileLayer.addInitHook(function () {
+            if (!this.options || this.options.pane !== 'geeAnalysisPane') return;
+            this.on('tileerror', function (e) {
+                var tile = e && e.tile;
+                if (!tile || !tile.src) return;
+                var attempt = (tile._sylvaRetryCount || 0) + 1;
+                if (attempt > _SYLVA_MAX_TILE_RETRIES) return; // çok nadir, kalıcı sunucu hatası — sessizce bırak
+                tile._sylvaRetryCount = attempt;
+                _sylvaRetryTile(tile, attempt);
+            });
+        });
+    });
+})();
+</script>
+<!-- SYLVAGIS TILE RETRY BİTİŞİ -->
+
 </body>
 
 </html>
