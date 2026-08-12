@@ -20687,6 +20687,17 @@ function selectRamp(name) {
 
             // --- Ekran elemanlarını (lejant, kuzey oku, ölçek) canvas'a çiz ---
             function drawOverlaysOnCanvas(ctx, mapEl, scale) {
+                // 🛠️ BUG FİX: Bu fonksiyon Ekran 2 (map2) için çağrıldığında da
+                // eskiden HER ZAMAN Ekran 1'in elemanlarını (document.querySelector
+                // ile ilk bulduğu .north-arrow, #map-legend-box, #map-info-box vb.)
+                // arıyordu — bu yüzden Ekran 2 çıktısında kuzey oku/ölçek/lejant/
+                // bilgi kutusu ya hiç görünmüyor ya da Ekran 1'in konumunda yanlış
+                // çiziliyordu. Artık mapEl'e göre doğru ekranın elemanları seçilir.
+                var _isMap2 = !!(mapEl && mapEl.id === 'map2');
+                var _legendBoxId = _isMap2 ? 'map2-legend-box' : 'map-legend-box';
+                var _infoBoxId   = _isMap2 ? 'map2-info-box'   : 'map-info-box';
+                var _northSel    = _isMap2 ? '.north-arrow.map2-control' : '.north-arrow:not(.map2-control)';
+
                 // ── Logo sol-alt köşede sabit — Y sınırını önceden hesapla ───────────
                 // Lejant logoyla çakışınca lejant yukarı kaydırılır; logo hiç hareket etmez.
                 // wmPad=8, wmPadY=5, logoH=32 → logoBoxH=42 → logoTopY = mapH - 8 - 42
@@ -20699,7 +20710,7 @@ function selectRamp(name) {
                  // html2canvas bağlamından bağımsız garantili beyaz arka plan için
                  // captureLegendOverlay / captureInfoBoxOverlay artık kullanılmıyor.
                  {
-                    var legend = document.getElementById('map-legend-box');
+                    var legend = document.getElementById(_legendBoxId);
                     if (legend && legend.style.display !== 'none' && legend.getBoundingClientRect().width > 0) {
                         var lRect = legend.getBoundingClientRect();
                         // Konum referansı: canvas her zaman mapEl (#map) boyutlarını temsil eder.
@@ -20979,7 +20990,7 @@ function selectRamp(name) {
                             // .legend-min-label / .legend-max-label kesin seçici kullanılıyor.
                             var minLabel = '', maxLabel = '';
                             // 🛠️ BUG FİX: aynı gerekçe — gerçek lejant kutusu hedeflenir.
-                            var legendBox2 = document.getElementById('map-legend-box');
+                            var legendBox2 = document.getElementById(_legendBoxId);
                             if (legendBox2) {
                                 var _minEl = legendBox2.querySelector('.legend-min-label');
                                 var _maxEl = legendBox2.querySelector('.legend-max-label');
@@ -21028,7 +21039,7 @@ function selectRamp(name) {
                     }
                     // ── Bilgi Kutusu: LULC / TOPO analizlerinde görünen veri seti
                     // bilgi kartı, ekrandaki durumuyla birebir (WYSIWYG) çizilir ──
-                    var infoBox = document.getElementById('map-info-box');
+                    var infoBox = document.getElementById(_infoBoxId);
                     var _ibR0 = infoBox ? infoBox.getBoundingClientRect() : null;
                     if (infoBox && infoBox.style.display !== 'none' && _ibR0 && _ibR0.width > 0 && _ibR0.height > 0) {
                         var ibRect = infoBox.getBoundingClientRect();
@@ -21186,7 +21197,7 @@ function selectRamp(name) {
                  } // lejant ve bilgi kutusu her zaman native canvas ile çizildi
                     // ── Aşağıdakiler HTML2CANVAS veya LEAFLET-IMAGE fark etmeksizin
                     // HER ZAMAN çizilir (kullanıcı gizlemiş olsa bile). ────────────
-                    var north = document.querySelector('.north-arrow');
+                    var north = document.querySelector(_northSel);
                     if (north) {
                         var nRect  = north.getBoundingClientRect();
                         var mRect2 = mapEl.getBoundingClientRect();
@@ -21223,9 +21234,9 @@ function selectRamp(name) {
     
                     // Ölçek çubuğu (Leaflet'in .leaflet-control-scale-line'ı)
                     // Kullanıcı ölçeği gizlemiş olsa bile çıktıda her zaman göster.
-                    var scaleLine = document.querySelector('.leaflet-control-scale-line');
+                    var scaleLine = mapEl.querySelector('.leaflet-control-scale-line');
                     if (scaleLine) {
-                        var _scaleParent = document.querySelector('.leaflet-control-scale');
+                        var _scaleParent = mapEl.querySelector('.leaflet-control-scale');
                         var _scaleWasHidden = _scaleParent && _scaleParent.style.display === 'none';
                         if (_scaleWasHidden) _scaleParent.style.display = '';
                         var sRect = scaleLine.getBoundingClientRect();
@@ -48531,6 +48542,45 @@ function _initSwipeDrag(divider) {
         </div>
         <div id="sylva-roadmap-body">
 
+            <!-- Kategori 0 -->
+            <div class="srm-cat">🚀 Yakında Gelecekler &amp; Öncelikli Güncellemeler</div>
+
+            <div class="srm-item">
+                <div class="srm-item-icon">🌤️</div>
+                <div class="srm-item-content">
+                    <div class="srm-item-title">Hava Durumu ve İklim Verisi Entegrasyonu</div>
+                    <div class="srm-item-desc">Çalışma alanındaki arazi kullanımı, topoğrafya ve çevre analizlerinde son 30 günlük yağış, sıcaklık ve nem verilerinin sunulması. Ayrıca uydu verileri ve analizlerinde, seçilen tarihten geriye dönük 30 günlük iklim verilerinin (varsa) otomatik olarak sürece dahil edilmesi.</div>
+                </div>
+                <span class="srm-badge srm-badge-soon">Yakında</span>
+            </div>
+
+            <div class="srm-item">
+                <div class="srm-item-icon">📥</div>
+                <div class="srm-item-content">
+                    <div class="srm-item-title">Gelişmiş Veri İndirme</div>
+                    <div class="srm-item-desc">KML, KMZ, SHP ve GeoPackage formatlarında, istenen koordinat sisteminde (CRS) dışa aktarım.</div>
+                </div>
+                <span class="srm-badge srm-badge-soon">Yakında</span>
+            </div>
+
+            <div class="srm-item">
+                <div class="srm-item-icon">🌿</div>
+                <div class="srm-item-content">
+                    <div class="srm-item-title">Çevresel ve Kentsel Analizler</div>
+                    <div class="srm-item-desc">Çevresel etki ve kentsel gelişim/yayılım analizlerinin sistem üzerinden yapılabilmesi.</div>
+                </div>
+                <span class="srm-badge srm-badge-soon">Yakında</span>
+            </div>
+
+            <div class="srm-item">
+                <div class="srm-item-icon">🛠️</div>
+                <div class="srm-item-content">
+                    <div class="srm-item-title">Harita Görüntüleme Sorunlarının Çözümü</div>
+                    <div class="srm-item-desc">Verilerin ekrana tam gelmemesi, haritada eksik kareler (tile) oluşması ve yakınlaştırma (zoom) yapıldığında bazı verilerin yüklenmemesi sorununun giderilmesi.</div>
+                </div>
+                <span class="srm-badge srm-badge-soon">Yakında</span>
+            </div>
+
             <!-- Kategori 1 -->
             <div class="srm-cat">👤 Kullanıcı ve Hesap Özellikleri</div>
 
@@ -48540,7 +48590,7 @@ function _initSwipeDrag(divider) {
                     <div class="srm-item-title">E-posta Doğrulamalı Giriş</div>
                     <div class="srm-item-desc">Güvenli kayıt ve doğrulama kodu ile giriş sistemi.</div>
                 </div>
-                <span class="srm-badge srm-badge-soon">Yakında</span>
+                <span class="srm-badge srm-badge-planned">Planlandı</span>
             </div>
 
             <div class="srm-item">
@@ -48549,7 +48599,7 @@ function _initSwipeDrag(divider) {
                     <div class="srm-item-title">Analiz Geçmişi</div>
                     <div class="srm-item-desc">Yapılan son 10 analizin saklanması ve istenildiğinde tekrar indirilmesi.</div>
                 </div>
-                <span class="srm-badge srm-badge-wip">Geliştiriliyor</span>
+                <span class="srm-badge srm-badge-planned">Planlandı</span>
             </div>
 
             <div class="srm-item">
@@ -48558,7 +48608,7 @@ function _initSwipeDrag(divider) {
                     <div class="srm-item-title">Google Drive Entegrasyonu</div>
                     <div class="srm-item-desc">Analiz çıktılarının doğrudan Google Drive hesabına aktarılması.</div>
                 </div>
-                <span class="srm-badge srm-badge-soon">Yakında</span>
+                <span class="srm-badge srm-badge-planned">Planlandı</span>
             </div>
 
             <div class="srm-item">
@@ -48572,15 +48622,6 @@ function _initSwipeDrag(divider) {
 
             <!-- Kategori 2 -->
             <div class="srm-cat">🗺️ Analiz ve Harita Özellikleri</div>
-
-            <div class="srm-item">
-                <div class="srm-item-icon">🌿</div>
-                <div class="srm-item-content">
-                    <div class="srm-item-title">Çevresel ve Kentsel Analizler</div>
-                    <div class="srm-item-desc">Çevresel etki ve kentsel gelişim/yayılım analizlerinin sistem üzerinden yapılabilmesi.</div>
-                </div>
-                <span class="srm-badge srm-badge-planned">Planlandı</span>
-            </div>
 
             <div class="srm-item">
                 <div class="srm-item-icon">⚡</div>
@@ -48627,7 +48668,7 @@ function _initSwipeDrag(divider) {
                     <div class="srm-item-title">3D Harita ve Yükseklik Profili</div>
                     <div class="srm-item-desc">Arazi yüksekliğine dayalı 3D görünüm ve çizilen hat boyunca yükseklik profili grafiği.</div>
                 </div>
-                <span class="srm-badge srm-badge-wip">Geliştiriliyor</span>
+                <span class="srm-badge srm-badge-planned">Planlandı</span>
             </div>
 
             <div class="srm-item">
@@ -48637,15 +48678,6 @@ function _initSwipeDrag(divider) {
                     <div class="srm-item-desc">10m ile 500m arasında 5 farklı aralıkta eş yükselti katmanı ekleme ve indirme.</div>
                 </div>
                 <span class="srm-badge srm-badge-wip">Geliştiriliyor</span>
-            </div>
-
-            <div class="srm-item">
-                <div class="srm-item-icon">📥</div>
-                <div class="srm-item-content">
-                    <div class="srm-item-title">Gelişmiş Veri İndirme</div>
-                    <div class="srm-item-desc">KML, KMZ, SHP ve GeoPackage formatlarında, istenen koordinat sisteminde (CRS) dışa aktarım.</div>
-                </div>
-                <span class="srm-badge srm-badge-soon">Yakında</span>
             </div>
 
             <div class="srm-item">
@@ -48663,7 +48695,7 @@ function _initSwipeDrag(divider) {
                     <div class="srm-item-title">Kartografik PDF Çıktısı</div>
                     <div class="srm-item-desc">Özelleştirilebilir renk stilleri, A4/A3 boyutları, logo ve başlık şablonlarıyla profesyonel harita çıktısı.</div>
                 </div>
-                <span class="srm-badge srm-badge-soon">Yakında</span>
+                <span class="srm-badge srm-badge-planned">Planlandı</span>
             </div>
 
             <!-- Kategori 4 -->
