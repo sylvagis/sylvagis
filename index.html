@@ -2782,7 +2782,44 @@ tr.class-highlight-active {
             transition: opacity 0.2s ease, max-height 0.2s ease;
         }
         #map2-legend-box.sylva-legend-collapsed:hover { opacity: 0.6; }
-    </style> 
+    </style>
+    <style id="sylva-tile-seam-fix">
+        /* ══════════════════════════════════════════════════════════════
+           SylvaGIS — KARO (TILE) ARASI İNCE BEYAZ ÇİZGİ DÜZELTMESİ
+           ══════════════════════════════════════════════════════════════
+           SORUN: Leaflet, karo panelini kaydırma/yakınlaştırma sırasında
+           CSS transform (translate3d) ile konumlandırır. Tarayıcı bu
+           transform değerini tam piksele yuvarlamadığında, komşu karo
+           kareleri arasında yarım pikselden küçük boşluklar oluşur; bu
+           boşluklardan haritanın altındaki (varsayılan beyaz) sayfa
+           zemini sızar ve ekranda ince beyaz yatay/dikey çizgiler
+           (bazen kesişip "artı" şekli) olarak görünür. Bu, GEE analiz
+           karoları (geeAnalysisPane) ile temel harita (basemap) karo
+           panelinin İKİSİNDE de aynı konumda oluştuğu için altlarındaki
+           içerik değil doğrudan sayfa zemini görünür.
+           ÇÖZÜM: Her karo görselini komşularıyla örtüşecek kadar
+           (yarım piksel) büyütüp ortadan hizalıyoruz; bu örtüşme
+           boşluğu tamamen kapatır ve görsel olarak fark edilmez.
+           Bu, Leaflet topluluğunda bilinen ve yaygın kullanılan bir
+           düzeltmedir; harita davranışını/etkileşimini değiştirmez.
+           ══════════════════════════════════════════════════════════════ */
+        #map .leaflet-tile,
+        #map2 .leaflet-tile {
+            width: 257px !important;
+            height: 257px !important;
+            margin-left: -0.5px !important;
+            margin-top: -0.5px !important;
+        }
+        /* Karo panelleri arka planı, olası kalan alt-piksel boşluklarında
+           beyaz yerine daha nötr bir ton göstersin — sayfa zemininin göz
+           alıcı beyaz çizgi olarak fark edilmesini önler. */
+        #map .leaflet-tile-pane,
+        #map2 .leaflet-tile-pane,
+        #map .leaflet-pane,
+        #map2 .leaflet-pane {
+            background-color: #cfd8dc;
+        }
+    </style>
 <style>
 
         /* ══ SylvaGIS — Zaman Serisi + Before/After CSS ════════════════════ */
@@ -13597,6 +13634,32 @@ function selectRamp(name) {
             _sylvaClearBuildingLayer(paneId);
         }
 
+        // 🆕 BUG FİX (Sentinel-2 L2A'da yanlış "kriterlere uygun veri bulunamadı"
+        // uyarısı): Google Earth Engine'deki Sentinel-2 L2A (Yüzey Yansıması —
+        // COPERNICUS/S2_SR_HARMONIZED) koleksiyonu yalnızca 28 MART 2017'DEN
+        // İTİBAREN mevcuttur (bkz. resmi Earth Engine veri kataloğu); üstelik
+        // 2017-2018 dönemi kapsaması henüz küresel değildir. Kullanıcı bu
+        // tarihten ÖNCE bir başlangıç tarihi seçtiğinde sunucu HER ZAMAN "veri
+        // yok" döner — bu bir sunucu/analiz hatası DEĞİLDİR, veri setinin kendi
+        // kapsam sınırıdır. Eskiden kullanıcıya genel/belirsiz "tarih aralığını
+        // deneyin" mesajı gösteriliyor, GERÇEK sebep hiç açıklanmıyordu. Artık
+        // istek sunucuya hiç gönderilmeden, tam olarak bu duruma özel açık bir
+        // uyarı gösterilir. (Sentinel-2 L1C/TOA için bu sınır 27 Haziran 2015'tir.)
+        function _sylvaCheckSatelliteDateFloor(satellite, startDateStr) {
+            if (!startDateStr) return true;
+            var floors = { 's2-l2a': '2017-03-28', 's2-l1c': '2015-06-27' };
+            var floor = floors[satellite];
+            if (!floor) return true;
+            if (startDateStr >= floor) return true;
+            var lang = (typeof _sylvaLang !== 'undefined') ? _sylvaLang : 'en';
+            var label = (satellite === 's2-l2a') ? 'Sentinel-2 L2A (BOA)' : 'Sentinel-2 L1C (TOA)';
+            var msg = (lang === 'tr')
+                ? (label + ' verisi Google Earth Engine\'de yalnızca ' + floor.split('-').reverse().join('.') + ' tarihinden itibaren mevcuttur. Lütfen başlangıç tarihini bu tarihten sonraya alın veya farklı bir sensör seçin.')
+                : (label + ' data is only available on Google Earth Engine from ' + floor + ' onward. Please choose a later start date or a different sensor.');
+            showNoDataModal(msg, label);
+            return false;
+        }
+
         function runAnalysis() {
             // 🛠️ BUG FİX (KÖK NEDEN): "📈 Zaman Serisi ve Değişim Analizi" bölümünde
             // bir periyot (Aylık/Yıllık) seçiliyken, kullanıcı ts-start-year/
@@ -13867,6 +13930,11 @@ function selectRamp(name) {
             var clipMode  = (isLulc || isTopo || isBuilding) ? 'clip' : (viewModeEl ? viewModeEl.value : 'clip');
             var maxCloud  = cloudSliderEl ? parseInt(cloudSliderEl.value, 10) : 20;
 
+            if (!isLulc && !isTopo && !isBuilding &&
+                !_sylvaCheckSatelliteDateFloor(satellite, startInput ? startInput.value : '')) {
+                return;
+            }
+
             var _roi = _extractROIGeometry(_aoiLayer);
             if (!_roi) {
                 sylvaAlert(t('no_geom'), 'warning');
@@ -13979,7 +14047,7 @@ function selectRamp(name) {
                     _onOneRequestSettled();
                     if (_analysisGeneration !== _runGen) return;
                     if (!data.success) {
-                        showNoDataModal(_TOAST_NO_DATA_MSG, _sylvaLayerFriendlyName(meta.analysisName) + (satellite ? (' — ' + satellite) : ''));
+                        showNoDataModal(_TOAST_NO_DATA_MSG, _sylvaLayerFriendlyName(meta.analysisName) + (satellite ? (' — ' + satellite) : ''), data.error);
                         return;
                     }
                     if (isTopoAnalysis(meta.analysisName) &&
@@ -15919,6 +15987,10 @@ function selectRamp(name) {
         function getSceneList(roiCoords, startDate, endDate, satellite, cloudCover) {
             var galleryEl = document.getElementById('map-gallery');
             if (!galleryEl) return;
+            if (!_sylvaCheckSatelliteDateFloor(satellite, startDate)) {
+                galleryEl.innerHTML = '';
+                return;
+            }
             galleryEl.innerHTML = '<div style="padding:6px 10px;font-size:0.75rem;color:#94a3b8;">⏳ Sahneler yükleniyor…</div>';
 
             fetch(API_BASE + '/api/get-scenes', {
@@ -15937,7 +16009,7 @@ function selectRamp(name) {
             .then(function(data) {
                 if (!data.success || !data.scenes || !data.scenes.length) {
                     galleryEl.innerHTML = '';
-                    showNoDataModal(_TOAST_NO_DATA_MSG, satellite || '');
+                    showNoDataModal(_TOAST_NO_DATA_MSG, satellite || '', data.error);
                     return;
                 }
                 galleryEl.innerHTML = '';
@@ -16033,7 +16105,7 @@ function selectRamp(name) {
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (!data.success) {
-                    if (!silent) { hideSylvaLoading(); showNoDataModal(_TOAST_NO_DATA_MSG, (sensorRadio ? sensorRadio.value : '') + (meta && meta.analysisName ? (' — ' + _sylvaLayerFriendlyName(meta.analysisName)) : '')); }
+                    if (!silent) { hideSylvaLoading(); showNoDataModal(_TOAST_NO_DATA_MSG, (sensorRadio ? sensorRadio.value : '') + (meta && meta.analysisName ? (' — ' + _sylvaLayerFriendlyName(meta.analysisName)) : ''), data.error); }
                     if (onDone) onDone();
                     return;
                 }
@@ -16172,6 +16244,10 @@ function selectRamp(name) {
             var _roi = _extractROIGeometry(_aoiForPane);
             if (!_roi) { sylvaAlert(t('no_geom'), 'warning'); return; }
 
+            if (!_sylvaCheckSatelliteDateFloor(meta.datasetKey, startInput ? startInput.value : '')) {
+                return;
+            }
+
             var runBtn = document.getElementById('btn-run-analysis');
             if (runBtn) { runBtn.disabled = true; runBtn.textContent = t('running'); }
             showSylvaLoading();
@@ -16210,7 +16286,7 @@ function selectRamp(name) {
                 // Geciken yanıt: kullanıcı yeni bir analiz başlattıysa bu yanıtı yoksay
                 if (_analysisGeneration !== _rgbGen) return;
                 if (!data.success) {
-                    showNoDataModal(_TOAST_NO_DATA_MSG, meta.datasetLabel || meta.datasetKey || '');
+                    showNoDataModal(_TOAST_NO_DATA_MSG, meta.datasetLabel || meta.datasetKey || '', data.error);
                     return;
                 }
                 if (!data.scenes || !data.scenes.length) {
@@ -16384,7 +16460,7 @@ function selectRamp(name) {
             })
             .then(function(r) { return r.json(); })
             .then(function(data) {
-                if (!data.success) { hideSylvaLoading(); showNoDataModal(_TOAST_NO_DATA_MSG, meta.datasetLabel || meta.datasetKey || ''); return; }
+                if (!data.success) { hideSylvaLoading(); showNoDataModal(_TOAST_NO_DATA_MSG, meta.datasetLabel || meta.datasetKey || '', data.error); return; }
                 if (data.nativeCrs || (data.meta && data.meta.crs)) {
                     window._lastAnalyzeNativeCrs = data.nativeCrs || data.meta.crs;
                     window._lastAnalyzeNativeCrsByPane[paneId] = window._lastAnalyzeNativeCrs;
@@ -20616,6 +20692,23 @@ function selectRamp(name) {
             var selectedFormat = 'png';
             var selectedScale  = 1; // WYSIWYG — her zaman ekran boyutunda yakalanır
 
+            // Bazı tarayıcılarda tek bir <canvas> boyutu için üst sınır vardır
+            // (Chrome/Firefox ~16384px/kenar, toplam piksel sayısı da sınırlıdır).
+            // Yüksek çözünürlük çarpanı (ör. 3×) çok geniş ekranlarda/çift ekran
+            // birleşiminde bu sınırı aşabileceğinden, istenen çarpan burada
+            // güvenli bir üst sınıra göre otomatik olarak (gerekiyorsa) düşürülür.
+            function _sylvaSafeExportScale(baseScale, w, h) {
+                var MAX_DIM    = 14000;      // güvenli kenar üst sınırı (marj bırakılmış)
+                var MAX_PIXELS = 60000000;   // ~60MP — bellek/performans güvenlik sınırı
+                var s = baseScale || 1;
+                if (w > 0 && w * s > MAX_DIM) s = Math.min(s, MAX_DIM / w);
+                if (h > 0 && h * s > MAX_DIM) s = Math.min(s, MAX_DIM / h);
+                if (w > 0 && h > 0 && (w * s) * (h * s) > MAX_PIXELS) {
+                    s = Math.min(s, Math.sqrt(MAX_PIXELS / (w * h)));
+                }
+                return Math.max(1, s);
+            }
+
             var overlay   = document.getElementById('export-modal-overlay');
             var btnOpen   = document.getElementById('btn-open-export');
             var btnClose  = document.getElementById('export-modal-close');
@@ -21600,6 +21693,11 @@ function selectRamp(name) {
                         final.width  = Math.max(1, Math.round(W * scale));
                         final.height = Math.max(1, Math.round(H * scale));
                         var ctx = final.getContext('2d');
+                        // Yüksek çözünürlüklü nihai canvas'a 1×'te yakalanan karo
+                        // görselini çizerken en kaliteli interpolasyon kullanılır
+                        // (yumuşak/keskin ölçekleme — "pikselli" görünümü azaltır).
+                        ctx.imageSmoothingEnabled = true;
+                        if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
                         if (tileCanvas) ctx.drawImage(tileCanvas, 0, 0, final.width, final.height);
 
                         var leafletSVGs = Array.from(mapEl.querySelectorAll('svg.leaflet-zoom-animated, svg.leaflet-zoom-hide'));
@@ -21619,7 +21717,10 @@ function selectRamp(name) {
                         });
                     }
 
-                    getLeafletCanvas(scale, paneId).then(finalizeWith).catch(function() {
+                    // html2canvas her zaman scale=1 ile çağrılır (hizalama hatasından
+                    // kaçınmak için); nihai çözünürlük artışı finalizeWith() içindeki
+                    // final canvas'ın W*scale × H*scale boyutuna çizilmesiyle sağlanır.
+                    getLeafletCanvas(1, paneId).then(finalizeWith).catch(function() {
                         // Son çare: DOM'daki karo canvas/img'lerini elle topla
                         var tileCanvas = document.createElement('canvas');
                         tileCanvas.width  = Math.max(1, Math.round(W * scale));
@@ -21647,7 +21748,10 @@ function selectRamp(name) {
             // İki ekranın tamamlanmış canvas'larını, aralarında belirgin beyaz
             // bir ayraç şeridiyle (ince gri çerçeveli) tek bir canvas'ta birleştirir.
             function combineDualScreenCanvas(c1, c2, scale) {
-                var dividerPx = Math.max(6, Math.round(10 * scale));
+                // Kalın beyaz ayraç: 16 CSS-eşdeğeri piksel taban genişliği,
+                // yüksek çözünürlük ölçeğiyle orantılı büyür (görsel 2'deki gibi
+                // iki ekranı net biçimde ayıran belirgin bir şerit).
+                var dividerPx = Math.max(10, Math.round(16 * scale));
                 var h = Math.max(c1.height, c2.height);
                 var w = c1.width + dividerPx + c2.width;
                 var final = document.createElement('canvas');
@@ -21744,12 +21848,22 @@ function selectRamp(name) {
             btnStart.addEventListener('click', function() {
                 var filename = (document.getElementById('exp-filename').value.trim() || t('export_default_filename'));
                 var fmt      = selectedFormat;
-                // WYSIWYG: ekrandaki map boyutunu birebir yansıtmak için scale daima 1.
-                // html2canvas scale>1 ile çalışırken Leaflet tile'larını CSS pikselden
-                // fiziksel piksele dönüştürürken pane transform'larını yanlış uygular ve
-                // haritanın ekrandaki görünümünden farklı (büyütülmüş/kaymış) bir çıktı
-                // üretir. scale=1 → W×H piksel çıktı = ekranda görünen alan ile birebir.
-                var scale    = 1;
+                // 🖥️➜🖨️ YÜKSEK ÇÖZÜNÜRLÜKLÜ ÇIKTI (≈300 DPI / HD):
+                // Ekran boyutu (W×H CSS piksel) hep WYSIWYG kalır — sayfa/harita
+                // ORANI ve KADRAJI ekrandakiyle birebir aynıdır. Ancak nihai canvas
+                // bu boyutun SYLVA_EXPORT_RESOLUTION_SCALE katı piksel yoğunluğunda
+                // (varsayılan 3× ≈ 288 DPI, ArcMap/QGIS baskı çıktısına yakın)
+                // üretilir; böylece metin/kuzey oku/ölçek çubuğu/lejant/markup gibi
+                // vektör öğeler PDF/PNG/JPEG çıktısında pikselleşmeden HD görünür.
+                // ÖNEMLİ: html2canvas'ın kendisi HÂLÂ scale=1 ile çağrılır (bkz.
+                // getLeafletCanvas çağrıları aşağıda) — html2canvas'a scale>1
+                // verildiğinde Leaflet pane transform'larını yanlış uygulayıp
+                // görüntüyü kaydırdığı/büyüttüğü ayrıca test edilip doğrulanmıştı.
+                // Bunun yerine 1×'te doğru/hizalı yakalanan harita canvas'ı, daha
+                // büyük nihai canvas'a yüksek kaliteli interpolasyonla (bkz.
+                // imageSmoothingQuality='high') çizilir — hizalama hatası riski
+                // olmadan çözünürlük artışı sağlanır.
+                var scale    = (window.SYLVA_EXPORT_RESOLUTION_SCALE || 3);
 
                 btnStart.disabled = true;
                 btnStart.innerHTML = '⏳ Hazırlanıyor…';
@@ -21762,7 +21876,15 @@ function selectRamp(name) {
                 var dsWrap  = document.getElementById('exp-dualscreen-wrap');
                 var wantsDualScreen = !!(dsCheck && dsCheck.checked && dsWrap && dsWrap.style.display !== 'none');
                 if (wantsDualScreen) {
-                    runDualScreenExport(filename, fmt, scale);
+                    var _m1 = document.getElementById('map'), _m2 = document.getElementById('map2');
+                    var _dsW1 = (_m1 && (_m1.offsetWidth  || _m1.getBoundingClientRect().width))  || 800;
+                    var _dsH1 = (_m1 && (_m1.offsetHeight || _m1.getBoundingClientRect().height)) || 600;
+                    var _dsW2 = (_m2 && (_m2.offsetWidth  || _m2.getBoundingClientRect().width))  || 800;
+                    var _dsH2 = (_m2 && (_m2.offsetHeight || _m2.getBoundingClientRect().height)) || 600;
+                    var _dsCombinedW = _dsW1 + 16 + _dsW2; // 16 ≈ ayraç taban genişliği
+                    var _dsCombinedH = Math.max(_dsH1, _dsH2);
+                    var dualScale = _sylvaSafeExportScale(scale, _dsCombinedW, _dsCombinedH);
+                    runDualScreenExport(filename, fmt, dualScale);
                     return;
                 }
 
@@ -21779,6 +21901,9 @@ function selectRamp(name) {
                 if (!(H > 0)) H = mapEl.getBoundingClientRect().height || 0;
                 if (!(W > 0)) W = 800;
                 if (!(H > 0)) H = 600;
+                // Tarayıcı canvas boyut/piksel sınırlarını aşmamak için çözünürlük
+                // çarpanı gerekiyorsa otomatik düşürülür (bkz. _sylvaSafeExportScale).
+                scale = _sylvaSafeExportScale(scale, W, H);
 
                 // 1. Leaflet tile canvas
                 setProgress(15, 'Tile katmanlar render ediliyor…');
@@ -21792,6 +21917,11 @@ function selectRamp(name) {
                     final.width  = W * scale;
                     final.height = H * scale;
                     var ctx = final.getContext('2d');
+                    // Yüksek çözünürlüklü nihai canvas'a 1×'te yakalanan karo
+                    // görselini çizerken en kaliteli interpolasyon kullanılır
+                    // (yumuşak/keskin ölçekleme — "pikselli" görünümü azaltır).
+                    ctx.imageSmoothingEnabled = true;
+                    if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
 
                     // Tile katmanı
                     if (tileCanvas) {
@@ -21887,7 +22017,10 @@ function selectRamp(name) {
                 // ───────────────────────────────────────────────────────────
 
                 window._exportUsedHtml2canvas = false;
-                getLeafletCanvas(scale).then(function(canvas) {
+                // html2canvas her zaman scale=1 ile çağrılır (hizalama hatasından
+                // kaçınmak için); nihai çözünürlük artışı buildFinalCanvas() içindeki
+                // final canvas'ın W*scale × H*scale boyutuna çizilmesiyle sağlanır.
+                getLeafletCanvas(1).then(function(canvas) {
                     buildFinalCanvas(canvas);
                 }).catch(function() {
                     // Son çare: Leaflet tile canvas'larını/img'lerini manuel topla
@@ -21959,15 +22092,24 @@ function selectRamp(name) {
 
                 var sizeKey = document.getElementById('exp-pdf-size').value;
                 var orientation = sizeKey.includes('landscape') ? 'landscape' : 'portrait';
-                var format = sizeKey.startsWith('a3') ? 'a3' : (sizeKey === 'map' ? [W * _scale * 0.264583, H * _scale * 0.264583] : 'a4');
+                // DÜZELTİLDİ: "Harita Boyutu" sayfa fiziksel ölçüsü, ekrandaki
+                // GERÇEK CSS piksel boyutuna (W×H, _scale'DEN BAĞIMSIZ) göre
+                // hesaplanır. Önceden mm boyutu da _scale ile çarpılıyordu; bu,
+                // yüksek çözünürlük seçildiğinde sayfayı orantılı büyütüp DPI'ı
+                // hep aynı (~96) bırakıyordu — çözünürlük artışının hiçbir pratik
+                // faydası olmuyordu. Artık sayfa ekrandaki gerçek boyutta (mm)
+                // kalır, canvas içindeki piksel sayısı _scale kadar fazla olduğu
+                // için efektif DPI = 96 × _scale olur (ör. 3× ≈ 288 DPI).
+                var format = sizeKey.startsWith('a3') ? 'a3' : (sizeKey === 'map' ? [W * 0.264583, H * 0.264583] : 'a4');
 
                 var doc;
                 if (sizeKey === 'map') {
-                    // Piksel → mm (1px = 0.264583mm @96dpi)
-                    var mmW = Math.max(W * _scale * 0.264583, 1);
-                    var mmH = Math.max(H * _scale * 0.264583, 1);
+                    // Piksel → mm (1px = 0.264583mm @96dpi) — _scale'den bağımsız,
+                    // sayfa ekrandaki harita ile birebir fiziksel boyutta kalır.
+                    var mmW = Math.max(W * 0.264583, 1);
+                    var mmH = Math.max(H * 0.264583, 1);
                     doc = new jsPDFConstructor({ orientation: mmW > mmH ? 'landscape' : 'portrait', unit: 'mm', format: [mmW, mmH] });
-                    doc.addImage(canvas.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, mmW, mmH);
+                    doc.addImage(canvas.toDataURL('image/jpeg', 0.98), 'JPEG', 0, 0, mmW, mmH);
                 } else {
                     doc = new jsPDFConstructor({ orientation: orientation, unit: 'mm', format: typeof format === 'string' ? format : format });
                     var pw = doc.internal.pageSize.getWidth();
@@ -21979,7 +22121,7 @@ function selectRamp(name) {
                     var ih = Math.max(H * ratio, 0.1);
                     var ox = (pw - iw) / 2;
                     var oy = (ph - ih) / 2;
-                    doc.addImage(canvas.toDataURL('image/jpeg', 0.95), 'JPEG', ox, oy, iw, ih);
+                    doc.addImage(canvas.toDataURL('image/jpeg', 0.98), 'JPEG', ox, oy, iw, ih);
                 }
 
                 // Başlık ve metadata
@@ -24403,7 +24545,7 @@ function cancelGeoTiffDownload() {
             });
         }
 
-        function showNoDataModal(msg, datasetName) {
+        function showNoDataModal(msg, datasetName, serverError) {
             // Zaten açık bir no-data modal varsa kaldır
             var existing = document.getElementById('sylva-nodata-overlay');
             if (existing) existing.parentNode.removeChild(existing);
@@ -24486,6 +24628,30 @@ function cancelGeoTiffDownload() {
                 ].join(';');
                 dsEl.textContent = datasetName;
                 box.appendChild(dsEl);
+            }
+
+            // 🛠️ BUG FİX (gerçek sebep gizleniyordu): "Veri bulunamadı" uyarısı
+            // eskiden HER ZAMAN aynı sabit/genel metni gösteriyordu — sunucunun
+            // (/api/analyze, /api/get-scenes) döndürdüğü GERÇEK hata mesajı
+            // (data.error) tamamen atılıyordu. Böylece gerçekten "kriterlere
+            // uygun veri yok" durumu ile GEE zaman aşımı/kota hatası, geçersiz
+            // geometri, ya da (Sentinel-2 L2A örneğinde olduğu gibi) "bu veri
+            // seti seçilen tarihten önce mevcut değil" gibi tamamen FARKLI bir
+            // sunucu hatası birbirinden ayırt edilemiyordu. Artık sunucudan
+            // gerçek bir hata metni geldiyse, genel uyarının altına küçük ve
+            // açıkça "Sunucu ayrıntısı" olarak etiketlenmiş şekilde eklenir.
+            if (serverError && String(serverError).trim()) {
+                var errEl = document.createElement('p');
+                errEl.style.cssText = [
+                    'margin:14px 0 0', 'padding-top:12px',
+                    'border-top:1px solid #f3d9a8',
+                    'font-size:0.78rem', 'line-height:1.5',
+                    'color:#92400e', 'text-align:left',
+                    'word-break:break-word'
+                ].join(';');
+                var errLabel = (lang === 'tr') ? 'Sunucu ayrıntısı: ' : 'Server detail: ';
+                errEl.textContent = errLabel + String(serverError);
+                box.appendChild(errEl);
             }
 
             overlay.appendChild(box);
@@ -48889,45 +49055,6 @@ function _initSwipeDrag(divider) {
                 <span class="srm-badge srm-badge-planned">Planlandı</span>
             </div>
 
-            <!-- Kategori 2 -->
-            <div class="srm-cat">🗺️ Analiz ve Harita Özellikleri</div>
-
-            <div class="srm-item">
-                <div class="srm-item-icon">⚡</div>
-                <div class="srm-item-content">
-                    <div class="srm-item-title">Çoklu Analiz Çalıştırma</div>
-                    <div class="srm-item-desc">NDVI, NDWI, LST gibi birden fazla analizi tek seferde başlatabilme.</div>
-                </div>
-                <span class="srm-badge srm-badge-soon">Yakında</span>
-            </div>
-
-            <div class="srm-item">
-                <div class="srm-item-icon">📈</div>
-                <div class="srm-item-content">
-                    <div class="srm-item-title">Zaman Serisi ve Değişim Analizi</div>
-                    <div class="srm-item-desc">Yıllık/aylık değişim grafikleri, zaman kaydırıcısı ve "Öncesi/Sonrası" (Swipe) kıyaslama aracı.</div>
-                </div>
-                <span class="srm-badge srm-badge-wip">Geliştiriliyor</span>
-            </div>
-
-            <div class="srm-item">
-                <div class="srm-item-icon">📊</div>
-                <div class="srm-item-content">
-                    <div class="srm-item-title">Alan İçi İstatistikler (Zonal Stats)</div>
-                    <div class="srm-item-desc">Seçilen poligon içindeki minimum, maksimum ve ortalama piksel değerlerini hesaplama.</div>
-                </div>
-                <span class="srm-badge srm-badge-soon">Yakında</span>
-            </div>
-
-            <div class="srm-item">
-                <div class="srm-item-icon">🔍</div>
-                <div class="srm-item-content">
-                    <div class="srm-item-title">Değişim Tespiti ve Doğruluk Hesabı</div>
-                    <div class="srm-item-desc">İki tarih arasındaki arazi sınıfı geçişlerini ve sınıflandırma doğruluk yüzdesini çıkarma.</div>
-                </div>
-                <span class="srm-badge srm-badge-planned">Planlandı</span>
-            </div>
-
             <!-- Kategori 3 -->
             <div class="srm-cat">🎨 Görselleştirme ve Çıktı Alma</div>
 
@@ -48938,15 +49065,6 @@ function _initSwipeDrag(divider) {
                     <div class="srm-item-desc">Arazi yüksekliğine dayalı 3D görünüm ve çizilen hat boyunca yükseklik profili grafiği.</div>
                 </div>
                 <span class="srm-badge srm-badge-planned">Planlandı</span>
-            </div>
-
-            <div class="srm-item">
-                <div class="srm-item-icon">📏</div>
-                <div class="srm-item-content">
-                    <div class="srm-item-title">Eş Yükselti (İzohips) Çizgileri</div>
-                    <div class="srm-item-desc">10m ile 500m arasında 5 farklı aralıkta eş yükselti katmanı ekleme ve indirme.</div>
-                </div>
-                <span class="srm-badge srm-badge-wip">Geliştiriliyor</span>
             </div>
 
             <div class="srm-item">
@@ -48963,63 +49081,6 @@ function _initSwipeDrag(divider) {
                 <div class="srm-item-content">
                     <div class="srm-item-title">Kartografik PDF Çıktısı</div>
                     <div class="srm-item-desc">Özelleştirilebilir renk stilleri, A4/A3 boyutları, logo ve başlık şablonlarıyla profesyonel harita çıktısı.</div>
-                </div>
-                <span class="srm-badge srm-badge-planned">Planlandı</span>
-            </div>
-
-            <!-- Kategori 4 -->
-            <div class="srm-cat">⚙️ Sistem, Performans ve Bağlantılar</div>
-
-            <div class="srm-item">
-                <div class="srm-item-icon">⏳</div>
-                <div class="srm-item-content">
-                    <div class="srm-item-title">Arka Plan İşlem Kuyruğu</div>
-                    <div class="srm-item-desc">Sistem donmalarını önlemek için ağır hesaplamaları arka plana alma ve ekranda yüzde/durum çubuğu gösterme.</div>
-                </div>
-                <span class="srm-badge srm-badge-planned">Planlandı</span>
-            </div>
-
-            <div class="srm-item">
-                <div class="srm-item-icon">🔗</div>
-                <div class="srm-item-content">
-                    <div class="srm-item-title">Masaüstü GIS Entegrasyonu (WFS/WMTS/WCS)</div>
-                    <div class="srm-item-desc">QGIS ve ArcGIS gibi programların doğrudan veri çekebilmesine imkan sağlama.</div>
-                </div>
-                <span class="srm-badge srm-badge-planned">Planlandı</span>
-            </div>
-
-            <div class="srm-item">
-                <div class="srm-item-icon">🔌</div>
-                <div class="srm-item-content">
-                    <div class="srm-item-title">Açık REST API</div>
-                    <div class="srm-item-desc">Dış uygulamaların platform fonksiyonlarını API key ile kullanabilmesi.</div>
-                </div>
-                <span class="srm-badge srm-badge-planned">Planlandı</span>
-            </div>
-
-            <div class="srm-item">
-                <div class="srm-item-icon">🌐</div>
-                <div class="srm-item-content">
-                    <div class="srm-item-title">Çoklu Dil ve Erişilebilirlik</div>
-                    <div class="srm-item-desc">Merkezi dil desteği genişletme, ekran okuyucu ve klavye navigasyon uyumu.</div>
-                </div>
-                <span class="srm-badge srm-badge-wip">Geliştiriliyor</span>
-            </div>
-
-            <div class="srm-item">
-                <div class="srm-item-icon">🛡️</div>
-                <div class="srm-item-content">
-                    <div class="srm-item-title">Rol Tabanlı Yetkilendirme ve Kayıtlar</div>
-                    <div class="srm-item-desc">İzleyici/Editör/Yönetici rolleri, işlem kayıtları (audit log) ve KVKK/GDPR uyumu.</div>
-                </div>
-                <span class="srm-badge srm-badge-planned">Planlandı</span>
-            </div>
-
-            <div class="srm-item">
-                <div class="srm-item-icon">🧩</div>
-                <div class="srm-item-content">
-                    <div class="srm-item-title">Modüler Kod Yapısı</div>
-                    <div class="srm-item-desc">Kod tabanını React/Vue gibi modern yapılara bölme, otomatik hata takibi ve test süreçleri kurma.</div>
                 </div>
                 <span class="srm-badge srm-badge-planned">Planlandı</span>
             </div>
