@@ -2074,6 +2074,95 @@ def build_rgb_collection(ds, roi, max_cloud):
     return col
 
 
+# 🛠️ BUG FİX (KÖK NEDEN — Tek sahne seçildiğinde AOI'nin bir kısmı
+# doldurulmuyordu): Kullanıcı Uydu Görüntüsü Galerisi'nden belirli bir
+# tarihe ait TEK bir sahne (scene_id) seçtiğinde, eskiden doğrudan
+# `col.filter(eq scene_id).first()` ile o TEK görüntü kullanılıyordu.
+# Ancak uydu sahneleri/tile'ları (Landsat WRS path/row şeridi ~185 km,
+# Sentinel-2 MGRS tile'ı ~110 km) sabit bir coğrafi ızgaraya göre kesilir;
+# çalışma alanı (AOI) iki komşu şerit/tile sınırına denk gelirse, seçilen
+# TEK sahne AOI'nin yalnızca bir kısmını kapsar — kalan kısımda hiç piksel
+# verisi olmadığı için harita o bölgede boş/temel harita olarak görünür
+# ("veri çalışma alanını tam doldurmuyor" şikayeti).
+#
+# ÇÖZÜM: Seçilen sahneyle AYNI GÜNE ait ve AOI'yi kesen TÜM diğer
+# sahneler (komşu path/row veya komşu MGRS tile) bulunur ve mozaiklenir.
+# ee.ImageCollection.mosaic() önceliği "sondan başa" uyguladığı için
+# (bkz. GEE dokümantasyonu: son eklenen görüntü en üstte/öncelikli olur),
+# seçilen sahne mozağa EN SONA eklenir — böylece kullanıcının seçtiği
+# görüntü öncelikli/değişmeden kalır, komşu sahneler yalnızca onun
+# kapsamadığı boşlukları doldurur.
+#
+# 🛠️ GÜNCELLEME (madde 1 — hâlâ boşluk kalıyordu): "Aynı gün" arama
+# çoğu zaman komşu sahneyi BULAMIYORDU, çünkü komşu MGRS tile/path-row
+# genelde AYNI gün değil, uydunun tekrar-geçiş döngüsüne göre birkaç
+# gün önce/sonra geçiyor (Sentinel-2 için tipik olarak ~5 gün). Bu
+# durumda fonksiyon sessizce boş dönüp orijinal tek sahneye geri
+# düşüyor, boşluk hiç dolmuyordu. Arama penceresi artık seçilen tarihin
+# ETRAFINDA ±_SCENE_GAP_FILL_DAY_WINDOW gün olacak şekilde genişletildi;
+# aynı gün içinde komşu sahne varsa öncelik yine ona (en yakın tarihe)
+# verilir, yoksa pencere içindeki en yakın tarihli sahne kullanılır.
+_SCENE_GAP_FILL_DAY_WINDOW = 5  # gün — hem yönde (önce/sonra) arama genişliği
+def _fill_scene_gaps_with_same_day_mosaic(col, selected_image, scene_id, roi,
+                                           day_window=_SCENE_GAP_FILL_DAY_WINDOW):
+    try:
+        img_date = ee.Date(selected_image.get('system:time_start'))
+        # Genişletilmiş arama penceresi: seçilen tarihten day_window gün
+        # önce ile day_window gün sonra arasında, AOI'yi kesen ve seçilen
+        # sahnenin kendisi olmayan tüm komşu sahneler.
+        window_start = img_date.advance(-day_window, 'day')
+        window_end = img_date.advance(day_window + 1, 'day')  # advance(+1) = gün sonu dahil
+        nearby_others = (col.filterDate(window_start, window_end)
+                             .filterBounds(roi)
+                             .filter(ee.Filter.neq('system:index', scene_id)))
+        # mosaic() önceliği koleksiyondaki SIRAYA göre uygular (son eklenen
+        # en üstte); nearby_others'ı seçilen tarihe en YAKIN olandan en
+        # UZAK olana doğru sıralıyoruz ki en son eklenen (dolayısıyla en
+        # öncelikli komşu, seçilen sahnenin altında kalan katman) tarihçe
+        # en yakın olsun — görsel tutarlılık için.
+        nearby_others = nearby_others.map(lambda img: img.set(
+            'sylva_day_distance', ee.Number(img.get('system:time_start'))
+                .subtract(selected_image.get('system:time_start')).abs()
+        )).sort('sylva_day_distance', False)  # en uzak önce → en yakın en son (mosaic'te en üstte)
+
+        # 🛠️ MADDE 4 — SESSİZ BAŞARISIZLIĞI LOGLAMA: Eskiden bu fonksiyon
+        # komşu sahne bulunamasa bile hiçbir iz bırakmadan orijinal tek
+        # sahneye "sessizce" geri dönüyordu — sunucu loglarında bunu görmek
+        # imkânsızdı. Artık kaç komşu sahne bulunduğu (varsa) loglanıyor.
+        # NOT: nearby_others.size().getInfo() ekstra bir GEE ağ çağrısı
+        # gerektirir — bu SADECE loglama amaçlı, sonucu etkilemez; bu
+        # yüzden kendi try/except'i içinde, ana akışı ASLA bloklamayacak
+        # ya da bozmayacak şekilde izole edilmiştir.
+        try:
+            _neighbor_count = _call_with_retry(
+                lambda: nearby_others.size().getInfo(), retries=1
+            )
+            if _neighbor_count > 0:
+                print('[SylvaGIS] ✅ Boşluk doldurma: scene_id={} için {} gün penceresinde '
+                      '{} komşu sahne bulundu ve mozaiklendi.'.format(
+                          scene_id, day_window, _neighbor_count))
+            else:
+                print('[SylvaGIS] ⚠️ Boşluk doldurma: scene_id={} için ±{} gün penceresinde '
+                      'HİÇ komşu sahne bulunamadı — AOI bu sahne dışında boş kalabilir. '
+                      'Pencereyi genişletmek (_SCENE_GAP_FILL_DAY_WINDOW) gerekebilir.'.format(
+                          scene_id, day_window))
+        except Exception as _log_err:
+            # Loglama başarısız olsa bile (ör. geçici ağ hatası) asıl
+            # mozaikleme işlemi ETKİLENMEMELİ — sadece durumu bildiriyoruz.
+            print('[SylvaGIS] ℹ️ Boşluk doldurma komşu-sahne sayısı loglanamadı '
+                  '(işlem yine de devam ediyor): {}'.format(_log_err))
+
+        merged = nearby_others.merge(ee.ImageCollection([selected_image]))
+        return merged.mosaic()
+    except Exception as e:
+        # Herhangi bir sorunda (ör. system:time_start eksik) güvenli
+        # şekilde orijinal tek görüntüye geri dön — davranış eskisiyle aynı kalır.
+        # 🛠️ MADDE 4: bu durum da artık loglanıyor — eskiden tamamen sessizdi.
+        print('[SylvaGIS] ⚠️ Boşluk doldurma başarısız oldu (scene_id={}), orijinal tek '
+              'sahneye geri dönülüyor: {}'.format(scene_id, e))
+        return selected_image
+
+
 _TR_MONTH_NAMES = {
     'ocak': 1, 'şubat': 2, 'subat': 2, 'mart': 3, 'nisan': 4, 'mayıs': 5,
     'mayis': 5, 'haziran': 6, 'temmuz': 7, 'ağustos': 8, 'agustos': 8,
@@ -2802,12 +2891,34 @@ def build_result_image(data, for_export=False):
             eff_end   = today.isoformat()
             eff_start = (today - datetime.timedelta(days=365)).isoformat()
 
-        dw = (ee.ImageCollection('GOOGLE/DYNAMICWORLD/V1')
-              .filterBounds(roi)
-              .filterDate(eff_start, eff_end)
-              .select('label')
-              .reduce(ee.Reducer.mode())
-              .rename('value'))
+        def _dw_mode(s, e):
+            return (ee.ImageCollection('GOOGLE/DYNAMICWORLD/V1')
+                    .filterBounds(roi)
+                    .filterDate(s, e)
+                    .select('label')
+                    .reduce(ee.Reducer.mode())
+                    .rename('value'))
+
+        dw = _dw_mode(eff_start, eff_end)
+
+        # 🛠️ BUG FİX (AOI'nin bir kısmı boş kalıyor — UYDU ANALİZLERİYLE
+        # AYNI KÖK NEDEN): Dynamic World, Sentinel-2 sahnelerinden türetilir
+        # ve Sentinel-2'nin MGRS tile ızgarasını miras alır. Dar bir tarih
+        # penceresinde (ör. son 365 gün yerine daha kısa bir aralık frontend'den
+        # geldiyse) AOI'yi kesen komşu tile'lardan biri o pencerede yeterli
+        # bulutsuz geçiş yapmamış olabilir — sonuçta o tile'ın kapladığı
+        # AOI kısmı boş/maskesiz kalır ve temel harita görünür.
+        # ÇÖZÜM: birincil pencerede boş kalan pikseller, ÇOK DAHA GENİŞ bir
+        # pencerede (son 3 yıl) hesaplanan aynı mod-kompozitle doldurulur.
+        # Sentinel-2'nin küresel düzenli tekrar-geçiş kaydı 3 yıl içinde her
+        # yeri defalarca kapsadığından bu, pratikte tüm boşlukları kapatır.
+        today = datetime.date.today()
+        _wide_end   = eff_end
+        _wide_start = (today - datetime.timedelta(days=3 * 365)).isoformat()
+        if _wide_start < eff_start:
+            dw_wide = _dw_mode(_wide_start, _wide_end)
+            dw = dw.unmask(dw_wide)
+
         palette = ['#419bdf', '#397d49', '#88b053', '#7a87c6',
                    '#e49635', '#dfc35a', '#c4281b', '#a59b8f', '#b39fe1']
         vis = {'min': 0, 'max': 8, 'palette': palette}
@@ -2976,8 +3087,27 @@ def build_result_image(data, for_export=False):
         # bir "güvenlik ağı" geçişi uyguluyoruz — ilk geçişte dolmayan
         # (çevresi de void olan) nadir pikseller ikinci, daha geniş
         # pencerede kesinlikle geçerli komşu bulur.
-        dem = dem.unmask(dem.focalMean(radius=150, units='meters'))
-        dem = dem.unmask(dem.focalMean(radius=450, units='meters'))
+        dem = dem.unmask(dem.focal_mean(radius=3, units='pixels'))
+
+        # 🛠️ BUG FİX (AOI'nin bir kısmı hâlâ boş kalabiliyor — BÜYÜK void/
+        # kapsama boşlukları): Yukarıdaki odak-ortalama doldurma yalnızca
+        # KÜÇÜK (birkaç piksel genişliğinde) void kümelerini kapatır. SRTM/
+        # NASADEM gibi kaynaklarda çok daha BÜYÜK boşluklar (kıyı şeridi
+        # yakını, dik yamaç radar gölgesi, bazı adalar/göller) kalabilir —
+        # bu pikseller çevresinde de hiç geçerli komşu bulunamadığından
+        # focalMean bunları dolduramaz; sonuç AOI'nin o kısmının haritada
+        # boş/temel harita olarak görünmesidir (uydu analizlerindeki AYNI
+        # "AOI'yi tam doldurmuyor" şikayetiyle aynı kök neden sınıfı).
+        # ÇÖZÜM: kalan tüm boşluklar, dünya genelinde en eksiksiz kapsamaya
+        # sahip küresel DEM kaynağı olan Copernicus GLO-30 mozağiyle
+        # doldurulur (seçili kaynak zaten Copernicus ise bu adım etkisizdir,
+        # zarar vermez). O da boşsa (son derece nadir, ör. açık deniz) son
+        # çare olarak 0 m (deniz seviyesi) atanır — böylece AOI içinde
+        # kesinlikle hiçbir NoData piksel kalmaz.
+        _copernicus_global_fallback = (ee.ImageCollection('COPERNICUS/DEM/GLO30')
+                                        .filterBounds(roi).mosaic().select('DEM'))
+        dem = dem.unmask(_copernicus_global_fallback)
+        dem = dem.unmask(0)
 
         terrain = ee.Terrain.products(dem)
         slope   = terrain.select('slope')
@@ -3273,7 +3403,11 @@ def build_result_image(data, for_export=False):
         col = build_rgb_collection(ds, roi, max_cloud)
 
         if scene_id:
-            image = col.filter(ee.Filter.eq('system:index', scene_id)).first()
+            _selected_image = col.filter(ee.Filter.eq('system:index', scene_id)).first()
+            # 🛠️ AOI, seçilen tek sahnenin/tile'ın dışına taşıyorsa aynı
+            # güne ait komşu sahnelerle boşluk doldurulur (bkz. yukarıdaki
+            # _fill_scene_gaps_with_same_day_mosaic docstring'i).
+            image = _fill_scene_gaps_with_same_day_mosaic(col, _selected_image, scene_id, roi)
         else:
             image = col.filterDate(start_date, end_date).sort('system:time_start', False).first()
 
@@ -3419,8 +3553,17 @@ def build_result_image(data, for_export=False):
 
     # ── 2. Tarih filtresi veya belirli sahne ────────────────────
     if scene_id:
-        image = col.filter(ee.Filter.eq('system:index', scene_id)).first()
-        _crs_probe_img = image
+        _selected_image = col.filter(ee.Filter.eq('system:index', scene_id)).first()
+        # CRS'i her zaman KULLANICININ SEÇTİĞİ gerçek sahneden okuyoruz —
+        # boşluk doldurma için eklenen komşu sahne(ler) farklı bir UTM
+        # diliminde olabilir; bu, indirme/lejant CRS'ini yanlış saptırmasın.
+        _crs_probe_img = _selected_image
+        # 🛠️ AOI, seçilen tek sahnenin/tile'ın dışına taşıyorsa aynı güne
+        # ait komşu sahnelerle boşluk doldurulur (bkz. yukarıdaki
+        # _fill_scene_gaps_with_same_day_mosaic docstring'i). Bu adım
+        # cloud-masking'den (yukarıdaki col.map) SONRA çalıştığı için
+        # doldurma sahnelerinde de bulut/gölge pikselleri zaten maskelidir.
+        image = _fill_scene_gaps_with_same_day_mosaic(col, _selected_image, scene_id, roi)
     else:
         image = col.filterDate(start_date, end_date).median()
         # 🛠️ BUG FİX (KÖK NEDEN — CRS seçici HER ZAMAN "WGS 84" gösteriyordu):
@@ -3456,8 +3599,7 @@ def build_result_image(data, for_export=False):
     # kalır (yanlışlıkla "bulut altı veri" uydurulmaz). İki aşamalı
     # (60 m + 200 m) geçiş, hem S2 (10 m) hem Landsat (30 m) çözünürlüğünde
     # tipik bulut-kenarı beneklerini kapatmaya yeter.
-    image = image.unmask(image.focalMean(radius=60, units='meters'))
-    image = image.unmask(image.focalMean(radius=200, units='meters'))
+    image = image.unmask(image.focal_mean(radius=2, units='pixels'))
 
     # 🛠️ BUG FİX (KÖK NEDEN — Landsat tabanlı TÜM indeksler yanlış
     # hesaplanıyordu): Landsat Collection 2 Level-2 (l89-l2, l7-l2,
@@ -5655,6 +5797,395 @@ def _geojson_to_features(geom):
         return [geom]
     # Ham geometri → sarmal Feature'a çevir
     return [{'type': 'Feature', 'geometry': geom, 'properties': {}}]
+
+
+# ════════════════════════════════════════════════════════════════
+# 📏 /api/topo-contour-vector — GERÇEK VEKTÖR eş yükselti çizgileri
+# ════════════════════════════════════════════════════════════════
+# SORUN: TOPO_CONTOUR analizi eskiden yalnızca bir RASTER karo (tile)
+# görüntüsü döndürüyordu — bu görüntü ekranda "merdiven basamağı" gibi
+# piksel kenarlarını takip ediyordu, çünkü aslında bir vektör çizgi
+# değil, siyah/beyaz bir maske görüntüsüydü. Bu maskeye tıklamak,
+# üzerine rakım yazmak ya da tek bir çizgiyi vurgulamak (highlight)
+# mümkün DEĞİLDİ, çünkü haritada tek bir "obje" yoktu, sadece pikseller
+# vardı.
+#
+# ÇÖZÜM: Bu fonksiyon, DEM'i seçilen aralığa göre yükselti eşiklerine
+# (levels) ayırır ve HER eşik için ayrı bir reduceToVectors() çağrısı
+# yapar. `dem >= level` maskesinin dış/iç halkalarının kendisi, tam
+# olarak o yükseklikteki eş yükselti eğrisidir — GEE bunu vektör
+# poligon olarak döndürür, biz de halkaları (ring) LineString'e
+# çeviririz. Sonuç: her biri gerçek bir GeoJSON çizgi objesi olan,
+# "elevation" (rakım, m) özelliği taşıyan, akıcı/pürüzsüz eğriler.
+# Bu obje frontend'de Leaflet ile L.geoJSON() olarak çizilir; böylece
+# tıklama, vurgulama (sarı) ve rakım etiketi gösterme MÜMKÜN olur.
+def _generate_contour_vectors(data):
+    import math as _math
+    import numpy as _np
+    from collections import deque as _deque
+    from rasterio.io import MemoryFile as _MemoryFile
+    from shapely.geometry import shape as _shp_shape, LineString as _ShpLine
+
+    roi_coords = data.get('roi')
+    if not roi_coords:
+        return {'success': False, 'error': 'Çalışma alanı geometrisi bulunamadı. Haritada bir alan çizin.'}
+    roi = make_roi(roi_coords)
+
+    # ── DEM kaynağı seç (build_result_image ile birebir aynı mantık) ──
+    _srtm_fallback = ee.Image('USGS/SRTMGL1_003').select('elevation')
+    dem_source = data.get('demSource', 'SRTM')
+    if dem_source == 'ALOS':
+        dem = (ee.ImageCollection('JAXA/ALOS/AW3D30/V3_2')
+               .filterBounds(roi).mosaic().select('DSM').rename('elevation'))
+        dem = dem.unmask(_srtm_fallback)
+    elif dem_source == 'Copernicus':
+        dem = (ee.ImageCollection('COPERNICUS/DEM/GLO30')
+               .filterBounds(roi).mosaic().select('DEM').rename('elevation'))
+        dem = dem.unmask(_srtm_fallback)
+    elif dem_source == 'NASADEM':
+        dem = ee.Image('NASA/NASADEM_HGT/001').select('elevation')
+    else:  # SRTM (varsayılan)
+        dem = ee.Image('USGS/SRTMGL1_003').select('elevation')
+
+    try:
+        interval = float(data.get('contourInterval', 50) or 50)
+    except (TypeError, ValueError):
+        interval = 50.0
+    if interval <= 0:
+        interval = 50.0
+
+    # ════════════════════════════════════════════════════════════════
+    # 🛠️ KÖK NEDEN DÜZELTMESİ — "merdiven basamağı" (staircase) sorunu
+    # ════════════════════════════════════════════════════════════════
+    # ESKİ YÖNTEM: dem.gte(level).selfMask() ile bir 0/1 RASTER MASKESİ
+    # üretilip mask.reduceToVectors(geometryType='polygon') ile bu
+    # maskenin dış hattı poligona çevriliyordu. Bu yöntem matematiksel
+    # olarak HER ZAMAN piksel kenarlarını (yatay/dikey/45°) takip eder
+    # — DEM ne kadar yumuşatılırsa yumuşatılsın, poligon sınırı asla
+    # pikselin İÇİNDEN geçemez, bu yüzden sonuç her zaman "basamaklı"
+    # görünür. Bu, bir uygulama hatası değil, reduceToVectors'ın
+    # RASTER→POLİGON dönüşümünün doğası gereği kaçınılmaz sonucudur.
+    #
+    # YENİ YÖNTEM: DEM'in kendisini bir sayısal ızgara (2D dizi) olarak
+    # indirip, üzerinde klasik MARCHING SQUARES algoritmasını çalıştırıyoruz.
+    # Bu algoritma her piksel hücresinin 4 köşe değeri arasında DOĞRUSAL
+    # ARA DEĞER (linear interpolation) hesaplayarak çizginin köşe
+    # kenarları üzerindeki TAM noktasını bulur — çizgi artık piksel
+    # sınırına değil, arazinin gerçek eğimine göre kesin bir noktadan
+    # geçer. Bu, ArcGIS/QGIS/Surfer gibi profesyonel CBS yazılımlarının
+    # topografik eş yükselti eğrisi üretmek için kullandığı standart
+    # yöntemin ta kendisidir.
+    #
+    # Ayrıca artık HER seviye için ayrı bir GEE reduceToVectors() ağ
+    # isteği YOK — DEM tek seferde indirilip TÜM seviyeler yerel olarak
+    # (numpy ile) hesaplanıyor. Bu hem çok daha hızlı hem de GEE kota
+    # kullanımını ciddi ölçüde azaltıyor.
+
+    # Ham veri gürültüsünü (tekil piksel sıçramaları) temizlemek için
+    # hafif bir ön-yumuşatma. NOT: Artık çizgi piksel kenarını takip
+    # etmediği için burada eski (raster önizleme) kadar agresif bir
+    # yarıçapa (45 m) gerek YOK — güçlü yumuşatma ince arazi
+    # detaylarını (sırt/vadi çizgilerini) siler. 15 m, sensör
+    # gürültüsünü temizlerken arazi şeklini korur.
+    dem_smooth = dem.focalMean(radius=15, units='meters')
+
+    scale = 30  # SRTM/ALOS/Copernicus/NASADEM hepsi ~30 m nominal çözünürlük
+    region = roi.bounds()
+
+    try:
+        tif_bytes = _download_band_geotiff_bytes(
+            dem_smooth, region, scale, 'EPSG:4326', 'contour_dem',
+            fallback_region_geom=region,
+        )
+    except Exception as e:
+        traceback.print_exc()
+        return {'success': False, 'error': 'Yükselti verisi indirilemedi: {}'.format(e)}
+
+    try:
+        with _MemoryFile(tif_bytes) as memfile:
+            with memfile.open() as src:
+                Z = src.read(1).astype('float64')
+                transform = src.transform
+                src_nodata = src.nodata
+    except Exception as e:
+        traceback.print_exc()
+        return {'success': False, 'error': 'Yükselti rasteri okunamadı: {}'.format(e)}
+
+    if src_nodata is not None:
+        Z[Z == src_nodata] = _np.nan
+    # Olağandışı/dolgu değerlerini (ör. deniz/okyanus maskesi) devre dışı bırak
+    Z[(Z < -1000) | (Z > 9000)] = _np.nan
+
+    valid = Z[~_np.isnan(Z)]
+    if valid.size == 0:
+        return {'success': False, 'error': 'Bu alanda yükselti verisi bulunamadı.'}
+    e_min = float(valid.min())
+    e_max = float(valid.max())
+
+    rows, cols = Z.shape
+    if rows < 2 or cols < 2:
+        return {'success': False, 'error': 'Alan, eş yükselti üretmek için çok küçük.'}
+
+    level_start = _math.floor(e_min / interval) * interval
+    level_end = _math.ceil(e_max / interval) * interval
+    levels = []
+    lv = level_start
+    while lv <= level_end + 1e-9:
+        if e_min < lv < e_max:   # sadece AOI içinde gerçekten geçilen seviyeler
+            levels.append(round(lv, 4))
+        lv += interval
+
+    # Performans/okunabilirlik: aşırı sık aralıkta (ör. 5 m, dağlık arazi)
+    # onlarca seviye oluşabilir — azami seviye sayısını sınırlayıp eşit
+    # aralıklarla seyrekleştiriyoruz.
+    _MAX_LEVELS = 60
+    if len(levels) > _MAX_LEVELS:
+        step = _math.ceil(len(levels) / _MAX_LEVELS)
+        levels = levels[::step]
+
+    if not levels:
+        return {
+            'success': False,
+            'error': 'Seçilen aralıkta eş yükselti seviyesi bulunamadı '
+                     '(alan çok küçük/düz olabilir). Aralığı küçültmeyi deneyin.'
+        }
+
+    # ── AOI poligonu — çizgileri gerçek (dikdörtgen olmayan) çalışma
+    # alanı sınırına kırpmak için. DEM bir DİKDÖRTGEN (bbox) olarak
+    # indirildiğinden, marching squares çizgileri bu dikdörtgenin
+    # tamamını kapsar; AOI çokgen değilse (kullanıcı serbest çizim
+    # yaptıysa) fazlalık kısımlar burada kesilir. ─────────────────────
+    try:
+        roi_geom_dict = _normalize_to_geojson(roi_coords)
+        roi_poly = _shp_shape(roi_geom_dict).buffer(0)
+        _clip_ok = roi_poly.is_valid and not roi_poly.is_empty
+    except Exception:
+        _clip_ok = False
+        roi_poly = None
+
+    # Piksel (kolon,satır) → coğrafi (lon,lat) dönüşümü için afin katsayıları
+    _ta, _tb, _tc, _td, _te, _tf = (
+        transform.a, transform.b, transform.c, transform.d, transform.e, transform.f
+    )
+
+    def _pixel_to_geo(col, row):
+        return (_ta * col + _tb * row + _tc, _td * col + _te * row + _tf)
+
+    def _safe_t(v_from, v_to, level):
+        denom = (v_to - v_from)
+        with _np.errstate(invalid='ignore', divide='ignore'):
+            t = (level - v_from) / denom
+        t = _np.where(denom == 0, 0.5, t)
+        return _np.clip(t, 0.0, 1.0)
+
+    def _chaikin_smooth(pts, iterations=2):
+        # Köşe kesme (corner-cutting) ile çizgiyi görsel olarak akıcı/pürüzsüz
+        # hale getirir — uçlardaki koordinatlar korunur, ara köşeler yumuşatılır.
+        if len(pts) < 3:
+            return pts
+        for _ in range(iterations):
+            new_pts = [pts[0]]
+            for i in range(len(pts) - 1):
+                p0 = pts[i]; p1 = pts[i + 1]
+                q = (0.75 * p0[0] + 0.25 * p1[0], 0.75 * p0[1] + 0.25 * p1[1])
+                r = (0.25 * p0[0] + 0.75 * p1[0], 0.25 * p0[1] + 0.75 * p1[1])
+                new_pts.append(q)
+                new_pts.append(r)
+            new_pts.append(pts[-1])
+            pts = new_pts
+        return pts
+
+    J, I = _np.meshgrid(
+        _np.arange(cols - 1, dtype='float64'), _np.arange(rows - 1, dtype='float64')
+    )
+    vTL = Z[:-1, :-1]; vTR = Z[:-1, 1:]; vBR = Z[1:, 1:]; vBL = Z[1:, :-1]
+
+    def _marching_squares_level(level):
+        """
+        Klasik marching squares (16 durum tablosu, doğrusal ara değerli).
+        Her hücrenin 4 köşesi seviyenin üstünde/altında sınıflandırılır;
+        seviyeyi kesen kenarlarda TAM (sub-pixel) kesişim noktası doğrusal
+        ara değerle hesaplanır. Sonuç: piksel ızgarasının hiçbir izi
+        taşımayan, arazinin gerçek eğimini takip eden çizgi parçaları.
+        """
+        tl = (vTL >= level); tr = (vTR >= level); br = (vBR >= level); bl = (vBL >= level)
+        case = (tl.astype('int8') * 8 + tr.astype('int8') * 4
+                + br.astype('int8') * 2 + bl.astype('int8') * 1)
+
+        tN = _safe_t(vTL, vTR, level); Nx, Ny = J + tN, I
+        tS = _safe_t(vBL, vBR, level); Sx, Sy = J + tS, I + 1.0
+        tW = _safe_t(vTL, vBL, level); Wx, Wy = J, I + tW
+        tE = _safe_t(vTR, vBR, level); Ex, Ey = J + 1.0, I + tE
+        center = (vTL + vTR + vBR + vBL) / 4.0
+
+        segs = []
+
+        def add(mask, p0, p1):
+            if not _np.any(mask):
+                return
+            x0 = p0[0][mask]; y0 = p0[1][mask]
+            x1 = p1[0][mask]; y1 = p1[1][mask]
+            ok = ~(_np.isnan(x0) | _np.isnan(y0) | _np.isnan(x1) | _np.isnan(y1))
+            if _np.any(ok):
+                segs.append((x0[ok], y0[ok], x1[ok], y1[ok]))
+
+        add((case == 1) | (case == 14), (Wx, Wy), (Sx, Sy))
+        add((case == 2) | (case == 13), (Sx, Sy), (Ex, Ey))
+        add((case == 3) | (case == 12), (Wx, Wy), (Ex, Ey))
+        add((case == 4) | (case == 11), (Nx, Ny), (Ex, Ey))
+        add((case == 6) | (case == 9), (Nx, Ny), (Sx, Sy))
+        add((case == 7) | (case == 8), (Nx, Ny), (Wx, Wy))
+        m5a = (case == 5) & (center >= level)
+        add(m5a, (Nx, Ny), (Wx, Wy)); add(m5a, (Sx, Sy), (Ex, Ey))
+        m5b = (case == 5) & (center < level)
+        add(m5b, (Nx, Ny), (Ex, Ey)); add(m5b, (Wx, Wy), (Sx, Sy))
+        m10a = (case == 10) & (center >= level)
+        add(m10a, (Nx, Ny), (Ex, Ey)); add(m10a, (Wx, Wy), (Sx, Sy))
+        m10b = (case == 10) & (center < level)
+        add(m10b, (Nx, Ny), (Wx, Wy)); add(m10b, (Sx, Sy), (Ex, Ey))
+
+        if not segs:
+            return []
+
+        xs0 = _np.concatenate([s[0] for s in segs]); ys0 = _np.concatenate([s[1] for s in segs])
+        xs1 = _np.concatenate([s[2] for s in segs]); ys1 = _np.concatenate([s[3] for s in segs])
+        n = xs0.shape[0]
+
+        # ── Uç noktaları zincirleyip sürekli polyline'lar oluştur ──
+        # (komşu hücrelerin ürettiği kısa parçalar, kenarları PAYLAŞTIĞI
+        # için aynı köşe noktasında birleşir — bunları tek bir akıcı
+        # çizgide dikiyoruz; artık ayrı ayrı binlerce mini segment değil,
+        # gerçek, sürekli eş yükselti eğrileri elde ediyoruz.)
+        def _key(x, y):
+            return (round(float(x), 5), round(float(y), 5))
+
+        key_to_segs = {}
+        for k in range(n):
+            a = _key(xs0[k], ys0[k]); b = _key(xs1[k], ys1[k])
+            if a == b:
+                continue
+            key_to_segs.setdefault(a, []).append(k)
+            key_to_segs.setdefault(b, []).append(k)
+
+        used = [False] * n
+        polylines = []
+
+        def _other_end(k, key):
+            a = _key(xs0[k], ys0[k])
+            return (float(xs1[k]), float(ys1[k])) if a == key else (float(xs0[k]), float(ys0[k]))
+
+        for k in range(n):
+            if used[k]:
+                continue
+            used[k] = True
+            p0 = (float(xs0[k]), float(ys0[k])); p1 = (float(xs1[k]), float(ys1[k]))
+            chain = _deque([p0, p1])
+
+            cur_key = _key(*p1)
+            while True:
+                cands = [c for c in key_to_segs.get(cur_key, []) if not used[c]]
+                if not cands:
+                    break
+                nxt = cands[0]
+                used[nxt] = True
+                nxt_pt = _other_end(nxt, cur_key)
+                chain.append(nxt_pt)
+                cur_key = _key(*nxt_pt)
+
+            cur_key = _key(*p0)
+            while True:
+                cands = [c for c in key_to_segs.get(cur_key, []) if not used[c]]
+                if not cands:
+                    break
+                nxt = cands[0]
+                used[nxt] = True
+                nxt_pt = _other_end(nxt, cur_key)
+                chain.appendleft(nxt_pt)
+                cur_key = _key(*nxt_pt)
+
+            polylines.append(list(chain))
+
+        return polylines
+
+    features_out = []
+    for level in levels:
+        try:
+            polylines = _marching_squares_level(level)
+        except Exception as e:
+            print('[SylvaGIS] ⚠️ Kontur seviyesi hesaplanamadı ({} m): {}'.format(level, e))
+            continue
+
+        for pix_pts in polylines:
+            if len(pix_pts) < 2:
+                continue
+            geo_pts = [_pixel_to_geo(c, r) for (c, r) in pix_pts]
+            geo_pts = _chaikin_smooth(geo_pts, iterations=2)
+
+            try:
+                geo_line = _ShpLine(geo_pts)
+            except Exception:
+                continue
+            if not geo_line.is_valid or geo_line.is_empty:
+                continue
+
+            if _clip_ok:
+                try:
+                    clipped = geo_line.intersection(roi_poly)
+                except Exception:
+                    clipped = geo_line
+            else:
+                clipped = geo_line
+
+            if clipped.is_empty:
+                continue
+
+            if clipped.geom_type == 'LineString':
+                parts = [clipped]
+            elif clipped.geom_type == 'MultiLineString':
+                parts = list(clipped.geoms)
+            elif clipped.geom_type == 'GeometryCollection':
+                parts = [g for g in clipped.geoms if g.geom_type == 'LineString']
+            else:
+                parts = []
+
+            for part in parts:
+                coords = list(part.coords)
+                if len(coords) < 2:
+                    continue
+                features_out.append({
+                    'type': 'Feature',
+                    'geometry': {'type': 'LineString', 'coordinates': coords},
+                    'properties': {'elevation': level},
+                })
+
+    return {
+        'success': True,
+        'type': 'FeatureCollection',
+        'features': features_out,
+        'elevMin': e_min,
+        'elevMax': e_max,
+        'interval': interval,
+    }
+
+
+
+@app.route('/api/topo-contour-vector', methods=['POST'])
+def topo_contour_vector():
+    """
+    Gerçek vektör eş yükselti çizgilerini GeoJSON FeatureCollection olarak
+    döndürür (bkz. _generate_contour_vectors üstündeki açıklama). Frontend
+    bunu Leaflet L.geoJSON() ile çizer; TOPO_CONTOUR'un eski raster
+    karo katmanı (data.tileUrl) yerine/üzerine bu katman kullanılır.
+    """
+    req_data = request.get_json(silent=True) or {}
+    try:
+        result = _generate_contour_vectors(req_data)
+        if not result.get('success'):
+            return jsonify(result), 400
+        return jsonify(result)
+    except Exception as ex:
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(ex)}), 500
 
 
 # ════════════════════════════════════════════════════════════════
