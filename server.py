@@ -4,6 +4,7 @@ import io
 import os
 import copy
 import uuid
+import html
 import hashlib
 import json
 import math
@@ -228,6 +229,53 @@ def _tile_url_for_client(sid, direct_url):
         except Exception:
             return direct_url
     return '{}/api/tiles/{}/{{z}}/{{x}}/{{y}}.png'.format(base, sid)
+
+
+def _attach_tile_session_extra(sid, **updates):
+    """
+    Açık bir tile oturumuna sonradan ek meta veri ekler/günceller (ör.
+    nativeCrs). /api/analyze içinde CRS, oturum _register_tile_session ile
+    zaten açıldıktan SONRA hesaplandığı için ayrı bir adım olarak eklenir.
+    Bu meta veri, aynı sid ('analysisId' olarak istemciye döndürülür)
+    /api/download-geotiff veya /api/vector-download isteklerinde geri
+    gönderildiğinde _get_analysis_session() tarafından okunur — bkz.
+    _last_analyze_params tanımının üstündeki "BİLİNEN SINIRLAMA" notu.
+    """
+    if not sid:
+        return
+    with _tile_lock:
+        session = _tile_sessions.get(sid)
+        if session is not None:
+            extra = dict(session.get('extra') or {})
+            extra.update(updates)
+            session['extra'] = extra
+
+
+def _get_analysis_session(analysis_id):
+    """
+    /api/analyze'ın döndürdüğü 'analysisId' ile daha önce kaydedilmiş analiz
+    parametrelerini (ve varsa nativeCrs'i) döndürür.
+
+    Bunu kullanan uç noktalar (/api/download-geotiff, /api/vector-download),
+    sunucudaki TÜM kullanıcılar arasında paylaşılan _last_analyze_params
+    global'i yerine — istemci bu kimliği gönderdiğinde — İSTEĞİ YAPAN
+    kullanıcının KENDİ son analizini kesin olarak kullanabilir.
+
+    Dönüş: (params_dict, native_crs_veya_None) — sid bulunamazsa/süresi
+    dolmuşsa None döner. Çağıran taraf bu durumda anlaşılır bir hata
+    döndürmelidir; paylaşılan global'e sessizce geri düşmek tam olarak
+    önlemeye çalıştığımız kullanıcılar-arası-karışma riskini yeniden açar.
+    """
+    if not analysis_id:
+        return None
+    with _tile_lock:
+        session = _tile_sessions.get(analysis_id)
+        if not session or not session.get('params'):
+            return None
+        params = copy.deepcopy(session['params'])
+        extra = session.get('extra') or {}
+        native_crs = extra.get('nativeCrs')
+    return params, native_crs
 
 
 def _rebuild_tile_session_url(session):
@@ -1521,6 +1569,32 @@ except Exception as e:
     print('❌ GEE başlatılamadı:', e)
 
 # Last analysis parameters (GeoTIFF download için saklanır)
+#
+# ⚠️ BİLİNEN SINIRLAMA (kullanıcılar arası analiz karışması): Bu, sunucu
+# SÜRECİNDEKİ TÜM eşzamanlı istemciler arasında PAYLAŞILAN tek bir global
+# değişkendir — belirli bir kullanıcıya/oturuma özel değildir. Kullanıcı A
+# bir analiz çalıştırıp İNDİRMEDEN ÖNCE Kullanıcı B farklı bir alan/analiz
+# çalıştırırsa, bu global B'nin parametreleriyle üzerine yazılır ve A'nın
+# sonraki /api/download-geotiff veya /api/vector-download isteği sessizce
+# B'nin analizini (yanlış konum/indeks/tarih) döndürebilir. Bu, -w 2
+# --threads 8 ile 16 eşzamanlı isteği aynı anda karşılayan bu sunucuda
+# (bkz. __main__ altındaki gunicorn notu) teorik değil, gerçek bir
+# senaryodur — 'roi' alanı için zaten aşağıda /api/download-geotiff
+# içinde kısmi bir düzeltme (istekten gelen güncel roi'ye öncelik verme)
+# uygulanmıştı, ama index/tarih/uydu/classBreaks gibi DİĞER TÜM parametreler
+# hâlâ bu paylaşılan global'den geliyordu.
+#
+# ÇÖZÜM (geriye dönük tamamen uyumlu): /api/analyze artık HER yanıtında
+# isteğe özel bir 'analysisId' alanı döndürür (bkz. _register_tile_session /
+# _attach_tile_session_extra / _get_analysis_session — yeni bir sistem
+# kurmak yerine halihazırda var olan tile-proxy oturum altyapısı yeniden
+# kullanılır). İstemci bu kimliği /api/download-geotiff ve
+# /api/vector-download isteklerinde geri gönderirse, KENDİ analizi bu
+# paylaşılan global yerine kesin/izole olarak kullanılır. İstemci
+# 'analysisId' göndermezse (ör. bu değişiklikten önceki bir index.html),
+# aşağıdaki iki global'e önceki (paylaşılan) davranışla AYNEN geri
+# düşülür — yani bu değişiklik mevcut istemciyi bozmaz, yalnızca istemci
+# güncellenene kadar eski sınırlamayı korur.
 _last_analyze_params = {}
 
 # ════════════════════════════════════════════════════════════════
@@ -2030,7 +2104,15 @@ def send_contact_message():
     ) % (name, email, subject, message)
 
     msg = MIMEText(body, 'plain', 'utf-8')
-    msg['Subject'] = Header('[SylvaGIS İletişim] %s' % subject, 'utf-8')
+    # 🔒 GÜVENLİK DÜZELTMESİ (e-posta başlığı enjeksiyonu — savunma katmanı):
+    # subject burada zaten Header(...) ile RFC 2047 kodlamasından geçiyor,
+    # ancak bu yalnızca ASCII-dışı karakter içerdiğinde ham CR/LF'i
+    # güvenilir şekilde etkisiz hale getirir. subject saf ASCII bir
+    # enjeksiyon payload'ı (ör. "Test\nBcc: saldirgan@ornek.com") ise
+    # Header() onu değiştirmeden bırakabilir. _sanitize_header_value ile
+    # önce satır sonları temizlenir — bkz. aynı fonksiyonun
+    # _send_registration_email() içindeki docstring'i.
+    msg['Subject'] = Header('[SylvaGIS İletişim] %s' % _sanitize_header_value(subject), 'utf-8')
     msg['From'] = smtp_user
     msg['To'] = CONTACT_RECEIVER_EMAIL
     msg['Reply-To'] = email
@@ -4417,11 +4499,18 @@ def analyze():
                     pass
             if download_native_crs:
                 _last_analyze_native_crs = download_native_crs
+            # Bu analize özel oturuma da aynı CRS'i ekle — bkz.
+            # _last_analyze_params tanımının üstündeki "BİLİNEN SINIRLAMA" notu.
+            _attach_tile_session_extra(_sid, nativeCrs=download_native_crs)
 
             return jsonify({
                 'success':  True,
                 'tileUrl':  tile_url,
                 'tileUrlDirect': tile_url_direct,
+                # İndirme/vektörleştirme uç noktalarının, kullanıcılar arasında
+                # paylaşılan sunucu belleği yerine BU analizi kesin olarak
+                # yeniden bulabilmesi için (bkz. _get_analysis_session).
+                'analysisId': _sid,
                 'index':    'RGB',
                 'meta':     meta,
                 'nativeCrs': download_native_crs,
@@ -4513,6 +4602,9 @@ def analyze():
 
         if native_crs:
             _last_analyze_native_crs = native_crs
+        # Bu analize özel oturuma da aynı CRS'i ekle — bkz.
+        # _last_analyze_params tanımının üstündeki "BİLİNEN SINIRLAMA" notu.
+        _attach_tile_session_extra(_sid, nativeCrs=native_crs)
 
         # ── İstatistik ────────────────────────────────────────────
         # 🛠️ BUG FİX (NoData piksel / büyük AOI istatistik sorunu):
@@ -4676,6 +4768,11 @@ def analyze():
             'tileUrl':   tile_url,
             # Proxy'ye ulaşılamazsa istemcinin geri düşebileceği ham GEE adresi.
             'tileUrlDirect': tile_url_direct,
+            # İndirme/vektörleştirme uç noktalarının, kullanıcılar arasında
+            # paylaşılan sunucu belleği yerine BU analizi kesin olarak
+            # yeniden bulabilmesi için (bkz. _get_analysis_session ve
+            # _last_analyze_params tanımının üstündeki "BİLİNEN SINIRLAMA" notu).
+            'analysisId': _sid,
             'stats':     stats,
             'realStats': real_minmax,
             'scenes':    scenes_list,
@@ -4784,8 +4881,36 @@ def download_geotiff():
         # düzeltme tüm raster analiz dışa aktarımlarına otomatik uygulanır.
         fresh_roi = req_data.get('roi')
 
-        if not _last_analyze_params.get('roi'):
-            return jsonify({'success': False, 'error': 'Önce bir uydu analizi çalıştırın.'})
+        # 🔒 GÜVENLİK/DOĞRULUK DÜZELTMESİ (kullanıcılar arası analiz
+        # karışması): _last_analyze_params/_last_analyze_native_crs sunucu
+        # SÜRECİNDEKİ TÜM eşzamanlı kullanıcılar arasında paylaşılan TEK bir
+        # global'dir (bkz. tanımlarının üstündeki "BİLİNEN SINIRLAMA" notu).
+        # İstemci (güncellenmiş index.html) /api/analyze'ın döndürdüğü
+        # 'analysisId'yi geri gönderirse, o analiz KENDİ izole oturumundan
+        # (_get_analysis_session) okunur — paylaşılan global'e HİÇ dokunulmaz.
+        # 'analysisId' bulunamazsa/süresi dolmuşsa BİLEREK global'e sessizce
+        # geri düşülmez (bu, önlemeye çalıştığımız karışmayı yeniden açardı);
+        # bunun yerine anlaşılır bir hata döndürülür. İstemci 'analysisId'
+        # hiç göndermezse (eski/güncellenmemiş istemci), önceki paylaşılan-
+        # global davranış AYNEN korunur — bu değişiklik geriye dönük
+        # tamamen uyumludur.
+        analysis_id = req_data.get('analysisId')
+        if analysis_id:
+            _session = _get_analysis_session(analysis_id)
+            if _session is None:
+                return jsonify({
+                    'success': False,
+                    'error': 'Analiz oturumunun süresi dolmuş veya geçersiz. '
+                             'Lütfen analizi tekrar çalıştırıp yeniden indirin.'
+                }), 410
+            data, session_native_crs = _session
+            if not data.get('roi'):
+                return jsonify({'success': False, 'error': 'Önce bir uydu analizi çalıştırın.'})
+        else:
+            if not _last_analyze_params.get('roi'):
+                return jsonify({'success': False, 'error': 'Önce bir uydu analizi çalıştırın.'})
+            data = dict(_last_analyze_params)
+            session_native_crs = _last_analyze_native_crs
 
         filename = (req_data.get('filename') or 'SylvaGIS_export').strip() or 'SylvaGIS_export'
         scale    = int(req_data.get('scale', 30))
@@ -4797,16 +4922,13 @@ def download_geotiff():
         # nativeCrs'e göre otomatik ön-seçip gönderir; bu yalnızca bir
         # güvenlik ağıdır. Kullanıcı seçiciden farklı bir CRS seçtiyse o
         # değer (req_data.get('crs')) her zaman önceliklidir.
-        crs = (req_data.get('crs') or _last_analyze_native_crs or 'EPSG:4326').strip()
+        crs = (req_data.get('crs') or session_native_crs or 'EPSG:4326').strip()
 
         # Güvenlik: Yalnızca EPSG:NNNNN formatına izin ver
         import re as _re
         if not _re.match(r'^EPSG:\d+$', crs, _re.IGNORECASE):
-            crs = _last_analyze_native_crs if (_last_analyze_native_crs and _re.match(r'^EPSG:\d+$', _last_analyze_native_crs, _re.IGNORECASE)) else 'EPSG:4326'
+            crs = session_native_crs if (session_native_crs and _re.match(r'^EPSG:\d+$', session_native_crs, _re.IGNORECASE)) else 'EPSG:4326'
         crs = crs.upper()
-
-        # Son analiz parametrelerini kullan
-        data = dict(_last_analyze_params)
 
         # Görüntü Alanı modu: istekten gelen değer son analizin üzerine yazar
         if 'clipMode' in req_data:
@@ -5952,6 +6074,27 @@ from email.mime.multipart import MIMEMultipart
 
 SYLVA_OWNER_EMAIL = 'sylvagis.world@gmail.com'
 
+
+def _sanitize_header_value(value):
+    """
+    🔒 GÜVENLİK DÜZELTMESİ (e-posta başlığı enjeksiyonu): Bir e-posta
+    başlığına (Subject vb.) gömülecek kullanıcı girdisindeki CR/LF
+    karakterlerini tek boşluğa indirger.
+
+    register_user() alanlara yalnızca .strip() uyguluyor — bu SADECE
+    baştaki/sondaki boşluğu temizler, alanın İÇİNDEKİ bir satır sonunu
+    TEMİZLEMEZ. Bu değerler ham bir Python string'i olarak doğrudan
+    msg['Subject']'e atandığından (MIMEMultipart'ın kullandığı eski
+    'compat32' e-posta politikası, modern email.policy.default'un aksine
+    başlık değerlerini otomatik doğrulamaz/reddetmez), içine satır sonu
+    içeren bir kayıt (ör. Ad alanına "Ali\\nBcc: saldirgan@ornek.com")
+    ham e-posta başlıklarına sahte ek satır/başlık enjekte edebilirdi
+    (klasik SMTP/e-posta başlığı enjeksiyonu). Bu fonksiyon o satırları
+    boşlukla değiştirerek enjeksiyon yolunu kapatır.
+    """
+    return re.sub(r'[\r\n]+', ' ', str(value or '')).strip()
+
+
 def _send_registration_email(ad, soyad, email, meslek, ulke):
     # ⚠️ GÜVENLİK DÜZELTMESİ: bkz. _smtp_credentials — parola artık kodda değil.
     smtp_user, smtp_pass, _cred_err = _smtp_credentials()
@@ -5961,13 +6104,35 @@ def _send_registration_email(ad, soyad, email, meslek, ulke):
         print('[SylvaGIS] ⚠️ Kayıt bildirimi e-postası atlandı: {}'.format(_cred_err))
         return
 
+    # 🔒 GÜVENLİK DÜZELTMESİ (e-posta başlığı enjeksiyonu): bkz.
+    # _sanitize_header_value docstring'i. Yalnızca Subject başlığına giren
+    # ad/soyad için gereklidir.
+    ad_header    = _sanitize_header_value(ad)
+    soyad_header = _sanitize_header_value(soyad)
+
     msg = MIMEMultipart('alternative')
-    msg['Subject'] = f'[SylvaGIS] Yeni Kayıt — {ad} {soyad}'
+    msg['Subject'] = f'[SylvaGIS] Yeni Kayıt — {ad_header} {soyad_header}'
     msg['From']    = smtp_user or SYLVA_OWNER_EMAIL
     msg['To']      = SYLVA_OWNER_EMAIL
 
     import datetime as _dt
     ts = _dt.datetime.now().strftime('%d.%m.%Y %H:%M')
+
+    # 🔒 GÜVENLİK DÜZELTMESİ (HTML enjeksiyonu): ad/soyad/email/meslek/ulke
+    # herkese açık bir kayıt formundan gelir ve aşağıda bir HTML e-postanın
+    # İÇİNE gömülür. Bu alanlar önceden kaçışlanmadan (escape) doğrudan
+    # yerleştiriliyordu — ör. Ad alanına "<img src=x onerror=...>" ya da
+    # e-postaya mailto href'ini kıracak bir tırnak gönderen biri, bu
+    # bildirim e-postasını açan site sahibinin e-posta istemcisinde
+    # işaretleme/yönlendirme enjekte edebilirdi (bu dosyada aynı prensip
+    # zaten _features_to_kml() içinde XML çıktısı için xml.sax.saxutils.escape
+    # ile uygulanıyordu — burada eksikti). html.escape() ile tüm kullanıcı
+    # girdisi e-postaya gömülmeden önce güvenli hale getirilir.
+    ad_html     = html.escape(ad or '')
+    soyad_html  = html.escape(soyad or '')
+    email_html  = html.escape(email or '')
+    meslek_html = html.escape(meslek) if meslek else ''
+    ulke_html   = html.escape(ulke) if ulke else ''
 
     html_body = f"""
     <html><body style="font-family:Arial,sans-serif;background:#f4f6f9;padding:24px;">
@@ -5979,13 +6144,13 @@ def _send_registration_email(ad, soyad, email, meslek, ulke):
         <div style="color:#64748b;font-size:.85rem;margin-bottom:24px;">{ts}</div>
         <table style="width:100%;border-collapse:collapse;font-size:.9rem;">
           <tr style="background:#eff6ff;"><td style="padding:10px 14px;font-weight:700;color:#1e3a8a;width:35%;">Ad Soyad</td>
-              <td style="padding:10px 14px;color:#334155;">{ad} {soyad}</td></tr>
+              <td style="padding:10px 14px;color:#334155;">{ad_html} {soyad_html}</td></tr>
           <tr><td style="padding:10px 14px;font-weight:700;color:#1e3a8a;">E-posta</td>
-              <td style="padding:10px 14px;color:#334155;"><a href="mailto:{email}">{email}</a></td></tr>
+              <td style="padding:10px 14px;color:#334155;"><a href="mailto:{email_html}">{email_html}</a></td></tr>
           <tr style="background:#eff6ff;"><td style="padding:10px 14px;font-weight:700;color:#1e3a8a;">Meslek</td>
-              <td style="padding:10px 14px;color:#334155;">{meslek or '—'}</td></tr>
+              <td style="padding:10px 14px;color:#334155;">{meslek_html or '—'}</td></tr>
           <tr><td style="padding:10px 14px;font-weight:700;color:#1e3a8a;">Ülke</td>
-              <td style="padding:10px 14px;color:#334155;">{ulke or '—'}</td></tr>
+              <td style="padding:10px 14px;color:#334155;">{ulke_html or '—'}</td></tr>
         </table>
       </div>
     </body></html>"""
@@ -6632,10 +6797,25 @@ def vector_download():
 
         # ── 2. Analiz sonucunu vektörize et ───────────────────────────
         else:
-            if not _last_analyze_params:
-                return jsonify({'error': 'Henüz bir analiz yapılmadı. Önce haritada bir analiz çalıştırın.'}), 400
-
-            data = dict(_last_analyze_params)
+            # 🔒 GÜVENLİK/DOĞRULUK DÜZELTMESİ (kullanıcılar arası analiz
+            # karışması) — bkz. /api/download-geotiff içindeki aynı başlıklı
+            # açıklama ve _last_analyze_params tanımının üstündeki "BİLİNEN
+            # SINIRLAMA" notu. İstemci 'analysisId' gönderirse KENDİ izole
+            # analiz oturumu kullanılır; göndermezse önceki paylaşılan-global
+            # davranış değiştirilmeden korunur.
+            analysis_id = req_data.get('analysisId')
+            if analysis_id:
+                _session = _get_analysis_session(analysis_id)
+                if _session is None:
+                    return jsonify({
+                        'error': 'Analiz oturumunun süresi dolmuş veya geçersiz. '
+                                 'Lütfen analizi tekrar çalıştırıp tekrar deneyin.'
+                    }), 410
+                data, _session_crs = _session
+            else:
+                if not _last_analyze_params:
+                    return jsonify({'error': 'Henüz bir analiz yapılmadı. Önce haritada bir analiz çalıştırın.'}), 400
+                data = dict(_last_analyze_params)
 
             # Vektörizasyon için sınıflandırılmış görüntüyü al
             try:
