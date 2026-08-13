@@ -6,6 +6,9 @@ import copy
 import uuid
 import html
 import hashlib
+import hmac
+import base64
+import zlib
 import json
 import math
 import time
@@ -157,16 +160,63 @@ TILE_PROXY_ENABLED = os.environ.get('SYLVAGIS_TILE_PROXY', '1').strip().lower() 
 #     export SYLVAGIS_PUBLIC_BASE_URL=https://api.sylvagis.com
 PUBLIC_BASE_URL = os.environ.get('SYLVAGIS_PUBLIC_BASE_URL', '').strip().rstrip('/')
 
-_TILE_SESSION_TTL_SECONDS = 3 * 3600   # map id oturumunun saklanma süresi
-_TILE_SESSION_MAX_ITEMS   = 64         # eşzamanlı tutulacak azami oturum
+# ════════════════════════════════════════════════════════════════
+# 🛠️ KÖK NEDEN DÜZELTMESİ — "410 Tile oturumu süresi doldu" (haritanın
+#     çoğu boş/gri kalması, karoların onlarca kez _sylvaRetry ile tekrar
+#     denenip yine de başarısız olması)
+# ════════════════════════════════════════════════════════════════
+# ESKİ TASARIM: /api/analyze bir oturum açıyor (_register_tile_session)
+# ve onu bu SÜRECİN belleğindeki bir sözlükte (_tile_sessions) saklıyordu.
+# /api/tiles/<sid>/... isteği geldiğinde sid bu sözlükte aranıyor,
+# bulunamazsa 410 "Tile oturumu süresi doldu" dönülüyordu.
+#
+# SORUN: Bu sunucu TEK bir süreç olarak çalışmıyor — birden fazla gunicorn
+# worker'ı (bkz. aşağıdaki DAĞITIM NOTU: "-w 2 --threads 8", yani en az 2
+# ayrı işletim sistemi süreci) VE/VEYA Cloud Run'ın kendi otomatik
+# ölçeklendirmesiyle birden fazla container instance'ı olarak çalışır.
+# Her worker/instance'ın KENDİ AYRI Python belleği vardır; biri diğerinin
+# _tile_sessions sözlüğünü GÖREMEZ. /api/analyze isteği worker A'ya
+# düşüp oturumu orada açtıktan hemen sonra tarayıcı 15-20 karo ister —
+# bunlardan worker B veya C'ye düşenler, oturum SANİYELER önce açılmış
+# olsa bile "bulunamadı" sayılıp anında 410 alır. Yüklenen bir HAR
+# kaydında bu yüzden 2647 karo isteğinin 1232'si (~%47'si), oturum
+# açıldıktan saniyeler/dakikalar sonra — 3 saatlik TTL'e hiç
+# yaklaşılmadan — başarısız olmuştu. Aynı sorun, indirme uç noktalarının
+# kullandığı 'analysisId' için de geçerliydi (bkz. _get_analysis_session).
+#
+# ÇÖZÜM: Oturum artık HİÇBİR YERDE (dict/bellek) SAKLANMIYOR. Bunun
+# yerine 'sid' kimliğinin KENDİSİ imzalı (HMAC-SHA256) ve sıkıştırılmış
+# bir token'dır; GEE tile URL şablonunu (ve küçükse analiz parametrelerini)
+# doğrudan içinde taşır — bkz. _pack_token/_unpack_token ve
+# _get_session_secret. Böylece hangi worker/instance isteği işlerse
+# işlesin, token'ı çözüp doğrulamak için hiçbir paylaşılan belleğe
+# ihtiyaç duyulmaz; sahte/erken "oturum bulunamadı" 410'u artık
+# YAPISAL OLARAK oluşamaz. Yalnızca token gerçekten süresi dolmuş ya da
+# bozuksa (imza uyuşmazsa) 410 dönülür — ki bu artık gerçek bir durumdur.
+_TILE_SESSION_TTL_SECONDS = 3 * 3600   # token'ın geçerlilik süresi
+# Analiz parametreleri (AOI/roi dahil) bu boyutu (JSON, karakter) aşarsa
+# KARO token'ına gömülmez — indirme için ayrı üretilen analysisId'de
+# (_register_analysis_session) böyle bir sınır YOKTUR. Aşılırsa yalnızca
+# map id süresi dolduğunda otomatik yenileme (bkz. _rebuild_tile_session_url)
+# o worker/instance'da atlanır; oturumun kendisi yine 410 VERMEZ.
+_TILE_SESSION_INLINE_PARAMS_LIMIT = 6000
 _TILE_CACHE_MAX_ITEMS     = 2000       # bellekte tutulacak azami tile (~40 MB)
 _TILE_FETCH_RETRIES       = 3          # tek bir tile için tekrar deneme sayısı
 _TILE_FETCH_TIMEOUT       = 25         # saniye
+_REBUILT_URL_CACHE_TTL_SECONDS = 20 * 60  # yenilenen map id'nin süreç-yerel önbellekte tutulma süresi
+_REBUILT_URL_CACHE_MAX_ITEMS   = 512
 
-_tile_sessions = {}
 _tile_cache = {}
 _tile_cache_order = []
 _tile_lock = threading.RLock()
+# GEE map id süresi dolup _rebuild_tile_session_url ile yenilendiğinde, AYNI
+# worker/instance üzerindeki SONRAKI karo isteklerinin her biri için tekrar
+# tekrar (yavaş) GEE getMapId çağrısı yapılmasını önleyen, süreç-yerel ve
+# en-iyi-çaba (best-effort) bir önbellek. Bu SADECE bir hız optimizasyonudur
+# — doğruluk buna bağlı DEĞİLDİR: farklı bir worker/instance bu önbellekte
+# bir şey bulamazsa sadece yeniden üretir (bkz. proxy_tile), asla 410
+# döndürmez — yukarıdaki kök neden düzeltmesiyle karıştırılmamalıdır.
+_rebuilt_url_cache = {}
 
 # requests.Session + geniş connection pool: tarayıcı 15-20 tile'ı aynı anda
 # ister; varsayılan havuz (10) bunu darboğaza sokar.
@@ -176,39 +226,164 @@ _tile_http.mount('https://', requests.adapters.HTTPAdapter(
 ))
 
 
-def _prune_tile_sessions_locked():
-    """TTL'i dolmuş veya sayı tavanını aşan oturumları temizler."""
-    now = time.time()
-    expired = [sid for sid, s in _tile_sessions.items()
-               if now - s['created'] > _TILE_SESSION_TTL_SECONDS]
-    for sid in expired:
-        _tile_sessions.pop(sid, None)
-    if len(_tile_sessions) > _TILE_SESSION_MAX_ITEMS:
-        # en eski kullanılanları at
-        for sid, _ in sorted(_tile_sessions.items(), key=lambda kv: kv[1]['last_used'])[
-                :len(_tile_sessions) - _TILE_SESSION_MAX_ITEMS]:
-            _tile_sessions.pop(sid, None)
+_session_secret_cache = None
+_session_secret_lock = threading.RLock()
+_SESSION_SECRET_ENV = 'SYLVAGIS_SESSION_SECRET'
+
+
+def _get_session_secret():
+    """
+    Tile-oturum token'larını (bkz. _pack_token/_unpack_token) imzalamak
+    için TÜM worker süreçleri / Cloud Run instance'ları arasında ORTAK ve
+    KARARLI bir gizli anahtar döndürür (bir kez hesaplanır, süreç ömrü
+    boyunca önbelleğe alınır). Öncelik sırası:
+      1) SYLVAGIS_SESSION_SECRET ortam değişkeni açıkça ayarlanmışsa kullanılır.
+      2) Değilse GEE_SERVICE_ACCOUNT_EMAIL + GEE_SERVICE_ACCOUNT_KEY'den
+         türetilir. Bu ikisi zaten TÜM worker/instance'larda BİREBİR AYNI
+         olmak ZORUNDADIR (yoksa Earth Engine kimlik doğrulaması hiç
+         çalışmaz) — bu sayede EK BİR ORTAM DEĞİŞKENİ TANIMLAMAYA GEREK
+         KALMADAN süreçler arasında otomatik/tutarlı bir imzalama anahtarı
+         elde edilir.
+      3) İkisi de yoksa (ör. servis hesabı tanımlanmamış yerel geliştirme),
+         SÜRECE ÖZEL rastgele bir anahtar üretilir ve konsola uyarı basılır
+         — bu yalnızca tekli-süreç yerel geliştirme için güvenlidir;
+         üretimde birden fazla worker/instance ile ESKİ 410 hatasını geri
+         getirir.
+    """
+    global _session_secret_cache
+    if _session_secret_cache is not None:
+        return _session_secret_cache
+    with _session_secret_lock:
+        if _session_secret_cache is not None:
+            return _session_secret_cache
+        explicit = os.environ.get(_SESSION_SECRET_ENV, '').strip()
+        if explicit:
+            _session_secret_cache = explicit.encode('utf-8')
+        elif GEE_SERVICE_ACCOUNT_EMAIL and GEE_SERVICE_ACCOUNT_KEY:
+            basis = (GEE_SERVICE_ACCOUNT_EMAIL + '|' + GEE_SERVICE_ACCOUNT_KEY).encode('utf-8')
+            _session_secret_cache = hashlib.sha256(basis).digest()
+        else:
+            _session_secret_cache = ('local-dev-' + uuid.uuid4().hex).encode('utf-8')
+            print('[SylvaGIS] ⚠️ {} tanımlı değil ve GEE servis hesabı bilgisi de yok — '
+                  'tile-oturum token\'ları SÜRECE ÖZEL rastgele bir anahtarla '
+                  'imzalanıyor. Birden fazla worker/instance ile üretimde çalışırken '
+                  'bu durum ESKİ 410 hatasını GERİ GETİRİR; lütfen '
+                  'GEE_SERVICE_ACCOUNT_KEY tanımlayın (zaten Earth Engine için '
+                  'gerekli) ya da bu ortam değişkenini sabit bir gizli değerle '
+                  'ayarlayın.'.format(_SESSION_SECRET_ENV))
+        return _session_secret_cache
+
+
+def _pack_token(payload):
+    """dict -> imzalı, URL-güvenli, sıkıştırılmış token dizesi."""
+    raw = json.dumps(payload, separators=(',', ':'), ensure_ascii=False, default=str).encode('utf-8')
+    compressed = zlib.compress(raw, 6)
+    body = base64.urlsafe_b64encode(compressed).rstrip(b'=').decode('ascii')
+    sig = hmac.new(_get_session_secret(), body.encode('ascii'), hashlib.sha256).digest()
+    sig_b64 = base64.urlsafe_b64encode(sig).rstrip(b'=').decode('ascii')
+    return body + '.' + sig_b64
+
+
+def _unpack_token(token):
+    """
+    token -> orijinal dict. İmza uyuşmuyorsa, bozuksa ya da TTL'i dolmuşsa
+    None döner (çağıran taraf bunu "oturum bulunamadı/süresi doldu" olarak
+    yorumlar — bkz. proxy_tile, _get_analysis_session). Doğrulama daima
+    İMZADAN başlar; format/TTL kontrolü yalnızca imza geçerliyse yapılır.
+    """
+    if not token or '.' not in token:
+        return None
+    body, _, sig_b64 = token.rpartition('.')
+    if not body or not sig_b64:
+        return None
+    try:
+        expected_sig = hmac.new(_get_session_secret(), body.encode('ascii'), hashlib.sha256).digest()
+        expected_b64 = base64.urlsafe_b64encode(expected_sig).rstrip(b'=').decode('ascii')
+    except Exception:
+        return None
+    if not hmac.compare_digest(expected_b64, sig_b64):
+        return None
+    try:
+        padded = body + '=' * (-len(body) % 4)
+        payload = json.loads(zlib.decompress(base64.urlsafe_b64decode(padded.encode('ascii'))).decode('utf-8'))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if time.time() - float(payload.get('created') or 0) > _TILE_SESSION_TTL_SECONDS:
+        return None
+    return payload
+
+
+def _get_cached_rebuilt_url(sid):
+    """Bkz. _rebuilt_url_cache tanımı — süreç-yerel, en-iyi-çaba (bulunamazsa None)."""
+    with _tile_lock:
+        entry = _rebuilt_url_cache.get(sid)
+        if not entry:
+            return None
+        url, expires_at = entry
+        if time.time() > expires_at:
+            _rebuilt_url_cache.pop(sid, None)
+            return None
+        return url
+
+
+def _remember_rebuilt_url(sid, url):
+    """Bkz. _rebuilt_url_cache tanımı — süreç-yerel, en-iyi-çaba."""
+    with _tile_lock:
+        _rebuilt_url_cache[sid] = (url, time.time() + _REBUILT_URL_CACHE_TTL_SECONDS)
+        while len(_rebuilt_url_cache) > _REBUILT_URL_CACHE_MAX_ITEMS:
+            _rebuilt_url_cache.pop(next(iter(_rebuilt_url_cache)), None)
 
 
 def _register_tile_session(url_format, params=None, kind='analyze', extra=None):
     """
-    Bir GEE map id (tile url_format) için proxy oturumu açar ve oturum
-    kimliğini döndürür. params/kind, map id'nin süresi dolduğunda
-    görüntüyü yeniden üretebilmek için saklanır.
+    Bir GEE map id (tile url_format) için KARO SUNUMUNDA kullanılacak
+    (/api/tiles/<sid>/...) imzalı, kendi-kendine-yeterli bir token üretir
+    ve döndürür — bkz. dosya başındaki "KÖK NEDEN DÜZELTMESİ" notu; artık
+    hiçbir sunucu belleğinde/sözlüğünde saklanmaz, bu yüzden hangi worker/
+    instance isteği işlerse işlesin aynı şekilde çözülebilir.
+
+    params/kind, map id'nin süresi dolduğunda görüntüyü yeniden
+    üretebilmek için (bkz. _rebuild_tile_session_url) token'a DA gömülür —
+    ANCAK yalnızca makul boyuttaysa (_TILE_SESSION_INLINE_PARAMS_LIMIT);
+    bu URL'nin her karo isteğinde tekrar tekrar gönderilecek olmasından
+    kaynaklanan bir boyut/performans önlemidir. İndirme uç noktaları için
+    boyut sınırı olmayan ayrı bir kimlik gerekiyorsa
+    _register_analysis_session() kullanılır.
     """
-    sid = uuid.uuid4().hex[:20]
-    now = time.time()
-    with _tile_lock:
-        _prune_tile_sessions_locked()
-        _tile_sessions[sid] = {
-            'url_format': url_format,
-            'params': copy.deepcopy(params) if params else None,
-            'kind': kind,
-            'extra': copy.deepcopy(extra) if extra else None,
-            'created': now,
-            'last_used': now,
-        }
-    return sid
+    payload = {
+        'url_format': url_format,
+        'kind': kind,
+        'extra': dict(extra) if extra else {},
+        'created': time.time(),
+    }
+    if params:
+        try:
+            params_json = json.dumps(params, separators=(',', ':'), ensure_ascii=False, default=str)
+        except Exception:
+            params_json = None
+        if params_json is not None and len(params_json) <= _TILE_SESSION_INLINE_PARAMS_LIMIT:
+            payload['params'] = params
+    return _pack_token(payload)
+
+
+def _register_analysis_session(params, kind='analyze', extra=None):
+    """
+    /api/download-geotiff ve /api/vector-download uç noktalarının kullandığı
+    'analysisId' değerini üretir. _register_tile_session()'dan AYRIDIR:
+    karo token'ı binlerce kez URL'de taşınacağı için parametre boyutu
+    sınırlanır, ama analysisId yalnızca kullanıcı "indir" dediğinde BİR KEZ
+    gönderilir — bu yüzden AOI/parametre boyutundan bağımsız olarak
+    parametreler HER ZAMAN tam olarak gömülür.
+    """
+    payload = {
+        'kind': kind,
+        'extra': dict(extra) if extra else {},
+        'created': time.time(),
+        'params': params,
+    }
+    return _pack_token(payload)
 
 
 def _tile_url_for_client(sid, direct_url):
@@ -231,50 +406,27 @@ def _tile_url_for_client(sid, direct_url):
     return '{}/api/tiles/{}/{{z}}/{{x}}/{{y}}.png'.format(base, sid)
 
 
-def _attach_tile_session_extra(sid, **updates):
-    """
-    Açık bir tile oturumuna sonradan ek meta veri ekler/günceller (ör.
-    nativeCrs). /api/analyze içinde CRS, oturum _register_tile_session ile
-    zaten açıldıktan SONRA hesaplandığı için ayrı bir adım olarak eklenir.
-    Bu meta veri, aynı sid ('analysisId' olarak istemciye döndürülür)
-    /api/download-geotiff veya /api/vector-download isteklerinde geri
-    gönderildiğinde _get_analysis_session() tarafından okunur — bkz.
-    _last_analyze_params tanımının üstündeki "BİLİNEN SINIRLAMA" notu.
-    """
-    if not sid:
-        return
-    with _tile_lock:
-        session = _tile_sessions.get(sid)
-        if session is not None:
-            extra = dict(session.get('extra') or {})
-            extra.update(updates)
-            session['extra'] = extra
-
-
 def _get_analysis_session(analysis_id):
     """
-    /api/analyze'ın döndürdüğü 'analysisId' ile daha önce kaydedilmiş analiz
-    parametrelerini (ve varsa nativeCrs'i) döndürür.
+    /api/analyze'ın döndürdüğü 'analysisId' (bkz. _register_analysis_session)
+    ile daha önce kaydedilmiş analiz parametrelerini (ve varsa nativeCrs'i)
+    döndürür. Token kendi kendine yeterli olduğu için (bkz. dosya başındaki
+    "KÖK NEDEN DÜZELTMESİ" notu) hangi worker/instance çözerse çözsün aynı
+    sonucu verir — sunucudaki TÜM kullanıcılar arasında paylaşılan
+    _last_analyze_params global'i yerine, istemci bu kimliği gönderdiğinde
+    İSTEĞİ YAPAN kullanıcının KENDİ son analizini kesin olarak kullanabiliriz.
 
-    Bunu kullanan uç noktalar (/api/download-geotiff, /api/vector-download),
-    sunucudaki TÜM kullanıcılar arasında paylaşılan _last_analyze_params
-    global'i yerine — istemci bu kimliği gönderdiğinde — İSTEĞİ YAPAN
-    kullanıcının KENDİ son analizini kesin olarak kullanabilir.
-
-    Dönüş: (params_dict, native_crs_veya_None) — sid bulunamazsa/süresi
-    dolmuşsa None döner. Çağıran taraf bu durumda anlaşılır bir hata
+    Dönüş: (params_dict, native_crs_veya_None) — token bulunamazsa/geçersizse/
+    süresi dolmuşsa None döner. Çağıran taraf bu durumda anlaşılır bir hata
     döndürmelidir; paylaşılan global'e sessizce geri düşmek tam olarak
     önlemeye çalıştığımız kullanıcılar-arası-karışma riskini yeniden açar.
     """
-    if not analysis_id:
+    payload = _unpack_token(analysis_id)
+    if not payload or not payload.get('params'):
         return None
-    with _tile_lock:
-        session = _tile_sessions.get(analysis_id)
-        if not session or not session.get('params'):
-            return None
-        params = copy.deepcopy(session['params'])
-        extra = session.get('extra') or {}
-        native_crs = extra.get('nativeCrs')
+    params = payload['params']
+    extra = payload.get('extra') or {}
+    native_crs = extra.get('nativeCrs')
     return params, native_crs
 
 
@@ -321,13 +473,17 @@ def proxy_tile(sid, z, x, y):
     Tek bir harita karesini GEE'den alıp istemciye iletir; geçici
     hatalarda tekrar dener, süresi dolmuş map id'yi yeniler ve başarılı
     kareleri önbelleğe alır. Leaflet tarafında hiçbir değişiklik gerekmez.
+
+    'sid', imzalı ve kendi-kendine-yeterli bir token'dır (bkz.
+    _register_tile_session / _unpack_token ve dosya başındaki "KÖK NEDEN
+    DÜZELTMESİ" notu) — bu isteği HANGİ worker/instance işlerse işlesin,
+    başka hiçbir sunucu belleğine bakmadan doğrudan çözülebilir. Bu yüzden
+    artık yalnızca token GERÇEKTEN geçersiz/süresi dolmuşsa 410 döner.
     """
-    with _tile_lock:
-        session = _tile_sessions.get(sid)
-        if session:
-            session['last_used'] = time.time()
+    session = _unpack_token(sid)
     if not session:
-        # Oturum düştüyse istemcinin analizi yenilemesi gerekir.
+        # Token geçersiz/bozuk/gerçekten süresi dolmuş — istemcinin analizi
+        # yenilemesi gerekir.
         return jsonify({'success': False, 'error': 'Tile oturumu süresi doldu.'}), 410
 
     cache_key = (sid, z, x, y)
@@ -338,10 +494,17 @@ def proxy_tile(sid, z, x, y):
             'X-SylvaGIS-Tile': 'cache',
         })
 
+    # Bu worker/instance daha önce (aynı sid için) map id'yi yenilediyse,
+    # her karo için tekrar tekrar yavaş bir GEE getMapId çağrısı yapmak
+    # yerine o tazelenmiş URL'den başla (yalnızca hız optimizasyonu — bkz.
+    # _rebuilt_url_cache tanımı; bulunamazsa token'daki orijinal url_format
+    # kullanılır ve gerekirse aşağıda yeniden üretilir).
+    current_url_format = _get_cached_rebuilt_url(sid) or session.get('url_format')
+
     refreshed_once = False
     delay = 0.6
     for attempt in range(_TILE_FETCH_RETRIES + 1):
-        url = (session['url_format']
+        url = (current_url_format
                .replace('{z}', str(z)).replace('{x}', str(x)).replace('{y}', str(y)))
         try:
             resp = _tile_http.get(url, timeout=_TILE_FETCH_TIMEOUT)
@@ -366,9 +529,8 @@ def proxy_tile(sid, z, x, y):
             try:
                 new_url = _rebuild_tile_session_url(session)
                 if new_url:
-                    with _tile_lock:
-                        session['url_format'] = new_url
-                        session['created'] = time.time()
+                    current_url_format = new_url
+                    _remember_rebuilt_url(sid, new_url)
                     # Eski map id'ye ait önbellek kareleri geçersiz değil
                     # (aynı görüntü) — bu yüzden temizlemeye gerek yok.
                     continue
@@ -532,10 +694,26 @@ def _filter_tiles_by_polygon(tiles, geometry):
 # önbellekten gelir. OSM verisi sık değişmediği için TTL, eski 60 sn'lik
 # AOI önbelleğine göre çok daha uzun (15 dk) tutulur; tile sayısı da binlerce
 # tile'ı kapsayacak şekilde ayarlanır.
-_TILE_CACHE_TTL_SECONDS = 15 * 60
-_TILE_CACHE_MAX_ITEMS = 8000
-_tile_cache = {}
-_tile_cache_lock = threading.RLock()
+#
+# 🛠️ HATA DÜZELTMESİ (isim çakışması): Bu blok daha önce GEE karo-proxy
+# önbelleğiyle (yukarıdaki _tile_cache/_TILE_CACHE_MAX_ITEMS, satır ~198/204)
+# AYNI global değişken adlarını yeniden tanımlıyordu. Python'da modül En
+# Üst Düzey (top-level) atamalar sırayla çalıştığı için bu İKİNCİ tanım
+# BİRİNCİYİ SESSİZCE EZİYORDU: _cache_get_tile/_cache_put_tile (GEE karo
+# PNG'leri, ham bayt) ile _get_cached_tile/_cache_tile (OSM bina
+# poligonları, {'created_at':..,'features':..} sözlüğü) SONUÇTA AYNI dict
+# nesnesini paylaşıyor, ayrıca FARKLI kilitlerle (_tile_lock vs.
+# _tile_cache_lock) korunduğu için eşzamanlı erişimde yarış durumuna da
+# açıktı. Toplam öğe sayısı 8000'i (OSM tavanı) aştığında, bu satırlardaki
+# min(..., key=lambda k: _tile_cache[k]['last_used_at']) bir GEE karo
+# kaydına (ham bayt) rastlarsa "TypeError: byte indices must be integers"
+# ile çöküyordu — bina/OSM sorgu uç noktalarında ayrı, aralıklı 500
+# hatalarının olası kaynağı. ÇÖZÜM: bu önbellek artık kendi adlarını
+# kullanıyor (_osm_tile_cache*); GEE karo önbelleğine hiç dokunmuyor.
+_OSM_TILE_CACHE_TTL_SECONDS = 15 * 60
+_OSM_TILE_CACHE_MAX_ITEMS = 8000
+_osm_tile_cache = {}
+_osm_tile_cache_lock = threading.RLock()
 
 
 def _tile_cache_key(tile_bbox):
@@ -545,12 +723,12 @@ def _tile_cache_key(tile_bbox):
 def _get_cached_tile(tile_bbox):
     key = _tile_cache_key(tile_bbox)
     now = time.monotonic()
-    with _tile_cache_lock:
-        entry = _tile_cache.get(key)
+    with _osm_tile_cache_lock:
+        entry = _osm_tile_cache.get(key)
         if not entry:
             return None
-        if now - entry['created_at'] > _TILE_CACHE_TTL_SECONDS:
-            _tile_cache.pop(key, None)
+        if now - entry['created_at'] > _OSM_TILE_CACHE_TTL_SECONDS:
+            _osm_tile_cache.pop(key, None)
             return None
         entry['last_used_at'] = now
         return copy.deepcopy(entry['features'])
@@ -559,18 +737,18 @@ def _get_cached_tile(tile_bbox):
 def _cache_tile(tile_bbox, features):
     key = _tile_cache_key(tile_bbox)
     now = time.monotonic()
-    with _tile_cache_lock:
-        _tile_cache[key] = {
+    with _osm_tile_cache_lock:
+        _osm_tile_cache[key] = {
             'created_at': now,
             'last_used_at': now,
             'features': copy.deepcopy(features),
         }
-        if len(_tile_cache) > _TILE_CACHE_MAX_ITEMS:
+        if len(_osm_tile_cache) > _OSM_TILE_CACHE_MAX_ITEMS:
             oldest_key = min(
-                _tile_cache,
-                key=lambda cache_key: _tile_cache[cache_key]['last_used_at'],
+                _osm_tile_cache,
+                key=lambda cache_key: _osm_tile_cache[cache_key]['last_used_at'],
             )
-            _tile_cache.pop(oldest_key, None)
+            _osm_tile_cache.pop(oldest_key, None)
 
 
 def _osm_buildings_from_tile(tile_bbox):
@@ -1585,16 +1763,23 @@ except Exception as e:
 # hâlâ bu paylaşılan global'den geliyordu.
 #
 # ÇÖZÜM (geriye dönük tamamen uyumlu): /api/analyze artık HER yanıtında
-# isteğe özel bir 'analysisId' alanı döndürür (bkz. _register_tile_session /
-# _attach_tile_session_extra / _get_analysis_session — yeni bir sistem
-# kurmak yerine halihazırda var olan tile-proxy oturum altyapısı yeniden
-# kullanılır). İstemci bu kimliği /api/download-geotiff ve
+# isteğe özel bir 'analysisId' alanı döndürür (bkz. _register_analysis_session
+# / _get_analysis_session). İstemci bu kimliği /api/download-geotiff ve
 # /api/vector-download isteklerinde geri gönderirse, KENDİ analizi bu
 # paylaşılan global yerine kesin/izole olarak kullanılır. İstemci
 # 'analysisId' göndermezse (ör. bu değişiklikten önceki bir index.html),
 # aşağıdaki iki global'e önceki (paylaşılan) davranışla AYNEN geri
 # düşülür — yani bu değişiklik mevcut istemciyi bozmaz, yalnızca istemci
 # güncellenene kadar eski sınırlamayı korur.
+#
+# 🛠️ EK DÜZELTME: 'analysisId' eskiden ('sid' ile aynı biçimde) bu SÜRECİN
+# belleğindeki bir sözlükte saklanıyordu — yani /api/analyze'ı işleyen
+# worker/instance ile /api/download-geotiff'i işleyen worker/instance
+# FARKLIYSA (bkz. dosya başındaki "KÖK NEDEN DÜZELTMESİ" notu, aynı sorunun
+# ikiz kardeşi), bu izolasyon mekanizması SESSİZCE bozulup 410
+# döndürüyordu. 'analysisId' de artık imzalı/kendi-kendine-yeterli bir
+# token olduğu için (bkz. _register_analysis_session) bu senaryoda da
+# sorunsuz çalışır.
 _last_analyze_params = {}
 
 # ════════════════════════════════════════════════════════════════
@@ -2015,14 +2200,20 @@ def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name):
 def ping():
     # Teşhis alanları: tile proxy'nin açık olup olmadığını ve önbellek
     # doluluğunu tarayıcıdan tek istekle görebilmek için.
+    # NOT: 'tileSessions' artık bir sözlük boyutu DEĞİL — oturumlar imzalı,
+    # kendi-kendine-yeterli token'lar olduğu için (bkz. "KÖK NEDEN
+    # DÜZELTMESİ" notu, dosya başı) merkezi/sayılabilir bir kayıt yoktur;
+    # bunun yerine bu SÜRECİN yenilenmiş-map-id en-iyi-çaba önbelleğinin
+    # (_rebuilt_url_cache) doluluğu raporlanır — yalnızca bilgi amaçlıdır.
     with _tile_lock:
-        session_count = len(_tile_sessions)
-        cached_tiles  = len(_tile_cache)
+        rebuilt_url_cache_size = len(_rebuilt_url_cache)
+        cached_tiles = len(_tile_cache)
     return jsonify({
         'ok': True,
-        'version': 'tile-proxy-v3',
+        'version': 'tile-proxy-v4-stateless-sessions',
         'tileProxy': TILE_PROXY_ENABLED,
-        'tileSessions': session_count,
+        'tileSessionMode': 'stateless-signed-token',
+        'rebuiltUrlCacheSize': rebuilt_url_cache_size,
         'cachedTiles': cached_tiles,
     })
 
@@ -4477,8 +4668,6 @@ def analyze():
             final_display, roi, result, vis, _unused_crs_probe = build_result_image(data)
             map_id = _call_with_retry(lambda: final_display.getMapId(vis))
             tile_url_direct = map_id['tile_fetcher'].url_format
-            _sid = _register_tile_session(tile_url_direct, params=data, kind='analyze')
-            tile_url = _tile_url_for_client(_sid, tile_url_direct)
 
             meta = _rgb_scene_metadata(data, roi, image, ds)
 
@@ -4499,9 +4688,19 @@ def analyze():
                     pass
             if download_native_crs:
                 _last_analyze_native_crs = download_native_crs
-            # Bu analize özel oturuma da aynı CRS'i ekle — bkz.
-            # _last_analyze_params tanımının üstündeki "BİLİNEN SINIRLAMA" notu.
-            _attach_tile_session_extra(_sid, nativeCrs=download_native_crs)
+
+            # 🛠️ KÖK NEDEN DÜZELTMESİ (410 hatası — bkz. dosya başındaki not):
+            # sid/analysisId artık nativeCrs HESAPLANDIKTAN SONRA, doğrudan
+            # içine gömülerek üretilir. Eskiden önce üretilip
+            # _attach_tile_session_extra ile SONRADAN güncelleniyordu; imzalı
+            # token'lar üretildikten sonra değiştirilemeyeceği için (ve zaten
+            # bu değişikliğin asıl amacı hiçbir paylaşılan sunucu belleğine
+            # ihtiyaç duymamak olduğu için) artık tek adımda, tam veriyle
+            # üretiliyor.
+            _extra = {'nativeCrs': download_native_crs} if download_native_crs else {}
+            _sid = _register_tile_session(tile_url_direct, params=data, kind='analyze', extra=_extra)
+            tile_url = _tile_url_for_client(_sid, tile_url_direct)
+            _analysis_sid = _register_analysis_session(data, kind='analyze', extra=_extra)
 
             return jsonify({
                 'success':  True,
@@ -4510,7 +4709,7 @@ def analyze():
                 # İndirme/vektörleştirme uç noktalarının, kullanıcılar arasında
                 # paylaşılan sunucu belleği yerine BU analizi kesin olarak
                 # yeniden bulabilmesi için (bkz. _get_analysis_session).
-                'analysisId': _sid,
+                'analysisId': _analysis_sid,
                 'index':    'RGB',
                 'meta':     meta,
                 'nativeCrs': download_native_crs,
@@ -4537,8 +4736,6 @@ def analyze():
         # katmanı artık düşüremez (aşağıda ayrıca güvenli varsayılana düşülür).
         map_id = _call_with_retry(lambda: final_display.getMapId(vis))
         tile_url_direct = map_id['tile_fetcher'].url_format
-        _sid = _register_tile_session(tile_url_direct, params=data, kind='analyze')
-        tile_url = _tile_url_for_client(_sid, tile_url_direct)
 
         # Bu analizin doğal çözünürlüğü — tüm reduceRegion çağrıları bunu kullanır.
         stats_scale = _stats_scale_for(data.get('index', 'NDVI'))
@@ -4602,9 +4799,18 @@ def analyze():
 
         if native_crs:
             _last_analyze_native_crs = native_crs
-        # Bu analize özel oturuma da aynı CRS'i ekle — bkz.
-        # _last_analyze_params tanımının üstündeki "BİLİNEN SINIRLAMA" notu.
-        _attach_tile_session_extra(_sid, nativeCrs=native_crs)
+
+        # 🛠️ KÖK NEDEN DÜZELTMESİ (410 hatası — bkz. dosya başındaki not):
+        # sid/analysisId artık nativeCrs HESAPLANDIKTAN SONRA, doğrudan
+        # içine gömülerek üretilir. GEE'ye giden asıl getMapId() çağrısı
+        # YİNE istatistiklerden ÖNCE (yukarıda) yapılıyor — kota zamanlaması
+        # değişmedi; yalnızca bizim KENDİ imzalı token'ımızın üretimi
+        # (yerel işlem, ağ çağrısı değil) nativeCrs sonrasına ertelendi,
+        # çünkü imzalı token'lar üretildikten sonra değiştirilemez.
+        _extra = {'nativeCrs': native_crs} if native_crs else {}
+        _sid = _register_tile_session(tile_url_direct, params=data, kind='analyze', extra=_extra)
+        tile_url = _tile_url_for_client(_sid, tile_url_direct)
+        _analysis_sid = _register_analysis_session(data, kind='analyze', extra=_extra)
 
         # ── İstatistik ────────────────────────────────────────────
         # 🛠️ BUG FİX (NoData piksel / büyük AOI istatistik sorunu):
@@ -4772,7 +4978,7 @@ def analyze():
             # paylaşılan sunucu belleği yerine BU analizi kesin olarak
             # yeniden bulabilmesi için (bkz. _get_analysis_session ve
             # _last_analyze_params tanımının üstündeki "BİLİNEN SINIRLAMA" notu).
-            'analysisId': _sid,
+            'analysisId': _analysis_sid,
             'stats':     stats,
             'realStats': real_minmax,
             'scenes':    scenes_list,
@@ -6900,19 +7106,34 @@ def vector_download():
 
 if __name__ == '__main__':
     # NOT: Bu blok sadece yerel (local) geliştirme/test içindir.
-    # VM'de 7/24 çalıştırırken bu dosya `python server.py` ile değil,
-    # gunicorn ile başlatılır.
+    # VM'de/Cloud Run'da 7/24 çalıştırırken bu dosya `python server.py` ile
+    # değil, gunicorn ile başlatılır.
     #
-    # ⚠️ ÖNEMLİ — GUNICORN KOMUTUNU GÜNCELLEYİN:
-    #   ESKİ:  gunicorn -w 4 -b 0.0.0.0:5000 --timeout 120 server:app
-    #   YENİ:  gunicorn -w 2 --threads 8 -b 0.0.0.0:5000 --timeout 120 server:app
+    # GUNICORN KOMUTU (örnek):
+    #   gunicorn -w 2 --threads 8 -b 0.0.0.0:5000 --timeout 120 server:app
     #
     # Gerekçe: tarayıcı bir haritayı çizerken 15-20 tile'ı AYNI ANDA ister.
-    # Tile'lar artık bu sunucu üzerinden geçtiği için (bkz. TILE PROXY),
-    # salt senkron worker'lar (-w 4, thread yok) aynı anda yalnızca 4 tile
-    # sunabilir ve harita gözle görülür şekilde yavaş boyanır. --threads 8
-    # ile 2 worker × 8 thread = 16 eşzamanlı tile karşılanır; tile'lar
-    # ağırlıklı olarak I/O beklediği için bu ek CPU maliyeti getirmez.
+    # Tile'lar bu sunucu üzerinden geçtiği için (bkz. TILE PROXY), salt
+    # senkron worker'lar (thread'siz) aynı anda yalnızca worker sayısı kadar
+    # tile sunabilir ve harita gözle görülür şekilde yavaş boyanır.
+    # --threads 8 ile 2 worker × 8 thread = 16 eşzamanlı tile karşılanır;
+    # tile'lar ağırlıklı olarak I/O beklediği için bu ek CPU maliyeti getirmez.
+    #
+    # 🛠️ ARTIK ÖNEMLİ DEĞİL (ama bilgi amaçlı): worker/instance SAYISI
+    # (-w 2, -w 4, Cloud Run'ın otomatik ölçeklendirmesiyle birden fazla
+    # container instance'ı vb.) bir daha "410 Tile oturumu süresi doldu"
+    # hatasına yol AÇAMAZ — bkz. dosya başındaki "KÖK NEDEN DÜZELTMESİ" notu.
+    # Tile/analiz oturumları artık imzalı, kendi-kendine-yeterli token'lar
+    # olduğu için hangi worker/instance isteği işlerse işlesin sorunsuz
+    # çözülür. Daha fazla eşzamanlı analiz/istatistik trafiği için worker
+    # sayısını serbestçe artırabilirsiniz.
+    #
+    # ⚠️ TEK KOŞUL: imzalama anahtarının TÜM worker/instance'lar arasında
+    # kararlı olması gerekir (bkz. _get_session_secret). GEE_SERVICE_ACCOUNT_
+    # EMAIL + GEE_SERVICE_ACCOUNT_KEY zaten tanımlıysa (Earth Engine için
+    # zorunlu) EK BİR ŞEY YAPMANIZ GEREKMEZ — anahtar bunlardan otomatik
+    # türetilir. İsterseniz yine de bağımsız/sabit bir anahtar için:
+    #     export SYLVAGIS_SESSION_SECRET=<uzun-rastgele-sabit-bir-deger>
     #
     # Proxy'yi kapatıp eski davranışa dönmek isterseniz: SYLVAGIS_TILE_PROXY=0
     port = int(os.environ.get('PORT', 5000))
