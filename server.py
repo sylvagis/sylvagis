@@ -2693,6 +2693,15 @@ def build_rgb_collection(ds, roi, max_cloud):
 _SCENE_GAP_FILL_DAY_WINDOW = 5  # gün — hem yönde (önce/sonra) arama genişliği
 def _fill_scene_gaps_with_same_day_mosaic(col, selected_image, scene_id, roi,
                                            day_window=_SCENE_GAP_FILL_DAY_WINDOW):
+    # 🛠️ BUG FİX (Element.get: Parameter 'object' is required and may not be
+    # null): selected_image çağıranlarda artık _require_nonempty_image() ile
+    # eager doğrulanıyor, ama bu fonksiyon başka bir yerden de çağrılabileceği
+    # için (savunmacı ikinci katman) None ise burada da hemen çıkılır — aksi
+    # halde birazdan .get('system:time_start') GEE'nin lazy grafiğinde bir
+    # "null nesne" hatasına neden olur ve bu hata çok daha SONRA (getInfo/
+    # getMapId sırasında), anlaşılmaz bir GEE mesajıyla ortaya çıkardı.
+    if selected_image is None:
+        return selected_image
     try:
         img_date = ee.Date(selected_image.get('system:time_start'))
         # Genişletilmiş arama penceresi: seçilen tarihten day_window gün
@@ -3433,6 +3442,40 @@ def _dynamic_stretch_vis(img, roi, scale, fallback_vis):
         return fallback_vis
 
 
+def _require_nonempty_image(image, empty_message):
+    """
+    🛠️ BUG FİX (Element.get: Parameter 'object' is required and may not be
+    null): .filter(...).first() veya boş bir koleksiyon üzerindeki benzer
+    bir seçim, GEE'nin LAZY (istemci tarafında hemen hesaplanmayan)
+    değerlendirme modeli yüzünden Python tarafında HİÇBİR ŞEKİLDE hata
+    fırlatmaz — geçersiz/boş bir ee.Image nesnesi sessizce üretilir. Bu
+    "boş" görüntü daha sonra (örn. getMapId/getInfo/reduceRegion.getInfo
+    sırasında, çoğunlukla build_result_image() çağrıldıktan çok sonra) GEE
+    sunucusunda değerlendirilmeye çalışıldığında "Element.get: Parameter
+    'object' is required and may not be null" gibi anlaşılmaz, ham bir hata
+    fırlatır — kullanıcı bunu "sunucu 5000 portunda çalışmıyor" gibi
+    alakasız bir mesajla birlikte görür.
+
+    ÇÖZÜM: /api/download-raw-bands içinde zaten doğru şekilde uygulanmış
+    olan desen (bkz. o rotanın 'system:index' kontrolü) burada genelleştirildi.
+    Görüntünün GERÇEKTEN bir sahneye karşılık gelip gelmediği erkenden
+    (eager) — yani build_result_image() dönmeden ÖNCE — tek ve ucuz bir
+    getInfo() çağrısıyla doğrulanır. Karşılık gelmiyorsa, GEE'nin çok daha
+    sonra fırlatacağı ham/anlaşılmaz hata yerine burada NET bir Türkçe
+    ValueError fırlatılır; tüm rota fonksiyonlarındaki mevcut
+    `except Exception as e: ... 'error': str(e)` blokları bu mesajı
+    doğrudan ve olduğu gibi kullanıcıya gösterir.
+    """
+    image = ee.Image(image)
+    try:
+        check = image.get('system:index').getInfo()
+    except Exception:
+        check = None
+    if not check:
+        raise ValueError(empty_message)
+    return image
+
+
 def build_result_image(data, for_export=False):
     """
     Ortak analiz görüntüsü oluşturma mantığı.
@@ -3463,6 +3506,19 @@ def build_result_image(data, for_export=False):
         class_breaks = None
 
     roi = make_roi(roi_coords)
+
+    # 🛠️ BUG FİX (ay/tarih filtresi HİÇBİR ANALİZ MODÜLÜNDE uygulanmıyordu):
+    # istemcinin "Ay Seçimi" (Search months) filtresi — bkz. _parse_months_param
+    # docstring'i — şimdiye kadar yalnızca galeri/sahne LİSTELEME uç noktalarında
+    # (/api/rgb-scenes, /api/get-scenes vb.) kullanılıyordu; asıl analiz/harita/
+    # indirme görüntüsünü üreten BU fonksiyon ayı hiç okumuyordu. Sonuç: galeri
+    # doğru ayları listelese bile, harita/analiz/indirme HER ZAMAN seçilen tarih
+    # aralığındaki (aya bakılmaksızın) İLK/medyan sahneyi kullanıyordu. Aşağıda
+    # gerçek uydu koleksiyonu sorgulayan HER dal (RGB, SAR, ana indeks dalı)
+    # bu filtreyi filterDate() sonrasına uygular; LULC/TOPO gibi uydu-bağımsız
+    # veri setleri (yukarıda zaten return ile ayrılmış) bundan etkilenmez.
+    months = _parse_months_param(data)
+    month_filter = _calendar_month_filter(months)
 
     # ── 0. Uydu görüntüsü gerektirmeyen bağımsız veri setleri ────
     # Bu analizler kendi GEE koleksiyonlarını kullanır; uydu/bant seçimi
@@ -4019,12 +4075,23 @@ def build_result_image(data, for_export=False):
 
         if scene_id:
             _selected_image = col.filter(ee.Filter.eq('system:index', scene_id)).first()
+            _selected_image = _require_nonempty_image(
+                _selected_image,
+                'Seçilen sahne bulunamadı. Lütfen galeriden tekrar bir görüntü seçin.'
+            )
             # 🛠️ AOI, seçilen tek sahnenin/tile'ın dışına taşıyorsa aynı
             # güne ait komşu sahnelerle boşluk doldurulur (bkz. yukarıdaki
             # _fill_scene_gaps_with_same_day_mosaic docstring'i).
             image = _fill_scene_gaps_with_same_day_mosaic(col, _selected_image, scene_id, roi)
         else:
-            image = col.filterDate(start_date, end_date).sort('system:time_start', False).first()
+            _rgb_dated = col.filterDate(start_date, end_date)
+            if month_filter is not None:
+                _rgb_dated = _rgb_dated.filter(month_filter)
+            image = _require_nonempty_image(
+                _rgb_dated.sort('system:time_start', False).first(),
+                'Seçilen kriterlere (tarih aralığı, ay filtresi, bulutluluk eşiği) uygun '
+                'uydu görüntüsü bulunamadı. Lütfen filtreleri genişletin.'
+            )
 
         disp = image.select(ds['rgbBands'])
         if ds.get('scaleFactor', 1) != 1 or ds.get('offset', 0) != 0:
@@ -4044,6 +4111,17 @@ def build_result_image(data, for_export=False):
                .filter(ee.Filter.eq('instrumentMode', 'IW'))
                .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VV'))
                .select('VV'))
+        if month_filter is not None:
+            _sar_col = _sar_col.filter(month_filter)
+        # 🛠️ BUG FİX (Element.get null hatası): seçilen ay/tarih aralığında
+        # hiç SAR sahnesi yoksa burada erken ve anlaşılır bir Türkçe hata
+        # fırlatılır — GEE'nin .mean() sonrası çok daha geç ve anlaşılmaz
+        # biçimde fırlatacağı "Element.get: ... may not be null" yerine.
+        _crs_probe_img = _require_nonempty_image(
+            _sar_col.first(),
+            'Seçilen kriterlere uygun SAR (Sentinel-1) görüntüsü bulunamadı. '
+            'Lütfen tarih aralığını veya ay filtresini genişletin.'
+        )
         sar = _sar_col.mean().rename('value')
         vis    = {'min': -25, 'max': 0,
                   'palette': ['black', 'white']}
@@ -4051,8 +4129,7 @@ def build_result_image(data, for_export=False):
         final_display = sar.clip(roi) if clip_mode == 'clip' else sar
         # 🛠️ BUG FİX: .mean() de median() gibi çıktı projeksiyonunu EPSG:4326'ya
         # sıfırlar — gerçek/native CRS'i reduce edilmeden ÖNCEki tek bir
-        # sahneden (_sar_col.first()) okuyoruz.
-        _crs_probe_img = _sar_col.first()
+        # sahneden (_sar_col.first()) okuyoruz (yukarıda zaten doğrulandı).
         return final_display, roi, result, vis, _crs_probe_img
 
     # ── 1. Uydu koleksiyonunu ve bant adlarını seç ──────────────
@@ -4169,6 +4246,10 @@ def build_result_image(data, for_export=False):
     # ── 2. Tarih filtresi veya belirli sahne ────────────────────
     if scene_id:
         _selected_image = col.filter(ee.Filter.eq('system:index', scene_id)).first()
+        _selected_image = _require_nonempty_image(
+            _selected_image,
+            'Seçilen sahne bulunamadı. Lütfen galeriden tekrar bir görüntü seçin.'
+        )
         # CRS'i her zaman KULLANICININ SEÇTİĞİ gerçek sahneden okuyoruz —
         # boşluk doldurma için eklenen komşu sahne(ler) farklı bir UTM
         # diliminde olabilir; bu, indirme/lejant CRS'ini yanlış saptırmasın.
@@ -4180,7 +4261,23 @@ def build_result_image(data, for_export=False):
         # doldurma sahnelerinde de bulut/gölge pikselleri zaten maskelidir.
         image = _fill_scene_gaps_with_same_day_mosaic(col, _selected_image, scene_id, roi)
     else:
-        image = col.filterDate(start_date, end_date).median()
+        # 🛠️ BUG FİX (ay filtresi): bkz. fonksiyon başındaki month_filter
+        # açıklaması — seçiliyse burada filterDate() sonrasına eklenir.
+        _dated_col = col.filterDate(start_date, end_date)
+        if month_filter is not None:
+            _dated_col = _dated_col.filter(month_filter)
+        # 🛠️ BUG FİX (Element.get null hatası): median() BOŞ bir koleksiyon
+        # üzerinde çağrılsa bile Python'da hata FIRLATMAZ — tamamen maskeli/
+        # boş bir görüntü üretir ve hata çok daha sonra (getMapId/getInfo
+        # sırasında) "Element.get: ... may not be null" olarak ortaya çıkar.
+        # Burada koleksiyonun GERÇEKTEN en az bir sahne içerip içermediği
+        # erkenden doğrulanır; içermiyorsa net bir Türkçe hata fırlatılır.
+        _crs_probe_img = _require_nonempty_image(
+            _dated_col.first(),
+            'Seçilen kriterlere (tarih aralığı, ay filtresi, bulutluluk eşiği) uygun '
+            'uydu görüntüsü bulunamadı. Lütfen filtreleri genişletin.'
+        )
+        image = _dated_col.median()
         # 🛠️ BUG FİX (KÖK NEDEN — CRS seçici HER ZAMAN "WGS 84" gösteriyordu):
         # ee.ImageCollection.median() (ve mean()/mosaic() gibi diğer reducer'lar)
         # çıktı görüntünün projeksiyonunu, kaynak sahnelerin gerçek UTM dilimi
@@ -4188,10 +4285,10 @@ def build_result_image(data, for_export=False):
         # Bu yüzden "result.projection()" üzerinden CRS okumak, verinin gerçek
         # native CRS'inden BAĞIMSIZ olarak daima "EPSG:4326" döndürüyordu.
         # ÇÖZÜM: Gerçek/native CRS'i, henüz reduce EDİLMEMİŞ kaynak
-        # koleksiyondaki TEK bir görüntüden (_crs_probe_img) okuyoruz — aynı
-        # AOI'yi kapsayan sahneler normalde aynı UTM diliminde olduğundan bu,
-        # medyan kompozitin gerçek/native CRS'ini doğru şekilde temsil eder.
-        _crs_probe_img = col.filterDate(start_date, end_date).first()
+        # koleksiyondaki TEK bir görüntüden (_crs_probe_img, yukarıda zaten
+        # doğrulandı) okuyoruz — aynı AOI'yi kapsayan sahneler normalde aynı
+        # UTM diliminde olduğundan bu, medyan kompozitin gerçek/native
+        # CRS'ini doğru şekilde temsil eder.
 
     # 🛠️ BUG FİX (NDVI/LST/NDWI vb. TÜM uydu indekslerinde dağınık
     # beyaz/siyah piksel boşlukları — DEM void-fill ile AYNI kök neden
@@ -4516,18 +4613,26 @@ def _sylva_period_ranges(start_year, end_year, period):
     return ranges
 
 
-def _sylva_least_cloud_scene(roi, satellite, start_date, end_date, max_cloud):
+def _sylva_least_cloud_scene(roi, satellite, start_date, end_date, max_cloud, months=None):
     """Verilen AOI + tarih aralığında, seçilen uydu için EN AZ bulutlu
     gerçek sahnenin metadata'sını (sceneId, timestamp, bulutluluk %) döner.
-    Uygun sahne bulunamazsa None döner — galeri o periyodu atlar."""
+    Uygun sahne bulunamazsa None döner — galeri o periyodu atlar.
+
+    months: 1-12 arası ay listesi (varsa) — bkz. _parse_months_param/
+    _calendar_month_filter. 🛠️ BUG FİX: bu parametre eskiden hiç yoktu;
+    Zaman Serisi galerisi (bkz. timeseries()) ay filtresini YOK sayıp
+    aralıktaki HER ayın en az bulutlu sahnesini gösteriyordu."""
     ds = SATELLITE_DATASETS.get(satellite)
     if not ds:
         return None
     cloud_prop = ds.get('cloudProp')
+    month_filter = _calendar_month_filter(months)
     try:
         col = None
         for coll_id in ds.get('collections', []):
             c = ee.ImageCollection(coll_id).filterBounds(roi).filterDate(start_date, end_date)
+            if month_filter is not None:
+                c = c.filter(month_filter)
             col = c if col is None else col.merge(c)
         if col is None:
             return None
@@ -4565,6 +4670,13 @@ def timeseries():
         indices = data.get('indices')
         if not indices:
             indices = [data.get('index', 'NDVI')]
+
+        # 🛠️ BUG FİX (ay filtresi Zaman Serisi galerisinde yok sayılıyordu):
+        # her periyodun build_result_image() çağrısı zaten period_data =
+        # dict(data) ile orijinal 'months' alanını devralır (aşağıda), ama
+        # galerideki "en az bulutlu sahne" sorgusu (_sylva_least_cloud_scene)
+        # AYRI bir fonksiyondur ve months'u açıkça almalıdır.
+        months = _parse_months_param(data)
 
         try:
             start_year = int(data.get('startYear'))
@@ -4621,7 +4733,7 @@ def timeseries():
         # tek bir sahne akışı gösterir, indeks başına ayrı galeri yoktur)
         gallery = []
         for label, sdate, edate in ranges:
-            scene = _sylva_least_cloud_scene(roi, satellite, sdate, edate, max_cloud)
+            scene = _sylva_least_cloud_scene(roi, satellite, sdate, edate, max_cloud, months=months)
             if scene:
                 scene['label'] = label
                 gallery.append(scene)
@@ -4660,10 +4772,21 @@ def analyze():
             max_cloud = int(data.get('maxCloud', 100))
             col = build_rgb_collection(ds, roi, max_cloud)
             scene_id = data.get('sceneId')
+            # 🛠️ BUG FİX (ay filtresi): bu blok yalnızca Görüntü Bilgileri
+            # panelinde gösterilecek meta veriyi (tarih/bulutluluk/CRS) okumak
+            # için AŞAĞIDAKİ build_result_image(data) çağrısıyla AYNI sahneyi
+            # seçmelidir — aksi halde ay filtresi uygulandıktan sonra bile
+            # panel, haritada görünenden FARKLI bir sahnenin bilgisini
+            # gösterebilirdi. Aynı month_filter mantığı burada da uygulanır.
+            _rgb_meta_months = _parse_months_param(data)
+            _rgb_meta_month_filter = _calendar_month_filter(_rgb_meta_months)
             if scene_id:
                 image = col.filter(ee.Filter.eq('system:index', scene_id)).first()
             else:
-                image = col.filterDate(data.get('startDate'), data.get('endDate')).sort('system:time_start', False).first()
+                _rgb_meta_dated = col.filterDate(data.get('startDate'), data.get('endDate'))
+                if _rgb_meta_month_filter is not None:
+                    _rgb_meta_dated = _rgb_meta_dated.filter(_rgb_meta_month_filter)
+                image = _rgb_meta_dated.sort('system:time_start', False).first()
 
             final_display, roi, result, vis, _unused_crs_probe = build_result_image(data)
             map_id = _call_with_retry(lambda: final_display.getMapId(vis))
@@ -5247,19 +5370,27 @@ def download_geotiff():
         # False) bu adım atlanır — mevcut davranış korunur.
         aoi_geom_4326 = _call_with_retry(lambda: roi.getInfo()) if is_clip else None
 
-        tif_bytes = _download_band_geotiff_bytes(
-            final_display, export_region, scale, crs, safe_name,
-            nodata_value=nodata_value, aoi_geom_4326=aoi_geom_4326,
-            fallback_region_geom=roi.bounds(maxError=100)
-        )
-
         # 🎨 ArcMap/QGIS "Siyah-Beyaz + Rakam" SORUNU DÜZELTMESİ:
         # LULC ailesi (LULC, LULC_ESA, LULC_MODIS, LULC_CORINE) indirmelerinde
         # ham GeoTIFF'in içine (ve yanına) Color Table + RAT gömülür; kullanıcıya
         # tek bir .tif yerine .tif + .tif.aux.xml + .clr içeren bir ZIP sunulur.
         # Diğer TÜM analizler (NDVI, DEM, RGB, TOPO vb.) etkilenmez; onlar
         # önceki gibi doğrudan .tif olarak inmeye devam eder.
+        # 🛠️ BUG FİX: lulc_index artık _download_band_geotiff_bytes() ÇAĞRISINDAN
+        # ÖNCE hesaplanır ki is_categorical=True olarak iletilebilsin — LULC
+        # sınıf kodlarının olası bir CRS yeniden örneklemesinde (_ensure_output_crs)
+        # bilinear yerine en_yakın_komşu kullanmasını sağlar (aksi halde komşu
+        # sınıflar arasında anlamsız ondalıklı "ara" kodlar üretilebilirdi).
         lulc_index = data.get('index')
+        is_lulc_categorical = lulc_index in LULC_CLASS_DEFS
+
+        tif_bytes = _download_band_geotiff_bytes(
+            final_display, export_region, scale, crs, safe_name,
+            nodata_value=nodata_value, aoi_geom_4326=aoi_geom_4326,
+            fallback_region_geom=roi.bounds(maxError=100),
+            is_categorical=is_lulc_categorical
+        )
+
         if lulc_index in LULC_CLASS_DEFS:
             try:
                 sym_files = _build_lulc_symbology_zip(tif_bytes, lulc_index, safe_name)
@@ -5291,7 +5422,12 @@ def download_geotiff():
         err = str(e).strip() or '{} (mesajsız hata — sunucu konsoluna bakın)'.format(type(e).__name__)
         # GEE boyut limiti otomatik karolama sonrasında da aşılırsa (çok
         # büyük AOI + çok küçük scale kombinasyonu) kullanıcıya bilgi ver.
-        if 'too large' in err.lower() or 'limit' in err.lower():
+        # 🛠️ BUG FİX: bkz. _is_size_limit_error()/_SIZE_LIMIT_ERROR_MARKERS
+        # docstring'i — eskiden buradaki gevşek 'too large'/'limit' kontrolü
+        # hem GEE'nin gerçek boyut-sınırı mesajını YAKALAYAMIYOR (bu yüzden
+        # kullanıcı ham/İngilizce GEE hatasını görüyordu) hem de alakasız
+        # hatalara YANLIŞLIKLA bu mesajı uyguluyordu.
+        if _is_size_limit_error(err):
             return jsonify({
                 'success': False,
                 'error': 'Alan otomatik karolamayla bile tek dosyada indirilemeyecek kadar büyük. '
@@ -5346,6 +5482,34 @@ def _parse_gee_size_limit_error(msg):
     if not m:
         return None
     return int(m.group(1)), int(m.group(2))
+
+
+# 🛠️ BUG FİX ("Alan otomatik karolamayla bile..." mesajı yerine ham/teknik
+# GEE hatasının gösterilmesi + alakasız hatalara yanlışlıkla aynı mesajın
+# uygulanması): download_geotiff()/download_raw_bands() route'larındaki
+# except bloklarında ESKİDEN `'too large' in err.lower() or 'limit' in
+# err.lower()` gibi çok gevşek bir alt-dize kontrolü vardı.
+#   1) GEE'nin GERÇEK boyut-sınırı mesajı olan "must be less than or equal
+#      to ... bytes" ifadesi ne "too large" ne de "limit" kelimesini içerir
+#      — yani bir karo TİLİNGDEN SONRA BİLE hâlâ çok büyükse (nested/iç içe
+#      başarısızlık, bkz. _download_band_geotiff_bytes_impl'deki karo
+#      indirme döngüsü), bu kontrol hiç EŞLEŞMEZ ve kullanıcı ham/İngilizce
+#      GEE hata metnini görür.
+#   2) Tam tersi yönde: "limit" kelimesi GEE'nin boyutla HİÇ ilgisi olmayan
+#      başka hatalarında da geçebilir (ör. kota/hesaplama karmaşıklığı
+#      limitleri) — bu durumlarda kullanıcıya YANLIŞ ÖNERİ ("AOI'yi küçültün")
+#      gösterilir.
+# ÇÖZÜM: Hem GEE'nin gerçek/bilinen mesaj kalıbını HEM DE
+# _download_band_geotiff_bytes_impl'in karo-bazında fırlattığı özel işaret
+# dizesini (aşağıya bkz.) tanıyan, dar ve kesin bir eşleşme listesi.
+_SIZE_LIMIT_ERROR_MARKERS = (
+    'SYLVAGIS_TILE_STILL_TOO_LARGE',
+    'must be less than or equal to',
+)
+
+
+def _is_size_limit_error(err_text):
+    return any(marker in (err_text or '') for marker in _SIZE_LIMIT_ERROR_MARKERS)
 
 
 def _split_bbox_grid(roi, nx, ny):
@@ -5447,7 +5611,7 @@ def _split_bbox_grid_aligned(roi, nx, ny, scale, crs):
     return tiles
 
 
-def _ensure_output_crs(tif_bytes, target_crs, nodata_value=None):
+def _ensure_output_crs(tif_bytes, target_crs, nodata_value=None, is_categorical=False):
     """
     🔒 KESİN CRS GÜVENCESİ — GEE'DEN BAĞIMSIZ.
 
@@ -5471,6 +5635,16 @@ def _ensure_output_crs(tif_bytes, target_crs, nodata_value=None):
     Herhangi bir nedenle bu adım başarısız olursa (bozuk dosya vb.)
     orijinal bayt içeriği DEĞİŞTİRİLMEDEN döndürülür — bu güvence
     katmanı asla indirmeyi kesintiye uğratmaz.
+
+    is_categorical: True ise (ör. LULC/LULC_ESA/LULC_MODIS/LULC_CORINE gibi
+    tam sayı sınıf kodları taşıyan arazi örtüsü verileri), yeniden
+    örnekleme en_yakın_komşu (Resampling.nearest) ile yapılır.
+    🛠️ BUG FİX: bu parametre eskiden yoktu ve TÜM dosyalar (kategorik/
+    sınıflandırılmış olanlar dahil) koşulsuz olarak bilinear ile yeniden
+    örnekleniyordu — bu, komşu sınıf kodları arasında (ör. "Orman"=1 ile
+    "Tarım Alanı"=4 arası) anlamsız ARA/ondalıklı değerler (ör. 2.7)
+    üretip sınıflandırmayı bozabiliyordu. Sürekli/ölçümsel veriler (NDVI,
+    DEM, eğim, yansıma vb.) için bilinear davranışı AYNEN korunur.
     """
     try:
         import rasterio
@@ -5512,6 +5686,12 @@ def _ensure_output_crs(tif_bytes, target_crs, nodata_value=None):
                 if src_nodata is not None:
                     out_meta['nodata'] = src_nodata
 
+                # 🛠️ BUG FİX: kategorik/sınıflandırılmış veride (LULC ailesi)
+                # bilinear ile ondalıklı "ara sınıf" değerleri üretmemek için
+                # en_yakın_komşu kullanılır; sürekli veriler için (varsayılan)
+                # önceki bilinear davranışı korunur.
+                resampling_method = Resampling.nearest if is_categorical else Resampling.bilinear
+
                 with MemoryFile() as out_memfile:
                     with out_memfile.open(**out_meta) as dst:
                         for band_idx in range(1, src.count + 1):
@@ -5523,13 +5703,10 @@ def _ensure_output_crs(tif_bytes, target_crs, nodata_value=None):
                                 dst_transform=transform,
                                 dst_crs=target,
                                 dst_nodata=src_nodata,
-                                # Kategorik olmayan sürekli veriler (NDVI, DEM,
-                                # eğim, yansıma vb.) için değerleri bozmayan
-                                # en_yakın_komşu yerine bilinear kullanılır;
                                 # NoData sınırında sızıntı olmaması için
                                 # src_nodata da ayrıca belirtilir.
                                 src_nodata=src_nodata,
-                                resampling=Resampling.bilinear,
+                                resampling=resampling_method,
                             )
                     return out_memfile.read()
     except Exception as reproj_err:
@@ -5646,6 +5823,7 @@ def _true_clip_tif_bytes(tif_bytes, aoi_geom_4326, nodata_value):
       CRS'ine otomatik olarak yeniden projeksiyonlanır.
     """
     try:
+        import numpy as np
         import rasterio
         from rasterio.mask import mask as rio_mask
         from rasterio.warp import transform_geom
@@ -5657,31 +5835,80 @@ def _true_clip_tif_bytes(tif_bytes, aoi_geom_4326, nodata_value):
             'çalıştırıp server.py\'yi yeniden başlatın.'
         )
 
-    with MemoryFile(tif_bytes) as memfile:
-        with memfile.open() as src:
-            dst_crs   = src.crs.to_string() if src.crs else 'EPSG:4326'
-            geom_dst  = transform_geom('EPSG:4326', dst_crs, aoi_geom_4326, precision=8)
+    def _valid_ratio(arr, nodata):
+        arr = np.asarray(arr)
+        finite = np.isfinite(arr)
+        if nodata is not None:
+            finite &= ~np.isclose(arr, float(nodata))
+        return float(finite.sum()) / float(arr.size) if arr.size else 0.0
 
-            # crop=True: raster kapsamını da AOI'nin bounding box'ına daraltır
-            # (gereksiz kenar boşluğu kalmaz). nodata: poligon dışındaki TÜM
-            # pikseller — kaynak veri ne olursa olsun — bu değere sabitlenir.
-            out_image, out_transform = rio_mask(
-                src, [geom_dst], crop=True, nodata=nodata_value,
-                all_touched=False, filled=True
-            )
-            out_meta = src.meta.copy()
-            out_meta.update({
-                'driver':    'GTiff',
-                'height':    out_image.shape[1],
-                'width':     out_image.shape[2],
-                'transform': out_transform,
-                'nodata':    nodata_value,
-            })
+    # 🛠️ BUG FİX (ArcMap/QGIS'te tamamen SİYAH/boş açılan indirilmiş raster):
+    # bu fonksiyonun ESKİDEN kendi try/except güvencesi YOKTU — kardeş
+    # fonksiyonlar _ensure_output_crs() ve _stamp_exact_band_statistics()'in
+    # aksine, burada oluşan HERHANGİ bir hata (ör. geometri/CRS dönüşüm
+    # sorunları, "Input shapes do not overlap raster") doğrudan üst seviyeye
+    # fırlayıp TÜM indirmeyi başarısız kılıyordu. DAHA SİNSİ bir ikinci
+    # senaryo ise rasterio.mask'in "başarıyla" dönüp — bir geometri/transform
+    # uyuşmazlığı yüzünden — neredeyse TÜM pikselleri yanlışlıkla NoData'ya
+    # çevirmesiydi: kullanıcı dosyayı GERÇEKTEN indirebiliyordu, ama ArcMap/
+    # QGIS'te açtığında ekran tamamen siyah/boş çıkıyordu (farklı analizler
+    # bile aynı -9999 sentinel değeriyle "aynı" görünüyordu — kullanıcının
+    # bildirdiği belirti tam olarak budur).
+    # ÇÖZÜM: (1) tüm bloğu, kardeş fonksiyonlarla TUTARLI bir try/except
+    # içine alıp herhangi bir hatada GEE'nin kendi clip/NoData zincirinden
+    # gelen (hâlâ geçerli) ORİJİNAL bayt içeriğine güvenle geri dönülür; (2)
+    # kırpma SONRASI geçerli piksel oranı, kırpma ÖNCESİNE göre şüpheli
+    # derecede düşükse (ör. kırpma öncesi geçerli veri vardı ama sonrasında
+    # neredeyse hiç kalmadıysa) sonuç GÜVENİLMEZ kabul edilip yine orijinal
+    # bayt içeriğine dönülür — kullanıcıya ASLA sessizce bozuk/boş bir dosya
+    # gönderilmez.
+    try:
+        with MemoryFile(tif_bytes) as memfile:
+            with memfile.open() as src:
+                dst_crs   = src.crs.to_string() if src.crs else 'EPSG:4326'
+                geom_dst  = transform_geom('EPSG:4326', dst_crs, aoi_geom_4326, precision=8)
 
-            with MemoryFile() as out_memfile:
-                with out_memfile.open(**out_meta) as dst:
-                    dst.write(out_image)
-                return out_memfile.read()
+                pre_data = src.read()
+                pre_nodata = src.nodata if src.nodata is not None else nodata_value
+                pre_valid_ratio = _valid_ratio(pre_data, pre_nodata)
+
+                # crop=True: raster kapsamını da AOI'nin bounding box'ına daraltır
+                # (gereksiz kenar boşluğu kalmaz). nodata: poligon dışındaki TÜM
+                # pikseller — kaynak veri ne olursa olsun — bu değere sabitlenir.
+                out_image, out_transform = rio_mask(
+                    src, [geom_dst], crop=True, nodata=nodata_value,
+                    all_touched=False, filled=True
+                )
+
+                post_valid_ratio = _valid_ratio(out_image, nodata_value)
+
+                # Kırpma öncesi zaten anlamlı miktarda geçerli piksel vardıysa
+                # (>%1) ama kırpma sonrası bunun neredeyse tamamı (>%95'i)
+                # kaybolduysa, bu kırpmanın YANLIŞ ÇALIŞTIĞININ işaretidir.
+                if pre_valid_ratio > 0.01 and post_valid_ratio < pre_valid_ratio * 0.05:
+                    print('[SylvaGIS] ⚠️ Yerel true-clip sonrası geçerli piksel oranı '
+                          'şüpheli derecede düştü ({:.4f} → {:.4f}) — sonuç GÜVENİLMEZ '
+                          'kabul edilip GEE\'nin kendi kırpmasıyla gelen orijinal dosyaya '
+                          'güvenle geri dönülüyor.'.format(pre_valid_ratio, post_valid_ratio))
+                    return tif_bytes
+
+                out_meta = src.meta.copy()
+                out_meta.update({
+                    'driver':    'GTiff',
+                    'height':    out_image.shape[1],
+                    'width':     out_image.shape[2],
+                    'transform': out_transform,
+                    'nodata':    nodata_value,
+                })
+
+                with MemoryFile() as out_memfile:
+                    with out_memfile.open(**out_meta) as dst:
+                        dst.write(out_image)
+                    return out_memfile.read()
+    except Exception as clip_err:
+        print('[SylvaGIS] ❌ Yerel true-clip başarısız — GEE\'nin kendi kırpmasıyla '
+              'gelen orijinal dosya gönderiliyor:', clip_err)
+        return tif_bytes
 
 
 def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, nodata_value=None,
@@ -5827,11 +6054,19 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
                 tr = _call_with_retry(lambda: requests.get(tile_url, timeout=180), retries=2)
                 if not tr.ok:
                     body_snippet = (tr.text or '')[:500]
-                    raise Exception(
-                        'GEE karo indirme isteği başarısız (karo {}, HTTP {}): {}'.format(
-                            idx + 1, tr.status_code, body_snippet
-                        )
+                    _tile_err_msg = 'GEE karo indirme isteği başarısız (karo {}, HTTP {}): {}'.format(
+                        idx + 1, tr.status_code, body_snippet
                     )
+                    # 🛠️ BUG FİX: karonun KENDİSİ bile GEE'nin boyut sınırını
+                    # aşıyorsa (aşırı büyük AOI + çok ince çözünürlük), bunu
+                    # daha fazla bölünerek çözemeyiz — üst seviyedeki hata
+                    # sınıflandırıcısının (bkz. _SIZE_LIMIT_ERROR_MARKERS) bunu
+                    # GEE'nin ham/İngilizce mesajı yerine kullanıcıya anlaşılır
+                    # bir Türkçe mesajla eşleştirebilmesi için özel bir işaret
+                    # dizesiyle işaretliyoruz.
+                    if _parse_gee_size_limit_error(body_snippet):
+                        raise Exception('SYLVAGIS_TILE_STILL_TOO_LARGE: ' + _tile_err_msg)
+                    raise Exception(_tile_err_msg)
                 tp = os.path.join(tmpdir, 'tile_{}.tif'.format(idx))
                 with open(tp, 'wb') as f:
                     f.write(tr.content)
@@ -5872,7 +6107,8 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
 
 
 def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata_value=None,
-                                  aoi_geom_4326=None, fallback_region_geom=None):
+                                  aoi_geom_4326=None, fallback_region_geom=None,
+                                  is_categorical=False):
     """
     _download_band_geotiff_bytes_impl() için ince bir sarmalayıcı (wrapper).
     Tek istek / bounded-fallback / karo-mozaik yollarının HANGİSİ
@@ -5882,6 +6118,10 @@ def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata
     (QGIS/ArcMap arasındaki min-max tutarsızlığı düzeltmesi). Tek bir
     yerden çağrılarak tüm indirme yollarının aynı garantiye sahip
     olması sağlanır.
+
+    is_categorical: bkz. _ensure_output_crs() docstring'i — LULC ailesi
+    gibi tam sayı sınıf kodu taşıyan veriler için True verilmelidir ki
+    olası bir CRS yeniden örneklemesi en_yakın_komşu kullansın.
     """
     raw_bytes = _download_band_geotiff_bytes_impl(
         img, region_geom, scale, crs, base_name,
@@ -5890,7 +6130,7 @@ def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata
     )
     # 🔒 GEE ne dönerse dönsün, kullanıcının seçtiği CRS'i kesin olarak
     # garanti eden güvence katmanı — bkz. _ensure_output_crs() docstring'i.
-    raw_bytes = _ensure_output_crs(raw_bytes, crs, nodata_value=nodata_value)
+    raw_bytes = _ensure_output_crs(raw_bytes, crs, nodata_value=nodata_value, is_categorical=is_categorical)
     return _stamp_exact_band_statistics(raw_bytes, nodata_value=nodata_value)
 
 
@@ -6079,7 +6319,9 @@ def download_raw_bands():
     except Exception as e:
         traceback.print_exc()
         err = str(e).strip() or '{} (mesajsız hata — sunucu konsoluna bakın)'.format(type(e).__name__)
-        if 'too large' in err.lower() or 'limit' in err.lower():
+        # 🛠️ BUG FİX: bkz. _is_size_limit_error()/_SIZE_LIMIT_ERROR_MARKERS
+        # docstring'i (download_geotiff()'teki aynı düzeltmeyle tutarlı).
+        if _is_size_limit_error(err):
             return jsonify({
                 'success': False,
                 'error': 'Çok büyük alan! Lütfen çalışma alanını (AOI) küçültüp tekrar deneyin '
