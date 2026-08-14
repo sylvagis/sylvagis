@@ -11656,21 +11656,25 @@ function selectRamp(name) {
                     + '<span>'+t('low_label','Low')+'</span><span>'+t('high_label','High')+'</span></div>';
             }
 
-            var _ral_minSpan  = legendBox.querySelector('.legend-min-label');
-            var _ral_maxSpan  = legendBox.querySelector('.legend-max-label');
-            var _ral_savedMin = _ral_minSpan ? _ral_minSpan.textContent.trim() : null;
-            var _ral_savedMax = _ral_maxSpan ? _ral_maxSpan.textContent.trim() : null;
+            // 🛠️ BUG FİX (Lejant Min/Max Değerleri Yeni Analizle Güncellenmiyordu):
+            // Bu fonksiyon eskiden, kutuyu YENİ html içeriğiyle güncellemeden
+            // ÖNCE, kutuda o an görünen (bir ÖNCEKİ analize/katmana ait olabilecek)
+            // Min/Max metnini okuyup, render'dan SONRA bu ESKİ değerleri yeni
+            // legendMin/legendMax'ın ÜZERİNE zorla geri yazıyordu. Bu kontrolsüz
+            // "geri yükleme" hangi analiz olduğuna bakmaksızın çalıştığından,
+            // örn. NDVI'dan NDWI'ya geçildiğinde NDWI'nin doğru hesaplanan Min/Max
+            // değerleri, NDVI'den kalma eski değerlerle eziliyordu — lejant
+            // sayısal aralığı bir daha hiç güncellenmeyip ilk analizde "donuyordu".
+            // Kullanıcının GERÇEKTEN özelleştirdiği Min/Max değerleri zaten ayrı
+            // ve doğru bir mekanizmayla (bkz. _sylvaSaveEditorStateForLayer /
+            // window._sylvaLayerLegendSnapshotByPane, "Lejantı Uygula" akışı)
+            // katman bazında saklanıp geri yükleniyor; bu kaba/koşulsuz üzerine
+            // yazma hem gereksizdi hem de yukarıdaki veri bütünlüğü hatasına yol
+            // açıyordu — bu yüzden kaldırıldı.
             var _ral_dateRow  = legendBox.querySelector('.real-stats-row');
             var _ral_dateHTML = _ral_dateRow ? _ral_dateRow.outerHTML : null;
 
             _setLegendHTML(legendBox, html);
-
-            if (_ral_savedMin !== null && _ral_savedMin !== '') {
-                var _ral_newMin = legendBox.querySelector('.legend-min-label');
-                var _ral_newMax = legendBox.querySelector('.legend-max-label');
-                if (_ral_newMin) _ral_newMin.textContent = _ral_savedMin;
-                if (_ral_newMax && _ral_savedMax !== null) _ral_newMax.textContent = _ral_savedMax;
-            }
 
             if (_ral_dateHTML) {
                 var _ral_tmp = document.createElement('div');
@@ -14002,7 +14006,20 @@ function selectRamp(name) {
                 }
             }
 
-            metaList.forEach(function (meta) {
+            // 🛠️ BUG FİX (Lejant/Üst Katman Karışıklığı — bkz. loadRgbScene()'deki
+            // _seq/_sylvaRgbTopSeqByPane deseninin BİREBİR eşleniği): Birden fazla
+            // indeks analizi (ör. NDVI + NDWI) aynı anda işaretlenip çalıştırıldığında
+            // her biri için AYRI ve ASENKRON bir istek atılır; bu istekler ağ
+            // gecikmesine bağlı olarak GÖNDERİLDİKLERİ SIRADAN FARKLI bir sırada yanıt
+            // dönebilir. Eskiden hangi yanıt EN SON gelirse Lejant/üst katman onun
+            // üzerine ayarlanıyordu (bkz. aşağıdaki _sylvaIndexTopSeqByPane kullanımı).
+            // Artık her istek, işaretlenme SIRASINA göre artan bir sıra numarası
+            // (_seq) taşıyor; bu sıra sıfırlanıp her meta'ya atanıyor.
+            window._sylvaIndexTopSeqByPane = window._sylvaIndexTopSeqByPane || { map: -1, map2: -1 };
+            window._sylvaIndexTopSeqByPane[_pane === 'map2' ? 'map2' : 'map'] = -1;
+
+            metaList.forEach(function (meta, _mIdx) {
+                meta._seq = _mIdx;
                 renderAnalysisLegend(meta, true);
 
                 // 🆕 Stack modundayken bu analiz için benzersiz bir depolama
@@ -14071,7 +14088,25 @@ function selectRamp(name) {
                         _sylvaLoadContourVectorLayer(_pane, _thisLayerKey, analyzePayload);
                     }
                     window._sylvaTopGeeLayerByPane = window._sylvaTopGeeLayerByPane || { map: null, map2: null };
-                    window._sylvaTopGeeLayerByPane[_pane === 'map2' ? 'map2' : 'map'] = _thisLayerKey;
+                    // 🛠️ BUG FİX (Lejant kısmında hatalı/eski analiz gösterilmesi —
+                    // bkz. loadRgbScene()'deki _seq/_isTopForPane deseni): "üstteki
+                    // katman" ataması artık SADECE bu yanıtın sıra numarası (meta._seq),
+                    // o an için kaydedilmiş en yüksek sıra numarasından KÜÇÜK DEĞİLSE
+                    // uygulanır. Böylece daha ÖNCE işaretlenmiş bir analizin (ör. NDVI)
+                    // yanıtı, ağ gecikmesi yüzünden daha SONRA işaretlenmiş bir analizden
+                    // (ör. NDWI) sonra gelse bile, üstteki katmanı/zIndex'i/Lejantı geriye
+                    // (yanlış analize) döndüremez. _isTopForPane aşağıda hem zIndex
+                    // atamasını hem de _sylvaRenderIndexAnalysisResult()'a (Lejant/
+                    // Galeri/Bilgi Kutusu/İstatistik) iletilir.
+                    window._sylvaIndexTopSeqByPane = window._sylvaIndexTopSeqByPane || { map: -1, map2: -1 };
+                    var _idxPaneKey = (_pane === 'map2') ? 'map2' : 'map';
+                    var _idxThisSeq = (typeof meta._seq === 'number') ? meta._seq : 0;
+                    var _isTopForPane = false;
+                    if (_idxThisSeq >= (window._sylvaIndexTopSeqByPane[_idxPaneKey] === undefined ? -1 : window._sylvaIndexTopSeqByPane[_idxPaneKey])) {
+                        window._sylvaIndexTopSeqByPane[_idxPaneKey] = _idxThisSeq;
+                        window._sylvaTopGeeLayerByPane[_idxPaneKey] = _thisLayerKey;
+                        _isTopForPane = true;
+                    }
                     // 🛠️ DÜZELTME (Katman Sıyırıcı "Önceki Analizin Üzerine Ekle"
                     // ile birlikte yanlış/eksik çalışıyordu): Bu satırdan önce yeni
                     // eklenen katman, DOM'da HER ZAMAN varsayılan zIndex (10) ile
@@ -14085,18 +14120,24 @@ function selectRamp(name) {
                     // o katman açıkça zIndex 20'ye, aynı ekrandaki diğer TÜM
                     // katmanlar açıkça zIndex 10'a ayarlanır — sıyırıcı her zaman
                     // doğru/güncel üst katmanı bulur.
-                    (function () {
-                        var _zKey = (_pane === 'map2') ? 'map2' : 'map';
-                        var _zStore = window._geeLayersByPane && window._geeLayersByPane[_zKey];
-                        if (!_zStore) return;
-                        Object.keys(_zStore).forEach(function (k) {
-                            try {
-                                if (typeof _zStore[k].setZIndex === 'function') {
-                                    _zStore[k].setZIndex(k === _thisLayerKey ? 20 : 10);
-                                }
-                            } catch (e) {}
-                        });
-                    })();
+                    // 🛠️ BUG FİX: bu zIndex ataması artık SADECE bu yanıt gerçekten
+                    // üstteki katmansa (_isTopForPane) çalışır — aksi halde geç gelen
+                    // bayat bir yanıt, hâlâ geçerli olan üst katmanı zIndex'te geriye
+                    // düşüremez.
+                    if (_isTopForPane) {
+                        (function () {
+                            var _zKey = (_pane === 'map2') ? 'map2' : 'map';
+                            var _zStore = window._geeLayersByPane && window._geeLayersByPane[_zKey];
+                            if (!_zStore) return;
+                            Object.keys(_zStore).forEach(function (k) {
+                                try {
+                                    if (typeof _zStore[k].setZIndex === 'function') {
+                                        _zStore[k].setZIndex(k === _thisLayerKey ? 20 : 10);
+                                    }
+                                } catch (e) {}
+                            });
+                        })();
+                    }
                     // 🆕 Katman adı artık her zaman (stack modu kapalıyken de)
                     // tarih aralığıyla birlikte saklanır — "Üstte Gösterilecek
                     // Katman" kutusunda hangi analiz hangi tarihe ait olduğu
@@ -14157,7 +14198,7 @@ function selectRamp(name) {
                     // geçiş yapılırken AYNI fonksiyon çağrılır. Böylece analiz
                     // değiştirildiğinde Lejant ve Uydu Görüntü Galerisi de o
                     // analize göre otomatik güncellenir; sabit kalmaz.
-                    _sylvaRenderIndexAnalysisResult(meta, data, _pane, false, _thisLayerKey);
+                    _sylvaRenderIndexAnalysisResult(meta, data, _pane, false, _thisLayerKey, _isTopForPane);
 
                     // 🛠️ KÖK NEDEN DÜZELTMESİ: Karşı ekrana yansıtma (mirror)
                     // eskiden BURADAN ÖNCE, yani lejant/galeri/bilgi kutusu bu
@@ -14173,7 +14214,7 @@ function selectRamp(name) {
                     // Artık mirror çağrısı, bu analizin GERÇEK lejant/galeri/bilgi
                     // içeriği ekrana yazıldıktan SONRA yapılıyor — Ekran 2 artık
                     // her çalıştırılan analiz için doğru içerikle güncelleniyor.
-                    if (_sylvaMirrorThisRun && window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer({ force: true, srcId: _pane, layerKey: meta.analysisName, tileUrl: data.tileUrl, isTop: true });
+                    if (_sylvaMirrorThisRun && window._sylvaDualScreenActive && typeof window._sylvaMirrorDataLayer === 'function') window._sylvaMirrorDataLayer({ force: true, srcId: _pane, layerKey: meta.analysisName, tileUrl: data.tileUrl, isTop: _isTopForPane });
                 })
                 .catch(function(err) {
                     _onOneRequestSettled();
@@ -14905,12 +14946,31 @@ function selectRamp(name) {
             });
         }
 
-        function _sylvaRenderIndexAnalysisResult(meta, data, _pane, skipClassifyRecalc, layerKeyOverride) {
+        function _sylvaRenderIndexAnalysisResult(meta, data, _pane, skipClassifyRecalc, layerKeyOverride, isTopForPane) {
             if (!meta || !data) return;
             // 🆕 Stack modunda çalıştırılan analizler kendi benzersiz depolama
             // anahtarını (layerKeyOverride) kullanır; aksi halde her zamanki
             // gibi meta.analysisName kullanılır (geriye dönük uyumlu).
             var _lk = layerKeyOverride || meta.analysisName;
+            var _iaKey = (_pane === 'map2') ? 'map2' : 'map';
+            // 🛠️ BUG FİX (Lejant/Galeri/Bilgi Kutusu ↔ Üst Katman Uyuşmazlığı):
+            // bu fonksiyon HEM ilk analiz dispatch'inden (birden fazla analiz aynı
+            // anda işaretlenmişse yarış durumuna açık — bkz. çağrı noktasındaki
+            // _seq/_isTopForPane açıklaması) HEM DE Katman Kutusu'ndan elle geçiş
+            // yapıldığında (her zaman açıkça "üstteki" katman) çağrılır. Parametre
+            // verilmediğinde (Katman Kutusu çağrıları gibi) varsayılan olarak
+            // true kabul edilir — geriye dönük tam uyumluluk. Dispatch noktasından
+            // çağrıldığında ise gerçek sıra-tabanlı sonuç iletilir; false ise bu
+            // yanıt PAYLAŞILAN/tekil arayüz yüzeylerini (Lejant, İstatistik/Grafik,
+            // Bilgi Kutusu, Galeri) GÜNCELLEMEZ — yalnızca kendi verisini
+            // window._sylvaIndexAnalysisStates altında saklar (fonksiyonun sonu).
+            var _isTop = (isTopForPane === undefined || isTopForPane === null) ? true : !!isTopForPane;
+            if (!_isTop) {
+                window._sylvaIndexAnalysisStates = window._sylvaIndexAnalysisStates || { map: {}, map2: {} };
+                if (!window._sylvaIndexAnalysisStates[_iaKey]) window._sylvaIndexAnalysisStates[_iaKey] = {};
+                window._sylvaIndexAnalysisStates[_iaKey][_lk] = { meta: meta, data: data };
+                return;
+            }
             var _isContourResultMeta = (meta.analysisName === 'TOPO_CONTOUR');
             var _ibCb = _updateLulcRestrictedUI(isLulcAnalysis(meta.analysisName) || _isContourResultMeta);
             if (isTopoAnalysis(meta.analysisName)) { _setGalleryPanelRestricted(true); }
@@ -15030,7 +15090,6 @@ function selectRamp(name) {
             // Bu analizin (meta + sunucu yanıtı) verisini pane+analysisName
             // bazında sakla — katman kutusundan geri dönüldüğünde kullanılır.
             window._sylvaIndexAnalysisStates = window._sylvaIndexAnalysisStates || { map: {}, map2: {} };
-            var _iaKey = (_pane === 'map2') ? 'map2' : 'map';
             if (!window._sylvaIndexAnalysisStates[_iaKey]) window._sylvaIndexAnalysisStates[_iaKey] = {};
             window._sylvaIndexAnalysisStates[_iaKey][_lk] = { meta: meta, data: data };
 
@@ -24294,13 +24353,26 @@ function executeGeoTiffDownload() {
     .then(function(r) {
         var ct = r.headers.get('Content-Type') || '';
         // Sunucu hata durumunda JSON, başarı durumunda binary .tif döner.
+        // 🛠️ BUG FİX: Aşağıdaki iki durumda da sunucuya GERÇEKTEN ulaşılmış
+        // ve bir HTTP yanıtı alınmıştır (bağlantı sorunu YOKTUR) — bu yüzden
+        // fırlatılan hataya _sylvaServerReached=true işareti konur. .catch()
+        // bloğu bu işarete bakarak "Flask sunucusunun 5000 portunda
+        // çalıştığından emin olun" mesajını SADECE gerçek bir bağlantı
+        // hatasında (fetch() isteğinin kendisi hiç yanıt alamadığında)
+        // gösterir — sunucu zaten yanıt verip düzgün bir hata döndürdüğünde
+        // (ör. kapasite/boş veri hatası) artık bu alakasız/kafa karıştırıcı
+        // mesaj gösterilmez.
         if (ct.indexOf('application/json') !== -1) {
             return r.json().then(function(data) {
-                throw new Error((data && data.error) || 'Bilinmeyen hata');
+                var _jsonErr = new Error((data && data.error) || 'Bilinmeyen hata');
+                _jsonErr._sylvaServerReached = true;
+                throw _jsonErr;
             });
         }
         if (!r.ok) {
-            throw new Error('Sunucu hatası (HTTP ' + r.status + ')');
+            var _httpErr = new Error('Sunucu hatası (HTTP ' + r.status + ')');
+            _httpErr._sylvaServerReached = true;
+            throw _httpErr;
         }
         var cd = r.headers.get('Content-Disposition') || '';
         var m = /filename="?([^"]+)"?/.exec(cd);
@@ -24340,6 +24412,23 @@ function executeGeoTiffDownload() {
         status.style.display = 'none';
         status.innerHTML = '';
         sylvaAddAnalysisHistoryEntry('GeoTIFF', '🗺️', res.tifName);
+
+        // 🆕 BUG FİX (Arazi Kullanımı/LULC indirmesi ArcMap'te "Could not
+        // open the specified file" hatası veriyordu): LULC indirmeleri
+        // sunucudan tek başına bir .tif olarak DEĞİL, doğru renk/sınıf
+        // bilgisiyle açılabilmesi için gereken ek dosyalarla (.clr, RAT,
+        // VAT vb.) birlikte bir .zip arşivi olarak gelir (bkz. server.py
+        // _build_lulc_symbology_zip). Kullanıcı bunu fark etmeden .zip
+        // dosyasını doğrudan ArcMap/QGIS'te açmaya çalışınca bu hatayı
+        // alıyordu. Artık indirilen dosya bir ZIP ise kullanıcıya önce
+        // ZIP'i çıkartması (extract) gerektiği açıkça bildirilir.
+        if (/\.zip$/i.test(res.tifName || '')) {
+            setTimeout(function () {
+                if (typeof sylvaAlert === 'function') {
+                    sylvaAlert(t('lulc_zip_extract_notice'), 'info');
+                }
+            }, 300);
+        }
     })
     .catch(function(err) {
         // 🛠️ BUG FİX: kullanıcı "İptal" butonuna bastığında fetch() isteği
@@ -24354,8 +24443,16 @@ function executeGeoTiffDownload() {
         status.style.color      = '#991b1b';
         status.style.background = '#fee2e2';
         status.style.borderColor = '#fca5a5';
+        // 🛠️ BUG FİX: "Flask sunucusunun 5000 portunda çalıştığından emin
+        // olun" ipucu artık YALNIZCA sunucuya gerçekten ulaşılamadığında
+        // (err._sylvaServerReached işaretli DEĞİLSE — ör. ağ/CORS/bağlantı
+        // hatası) gösteriliyor. Sunucu zaten çalışıp geçerli bir hata mesajı
+        // döndürdüğünde (ör. "alan çok büyük" veya boş veri hatası) bu satır
+        // artık eklenmiyor — önceden her hata türünde koşulsuz gösteriliyordu.
         status.innerHTML = '❌ ' + t('gtiff_err_prefix') + ((err && err.message) || t('gtiff_err_unknown')) +
-            '<br><span style="font-size:0.78rem;color:#64748b;">' + t('gtiff_err_server') + '</span>';
+            ((err && err._sylvaServerReached)
+                ? ''
+                : ('<br><span style="font-size:0.78rem;color:#64748b;">' + t('gtiff_err_server') + '</span>'));
         if (btn) { btn.disabled = false; btn.textContent = t('gtiff_btn_download'); }
         // Hata durumunda animasyonu durdur, kullanıcı kilitlenmesin — ancak
         // pencere açık kalır ki kullanıcı hata mesajını görüp tekrar deneyebilsin.
@@ -24869,6 +24966,7 @@ var SYLVA_TRANSLATIONS = {
     gtiff_err_prefix: 'Error: ',
     gtiff_err_unknown: 'Unknown error',
     gtiff_err_server: 'Please make sure the Flask server is running on port 5000.',
+    lulc_zip_extract_notice: 'This download is a ZIP archive containing the GeoTIFF together with the color/classification files needed to display it correctly. Please extract the ZIP first, then open the .tif file inside it in ArcMap/QGIS — opening the .zip file directly will fail with a "could not open file" error.',
     // Legend info labels
     lbl_date: 'Date:', lbl_sat_sensor: 'Satellite / Sensor', lbl_cloud_pct: 'Cloud Cover (%)',
     lbl_resolution: 'Resolution (m)', lbl_projection: 'Projection (CRS)', lbl_bands: 'Bands', lbl_image_id: 'Image ID',
@@ -26889,6 +26987,7 @@ var SYLVA_TRANSLATIONS = {
     gtiff_err_prefix: 'Hata: ',
     gtiff_err_unknown: 'Bilinmeyen hata',
     gtiff_err_server: 'Flask sunucusunun 5000 portunda çalıştığından emin olun.',
+    lulc_zip_extract_notice: 'Bu indirme; GeoTIFF dosyasını doğru renk/sınıflandırma ile açabilmeniz için gereken ek dosyalarla birlikte bir ZIP arşivi olarak hazırlandı. Lütfen önce ZIP dosyasını bilgisayarınıza çıkartın (extract edin), ardından içindeki .tif dosyasını ArcMap/QGIS üzerinde açın — ZIP dosyasını doğrudan açmaya çalışmak "Could not open the specified file" hatası verir.',
     lbl_date: 'Tarih:', lbl_sat_sensor: 'Uydu / Sensör', lbl_cloud_pct: 'Bulutluluk (%)',
     lbl_resolution: 'Çözünürlük (m)', lbl_projection: 'Projeksiyon (CRS)', lbl_bands: 'Bantlar', lbl_image_id: 'Görüntü Kimliği',
     no_analysis: 'Lütfen bir analiz veya veri katmanı seçin.',
@@ -48713,7 +48812,17 @@ function runTimeSeriesAnalysis() {
             startYear: sy,
             endYear:   ey,
             maxCloud:  cloudPct,
-            indices:   idxs
+            indices:   idxs,
+            // 🛠️ BUG FİX: "Zaman Serisi ve Değişim Analizi" bölümündeki Ay
+            // Seçici (sylvaTsSelectedMonths — bkz. ts-month-select-panel)
+            // eskiden bu istek gövdesine HİÇ eklenmiyordu; kullanıcı örn.
+            // sadece "Haziran" seçse bile sunucu tüm ayları tarıyor, galeri
+            // ve zaman çizelgesi alakasız aylara (Temmuz/Ağustos/Eylül vb.)
+            // ait sahneleri gösteriyordu. Diğer analiz akışları (normal
+            // Analizi Çalıştır, sahne/galeri seçimi — bkz. window.sylvaSelectedMonths
+            // kullanımları) zaten bu alanı gönderiyordu; Zaman Serisi akışı
+            // burada eksikti.
+            months:    window.sylvaTsSelectedMonths || []
         })
     })
     .then(function(r) { return r.json(); })
