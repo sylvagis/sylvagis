@@ -10749,23 +10749,31 @@ function selectRamp(name) {
 
             showSylvaLoading();
 
+            var _stretchAnalyzePayload = {
+                roi:       _roi,
+                clipMode:  _clipMode,
+                startDate: _startDate,
+                endDate:   _endDate,
+                satellite: _satellite,
+                index:     meta.analysisName,
+                maxCloud:  _maxCloud,
+                sceneId:   _sylvaSceneIdGet(_pane),
+                demSource: _demSource,
+                palette:   palette,
+                min:       minVal,
+                max:       maxVal
+            };
+            // 🛠️ BUG FİX (Görsel 5/8 - İndirme, ekranda görünenle uyuşmuyordu):
+            // bkz. loadRgbScene() içindeki aynı düzeltme notu. "Lejantı Uygula"
+            // ile germe (stretch) güncellendiğinde de bu EN GÜNCEL payload
+            // indirme senkronizasyonunun kullandığı ortak değişkende saklanır.
+            window._lastAnalyzePayloadByPane = window._lastAnalyzePayloadByPane || { map: null, map2: null };
+            window._lastAnalyzePayloadByPane[_pane] = _stretchAnalyzePayload;
+
             fetch(API_BASE + '/api/analyze', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    roi:       _roi,
-                    clipMode:  _clipMode,
-                    startDate: _startDate,
-                    endDate:   _endDate,
-                    satellite: _satellite,
-                    index:     meta.analysisName,
-                    maxCloud:  _maxCloud,
-                    sceneId:   _sylvaSceneIdGet(_pane),
-                    demSource: _demSource,
-                    palette:   palette,
-                    min:       minVal,
-                    max:       maxVal
-                })
+                body: JSON.stringify(_stretchAnalyzePayload)
             })
             .then(function(r) { return r.json(); })
             .then(function(data) {
@@ -11221,24 +11229,32 @@ function selectRamp(name) {
 
             showSylvaLoading();
 
+            var _classAnalyzePayload = {
+                roi:         _roiCls,
+                clipMode:    _clipMode,
+                startDate:   _startDate,
+                endDate:     _endDate,
+                satellite:   _satellite,
+                index:       meta.analysisName,
+                maxCloud:    _maxCloud,
+                sceneId:     _sylvaSceneIdGet(_pane),
+                demSource:   _demSource,
+                palette:     palette,
+                min:         overallMin,
+                max:         overallMax,
+                classBreaks: classBreaks
+            };
+            // 🛠️ BUG FİX (Görsel 5/8 - İndirme, ekranda görünenle uyuşmuyordu):
+            // bkz. loadRgbScene() içindeki aynı düzeltme notu. Sınıflandırma
+            // (classBreaks) güncellendiğinde de bu EN GÜNCEL payload indirme
+            // senkronizasyonunun kullandığı ortak değişkende saklanır.
+            window._lastAnalyzePayloadByPane = window._lastAnalyzePayloadByPane || { map: null, map2: null };
+            window._lastAnalyzePayloadByPane[_pane] = _classAnalyzePayload;
+
             fetch(API_BASE + '/api/analyze', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    roi:         _roiCls,
-                    clipMode:    _clipMode,
-                    startDate:   _startDate,
-                    endDate:     _endDate,
-                    satellite:   _satellite,
-                    index:       meta.analysisName,
-                    maxCloud:    _maxCloud,
-                    sceneId:     _sylvaSceneIdGet(_pane),
-                    demSource:   _demSource,
-                    palette:     palette,
-                    min:         overallMin,
-                    max:         overallMax,
-                    classBreaks: classBreaks
-                })
+                body: JSON.stringify(_classAnalyzePayload)
             })
             .then(function(r) { return r.json(); })
             .then(function(data) {
@@ -12455,6 +12471,56 @@ function selectRamp(name) {
             }
         }
 
+        // 🛠️ BUG FİX ("Üstte Gösterilecek Katman" kutusunda YANLIŞ veri seti
+        // işaretli görünüyordu — ör. haritada/Bilgi Kutusunda Landsat aktifken
+        // kutuda Sentinel-2 işaretli kalıyordu): kutudaki checkbox'lar
+        // window._sylvaLayerVisibleByPane'e bakar (bkz. _sylvaRenderLayerSwitchBox
+        // → isVisible). Bu bayrak iki farklı yerden değişebiliyordu:
+        //  1) _sylvaAddGeeLayer() — yeni bir katman EKLENDİĞİNDE (ör. galeriden
+        //     yeni bir sahne/veri seti yüklenince) diğerlerini otomatik gizler.
+        //  2) _sylvaBringGeeLayerToFront() — kutudan ELLE zaten yüklü bir
+        //     katmana geçildiğinde SADECE zIndex değişiyordu, bu bayrağa HİÇ
+        //     dokunulmuyordu.
+        // Ayrıca (1) her zaman KOŞULSUZ çalıştığından, birden fazla veri seti/
+        // analiz eşzamanlı çalıştırıldığında (ör. NDVI+NDWI veya Sentinel+
+        // Landsat) yanıtlar ağ gecikmesiyle YANLIŞ sırada dönerse, bu bayrak
+        // "gerçek" üst katmanı (window._sylvaTopGeeLayerByPane — sıra
+        // numarasına göre doğru çözümlenir) değil, son CEVAP GELEN katmanı
+        // yansıtabiliyordu. Bu ortak fonksiyon, verilen katmanı açıkça
+        // "görünür/üstte" işaretleyip haritaya (gerekiyorsa) geri ekler; aynı
+        // paneldeki DİĞER TÜM katmanları "görünür değil" işaretleyip haritadan
+        // kaldırır — hem elle geçişte hem de yarış durumu sonrası "gerçek üst
+        // katman" belirlendiğinde çağrılarak checkbox'ların her zaman
+        // haritadaki/Bilgi Kutusundaki gerçek durumla tutarlı kalmasını sağlar.
+        function _sylvaSyncLayerVisibilityToTop(paneId, layerKey) {
+            var key = (paneId === 'map2') ? 'map2' : 'map';
+            var store = window._geeLayersByPane && window._geeLayersByPane[key];
+            if (!store || !store[layerKey]) return;
+            window._sylvaLayerVisibleByPane = window._sylvaLayerVisibleByPane || { map: {}, map2: {} };
+            window._sylvaLayerVisibleByPane[key] = window._sylvaLayerVisibleByPane[key] || {};
+            var _bftTargetMap = (typeof _sylvaTargetMap === 'function') ? _sylvaTargetMap(paneId) : null;
+            Object.keys(store).forEach(function (k) {
+                var _bftLayer = store[k];
+                if (k === layerKey) {
+                    window._sylvaLayerVisibleByPane[key][k] = true;
+                    if (_bftLayer && _bftTargetMap) {
+                        try { if (!_bftTargetMap.hasLayer(_bftLayer)) _bftLayer.addTo(_bftTargetMap); } catch (e) {}
+                    }
+                } else {
+                    window._sylvaLayerVisibleByPane[key][k] = false;
+                    if (_bftLayer && _bftTargetMap) {
+                        try { if (_bftTargetMap.hasLayer(_bftLayer)) _bftTargetMap.removeLayer(_bftLayer); } catch (e) {}
+                    }
+                    var _bftCvStore = window._sylvaContourVectorByPane && window._sylvaContourVectorByPane[key];
+                    var _bftCvLayer = _bftCvStore && _bftCvStore[k];
+                    if (_bftCvLayer && _bftTargetMap) {
+                        try { if (_bftTargetMap.hasLayer(_bftCvLayer)) _bftTargetMap.removeLayer(_bftCvLayer); } catch (e) {}
+                    }
+                }
+            });
+        }
+        window._sylvaSyncLayerVisibilityToTop = _sylvaSyncLayerVisibilityToTop;
+
         function _sylvaBringGeeLayerToFront(paneId, layerKey) {
             var key = (paneId === 'map2') ? 'map2' : 'map';
             var store = window._geeLayersByPane[key];
@@ -12476,6 +12542,45 @@ function selectRamp(name) {
             });
             window._sylvaTopGeeLayerByPane = window._sylvaTopGeeLayerByPane || { map: null, map2: null };
             window._sylvaTopGeeLayerByPane[key] = layerKey;
+
+            // 🛠️ BUG FİX ("Üstte Gösterilecek Katman" kutusunda YANLIŞ veri
+            // seti işaretli görünüyordu — ör. haritada/Bilgi Kutusunda Landsat
+            // aktifken kutuda Sentinel-2 işaretli kalıyordu): bu fonksiyon
+            // yalnızca zIndex'i (görsel sıralamayı) günceller, ama kutudaki
+            // checkbox'lar aslında window._sylvaLayerVisibleByPane'e bakar
+            // (bkz. _sylvaRenderLayerSwitchBox → isVisible). _sylvaAddGeeLayer()
+            // yeni bir katman EKLERKEN bu bayrağı doğru güncelliyordu, ama
+            // kullanıcı burada (kutudan) DAHA ÖNCE zaten yüklenmiş bir katmana
+            // manuel geçtiğinde bu bayrak hiç dokunulmadan eski/bayat kalıyordu.
+            // Artık öne getirilen katman burada da açıkça "görünür" işaretlenir
+            // ve (haritadan kaldırılmışsa) haritaya geri eklenir; aynı paneldeki
+            // DİĞER tüm katmanlar "görünür değil" işaretlenip haritadan
+            // kaldırılır — _sylvaAddGeeLayer()'daki "yeni katman eklenince
+            // diğerlerini gizle" mantığıyla birebir tutarlı.
+            (function () {
+                window._sylvaLayerVisibleByPane = window._sylvaLayerVisibleByPane || { map: {}, map2: {} };
+                window._sylvaLayerVisibleByPane[key] = window._sylvaLayerVisibleByPane[key] || {};
+                var _bftTargetMap = (typeof _sylvaTargetMap === 'function') ? _sylvaTargetMap(paneId) : null;
+                Object.keys(store).forEach(function (k) {
+                    var _bftLayer = store[k];
+                    if (k === layerKey) {
+                        window._sylvaLayerVisibleByPane[key][k] = true;
+                        if (_bftLayer && _bftTargetMap) {
+                            try { if (!_bftTargetMap.hasLayer(_bftLayer)) _bftLayer.addTo(_bftTargetMap); } catch (e) {}
+                        }
+                    } else {
+                        window._sylvaLayerVisibleByPane[key][k] = false;
+                        if (_bftLayer && _bftTargetMap) {
+                            try { if (_bftTargetMap.hasLayer(_bftLayer)) _bftTargetMap.removeLayer(_bftLayer); } catch (e) {}
+                        }
+                        var _bftCvStore = window._sylvaContourVectorByPane && window._sylvaContourVectorByPane[key];
+                        var _bftCvLayer = _bftCvStore && _bftCvStore[k];
+                        if (_bftCvLayer && _bftTargetMap) {
+                            try { if (_bftTargetMap.hasLayer(_bftCvLayer)) _bftTargetMap.removeLayer(_bftCvLayer); } catch (e) {}
+                        }
+                    }
+                });
+            })();
 
             // 🛠️ BUG FİX: "Veri Şeffaflığı" slider'ı her zaman EN SON EKLENEN
             // katmanı (_geeLayer / _geeLayer2) hedefliyordu; katman listesinden
@@ -14039,6 +14144,35 @@ function selectRamp(name) {
                     demSource: demSourceRadio ? demSourceRadio.value : 'SRTM',
                     months:    window.sylvaSelectedMonths || [],
                 };
+                // 🛠️ BUG FİX (Harita gri tonlamalı, Lejant renkli — birbirini
+                // tutmuyordu): server.py'de her indeks için varsayılan görsel
+                // ('vis') paleti sabit ['black','white'] idi ve bu SADECE
+                // kullanıcı analiz çalıştıktan SONRA "Lejantı Uygula"ya
+                // basarsa (bkz. _syncStretchedToGEEForPane) seçili renk
+                // paletiyle değiştiriliyordu. İlk analiz çalıştırıldığında
+                // (bu istek) 'palette' hiç gönderilmediğinden harita HER ZAMAN
+                // siyah-beyaz render ediliyordu — kullanıcının önceden seçmiş
+                // olabileceği renkli palet yalnızca Lejant kutusunun (saf CSS)
+                // gradyanında görünüyor, haritadaki katmanla hiç eşleşmiyordu.
+                // Bazı durumlarda (gerçek veri aralığı sabit vis min/max'ın
+                // çoğunlukla dışında kaldığında) bu aynı zamanda haritanın
+                // neredeyse tamamen SİYAH görünmesine de yol açıyordu. Artık
+                // ilk istekte de (yalnızca sürekli/"stretched" lejant tipli
+                // analizlerde — LULC/sınıflandırılmış/kontur kendi paletini
+                // korur) o an seçili olan renk paleti gönderilir; harita ilk
+                // render'dan itibaren Lejant ile aynı renkleri kullanır.
+                if ((meta.legendType || 'stretched') === 'stretched') {
+                    var _initRampEl = document.getElementById('selectedRamp');
+                    var _initRampName = _initRampEl ? (_initRampEl.getAttribute('data-ramp') || 'black-white') : 'black-white';
+                    if (_initRampName === '__gee__') _initRampName = 'black-white';
+                    if (typeof sampleRampColors === 'function') {
+                        var _initPalette = sampleRampColors(_initRampName, 8);
+                        if (typeof rampReversed !== 'undefined' && rampReversed) _initPalette.reverse();
+                        if (_initPalette && _initPalette.length) {
+                            analyzePayload.palette = _initPalette.map(function (c) { return c.replace(/^#/, ''); });
+                        }
+                    }
+                }
                 // 📏 Eş Yükselti (Kontur) analizinde, kullanıcının seçtiği aralık
                 // (5-500 m) da isteğe eklenir — backend bu değeri kullanarak DEM'i
                 // ilgili yükselti bantlarına ayırıp kontur maskesini üretir.
@@ -14106,6 +14240,18 @@ function selectRamp(name) {
                         window._sylvaIndexTopSeqByPane[_idxPaneKey] = _idxThisSeq;
                         window._sylvaTopGeeLayerByPane[_idxPaneKey] = _thisLayerKey;
                         _isTopForPane = true;
+                        // 🛠️ BUG FİX (Görsel 4 - Katman Değiştirme Kutusu Senkron Hatası,
+                        // yarış durumu payı): _sylvaAddGeeLayer() yeni katmanı eklerken
+                        // seq kontrolünden ÖNCE, panedeki TÜM katmanları görünür/gizli
+                        // olarak işaretliyordu; bu nedenle iki analiz aynı anda
+                        // gönderildiğinde "kaybeden" yanıt son çalışırsa, kazanan katman
+                        // haritadan kaldırılmış ama katman kutusunda işaretli kalmış
+                        // (veya tam tersi) durumda kalabiliyordu. Burada, bu yanıt GERÇEKTEN
+                        // en güncel (top) olduğunda görünürlük durumu ve Leaflet katmanları
+                        // açıkça bu katmana göre yeniden senkronize ediliyor.
+                        if (typeof _sylvaSyncLayerVisibilityToTop === 'function') {
+                            _sylvaSyncLayerVisibilityToTop(_idxPaneKey, _thisLayerKey);
+                        }
                     }
                     // 🛠️ DÜZELTME (Katman Sıyırıcı "Önceki Analizin Üzerine Ekle"
                     // ile birlikte yanlış/eksik çalışıyordu): Bu satırdan önce yeni
@@ -16141,25 +16287,34 @@ function selectRamp(name) {
             // her karede yanıp sönen "SylvaGIS" overlay'i akıcı video hissini bozuyordu.
             if (!silent) showSylvaLoading();
 
+            var _specificSceneAnalyzePayload = {
+                roi:       _roi,
+                clipMode:  _sceneClipMode,
+                startDate: startInput    ? startInput.value : '',
+                endDate:   endInput      ? endInput.value   : '',
+                satellite: sensorRadio   ? sensorRadio.value : 's2-l2a',
+                index:     meta.analysisName,
+                maxCloud:  cloudSliderEl ? parseInt(cloudSliderEl.value, 10) : 20,
+                sceneId:   sceneId,
+                palette:   (function() {
+                    var rEl = document.getElementById('selectedRamp');
+                    var rKey = rEl ? (rEl.getAttribute('data-ramp') || 'black-white') : 'black-white';
+                    if (rKey === '__gee__') return ['black', 'white'];
+                    return sampleRampColors(rKey, 6);
+                })()
+            };
+            // 🛠️ BUG FİX (Görsel 8 - GeoTIFF indirirken "Seçilen sahne
+            // bulunamadı"): bkz. loadRgbScene() içindeki aynı düzeltme notu.
+            // Galeriden belirli bir sahne seçilerek bir İNDEKS analizi
+            // (NDVI vb.) görüntülendiğinde de bu payload artık indirme
+            // senkronizasyonunun kullandığı ortak değişkende saklanır.
+            window._lastAnalyzePayloadByPane = window._lastAnalyzePayloadByPane || { map: null, map2: null };
+            window._lastAnalyzePayloadByPane[_pane] = _specificSceneAnalyzePayload;
+
             fetch(API_BASE + '/api/analyze', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    roi:       _roi,
-                    clipMode:  _sceneClipMode,
-                    startDate: startInput    ? startInput.value : '',
-                    endDate:   endInput      ? endInput.value   : '',
-                    satellite: sensorRadio   ? sensorRadio.value : 's2-l2a',
-                    index:     meta.analysisName,
-                    maxCloud:  cloudSliderEl ? parseInt(cloudSliderEl.value, 10) : 20,
-                    sceneId:   sceneId,
-                    palette:   (function() {
-                        var rEl = document.getElementById('selectedRamp');
-                        var rKey = rEl ? (rEl.getAttribute('data-ramp') || 'black-white') : 'black-white';
-                        if (rKey === '__gee__') return ['black', 'white'];
-                        return sampleRampColors(rKey, 6);
-                    })()
-                })
+                body: JSON.stringify(_specificSceneAnalyzePayload)
             })
             .then(function(r) { return r.json(); })
             .then(function(data) {
@@ -16202,6 +16357,54 @@ function selectRamp(name) {
                 // ekrana geçmiş olsa bile lejant, sahnenin ait olduğu ekranda kalsın.
                 if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(_pane);
                 renderAnalysisLegend(metaForScene, false, _pane);
+
+                // 🛠️ BUG FİX (Görsel 9 - Zaman Serisi/Galeri Sahne Değişiminde
+                // Bilgi Kutusu Eski Analizde Takılı Kalıyordu): Ana "Analizi
+                // Çalıştır" akışı hangi analiz aktifse Bilgi Kutusu'nu ona göre
+                // günceller/temizler (bkz. o akıştaki aynı 3'lü dal: statik veri
+                // seti → kendi kartı, NDVI/NDWI → kendi kartı, diğer HERŞEY →
+                // _sylvaClearInfoBox). Ancak loadSpecificScene() — galeriden
+                // veya Zaman Serisi modülünden (runTimeSeriesAnalysis() bu
+                // fonksiyonu dahili olarak çağırır) belirli bir sahne
+                // yüklerken kullanılır — bu adımı hiç yapmıyordu. Sonuç:
+                // kullanıcı önce statik bir veri seti (ör. ESA WorldCover)
+                // görüntüleyip Bilgi Kutusu'nu doldurduktan sonra Zaman
+                // Serisi çalıştırdığında; harita/lejant/grafik YENİ veriye
+                // güncellenirken Bilgi Kutusu ESKİ (ESA WorldCover) içeriğiyle
+                // ekranda asılı kalıyordu. Artık aynı 3'lü mantık burada da
+                // uygulanır — Bilgi Kutusu her zaman EKRANDA GERÇEKTEN aktif
+                // olan katmanla senkron kalır.
+                if (typeof _STATIC_DATASETS !== 'undefined' && _STATIC_DATASETS.indexOf(meta.analysisName) !== -1) {
+                    if (typeof renderDatasetInfoCard === 'function') renderDatasetInfoCard(meta.analysisName, _pane);
+                } else if (['NDVI', 'NDWI'].indexOf(String(meta.analysisName || '').toUpperCase()) !== -1) {
+                    if (typeof renderIndexInfoCard === 'function') renderIndexInfoCard(meta.analysisName, metaForScene, _pane);
+                } else if (typeof _sylvaClearInfoBox === 'function') {
+                    _sylvaClearInfoBox(_pane);
+                }
+                // Bilgi Kutusu checkbox'ını/görünürlüğünü ana "Analizi Çalıştır"
+                // akışındaki AYNI mantıkla senkron tutar (bkz. o akıştaki birebir
+                // aynı IIFE) — kullanıcının önceki tercihini (varsa) korur.
+                (function() {
+                    var _ibCb2 = document.getElementById('toggle-info-box');
+                    var _ibWrap = document.getElementById('info-box-toggle-wrap');
+                    if (_ibCb2) {
+                        _ibCb2.disabled = false;
+                        if (_ibWrap) _ibWrap.style.opacity = '1';
+                        _ibCb2._sylvaInfoBoxPreferenceByPane = _ibCb2._sylvaInfoBoxPreferenceByPane || {};
+                        var _ibHasPreference = Object.prototype.hasOwnProperty.call(
+                            _ibCb2._sylvaInfoBoxPreferenceByPane, _pane
+                        );
+                        _ibCb2.checked = _ibHasPreference ? !!_ibCb2._sylvaInfoBoxPreferenceByPane[_pane] : true;
+                    }
+                    var _infoBox2 = document.getElementById(_pane === 'map2' ? 'map2-info-box' : 'map-info-box');
+                    if (_infoBox2 && _infoBox2.innerHTML.trim()) {
+                        _infoBox2.style.display = (_ibCb2 && !_ibCb2.checked) ? 'none' : 'block';
+                        if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[_pane]) {
+                            window._sylvaLegendInfoByPane[_pane].infoDisplay = _infoBox2.style.display;
+                        }
+                    }
+                })();
+
                 if (data.stats) {
                     updateStatsTable(data.stats, _pane);
                     renderChart(data.stats, metaForScene, _pane);
@@ -16345,10 +16548,12 @@ function selectRamp(name) {
                 // Geciken yanıt: kullanıcı yeni bir analiz başlattıysa bu yanıtı yoksay
                 if (_analysisGeneration !== _rgbGen) return;
                 if (!data.success) {
+                    _sylvaUnlockGalleryUI(paneId);
                     showNoDataModal(_TOAST_NO_DATA_MSG, meta.datasetLabel || meta.datasetKey || '', data.error);
                     return;
                 }
                 if (!data.scenes || !data.scenes.length) {
+                    _sylvaUnlockGalleryUI(paneId);
                     showNoDataModal(_TOAST_NO_DATA_MSG, meta.datasetLabel || meta.datasetKey || '');
                     return;
                 }
@@ -16367,10 +16572,40 @@ function selectRamp(name) {
             .catch(function(err) {
                 if (runBtn) { runBtn.disabled = false; runBtn.textContent = t('run_analysis'); }
                 hideSylvaLoading();
+                // 🛠️ BUG FİX (Görsel 1-2-3 - Arama Boş/Hatalı Dönünce Galeri
+                // Kilitleniyordu): önceden bu catch bloğu galeriyi tamamen
+                // gizliyordu (innerHTML='' + display='none') AMA "legend-
+                // symbology-panel" panelini ve galerinin kendi opacity/
+                // pointer-events durumunu SIFIRLAMIYORDU — bir sonraki
+                // sorguda bile galeri/legend paneli tıklanamaz/donuk kalmaya
+                // devam edebiliyordu. Kullanıcının açık talebi: arama boş ya
+                // da hatalı dönse bile ikincil paneller HER KOŞULDA tam
+                // etkileşimli kalmalı. Artık hem başarısız hem de boş-sonuç
+                // dallarında (yukarıda) hem de bu ağ hatası dalında ortak
+                // _sylvaUnlockGalleryUI() ile panel kilidi açılıyor.
                 galleryEl.innerHTML = '';
                 galleryEl.style.display = 'none';
+                _sylvaUnlockGalleryUI(paneId);
                 showAnalysisToast(t('server_error') + '(' + err.message + ')', 'error');
             });
+        }
+
+        // 🛠️ BUG FİX (Görsel 1-2-3 - Galeri/Legend Paneli Kilitlenmesi):
+        // fetchRgbGallery() bir sorgu başlarken galeriyi ve Legend & Symbology
+        // panelini geçici olarak yarı saydam/tıklanamaz yapıyordu (yükleniyor
+        // efekti); bu, YALNIZCA başarılı bir yanıt geldiğinde (renderRgbGalleryCards
+        // öncesindeki IIFE) geri açılıyordu. "Seçilen kriterlere uygun görüntü
+        // bulunamadı" (boş sonuç) veya sunucu hatası durumunda BU geri-açma hiç
+        // çalışmıyordu — galeri ve/veya legend paneli görsel olarak donuk VE
+        // tıklanamaz halde KİLİTLİ kalıyordu, kullanıcı galerideki diğer
+        // sahnelere tıklayamıyordu. Bu yardımcı fonksiyon, arama sonucu ne
+        // olursa olsun (boş/hata/başarı) HER ZAMAN çağrılarak iki paneli de
+        // tam etkileşimli durumuna döndürür.
+        function _sylvaUnlockGalleryUI(paneId) {
+            var _gEl = _sylvaGalleryEl(paneId);
+            if (_gEl) { _gEl.style.opacity = '1'; _gEl.style.pointerEvents = 'auto'; }
+            var _lsp = document.getElementById('legend-symbology-panel');
+            if (_lsp) { _lsp.style.opacity = '1'; _lsp.style.pointerEvents = 'auto'; _lsp.style.userSelect = ''; }
         }
 
         function _sortedRgbScenes(paneId, datasetKey) {
@@ -16435,8 +16670,14 @@ function selectRamp(name) {
             scenes.forEach(function(scene) {
                 var dateLabel = scene.timestamp ? new Date(scene.timestamp).toLocaleDateString('tr-TR') : '—';
                 var cloudLabel = (typeof scene.cloud === 'number') ? ('☁ %' + scene.cloud.toFixed(1)) : '☁ —';
+                // 🛠️ BUG FİX (Görsel 1-2-3 - Boş/Kayıp Galeri Önizlemeleri):
+                // thumbnailUrl yüklenemezse (ör. sunucu tarafı indirme
+                // başarısız olduysa) <img> önceden hiçbir "onerror" işleyicisi
+                // olmadığı için sessizce BOŞ alan bırakıyordu — kart sadece
+                // tarih/bulutluluk metniyle kalıyordu. Artık yükleme
+                // başarısız olursa img gizlenip yerine 🛰️ simgesi ekleniyor.
                 var thumbHtml = scene.thumbnailUrl
-                    ? '<img src="' + scene.thumbnailUrl + '" alt="' + escapeHtml(dateLabel) + '" style="width:100%;height:100%;object-fit:cover;">'
+                    ? '<img src="' + scene.thumbnailUrl + '" alt="' + escapeHtml(dateLabel) + '" style="width:100%;height:100%;object-fit:cover;" onerror="this.onerror=null;this.style.display=\'none\';this.insertAdjacentHTML(\'afterend\',\'🛰️\');">'
                     : '🛰️';
 
                 var div = document.createElement('div');
@@ -16503,23 +16744,48 @@ function selectRamp(name) {
 
             showSylvaLoading();
 
+            var _rgbAnalyzePayload = {
+                roi:       _roi,
+                clipMode:  _rgbClipMode,
+                startDate: startInput ? startInput.value : '',
+                endDate:   endInput   ? endInput.value   : '',
+                satellite: meta.datasetKey,
+                index:     'RGB',
+                maxCloud:  cloudSliderEl ? parseInt(cloudSliderEl.value, 10) : 100,
+                sceneId:   sceneId
+            };
+            // 🛠️ BUG FİX (Görsel 8 - GeoTIFF indirirken "Seçilen sahne
+            // bulunamadı"): _sylvaSyncActivePaneForDownload() (indirme
+            // penceresi açılırken sunucunun "son analiz" kaydını aktif
+            // ekranla senkronize eden fonksiyon — bkz. tanımı) yalnızca
+            // window._lastAnalyzePayloadByPane'de SAKLI olan payload'ı
+            // yeniden gönderir. Bu değişken önceden SADECE ana "Analizi
+            // Çalıştır" (indeks/modül) akışında güncelleniyordu; bir uydu
+            // görüntüsü sahnesi galeri üzerinden görüntülendiğinde (TAM
+            // OLARAK burada) HİÇ güncellenmiyordu. Sonuç: kullanıcı bir
+            // uydu sahnesi izlerken GeoTIFF indirmeye çalıştığında, sunucu
+            // ekranda GÖRÜNENİ değil, o ekran için kaydedilmiş ESKİ (veya
+            // hiç var olmayan) bir analiz payload'ını senkronize ediyor,
+            // indirme bambaşka/geçersiz bir sceneId ile başarısız oluyordu.
+            // Artık bu payload da diğer analizlerle AYNI ortak değişkende
+            // saklanıyor; indirme her zaman EKRANDA GERÇEKTEN görüneni baz alır.
+            window._lastAnalyzePayloadByPane = window._lastAnalyzePayloadByPane || { map: null, map2: null };
+            window._lastAnalyzePayloadByPane[paneId] = _rgbAnalyzePayload;
+
             fetch(API_BASE + '/api/analyze', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    roi:       _roi,
-                    clipMode:  _rgbClipMode,
-                    startDate: startInput ? startInput.value : '',
-                    endDate:   endInput   ? endInput.value   : '',
-                    satellite: meta.datasetKey,
-                    index:     'RGB',
-                    maxCloud:  cloudSliderEl ? parseInt(cloudSliderEl.value, 10) : 100,
-                    sceneId:   sceneId
-                })
+                body: JSON.stringify(_rgbAnalyzePayload)
             })
             .then(function(r) { return r.json(); })
             .then(function(data) {
-                if (!data.success) { hideSylvaLoading(); showNoDataModal(_TOAST_NO_DATA_MSG, meta.datasetLabel || meta.datasetKey || '', data.error); return; }
+                // 🛠️ BUG FİX (Görsel 1-2-3 - Hata Sonrası Galeri Kilitlenmesi):
+                // "Seçilen sahne bulunamadı" gibi bir hata TAM OLARAK burada
+                // (loadRgbScene başarısız yanıtı) yüzeye çıkar. Galeri/legend
+                // paneli başka bir yerde kilitli kalmışsa bu hata sırasında da
+                // asla açılmıyordu; artık her ihtimale karşı burada da açıkça
+                // kilidi kaldırıyoruz (bkz. _sylvaUnlockGalleryUI tanımı).
+                if (!data.success) { hideSylvaLoading(); if (typeof _sylvaUnlockGalleryUI === 'function') _sylvaUnlockGalleryUI(paneId); showNoDataModal(_TOAST_NO_DATA_MSG, meta.datasetLabel || meta.datasetKey || '', data.error); return; }
                 if (data.nativeCrs || (data.meta && data.meta.crs)) {
                     window._lastAnalyzeNativeCrs = data.nativeCrs || data.meta.crs;
                     window._lastAnalyzeNativeCrsByPane[paneId] = window._lastAnalyzeNativeCrs;
@@ -16550,6 +16816,13 @@ function selectRamp(name) {
                 if (_thisSeq >= (window._sylvaRgbTopSeqByPane[paneId] === undefined ? -1 : window._sylvaRgbTopSeqByPane[paneId])) {
                     window._sylvaRgbTopSeqByPane[paneId] = _thisSeq;
                     window._sylvaTopGeeLayerByPane[paneId] = _layerKey;
+                    // 🛠️ BUG FİX (Görsel 4 - Katman Değiştirme Kutusu Senkron Hatası,
+                    // yarış durumu payı): bkz. yukarıdaki analiz-sonucu işleyicisindeki
+                    // aynı düzeltme notu. Uydu galerisinden (RGB) yüklenen katmanlar için
+                    // de aynı senkronizasyon burada uygulanıyor.
+                    if (typeof _sylvaSyncLayerVisibilityToTop === 'function') {
+                        _sylvaSyncLayerVisibilityToTop(paneId, _layerKey);
+                    }
                 }
                 // 🛠️ BUG FİX (Lejant/Bilgi Kutusu ↔ Üst Katman Uyuşmazlığı):
                 // "üstteki katman" (harita üstünde görünen ve katman kutusunda
