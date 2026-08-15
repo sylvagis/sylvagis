@@ -4016,7 +4016,32 @@ def build_result_image(data, for_export=False):
         if for_export:
             # GeoTIFF indirme: her zaman orijinal bar skalasındaki ham değerler.
             # classBreaks (sınıf ID), custom_palette/min/max UYGULANMAZ.
-            display_result = result
+            # 🛠️ BUG FİX (Görsel 7 - "Tüm pikseller aynı sabit değer, topografik
+            # değişkenlik tamamen kayboldu / ArcMap'te High:X Low:X"):
+            # Eş Yükselti (TOPO_CONTOUR) analizinde 'result', canlı harita
+            # önizlemesi İÇİN üretilmiş bir zeroCrossing() İKİLİ (0/1)
+            # MASKESİYDİ — "bu piksel bir kontur çizgisinin TAM ÜZERİNDE mi"
+            # sorusuna cevap, GERÇEK bir yükselti/topografya değeri DEĞİL.
+            # Bu if/elif zinciri for_export=True olduğunda class_breaks/
+            # custom_palette dallarıyla birlikte AŞAĞIDAKİ "elif index ==
+            # 'TOPO_CONTOUR': display_result = result.selfMask()" dalını da
+            # tamamen ATLADIĞI için, GeoTIFF'e selfMask() bile uygulanmadan
+            # ham 0/1 maskesi yazılıyordu: AOI'nin neredeyse tamamı (çoğu
+            # zaman TAMAMI) 0, yalnızca ~1 piksel kalınlığındaki çizgi
+            # üzerinde 1 — kullanıcının ArcMap'te gördüğü "tüm pikseller aynı
+            # sabit değer" ve "topografik değişkenlik kayboldu" şikayeti
+            # BİREBİR budur. Gerçek eş yükselti VEKTÖRÜ zaten ayrı bir uç
+            # noktadan (/api/topo-contour-vector, bkz. _generate_contour_vectors)
+            # sunulduğu için, bu GeoTIFF indirmesinde artık kontur
+            # çizgilerinin HESAPLANDIĞI asıl sürekli/pürüzsüz yükselti
+            # yüzeyi (_dem_smooth) dışa aktarılır — kullanıcı SylvaGIS'teki
+            # gerçek min-max yükselti aralığını eksiksiz olarak indirebilir.
+            if index == 'TOPO_CONTOUR':
+                display_result = _dem_smooth.rename('value')
+                result = display_result
+                vis = {'min': 0, 'max': 3000, 'palette': ['black', 'white']}
+            else:
+                display_result = result
         elif class_breaks and isinstance(class_breaks, list) and len(class_breaks) > 0:
             classified_img, classified_vis = build_classified_image(result, class_breaks)
             if classified_img is not None:
@@ -5574,8 +5599,19 @@ def _split_bbox_grid_aligned(roi, nx, ny, scale, crs):
     """
     # AOI'yi hedef CRS'e projekte edip GERÇEK sınırlayıcı kutusunu al
     # (maxError=1: metre cinsinden izin verilen projeksiyon hatası payı).
-    roi_in_crs = roi.transform(crs, 1)
-    ring = roi_in_crs.bounds().coordinates().get(0).getInfo()
+    # 🛠️ BUG FİX (Görsel 5 - "Geometry.bounds: ... non-zero error margin"):
+    # .bounds() sunucu tarafında HESAPLANMIŞ (transform() sonucu) bir
+    # geometri üzerinde çağrıldığında GEE, hata payı (maxError) AÇIKÇA
+    # verilmezse bu işlemi reddedip tam olarak bu mesajla başarısız olur.
+    # Bu fonksiyon (_split_bbox_grid_aligned), Faz 3'te büyük TOPO
+    # katmanlarındaki piksel-boşluğu sorununu çözmek için eklenmişti; ama
+    # eklenen roi_in_crs.bounds() çağrısına hata payı verilmemişti — bu da
+    # BÜYÜK (tek istekte indirilemeyen, çoklu-karo gerektiren) indirmelerde
+    # (özellikle tarih/alan değişince farklı bir sahne boyutuna düşüldüğünde)
+    # tam olarak kullanıcının gördüğü hatayı üretiyordu. transform() ile
+    # AYNI (1 metre) hassasiyet korunarak .bounds(1) çağrılıyor — piksel
+    # hizalama kesinliği bozulmadan hata giderilmiş oluyor.
+    ring = roi_in_crs.bounds(1).coordinates().get(0).getInfo()
     xs = [p[0] for p in ring]
     ys = [p[1] for p in ring]
     xmin, xmax = min(xs), max(xs)
@@ -6398,6 +6434,41 @@ def rgb_scenes():
                 'thumbnailUrl': thumb_url,
             })
 
+        # 🛠️ BUG FİX (Görsel 1-2-3 - Galeri Önizleme Görselleri Yüklenmiyor):
+        # 'thumbnailUrl' önceden doğrudan earthengine.googleapis.com adresine
+        # işaret ediyordu ve bu adresi TARAYICI kendisi çekmeye çalışıyordu.
+        # Bu istekler DevTools'ta "CORB blocked" olarak görünüyordu (bkz.
+        # sorunlar.docx, ":getPixels" istekleri) ve <img> elementleri sessizce
+        # boş kalıyordu — galeri kartlarında yalnızca tarih metni görünüyor,
+        # önizleme görünmüyordu. Kök neden: GEE thumbnail URL'leri her zaman
+        # tarayıcıdan doğrudan erişime (CORS/CORB) uygun değildir. Çözüm:
+        # thumbnail baytlarını SUNUCU tarafında (GEE ile aynı taraf, bizim
+        # tile-proxy'mizle aynı '_tile_http' oturumu ile) çekip, Base64
+        # 'data:' URI'sine gömerek istemciye gönderiyoruz — tarayıcı artık
+        # earthengine.googleapis.com'a hiç doğrudan istek atmıyor, bu yüzden
+        # CORB/CORS engeli devre dışı kalıyor. Ağ gecikmesini gizlemek için
+        # tüm sahnelerin thumbnail'leri PARALEL (ThreadPoolExecutor) indirilir;
+        # bir sahnenin indirmesi başarısız olursa thumbnailUrl sadece None
+        # olur (ön yüz zaten null durumunda 🛰️ simgesine düşüyor).
+        def _fetch_thumb_data_uri(url):
+            if not url:
+                return None
+            try:
+                resp = _tile_http.get(url, timeout=_TILE_FETCH_TIMEOUT)
+                if resp.status_code == 200 and resp.content:
+                    b64 = base64.b64encode(resp.content).decode('ascii')
+                    return 'data:image/png;base64,' + b64
+            except Exception:
+                pass
+            return None
+
+        _thumb_urls = [s['thumbnailUrl'] for s in scenes]
+        if any(_thumb_urls):
+            with ThreadPoolExecutor(max_workers=8) as _thumb_pool:
+                _data_uris = list(_thumb_pool.map(_fetch_thumb_data_uri, _thumb_urls))
+            for _i, _s in enumerate(scenes):
+                _s['thumbnailUrl'] = _data_uris[_i]
+
         return jsonify({
             'success': True,
             'scenes':  scenes,
@@ -6911,7 +6982,12 @@ def _generate_contour_vectors(data):
     dem_smooth = dem.focalMean(radius=15, units='meters')
 
     scale = 30  # SRTM/ALOS/Copernicus/NASADEM hepsi ~30 m nominal çözünürlük
-    region = roi.bounds()
+    # 🛠️ BUG FİX (Görsel 5/7 - "Geometry.bounds: ... non-zero error margin"
+    # ve Eş Yükselti indirmelerinde başarısızlık): .bounds() burada da hata
+    # payı (maxError) belirtilmeden çağrılıyordu — bkz. _split_bbox_grid_aligned
+    # içindeki aynı düzeltme notu. Diğer indirme yollarıyla (download_geotiff)
+    # tutarlı olacak şekilde maxError=100 kullanılıyor.
+    region = roi.bounds(maxError=100)
 
     try:
         tif_bytes = _download_band_geotiff_bytes(
@@ -7292,7 +7368,11 @@ def vector_download():
                 vec_fc = _call_with_retry(
                     lambda: final_display.int().reduceToVectors(
                         reducer=ee.Reducer.first(),
-                        geometry=roi.bounds(),
+                        # 🛠️ BUG FİX (Görsel 5 - "Geometry.bounds: ... non-zero
+                        # error margin"): bkz. _split_bbox_grid_aligned içindeki
+                        # aynı düzeltme notu — maxError açıkça verilmeden .bounds()
+                        # çağrısı GEE tarafından reddediliyordu.
+                        geometry=roi.bounds(maxError=100),
                         scale=vec_scale,
                         maxPixels=1e8,
                         geometryType='polygon',
