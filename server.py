@@ -5844,6 +5844,16 @@ def _split_bbox_grid_aligned(roi, nx, ny, scale, crs):
     # tam olarak kullanıcının gördüğü hatayı üretiyordu. transform() ile
     # AYNI (1 metre) hassasiyet korunarak .bounds(1) çağrılıyor — piksel
     # hizalama kesinliği bozulmadan hata giderilmiş oluyor.
+    # 🛠️ BUG FİX (❌ "name 'roi_in_crs' is not defined" — büyük/native
+    # çözünürlüklü indirmelerde GEE'nin tek-istek boyut sınırı aşılıp bu
+    # karo-bölme yoluna düşüldüğünde İNDİRME TAMAMEN BAŞARISIZ oluyordu):
+    # Yukarıdaki yorum "AOI'yi hedef CRS'e projekte edip GERÇEK sınırlayıcı
+    # kutusunu al" diyor ama bu projeksiyon adımının kendisi (roi_in_crs'in
+    # ATANMASI) hiç yazılmamıştı — değişken hiçbir yerde tanımlanmadan
+    # doğrudan kullanılıyordu. `roi` (fonksiyonun parametresi) burada
+    # açıkça hedef `crs`'e (maxError=1 ile, üstteki yorumla aynı hassasiyet)
+    # projekte edilerek eksik atama tamamlanıyor.
+    roi_in_crs = roi.transform(crs, 1)
     ring = roi_in_crs.bounds(1).coordinates().get(0).getInfo()
     xs = [p[0] for p in ring]
     ys = [p[1] for p in ring]
