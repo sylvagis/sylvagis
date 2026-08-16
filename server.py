@@ -3731,10 +3731,23 @@ def build_result_image(data, for_export=False):
                     .selfMask()
                     .rename('value'))
 
-        # 🛠️ BUG FİX (LULC indirmeleri ArcMap'te açılmıyordu): bkz. yukarıdaki
-        # LULC (Dynamic World) bloğundaki aynı düzeltme notu — clip() öncesi
-        # somut bir piksel ızgarasına reproject() edilir.
-        remapped = remapped.reproject(crs='EPSG:4326', scale=_NATIVE_STATS_SCALE.get('LULC_ESA', 10))
+        # 🛠️ BUG FİX (DÜZELTME GERİ ALINDI — Faz 6/7'de fark edilen analiz
+        # hatası): Burada önceden LULC (Dynamic World) bloğundaki reproject()
+        # düzeltmesiyle AYNI mantık — "clip() öncesi somut piksel ızgarasına
+        # oturt" — buraya da uygulanmıştı. Ama Dynamic World'ün sorunu
+        # `.reduce(ee.Reducer.mode())` KULLANMASINDAN kaynaklanıyordu (bu tür
+        # indirgemeler GEE'de projeksiyonu belirsiz/varsayılana sıfırlar).
+        # ESA WorldCover ise `.first()` ile TEK bir görüntü alır — indirgeme
+        # YOKTUR, dolayısıyla projeksiyonu zaten baştan somut/native'dir; bu
+        # reproject() hiçbir sorunu ÇÖZMÜYORDU, tam tersine kullanıcının
+        # daha önce sorunsuz çalışan eski sunucusunda (bkz. kullanıcının
+        # gönderdiği referans server.py) hiç var olmayan FAZLADAN bir
+        # yeniden örnekleme adımı ekleyip olası yeni bir bozulma kaynağı
+        # oluşturuyordu. Kullanıcının eski/çalışan davranışına birebir geri
+        # dönüldü — native projeksiyon korunur, yalnızca aşağıdaki .clip()
+        # uygulanır. (Ölçek/çözünürlük düzeltmesi — _NATIVE_STATS_SCALE —
+        # ayrı ve hâlâ geçerli bir düzeltmedir, download_geotiff() içinde
+        # kalmaya devam ediyor.)
 
         vis = {'min': 1, 'max': len(wc_codes), 'palette': wc_palette}
         result = remapped
@@ -3774,12 +3787,13 @@ def build_result_image(data, for_export=False):
                           .remap(modis_codes, list(range(1, 18)), 0)
                           .selfMask()
                           .rename('value'))
-        # 🛠️ BUG FİX (LULC indirmeleri ArcMap'te açılmıyordu): bkz. yukarıdaki
-        # LULC (Dynamic World) bloğundaki aynı düzeltme notu. MODIS'in kendi
-        # native projeksiyonu (Sinusoidal) AOI'nin lat/lon CRS'inden çok
-        # farklı olduğundan, clip() öncesi açık bir reproject() ile somut
-        # bir piksel ızgarasına oturtmak ÖZELLİKLE bu veri seti için önemlidir.
-        remapped_modis = remapped_modis.reproject(crs='EPSG:4326', scale=_NATIVE_STATS_SCALE.get('LULC_MODIS', 500))
+        # 🛠️ BUG FİX (DÜZELTME GERİ ALINDI — bkz. LULC_ESA bloğundaki aynı
+        # başlıklı ayrıntılı not): MODIS_img de `.first()` ile TEK bir
+        # görüntü olarak alınıyor — `.mosaic()/.median()/.reduce()` YOK,
+        # dolayısıyla projeksiyonu (Sinusoidal olsa da) zaten somut/native.
+        # Buradaki reproject() de aynı mantık hatasıyla eklenmişti ve
+        # kullanıcının önceden sorunsuz çalışan eski koduna göre FAZLADAN
+        # bir adımdı; geri alındı.
         vis    = {'min': 1, 'max': 17, 'palette': modis_palette}
         result = remapped_modis
         final_display = remapped_modis.clip(roi)
@@ -3830,12 +3844,15 @@ def build_result_image(data, for_export=False):
                            .remap(corine_codes, list(range(1, len(corine_codes) + 1)), 0)
                            .selfMask()
                            .rename('value'))
-        # 🛠️ BUG FİX (LULC indirmeleri ArcMap'te açılmıyordu): bkz. yukarıdaki
-        # LULC (Dynamic World) bloğundaki aynı düzeltme notu. CORINE'in kendi
-        # native projeksiyonu (ETRS89-LAEA / EPSG:3035) AOI'nin lat/lon
-        # CRS'inden farklı olduğundan, clip() öncesi açık bir reproject() ile
-        # somut bir piksel ızgarasına oturtmak bu veri seti için de önemlidir.
-        remapped_corine = remapped_corine.reproject(crs='EPSG:4326', scale=_NATIVE_STATS_SCALE.get('LULC_CORINE', 100))
+        # 🛠️ BUG FİX (DÜZELTME GERİ ALINDI — bkz. LULC_ESA bloğundaki aynı
+        # başlıklı ayrıntılı not): corine_img de `.first()`/`ee.Algorithms.If`
+        # ile TEK bir görüntü olarak alınıyor — `.mosaic()/.median()/.reduce()`
+        # YOK, dolayısıyla projeksiyonu (ETRS89-LAEA/EPSG:3035 olsa da) zaten
+        # somut/native. Buradaki reproject() de aynı mantık hatasıyla
+        # eklenmişti VE kullanıcının hâlâ CORINE indirmelerinde "could not
+        # open the specified file" hatası aldığını bildirdiği tam da bu
+        # katmandı — kullanıcının önceden sorunsuz çalışan eski koduna göre
+        # fazladan bir yeniden örnekleme adımıydı; geri alındı.
         vis    = {'min': 1, 'max': len(corine_codes), 'palette': corine_palette}
         result = remapped_corine
         final_display = remapped_corine.clip(roi)
