@@ -1721,7 +1721,41 @@ def _osm_buildings_from_bbox(geometry):
 GEE_SERVICE_ACCOUNT_EMAIL = os.environ.get('GEE_SERVICE_ACCOUNT_EMAIL', '')
 GEE_SERVICE_ACCOUNT_KEY   = os.environ.get('GEE_SERVICE_ACCOUNT_KEY', '')
 
-try:
+# 🛠️ BUG FİX (kesikli "Earth Engine client library not initialized" hatası —
+# özellikle birden fazla analiz aynı anda seçilip çalıştırıldığında ortaya
+# çıkıyordu): Bu blok eskiden yalnızca MODÜL YÜKLENİRKEN (worker/instance
+# başlarken) BİR KEZ çalışıyordu ve başarısız olursa sadece log basıp
+# sessizce vazgeçiyordu. Bu sunucu "gunicorn -w 2 --threads 8" ile ve
+# Cloud Run'ın OTOMATİK ÖLÇEKLENDİRMESİYLE (yoğun/eşzamanlı istek anlarında
+# YENİ container instance'ları açılarak) çalıştığı için, HER worker/instance
+# bu kodu kendi soğuk-başlangıcında bağımsız olarak çalıştırır. Soğuk
+# başlangıçta ağ/DNS/metadata sunucusu henüz tam hazır olmayabilir; tam o an
+# ee.Initialize() başarısız olursa, hiçbir yeniden deneme olmadığından o
+# worker/instance SÜRESİZ OLARAK bozuk kalıyor ve ona yönlendirilen TÜM
+# istekler "Invalid geometry — ... Earth Engine client library not
+# initialized" hatası alıyordu. Kullanıcı birden fazla analiz seçip hepsini
+# eşzamanlı ateşlediğinde Cloud Run tam da bu anda yeni instance'lar açtığı
+# için hata en çok tam da çoklu analiz seçiminde ortaya çıkıyor, ve
+# seçilenlerden bazıları (bozuk instance'a düşenler) sessizce başarısız
+# olurken diğerleri normal çalışıyordu — "birden fazla analiz seçince sadece
+# biri açılıyor" şikâyetinin doğrudan kök nedeni budur.
+#
+# ÇÖZÜM: (1) başlangıçta birkaç kez yeniden dene (kısa bekleme ile) — çoğu
+# soğuk-başlangıç ağ gecikmesi burada, hiçbir istemci isteği gelmeden önce
+# atlatılır; (2) her EE kullanan istekten önce çalışan bir "hazır mı?"
+# kontrolü (_ensure_ee_ready, aşağıdaki before_request kancasıyla) ekle —
+# hazır değilse istek anında (thread-safe kilit ile, aynı worker'daki diğer
+# thread'lerin üst üste binmesini önleyerek) tekrar dener. Böylece başlangıçta
+# başarısız olan bir worker/instance sonraki bir istekte kendini iyileştirir;
+# sürekli bozuk kalmaz.
+_EE_READY = False
+_EE_INIT_LOCK = threading.Lock()
+_EE_LAST_INIT_ATTEMPT = 0.0
+_EE_INIT_RETRY_COOLDOWN = 15  # saniye — başarısız denemeler arasında minimum bekleme
+
+
+def _do_ee_initialize():
+    """Tek bir ee.Initialize() denemesi yapar; başarısızsa exception fırlatır."""
     if GEE_SERVICE_ACCOUNT_EMAIL and GEE_SERVICE_ACCOUNT_KEY:
         # GEE_SERVICE_ACCOUNT_KEY ya bir dosya yolu (örn. /etc/secrets/key.json)
         # ya da doğrudan key.json'un ham JSON içeriği olabilir (Cloud Run
@@ -1743,8 +1777,70 @@ try:
         # kişisel login yöntemine geri düş — sadece local test için.
         ee.Initialize(project='sylvagis')
         print('⚠️  GEE kişisel hesap ile başlatıldı (yerel geliştirme modu).')
-except Exception as e:
-    print('❌ GEE başlatılamadı:', e)
+
+
+def _ensure_ee_ready(force=False):
+    """EE'nin başlatılmış olduğundan emin olur; değilse (thread-safe ve
+    soğuma süreli şekilde) yeniden başlatmayı dener. Zaten hazırsa neredeyse
+    sıfır maliyetlidir (tek bir boolean kontrolü) — her EE kullanan isteğin
+    başında güvenle çağrılabilir."""
+    global _EE_READY, _EE_LAST_INIT_ATTEMPT
+    if _EE_READY and not force:
+        return True
+    with _EE_INIT_LOCK:
+        if _EE_READY and not force:
+            return True
+        _now = time.time()
+        if not force and (_now - _EE_LAST_INIT_ATTEMPT) < _EE_INIT_RETRY_COOLDOWN:
+            # Çok yakın zamanda denendi ve başarısız oldu — auth sunucusunu
+            # gereksiz yere zorlamamak için kısa bir süre bekle.
+            return _EE_READY
+        _EE_LAST_INIT_ATTEMPT = _now
+        try:
+            _do_ee_initialize()
+            _EE_READY = True
+        except Exception as e:
+            print('❌ GEE başlatılamadı (yeniden deneme):', e)
+            _EE_READY = False
+        return _EE_READY
+
+
+def _is_ee_not_ready_error(e):
+    """Bir exception'ın (geometri/veri hatası değil) EE'nin henüz hazır
+    olmamasından kaynaklandığını tespit eder — bkz. make_roi() içindeki
+    kullanım notu. EE Python istemcisi bu durumda hep aynı karakteristik
+    mesajı fırlatır ('...Earth Engine client library not initialized...
+    See http://goo.gle/ee-auth.')."""
+    _t = str(e)
+    return ('not initialized' in _t) or ('ee-auth' in _t) or ('Earth Engine client library' in _t)
+
+
+# Başlangıçta birkaç kez dene — soğuk başlangıçtaki geçici ağ/DNS
+# gecikmelerinin çoğu 2-3 deneme içinde atlatılır, böylece ilk istemci
+# isteği gelmeden önce sorun burada çözülmüş olur.
+for _ee_attempt in range(3):
+    try:
+        _do_ee_initialize()
+        _EE_READY = True
+        break
+    except Exception as e:
+        print('❌ GEE başlatılamadı (deneme {}/3):'.format(_ee_attempt + 1), e)
+        if _ee_attempt < 2:
+            time.sleep(2)
+_EE_LAST_INIT_ATTEMPT = time.time()
+
+
+@app.before_request
+def _sylvagis_ensure_ee_before_request():
+    """🛠️ BUG FİX: EE zaten hazırsa maliyeti tek bir boolean kontrolüdür —
+    diğer tüm (statik dosya vb.) isteklere gözle görülür bir gecikme
+    eklemez. EE hazır DEĞİLSE (bu worker/instance soğuk başlangıçta
+    başarısız olduysa) burada kendini iyileştirmeyi dener — böylece
+    kullanıcı "Earth Engine client library not initialized" hatasını bir
+    daha görmeden önce sorun istek anında arka planda çözülmeye çalışılır."""
+    if not _EE_READY:
+        _ensure_ee_ready()
+
 
 # Last analysis parameters (GeoTIFF download için saklanır)
 #
@@ -3059,6 +3155,19 @@ def make_roi(roi):
     try:
         return ee.Geometry(geom_dict, None, False)
     except Exception as e1:
+        # 🛠️ BUG FİX: EE henüz hazır değilken (bkz. _ensure_ee_ready) bu
+        # deneme HER ZAMAN başarısız olur — ama bunun nedeni geometri DEĞİL,
+        # EE bağlantısıdır. Böyle bir hatayı "belki geometri bozuktur" diye
+        # yorumlayıp aşağıdaki onarım aşamalarına (2. ve 3.) düşmek hem
+        # anlamsız (onarım bunu asla çözemez) hem de yanıltıcı hata
+        # mesajına giden yolu uzatıyordu. Bu durumda doğrudan ve hızlıca
+        # asıl (EE hazır değil) hataya atlıyoruz.
+        if _is_ee_not_ready_error(e1):
+            raise ValueError(
+                'Sunucu Earth Engine bağlantısını şu anda kuramadı — lütfen '
+                'birkaç saniye bekleyip tekrar deneyin. Sorun devam ederse '
+                'sunucu yöneticisine bildirin.'
+            )
         first_err = e1
 
     # 2. Shapely gerektirmeyen hafif onarım (kapanmamış halka / tekrarlı nokta).
@@ -3106,7 +3215,20 @@ def make_roi(roi):
 
         return ee.Geometry(fixed, None, False)
     except Exception as e:
-        raise ValueError('Invalid geometry — lütfen çalışma alanını kontrol edin: ' + str(e))
+        _err_text = str(e)
+        # 🛠️ BUG FİX (yanıltıcı hata mesajı): 'not initialized' bu üstteki
+        # try bloğunda ee.Geometry(...) çağrısı EE henüz hazır değilken
+        # yapılırsa fırlatılır — sorun geometriyle DEĞİL, bu isteği
+        # karşılayan worker/instance'ın EE bağlantısıyla ilgilidir (bkz.
+        # yukarıdaki _ensure_ee_ready / before_request notu). Kullanıcıyı
+        # "çalışma alanını kontrol et" diyerek yanlış yöne yönlendirmemek
+        # için ayrı ve doğru bir mesaj veriyoruz. Normalde before_request
+        # kancası bunu isteğin en başında kendiliğinden çözer; buraya
+        # düşülmesi yalnızca EE'ye o an gerçekten ulaşılamadığı nadir
+        # durumlarda beklenir.
+        if _is_ee_not_ready_error(e):
+            raise ValueError('Sunucu Earth Engine bağlantısını şu anda kuramadı — lütfen birkaç saniye bekleyip tekrar deneyin. Sorun devam ederse sunucu yöneticisine bildirin.')
+        raise ValueError('Invalid geometry — lütfen çalışma alanını kontrol edin: ' + _err_text)
 
 
 @app.route('/api/building-footprints', methods=['POST'])
@@ -4119,6 +4241,25 @@ def build_result_image(data, for_export=False):
         # önizlemesinde değil, yukarıdaki kontur görselleştirme dalında
         # uygulanır. Böylece genel palette/alan renklendirme kodu kontura
         # hiçbir zaman dolgu olarak sızamaz.
+
+        # 🛠️ BUG FİX (TOPO indirmeleri ArcMap'te "Could not open the
+        # specified file" — LULC ailesindeki AYNI kök nedenli düzeltme
+        # notuna bkz.): DEM'in kendisi SRTM/NASADEM gibi TEK/somut bir
+        # ee.Image varlığı olsa da, yukarıdaki boşluk-doldurma zinciri
+        # HER ZAMAN (seçilen dem_source ne olursa olsun) bir
+        # ImageCollection.mosaic() çıktısını (_copernicus_global_fallback)
+        # unmask() ile karıştırır. Bu dosyanın kendi "🛠️ BUG FİX (KÖK NEDEN
+        # — CRS seçici HER ZAMAN 'WGS 84' gösteriyordu)" notunda AÇIKÇA
+        # belgelendiği gibi, .mosaic() (median()/mean() ile aynı sınıf)
+        # çıktı projeksiyonunu somut/native bir ızgaraya değil, belirsiz/
+        # varsayılan bir projeksiyona sıfırlar — bu da clip() öncesi somut
+        # bir piksel ızgarası olmadan dışa aktarım yapıldığında AOI dışında
+        # tutarsız alan veya CBS yazılımlarının (özellikle ArcMap) güvenilir
+        # açamayacağı bir dosya yapısı üretebilir. ÇÖZÜM: clip() öncesi,
+        # tıpkı LULC/ham bant indirmesindeki AYNI ilkeyle, DEM'in kendi
+        # doğal ~30 m çözünürlüğünde somut bir piksel ızgarasına açıkça
+        # reproject() edilir.
+        display_result = display_result.reproject(crs='EPSG:4326', scale=30)
 
         final_display = display_result.clip(roi) if clip_mode == 'clip' else display_result
         return final_display, roi, result, vis, None
