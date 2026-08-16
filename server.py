@@ -5386,6 +5386,24 @@ def download_geotiff():
         # ArcMap'te ek bir parlaklık/kontrast ayarı gerekmez.
         # Landsat ve diğer tüm veri setleri/indeksler ETKİLENMEZ; onlar
         # hâlâ önceki (ham) davranışlarıyla dışa aktarılır.
+        # 🛠️ BUG FİX (ArcMap "Could not open the specified file" — Sentinel-2
+        # gerçek renk indirmelerinde): aşağıdaki .toByte() dönüşümü görüntüyü
+        # Byte (0-255) aralığına daraltır. Ancak bu fonksiyonun ilerisinde
+        # TÜM indeksler için ORTAK/sabit NoData sentinel değeri -9999'dur —
+        # bu değer Byte'ın (uint8) temsil edebileceği [0, 255] aralığının
+        # TAMAMEN dışındadır. _download_band_geotiff_bytes_impl() bu Byte
+        # görüntüyü .unmask(-9999) ile maskelediğinde ve/veya formatOptions.
+        # noData=-9999 etiketlediğinde, GEE'nin ürettiği dosyanın piksel tipi
+        # (Byte) ile NoData etiketi (-9999) birbiriyle TUTARSIZ hale gelir.
+        # rasterio/GDAL bu tutarsızlığı (haklı olarak) reddediyor — bkz.
+        # _ensure_output_crs()'teki "Given nodata value, -9999, is beyond
+        # the valid range of its data type, uint8" hatası — ve daha katı
+        # olan ArcMap'in dosyayı hiç açamamasıyla BİREBİR eşleşen bir
+        # belirti üretiyor. ÇÖZÜM: bu Byte'a daraltılmış dışa aktarım için
+        # NoData sentinel'i de Byte aralığına UYGUN bir değere (0) çekilir
+        # — tıpkı LULC semboloji paketinin (_build_lulc_symbology_zip) kendi
+        # Byte çıktısı için zaten 0'ı NoData olarak kullanması gibi.
+        _is_byte_rgb_export = False
         if data.get('index') == 'RGB' and data.get('satellite') in ('s2-l1c', 's2-l2a'):
             v_min = vis.get('min', 0)
             v_max = vis.get('max', 0.3)
@@ -5396,6 +5414,7 @@ def download_geotiff():
                 .clamp(0, 255)
                 .toByte()
             )
+            _is_byte_rgb_export = True
 
         # Full modunda ROI ile kesmeden tüm görüntüyü indir;
         # Clip modunda yalnızca ROI sınırları içindeki pikseller alınır.
@@ -5454,6 +5473,11 @@ def download_geotiff():
         # Bu, raster verilerinde yaygın kabul görmüş standart bir NoData
         # kuralıdır (ör. USGS/ESRI ürünlerinde de kullanılır).
         nodata_value = -9999 if is_clip else None
+        if _is_byte_rgb_export and nodata_value is not None:
+            # bkz. yukarıdaki BUG FİX notu — Byte (0-255) aralığı -9999'u
+            # temsil edemez; 0 kullanılır (gerçek 3 bantlı yansımada üç
+            # kanalın da AYNI ANDA tam 0 olması pratikte ihmal edilebilir).
+            nodata_value = 0
 
         # 🔒 true-clip güvencesi: GEE'nin clip()/unmask() zincirinin ötesinde,
         # AOI'nin GERÇEK poligon şeklini (EPSG:4326) de gönderiyoruz ki
@@ -5776,6 +5800,37 @@ def _ensure_output_crs(tif_bytes, target_crs, nodata_value=None, is_categorical=
                       'olarak yeniden projeksiyonlanıyor.'.format(src.crs, target_crs))
 
                 src_nodata = src.nodata if src.nodata is not None else nodata_value
+
+                # 🛠️ BUG FİX (ArcMap "Could not open the specified file" —
+                # genel güvence katmanı): src_nodata, bandın GERÇEK piksel
+                # tipinin (ör. Byte/uint8: [0, 255]) temsil edebileceği
+                # aralığın DIŞINDA olabilir (ör. -9999 sentinel'i bir Byte
+                # görüntüsüyle eşleştiğinde — bkz. download_geotiff()'teki
+                # Sentinel-2 .toByte() düzeltme notu). Bu durumda rasterio/
+                # GDAL, YENİ dosyayı `nodata=<aralık dışı değer>` ile
+                # OLUŞTURMAYI TAMAMEN REDDEDER ("Given nodata value, X, is
+                # beyond the valid range of its data type") — bu da aşağıdaki
+                # `except` bloğuna düşüp CRS dönüşümünün SESSİZCE atlanmasına
+                # (ve olası bir dtype/NoData tutarsızlığının GEE'den geldiği
+                # HALİYLE kullanıcıya gönderilmesine) yol açıyordu. Artık
+                # böyle bir uyuşmazlık burada ÖNCEDEN tespit edilip src_nodata
+                # None'a çekiliyor — reprojeksiyon (CRS garantisi) yine de
+                # TAMAMLANIYOR, yalnızca NoData etiketi atlanıyor (dosyanın
+                # piksel verisi/CRS'i etkilenmez).
+                if src_nodata is not None:
+                    try:
+                        import numpy as _np
+                        _dtype = _np.dtype(src.dtypes[0])
+                        if _np.issubdtype(_dtype, _np.integer):
+                            _rng = _np.iinfo(_dtype)
+                            if not (_rng.min <= src_nodata <= _rng.max):
+                                print('[SylvaGIS] ⚠️ NoData değeri ({}) hedef piksel '
+                                      'tipinin ({}) aralığı dışında — NoData etiketi '
+                                      'atlanıyor, CRS dönüşümü yine de uygulanacak.'
+                                      .format(src_nodata, _dtype))
+                                src_nodata = None
+                    except Exception:
+                        pass
 
                 transform, width, height = calculate_default_transform(
                     src.crs, target, src.width, src.height, *src.bounds
