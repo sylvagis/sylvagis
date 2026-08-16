@@ -3563,6 +3563,25 @@ def build_result_image(data, for_export=False):
             dw_wide = _dw_mode(_wide_start, _wide_end)
             dw = dw.unmask(dw_wide)
 
+        # 🛠️ BUG FİX (LULC indirmeleri ArcMap'te açılmıyordu — ham bant
+        # indirmesi ise sorunsuz çalışıyordu): bkz. download_raw_bands()
+        # içindeki AYNI kök nedenli düzeltme notu ("reproject() öncelik
+        # sırası"). Bir ImageCollection üzerinde .reduce()/mod bileşimi
+        # gibi bir indirgeme işleminden çıkan görüntünün VARSAYILAN
+        # projeksiyonu GEE tarafından somut/native bir piksel ızgarasına
+        # değil, belirsiz/varsayılan bir projeksiyona sıfırlanır. clip(roi)
+        # bu "somut olmayan" projeksiyon üzerinde çağrılırsa (aşağıda
+        # olduğu gibi), dışa aktarım ardışık düzeni AOI dışında tutarsız
+        # alan dahil edebilir ya da sonuç dosyanın piksel ızgarası/blok
+        # yapısını CBS yazılımlarının (özellikle ArcMap) güvenilir şekilde
+        # ayrıştıramayacağı şekilde bozabilir. ÇÖZÜM: clip() öncesi, görüntü
+        # açıkça kendi doğal çözünürlüğünde (bkz. _NATIVE_STATS_SCALE)
+        # somut bir piksel ızgarasına reproject() edilir — Landsat ham bant
+        # indirmesinde zaten uygulanan reproject()+clip() sırasıyla BİREBİR
+        # aynı ilke. Nearest-neighbor (varsayılan .reproject() davranışı,
+        # .resample() çağrılmadığı sürece) sınıf kodlarını korur.
+        dw = dw.reproject(crs='EPSG:4326', scale=_NATIVE_STATS_SCALE.get('LULC', 10))
+
         palette = ['#419bdf', '#397d49', '#88b053', '#7a87c6',
                    '#e49635', '#dfc35a', '#c4281b', '#a59b8f', '#b39fe1']
         vis = {'min': 0, 'max': 8, 'palette': palette}
@@ -3589,6 +3608,11 @@ def build_result_image(data, for_export=False):
                     .remap(wc_codes, list(range(1, len(wc_codes) + 1)), 0)
                     .selfMask()
                     .rename('value'))
+
+        # 🛠️ BUG FİX (LULC indirmeleri ArcMap'te açılmıyordu): bkz. yukarıdaki
+        # LULC (Dynamic World) bloğundaki aynı düzeltme notu — clip() öncesi
+        # somut bir piksel ızgarasına reproject() edilir.
+        remapped = remapped.reproject(crs='EPSG:4326', scale=_NATIVE_STATS_SCALE.get('LULC_ESA', 10))
 
         vis = {'min': 1, 'max': len(wc_codes), 'palette': wc_palette}
         result = remapped
@@ -3628,6 +3652,12 @@ def build_result_image(data, for_export=False):
                           .remap(modis_codes, list(range(1, 18)), 0)
                           .selfMask()
                           .rename('value'))
+        # 🛠️ BUG FİX (LULC indirmeleri ArcMap'te açılmıyordu): bkz. yukarıdaki
+        # LULC (Dynamic World) bloğundaki aynı düzeltme notu. MODIS'in kendi
+        # native projeksiyonu (Sinusoidal) AOI'nin lat/lon CRS'inden çok
+        # farklı olduğundan, clip() öncesi açık bir reproject() ile somut
+        # bir piksel ızgarasına oturtmak ÖZELLİKLE bu veri seti için önemlidir.
+        remapped_modis = remapped_modis.reproject(crs='EPSG:4326', scale=_NATIVE_STATS_SCALE.get('LULC_MODIS', 500))
         vis    = {'min': 1, 'max': 17, 'palette': modis_palette}
         result = remapped_modis
         final_display = remapped_modis.clip(roi)
@@ -3678,6 +3708,12 @@ def build_result_image(data, for_export=False):
                            .remap(corine_codes, list(range(1, len(corine_codes) + 1)), 0)
                            .selfMask()
                            .rename('value'))
+        # 🛠️ BUG FİX (LULC indirmeleri ArcMap'te açılmıyordu): bkz. yukarıdaki
+        # LULC (Dynamic World) bloğundaki aynı düzeltme notu. CORINE'in kendi
+        # native projeksiyonu (ETRS89-LAEA / EPSG:3035) AOI'nin lat/lon
+        # CRS'inden farklı olduğundan, clip() öncesi açık bir reproject() ile
+        # somut bir piksel ızgarasına oturtmak bu veri seti için de önemlidir.
+        remapped_corine = remapped_corine.reproject(crs='EPSG:4326', scale=_NATIVE_STATS_SCALE.get('LULC_CORINE', 100))
         vis    = {'min': 1, 'max': len(corine_codes), 'palette': corine_palette}
         result = remapped_corine
         final_display = remapped_corine.clip(roi)
@@ -5268,6 +5304,38 @@ def download_geotiff():
 
         filename = (req_data.get('filename') or 'SylvaGIS_export').strip() or 'SylvaGIS_export'
         scale    = int(req_data.get('scale', 30))
+
+        # 🛠️ BUG FİX (LULC indirmeleri anormal derecede büyük/bozuk dosyalar
+        # üretiyordu — ArcMap'te açılmıyordu, ham bant indirmeleri ise
+        # SORUNSUZ çalışıyordu): bkz. index.html — executeGeoTiffDownload()
+        # yanındaki aynı düzeltme notu. "Piksel Çözünürlüğü" seçici LULC/TOPO
+        # analizlerinde arayüzde GİZLENİR (openGeoTiffDownloadDialog içindeki
+        # scaleWrap.style.display='none') çünkü bu analizler kendi doğal/
+        # sabit çözünürlükleriyle dışa aktarılmalıdır — ANCAK gizlenen
+        # <select> elemanının DEĞERİ silinmiyordu; hâlâ (son seçilen Sentinel/
+        # Landsat uydusuna göre) 10 veya 30 gibi TAMAMEN ALAKASIZ bir uydu
+        # bandı çözünürlüğü taşıyıp sunucuya gönderilmeye devam ediyordu.
+        # KÖK NEDEN SONUCU: MODIS (500 m native) veya CORINE (100 m native)
+        # gibi veri setleri bu yüzden 10-50 KAT daha yüksek "sahte" bir
+        # çözünürlükte isteniyordu — GEE'nin tek istekteki boyut sınırını
+        # katlayarak aşan, onlarca/yüzlerce karoya bölünüp rasterio.merge
+        # ile mozaiklenen, sunucu belleği/süresi açısından aşırı ağır ve
+        # nihayetinde ArcMap/QGIS'in güvenilir şekilde açamadığı devasa
+        # veya (karo/mozaik sınırında) bozuk dosyalar ortaya çıkıyordu.
+        # ÇÖZÜM: sunucu, LULC/TOPO ailesi için istemciden gelen 'scale'
+        # değerini TAMAMEN YOK SAYAR ve her zaman veri setinin GERÇEK doğal
+        # çözünürlüğünü kullanır — tıpkı ham bant indirmesinin
+        # (download_raw_bands) istemciden HİÇ scale almayıp HER ZAMAN
+        # sahnenin kendi native_scale'ini (ee.Image.projection()
+        # .nominalScale()) kullanması gibi.
+        _dl_index_for_scale = data.get('index')
+        if _dl_index_for_scale in _NATIVE_STATS_SCALE:
+            scale = _NATIVE_STATS_SCALE[_dl_index_for_scale]
+        elif isinstance(_dl_index_for_scale, str) and _dl_index_for_scale.startswith('TOPO'):
+            # SRTM/ALOS/Copernicus/NASADEM hepsi ~30 m nominal — bkz.
+            # build_result_image() içindeki "_dem_scale = 30" ile TUTARLI.
+            scale = 30
+
         # 🌐 İstemci bir CRS göndermezse (ör. eski/farklı bir istemci veya
         # doğrudan API çağrısı), sabit "EPSG:4326" yerine son analizin
         # KENDİ gerçek/doğal CRS'ine düşülür — böylece veri hangi UTM
