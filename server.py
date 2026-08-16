@@ -5630,11 +5630,41 @@ def download_geotiff():
         # [0-1]) asla gerçekten oluşamayacak -9999 değeri kullanılıyor.
         # Bu, raster verilerinde yaygın kabul görmüş standart bir NoData
         # kuralıdır (ör. USGS/ESRI ürünlerinde de kullanılır).
+        # 🛠️ BUG FİX: lulc_index/is_lulc_categorical artık NoData sentinel'i
+        # seçilmeden ÖNCE hesaplanıyor (bkz. az aşağıdaki yeni BUG FİX notu)
+        # — hem bu amaçla hem de _download_band_geotiff_bytes() çağrısında
+        # is_categorical=True olarak iletilebilmesi için (LULC sınıf
+        # kodlarının olası bir CRS yeniden örneklemesinde — _ensure_output_crs
+        # — bilinear yerine en_yakın_komşu kullanmasını sağlar; aksi halde
+        # komşu sınıflar arasında anlamsız ondalıklı "ara" kodlar üretilebilirdi).
+        lulc_index = data.get('index')
+        is_lulc_categorical = lulc_index in LULC_CLASS_DEFS
+
         nodata_value = -9999 if is_clip else None
-        if _is_byte_rgb_export and nodata_value is not None:
-            # bkz. yukarıdaki BUG FİX notu — Byte (0-255) aralığı -9999'u
-            # temsil edemez; 0 kullanılır (gerçek 3 bantlı yansımada üç
-            # kanalın da AYNI ANDA tam 0 olması pratikte ihmal edilebilir).
+        # 🛠️ BUG FİX (ArcMap "Could not open the specified file" — Arazi
+        # Kullanımı/LULC indirmelerinde: LULC, LULC_ESA, LULC_MODIS,
+        # LULC_CORINE): Byte-Sentinel-2-gerçek-renk düzeltmesiyle (hemen
+        # altındaki _is_byte_rgb_export dalı) AYNI kök nedenin LULC ailesi
+        # ayağı. is_lulc_categorical hesaplanıyor olmasına rağmen buraya
+        # kadar hiçbir yerde KULLANILMIYORDU — yani LULC indirmeleri, Byte'a
+        # daraltılmış RGB indirmesiyle birebir aynı risk altında olsa bile,
+        # her zaman -9999 NoData etiketiyle dışa aktarılıyordu. Google'ın
+        # kendi "Exporting images" rehberi açıkça uyarıyor: "the nodata
+        # value should be inside the valid range for the image's
+        # PixelType" — yani GEE, formatOptions.noData'yı görüntünün gerçek
+        # (olası işaretsiz/Byte) tipine UYACAK şekilde otomatik genişletmez.
+        # Artık is_lulc_categorical de bu düzeltmeyi tetikliyor. Bu, LULC
+        # için tamamen GÜVENLİDİR: remap(..., defaultValue=0).selfMask()
+        # zaten 0'ı "geçersiz/sınıf dışı" sentinel'i olarak kullanıyor —
+        # gerçek bir sınıf kodu ASLA 0 olamaz (kodlar 1'den başlar) — ve
+        # _build_lulc_symbology_zip() de kendi ürettiği Byte çıktısında
+        # zaten bağımsız olarak 0'ı NoData kabul ediyor; artık ikisi TUTARLI.
+        if (_is_byte_rgb_export or is_lulc_categorical) and nodata_value is not None:
+            # bkz. yukarıdaki iki BUG FİX notu — Byte (0-255) aralığı
+            # -9999'u temsil edemez; 0 kullanılır (RGB'de gerçek 3 bantlı
+            # yansımada üç kanalın da AYNI ANDA tam 0 olması pratikte
+            # ihmal edilebilir; LULC'de 0 zaten hiçbir zaman geçerli bir
+            # sınıf kodu olamaz).
             nodata_value = 0
 
         # 🔒 true-clip güvencesi: GEE'nin clip()/unmask() zincirinin ötesinde,
@@ -5651,14 +5681,6 @@ def download_geotiff():
         # tek bir .tif yerine .tif + .tif.aux.xml + .clr içeren bir ZIP sunulur.
         # Diğer TÜM analizler (NDVI, DEM, RGB, TOPO vb.) etkilenmez; onlar
         # önceki gibi doğrudan .tif olarak inmeye devam eder.
-        # 🛠️ BUG FİX: lulc_index artık _download_band_geotiff_bytes() ÇAĞRISINDAN
-        # ÖNCE hesaplanır ki is_categorical=True olarak iletilebilsin — LULC
-        # sınıf kodlarının olası bir CRS yeniden örneklemesinde (_ensure_output_crs)
-        # bilinear yerine en_yakın_komşu kullanmasını sağlar (aksi halde komşu
-        # sınıflar arasında anlamsız ondalıklı "ara" kodlar üretilebilirdi).
-        lulc_index = data.get('index')
-        is_lulc_categorical = lulc_index in LULC_CLASS_DEFS
-
         tif_bytes = _download_band_geotiff_bytes(
             final_display, export_region, scale, crs, safe_name,
             nodata_value=nodata_value, aoi_geom_4326=aoi_geom_4326,
@@ -6604,6 +6626,38 @@ def download_raw_bands():
                 # boş gösteriyordu. -9999, bu bantların hiçbirinde
                 # gerçekten oluşamayacak standart bir NoData sentinelidir.
                 nodata_value = -9999 if scope == 'clip' else None
+
+                # 🛠️ BUG FİX (ArcMap "Could not open the specified file" —
+                # Ham Veri/Bantlar indirmelerinde): Sentinel-2/Landsat
+                # bantları Earth Engine kataloğunda İŞARETSİZ (UInt16,
+                # [0, 65535]) tam sayı tipindedir ve burada hiçbir açık tip
+                # dönüşümü (toByte/toShort/toInt) uygulanmıyordu. Google'ın
+                # resmi "Exporting images" rehberi açıkça uyarıyor: "the
+                # nodata value should be inside the valid range for the
+                # image's PixelType" — yani GEE, formatOptions.noData
+                # değerini görüntünün tipine UYACAK şekilde otomatik
+                # genişletmez/korumaz. -9999, UInt16'nın temsil edebileceği
+                # [0, 65535] aralığının TAMAMEN dışında olduğundan, indirilen
+                # dosyanın piksel tipi (UInt16) ile NoData etiketi (-9999)
+                # birbiriyle TUTARSIZ hale gelebiliyor — ArcMap'in dosyayı
+                # hiç açamamasıyla birebir eşleşen bir belirti.
+                #
+                # ÇÖZÜM (Google'ın kendi önerdiği yöntem — aynı rehber:
+                # "You can also set the image's PixelType by casting the
+                # data to a specific type using image methods toShort() or
+                # toInt()"): NoData sentinel'i BİLEREK 0'a ÇEKİLMİYOR — bu,
+                # yukarıdaki KÖK NEDEN DÜZELTMESİ notunda açıklanan (gerçek
+                # 0 DN değerli su/gölge piksellerinin yanlışlıkla boş
+                # görünmesi) sorununu GERİ GETİRİRDİ. Bunun yerine görüntü,
+                # -9999'u sorunsuz temsil edebilecek işaretli/geniş bir tipe
+                # (Int32) açıkça dönüştürülüyor — UInt16'nın tüm [0, 65535]
+                # aralığı hiçbir veri kaybı olmadan Int32'ye sığar, üstüne
+                # -9999 da artık geçerli bir değer olur. Yalnızca NoData
+                # gerçekten kullanılacaksa (clip kapsamında) uygulanır;
+                # 'full' kapsamında (nodata yok, unmask() hiç çağrılmıyor)
+                # bantlar hâlâ doğal UInt16 tipinde, değiştirilmeden iner.
+                if nodata_value is not None:
+                    export_img = export_img.toInt()
 
                 tif_bytes = _download_band_geotiff_bytes(
                     export_img, export_region, native_scale, native_crs, base_name,
