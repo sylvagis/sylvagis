@@ -10780,6 +10780,15 @@ function selectRamp(name) {
                 if (!data.success) { hideSylvaLoading(); return; }
                 if (data.nativeCrs) { window._lastAnalyzeNativeCrs = data.nativeCrs; window._lastAnalyzeNativeCrsByPane[_pane] = data.nativeCrs; }
                 _sylvaReplaceGeeLayer(_pane, data.tileUrl, { opacity: 1 });
+                // 🛠️ BUG FİX (İndirilen dosya ekranda görünenle uyuşmuyordu):
+                // bu payload, güncellediği (üstteki) katmanın kendi anahtarına
+                // göre de ayrıca saklanır — bkz. _sylvaBringGeeLayerToFront
+                // içindeki asıl düzeltme notu.
+                if (typeof _sylvaRememberLayerAnalyzePayload === 'function') {
+                    var _stretchTopKey = window._sylvaTopGeeLayerByPane &&
+                        window._sylvaTopGeeLayerByPane[(_pane === 'map2') ? 'map2' : 'map'];
+                    _sylvaRememberLayerAnalyzePayload(_pane, _stretchTopKey, _stretchAnalyzePayload);
+                }
                 _applyGeeLayerClipMode(_clipMode, _pane);
                 _sylvaApplyAutoOpacity(_pane, meta);
                 // Renklendirilmiş yeni veri haritada hazır olup tamamen ekrana
@@ -11261,6 +11270,15 @@ function selectRamp(name) {
                 if (!data.success) { hideSylvaLoading(); return; }
                 if (data.nativeCrs) { window._lastAnalyzeNativeCrs = data.nativeCrs; window._lastAnalyzeNativeCrsByPane[_pane] = data.nativeCrs; }
                 _sylvaReplaceGeeLayer(_pane, data.tileUrl, { opacity: 1 });
+                // 🛠️ BUG FİX (İndirilen dosya ekranda görünenle uyuşmuyordu):
+                // bu payload, güncellediği (üstteki) katmanın kendi anahtarına
+                // göre de ayrıca saklanır — bkz. _sylvaBringGeeLayerToFront
+                // içindeki asıl düzeltme notu.
+                if (typeof _sylvaRememberLayerAnalyzePayload === 'function') {
+                    var _classTopKey = window._sylvaTopGeeLayerByPane &&
+                        window._sylvaTopGeeLayerByPane[(_pane === 'map2') ? 'map2' : 'map'];
+                    _sylvaRememberLayerAnalyzePayload(_pane, _classTopKey, _classAnalyzePayload);
+                }
                 _applyGeeLayerClipMode(_clipMode, _pane);
                 _sylvaApplyAutoOpacity(_pane, meta);
                 // Renklendirilmiş yeni veri haritada hazır olup tamamen ekrana
@@ -12521,6 +12539,23 @@ function selectRamp(name) {
         }
         window._sylvaSyncLayerVisibilityToTop = _sylvaSyncLayerVisibilityToTop;
 
+        // 🛠️ BUG FİX (İndirilen dosya ekranda görünenle uyuşmuyordu — ör.
+        // Eğim/Slope haritası açıkken indirilen GeoTIFF ham DEM ya da başka
+        // bir analiz çıkıyordu): bkz. _sylvaBringGeeLayerToFront içindeki
+        // asıl düzeltme notu. Her katman, kendisini üreten /api/analyze
+        // payload'ını burada KENDİ katman anahtarına (layerKey) göre ayrıca
+        // saklar; "Üstte Gösterilecek Katman" kutusundan bu katmana daha
+        // sonra manuel olarak geri dönüldüğünde indirme senkronizasyonu
+        // (_lastAnalyzePayloadByPane) bu kayıtlı payload'la GERİ YÜKLENİR —
+        // indirilen dosya HER ZAMAN ekranda görünenle birebir eşleşir.
+        function _sylvaRememberLayerAnalyzePayload(paneId, layerKey, payload) {
+            if (!layerKey || !payload) return;
+            var key = (paneId === 'map2') ? 'map2' : 'map';
+            window._sylvaLayerAnalyzePayloadByPane = window._sylvaLayerAnalyzePayloadByPane || { map: {}, map2: {} };
+            window._sylvaLayerAnalyzePayloadByPane[key][layerKey] = payload;
+        }
+        window._sylvaRememberLayerAnalyzePayload = _sylvaRememberLayerAnalyzePayload;
+
         function _sylvaBringGeeLayerToFront(paneId, layerKey) {
             var key = (paneId === 'map2') ? 'map2' : 'map';
             var store = window._geeLayersByPane[key];
@@ -12542,6 +12577,30 @@ function selectRamp(name) {
             });
             window._sylvaTopGeeLayerByPane = window._sylvaTopGeeLayerByPane || { map: null, map2: null };
             window._sylvaTopGeeLayerByPane[key] = layerKey;
+
+            // 🛠️ BUG FİX (Görsel - İndirilen dosya ekranda görünenle
+            // uyuşmuyordu): bu fonksiyon eskiden yalnızca GÖRSEL durumu
+            // (zIndex/görünürlük) güncelliyordu — window._lastAnalyzePayloadByPane
+            // (indirme senkronizasyonunun kullandığı "son analiz
+            // parametreleri") HİÇ dokunulmuyordu. Sonuç: kullanıcı örn. önce
+            // DEM, sonra Eğim (Slope) çalıştırıp kutudan tekrar DEM'e (ya da
+            // başka bir katmana) baktıktan sonra Eğim'e GERİ döndüğünde,
+            // ekranda Eğim görünse bile indirme hâlâ EN SON /api/analyze
+            // isteğine ait (o an ekranda GÖRÜNMEYEN) katmanın parametrelerini
+            // kullanıyordu — kullanıcının bildirdiği "Eğim haritasını
+            // indirirken DEM verisi iniyor" sorunu tam olarak budur. Artık bu
+            // katman için daha önce kaydedilmiş bir analiz payload'ı varsa
+            // (bkz. _sylvaRememberLayerAnalyzePayload çağrıları), indirme
+            // senkronizasyonu için de burada GERİ YÜKLENİR.
+            (function () {
+                var _bftSavedPayload = window._sylvaLayerAnalyzePayloadByPane &&
+                    window._sylvaLayerAnalyzePayloadByPane[key] &&
+                    window._sylvaLayerAnalyzePayloadByPane[key][layerKey];
+                if (_bftSavedPayload) {
+                    window._lastAnalyzePayloadByPane = window._lastAnalyzePayloadByPane || { map: null, map2: null };
+                    window._lastAnalyzePayloadByPane[key] = _bftSavedPayload;
+                }
+            })();
 
             // 🛠️ BUG FİX ("Üstte Gösterilecek Katman" kutusunda YANLIŞ veri
             // seti işaretli görünüyordu — ör. haritada/Bilgi Kutusunda Landsat
@@ -14186,6 +14245,13 @@ function selectRamp(name) {
                     analyzePayload.palette = [analyzePayload.contourLineColor];
                 }
                 window._lastAnalyzePayloadByPane[_pane] = analyzePayload;
+                // 🛠️ BUG FİX (İndirilen dosya ekranda görünenle uyuşmuyordu):
+                // bu payload, ÜRETTİĞİ katmanın kendi anahtarına (_thisLayerKey)
+                // göre de ayrıca saklanır — bkz. _sylvaBringGeeLayerToFront
+                // içindeki asıl düzeltme notu.
+                if (typeof _sylvaRememberLayerAnalyzePayload === 'function') {
+                    _sylvaRememberLayerAnalyzePayload(_pane, _thisLayerKey, analyzePayload);
+                }
                 var _runGen = _analysisGeneration;
 
                 fetch(API_BASE + '/api/analyze', {
@@ -16328,6 +16394,15 @@ function selectRamp(name) {
                 if (_analysisGeneration !== _sceneGen) { if (!silent) hideSylvaLoading(); if (onDone) onDone(); return; }
                 // Harita katmanını güncelle (o an aktif olan ekranda)
                 _sylvaReplaceGeeLayer(_pane, data.tileUrl, { opacity: 1 });
+                // 🛠️ BUG FİX (İndirilen dosya ekranda görünenle uyuşmuyordu):
+                // bu payload, güncellediği (üstteki) katmanın kendi anahtarına
+                // göre de ayrıca saklanır — bkz. _sylvaBringGeeLayerToFront
+                // içindeki asıl düzeltme notu.
+                if (typeof _sylvaRememberLayerAnalyzePayload === 'function') {
+                    var _sceneTopKey = window._sylvaTopGeeLayerByPane &&
+                        window._sylvaTopGeeLayerByPane[(_pane === 'map2') ? 'map2' : 'map'];
+                    _sylvaRememberLayerAnalyzePayload(_pane, _sceneTopKey, _specificSceneAnalyzePayload);
+                }
                 _applyGeeLayerClipMode(_sceneClipMode, _pane);
                 _sylvaApplyAutoOpacity(_pane, meta);
                 // 🛠️ BUG FİX: Uydu görüntü galerisinden (tarih/bulut oranı
@@ -16803,6 +16878,13 @@ function selectRamp(name) {
                 window._sylvaLayerBaseNames = window._sylvaLayerBaseNames || {};
                 window._sylvaLayerBaseNames[_layerKey] = meta.datasetLabel || meta.datasetKey;
                 _sylvaAddGeeLayer(paneId, _layerKey, data.tileUrl, { opacity: 1 });
+                // 🛠️ BUG FİX (İndirilen dosya ekranda görünenle uyuşmuyordu):
+                // bu payload, ÜRETTİĞİ katmanın kendi anahtarına (_layerKey)
+                // göre de ayrıca saklanır — bkz. _sylvaBringGeeLayerToFront
+                // içindeki asıl düzeltme notu.
+                if (typeof _sylvaRememberLayerAnalyzePayload === 'function') {
+                    _sylvaRememberLayerAnalyzePayload(paneId, _layerKey, _rgbAnalyzePayload);
+                }
                 window._sylvaTopGeeLayerByPane = window._sylvaTopGeeLayerByPane || { map: null, map2: null };
                 // 🛠️ BUG FİX (Sensör/Etiket Karışıklığı — bkz. dispatch noktasındaki
                 // açıklama): "üstteki katman" artık SADECE bu yanıtın sıra numarası
