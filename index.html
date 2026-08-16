@@ -11522,56 +11522,120 @@ function selectRamp(name) {
             return null;
         }
 
+        // 🛠️ BUG FİX (Ekrana ilk gelen veri ile Lejant/Bilgi Kutusu/"Üstte
+        // Gösterilecek Katman" kutusunda işaretli görünen veri UYUŞMUYORDU —
+        // ör. ESA WorldCover haritada görünürken kutu/lejant CORINE
+        // gösteriyordu): getSelectedAnalysisMetaList() aşağıda birden fazla
+        // işaretli analiz kutusunu document.querySelectorAll(...) ile
+        // topluyordu — bu DOM/HTML'deki SIRAYA göre döner, kullanıcının
+        // kutuları GERÇEKTEN İŞARETLEME SIRASINA göre DEĞİL. Analiz
+        // dispatch döngüsü ("Analizi Çalıştır") ise metaList'teki her
+        // öğeye, dizideki KONUMUNU (_mIdx) "işaretlenme sırası" (_seq)
+        // olarak atayıp en yüksek _seq'e sahip yanıtı "üstteki katman"
+        // (Lejant/Bilgi Kutusu'nu süren) ilan ediyordu. Sonuç: ör. CORINE
+        // checkbox'ı HTML'de ESA'dan SONRA yer aldığı için, kullanıcı ESA'yı
+        // CORINE'den SONRA işaretlese bile (gerçek niyeti ESA'yı üstte
+        // görmekse bile), CORINE her zaman DOM sırası yüzünden "üstteki"
+        // ilan ediliyor, harita/checkbox durumu ESA'yı gösterse bile Lejant/
+        // Bilgi Kutusu CORINE'de kalıyordu.
+        //
+        // ÇÖZÜM: Her ilgili checkbox'a, GERÇEKTEN işaretlendiği ANDA (change
+        // olayında) tek yönlü artan bir "işaretlenme sırası" damgası
+        // (data-sylva-check-seq) vuruluyor. getSelectedAnalysisMetaList()
+        // artık topladığı listeyi DOM sırası yerine bu GERÇEK işaretlenme
+        // sırasına göre sıralayıp döndürüyor — dispatch döngüsündeki _seq
+        // mantığı DEĞİŞMEDEN, artık gerçekten "en son işaretlenen kazanır"
+        // garantisini doğru veriyle sağlıyor.
+        window._sylvaCheckOrderCounter = window._sylvaCheckOrderCounter || 0;
+        document.addEventListener('change', function (e) {
+            var t = e.target;
+            if (!t || t.tagName !== 'INPUT' || t.type !== 'checkbox' || !t.checked) return;
+            var isAnalysisCb = t.classList && t.classList.contains('uydu-analiz-checkbox');
+            var isModuleCb = t.matches && t.matches('.option-item input[name="sylva-module"][data-analysis]');
+            var isGoruntuCb = t.classList && t.classList.contains('uydu-goruntu-radio');
+            if (isAnalysisCb || isModuleCb || isGoruntuCb) {
+                window._sylvaCheckOrderCounter += 1;
+                t.setAttribute('data-sylva-check-seq', String(window._sylvaCheckOrderCounter));
+            }
+        });
+        // İşaretlenme sırası damgası bulunamayan (ör. sayfa yeni yüklendi,
+        // henüz hiç değiştirilmedi) elemanlar için DOM sırasını (mevcut
+        // eski davranış) koruyan bir yedek değer üretir.
+        function _sylvaCheckSeqOf(el, domIndex) {
+            var raw = el && el.getAttribute ? el.getAttribute('data-sylva-check-seq') : null;
+            return raw !== null ? parseInt(raw, 10) : domIndex;
+        }
+
         function getSelectedAnalysisMetaList() {
             var checkedGoruntuList = document.querySelectorAll('.uydu-goruntu-radio:checked');
             if (checkedGoruntuList.length) {
-                var rgbList = [];
-                checkedGoruntuList.forEach(function (cg) {
-                    rgbList.push({
-                        analysisName: 'RGB',
-                        datasetKey: cg.value,
-                        datasetLabel: cg.getAttribute('data-label') || cg.value,
-                        sensorLabel: cg.getAttribute('data-sensor') || null,
-                        rampKey: 'black-white',
-                        legendType: 'image',
-                        legendMin: '', legendMax: '',
-                        classesRaw: null,
-                        isRgbGallery: true,
-                        needsGallery: true
+                var rgbEntries = [];
+                checkedGoruntuList.forEach(function (cg, _domIdx) {
+                    rgbEntries.push({
+                        seq: _sylvaCheckSeqOf(cg, _domIdx),
+                        meta: {
+                            analysisName: 'RGB',
+                            datasetKey: cg.value,
+                            datasetLabel: cg.getAttribute('data-label') || cg.value,
+                            sensorLabel: cg.getAttribute('data-sensor') || null,
+                            rampKey: 'black-white',
+                            legendType: 'image',
+                            legendMin: '', legendMax: '',
+                            classesRaw: null,
+                            isRgbGallery: true,
+                            needsGallery: true
+                        }
                     });
                 });
-                return rgbList;
+                // 🛠️ BUG FİX: DOM sırası yerine GERÇEK işaretlenme sırasına göre
+                // sıralanıyor (bkz. yukarıdaki _sylvaCheckSeqOf açıklaması) —
+                // dispatch döngüsü dizinin SON öğesini "üstteki katman" ilan
+                // ettiği için, en son işaretlenen veri seti artık gerçekten
+                // dizinin sonunda yer alıyor.
+                rgbEntries.sort(function (a, b) { return a.seq - b.seq; });
+                return rgbEntries.map(function (en) { return en.meta; });
             }
-            var list = [];
-            document.querySelectorAll('.uydu-analiz-checkbox:checked').forEach(function (cb) {
+            var entries = [];
+            document.querySelectorAll('.uydu-analiz-checkbox:checked').forEach(function (cb, _domIdx) {
                 var sensorRadio = document.querySelector('.uydu-sensor-radio:checked');
-                list.push({
-                    analysisName: cb.getAttribute('data-analysis') || 'Analiz',
-                    rampKey: cb.getAttribute('data-ramp-key') || 'black-white',
-                    legendType: 'stretched',
-                    legendMin: cb.getAttribute('data-legend-min') || '-1',
-                    legendMax: cb.getAttribute('data-legend-max') || '+1',
-                    classesRaw: null,
-                    sensorKey: sensorRadio ? sensorRadio.value : null,
-                    sensorLabel: sensorRadio ? sensorRadio.getAttribute('data-sensor-label') : null,
-                    needsGallery: true
+                entries.push({
+                    seq: _sylvaCheckSeqOf(cb, _domIdx),
+                    meta: {
+                        analysisName: cb.getAttribute('data-analysis') || 'Analiz',
+                        rampKey: cb.getAttribute('data-ramp-key') || 'black-white',
+                        legendType: 'stretched',
+                        legendMin: cb.getAttribute('data-legend-min') || '-1',
+                        legendMax: cb.getAttribute('data-legend-max') || '+1',
+                        classesRaw: null,
+                        sensorKey: sensorRadio ? sensorRadio.value : null,
+                        sensorLabel: sensorRadio ? sensorRadio.getAttribute('data-sensor-label') : null,
+                        needsGallery: true
+                    }
                 });
             });
-            if (list.length) return list;
-            document.querySelectorAll('.option-item input[name="sylva-module"][data-analysis]:checked').forEach(function (checked) {
+            if (entries.length) {
+                entries.sort(function (a, b) { return a.seq - b.seq; });
+                return entries.map(function (en) { return en.meta; });
+            }
+            var moduleEntries = [];
+            document.querySelectorAll('.option-item input[name="sylva-module"][data-analysis]:checked').forEach(function (checked, _domIdx) {
                 var legendType = checked.getAttribute('data-legend-type') || 'stretched';
-                list.push({
-                    analysisName: checked.getAttribute('data-analysis') || 'Veri',
-                    rampKey: checked.getAttribute('data-ramp-key') || 'black-white',
-                    legendType: legendType,
-                    legendMin: checked.getAttribute('data-legend-min') || '-1',
-                    legendMax: checked.getAttribute('data-legend-max') || '+1',
-                    classesRaw: checked.getAttribute('data-legend-classes'),
-                    sensorLabel: null,
-                    needsGallery: legendType === 'image'
+                moduleEntries.push({
+                    seq: _sylvaCheckSeqOf(checked, _domIdx),
+                    meta: {
+                        analysisName: checked.getAttribute('data-analysis') || 'Veri',
+                        rampKey: checked.getAttribute('data-ramp-key') || 'black-white',
+                        legendType: legendType,
+                        legendMin: checked.getAttribute('data-legend-min') || '-1',
+                        legendMax: checked.getAttribute('data-legend-max') || '+1',
+                        classesRaw: checked.getAttribute('data-legend-classes'),
+                        sensorLabel: null,
+                        needsGallery: legendType === 'image'
+                    }
                 });
             });
-            return list;
+            moduleEntries.sort(function (a, b) { return a.seq - b.seq; });
+            return moduleEntries.map(function (en) { return en.meta; });
         }
 
         // Lejantı (harita üzerindeki .map-legend kutusu) meta bilgisinden yeniden çizer.
@@ -12905,6 +12969,46 @@ function selectRamp(name) {
                         console.error('[Sylva] Lejant/Bilgi Kutusu garanti güncellemesi başarısız oldu:', err2);
                     }
                     _sylvaForceInfoBoxIfEligible(paneId, _iaState.meta.analysisName);
+                } else {
+                    // 🛠️ BUG FİX (Lejant/Bilgi Kutusu ↔ Üst Katman Uyuşmazlığı —
+                    // ekrana ilk gelen veri ESA WorldCover iken Bilgi Kutusu/
+                    // Lejant/Analiz Seçenekleri kutusunun CORINE gösterip
+                    // kalması sorununun İKİNCİ ayağı; yukarıdaki RGB dalındaki
+                    // "scMeta yok" durumuyla BİREBİR aynı düzeltme): Bu katman
+                    // için kaydedilmiş bir analiz anlık görüntüsü (_iaState)
+                    // hiç yoksa (ör. sayfa yeniden yüklendi, senkronizasyon
+                    // yeni açıldı, ya da bu katman başka bir nedenle hiç
+                    // kaydedilmemiş), eskiden bu dal SESSİZCE HİÇBİR ŞEY
+                    // YAPMIYORDU — bu da Lejant/Bilgi Kutusu'nun bir önceki
+                    // katmana (ör. CORINE) ait BAYAT içeriği göstermeye devam
+                    // etmesine yol açıyordu; hâlbuki "Üstte Gösterilecek
+                    // Katman" kutusu/checkbox'lar (_sylvaRenderLayerSwitchBox
+                    // yukarıda zaten çağrıldı) doğru katmana (ör. ESA
+                    // WorldCover) güncellenmişti — tam da kullanıcının
+                    // bildirdiği belirti. Artık RGB dalıyla BİREBİR aynı
+                    // şekilde, Lejant/Bilgi Kutusu bu durumda TEMİZLENİR —
+                    // yanlış katmana ait içerik asla ekranda asılı kalmaz.
+                    var _legendBoxClearIa = document.getElementById(paneId === 'map2' ? 'map2-legend-box' : 'map-legend-box');
+                    var _infoBoxClearIa   = document.getElementById(paneId === 'map2' ? 'map2-info-box'   : 'map-info-box');
+                    if (_legendBoxClearIa) { _legendBoxClearIa.innerHTML = ''; _legendBoxClearIa.style.display = 'none'; }
+                    if (_infoBoxClearIa)   { _infoBoxClearIa.innerHTML = '';   _infoBoxClearIa.style.display = 'none'; }
+                    if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[paneId]) {
+                        window._sylvaLegendInfoByPane[paneId].legendHTML = '';
+                        window._sylvaLegendInfoByPane[paneId].legendDisplay = 'none';
+                        window._sylvaLegendInfoByPane[paneId].infoHTML = '';
+                        window._sylvaLegendInfoByPane[paneId].infoDisplay = 'none';
+                    }
+                    if (typeof window.sylvaMirrorLegendInfoToMap2 === 'function') window.sylvaMirrorLegendInfoToMap2();
+                    // 🛠️ Pasta/bar grafik alanı da aynı nedenle boşaltılır —
+                    // aksi halde önceki katmana ait grafik ekranda asılı kalabilir.
+                    if (paneId === (typeof _sylvaActivePaneId === 'function' ? _sylvaActivePaneId() : 'map')) {
+                        window._sylvaChartDataByPane = window._sylvaChartDataByPane || { map: null, map2: null };
+                        window._sylvaChartDataByPane[key] = null;
+                        var _chartWrapClearIa = document.getElementById('stats-chart-svg-wrap');
+                        var _chartTableClearIa = document.getElementById('stats-chart-table');
+                        if (_chartWrapClearIa) { _chartWrapClearIa.className = ''; _chartWrapClearIa.innerHTML = ''; }
+                        if (_chartTableClearIa) _chartTableClearIa.innerHTML = '';
+                    }
                 }
             }
 
