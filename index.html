@@ -14828,18 +14828,24 @@ function selectRamp(name) {
                         window._sylvaIndexTopSeqByPane[_idxPaneKey] = _idxThisSeq;
                         window._sylvaTopGeeLayerByPane[_idxPaneKey] = _thisLayerKey;
                         _isTopForPane = true;
-                        // 🛠️ BUG FİX (Görsel 4 - Katman Değiştirme Kutusu Senkron Hatası,
-                        // yarış durumu payı): _sylvaAddGeeLayer() yeni katmanı eklerken
-                        // seq kontrolünden ÖNCE, panedeki TÜM katmanları görünür/gizli
-                        // olarak işaretliyordu; bu nedenle iki analiz aynı anda
-                        // gönderildiğinde "kaybeden" yanıt son çalışırsa, kazanan katman
-                        // haritadan kaldırılmış ama katman kutusunda işaretli kalmış
-                        // (veya tam tersi) durumda kalabiliyordu. Burada, bu yanıt GERÇEKTEN
-                        // en güncel (top) olduğunda görünürlük durumu ve Leaflet katmanları
-                        // açıkça bu katmana göre yeniden senkronize ediliyor.
-                        if (typeof _sylvaSyncLayerVisibilityToTop === 'function') {
-                            _sylvaSyncLayerVisibilityToTop(_idxPaneKey, _thisLayerKey);
-                        }
+                    }
+                    // 🛠️ BUG FİX (YARIŞ DURUMU — Harita/Lejant Uyuşmazlığı): _sylvaAddGeeLayer()
+                    // yukarıda BU yanıt gerçekten “üstteki” (en son işaretlenen) katman
+                    // olup olmadığına BAKMAKSIZIN, eklediği katmanı görünür yapıp AYNI
+                    // paneldeki TÜM diğer katmanları koşulsuz gizliyordu. Bu yüzden, daha
+                    // ÖNCE işaretlenmiş ama sunucudan GEÇ yanıt dönen bir analiz (ör.
+                    // CORINE önce işaretlenip ESA sonra işaretlense bile CORINE'nin isteği
+                    // ESA'nınkinden daha yavaş tamamlanırsa), ESA doğru şekilde “üstteki
+                    // katman” olarak zaten gösterilmişken, CORINE'nin geç gelen yanıtı
+                    // haritadan ESA'yı kaldırıp kendini gösteriyordu — Lejant/Bilgi
+                    // Kutusu/"Üstte Gösterilecek Katman" başlığı hâlâ (doğru şekilde) ESA
+                    // yazsa bile, haritada GÖRÜNEN katman CORINE oluyordu. Artık HER yanıt
+                    // sonrası (bu yanıt üstte olsun ya da olmasın), görünürlük her zaman o
+                    // an kayıtlı GERÇEK üst katmana göre yeniden senkronize edilir —
+                    // böylece geç gelen alt-sıradaki bir yanıt, doğru üst katmanı asla
+                    // haritadan kaldıramaz.
+                    if (typeof _sylvaSyncLayerVisibilityToTop === 'function' && window._sylvaTopGeeLayerByPane[_idxPaneKey]) {
+                        _sylvaSyncLayerVisibilityToTop(_idxPaneKey, window._sylvaTopGeeLayerByPane[_idxPaneKey]);
                     }
                     // 🛠️ DÜZELTME (Katman Sıyırıcı "Önceki Analizin Üzerine Ekle"
                     // ile birlikte yanlış/eksik çalışıyordu): Bu satırdan önce yeni
@@ -17727,13 +17733,19 @@ function selectRamp(name) {
                 if (_thisSeq >= (window._sylvaRgbTopSeqByPane[paneId] === undefined ? -1 : window._sylvaRgbTopSeqByPane[paneId])) {
                     window._sylvaRgbTopSeqByPane[paneId] = _thisSeq;
                     window._sylvaTopGeeLayerByPane[paneId] = _layerKey;
-                    // 🛠️ BUG FİX (Görsel 4 - Katman Değiştirme Kutusu Senkron Hatası,
-                    // yarış durumu payı): bkz. yukarıdaki analiz-sonucu işleyicisindeki
-                    // aynı düzeltme notu. Uydu galerisinden (RGB) yüklenen katmanlar için
-                    // de aynı senkronizasyon burada uygulanıyor.
-                    if (typeof _sylvaSyncLayerVisibilityToTop === 'function') {
-                        _sylvaSyncLayerVisibilityToTop(paneId, _layerKey);
-                    }
+                }
+                // 🛠️ BUG FİX (YARIŞ DURUMU — bkz. yukarıdaki analiz-sonucu işleyicisindeki
+                // aynı düzeltme notu): _sylvaAddGeeLayer() BU yanıtın gerçekten “üstteki”
+                // katman olup olmadığına BAKMAKSIZIN, eklediği katmanı görünür yapıp
+                // aynı paneldeki TÜM diğer katmanları koşulsuz gizliyordu — bu yüzden
+                // daha ÖNCE işaretlenmiş ama sunucudan GEÇ yanıt dönen bir veri seti
+                // (ör. Sentinel-2), aslında doğru şekilde üstte gösterilmekte olan SONRAKI
+                // veri setini (ör. Landsat) haritadan kaldırabiliyordu — dropdown/lejant
+                // hala doğru veri setini yazsa bile haritada YANLIŞ görüntü kalıyordu.
+                // Artık HER yanıt sonrası (üstte olsun ya da olmasın), görünürlük her
+                // zaman o an kayıtlı GERÇEK üst katmana göre yeniden senkronize edilir.
+                if (typeof _sylvaSyncLayerVisibilityToTop === 'function' && window._sylvaTopGeeLayerByPane[paneId]) {
+                    _sylvaSyncLayerVisibilityToTop(paneId, window._sylvaTopGeeLayerByPane[paneId]);
                 }
                 // 🛠️ BUG FİX (Lejant/Bilgi Kutusu ↔ Üst Katman Uyuşmazlığı):
                 // "üstteki katman" (harita üstünde görünen ve katman kutusunda
