@@ -14873,13 +14873,16 @@ function selectRamp(name) {
                     // bu yeni katman diğer mevcut katmanları haritadan GİZLEMEZ —
                     // hepsi birlikte görünür kalır, Katman Sıyırıcı ile karşılaştırma
                     // yapılabilsin diye (bkz. _sylvaAddGeeLayer'daki hideOthers notu).
-                    // 🆕 Sadece "Çevresel ve Kentsel Analizler" grubunda yeni bir
-                    // katman eklenince önceki katman(lar) otomatik gizlenmeye
-                    // devam eder (eski davranış). Diğer TÜM analizlerde
-                    // (NDVI/NDWI/LULC/TOPO vb.) artık yeni katman eklenince
-                    // önceki katman(lar) OTOMATİK gizlenmez — kullanıcı kutudaki
-                    // tiki kendi eliyle kaldırmadıkça hepsi görünür kalır.
-                    _sylvaAddGeeLayer(_pane, _thisLayerKey, data.tileUrl, { opacity: _isVectorContour ? 0 : 1, hideOthers: !_stackMode && isEnvUrbanAnalysis(meta.analysisName) });
+                    // 🔁 Varsayılan davranışa dönüldü: yeni bir katman eklenince
+                    // (stack modu kapalıyken) önceki katman(lar) otomatik
+                    // gizlenir/tiki kapanır — "Üstte Gösterilecek Katman"
+                    // kutusunda her zaman tek bir katman açık gelir. Kullanıcı
+                    // isterse kutudaki DİĞER kutucukları kendi eliyle
+                    // işaretleyerek istediği kadar katmanı manuel olarak
+                    // (bkz. sylva-layer-switch-visibility tıklama işleyicisi)
+                    // ek olarak görünür yapabilir — bu manuel işlem bu
+                    // otomatik gizlemeden ETKİLENMEZ/geri alınmaz.
+                    _sylvaAddGeeLayer(_pane, _thisLayerKey, data.tileUrl, { opacity: _isVectorContour ? 0 : 1, hideOthers: !_stackMode });
                     if (_isVectorContour && typeof _sylvaLoadContourVectorLayer === 'function') {
                         _sylvaLoadContourVectorLayer(_pane, _thisLayerKey, analyzePayload);
                     }
@@ -14924,11 +14927,7 @@ function selectRamp(name) {
                     // katmanları yine gizlerdi; stack modunun bütün amacı (birden
                     // fazla analizi aynı anda haritada tutup Sıyırıcı ile
                     // karşılaştırmak) böylece bozulmamış olur.
-                    // 🆕 Bu zorunlu görünürlük senkronizasyonu (diğer TÜM katmanları
-                    // gizleme) artık SADECE "Çevresel ve Kentsel Analizler" grubunda
-                    // çalışır — diğer analizlerde (NDVI/NDWI/LULC/TOPO vb.) önceden
-                    // görünür bırakılmış katmanlar bu adımla tekrar gizlenmesin diye.
-                    if (!_stackMode && isEnvUrbanAnalysis(meta.analysisName) && typeof _sylvaSyncLayerVisibilityToTop === 'function' && window._sylvaTopGeeLayerByPane[_idxPaneKey]) {
+                    if (!_stackMode && typeof _sylvaSyncLayerVisibilityToTop === 'function' && window._sylvaTopGeeLayerByPane[_idxPaneKey]) {
                         _sylvaSyncLayerVisibilityToTop(_idxPaneKey, window._sylvaTopGeeLayerByPane[_idxPaneKey]);
                     }
                     // 🛠️ DÜZELTME (Katman Sıyırıcı "Önceki Analizin Üzerine Ekle"
@@ -17816,13 +17815,14 @@ function selectRamp(name) {
                 window._sylvaLayerFriendlyNames[_layerKey] = friendlyLabel || meta.datasetLabel || meta.datasetKey;
                 window._sylvaLayerBaseNames = window._sylvaLayerBaseNames || {};
                 window._sylvaLayerBaseNames[_layerKey] = meta.datasetLabel || meta.datasetKey;
-                // 🆕 Uydu Görüntüsü Galerisi (RGB) "Çevresel ve Kentsel Analizler"
-                // grubuna girmez; bu yüzden birden fazla görüntü seçilip
-                // indirildiğinde artık öncekiler OTOMATİK gizlenmez/tiki
-                // kapanmaz — kullanıcı kutudaki tiki kendi eliyle kaldırmadıkça
-                // hepsi görünür/işaretli kalır (bkz. modül analiz dispatch'indeki
-                // aynı notu).
-                _sylvaAddGeeLayer(paneId, _layerKey, data.tileUrl, { opacity: 1, hideOthers: false });
+                // 🔁 Varsayılan davranışa dönüldü: Stack modunda mevcut
+                // katmanları gizlemez, aksi halde (yeni bir görüntü/veri seti
+                // seçildiğinde) önceki katman otomatik gizlenir — "Üstte
+                // Gösterilecek Katman" kutusunda her zaman tek bir katman
+                // açık gelir. Kullanıcı kutudaki DİĞER kutucukları kendi
+                // eliyle işaretleyerek istediği kadar görüntüyü ek olarak
+                // görünür yapabilir (bkz. sylva-layer-switch-visibility).
+                _sylvaAddGeeLayer(paneId, _layerKey, data.tileUrl, { opacity: 1, hideOthers: !isStackMode });
                 // 🛠️ BUG FİX (İndirilen dosya ekranda görünenle uyuşmuyordu):
                 // bu payload, ÜRETTİĞİ katmanın kendi anahtarına (_layerKey)
                 // göre de ayrıca saklanır — bkz. _sylvaBringGeeLayerToFront
@@ -17854,11 +17854,12 @@ function selectRamp(name) {
                 // hala doğru veri setini yazsa bile haritada YANLIŞ görüntü kalıyordu.
                 // Artık HER yanıt sonrası (üstte olsun ya da olmasın), görünürlük her
                 // zaman o an kayıtlı GERÇEK üst katmana göre yeniden senkronize edilir.
-                // 🆕 Uydu Görüntüsü Galerisi (RGB) "Çevresel ve Kentsel Analizler"
-                // grubuna girmediği için bu zorunlu görünürlük senkronizasyonu
-                // (diğer TÜM katmanları gizleme) artık HİÇ ÇALIŞTIRILMAZ — birden
-                // fazla görüntü indirildiğinde öncekiler otomatik gizlenmez/tiki
-                // kapanmaz (bkz. modül analiz dispatch'indeki aynı notu).
+                // 🆕 Stack modunda bu adım ATLANIR — diğer (kasıtlı olarak görünür
+                // bırakılmış) katmanlar gizlenmesin diye (bkz. modül analiz
+                // dispatch'indeki aynı notu).
+                if (!isStackMode && typeof _sylvaSyncLayerVisibilityToTop === 'function' && window._sylvaTopGeeLayerByPane[paneId]) {
+                    _sylvaSyncLayerVisibilityToTop(paneId, window._sylvaTopGeeLayerByPane[paneId]);
+                }
                 // 🛠️ BUG FİX (Lejant/Bilgi Kutusu ↔ Üst Katman Uyuşmazlığı):
                 // "üstteki katman" (harita üstünde görünen ve katman kutusunda
                 // seçili olan görüntü) SADECE sıra numarası en yüksek olan yanıta
@@ -25562,12 +25563,20 @@ function sylvaSuggestGeoTiffFilename() {
         if (areaClean) parts.push(areaClean);
     }
 
-    // Tarih: seçili tarih aralığının bitiş tarihi varsa (zaten YYYY-MM-DD
-    // biçimindeki <input type="date"> değeri) kullanılır; yoksa bugünün
-    // tarihi (indirme/dışa aktarım tarihi) kullanılır.
-    var endInput = document.getElementById('date-end');
-    var datePart = (endInput && endInput.value) ? endInput.value : new Date().toISOString().slice(0, 10);
-    parts.push(datePart);
+    // 🆕 Tarih: SADECE uydu görüntüsü/uydu indeks analizlerinde (NDVI/NDWI vb.
+    // ve Ham Uydu Görüntüsü/RGB) dosya adına eklenir — LULC/TOPO/Çevresel
+    // analizler bir tarih aralığına bağlı olmadığından dosya adına hiç tarih
+    // eklenmez. Eklendiğinde de artık BUGÜNÜN tarihi (indirme anı) DEĞİL,
+    // verinin ait olduğu seçili tarih aralığının bitiş tarihi kullanılır;
+    // gerçek bir tarih yoksa segment tamamen atlanır (asla "bugün"e düşülmez).
+    var _fnMeta = (typeof getSelectedAnalysisMeta === 'function') ? getSelectedAnalysisMeta() : null;
+    var _fnAn = _fnMeta && _fnMeta.analysisName ? _fnMeta.analysisName : '';
+    var _fnIsDateable = (typeof isSatelliteIndexAnalysis === 'function' && isSatelliteIndexAnalysis(_fnAn)) ||
+        _fnAn === 'RGB' || (_fnMeta && _fnMeta.isRgbGallery);
+    if (_fnIsDateable) {
+        var endInput = document.getElementById('date-end');
+        if (endInput && endInput.value) parts.push(endInput.value);
+    }
 
     return parts.join('_');
 }
@@ -52221,8 +52230,12 @@ refresh();
         // eklenir (bkz. aşağıdaki items.push).
         var _gtiffIsAutoName = (filename === window._sylvaLastAutoGtiffName);
         var _gtiffAreaName = ((document.getElementById('geotiff-aoi-name') || {}).value || '').trim();
+        // 🆕 Artık tek/ortak bir "bugünün tarihi" fallback'i YOK — her katman
+        // (özellikle Zaman Serisi/çoklu tarihli indirmelerde) aşağıda KENDİ
+        // gerçek tarihini (entry.payload.endDate/startDate) kullanır; bu
+        // sadece toplu ZIP'in genel adı için (varsa) mevcut tarih aralığı
+        // bitişini tutar, yoksa boş kalır (asla "bugün"e düşülmez).
         var _gtiffDateEnd = (document.getElementById('date-end') || {}).value || '';
-        var _gtiffDatePart = _gtiffDateEnd || new Date().toISOString().slice(0, 10);
         var scale=parseInt((document.getElementById('geotiff-scale') || {}).value,10) || 30;
         var crs=typeof getSelectedCrs === 'function' ? getSelectedCrs() : 'EPSG:4326';
         // 🌐 ÇOK DİLLİ İNDİRME KUYRUĞU MESAJLARI: bu durum metinleri önceden
@@ -52248,6 +52261,15 @@ refresh();
                     if (!analysis.analysisId) throw new Error(_dlqFmt(_dlqT('dlq_session_error', '{name} için analiz oturumu oluşturulamadı.'), { name: entry.index }));
                     // 🏷️ Export Convention: SylvaGIS_export_[Analiz_Türü]_[Sensör/Veri]_[Alan_Adı]_[Tarih]
                     var _ts = sylvaExportTypeAndSourceFromPayload(entry.payload);
+                    // 🆕 Tarih SADECE uydu görüntüsü/uydu indeks analizlerinde
+                    // (NDVI/NDWI vb.) dosya adına eklenir — LULC/TOPO/Çevresel
+                    // analizlerde hiç eklenmez. Eklendiğinde de tüm katmanlar
+                    // için ORTAK/bugünkü bir tarih DEĞİL, o KATMANIN kendi
+                    // analiz isteğinde kullanılan gerçek tarih (endDate/
+                    // startDate) kullanılır — Zaman Serisi/çoklu tarihli
+                    // indirmelerde her dosya kendi doğru tarihini taşır.
+                    var _entryIsDateable = (typeof isSatelliteIndexAnalysis === 'function' && isSatelliteIndexAnalysis(entry.index)) || entry.index === 'RGB';
+                    var _entryDatePart = _entryIsDateable ? ((entry.payload && (entry.payload.endDate || entry.payload.startDate)) || '') : '';
                     var _entryFilename;
                     if (_gtiffIsAutoName) {
                         var _p = ['SylvaGIS_export'];
@@ -52257,7 +52279,7 @@ refresh();
                             var _ac = sylvaTranslitTR(_gtiffAreaName).replace(/\s+/g, '_').replace(/[^A-Za-z0-9_\-]+/g, '');
                             if (_ac) _p.push(_ac);
                         }
-                        _p.push(_gtiffDatePart);
+                        if (_entryDatePart) _p.push(_entryDatePart);
                         _entryFilename = safeName(_p.join('_'));
                     } else {
                         // Kullanıcı kendi dosya adını yazdı — yine de aynı isim
@@ -52275,7 +52297,7 @@ refresh();
             if (status) status.textContent='⏳ ' + _dlqT('dlq_building_geotiff', 'GeoTIFF dosyası oluşturuluyor…');
             if (items.length === 1) return responseBlob('/api/download-geotiff', items[0]).then(function(b){ return {blob:b,name:items[0].filename + '.tif'}; });
             var _batchName = _gtiffIsAutoName
-                ? safeName('SylvaGIS_export_raster_analizleri_' + _gtiffDatePart)
+                ? safeName('SylvaGIS_export_raster_analizleri' + (_gtiffDateEnd ? ('_' + _gtiffDateEnd) : ''))
                 : safeName(filename) + '_raster_analizleri';
             return responseBlob('/api/download-geotiff-batch', {items:items}).then(function(b){ return {blob:b,name:_batchName + '.zip'}; });
         }).then(function (out) {
