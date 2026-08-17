@@ -29,6 +29,92 @@ CORS(app)
 print('SylvaGIS server.py yüklendi — versiyon: zip-export-v2-tiling (lejant-coklu-katman-2026-08-17)')
 
 
+# ════════════════════════════════════════════════════════════════
+# 🏷️ Tutarlı Dosya İsimlendirme Kuralı (Export Convention) — yardımcılar
+# ════════════════════════════════════════════════════════════════
+# Kural: SylvaGIS_export_[Analiz_Türü]_[Sensör/Veri]_[Alan_Adı]_[Tarih]
+#   Tarih formatı [YYYY-MM-DD]'dir; Alan_Adı boşsa segment atlanır.
+# 🛠️ BUG FİX: Dosya adı sanitizasyonu eskiden yalnızca ASCII harf/rakam
+# bırakıp geri kalan HER karakteri (Türkçe ç/ğ/ı/ö/ş/ü dahil) tek bir
+# "_" ile değiştiriyordu — ör. kullanıcının girdiği "Çaycuma" AOI adı
+# "_aycuma" gibi anlamsız/eksik bir dosya adı parçasına dönüşüyordu.
+# Artık Türkçe karakterler önce ASCII karşılıklarına çevrilir ("Çaycuma"
+# → "Caycuma"), böylece dosya adları hem ArcGIS/QGIS'te sorunsuz açılır
+# hem de okunaklı/anlamlı kalır.
+_TR_TRANSLIT_MAP = str.maketrans({
+    'ç': 'c', 'Ç': 'C', 'ğ': 'g', 'Ğ': 'G', 'ı': 'i', 'İ': 'I',
+    'ö': 'o', 'Ö': 'O', 'ş': 's', 'Ş': 'S', 'ü': 'u', 'Ü': 'U',
+})
+
+
+def _sylva_translit_tr(text):
+    """Türkçe karakterleri ASCII karşılıklarına çevirir."""
+    return (text or '').translate(_TR_TRANSLIT_MAP)
+
+
+def _sylva_safe_filename(text, allow_dots=True):
+    """Dosya adı için güvenli, ama Türkçe karakterleri SİLMEK yerine ASCII'ye
+    çeviren bir sanitizasyon uygular (bkz. yukarıdaki BUG FİX notu)."""
+    cleaned = _sylva_translit_tr(text or '')
+    pattern = r'[^A-Za-z0-9_\-\.]+' if allow_dots else r'[^A-Za-z0-9_\-]+'
+    return re.sub(pattern, '_', cleaned)
+
+
+# LULC ailesi indeks kodu → gerçek veri kaynağı etiketi (Sensör/Veri segmenti)
+_LULC_SOURCE_LABELS = {
+    'LULC': 'DynamicWorld',
+    'LULC_ESA': 'ESA',
+    'LULC_MODIS': 'MODIS',
+    'LULC_CORINE': 'CORINE',
+}
+
+# Uydu/sensör anahtarı → dosya adında kullanılacak kompakt etiket
+# (bkz. _dataset_file_tags() ile aynı aile — burada tek satırlık,
+# EE'ye ayrı bir sorgu gerektirmeyen bir yedek/varsayılan olarak kullanılır)
+_SENSOR_EXPORT_TAGS = {
+    's2-l1c': 'Sentinel2', 's2-l2a': 'Sentinel2',
+    'l89-l2': 'Landsat89', 'l89-l1': 'Landsat89',
+    'l7-l2': 'Landsat7', 'l7-l1': 'Landsat7',
+    'l45-l2': 'Landsat45', 'l45-l1': 'Landsat45',
+    'mss-l1': 'LandsatMSS',
+    's1-sar': 'Sentinel1',
+    'global-datasets': 'SRTM',
+}
+
+
+def _sylva_export_type_and_source(analysis_index, satellite_key, dem_source=None):
+    """Analiz indeksi + sensör anahtarından [Analiz_Türü, Sensör/Veri]
+    çiftini üretir — Export Convention kuralının çekirdek eşlemesi.
+    (İstemci tarafındaki sylvaExportTypeAndSource()/…FromPayload() ile
+    AYNI mantığı izler; bkz. index.html.)"""
+    idx = analysis_index or ''
+    if idx in _LULC_SOURCE_LABELS:
+        return 'LULC', _LULC_SOURCE_LABELS[idx]
+    if idx.startswith('TOPO'):
+        topo_type = idx[len('TOPO'):].lstrip('_') or 'TOPO'
+        return topo_type, (dem_source or 'SRTM')
+    source = _SENSOR_EXPORT_TAGS.get(satellite_key, '')
+    if not source and satellite_key:
+        source = _sylva_safe_filename(satellite_key, allow_dots=False).strip('_')
+    return (idx or 'Veri'), source
+
+
+def _sylva_build_export_basename(analysis_index, satellite_key, area_name=None,
+                                  date_str=None, dem_source=None):
+    """SylvaGIS_export_[Analiz_Türü]_[Sensör/Veri]_[Alan_Adı]_[Tarih]
+    kuralına uygun, uzantısız bir temel dosya adı üretir."""
+    export_type, source = _sylva_export_type_and_source(analysis_index, satellite_key, dem_source)
+    parts = ['SylvaGIS_export', _sylva_safe_filename(export_type, allow_dots=False)]
+    if source:
+        parts.append(_sylva_safe_filename(source, allow_dots=False))
+    area_clean = _sylva_safe_filename((area_name or '').strip().replace(' ', '_'), allow_dots=False)
+    area_clean = area_clean.strip('_')
+    if area_clean:
+        parts.append(area_clean)
+    parts.append(date_str or datetime.datetime.utcnow().strftime('%Y-%m-%d'))
+    return '_'.join(p for p in parts if p)
+
+
 # API istemcisi JSON bekler. Flask'in varsayılan HTML 404/405 sayfaları,
 # yanlış endpoint veya proxy yönlendirmesi olduğunda istemcide
 # "Unexpected token 'T'" gibi yanıltıcı bir parse hatasına dönüşmesin.
@@ -2153,8 +2239,10 @@ def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name):
       3) {ad}.clr           — klasik GDAL/ESRI renk eşleştirme dosyası;
                               ArcMap'te Symbology > Import ile manuel olarak
                               da yüklenebilir (yedek yol).
-      4) OKUBENI.txt        — ArcMap/QGIS'te nasıl kullanılacağını anlatan
-                              kısa Türkçe kılavuz.
+      4) OKUBENI.txt        — (KALDIRILDI) ArcMap/QGIS kullanım kılavuzu artık
+                              ZIP paketine eklenmiyor; paket sadece veri
+                              dosyalarını (.tif, .tif.aux.xml, .tif.vat.dbf/.cpg,
+                              .clr) içerir. Bkz. aşağıdaki BUG FİX notu.
 
     Girdi verisi zaten sunucuda 1..N (veya Dynamic World için 0..8) gibi
     küçük, ardışık tam sayı sınıf kodlarına remaplenmiş halde gelir (bkz.
@@ -2276,39 +2364,19 @@ def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name):
     vat_dbf_bytes = _write_dbf_bytes(field_defs, vat_rows)
     vat_cpg_bytes = b'UTF-8'
 
-    readme = (
-        'SylvaGIS — Renkli/İsimlendirilmiş Arazi Örtüsü (LULC) Paketi\n'
-        '================================================================\n\n'
-        'Bu ZIP içinde:\n'
-        '  - {name}.tif             -> Rengi dosyanın İÇİNE gömülü GeoTIFF.\n'
-        '  - {name}.tif.vat.dbf/.cpg-> Sınıf isim tablosu (Value Attribute Table).\n'
-        '                              *** ArcMap için EN GÜVENİLİR yöntem budur. ***\n'
-        '  - {name}.tif.aux.xml     -> Ek/yedek isim tablosu (RAT, çoğunlukla QGIS\n'
-        '                              ve ArcGIS Pro tarafından okunur).\n'
-        '  - {name}.clr             -> Yedek/manuel renk dosyası.\n\n'
-        'ÖNEMLİ: Bu 4 dosyayı ZIP\'ten çıkarırken HEPSİNİ AYNI klasörde, isimlerini\n'
-        'DEĞİŞTİRMEDEN tutun — ArcMap/QGIS bunları .tif ile eşleştirmek için dosya\n'
-        'adına bakar.\n\n'
-        'ArcMap\'te kullanım (sınıf isimlerini görmek için):\n'
-        '  1) Sadece {name}.tif dosyasını sürükleyip haritaya ekleyin (renkler\n'
-        '     otomatik gelecektir — artık siyah-beyaz DEĞİL).\n'
-        '  2) Katmana sağ tık > Properties > Symbology sekmesi.\n'
-        '  3) Show: "Unique Values" seçin.\n'
-        '  4) "Value Field" açılır menüsünden "Value" yerine "CLASS_NAME" seçin.\n'
-        '  5) "Add All Values" butonuna basın.\n'
-        '  6) Tamam/Uygula — artık Label sütununda "1, 2, 3" yerine "Orman",\n'
-        '     "Tarım Alanı" gibi isimler görünecektir.\n'
-        '  Renkler görünmüyorsa: adım 3\'te "Import" ile {name}.clr dosyasını\n'
-        '  yükleyebilirsiniz.\n'
-    ).format(name=safe_name)
-
+    # 🛠️ BUG FİX (Dışa Aktarma Paketi Temizliği): ZIP paketleri önceden
+    # "OKUBENI.txt" adlı bir kullanım kılavuzu içeriyordu. Bu salt
+    # bilgilendirme amaçlı bir metindi ve QGIS/ArcMap'in kendisi tarafından
+    # kullanılmıyordu — kullanıcı ZIP'i açtığında veri dosyalarının (.tif,
+    # .tif.aux.xml, .tif.vat.dbf/.cpg, .clr) arasında gereksiz bir dosya
+    # olarak duruyordu. Artık üretilmiyor; paket sadece gerçek veri
+    # dosyalarını içerir. (readme metni bilinçli olarak kaldırıldı.)
     return {
         '{}.tif'.format(safe_name): new_tif_bytes,
         '{}.tif.aux.xml'.format(safe_name): aux_xml_bytes,
         '{}.tif.vat.dbf'.format(safe_name): vat_dbf_bytes,
         '{}.tif.vat.cpg'.format(safe_name): vat_cpg_bytes,
         '{}.clr'.format(safe_name): clr_bytes,
-        'OKUBENI.txt': readme.encode('utf-8'),
     }
 
 
@@ -6306,7 +6374,7 @@ def download_geotiff():
             # ile otomatik olarak tekrar dener.
             export_region = final_display.geometry()
 
-        safe_name = re.sub(r'[^A-Za-z0-9_\-\.]+', '_', filename)
+        safe_name = _sylva_safe_filename(filename)
 
         # ÖNEMLİ (bkz. download_raw_bands): Clip modunda AOI dışında kalan
         # pikseller, "region" parametresinin yalnızca dikdörtgen bir kapsama
@@ -7269,7 +7337,7 @@ def download_raw_bands():
         roi = make_roi(data.get('roi'))
 
         aoi_name  = (data.get('aoiName') or '').strip()
-        safe_aoi  = re.sub(r'[^A-Za-z0-9_-]+', '', aoi_name.replace(' ', '_')) if aoi_name else ''
+        safe_aoi  = _sylva_safe_filename(aoi_name.replace(' ', '_'), allow_dots=False) if aoi_name else ''
 
         max_cloud = int(data.get('maxCloud', 100))
         col   = build_rgb_collection(ds, roi, max_cloud)
@@ -7340,7 +7408,7 @@ def download_raw_bands():
                 base_name = sensor_tag + '_' + level_tag + '_' + date_label + '_' + band_name + '_' + str(native_scale) + 'm'
                 if scope == 'clip' and safe_aoi:
                     base_name += '_' + safe_aoi
-                base_name = re.sub(r'[^A-Za-z0-9_\-\.]+', '_', base_name)
+                base_name = _sylva_safe_filename(base_name)
 
                 # 'clip' kapsamında AOI dışında kalan pikseller GERÇEK bir
                 # NoData değeri olarak yazılır — bu olmadan GEE, maskeyi
@@ -8380,9 +8448,9 @@ def vector_download():
     data_source = (req_data.get('dataSource') or 'workspace').strip()
     geom_json   = req_data.get('geometry')
 
-    # Güvenli dosya adı
-    import re as _re2
-    safe_name = _re2.sub(r'[^\w\-.]', '_', filename)[:80] or 'SylvaGIS_vector'
+    # Güvenli dosya adı (Türkçe karakterler ASCII'ye çevrilir, silinmez —
+    # bkz. _sylva_safe_filename() ve dosya başındaki BUG FİX notu)
+    safe_name = _sylva_safe_filename(filename)[:80] or 'SylvaGIS_vector'
 
     try:
         # ── 1. Çalışma alanı geometrisi ───────────────────────────────
