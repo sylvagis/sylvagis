@@ -26,7 +26,7 @@ from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
-print('SylvaGIS server.py yüklendi — versiyon: zip-export-v2-tiling')
+print('SylvaGIS server.py yüklendi — versiyon: zip-export-v2-tiling (lejant-coklu-katman-2026-08-17)')
 
 
 # API istemcisi JSON bekler. Flask'in varsayılan HTML 404/405 sayfaları,
@@ -6385,8 +6385,28 @@ def download_geotiff():
         # tek bir .tif yerine .tif + .tif.aux.xml + .clr içeren bir ZIP sunulur.
         # Diğer TÜM analizler (NDVI, DEM, RGB, TOPO vb.) etkilenmez; onlar
         # önceki gibi doğrudan .tif olarak inmeye devam eder.
+        # İstemci ekranda görülen renk paletini istediyse (sürekli indeks,
+        # DEM vb.) sayısal ham bandı değil aynı min/max + paletle üretilen
+        # 3 bantlı RGB GeoTIFF'i dışa aktar. ArcMap/QGIS böylece varsayılan
+        # gri germe uygulamaz ve görünüm haritadaki renk çubuğuyla eşleşir.
+        requested_vis = req_data.get('visualization')
+        if isinstance(requested_vis, dict):
+            for _vis_key in ('min', 'max', 'palette'):
+                if requested_vis.get(_vis_key) not in (None, '', []):
+                    vis[_vis_key] = requested_vis[_vis_key]
+        export_image = final_display
+        if req_data.get('rendered') and not is_lulc_categorical:
+            try:
+                export_image = final_display.visualize(**vis)
+                # RGB görselleştirme Byte olduğundan NoData da Byte aralığında
+                # kalmalıdır; aksi ArcMap bazı TIFF'leri açmayı reddeder.
+                if nodata_value is not None:
+                    nodata_value = 0
+            except Exception as visual_err:
+                print('[SylvaGIS] Görsel GeoTIFF üretilemedi; ham bant indiriliyor: {}'.format(visual_err))
+
         tif_bytes = _download_band_geotiff_bytes(
-            final_display, export_region, scale, crs, safe_name,
+            export_image, export_region, scale, crs, safe_name,
             nodata_value=nodata_value, aoi_geom_4326=aoi_geom_4326,
             fallback_region_geom=roi.bounds(maxError=100),
             is_categorical=is_lulc_categorical
@@ -6402,16 +6422,21 @@ def download_geotiff():
                       'olarak devam ediliyor: {}'.format(sym_err))
 
             if sym_files:
-                zip_buf = io.BytesIO()
-                with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-                    for fname, fbytes in sym_files.items():
-                        zf.writestr(fname, fbytes)
-                zip_bytes = zip_buf.getvalue()
-
-                resp = Response(zip_bytes, mimetype='application/zip')
-                resp.headers['Content-Disposition'] = 'attachment; filename="{}.zip"'.format(safe_name)
-                resp.headers['Content-Length'] = str(len(zip_bytes))
-                return resp
+                # Tek analiz için kullanıcı doğrudan TIFF istediğinde renk
+                # tablosu gömülü TIFF'i döndür. Çoklu analizlerde ise sınıf
+                # isimlerini taşıyan RAT/VAT yan dosyaları batch ZIP'e katılır.
+                if req_data.get('flatTiff'):
+                    tif_bytes = sym_files.get('{}.tif'.format(safe_name), tif_bytes)
+                else:
+                    zip_buf = io.BytesIO()
+                    with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+                        for fname, fbytes in sym_files.items():
+                            zf.writestr(fname, fbytes)
+                    zip_bytes = zip_buf.getvalue()
+                    resp = Response(zip_bytes, mimetype='application/zip')
+                    resp.headers['Content-Disposition'] = 'attachment; filename="{}.zip"'.format(safe_name)
+                    resp.headers['Content-Length'] = str(len(zip_bytes))
+                    return resp
 
         resp = Response(tif_bytes, mimetype='image/tiff')
         resp.headers['Content-Disposition'] = 'attachment; filename="{}.tif"'.format(safe_name)
@@ -8475,6 +8500,55 @@ def vector_download():
         return jsonify({'error': str(ex)}), 500
 
 
+@app.route('/api/download-geotiff-batch', methods=['POST'])
+def download_geotiff_batch():
+    """Bir aktif ekrandaki birden fazla rasteri tek ZIP içinde döndürür."""
+    req_data = request.json or {}
+    items = req_data.get('items') or []
+    if not isinstance(items, list) or len(items) < 2:
+        return jsonify({'success': False, 'error': 'ZIP için en az iki raster analiz gerekir.'}), 400
+    if len(items) > 25:
+        return jsonify({'success': False, 'error': 'Tek ZIP içinde en fazla 25 analiz indirilebilir.'}), 400
+    zip_buf = io.BytesIO()
+    try:
+        with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as out_zip:
+            used_names = set()
+            for pos, item in enumerate(items, 1):
+                if not isinstance(item, dict):
+                    continue
+                item = dict(item)
+                base = re.sub(r'[^A-Za-z0-9_.-]+', '_', str(item.get('filename') or 'SylvaGIS_{}'.format(pos))).strip('._') or 'SylvaGIS_{}'.format(pos)
+                while base.lower() in used_names:
+                    base = '{}_{}'.format(base, pos)
+                used_names.add(base.lower())
+                item['filename'] = base
+                # Çoklu ZIP'te LULC RAT/VAT yan dosyaları korunur.
+                item['flatTiff'] = False
+                with app.test_request_context('/api/download-geotiff', method='POST', json=item):
+                    response = download_geotiff()
+                if isinstance(response, tuple):
+                    response = response[0]
+                if not isinstance(response, Response) or response.status_code >= 400:
+                    raise RuntimeError('{}. analiz indirilemedi.'.format(base))
+                body = response.get_data()
+                content_type = (response.content_type or '').lower()
+                if 'application/zip' in content_type or body[:2] == b'PK':
+                    # LULC renk tablosu/RAT dosyalarını ana ZIP'e doğrudan aç.
+                    with zipfile.ZipFile(io.BytesIO(body), 'r') as nested:
+                        for member in nested.infolist():
+                            if not member.is_dir():
+                                out_zip.writestr(member.filename, nested.read(member.filename))
+                else:
+                    out_zip.writestr(base + '.tif', body)
+        result = zip_buf.getvalue()
+        response = Response(result, mimetype='application/zip')
+        response.headers['Content-Disposition'] = 'attachment; filename="SylvaGIS_raster_analizleri.zip"'
+        response.headers['Content-Length'] = str(len(result))
+        return response
+    except Exception as exc:
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
 if __name__ == '__main__':
     # NOT: Bu blok sadece yerel (local) geliştirme/test içindir.
     # VM'de/Cloud Run'da 7/24 çalıştırırken bu dosya `python server.py` ile
@@ -8509,4 +8583,3 @@ if __name__ == '__main__':
     # Proxy'yi kapatıp eski davranışa dönmek isterseniz: SYLVAGIS_TILE_PROXY=0
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
-
