@@ -51839,6 +51839,124 @@ refresh();
 }());
 </script>
 
+<!-- 2026-08-17: Lejant / çoklu katman seçimi son davranış güvencesi -->
+<script id="sylva-final-legend-and-layer-selection-fix">
+(function () {
+    'use strict';
+    function hideBlankDateRows() {
+        document.querySelectorAll('.real-stats-row').forEach(function (row) {
+            var normalized = (row.textContent || '').replace(/[\u00a0\s📡]/g, '').replace(/Tarih:|Date:|Fecha:|Datum:|Дата:|التاريخ:/gi, '');
+            if (!normalized || /(?:—|–|-)$/.test(normalized)) row.style.display = 'none';
+        });
+    }
+    // Katman listesindeki her kutu bağımsızdır. Kutu yeniden işaretlenince,
+    // o katmanın kendi lejantı, bilgi kutusu, grafiği ve galerisi öne alınır.
+    document.addEventListener('change', function (event) {
+        var input = event.target;
+        if (!input || !input.classList || !input.classList.contains('sylva-layer-switch-visibility')) return;
+        if (!input.checked || typeof window._sylvaBringGeeLayerToFront !== 'function') return;
+        var paneId = input.getAttribute('data-pane') || 'map';
+        var layerKey = input.getAttribute('data-layer-key');
+        if (!layerKey) return;
+        setTimeout(function () {
+            var paneKey = paneId === 'map2' ? 'map2' : 'map';
+            var visible = window._sylvaLayerVisibleByPane && window._sylvaLayerVisibleByPane[paneKey];
+            if (!visible || visible[layerKey] === false) return;
+            window._sylvaBringGeeLayerToFront(paneId, layerKey);
+        }, 0);
+    });
+    var queued = false;
+    function refresh() { if (queued) return; queued = true; setTimeout(function () { queued = false; hideBlankDateRows(); }, 10); }
+    new MutationObserver(refresh).observe(document.body, { subtree:true, childList:true, characterData:true, attributes:true, attributeFilter:['style','class'] });
+    refresh();
+}());
+</script>
+<script id="sylva-raster-export-batch-and-style-fix">
+(function () {
+    'use strict';
+    function activePane() { return typeof window._sylvaActivePaneId === 'function' ? window._sylvaActivePaneId() : 'map'; }
+    function safeName(value) { return String(value || 'Analiz').replace(/[^a-z0-9_-]+/gi, '_').replace(/^_+|_+$/g, '') || 'Analiz'; }
+    function exportVisualFor(pane, key) {
+        var state = window._sylvaEditorStateByPane && window._sylvaEditorStateByPane[pane] && window._sylvaEditorStateByPane[pane][key];
+        var colors = [], min, max;
+        if (state && state.classRows && state.classRows.length) {
+            state.classRows.forEach(function (row) { if (row.color) colors.push(String(row.color).replace(/^#/, '')); });
+            min = parseFloat(state.classRows[0].min); max = parseFloat(state.classRows[state.classRows.length - 1].max);
+        }
+        var ramp = state && state.rampDataAttr;
+        if (!colors.length && ramp && ramp !== '__gee__' && typeof sampleRampColors === 'function') {
+            colors = sampleRampColors(ramp, 8).map(function (c) { return String(c).replace(/^#/, ''); });
+        }
+        if (!colors.length) colors = ['000000', 'ffffff'];
+        if (!isFinite(min)) min = -1;
+        if (!isFinite(max) || max === min) max = 1;
+        return { min:min, max:max, palette:colors };
+    }
+    function rasterEntries(pane) {
+        var result = [], seen = {};
+        var byLayer = window._sylvaLayerAnalyzePayloadByPane && window._sylvaLayerAnalyzePayloadByPane[pane] || {};
+        var store = window._geeLayersByPane && window._geeLayersByPane[pane] || {};
+        Object.keys(store).forEach(function (key) {
+            var payload = byLayer[key];
+            var index = payload && payload.index;
+            if (!payload || !index || /^(TOPO_CONTOUR|BUILDING_FOOTPRINT)$/i.test(index)) return;
+            var fingerprint = JSON.stringify(payload);
+            if (seen[fingerprint]) return;
+            seen[fingerprint] = true;
+            result.push({ key:key, payload:payload, index:index });
+        });
+        if (!result.length) {
+            var fallback = window._lastAnalyzePayloadByPane && window._lastAnalyzePayloadByPane[pane];
+            if (fallback && fallback.index && !/^(TOPO_CONTOUR|BUILDING_FOOTPRINT)$/i.test(fallback.index)) result.push({key:'active',payload:fallback,index:fallback.index});
+        }
+        return result;
+    }
+    function requestJson(url, body) {
+        return fetch((window.API_BASE || '') + url, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })
+            .then(function (r) { return r.json().then(function (d) { if (!r.ok || !d || d.success === false) throw new Error((d && d.error) || r.statusText); return d; }); });
+    }
+    function responseBlob(url, body) {
+        return fetch((window.API_BASE || '') + url, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })
+            .then(function (r) { if (!r.ok || (r.headers.get('Content-Type') || '').indexOf('application/json') >= 0) return r.json().then(function(d){throw new Error((d && d.error) || r.statusText);}); return r.blob(); });
+    }
+    function downloadBlob(blob, name) { var a=document.createElement('a'), url=URL.createObjectURL(blob); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(function(){URL.revokeObjectURL(url);}, 60000); }
+
+    // Eski tek-katman indirme fonksiyonunun yerine geçer. Aktif ekranın tüm
+    // raster katmanlarını bulur; 1 katman TIFF, 2+ katman tek ZIP üretir.
+    window.executeGeoTiffDownload = function () {
+        var pane = activePane(), entries = rasterEntries(pane);
+        var status=document.getElementById('geotiff-status'), btn=document.getElementById('btn-geotiff-execute');
+        var filename=(document.getElementById('geotiff-filename').value || 'SylvaGIS_export').trim();
+        var scale=parseInt((document.getElementById('geotiff-scale') || {}).value,10) || 30;
+        var crs=typeof getSelectedCrs === 'function' ? getSelectedCrs() : 'EPSG:4326';
+        if (!entries.length) { if(status){status.style.display='block';status.textContent='❌ İndirilebilir raster analiz bulunamadı.';} return; }
+        if (btn) { btn.disabled=true; btn.textContent='⏳ Hazırlanıyor…'; }
+        if (status) { status.style.display='block'; status.style.color='#1e3a8a'; status.textContent='⏳ Aktif ekrandaki raster analizler hazırlanıyor…'; }
+        var items=[];
+        entries.reduce(function(chain, entry, n) {
+            return chain.then(function () {
+                if(status) status.textContent='⏳ ' + (n + 1) + '/' + entries.length + ' — ' + entry.index + ' hazırlanıyor…';
+                return requestJson('/api/analyze', entry.payload).then(function (analysis) {
+                    if (!analysis.analysisId) throw new Error(entry.index + ' için analiz oturumu oluşturulamadı.');
+                    items.push({ analysisId:analysis.analysisId, filename:safeName(filename + '_' + entry.index), scale:scale, crs:crs,
+                        clipMode:entry.payload.clipMode || 'clip', roi:entry.payload.roi || null, rendered:true,
+                        visualization:exportVisualFor(pane, entry.key), flatTiff:true });
+                });
+            });
+        }, Promise.resolve()).then(function () {
+            if (status) status.textContent='⏳ GeoTIFF dosyası oluşturuluyor…';
+            if (items.length === 1) return responseBlob('/api/download-geotiff', items[0]).then(function(b){ return {blob:b,name:items[0].filename + '.tif'}; });
+            return responseBlob('/api/download-geotiff-batch', {items:items}).then(function(b){ return {blob:b,name:safeName(filename) + '_raster_analizleri.zip'}; });
+        }).then(function (out) {
+            downloadBlob(out.blob, out.name);
+            if(status) { status.style.color='#166534'; status.textContent='✓ İndirme hazırlandı.'; }
+            if(typeof sylvaAddAnalysisHistoryEntry === 'function') sylvaAddAnalysisHistoryEntry('GeoTIFF', '🗺️', out.name);
+        }).catch(function(err) {
+            if(status) { status.style.color='#991b1b'; status.textContent='❌ ' + ((err && err.message) || 'İndirme hazırlanamadı.'); }
+        }).finally(function(){ if(btn){btn.disabled=false;btn.textContent=(typeof t==='function'?t('gtiff_btn_download'):'İndir');} });
+    };
+}());
+</script>
 </body>
 
 </html>
