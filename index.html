@@ -12690,7 +12690,17 @@ function selectRamp(name) {
             // 🛠️ DÜZELTME (Zoom'da Veri Kaybolması): bkz. _sylvaReplaceGeeLayer
             // içindeki açıklama — aynı maxZoom/maxNativeZoom eksikliği burada
             // eklenen katmanlar için de geçerliydi.
+            // 🆕 "Önceki Analizin Üzerine Ekle" (stack modu) desteği: options
+            // içinde hideOthers:false gönderilirse, bu yeni katman eklenirken
+            // AYNI paneldeki diğer katmanlar ARTIK gizlenmez — hepsi görünür
+            // kalır. Böylece Katman Sıyırıcı (⇔) ile üst üste eklenen birden
+            // fazla analiz (ör. önce ESA, sonra stack modunda CORINE)
+            // karşılaştırılabilir. Belirtilmezse (undefined) eski/varsayılan
+            // davranış (yeni katman geldiğinde diğerleri gizlenir, "tek
+            // seferde tek görünür katman") AYNEN korunur.
+            var _hideOthers = (options && options.hideOthers === false) ? false : true;
             var opts = Object.assign({ opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane', maxZoom: 24, maxNativeZoom: 16 }, options || {});
+            delete opts.hideOthers; // Leaflet tileLayer seçeneği değil, sadece bu fonksiyona özel bayrak
             var store = window._geeLayersByPane[(paneId === 'map2') ? 'map2' : 'map'];
             if (store[layerKey]) { try { targetMap.removeLayer(store[layerKey]); } catch (e) {} delete store[layerKey]; }
             var layer = L.tileLayer(tileUrl, opts).addTo(targetMap);
@@ -12721,22 +12731,28 @@ function selectRamp(name) {
                 // Gösterilecek Katman" kutusundan istediği katmanı elle tekrar
                 // işaretleyip açabilir — bkz. sylva-layer-switch-visibility
                 // checkbox tıklama işleyicisi.
-                Object.keys(store).forEach(function (_otherKey) {
-                    if (_otherKey === layerKey) return;
-                    window._sylvaLayerVisibleByPane[_vKey][_otherKey] = false;
-                    var _otherLayer = store[_otherKey];
-                    if (_otherLayer) {
-                        try { if (targetMap.hasLayer(_otherLayer)) targetMap.removeLayer(_otherLayer); } catch (e) {}
-                    }
-                    // Konturun (varsa) vektör eşleniğini de birlikte gizle —
-                    // aksi halde raster gizlenirken vektör çizgiler ekranda
-                    // yanlışlıkla görünmeye devam ederdi.
-                    var _ocvStore = window._sylvaContourVectorByPane && window._sylvaContourVectorByPane[_vKey];
-                    var _ocvLayer = _ocvStore && _ocvStore[_otherKey];
-                    if (_ocvLayer) {
-                        try { if (targetMap.hasLayer(_ocvLayer)) targetMap.removeLayer(_ocvLayer); } catch (e) {}
-                    }
-                });
+                // 🆕 hideOthers:false (stack modu) iken bu adım TAMAMEN
+                // atlanır — diğer katmanlar dokunulmadan görünür kalır,
+                // böylece birden fazla analiz aynı anda haritada üst üste
+                // durup Katman Sıyırıcı ile karşılaştırılabilir.
+                if (_hideOthers) {
+                    Object.keys(store).forEach(function (_otherKey) {
+                        if (_otherKey === layerKey) return;
+                        window._sylvaLayerVisibleByPane[_vKey][_otherKey] = false;
+                        var _otherLayer = store[_otherKey];
+                        if (_otherLayer) {
+                            try { if (targetMap.hasLayer(_otherLayer)) targetMap.removeLayer(_otherLayer); } catch (e) {}
+                        }
+                        // Konturun (varsa) vektör eşleniğini de birlikte gizle —
+                        // aksi halde raster gizlenirken vektör çizgiler ekranda
+                        // yanlışlıkla görünmeye devam ederdi.
+                        var _ocvStore = window._sylvaContourVectorByPane && window._sylvaContourVectorByPane[_vKey];
+                        var _ocvLayer = _ocvStore && _ocvStore[_otherKey];
+                        if (_ocvLayer) {
+                            try { if (targetMap.hasLayer(_ocvLayer)) targetMap.removeLayer(_ocvLayer); } catch (e) {}
+                        }
+                    });
+                }
             }
             return layer;
         }
@@ -14573,7 +14589,7 @@ function selectRamp(name) {
                         // 🆕 Etiket (tarih dahil) artık her zaman gönderilir —
                         // stack modu kapalıyken de "Üstte Gösterilecek Katman"
                         // kutusunda hangi tarihe ait olduğu görünsün diye.
-                        fetchRgbGallery(meta, _pane, _sylvaMirrorThisRun, _stackKey, (meta.datasetLabel || meta.datasetKey) + _stackDateLabel);
+                        fetchRgbGallery(meta, _pane, _sylvaMirrorThisRun, _stackKey, (meta.datasetLabel || meta.datasetKey) + _stackDateLabel, _stackMode);
                     }
                 });
                 return;
@@ -14805,7 +14821,11 @@ function selectRamp(name) {
                     // eş yükselti çizgileridir (düz/akıcı, tıklanınca sarı
                     // parlayan, üzerinde rakım yazan).
                     var _isVectorContour = (meta.analysisName === 'TOPO_CONTOUR');
-                    _sylvaAddGeeLayer(_pane, _thisLayerKey, data.tileUrl, { opacity: _isVectorContour ? 0 : 1 });
+                    // 🆕 Stack modunda ("Önceki Analizin Üzerine Ekle" işaretliyse)
+                    // bu yeni katman diğer mevcut katmanları haritadan GİZLEMEZ —
+                    // hepsi birlikte görünür kalır, Katman Sıyırıcı ile karşılaştırma
+                    // yapılabilsin diye (bkz. _sylvaAddGeeLayer'daki hideOthers notu).
+                    _sylvaAddGeeLayer(_pane, _thisLayerKey, data.tileUrl, { opacity: _isVectorContour ? 0 : 1, hideOthers: !_stackMode });
                     if (_isVectorContour && typeof _sylvaLoadContourVectorLayer === 'function') {
                         _sylvaLoadContourVectorLayer(_pane, _thisLayerKey, analyzePayload);
                     }
@@ -14844,7 +14864,13 @@ function selectRamp(name) {
                     // an kayıtlı GERÇEK üst katmana göre yeniden senkronize edilir —
                     // böylece geç gelen alt-sıradaki bir yanıt, doğru üst katmanı asla
                     // haritadan kaldıramaz.
-                    if (typeof _sylvaSyncLayerVisibilityToTop === 'function' && window._sylvaTopGeeLayerByPane[_idxPaneKey]) {
+                    // 🆕 Stack modundayken bu senkronizasyon ATLANIR — aksi halde
+                    // yeni eklenen katman, "gerçek üst katmana göre görünürlüğü
+                    // eşitleme" adımıyla diğer (kasıtlı olarak görünür bırakılmış)
+                    // katmanları yine gizlerdi; stack modunun bütün amacı (birden
+                    // fazla analizi aynı anda haritada tutup Sıyırıcı ile
+                    // karşılaştırmak) böylece bozulmamış olur.
+                    if (!_stackMode && typeof _sylvaSyncLayerVisibilityToTop === 'function' && window._sylvaTopGeeLayerByPane[_idxPaneKey]) {
                         _sylvaSyncLayerVisibilityToTop(_idxPaneKey, window._sylvaTopGeeLayerByPane[_idxPaneKey]);
                     }
                     // 🛠️ DÜZELTME (Katman Sıyırıcı "Önceki Analizin Üzerine Ekle"
@@ -17400,7 +17426,7 @@ function selectRamp(name) {
         // AOI + tarih + bulutluluk kriterine uyan gerçek sahneleri (thumbnail
         // önizlemeleriyle birlikte) sunucudan/GEE'den çeker ve galeriyi doldurur.
         // paneId: 'map' (Ekran 1) | 'map2' (Ekran 2) — verilmezse aktif ekran kullanılır.
-        function fetchRgbGallery(meta, paneId, mirrorThisRun, stackKey, friendlyLabel) {
+        function fetchRgbGallery(meta, paneId, mirrorThisRun, stackKey, friendlyLabel, isStackMode) {
             paneId = (paneId === 'map2') ? 'map2' : 'map';
             var _rgbStateKey = stackKey || meta.datasetKey;
             var galleryEl = _sylvaGalleryEl(paneId);
@@ -17712,7 +17738,9 @@ function selectRamp(name) {
                 window._sylvaLayerFriendlyNames[_layerKey] = friendlyLabel || meta.datasetLabel || meta.datasetKey;
                 window._sylvaLayerBaseNames = window._sylvaLayerBaseNames || {};
                 window._sylvaLayerBaseNames[_layerKey] = meta.datasetLabel || meta.datasetKey;
-                _sylvaAddGeeLayer(paneId, _layerKey, data.tileUrl, { opacity: 1 });
+                // 🆕 Stack modunda mevcut katmanları gizlemez (bkz. modül analiz
+                // dispatch'indeki aynı notu — Katman Sıyırıcı karşılaştırması için).
+                _sylvaAddGeeLayer(paneId, _layerKey, data.tileUrl, { opacity: 1, hideOthers: !isStackMode });
                 // 🛠️ BUG FİX (İndirilen dosya ekranda görünenle uyuşmuyordu):
                 // bu payload, ÜRETTİĞİ katmanın kendi anahtarına (_layerKey)
                 // göre de ayrıca saklanır — bkz. _sylvaBringGeeLayerToFront
@@ -17744,7 +17772,10 @@ function selectRamp(name) {
                 // hala doğru veri setini yazsa bile haritada YANLIŞ görüntü kalıyordu.
                 // Artık HER yanıt sonrası (üstte olsun ya da olmasın), görünürlük her
                 // zaman o an kayıtlı GERÇEK üst katmana göre yeniden senkronize edilir.
-                if (typeof _sylvaSyncLayerVisibilityToTop === 'function' && window._sylvaTopGeeLayerByPane[paneId]) {
+                // 🆕 Stack modunda bu adım ATLANIR — diğer (kasıtlı olarak görünür
+                // bırakılmış) katmanlar gizlenmesin diye (bkz. modül analiz
+                // dispatch'indeki aynı notu).
+                if (!isStackMode && typeof _sylvaSyncLayerVisibilityToTop === 'function' && window._sylvaTopGeeLayerByPane[paneId]) {
                     _sylvaSyncLayerVisibilityToTop(paneId, window._sylvaTopGeeLayerByPane[paneId]);
                 }
                 // 🛠️ BUG FİX (Lejant/Bilgi Kutusu ↔ Üst Katman Uyuşmazlığı):
