@@ -5206,11 +5206,11 @@ def build_result_image(data, for_export=False):
     # ── 3. İndeks hesapla ───────────────────────────────────────
     if index == 'NDVI':
         result = image_refl.normalizedDifference([b['nir'], b['red']]).rename('value')
-        vis    = {'min': -0.2, 'max': 0.9, 'palette': ['black', 'white']}
+        vis    = {'min': -0.2, 'max': 0.9, 'palette': ['d73027', 'fee08b', '1a9850']}
 
     elif index == 'NDWI':
         result = image_refl.normalizedDifference([b['green'], b['nir']]).rename('value')
-        vis    = {'min': -0.5, 'max': 0.5, 'palette': ['black', 'white']}
+        vis    = {'min': -0.5, 'max': 0.5, 'palette': ['e0f2fe', '38bdf8', '0369a1']}
 
     elif index == 'EVI':
         nir   = image_refl.select(b['nir'])
@@ -5219,7 +5219,7 @@ def build_result_image(data, for_export=False):
         result = (nir.subtract(red)).divide(
             nir.add(red.multiply(6)).subtract(blue.multiply(7.5)).add(1)
         ).multiply(2.5).rename('value')
-        vis    = {'min': -0.2, 'max': 0.8, 'palette': ['black', 'white']}
+        vis    = {'min': -0.2, 'max': 0.8, 'palette': ['f7fcf5', '74c476', '00441b']}
 
     elif index == 'SAVI':
         L = 0.5
@@ -5228,21 +5228,21 @@ def build_result_image(data, for_export=False):
         result = (nir.subtract(red)).multiply(1 + L).divide(
             nir.add(red).add(L)
         ).rename('value')
-        vis    = {'min': -0.3, 'max': 0.8, 'palette': ['black', 'white']}
+        vis    = {'min': -0.3, 'max': 0.8, 'palette': ['d73027', 'fee08b', '1a9850']}
 
     elif index == 'SMI':
         nir  = image_refl.select(b['nir'])
         swir = image_refl.select(b['swir'])
         result = nir.subtract(swir).divide(nir.add(swir)).rename('value')
-        vis    = {'min': -0.5, 'max': 0.5, 'palette': ['black', 'white']}
+        vis    = {'min': -0.5, 'max': 0.5, 'palette': ['f5deb3', 'c8a96e', '8b5a2b']}
 
     elif index == 'NBR':
         result = image_refl.normalizedDifference([b['nir'], b['swir']]).rename('value')
-        vis    = {'min': -1.0, 'max': 1.0, 'palette': ['black', 'white']}
+        vis    = {'min': -1.0, 'max': 1.0, 'palette': ['ffffb2', 'fecc5c', 'fd8d3c', 'f03b20', 'bd0026']}
 
     elif index == 'NDSI':
         result = image_refl.normalizedDifference([b['green'], b['swir']]).rename('value')
-        vis    = {'min': -0.5, 'max': 0.8, 'palette': ['black', 'white']}
+        vis    = {'min': -0.5, 'max': 0.8, 'palette': ['f8fafc', '93c5fd', '1d4ed8']}
 
     elif index == 'BSI':
         nir   = image_refl.select(b['nir'])
@@ -5252,13 +5252,13 @@ def build_result_image(data, for_export=False):
         result = swir.add(red).subtract(nir).subtract(blue).divide(
             swir.add(red).add(nir).add(blue)
         ).rename('value')
-        vis    = {'min': -1.0, 'max': 1.0, 'palette': ['black', 'white']}
+        vis    = {'min': -1.0, 'max': 1.0, 'palette': ['fff7ec', 'fdae6b', 'a63603']}
 
     elif index == 'LST' and b['thermal']:
         thermal = image.select(b['thermal'])
         lst_k   = thermal.multiply(0.00341802).add(149.0)
         result  = lst_k.subtract(273.15).rename('value')
-        vis     = {'min': 10, 'max': 45, 'palette': ['black', 'white']}
+        vis     = {'min': 10, 'max': 45, 'palette': ['ffffb2', 'fecc5c', 'fd8d3c', 'f03b20', 'bd0026']}
 
     elif index == 'AVI':
         # Advanced Vegetation Index — (NIR*(1-RED)*(NIR-RED))^(1/3)
@@ -5269,7 +5269,7 @@ def build_result_image(data, for_export=False):
         ).multiply(
             nir.subtract(red).abs()
         ).pow(1.0 / 3.0).rename('value')
-        vis = {'min': 0, 'max': 0.9, 'palette': ['black', 'white']}
+        vis = {'min': 0, 'max': 0.9, 'palette': ['f7fcf5', '74c476', '00441b']}
 
     elif index == 'SI':
         # Shadow Index — ((1-B)*(1-G)*(1-R))^(1/3)
@@ -5281,17 +5281,17 @@ def build_result_image(data, for_export=False):
         ).multiply(
             ee.Image(1).subtract(red)
         ).pow(1.0 / 3.0).rename('value')
-        vis = {'min': 0, 'max': 0.8, 'palette': ['black', 'white']}
+        vis = {'min': 0, 'max': 0.8, 'palette': ['f1f5f9', '64748b', '0f172a']}
 
     elif index == 'NDGI':
         # Normalized Difference Glacier Index — (Green-Red)/(Green+Red)
         result = image_refl.normalizedDifference([b['green'], b['red']]).rename('value')
-        vis    = {'min': -0.5, 'max': 0.5, 'palette': ['black', 'white']}
+        vis    = {'min': -0.5, 'max': 0.5, 'palette': ['f8fafc', '93c5fd', '1d4ed8']}
 
     elif index == 'NDMI':
         # Normalized Difference Moisture Index — (NIR-SWIR)/(NIR+SWIR)
         result = image_refl.normalizedDifference([b['nir'], b['swir']]).rename('value')
-        vis    = {'min': -0.8, 'max': 0.8, 'palette': ['black', 'white']}
+        vis    = {'min': -0.8, 'max': 0.8, 'palette': ['e0f2fe', '38bdf8', '0369a1']}
 
     elif index == 'NPCRI':
         # Normalized Pigment Chlorophyll Ratio Index — (Red-Blue)/(Red+Blue)
@@ -5300,7 +5300,7 @@ def build_result_image(data, for_export=False):
         result = red.subtract(blue).divide(
             red.add(blue).add(1e-6)
         ).rename('value')
-        vis = {'min': -0.5, 'max': 0.5, 'palette': ['black', 'white']}
+        vis = {'min': -0.5, 'max': 0.5, 'palette': ['ffffb2', 'fecc5c', 'fd8d3c', 'f03b20', 'bd0026']}
 
     elif index == 'VHI':
         # Vegetation Health Index — 0.5*VCI + 0.5*TCI (basitleştirilmiş)
@@ -5315,7 +5315,7 @@ def build_result_image(data, for_export=False):
             result  = vci.multiply(0.5).add(tci.multiply(0.5)).rename('value')
         else:
             result  = vci.rename('value')
-        vis = {'min': 0, 'max': 1, 'palette': ['black', 'white']}
+        vis = {'min': 0, 'max': 1, 'palette': ['d73027', 'fee08b', '1a9850']}
 
     elif index == 'FRI':
         # 🔥 Yangın Risk İndeksi (Fire Risk Index) — kompozit bir skor.
@@ -5344,7 +5344,7 @@ def build_result_image(data, for_export=False):
             result = (dryness.multiply(0.5)
                       .add(fuel.multiply(0.5))
                       .rename('value'))
-        vis = {'min': 0, 'max': 1, 'palette': ['black', 'white']}
+        vis = {'min': 0, 'max': 1, 'palette': ['ffffb2', 'fecc5c', 'fd8d3c', 'f03b20', 'bd0026']}
 
     # 🆕 FAZ 12 — bu iki analiz, ana uydu-indeks zincirinde kalır (erken
     # bloktaki 24 analizin AKSİNE) çünkü ikisi de mevcut optik uydu/bant
@@ -5409,7 +5409,7 @@ def build_result_image(data, for_export=False):
 
     else:
         result = image_refl.normalizedDifference([b['nir'], b['red']]).rename('value')
-        vis    = {'min': -0.2, 'max': 0.9, 'palette': ['black', 'white']}
+        vis    = {'min': -0.2, 'max': 0.9, 'palette': ['d73027', 'fee08b', '1a9850']}
 
     # ── 3b. Görsel mod / dışa aktarım modu ayrımı ──────────────────
     # 🛠️ BUG FİX: for_export=True (GeoTIFF indirme) → her zaman ham result.
