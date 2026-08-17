@@ -4044,7 +4044,7 @@ tr.class-highlight-active {
                         </div>
                         <div class="option-list" id="uydu-analiz-checkbox-list" style="display:grid; grid-template-columns:1fr 1fr; gap:4px;">
                             <label class="option-item uydu-analiz-item disabled-analysis" data-key="NDVI">
-                                <input type="checkbox" class="uydu-analiz-checkbox" disabled data-analysis="NDVI" data-ramp-key="viridis" data-legend-min="-1" data-legend-max="+1"> NDVI
+                                <input type="checkbox" class="uydu-analiz-checkbox" disabled data-analysis="NDVI" data-ramp-key="red-yellow-green" data-legend-min="-1" data-legend-max="+1"> NDVI
                             </label>
                             <label class="option-item uydu-analiz-item disabled-analysis" data-key="NDWI">
                                 <input type="checkbox" class="uydu-analiz-checkbox" disabled data-analysis="NDWI" data-ramp-key="blue-ocean" data-legend-min="-1" data-legend-max="+1"> NDWI
@@ -10705,6 +10705,7 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
     "red-yellow-green": "linear-gradient(to right,#d73027,#fee08b,#1a9850)",
     "blue-white-red": "linear-gradient(to right,#313695,#ffffff,#a50026)",
     "black-white": "linear-gradient(to right,#000000,#ffffff)",
+    gray: "linear-gradient(to right,#f1f5f9,#64748b,#0f172a)",
 
     brown: "linear-gradient(to right,#f5deb3,#8b5a2b)",
     green: "linear-gradient(to right,#b7e4c7,#1b4332)",
@@ -12062,9 +12063,10 @@ function selectRamp(name) {
                 }
             }
 
+             var _nativeLegendTitleKeys = { FOREST_LOSS: 'env_forest_loss', URBAN_GROWTH: 'env_urban_growth' };
              var _legendTitle = meta.analysisName === 'BUILDING_FOOTPRINT'
                  ? t('building_roof_detection', 'Building Roof Detection')
-                 : meta.analysisName;
+                 : (_nativeLegendTitleKeys[meta.analysisName] ? t(_nativeLegendTitleKeys[meta.analysisName], meta.analysisName) : meta.analysisName);
              var html = '<b style="font-size:0.78rem;">' + escapeHtml(_legendTitle) + '</b>';
 
             if (legendType === 'classified') {
@@ -15758,14 +15760,18 @@ function selectRamp(name) {
                 // ekrandaki PAYLAŞILAN sınıflandırma ayarları (başka bir analize
                 // ait sınıf aralıkları/renkleri) yanlışlıkla bu katmana da
                 // uygulanıyor ve haritadaki rengi bozuyordu.
-                if (!skipClassifyRecalc && currentClassificationType === 'classified' && !isLulcAnalysis(meta.analysisName)) {
+                var _isNativeClassified = !!(meta && meta.legendType === 'classified' && meta.classesRaw);
+                if (!skipClassifyRecalc && currentClassificationType === 'classified' && !isLulcAnalysis(meta.analysisName) && !_isNativeClassified) {
                     if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(_pane);
                     buildClassRows(parseInt(classCountSelect.value, 10) || 1);
                     applyClassificationToMap();
                 }
             }
             if (data.visPalette && Array.isArray(data.visPalette) && data.visPalette.length >= 2) {
-                var _basePalette = data.visPalette.slice();
+                var _basePalette = data.visPalette.slice().map(function (color) {
+                    color = String(color || '').trim();
+                    return (/^(?:#|rgb|hsl)/i.test(color) || /^[a-z]+$/i.test(color)) ? color : ('#' + color);
+                });
                 if (typeof rampReversed !== 'undefined' && rampReversed) {
                     _basePalette = _basePalette.slice().reverse();
                 }
@@ -18383,7 +18389,38 @@ function selectRamp(name) {
 
         // ── Histogram → 7 bin → bar/pie SVG grafiği ─────────────────
         // stats: sunucudan gelen tam nesne  { value: { ... } }
+        function renderNativeClassifiedStatsChart(stats, meta, paneId) {
+            var hist = (stats && stats.value) ? stats.value : null;
+            if (!hist || !meta || !meta.classesRaw) return false;
+            var rawClasses;
+            try { rawClasses = JSON.parse(meta.classesRaw); } catch (e) { return false; }
+            if (!Array.isArray(rawClasses) || !rawClasses.length) return false;
+
+            var counts = {};
+            Object.keys(hist).forEach(function (key) {
+                var code = Number(key);
+                if (!isNaN(code)) counts[code] = (counts[code] || 0) + Number(hist[key] || 0);
+            });
+            var classes = rawClasses.map(function (cls, index) {
+                var code = (cls.code !== undefined) ? Number(cls.code) : ((cls.value !== undefined) ? Number(cls.value) : index);
+                return { min: code, max: code, count: counts[code] || 0,
+                    name: cls.label || ('Class ' + (index + 1)), color: cls.color || '#64748b' };
+            });
+            var total = classes.reduce(function (sum, cls) { return sum + cls.count; }, 0) || 1;
+            var percentages = classes.map(function (cls) { return (cls.count / total) * 100; });
+            var targetPane = (paneId === 'map' || paneId === 'map2') ? paneId : ((typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map');
+            var aoiLayer = targetPane === 'map2' ? currentLayer2 : currentLayer;
+            var areaHa = null;
+            try { if (aoiLayer) areaHa = turf.area(aoiLayer.toGeoJSON()) / 10000; } catch (e) {}
+            renderStatsChart({ classes: classes, percentages: percentages, areaHa: areaHa }, targetPane);
+            return true;
+        }
+
         function renderChart(stats, meta, paneId) {
+            var nativeClassAnalysesExcluded = ['LULC', 'LULC_ESA', 'LULC_MODIS', 'LULC_CORINE'];
+            if (meta && meta.legendType === 'classified' && meta.classesRaw &&
+                nativeClassAnalysesExcluded.indexOf(meta.analysisName) === -1 &&
+                renderNativeClassifiedStatsChart(stats, meta, paneId)) return;
              // 🆕 FAZ 12 — ADIM 5: 27 yeni Çevresel/Kentsel analiz kutusunun her
              // biri artık kendi data-chart-type niteliğini taşıyor (meta.chartType
              // — bkz. getSelectedAnalysisMetaList()). Bu analizler için grafik,
@@ -42713,7 +42750,12 @@ function applySylvaLang(lang) {
       'TOPO_CURVATURE', 'TOPO_PLAN_CURV', 'TOPO_PROFILE_CURV',
       'TOPO_FLOWDIR', 'TOPO_FLOWACC', 'TOPO_STREAM',
       'TOPO_TWI', 'TOPO_SPI', 'TOPO_STI',
-      'TOPO_HILLSHADE_MULTI', 'TOPO_SOLAR', 'TOPO_SHADOW', 'TOPO_CONTOUR', 'SAR'
+      'TOPO_HILLSHADE_MULTI', 'TOPO_SOLAR', 'TOPO_SHADOW', 'TOPO_CONTOUR', 'SAR',
+      'UHI_LST', 'UHI_TREND', 'LST_LULC_CORRELATION', 'WATER_OCCURRENCE', 'WATER_CHANGE', 'WATER_SEASONALITY',
+      'RESERVOIR_VOLUME', 'WATER_QUALITY_PROXY', 'VEG_CHANGE', 'FOREST_LOSS', 'BURN_SEVERITY', 'CANOPY_HEIGHT_BIOMASS',
+      'FOREST_HEALTH', 'URBAN_GROWTH', 'IMPERVIOUS_CHANGE', 'NIGHTLIGHTS_ECONOMIC', 'DROUGHT_INDEX', 'FLOOD_MAPPING',
+      'LANDSLIDE_SUSCEPTIBILITY', 'DROUGHT_RISK_COMPOSITE', 'EARTHQUAKE_DAMAGE_PROXY', 'NO2_TIMESERIES',
+      'AEROSOL_OPTICAL_DEPTH', 'SO2_CO_ANOMALY', 'COASTLINE_CHANGE', 'SST_TREND'
     ];
     if (_staticInfoDs.indexOf(_lastAnalyzeMeta.analysisName) !== -1) {
       if (typeof renderDatasetInfoCard === 'function') {
@@ -51736,6 +51778,7 @@ function refreshInfoButtons(lang){var text=INFO_BUTTON_TEXT[lang]||INFO_BUTTON_T
 /* Kart içindeki sabit değerleri de seçili dile çevirir. `data-env-original`
    metnin her dil değişiminde Türkçeye geri dönüp yeniden çevrilmesini sağlar. */
 function translateAnyInfoText(text,lang){var u='https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl='+encodeURIComponent(lang)+'&dt=t&q='+encodeURIComponent(text);return fetch(u).then(function(r){if(!r.ok)throw Error('translate');return r.json()}).then(function(j){return(j[0]||[]).map(function(p){return p[0]||''}).join('')})}
+window.sylvaTranslateEnvText=translateAnyInfoText;
 function localizeMapInfoBox(box,lang){if(!box||lang==='tr'||!window.fetch)return;var els=Array.prototype.slice.call(box.querySelectorAll('td,div')).filter(function(el){return el.children.length===0&&el.textContent.trim()});els.forEach(function(el){var original=el.getAttribute('data-env-original');if(!original){original=el.textContent.trim();el.setAttribute('data-env-original',original)}translateAnyInfoText(original,lang).then(function(v){if(v&&document.body.contains(el))el.textContent=v}).catch(function(){})})}
 function refreshVisibleInfoBoxes(lang){['map-info-box','map2-info-box'].forEach(function(id){localizeMapInfoBox(document.getElementById(id),lang)})}
 /* Sınıflandırılmış analizler, histogramı 7 sayısal aralığa bölmez. Sunulan
@@ -51748,6 +51791,19 @@ var oldRenderChart=window.renderChart;if(typeof oldRenderChart==='function'){win
 var oldDatasetInfo=window.renderDatasetInfoCard;if(typeof oldDatasetInfo==='function'){window.renderDatasetInfoCard=function(analysisName,paneId){var r=oldDatasetInfo.apply(this,arguments);localizeMapInfoBox(document.getElementById(paneId==='map2'?'map2-info-box':'map-info-box'),selectedInfoLang());return r}}
 var oldApply=window.applySylvaLang;if(typeof oldApply==='function'){window.applySylvaLang=function(lang){var r=oldApply.apply(this,arguments);refreshInfoButtons(lang);refreshVisibleInfoBoxes(lang);return r}}
 refreshInfoButtons(selectedInfoLang());
+}());
+</script>
+<script id="env-urban-native-class-translation">
+(function(){'use strict';
+/* Özgün sınıf lejantı ve grafik tablosu, dil değişiminden sonra yeniden
+   üretildiğinde Türkçe/önceki dilde kalmasın diye doğrudan sınıf etiketlerini
+   de seçili 30 dile çevirir. Sunucu veya ağ erişimi yoksa özgün etiket korunur. */
+function lang(){return(typeof window._sylvaLang==='string'&&window._sylvaLang)||'en'}
+function nativeMeta(){return window._lastAnalyzeMeta||null}
+function translateClassLabels(){var m=nativeMeta(),l=lang();if(!m||m.legendType!=='classified'||!m.classesRaw||l==='tr'||typeof window.sylvaTranslateEnvText!=='function')return;var labels=[];try{labels=JSON.parse(m.classesRaw).map(function(c){return String(c.label||'').trim()}).filter(Boolean)}catch(e){return}if(!labels.length)return;var roots=[document.getElementById('map-legend-box'),document.getElementById('map2-legend-box'),document.getElementById('stats-chart-table'),document.getElementById('map-stats-table'),document.getElementById('map2-stats-table')];roots.forEach(function(root){if(!root)return;Array.prototype.slice.call(root.querySelectorAll('span,td,div')).forEach(function(el){if(el.children.length)return;var shown=el.textContent.trim(),original=el.getAttribute('data-env-native-class')||shown;if(labels.indexOf(original)===-1)return;el.setAttribute('data-env-native-class',original);if(el.getAttribute('data-env-native-lang')===l)return;el.setAttribute('data-env-native-lang',l);window.sylvaTranslateEnvText(original,l).then(function(v){if(v&&el.getAttribute('data-env-native-lang')===l)el.textContent=v}).catch(function(){})});Array.prototype.slice.call(root.querySelectorAll('tbody tr td:first-child')).forEach(function(cell){var node=Array.prototype.slice.call(cell.childNodes).filter(function(n){return n.nodeType===3&&n.nodeValue.trim()})[0];if(!node)return;var original=cell.getAttribute('data-env-native-class')||node.nodeValue.trim();if(labels.indexOf(original)===-1)return;cell.setAttribute('data-env-native-class',original);if(cell.getAttribute('data-env-native-lang')===l)return;cell.setAttribute('data-env-native-lang',l);window.sylvaTranslateEnvText(original,l).then(function(v){if(v&&cell.getAttribute('data-env-native-lang')===l)node.nodeValue=' '+v}).catch(function(){})})})}
+var scheduled=false;function queue(){if(scheduled)return;scheduled=true;setTimeout(function(){scheduled=false;translateClassLabels()},30)}
+new MutationObserver(queue).observe(document.body,{subtree:true,childList:true,characterData:true});
+document.addEventListener('change',queue);queue();
 }());
 </script>
 
