@@ -1927,6 +1927,26 @@ _NATIVE_STATS_SCALE = {
     'LULC_ESA':    10,   # ESA WorldCover v200
     'LULC_CORINE': 100,  # CORINE Land Cover 2018
     'LULC_MODIS':  500,  # MODIS MCD12Q1
+    # 🆕 FAZ 12 — "Çevresel ve Kentsel Analizler" (27 analiz). Bu analizlerin
+    # bazıları çok daha kaba/iri pikselli kaynaklardan (VIIRS gece ışığı,
+    # CHIRPS yağış, SMAP toprak nemi, Sentinel-5P atmosfer, OISST deniz
+    # yüzeyi) geldiği için 30 m varsayılanıyla reduceRegion'a sokulursa hem
+    # anlamsız derecede yüksek çözünürlükte (gerçek veriden çok daha "sahte"
+    # ayrıntılı) hem de gereksiz yere pahalı/yavaş olur — bu dict'in yukarıdaki
+    # LULC girdileriyle aynı ilke. Diğer 18 analiz (optik bant tabanlı NDVI/
+    # NDWI/NBR/NDMI/LST vb. veya SRTM/ESA WorldCover/Sentinel-1/Hansen/GSW),
+    # mevcut NDVI ailesiyle aynı 30 m varsayılanına bırakıldı — kendi native
+    # çözünürlükleri zaten 10-30 m aralığında ve bu varsayılan yeterince
+    # isabetli.
+    'NIGHTLIGHTS_ECONOMIC':     500,    # VIIRS DNB (~500 m native)
+    'DROUGHT_INDEX':            5000,   # CHIRPS (~5.5 km native)
+    'DROUGHT_RISK_COMPOSITE':   5000,   # CHIRPS bileşeni baskın
+    'NO2_TIMESERIES':           1113,   # Sentinel-5P TROPOMI (~1113 m)
+    'AEROSOL_OPTICAL_DEPTH':    1113,   # Sentinel-5P TROPOMI (~1113 m)
+    'SO2_CO_ANOMALY':           1113,   # Sentinel-5P TROPOMI (~1113 m)
+    'SST_TREND':                27830,  # NOAA CDR OISST (~0.25° ≈ 27.8 km)
+    'CANOPY_HEIGHT_BIOMASS':    25,     # NASA GEDI L2A ayak izi (~25 m)
+    'LST_LULC_CORRELATION':     30,     # Landsat termal bant native çözünürlüğü
 }
 
 
@@ -4351,6 +4371,589 @@ def build_result_image(data, for_export=False):
         # sahneden (_sar_col.first()) okuyoruz (yukarıda zaten doğrulandı).
         return final_display, roi, result, vis, _crs_probe_img
 
+    # ════════════════════════════════════════════════════════════════
+    # 🆕 FAZ 12 — "🌆 Çevresel ve Kentsel Analizler" (27 analiz — Talep_1.docx)
+    # ════════════════════════════════════════════════════════════════
+    # Bu blok, LULC/TOPO/SAR ile AYNI ilkeyi izler: uydu/bant seçim
+    # sistemine (aşağıdaki "── 1. Uydu koleksiyonunu ve bant adlarını
+    # seç" bölümü) ihtiyaç duymayan YA DA çift-dönem farkını doğrudan
+    # kendi bağımsız veri kaynağından hesaplayan analizler burada, erken
+    # ve kendi return'leriyle ele alınır. Yalnızca LST_LULC_CORRELATION
+    # ve WATER_QUALITY_PROXY (aşağıda, ana uydu-indeks zincirinde, NDVI/
+    # NDWI'nin yanında) bu bloğun DIŞINDA — onlar mevcut optik uydu/bant
+    # seçimini (image_refl/b) doğrudan kullanır.
+    #
+    # ÇİFT DÖNEM (requiresSecondPeriod:true) analizler, frontend'in
+    # gönderdiği startDate2/endDate2 (bkz. index.html → runAnalysis()
+    # içindeki "FAZ 12 — ADIM 3" notu) alanlarını okur. Optik uydu
+    # bantlarına dayanan çift-dönem analizler (VEG_CHANGE, WATER_CHANGE,
+    # BURN_SEVERITY, FOREST_HEALTH, COASTLINE_CHANGE, UHI_TREND), 2.
+    # dönem görüntüsünü build_result_image()'i AYNI (tek-dönemli) index
+    # ile (ör. 'NDVI') startDate/endDate YERİNE startDate2/endDate2 ile
+    # ÖZYİNELEMELİ (recursive) olarak çağırarak elde eder — bu sayede
+    # bulut/gölge maskesi, void-doldurma, Landsat DN→yansıma offset
+    # düzeltmesi gibi TÜM mevcut düzeltmeler otomatik olarak HER İKİ
+    # dönem için de uygulanmış olur; kod tekrarı ve senkronizasyon
+    # hatası riski yoktur.
+    #
+    # DÜRÜSTLÜK NOTU: Bu 24 analizin GEE veri kaynağı kimlikleri
+    # (dataset ID) ve bant adları web araması ile TEK TEK doğrulandı
+    # (bkz. Faz 12 dokümanı). Ancak bu ortamda canlı Earth Engine
+    # erişimi OLMADIĞI için hiçbiri uçtan uca test edilemedi — sözdizimi
+    # (py_compile/pyflakes) doğrulandı, davranışsal doğrulama YAPILAMADI.
+    # RESERVOIR_VOLUME, DROUGHT_INDEX, DROUGHT_RISK_COMPOSITE,
+    # EARTHQUAKE_DAMAGE_PROXY, LST_LULC_CORRELATION açıkça birer TAHMİN/
+    # PROXY'dir (docx'in kendi adlandırması da bunu işaret ediyor) —
+    # rigorous bilimsel SPI/VCI/InSAR coherence YERİNE savunulabilir,
+    # basitleştirilmiş yaklaşıklıklar kullanır; ayrıntı için kod içi
+    # yorumlara bakın.
+
+    def _env_urban_single_period_image(base_data, sub_index, s, e, months_key=None):
+        """
+        Tek dönemlik bir optik indeksi (NDVI/NDWI/NBR/NDMI/LST...), verilen
+        [s, e] tarih aralığı için, build_result_image()'i ÖZYİNELEMELİ
+        çağırarak hesaplar. Böylece mevcut bulut maskesi/void-doldurma/
+        Landsat offset düzeltmesi gibi TÜM alt-adımlar otomatik uygulanır.
+        for_export=True verilir ki kullanıcının OLASI bir manuel
+        sınıflandırması (classBreaks) bu iç hesaba karışmasın.
+
+        🛠️ BUG FİX (Dönem 2'nin ay filtresi sessizce Dönem 1'inkini
+        kullanıyordu): dict(base_data) sığ bir kopya olduğundan, 'months'
+        alanı base_data'dan OLDUĞU GİBİ (Dönem 1'in ay seçimi) miras
+        alınıyordu — Dönem 2 çağrıları için bu YANLIŞ. months_key
+        parametresi (ör. 'months2') verildiğinde, sub_data['months']
+        base_data[months_key] ile AÇIKÇA değiştirilir. Dönem 1 çağrıları
+        (months_key=None, varsayılan) davranışı DEĞİŞMEDEN kalır.
+        """
+        sub_data = dict(base_data)
+        sub_data['index'] = sub_index
+        sub_data['startDate'] = s
+        sub_data['endDate'] = e
+        sub_data.pop('sceneId', None)
+        if months_key is not None:
+            sub_data['months'] = base_data.get(months_key)
+        _disp, _sub_roi, sub_result, _sub_vis, sub_crs = build_result_image(sub_data, for_export=True)
+        return sub_result, sub_crs
+
+    def _env_urban_require_period2(data):
+        s2 = data.get('startDate2')
+        e2 = data.get('endDate2')
+        if not s2 or not e2:
+            raise ValueError(
+                'Bu analiz 2 bağımsız dönem gerektirir (Dönem 1 + Dönem 2). '
+                'Lütfen "Dönem 2" tarih aralığını da seçin.'
+            )
+        return s2, e2
+
+    # ── 🌡️ Kentsel Isı Adası — Tek/Çift Dönem ───────────────────────
+    if index == 'UHI_LST':
+        # Kentsel Isı Adası YOĞUNLUĞU tanım gereği GÖRECELİDİR: bir
+        # pikselin, aynı AOI'nin kendi ortalama yüzey sıcaklığına göre ne
+        # kadar sıcak/soğuk olduğunu gösterir (mutlak LST değil — bu yüzden
+        # lejant -10°C..+10°C gibi DAR bir aralıkta). Mutlak LST için zaten
+        # mevcut 'LST' indeksi kullanılabilir.
+        lst_img, crs_probe = _env_urban_single_period_image(data, 'LST', start_date, end_date)
+        mean_lst = _call_with_retry(
+            lambda: lst_img.reduceRegion(
+                reducer=ee.Reducer.mean(), geometry=roi, scale=_stats_scale_for('UHI_LST'),
+                maxPixels=1e9, bestEffort=True, tileScale=4
+            ).get('value').getInfo()
+        )
+        if mean_lst is None:
+            raise ValueError('Seçilen AOI/tarih aralığında geçerli LST verisi bulunamadı (UHI_LST).')
+        result = lst_img.subtract(ee.Number(mean_lst)).rename('value')
+        vis = {'min': -10, 'max': 10, 'palette': ['0000ff', 'ffffff', 'ff0000']}
+        final_display = result.clip(roi) if clip_mode == 'clip' else result
+        return final_display, roi, result, vis, crs_probe
+
+    if index == 'UHI_TREND':
+        s2, e2 = _env_urban_require_period2(data)
+        lst1, crs1 = _env_urban_single_period_image(data, 'LST', start_date, end_date)
+        lst2, _crs2 = _env_urban_single_period_image(data, 'LST', s2, e2, months_key='months2')
+        mean1 = _call_with_retry(
+            lambda: lst1.reduceRegion(reducer=ee.Reducer.mean(), geometry=roi,
+                                       scale=_stats_scale_for('UHI_TREND'), maxPixels=1e9,
+                                       bestEffort=True, tileScale=4).get('value').getInfo()
+        )
+        mean2 = _call_with_retry(
+            lambda: lst2.reduceRegion(reducer=ee.Reducer.mean(), geometry=roi,
+                                       scale=_stats_scale_for('UHI_TREND'), maxPixels=1e9,
+                                       bestEffort=True, tileScale=4).get('value').getInfo()
+        )
+        if mean1 is None or mean2 is None:
+            raise ValueError('Seçilen dönemlerden birinde geçerli LST verisi bulunamadı (UHI_TREND).')
+        uhi1 = lst1.subtract(ee.Number(mean1))
+        uhi2 = lst2.subtract(ee.Number(mean2))
+        result = uhi2.subtract(uhi1).rename('value')
+        vis = {'min': -5, 'max': 5, 'palette': ['0000ff', 'ffffff', 'ff0000']}
+        final_display = result.clip(roi) if clip_mode == 'clip' else result
+        return final_display, roi, result, vis, crs1
+
+    # ── 💧 Su Yüzeyi ve Hidroloji ─────────────────────────────────────
+    if index == 'WATER_OCCURRENCE':
+        # JRC Global Surface Water v1.4 — tarih/bulutluluk gerektirmeyen
+        # hazır (1984-2021) küresel kompozit. occurrence: 0-100 (%).
+        gsw = ee.Image('JRC/GSW1_4/GlobalSurfaceWater')
+        result = gsw.select('occurrence').unmask(0).rename('value')
+        vis = {'min': 0, 'max': 100, 'palette': ['ffffff', '99d9ea', '0000ff']}
+        final_display = result.clip(roi) if clip_mode == 'clip' else result
+        return final_display, roi, result, vis, None
+
+    if index == 'WATER_SEASONALITY':
+        # JRC Seasonality bandı: 0 (su değil) .. 12 (yıl boyu su) ay sayısı.
+        gsw = ee.Image('JRC/GSW1_4/GlobalSurfaceWater')
+        result = gsw.select('seasonality').unmask(0).rename('value')
+        vis = {'min': 0, 'max': 12, 'palette': ['ffffff', '99d9ea', '0000ff', '00008b']}
+        final_display = result.clip(roi) if clip_mode == 'clip' else result
+        return final_display, roi, result, vis, None
+
+    if index == 'WATER_CHANGE':
+        s2, e2 = _env_urban_require_period2(data)
+        ndwi1, crs1 = _env_urban_single_period_image(data, 'NDWI', start_date, end_date)
+        ndwi2, _crs2 = _env_urban_single_period_image(data, 'NDWI', s2, e2, months_key='months2')
+        # Kazanım (su artışı) = pozitif, Kayıp (su azalışı) = negatif —
+        # HTML lejantı legend-min="Kayıp" legend-max="Kazanım" ile eşleşir.
+        result = ndwi2.subtract(ndwi1).rename('value')
+        vis = {'min': -0.5, 'max': 0.5, 'palette': ['d73027', 'ffffbf', '1a9850']}
+        final_display = result.clip(roi) if clip_mode == 'clip' else result
+        return final_display, roi, result, vis, crs1
+
+    if index == 'RESERVOIR_VOLUME':
+        # 🧪 TAHMİNİ hacim değişimi: iki dönemdeki NDWI-tabanlı su
+        # maskeleri + SRTM DEM'den türetilen basit bir "derinlik proxy"si
+        # ile ağırlıklandırılmış piksel-bazlı bir vekil gösterge üretir.
+        # Gerçek batimetri/hacim ölçümü DEĞİLDİR — yalnızca "bu piksel
+        # kurudu/yeniden su altında kaldı ve göreli olarak ne kadar derin
+        # bir noktada" sorusuna kaba bir yaklaşıklık sunar.
+        s2, e2 = _env_urban_require_period2(data)
+        ndwi1, crs1 = _env_urban_single_period_image(data, 'NDWI', start_date, end_date)
+        ndwi2, _crs2 = _env_urban_single_period_image(data, 'NDWI', s2, e2, months_key='months2')
+        water1 = ndwi1.gt(0)
+        water2 = ndwi2.gt(0)
+        ever_water = water1.Or(water2)
+        dem = ee.Image('USGS/SRTMGL1_003').select('elevation')
+        max_water_elev = _call_with_retry(
+            lambda: dem.updateMask(ever_water).reduceRegion(
+                reducer=ee.Reducer.max(), geometry=roi, scale=30,
+                maxPixels=1e9, bestEffort=True, tileScale=4
+            ).get('elevation').getInfo()
+        )
+        if max_water_elev is None:
+            # AOI içinde hiçbir dönemde su tespit edilmediyse (kuru alan):
+            # değişim sıfır kabul edilir, hata fırlatılmaz.
+            result = ee.Image(0).rename('value')
+        else:
+            depth_proxy = ee.Image.constant(float(max_water_elev)).subtract(dem).max(0)
+            result = water2.subtract(water1).multiply(depth_proxy).rename('value')
+        vis = {'min': -10, 'max': 10, 'palette': ['d73027', 'ffffbf', '1a9850']}
+        final_display = result.clip(roi) if clip_mode == 'clip' else result
+        return final_display, roi, result, vis, crs1
+
+    # ── 🌳 Bitki Örtüsü ve Orman Değişimi ─────────────────────────────
+    if index == 'VEG_CHANGE':
+        s2, e2 = _env_urban_require_period2(data)
+        ndvi1, crs1 = _env_urban_single_period_image(data, 'NDVI', start_date, end_date)
+        ndvi2, _crs2 = _env_urban_single_period_image(data, 'NDVI', s2, e2, months_key='months2')
+        result = ndvi2.subtract(ndvi1).rename('value')
+        vis = {'min': -1.0, 'max': 1.0, 'palette': ['d73027', 'ffffbf', '1a9850']}
+        final_display = result.clip(roi) if clip_mode == 'clip' else result
+        return final_display, roi, result, vis, crs1
+
+    if index == 'FOREST_LOSS':
+        # Hansen Global Forest Change v1.13 (2000-2025). Tarih filtresi
+        # yoktur — isteğe bağlı olarak lossyear ile yıl aralığına
+        # daraltılabilir; burada TÜM dönem (2001-2025) gösterilir.
+        # Kodlama (LULC_CLASS_DEFS deseniyle uyumlu 3 sınıf):
+        #   0 = Orman (Değişmeyen), 1 = Orman Kaybı, 2 = Orman Kazanımı
+        hansen = ee.Image('UMD/hansen/global_forest_change_2025_v1_13')
+        treecover = hansen.select('treecover2000')
+        loss = hansen.select('loss')
+        gain = hansen.select('gain')
+        forest_baseline = treecover.gte(30)  # >=%30 kanopi = "orman" kabul edilir (Hansen standardı)
+        unchanged = forest_baseline.And(loss.Not())
+        cls = (ee.Image(0).where(unchanged, 0)
+               .where(loss.eq(1), 1)
+               .where(gain.eq(1).And(loss.Not()), 2))
+        result = cls.updateMask(forest_baseline.Or(loss.eq(1)).Or(gain.eq(1))).rename('value')
+        vis = {'min': 0, 'max': 2, 'palette': ['397d49', 'e11d48', '22c55e']}
+        final_display = result.clip(roi) if clip_mode == 'clip' else result
+        return final_display, roi, result, vis, None
+
+    if index == 'BURN_SEVERITY':
+        # dNBR (USGS kuralı): NBR_öncesi − NBR_sonrası. Pozitif = yanık.
+        # Dönem 1 = YANGIN ÖNCESİ, Dönem 2 = YANGIN SONRASI olarak kabul
+        # edilir (kullanıcı tarih sırasını buna göre seçmelidir).
+        s2, e2 = _env_urban_require_period2(data)
+        nbr_pre, crs1 = _env_urban_single_period_image(data, 'NBR', start_date, end_date)
+        nbr_post, _crs2 = _env_urban_single_period_image(data, 'NBR', s2, e2, months_key='months2')
+        result = nbr_pre.subtract(nbr_post).rename('value')
+        # USGS dNBR şiddet eşikleri (yaklaşık): <-0.1 büyüme, -0.1..0.1 yanmamış,
+        # 0.1..0.27 düşük, 0.27..0.44 orta-düşük, 0.44..0.66 orta-yüksek, >0.66 yüksek.
+        vis = {'min': -0.5, 'max': 1.0, 'palette': ['1a9850', 'ffffbf', 'fee08b', 'fc8d59', 'd73027']}
+        final_display = result.clip(roi) if clip_mode == 'clip' else result
+        return final_display, roi, result, vis, crs1
+
+    if index == 'CANOPY_HEIGHT_BIOMASS':
+        # NASA GEDI L2A (kanopi yüksekliği, rh98) — statik/hazır LiDAR
+        # örneklem kompoziti (2019-günümüz), tarih filtresi uygulanmaz.
+        # Kalite bayrakları (quality_flag==1, degrade_flag==0) ile maskelenir.
+        gedi = (ee.ImageCollection('LARSE/GEDI/GEDI02_A_002_MONTHLY')
+                .filterBounds(roi)
+                .map(lambda img: img.updateMask(
+                    img.select('quality_flag').eq(1).And(img.select('degrade_flag').eq(0))
+                )))
+        result = gedi.select('rh98').mean().rename('value')
+        vis = {'min': 0, 'max': 40, 'palette': ['ffffe5', '78c679', '006837']}
+        final_display = result.clip(roi) if clip_mode == 'clip' else result
+        return final_display, roi, result, vis, None
+
+    if index == 'FOREST_HEALTH':
+        # Orman sağlığı/stres trendi — NDMI (nem/stres) farkı üzerinden
+        # basitleştirilmiş bir vekil gösterge (NBR+NDMI kompozit yerine
+        # yalnızca NDMI — daha doğrudan bir nem-stresi sinyali).
+        s2, e2 = _env_urban_require_period2(data)
+        ndmi1, crs1 = _env_urban_single_period_image(data, 'NDMI', start_date, end_date)
+        ndmi2, _crs2 = _env_urban_single_period_image(data, 'NDMI', s2, e2, months_key='months2')
+        result = ndmi2.subtract(ndmi1).rename('value')
+        vis = {'min': -0.5, 'max': 0.5, 'palette': ['d73027', 'ffffbf', '1a9850']}
+        final_display = result.clip(roi) if clip_mode == 'clip' else result
+        return final_display, roi, result, vis, crs1
+
+    # ── 🏙️ Kentsel Gelişim ve Arazi Değişimi ──────────────────────────
+    if index in ('URBAN_GROWTH', 'IMPERVIOUS_CHANGE'):
+        # Dynamic World V1 'built' (yapay/kentsel) olasılık bandı (0-1),
+        # her iki dönem için AOI'yi kapsayan sahnelerin ortalaması alınır.
+        s2, e2 = _env_urban_require_period2(data)
+
+        def _dw_built_mean(s, e):
+            return (ee.ImageCollection('GOOGLE/DYNAMICWORLD/V1')
+                    .filterBounds(roi).filterDate(s, e)
+                    .select('built').mean())
+
+        built1 = _dw_built_mean(start_date, end_date)
+        built2 = _dw_built_mean(s2, e2)
+
+        if index == 'URBAN_GROWTH':
+            # Otomatik/2 sınıf (HTML'deki data-legend-classes ile birebir
+            # sırayla eşleşir): 0 = Değişmeyen, 1 = Yeni Kentsel Alan.
+            was_built = built1.gt(0.5)
+            now_built = built2.gt(0.5)
+            new_urban = now_built.And(was_built.Not())
+            result = ee.Image(0).where(new_urban, 1).rename('value')
+            vis = {'min': 0, 'max': 1, 'palette': ['94a3b8', 'c4281b']}
+        else:
+            result = built2.subtract(built1).multiply(100).rename('value')
+            vis = {'min': -50, 'max': 50, 'palette': ['1a9850', 'ffffbf', 'c4281b']}
+        final_display = result.clip(roi) if clip_mode == 'clip' else result
+        return final_display, roi, result, vis, None
+
+    if index == 'NIGHTLIGHTS_ECONOMIC':
+        s2, e2 = _env_urban_require_period2(data)
+
+        def _viirs_mean(s, e):
+            return (ee.ImageCollection('NOAA/VIIRS/DNB/MONTHLY_V1/VCMSLCFG')
+                    .filterBounds(roi).filterDate(s, e)
+                    .select('avg_rad').mean())
+
+        rad1 = _viirs_mean(start_date, end_date)
+        rad2 = _viirs_mean(s2, e2)
+        result = rad2.subtract(rad1).rename('value')
+        vis = {'min': -5, 'max': 5, 'palette': ['313695', 'ffffbf', 'fdae61', 'd73027']}
+        final_display = result.clip(roi) if clip_mode == 'clip' else result
+        return final_display, roi, result, vis, None
+
+    # ── ⚠️ Çevresel Risk ve İzleme ─────────────────────────────────────
+    if index == 'DROUGHT_INDEX':
+        # 🧪 Basitleştirilmiş kuraklık göstergesi (gerçek SPI DEĞİLDİR —
+        # SPI, çok-yıllık gamma dağılımı uydurması gerektirir): seçilen
+        # dönemin CHIRPS toplam yağışı, AYNI takvim aralığının önceki
+        # 10 yıllık ortalamasıyla karşılaştırılır; SMAP yüzey nemiyle
+        # birleştirilip 0 (nemli) – 1 (kurak) aralığında normalize edilir.
+        try:
+            _d0 = datetime.date.fromisoformat(start_date)
+            _d1 = datetime.date.fromisoformat(end_date)
+        except (TypeError, ValueError):
+            raise ValueError('DROUGHT_INDEX için geçerli bir tarih aralığı gereklidir.')
+        chirps = ee.ImageCollection('UCSB-CHG/CHIRPS/DAILY').filterBounds(roi)
+        cur_precip = chirps.filterDate(start_date, end_date).select('precipitation').sum()
+        _hist_sums = []
+        for _yr_back in range(1, 11):
+            try:
+                _hs = _d0.replace(year=_d0.year - _yr_back).isoformat()
+                _he = _d1.replace(year=_d1.year - _yr_back).isoformat()
+            except ValueError:
+                continue  # 29 Şubat gibi kaydırmalar için o yılı atla
+            _hist_sums.append(
+                chirps.filterDate(_hs, _he).select('precipitation').sum()
+            )
+        if not _hist_sums:
+            raise ValueError('DROUGHT_INDEX için tarihsel referans dönem hesaplanamadı.')
+        hist_mean = ee.ImageCollection(_hist_sums).mean()
+        precip_ratio = cur_precip.divide(hist_mean.max(1e-3)).clamp(0, 2)
+        precip_dryness = ee.Image(1).subtract(precip_ratio.divide(2))  # 0=bol yağış, 1=kurak
+
+        smap = (ee.ImageCollection('NASA/SMAP/SPL4SMGP/008')
+                .filterBounds(roi).filterDate(start_date, end_date)
+                .select('sm_surface').mean())
+        moisture_dryness = ee.Image(1).subtract(smap.divide(0.5).clamp(0, 1))  # 0.5 m3/m3 ~ doygun kabul
+
+        result = precip_dryness.multiply(0.6).add(moisture_dryness.multiply(0.4)).clamp(0, 1).rename('value')
+        vis = {'min': 0, 'max': 1, 'palette': ['1a9850', 'ffffbf', '8c510a']}
+        final_display = result.clip(roi) if clip_mode == 'clip' else result
+        return final_display, roi, result, vis, None
+
+    if index == 'DROUGHT_RISK_COMPOSITE':
+        # 🧪 Kompozit risk indeksi (basitleştirilmiş VCI + yağış anomalisi +
+        # toprak nemi ortalaması, 0=düşük risk .. 1=yüksek risk).
+        try:
+            _d0c = datetime.date.fromisoformat(start_date)
+            _d1c = datetime.date.fromisoformat(end_date)
+        except (TypeError, ValueError):
+            raise ValueError('DROUGHT_RISK_COMPOSITE için geçerli bir tarih aralığı gereklidir.')
+        ndvi_cur, _crs_ndvi = _env_urban_single_period_image(data, 'NDVI', start_date, end_date)
+        try:
+            _bh_s = _d0c.replace(year=_d0c.year - 5).isoformat()
+            _bh_e = _d1c.isoformat()
+        except ValueError:
+            _bh_s, _bh_e = start_date, end_date
+        ndvi_hist_col_data = dict(data)
+        ndvi_hist_col_data['index'] = 'NDVI'
+        # 5 yıllık geniş pencerede min/max NDVI (basit VCI paydası)
+        _hist_ndvi_disp, _hist_roi, hist_ndvi_img, _hv, _hc = build_result_image(
+            {**ndvi_hist_col_data, 'startDate': _bh_s, 'endDate': _bh_e}, for_export=True
+        )
+        # NOT: hist_ndvi_img tek bir kompozit (median) değeri temsil eder;
+        # gerçek VCI günlük min/max serisi gerektirir. Burada, geçerli
+        # dönem NDVI'sinin bu geniş-pencere medyanına ORANI basit bir VCI
+        # benzeri gösterge olarak kullanılır (0=çok düşük bitki örtüsü
+        # sağlığı/risk yüksek .. 1=sağlıklı).
+        vci_proxy = ndvi_cur.divide(hist_ndvi_img.max(0.05)).clamp(0, 2).divide(2)
+        veg_risk = ee.Image(1).subtract(vci_proxy)
+
+        chirps2 = ee.ImageCollection('UCSB-CHG/CHIRPS/DAILY').filterBounds(roi)
+        cur_precip2 = chirps2.filterDate(start_date, end_date).select('precipitation').sum()
+        _hist_sums2 = []
+        for _yr_back in range(1, 6):
+            try:
+                _hs2 = _d0c.replace(year=_d0c.year - _yr_back).isoformat()
+                _he2 = _d1c.replace(year=_d1c.year - _yr_back).isoformat()
+            except ValueError:
+                continue
+            _hist_sums2.append(chirps2.filterDate(_hs2, _he2).select('precipitation').sum())
+        precip_risk = ee.Image(0.5)
+        if _hist_sums2:
+            hist_mean2 = ee.ImageCollection(_hist_sums2).mean()
+            precip_risk = ee.Image(1).subtract(
+                cur_precip2.divide(hist_mean2.max(1e-3)).clamp(0, 2).divide(2)
+            )
+
+        smap2 = (ee.ImageCollection('NASA/SMAP/SPL4SMGP/008')
+                 .filterBounds(roi).filterDate(start_date, end_date)
+                 .select('sm_surface').mean())
+        moisture_risk = ee.Image(1).subtract(smap2.divide(0.5).clamp(0, 1))
+
+        result = (veg_risk.multiply(0.34)
+                  .add(precip_risk.multiply(0.33))
+                  .add(moisture_risk.multiply(0.33))
+                  .clamp(0, 1).rename('value'))
+        vis = {'min': 0, 'max': 1, 'palette': ['1a9850', 'ffffbf', '8c510a']}
+        final_display = result.clip(roi) if clip_mode == 'clip' else result
+        return final_display, roi, result, vis, None
+
+    if index == 'FLOOD_MAPPING':
+        # Sentinel-1 GRD VV — sel ÖNCESİ/SONRASI geri saçılım karşılaştırması.
+        # Su yüzeyleri düşük VV geri saçılımı verir; taşkın = ani düşüş.
+        s2, e2 = _env_urban_require_period2(data)
+        # 🛠️ BUG FİX (tutarlılık): mevcut 'SAR' indeksi (bkz. yukarıdaki erken
+        # blok) ay filtresini (month_filter) UYGULAR — bu yeni analiz AYNI
+        # COPERNICUS/S1_GRD koleksiyonunu kullandığı halde eskiden ay
+        # filtresini YOK SAYIYORDU. Dönem 2 için AYNI mantıkla months2'den
+        # kendi filtresi türetilir (bkz. _env_urban_single_period_image'daki
+        # months_key deseni).
+        month_filter2 = _calendar_month_filter(_parse_months_param({'months': data.get('months2')}))
+
+        def _s1_vv_mean(s, e, mf):
+            col = (ee.ImageCollection('COPERNICUS/S1_GRD')
+                   .filterBounds(roi).filterDate(s, e)
+                   .filter(ee.Filter.eq('instrumentMode', 'IW'))
+                   .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VV'))
+                   .select('VV'))
+            if mf is not None:
+                col = col.filter(mf)
+            _probe = _require_nonempty_image(
+                col.first(),
+                'Seçilen dönemde SAR (Sentinel-1) görüntüsü bulunamadı (FLOOD_MAPPING).'
+            )
+            return col.mean(), _probe
+
+        vv_before, crs_before = _s1_vv_mean(start_date, end_date, month_filter)
+        vv_after, _crs_after = _s1_vv_mean(s2, e2, month_filter2)
+        # Kara (düşük değer) → Su Baskını (yüksek değer): geri saçılımdaki
+        # DÜŞÜŞ (öncesi-sonrası pozitif) taşkını işaret eder.
+        result = vv_before.subtract(vv_after).rename('value')
+        vis = {'min': -5, 'max': 15, 'palette': ['ffffff', '3288bd', '08306b']}
+        final_display = result.clip(roi) if clip_mode == 'clip' else result
+        return final_display, roi, result, vis, crs_before
+
+    if index == 'LANDSLIDE_SUSCEPTIBILITY':
+        # 🧪 Statik kompozit duyarlılık göstergesi (gerçek istatistiksel/
+        # makine-öğrenmesi tabanlı bir heyelan modeli DEĞİLDİR): eğim +
+        # arazi örtüsü (bitkisiz/açık alan = daha duyarlı) + göreli
+        # yükselti pozisyonundan (TPI benzeri) basit ağırlıklı bir skor.
+        srtm_h = ee.Image('USGS/SRTMGL1_003').select('elevation')
+        terrain_h = ee.Terrain.products(srtm_h)
+        slope_h = terrain_h.select('slope')
+        slope_risk = slope_h.divide(45).clamp(0, 1)  # ~45°+ çok dik kabul edilir
+
+        wc = ee.Image('ESA/WorldCover/v200').select('Map')
+        # Bitkisiz/açık zemin sınıfları (ESA WorldCover kodları): 60=Çıplak/Seyrek,
+        # 40=Tarım, 20=Çalılık — bunlar orman (10) veya yerleşik (50) alana göre
+        # göreli olarak daha yüksek heyelan duyarlılığı taşır kabul edilir.
+        cover_risk = (ee.Image(0.3)
+                      .where(wc.eq(10), 0.15)   # Orman — kök sistemi stabilize eder
+                      .where(wc.eq(20), 0.55)   # Çalılık
+                      .where(wc.eq(40), 0.5)    # Tarım
+                      .where(wc.eq(60), 0.8)    # Çıplak/seyrek bitki örtüsü
+                      .where(wc.eq(70), 0.9))   # Kar/buz (donma-çözülme)
+
+        focal_mean_h = srtm_h.focalMean(radius=300, units='meters')
+        tpi_h = srtm_h.subtract(focal_mean_h)
+        relief_risk = tpi_h.abs().divide(50).clamp(0, 1)  # keskin sırt/vadi = daha duyarlı
+
+        result = (slope_risk.multiply(0.5)
+                  .add(cover_risk.multiply(0.3))
+                  .add(relief_risk.multiply(0.2))
+                  .clamp(0, 1).rename('value'))
+        vis = {'min': 0, 'max': 1, 'palette': ['1a9850', 'fee08b', 'd73027']}
+        final_display = result.clip(roi) if clip_mode == 'clip' else result
+        return final_display, roi, result, vis, None
+
+    if index == 'EARTHQUAKE_DAMAGE_PROXY':
+        # 🧪 Sentinel-1 GRD (algılanmış genlik) kullanır — GERÇEK InSAR
+        # koherans DEĞİLDİR (koherans, kompleks SLC verisi gerektirir ve
+        # GEE'nin S1_GRD koleksiyonunda mevcut değildir). Bunun yerine,
+        # deprem öncesi/sonrası VV geri saçılımındaki MUTLAK değişim
+        # büyüklüğü — enkaz/yapısal hasarın neden olduğu ani yüzey
+        # pürüzlülüğü değişimiyle kabaca ilişkili bir vekil gösterge —
+        # kullanılır.
+        s2, e2 = _env_urban_require_period2(data)
+        # 🛠️ BUG FİX (tutarlılık): bkz. FLOOD_MAPPING'deki AYNI notu — mevcut
+        # 'SAR' indeksiyle aynı koleksiyonu kullandığı için ay filtresi burada
+        # da uygulanır.
+        month_filter2 = _calendar_month_filter(_parse_months_param({'months': data.get('months2')}))
+
+        def _s1_vv_mean_eq(s, e, mf):
+            col = (ee.ImageCollection('COPERNICUS/S1_GRD')
+                   .filterBounds(roi).filterDate(s, e)
+                   .filter(ee.Filter.eq('instrumentMode', 'IW'))
+                   .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VV'))
+                   .select('VV'))
+            if mf is not None:
+                col = col.filter(mf)
+            _probe = _require_nonempty_image(
+                col.first(),
+                'Seçilen dönemde SAR (Sentinel-1) görüntüsü bulunamadı (EARTHQUAKE_DAMAGE_PROXY).'
+            )
+            return col.mean(), _probe
+
+        vv_pre, crs_pre = _s1_vv_mean_eq(start_date, end_date, month_filter)
+        vv_post, _crs_post = _s1_vv_mean_eq(s2, e2, month_filter2)
+        result = vv_post.subtract(vv_pre).abs().rename('value')
+        vis = {'min': 0, 'max': 8, 'palette': ['ffffff', 'fee08b', 'd73027', '7f0000']}
+        final_display = result.clip(roi) if clip_mode == 'clip' else result
+        return final_display, roi, result, vis, crs_pre
+
+    # ── 🌬️ Hava Kalitesi (Sentinel-5P TROPOMI) ─────────────────────────
+    if index == 'NO2_TIMESERIES':
+        no2 = (ee.ImageCollection('COPERNICUS/S5P/OFFL/L3_NO2')
+               .filterBounds(roi).filterDate(start_date, end_date))
+        # 🛠️ BUG FİX (tutarlılık): ana uydu-indeks zincirindeki HER dal
+        # (bkz. fonksiyon başındaki month_filter açıklaması) ay filtresini
+        # uygular; bu yeni Sentinel-5P tabanlı analizler de gerçek bir
+        # koleksiyon sorguladığı için aynı kurala tabi tutulur.
+        if month_filter is not None:
+            no2 = no2.filter(month_filter)
+        no2 = no2.select('tropospheric_NO2_column_number_density')
+        _probe = _require_nonempty_image(
+            no2.first(), 'Seçilen tarih aralığında Sentinel-5P NO₂ verisi bulunamadı.'
+        )
+        result = no2.mean().multiply(1e6).rename('value')  # mol/m² → µmol/m² (okunabilirlik)
+        vis = {'min': 0, 'max': 300, 'palette': ['000080', '00ffff', 'ffff00', 'ff0000']}
+        final_display = result.clip(roi) if clip_mode == 'clip' else result
+        return final_display, roi, result, vis, _probe
+
+    if index == 'AEROSOL_OPTICAL_DEPTH':
+        aer = (ee.ImageCollection('COPERNICUS/S5P/OFFL/L3_AER_AI')
+               .filterBounds(roi).filterDate(start_date, end_date))
+        if month_filter is not None:
+            aer = aer.filter(month_filter)
+        aer = aer.select('absorbing_aerosol_index')
+        _probe = _require_nonempty_image(
+            aer.first(), 'Seçilen tarih aralığında Sentinel-5P Aerosol verisi bulunamadı.'
+        )
+        result = aer.mean().rename('value')
+        vis = {'min': -1, 'max': 2, 'palette': ['313695', 'ffffbf', 'a50026']}
+        final_display = result.clip(roi) if clip_mode == 'clip' else result
+        return final_display, roi, result, vis, _probe
+
+    if index == 'SO2_CO_ANOMALY':
+        so2 = (ee.ImageCollection('COPERNICUS/S5P/OFFL/L3_SO2')
+               .filterBounds(roi).filterDate(start_date, end_date))
+        co = (ee.ImageCollection('COPERNICUS/S5P/OFFL/L3_CO')
+              .filterBounds(roi).filterDate(start_date, end_date))
+        if month_filter is not None:
+            so2 = so2.filter(month_filter)
+            co = co.filter(month_filter)
+        so2 = so2.select('SO2_column_number_density')
+        co = co.select('CO_column_number_density')
+        _probe = _require_nonempty_image(
+            so2.first(), 'Seçilen tarih aralığında Sentinel-5P SO₂ verisi bulunamadı.'
+        )
+        # Basit kompozit anomali: SO₂ (µmol/m² ölçeğinde) + CO (mol/m² çok
+        # daha büyük mertebede olduğundan burada ayrı ölçeklenir) ortalaması.
+        so2_n = so2.mean().multiply(1e6).clamp(0, 50).divide(50)   # 0-1 normalize
+        co_n = co.mean().clamp(0, 0.05).divide(0.05)               # 0-1 normalize
+        result = so2_n.multiply(0.5).add(co_n.multiply(0.5)).rename('value')
+        vis = {'min': 0, 'max': 1, 'palette': ['ffffff', 'fee08b', 'd73027']}
+        final_display = result.clip(roi) if clip_mode == 'clip' else result
+        return final_display, roi, result, vis, _probe
+
+    # ── 🏖️ Kıyı ve Deniz ────────────────────────────────────────────────
+    if index == 'COASTLINE_CHANGE':
+        s2, e2 = _env_urban_require_period2(data)
+        ndwi1c, crs1c = _env_urban_single_period_image(data, 'NDWI', start_date, end_date)
+        ndwi2c, _crs2c = _env_urban_single_period_image(data, 'NDWI', s2, e2, months_key='months2')
+        # Erozyon (kara→su, NDWI artışı) = negatif; Birikim (su→kara,
+        # NDWI azalışı) = pozitif — HTML lejantı legend-min="Erozyon"
+        # legend-max="Birikim" ile eşleşir.
+        result = ndwi1c.subtract(ndwi2c).rename('value')
+        vis = {'min': -0.5, 'max': 0.5, 'palette': ['d73027', 'ffffbf', '1a9850']}
+        final_display = result.clip(roi) if clip_mode == 'clip' else result
+        return final_display, roi, result, vis, crs1c
+
+    if index == 'SST_TREND':
+        # NOAA CDR OISST v2.1 — günlük, bulutsuz kompozit deniz yüzeyi
+        # sıcaklığı. Ham 'sst' bandı x0.01 ölçek faktörü taşır (resmi
+        # katalog örnek koduyla doğrulandı — bkz. Faz 12 dokümanı).
+        # "Trend": seçilen aralığın İLK ve SON yarısının ortalama SST
+        # farkı (basit bir dönem-içi trend göstergesi).
+        try:
+            _sd = datetime.date.fromisoformat(start_date)
+            _ed = datetime.date.fromisoformat(end_date)
+        except (TypeError, ValueError):
+            raise ValueError('SST_TREND için geçerli bir tarih aralığı gereklidir.')
+        _mid = _sd + (_ed - _sd) / 2
+        oisst = ee.ImageCollection('NOAA/CDR/OISST/V2_1').filterBounds(roi)
+        first_half = (oisst.filterDate(_sd.isoformat(), _mid.isoformat())
+                      .select('sst').mean().multiply(0.01))
+        second_half = (oisst.filterDate(_mid.isoformat(), (_ed + datetime.timedelta(days=1)).isoformat())
+                       .select('sst').mean().multiply(0.01))
+        result = second_half.subtract(first_half).rename('value')
+        vis = {'min': -2, 'max': 2, 'palette': ['0000ff', 'ffffff', 'ff0000']}
+        final_display = result.clip(roi) if clip_mode == 'clip' else result
+        return final_display, roi, result, vis, None
+
+
     # ── 1. Uydu koleksiyonunu ve bant adlarını seç ──────────────
     if satellite == 's2-l2a':
         col = (ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
@@ -4702,6 +5305,67 @@ def build_result_image(data, for_export=False):
                       .add(fuel.multiply(0.5))
                       .rename('value'))
         vis = {'min': 0, 'max': 1, 'palette': ['black', 'white']}
+
+    # 🆕 FAZ 12 — bu iki analiz, ana uydu-indeks zincirinde kalır (erken
+    # bloktaki 24 analizin AKSİNE) çünkü ikisi de mevcut optik uydu/bant
+    # seçimini (image_refl/b) DOĞRUDAN kullanır.
+    elif index == 'LST_LULC_CORRELATION':
+        # 🧪 LST'nin, pikselin kendi arazi örtüsü (LULC) sınıfının ortalama
+        # sıcaklığına göre SAPMASI — gerçek istatistiksel bir korelasyon
+        # katsayısı (Pearson r) DEĞİLDİR (bu, uzamsal/zamansal örneklem
+        # çiftleri gerektirir; piksel-bazlı bir görüntüde tanımsızdır).
+        # Ham °C sapması ±10°C'yi ölçek birimi kabul edip -1..+1 aralığına
+        # normalize edilir/kırpılır — böylece işaret (sınıf ortalamasından
+        # sıcak/soğuk) ve göreli büyüklük anlamlı kalırken, HTML'deki
+        # -1/+1 lejantıyla (diğer normalize indekslerle aynı ölçek
+        # kuralıyla) tutarlı bir görsel aralık sağlanır. Genel 7-kutulu
+        # histogram grafiği kullanılır; TOPO_CONTOUR'daki gibi ayrı bir
+        # "sınıf-bazlı ortalama" grafik yolu bilinçli olarak eklenmedi
+        # (kapsam/karmaşıklık dengesi).
+        if not b['thermal']:
+            raise ValueError(
+                'Bu analiz termal bant gerektirir. Lütfen Landsat 5/7/8/9 gibi '
+                'termal bant içeren bir uydu seçin (Sentinel-2 termal bant içermez).'
+            )
+        lst_c = (image.select(b['thermal'])
+                 .multiply(0.00341802).add(149.0).subtract(273.15).rename('lst'))
+        lulc = (ee.ImageCollection('GOOGLE/DYNAMICWORLD/V1')
+                .filterBounds(roi).filterDate(start_date, end_date)
+                .select('label').reduce(ee.Reducer.mode()).rename('lulc'))
+        _class_stats = _call_with_retry(
+            lambda: lst_c.addBands(lulc).reduceRegion(
+                reducer=ee.Reducer.mean().group(groupField=1, groupName='lulc'),
+                geometry=roi, scale=_stats_scale_for('LST_LULC_CORRELATION'),
+                maxPixels=1e9, bestEffort=True, tileScale=4
+            ).get('groups').getInfo()
+        )
+        if not _class_stats:
+            raise ValueError(
+                'Seçilen AOI için LULC sınıf ortalamaları hesaplanamadı (LST_LULC_CORRELATION).'
+            )
+        _class_codes = [int(g['lulc']) for g in _class_stats]
+        _class_avgs  = [float(g['mean']) for g in _class_stats]
+        class_mean_img = lulc.remap(_class_codes, _class_avgs)
+        result = lst_c.subtract(class_mean_img).divide(10.0).clamp(-1, 1).rename('value')
+        vis = {'min': -1, 'max': 1, 'palette': ['0000ff', 'ffffff', 'ff0000']}
+
+    elif index == 'WATER_QUALITY_PROXY':
+        # 🧪 Bulanıklık/klorofil VEKİL göstergesi — (Red-Green)/(Red+Green)
+        # oranı (NDTI benzeri), yalnızca su pikselleriyle (NDWI>0) maskelenir.
+        # Kalibre edilmiş klorofil-a/NTU bulanıklık ölçümü DEĞİLDİR (bu, S2
+        # red-edge bantlarına dayanan NDCI gibi bantlar VE in-situ kalibrasyon
+        # gerektirir; burada 9 uydunun TAMAMINDA ortak olan red/green/nir
+        # bantları kullanılır, satellite-agnostik kalması için). Yalnızca
+        # "bu su pikseli komşularına göre görece ne kadar bulanık/tortulu"
+        # sorusuna kaba bir yaklaşıklık sunar. Temiz su daha DÜŞÜK (negatif),
+        # bulanık su daha YÜKSEK (pozitif) değer alır (HTML lejantı
+        # legend-min="Temiz" legend-max="Bulanık" ile eşleşir).
+        green = image_refl.select(b['green'])
+        red   = image_refl.select(b['red'])
+        ndwi_mask = image_refl.normalizedDifference([b['green'], b['nir']]).gt(0)
+        turbidity = red.subtract(green).divide(red.add(green).max(1e-6))
+        result = turbidity.updateMask(ndwi_mask).rename('value')
+        vis = {'min': -0.3, 'max': 0.3, 'palette': ['1a9850', 'ffffbf', '8b4513']}
 
     else:
         result = image_refl.normalizedDifference([b['nir'], b['red']]).rename('value')
