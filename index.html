@@ -17498,11 +17498,18 @@ function selectRamp(name) {
                 _gState.meta    = meta;
                 _gState.sortKey = 'date';
                 _gState.sortAsc = false; // en güncel önce
+                // 🛠️ BUG FİX (Görüntü yüklenemedi: isStackMode is not defined):
+                // loadRgbScene() içinde isStackMode kullanılıyor ama fonksiyon
+                // bu parametreyi hiç almıyordu. Artık fetchRgbGallery'nin kendi
+                // isStackMode değeri hem gState'e kaydediliyor (galeri kartına
+                // tıklanınca da hatırlansın diye) hem de loadRgbScene çağrısına
+                // doğrudan aktarılıyor.
+                _gState.isStackMode = !!isStackMode;
                 renderRgbGalleryCards(paneId);
 
                 // Galeri açılınca bu veri setinin en güncel sahnesi otomatik gösterilir.
                 var first = _sortedRgbScenes(paneId, _rgbStateKey)[0];
-                if (first) loadRgbScene(first.sceneId, meta, data.dataset, paneId, true, mirrorThisRun, stackKey, friendlyLabel);
+                if (first) loadRgbScene(first.sceneId, meta, data.dataset, paneId, true, mirrorThisRun, stackKey, friendlyLabel, isStackMode);
                 _ensureDefaultVisibility();
             })
             .catch(function(err) {
@@ -17627,7 +17634,7 @@ function selectRamp(name) {
                     galleryEl.querySelectorAll('.gallery-item[data-dataset-key="' + dk + '"]').forEach(function(i) { i.classList.remove('active'); });
                     div.classList.add('active');
                     _gState.activeSceneId = scene.sceneId;
-                    loadRgbScene(scene.sceneId, meta, ds, paneId, false, false, dk, window._sylvaLayerFriendlyNames && window._sylvaLayerFriendlyNames['RGB::' + dk]);
+                    loadRgbScene(scene.sceneId, meta, ds, paneId, false, false, dk, window._sylvaLayerFriendlyNames && window._sylvaLayerFriendlyNames['RGB::' + dk], _gState.isStackMode);
                 });
                 galleryEl.appendChild(div);
             });
@@ -17660,7 +17667,15 @@ function selectRamp(name) {
         // AOI'ye odaklar ve dinamik bilgi kutusu/lejantı + Görüntü Bilgileri
         // panelini günceller. paneId verilmezse aktif ekran kullanılır — bu
         // sayede aynı akış Ekran 1 ve Ekran 2'de birebir aynı şekilde çalışır.
-        function loadRgbScene(sceneId, meta, dsInfo, paneId, _isInitialRun, _mirrorThisRun, stackKey, friendlyLabel) {
+        function loadRgbScene(sceneId, meta, dsInfo, paneId, _isInitialRun, _mirrorThisRun, stackKey, friendlyLabel, isStackMode) {
+            // 🛠️ BUG FİX (Görüntü yüklenemedi: isStackMode is not defined):
+            // bu parametre önceden hiç tanımlı değildi, fonksiyon gövdesinde
+            // (aşağıda) doğrudan global/serbest bir değişken gibi kullanılıyordu.
+            // Çağıran hiçbir yer bunu geçmediği için tarayıcı ReferenceError
+            // fırlatıyor, .catch() bloğu bunu yakalayıp kullanıcıya
+            // "Görüntü yüklenemedi: isStackMode is not defined" toast'ı olarak
+            // gösteriyordu — özellikle bir uydu görüntüsü seçilip tıklandığında.
+            isStackMode = !!isStackMode;
             paneId = (paneId === 'map2') ? 'map2' : 'map';
             var _rgbStateKey = stackKey || meta.datasetKey;
             var _aoiForPane = (paneId === 'map2') ? currentLayer2 : currentLayer;
