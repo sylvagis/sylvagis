@@ -3647,6 +3647,24 @@ def build_result_image(data, for_export=False):
     if for_export:
         class_breaks = None
 
+    # Çevresel/Kentsel modüller çalışma alanı temellidir. Kullanıcı başka
+    # bir görünüm modunda olsa bile bu analizlerin çıktısı AOI dışına taşmaz;
+    # hem harita hem de istatistik/grafik aynı çalışma alanını temsil eder.
+    _env_urban_indices = {
+        'UHI_LST', 'UHI_TREND', 'LST_LULC_CORRELATION',
+        'WATER_OCCURRENCE', 'WATER_CHANGE', 'WATER_SEASONALITY',
+        'RESERVOIR_VOLUME', 'WATER_QUALITY_PROXY', 'VEG_CHANGE',
+        'FOREST_LOSS', 'BURN_SEVERITY', 'CANOPY_HEIGHT_BIOMASS',
+        'FOREST_HEALTH', 'URBAN_GROWTH', 'IMPERVIOUS_CHANGE',
+        'BUILDING_FOOTPRINT', 'NIGHTLIGHTS_ECONOMIC', 'DROUGHT_INDEX',
+        'FLOOD_MAPPING', 'LANDSLIDE_SUSCEPTIBILITY',
+        'DROUGHT_RISK_COMPOSITE', 'EARTHQUAKE_DAMAGE_PROXY',
+        'NO2_TIMESERIES', 'AEROSOL_OPTICAL_DEPTH', 'SO2_CO_ANOMALY',
+        'COASTLINE_CHANGE', 'SST_TREND'
+    }
+    if index in _env_urban_indices:
+        clip_mode = 'clip'
+
     roi = make_roi(roi_coords)
 
     # 🛠️ BUG FİX (ay/tarih filtresi HİÇBİR ANALİZ MODÜLÜNDE uygulanmıyordu):
@@ -5063,6 +5081,14 @@ def build_result_image(data, for_export=False):
     # görüntüye ayrı ayrı uygulanır ki hem tek sahne (scene_id) hem de
     # medyan kompozit (median()) modunda export edilen GeoTIFF'te AOI
     # içinde rastgele beyaz/boşluk (NoData) pikselleri kalmasın.
+    # Maskelenmemiş koleksiyonu ayrıca sakla. Piksel-bazlı bulut maskesi
+    # bilimsel olarak tercih edilen ilk kaynaktır; fakat tüm AOI'nin yalnızca
+    # küçük bir bölümünde geçerli piksel bıraktığında değişim analizleri
+    # haritada "tek karo" gibi görünüyordu. Aşağıda maskeli kompozitteki
+    # geniş boşluklar yalnızca son çare olarak bu yedek kompozitle kapatılır.
+    # Böylece her analiz çalışma alanının tamamında görüntülenir; temiz
+    # pikseller her zaman maskeli/orijinal kompozitten gelmeye devam eder.
+    raw_col = col
     col = col.map(lambda img: _mask_clouds(img, satellite))
 
     # ── 2. Tarih filtresi veya belirli sahne ────────────────────
@@ -5082,6 +5108,14 @@ def build_result_image(data, for_export=False):
         # cloud-masking'den (yukarıdaki col.map) SONRA çalıştığı için
         # doldurma sahnelerinde de bulut/gölge pikselleri zaten maskelidir.
         image = _fill_scene_gaps_with_same_day_mosaic(col, _selected_image, scene_id, roi)
+        _raw_selected = _require_nonempty_image(
+            raw_col.filter(ee.Filter.eq('system:index', scene_id)).first(),
+            'Seçilen sahnenin yedek görüntüsü bulunamadı.'
+        )
+        _raw_fallback = _fill_scene_gaps_with_same_day_mosaic(
+            raw_col, _raw_selected, scene_id, roi
+        )
+        image = image.unmask(_raw_fallback)
     else:
         # 🛠️ BUG FİX (ay filtresi): bkz. fonksiyon başındaki month_filter
         # açıklaması — seçiliyse burada filterDate() sonrasına eklenir.
@@ -5100,6 +5134,12 @@ def build_result_image(data, for_export=False):
             'uydu görüntüsü bulunamadı. Lütfen filtreleri genişletin.'
         )
         image = _dated_col.median()
+        # AOI'nin tamamını kapsayan maskelenmemiş dönem kompoziti yalnızca
+        # bulut/gölge maskesinin boş bıraktığı pikselleri doldurur.
+        _raw_dated_col = raw_col.filterDate(start_date, end_date)
+        if month_filter is not None:
+            _raw_dated_col = _raw_dated_col.filter(month_filter)
+        image = image.unmask(_raw_dated_col.median())
         # 🛠️ BUG FİX (KÖK NEDEN — CRS seçici HER ZAMAN "WGS 84" gösteriyordu):
         # ee.ImageCollection.median() (ve mean()/mosaic() gibi diğer reducer'lar)
         # çıktı görüntünün projeksiyonunu, kaynak sahnelerin gerçek UTM dilimi
