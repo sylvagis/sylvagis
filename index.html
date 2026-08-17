@@ -3292,16 +3292,21 @@ tr.class-highlight-active {
 .sylva-dp-icon{font-size:0.78rem;}
 .sylva-dp-popup{display:none;position:absolute;top:calc(100% + 2px);left:0;z-index:9999;background:#fff;border:1px solid #cbd5e1;border-radius:8px;box-shadow:0 4px 18px rgba(0,0,0,.13);padding:6px 6px 5px;width:168px;font-size:0.68rem;}
 .sylva-dp-popup.open{display:block;}
-/* End picker açılır menüsü sağa yaslı — taşma önlemi */
-#dp-popup-end{left:auto;right:0;}
-/* Date range row — kompakt + taşma önleme (overflow:hidden YOK — popup kırpılmasın) */
-#date-range-row{gap:5px;min-width:0;}
-#date-range-row .control-group{gap:2px;min-width:0;overflow:visible;}
-#date-range-row .control-group label{font-size:0.72rem;}
-#date-range-row .sylva-dp-wrap{min-width:0;max-width:100%;box-sizing:border-box;overflow:visible;}
-#date-range-row .sylva-dp-input-row{min-width:0;max-width:100%;box-sizing:border-box;}
+/* End picker açılır menüsü sağa yaslı — taşma önlemi
+   🆕 Dönem 2 (end2) aynı kurala tabi değildi, bu yüzden Dönem 2'nin
+   Bitiş takvimi sağdan taşıyordu — end ile birlikte end2 de eklendi. */
+#dp-popup-end,#dp-popup-end2{left:auto;right:0;}
+/* Date range row — kompakt + taşma önleme (overflow:hidden YOK — popup kırpılmasın)
+   🆕 Aynı kompakt/taşma-önleme kuralları Dönem 2 satırına (#date-range-row-2)
+   da uygulanıyor — daha önce yalnızca Dönem 1'e (#date-range-row) tanımlıydı,
+   bu da Dönem 2 kutularının düzeninin bozuk görünmesine yol açıyordu. */
+#date-range-row,#date-range-row-2{gap:5px;min-width:0;}
+#date-range-row .control-group,#date-range-row-2 .control-group{gap:2px;min-width:0;overflow:visible;}
+#date-range-row .control-group label,#date-range-row-2 .control-group label{font-size:0.72rem;}
+#date-range-row .sylva-dp-wrap,#date-range-row-2 .sylva-dp-wrap{min-width:0;max-width:100%;box-sizing:border-box;overflow:visible;}
+#date-range-row .sylva-dp-input-row,#date-range-row-2 .sylva-dp-input-row{min-width:0;max-width:100%;box-sizing:border-box;}
 /* .control-group input{padding:8px} specificity(0,1,1) → !important ile geçersiz kıl */
-#date-range-row .sylva-dp-text{padding:2px 4px !important;height:24px !important;font-size:0.69rem !important;box-sizing:border-box !important;}
+#date-range-row .sylva-dp-text,#date-range-row-2 .sylva-dp-text{padding:2px 4px !important;height:24px !important;font-size:0.69rem !important;box-sizing:border-box !important;}
 .sylva-dp-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;gap:2px;}
 .sylva-dp-nav{background:none;border:none;cursor:pointer;font-size:0.95rem;color:#1e3a8a;padding:1px 4px;border-radius:3px;line-height:1;}
 .sylva-dp-nav:hover{background:#eff6ff;}
@@ -3858,6 +3863,72 @@ tr.class-highlight-active {
                 </div>
             </div>
 
+            <!-- ============================================================
+                 🆕 ADIM 3 — ÇİFT TARİH (Dönem 2) UI BLOĞU
+                 ------------------------------------------------------------
+                 Yukarıdaki #date-range-row / #cloud-control-group ile AYNI
+                 yapının bağımsız bir kopyası. Yalnızca requiresSecondPeriod:true
+                 olan bir analiz seçiliyken görünür olur (bkz. aşağıdaki
+                 _sylvaSyncSecondPeriodUI ve getSelectedAnalysisMeta().
+                 requiresSecondPeriod). Varsayılan olarak GİZLİ.
+                 NOT: Bu blok yalnızca UI/görünürlük katmanıdır — 2. dönem
+                 tarihlerinin GEE analiz isteğine (dispatch) gönderilmesi
+                 ayrı bir adımın kapsamındadır.
+                 ============================================================ -->
+            <div id="period2-section" style="display:none;margin-top:10px;padding-top:10px;border-top:1px dashed #cbd5e1;">
+                <h2 id="date-section-title-2" data-i18n="date_title_2">Dönem 2</h2>
+                <div class="tool-row" id="date-range-row-2">
+                    <div class="control-group" style="flex: 1;">
+                        <label data-i18n="date_start">Başlangıç</label>
+                        <div class="sylva-dp-wrap" id="dp-wrap-start2">
+                            <input type="date" id="date-start2" style="position:absolute;opacity:0;pointer-events:none;width:1px;height:1px;">
+                            <div class="sylva-dp-input-row">
+                                <input type="text" class="sylva-dp-text" id="dp-text-start2"
+                                       placeholder="GG.AA.YYYY" autocomplete="off" spellcheck="false"
+                                       inputmode="numeric" data-i18n-aria-label="aria_start_date" aria-label="Dönem 2 başlangıç tarihi">
+                                <button type="button" class="sylva-dp-icon-btn" id="dp-btn-start2" data-i18n-title="dp_toggle_calendar" title="Takvimi aç / kapat">📅</button>
+                            </div>
+                            <div class="sylva-dp-popup" id="dp-popup-start2"></div>
+                        </div>
+                    </div>
+                    <div class="control-group" style="flex: 1;">
+                        <label data-i18n="date_end">Bitiş</label>
+                        <div class="sylva-dp-wrap" id="dp-wrap-end2">
+                            <input type="date" id="date-end2" style="position:absolute;opacity:0;pointer-events:none;width:1px;height:1px;">
+                            <div class="sylva-dp-input-row">
+                                <input type="text" class="sylva-dp-text" id="dp-text-end2"
+                                       placeholder="GG.AA.YYYY" autocomplete="off" spellcheck="false"
+                                       inputmode="numeric" data-i18n-aria-label="aria_end_date" aria-label="Dönem 2 bitiş tarihi">
+                                <button type="button" class="sylva-dp-icon-btn" id="dp-btn-end2" data-i18n-title="dp_toggle_calendar" title="Takvimi aç / kapat">📅</button>
+                            </div>
+                            <div class="sylva-dp-popup" id="dp-popup-end2"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 🆕 Dönem 1'deki #month-control-group ile birebir aynı yapının
+                     Dönem 2 kopyası — önceden burada yoktu, Ay Seçimi kutusu
+                     yalnızca Dönem 1'de mevcuttu. -->
+                <div class="control-group" id="month-control-group-2">
+                    <label data-i18n="month_label_2">Ay Seçimi — Dönem 2</label>
+                    <div class="sylva-month-select" id="month-select-wrap-2">
+                        <button type="button" class="sylva-month-select-btn" id="month-select-btn-2" aria-haspopup="true" aria-expanded="false">
+                            <span class="sylva-month-select-label" id="month-select-label-2">(tümü)</span>
+                            <span class="sylva-month-select-caret">▾</span>
+                        </button>
+                        <div class="sylva-month-select-panel" id="month-select-panel-2"></div>
+                    </div>
+                </div>
+
+                <div class="control-group" id="cloud-control-group-2">
+                    <label for="cloud-slider-2" data-i18n="cloud_label_2">Bulutluluk Oranı (Maks) — Dönem 2</label>
+                    <div class="slider-group">
+                        <input type="range" id="cloud-slider-2" min="0" max="100" value="10">
+                        <span class="slider-val" id="cloud-val-2">%10</span>
+                    </div>
+                </div>
+            </div>
+
             <h2 data-i18n="analysis_modules">Analiz ve Veri Modülleri</h2>
 
 
@@ -4394,7 +4465,7 @@ tr.class-highlight-active {
             </script>
 
 
-            <details class="main-module-details">
+            <details class="main-module-details" id="env-urban-analyses-details">
                 <summary><span data-i18n="sec_env_urban">🌆 Çevresel ve Kentsel Analizler</span></summary>
                 <div class="details-content">
                     <div style="font-size:0.68rem;color:#64748b;margin-bottom:6px;" data-i18n="env_urban_desc">
@@ -4402,36 +4473,55 @@ tr.class-highlight-active {
                         (uydu görüntüsü, DEM, çok-zamanlı seri) bir araya getiren bileşik
                         çevresel ve kentsel analizler.
                     </div>
-                    <div style="margin-bottom:8px;"><span class="env-coming-soon-badge sylva-badge-blink" data-i18n="env_coming_soon">🔒 Yakında</span></div>
 
                     <div class="option-list">
                         <!-- Kentsel Isı Adası -->
-                        <div class="sensor-group-label" data-i18n="env_uhi_group">🌡️ Kentsel Isı Adası Analizleri</div>
-                        <label class="option-item env-disabled-item"><input type="checkbox" name="sylva-module" disabled data-analysis="UHI_LST" data-ramp-key="heat" data-legend-type="stretched" data-legend-min="-10°C" data-legend-max="+10°C"> <span data-i18n="env_uhi_lst">Kentsel Isı Adası Yoğunluğu (UHI Intensity)</span></label>
-                        <label class="option-item env-disabled-item"><input type="checkbox" name="sylva-module" disabled data-analysis="UHI_TREND" data-ramp-key="heat" data-legend-type="stretched" data-legend-min="-5°C" data-legend-max="+5°C"> <span data-i18n="env_uhi_trend">Zamansal Isı Değişim Trendi (LST Trend)</span></label>
+                        <div class="sensor-group-label" data-i18n="env_uhi_group">🌡️ Kentsel Isı Adası</div>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="UHI_LST" data-chart-type="bar" data-ramp-key="heat" data-legend-type="stretched" data-legend-min="-10°C" data-legend-max="+10°C"> <span data-i18n="env_uhi_lst">Kentsel Isı Adası Yoğunluğu</span></label>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="UHI_TREND" data-chart-type="line" data-ramp-key="heat" data-legend-type="stretched" data-legend-min="-5°C" data-legend-max="+5°C" data-requires-second-period="true"> <span data-i18n="env_uhi_trend">Zamansal Isı Değişim Trendi</span></label>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="LST_LULC_CORRELATION" data-chart-type="bar" data-ramp-key="rainbow" data-legend-type="stretched" data-legend-min="-1" data-legend-max="+1"> <span data-i18n="env_lst_lulc_corr">Arazi Örtüsü–Sıcaklık İlişkilendirme</span></label>
 
-                        <!-- Su Yüzeyi ve Hidrografi Değişimleri -->
-                        <div class="sensor-group-label" style="margin-top:8px;" data-i18n="env_water_group">💧 Su Yüzeyi Değişim Analizleri</div>
-                        <label class="option-item env-disabled-item"><input type="checkbox" name="sylva-module" disabled data-analysis="WATER_OCCURRENCE" data-ramp-key="blue-ocean" data-legend-type="stretched" data-legend-min="0%" data-legend-max="100%"> <span data-i18n="env_water_occ">Su Yüzeyi Geçmişi (Surface Water Occurrence)</span></label>
-                        <label class="option-item env-disabled-item"><input type="checkbox" name="sylva-module" disabled data-analysis="WATER_CHANGE" data-ramp-key="red-yellow-green" data-legend-type="stretched" data-legend-min="Kayıp" data-legend-max="Kazanım"> <span data-i18n="env_water_change">Su Yüzeyi Değişim Alanları (Çok-zamanlı NDWI Farkı)</span></label>
-                        <label class="option-item env-disabled-item"><input type="checkbox" name="sylva-module" disabled data-analysis="WATER_SEASONALITY" data-ramp-key="rainbow" data-legend-type="stretched" data-legend-min="0 ay" data-legend-max="12 ay"> <span data-i18n="env_water_season">Mevsimsel Su Değişimi (Seasonality)</span></label>
+                        <!-- Su Yüzeyi ve Hidroloji -->
+                        <div class="sensor-group-label" style="margin-top:8px;" data-i18n="env_water_group">💧 Su Yüzeyi ve Hidroloji</div>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="WATER_OCCURRENCE" data-chart-type="pie" data-ramp-key="blue-ocean" data-legend-type="stretched" data-legend-min="0%" data-legend-max="100%"> <span data-i18n="env_water_occ">Su Yüzeyi Geçmişi</span></label>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="WATER_CHANGE" data-chart-type="bar" data-ramp-key="red-yellow-green" data-legend-type="stretched" data-legend-min="Kayıp" data-legend-max="Kazanım" data-requires-second-period="true"> <span data-i18n="env_water_change">Su Yüzeyi Değişim Alanları</span></label>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="WATER_SEASONALITY" data-chart-type="pie" data-ramp-key="rainbow" data-legend-type="stretched" data-legend-min="0 ay" data-legend-max="12 ay"> <span data-i18n="env_water_season">Mevsimsel Su Değişimi</span></label>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="RESERVOIR_VOLUME" data-chart-type="line" data-ramp-key="blue-ocean" data-legend-type="stretched" data-legend-min="Azalma" data-legend-max="Artış" data-requires-second-period="true"> <span data-i18n="env_reservoir_volume">Rezervuar/Göl Hacim Değişim Tahmini</span></label>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="WATER_QUALITY_PROXY" data-chart-type="bar" data-ramp-key="rainbow" data-legend-type="stretched" data-legend-min="Temiz" data-legend-max="Bulanık"> <span data-i18n="env_water_quality">Su Kalitesi Proxy</span></label>
 
                         <!-- Bitki Örtüsü ve Orman Değişimi -->
                         <div class="sensor-group-label" style="margin-top:8px;" data-i18n="env_veg_group">🌳 Bitki Örtüsü ve Orman Değişimi</div>
-                        <label class="option-item env-disabled-item"><input type="checkbox" name="sylva-module" disabled data-analysis="VEG_CHANGE" data-ramp-key="red-yellow-green" data-legend-type="stretched" data-legend-min="-1" data-legend-max="+1"> <span data-i18n="env_veg_change">Bitki Örtüsü Değişimi (Çok-zamanlı NDVI Farkı)</span></label>
-                        <label class="option-item env-disabled-item"><input type="checkbox" name="sylva-module" disabled data-analysis="FOREST_LOSS" data-ramp-key="heat" data-legend-type="classified" data-legend-classes='[{"color":"#397d49","label":"Orman (Değişmeyen)"},{"color":"#e11d48","label":"Orman Kaybı"},{"color":"#22c55e","label":"Orman Kazanımı"}]'> <span data-i18n="env_forest_loss">Orman Kaybı / Kazanımı (Forest Change)</span></label>
-                        <label class="option-item env-disabled-item"><input type="checkbox" name="sylva-module" disabled data-analysis="BURN_SEVERITY" data-ramp-key="heat" data-legend-type="stretched" data-legend-min="-0.5" data-legend-max="+1.0"> <span data-i18n="env_burn_sev">Yanık Şiddeti (dNBR — Öncesi/Sonrası)</span></label>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="VEG_CHANGE" data-chart-type="bar" data-ramp-key="red-yellow-green" data-legend-type="stretched" data-legend-min="-1" data-legend-max="+1" data-requires-second-period="true"> <span data-i18n="env_veg_change">Bitki Örtüsü Değişimi</span></label>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="FOREST_LOSS" data-chart-type="pie" data-ramp-key="heat" data-legend-type="classified" data-legend-classes='[{"color":"#397d49","label":"Orman (Değişmeyen)"},{"color":"#e11d48","label":"Orman Kaybı"},{"color":"#22c55e","label":"Orman Kazanımı"}]'> <span data-i18n="env_forest_loss">Orman Kaybı/Kazanımı</span></label>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="BURN_SEVERITY" data-chart-type="pie" data-ramp-key="heat" data-legend-type="stretched" data-legend-min="-0.5" data-legend-max="+1.0" data-requires-second-period="true"> <span data-i18n="env_burn_sev">Yanık Şiddeti</span></label>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="CANOPY_HEIGHT_BIOMASS" data-chart-type="bar" data-ramp-key="rainbow" data-legend-type="stretched" data-legend-min="0 m" data-legend-max="40 m"> <span data-i18n="env_canopy_biomass">Kanopi Yüksekliği / Biyokütle-Karbon</span></label>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="FOREST_HEALTH" data-chart-type="line" data-ramp-key="red-yellow-green" data-legend-type="stretched" data-legend-min="Zayıf" data-legend-max="Sağlıklı" data-requires-second-period="true"> <span data-i18n="env_forest_health">Orman Sağlığı İzleme</span></label>
 
                         <!-- Kentsel Gelişim ve Arazi Değişimi -->
                         <div class="sensor-group-label" style="margin-top:8px;" data-i18n="env_urban_dev_group">🏙️ Kentsel Gelişim ve Arazi Değişimi</div>
-                        <label class="option-item env-disabled-item"><input type="checkbox" name="sylva-module" disabled data-analysis="URBAN_GROWTH" data-ramp-key="rainbow" data-legend-type="classified" data-legend-classes='[{"color":"#94a3b8","label":"Değişmeyen"},{"color":"#c4281b","label":"Yeni Kentsel Alan"}]'> <span data-i18n="env_urban_growth">Kentsel Genişleme Analizi (Çok-zamanlı LULC Farkı)</span></label>
-                        <label class="option-item env-disabled-item"><input type="checkbox" name="sylva-module" disabled data-analysis="IMPERVIOUS_CHANGE" data-ramp-key="gray" data-legend-type="stretched" data-legend-min="0%" data-legend-max="100%"> <span data-i18n="env_impervious">Geçirimsiz Yüzey Değişimi (Impervious Surface)</span></label>
-                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="BUILDING_FOOTPRINT" data-ramp-key="gray" data-legend-type="classified" data-legend-classes='[{"color":"#dc2626","label":"Bina Çatı Poligonu"},{"color":"#cbd5e1","label":"Bina Dışı Alan"}]'> <span data-i18n="building_roof_detection">Bina Çatı Tespiti</span></label>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="URBAN_GROWTH" data-chart-type="pie" data-ramp-key="rainbow" data-legend-type="classified" data-legend-classes='[{"color":"#94a3b8","label":"Değişmeyen"},{"color":"#c4281b","label":"Yeni Kentsel Alan"}]' data-requires-second-period="true"> <span data-i18n="env_urban_growth">Kentsel Genişleme</span></label>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="IMPERVIOUS_CHANGE" data-chart-type="bar" data-ramp-key="gray" data-legend-type="stretched" data-legend-min="0%" data-legend-max="100%" data-requires-second-period="true"> <span data-i18n="env_impervious">Geçirimsiz Yüzey Değişimi</span></label>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="BUILDING_FOOTPRINT" data-chart-type="bar" data-ramp-key="gray" data-legend-type="classified" data-legend-classes='[{"color":"#dc2626","label":"Bina Çatı Poligonu"},{"color":"#cbd5e1","label":"Bina Dışı Alan"}]'> <span data-i18n="building_roof_detection">Bina Çatı Tespiti</span></label>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="NIGHTLIGHTS_ECONOMIC" data-chart-type="line" data-ramp-key="heat" data-legend-type="stretched" data-legend-min="Azalma" data-legend-max="Artış" data-requires-second-period="true"> <span data-i18n="env_nightlights">Gece Işıkları — Ekonomik Aktivite Değişimi</span></label>
 
                         <!-- Çevresel Risk ve İzleme -->
                         <div class="sensor-group-label" style="margin-top:8px;" data-i18n="env_risk_group">⚠️ Çevresel Risk ve İzleme</div>
-                        <label class="option-item env-disabled-item"><input type="checkbox" name="sylva-module" disabled data-analysis="DROUGHT_INDEX" data-ramp-key="brown" data-legend-type="stretched" data-legend-min="0" data-legend-max="1"> <span data-i18n="env_drought">Kuraklık İzleme (Toprak Nemi / SPI Bazlı)</span></label>
-                        <label class="option-item env-disabled-item"><input type="checkbox" name="sylva-module" disabled data-analysis="FLOOD_MAPPING" data-ramp-key="blue-ocean" data-legend-type="stretched" data-legend-min="Kara" data-legend-max="Su Baskını"> <span data-i18n="env_flood">Sel / Taşkın Haritalama (SAR Bazlı)</span></label>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="DROUGHT_INDEX" data-chart-type="line" data-ramp-key="brown" data-legend-type="stretched" data-legend-min="0" data-legend-max="1"> <span data-i18n="env_drought">Kuraklık İzleme</span></label>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="FLOOD_MAPPING" data-chart-type="pie" data-ramp-key="blue-ocean" data-legend-type="stretched" data-legend-min="Kara" data-legend-max="Su Baskını" data-requires-second-period="true"> <span data-i18n="env_flood">Sel/Taşkın Haritalama</span></label>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="LANDSLIDE_SUSCEPTIBILITY" data-chart-type="pie" data-ramp-key="heat" data-legend-type="stretched" data-legend-min="Düşük" data-legend-max="Yüksek"> <span data-i18n="env_landslide">Heyelan Duyarlılık Haritası</span></label>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="DROUGHT_RISK_COMPOSITE" data-chart-type="bar" data-ramp-key="brown" data-legend-type="stretched" data-legend-min="0" data-legend-max="1"> <span data-i18n="env_drought_risk_composite">Kuraklık Riski Kompozit İndeksi</span></label>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="EARTHQUAKE_DAMAGE_PROXY" data-chart-type="pie" data-ramp-key="heat" data-legend-type="stretched" data-legend-min="Hasarsız" data-legend-max="Ağır Hasar" data-requires-second-period="true"> <span data-i18n="env_earthquake_damage">Deprem Sonrası Hasar Proxy</span></label>
+
+                        <!-- Hava Kalitesi -->
+                        <div class="sensor-group-label" style="margin-top:8px;" data-i18n="env_air_group">🌬️ Hava Kalitesi</div>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="NO2_TIMESERIES" data-chart-type="line" data-ramp-key="rainbow" data-legend-type="stretched" data-legend-min="Düşük" data-legend-max="Yüksek"> <span data-i18n="env_no2_series">NO₂ Zaman Serisi</span></label>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="AEROSOL_OPTICAL_DEPTH" data-chart-type="bar" data-ramp-key="rainbow" data-legend-type="stretched" data-legend-min="0" data-legend-max="1"> <span data-i18n="env_aerosol_depth">Aerosol Optik Derinliği</span></label>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="SO2_CO_ANOMALY" data-chart-type="line" data-ramp-key="heat" data-legend-type="stretched" data-legend-min="Normal" data-legend-max="Anomali"> <span data-i18n="env_so2_co_anomaly">SO₂/CO Anomali Haritası</span></label>
+
+                        <!-- Kıyı ve Deniz -->
+                        <div class="sensor-group-label" style="margin-top:8px;" data-i18n="env_coastal_group">🏖️ Kıyı ve Deniz</div>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="COASTLINE_CHANGE" data-chart-type="bar" data-ramp-key="blue-ocean" data-legend-type="stretched" data-legend-min="Erozyon" data-legend-max="Birikim" data-requires-second-period="true"> <span data-i18n="env_coastline_change">Kıyı Çizgisi Değişimi</span></label>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="SST_TREND" data-chart-type="line" data-ramp-key="heat" data-legend-type="stretched" data-legend-min="-2°C" data-legend-max="+2°C"> <span data-i18n="env_sst_trend">Deniz Yüzey Sıcaklığı (SST) Trend</span></label>
                     </div>
                 </div>
             </details>
@@ -5543,7 +5633,7 @@ tr.class-highlight-active {
                     <button type="button" id="btn-chart-pie" class="btn-tool" style="flex:1; font-size:0.8rem;" data-i18n="pie_chart">🥧 Pasta Grafik</button>
                     <button type="button" id="btn-chart-line" class="btn-tool" style="flex:1; font-size:0.8rem;" data-i18n="ts_chart_line_btn">📈 Line Chart</button>
                 </div>
-                <div id="stats-chart-svg-wrap" class="chart-placeholder" style="height:auto; min-height:120px; flex-direction:column; padding:10px;"><div style="display:flex;align-items:center;justify-content:center;height:80px;color:#94a3b8;font-size:0.78rem;text-align:center;padding:0 12px;" id="chart-empty-placeholder" data-i18n="chart_empty">📊 🥧 Analiz tamamlandığında sınıflandırılmış verilerin alan ve yüzde dağılımı burada görünecek.</div><div style="font-size:0.7rem;color:#64748b;text-align:center;padding:2px 12px 6px;line-height:1.4;" data-i18n="chart_line_note">📈 Çizgi Grafik yalnızca Zaman Serisi ve Değişim Analizi için özeldir.</div></div>
+                <div id="stats-chart-svg-wrap" class="chart-placeholder" style="height:auto; min-height:120px; flex-direction:column; padding:10px;"><div style="display:flex;align-items:center;justify-content:center;height:80px;color:#94a3b8;font-size:0.78rem;text-align:center;padding:0 12px;" id="chart-empty-placeholder" data-i18n="chart_empty">Sınıflandırılmış verilerin dağılım ve yüzdelik oranlarını karşılaştırmalı olarak gösterir.</div></div>
                 <div id="stats-chart-table"></div>
 
                 <!-- İndirme butonları — analiz çalıştıktan sonra tabloyu/grafiği dışa aktarır -->
@@ -9691,6 +9781,68 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
         }
 
         // ===========================================================
+        // 🆕 🌆 Çevresel ve Kentsel Analizler paneli — TAM STATİK veri
+        // setleri: bunlar JRC/Hansen/GEDI gibi tek bir sabit tarih
+        // aralığını kapsayan HAZIR (precomputed) composite ürünlerdir;
+        // kullanıcının bir tarih aralığı, ay ya da bulut oranı seçmesinin
+        // hiçbir karşılığı yoktur (BUILDING_FOOTPRINT ile aynı mantık,
+        // bkz. isBuildingFootprintAnalysis). Bu yüzden bu analizlerden
+        // biri seçiliyken Tarih Aralığı + Ay Seçimi + Bulut Oranı bloğu
+        // TAMAMEN pasif olur (LULC/TOPO ile birebir aynı davranış);
+        // başka (tarihe ihtiyaç duyan) bir kutu seçildiğinde ise blok
+        // otomatik olarak yeniden aktif hale döner (bkz. isStatic
+        // kullanımı, _updateDateCloudControlsVisibility içinde).
+        //   - WATER_OCCURRENCE / WATER_SEASONALITY → JRC Global Surface Water
+        //   - FOREST_LOSS                          → Hansen Global Forest Change
+        //   - CANOPY_HEIGHT_BIOMASS                → GEDI/global kanopi yüksekliği (tek zaman damgalı)
+        // Not: data-requires-second-period taşıyan (2 dönem karşılaştıran)
+        // analizler burada YER ALMAZ — onlar tarihe hâlâ ihtiyaç duyar.
+        // ===========================================================
+        // 🛠️ BUG FİX (FAZ 12 — eksik tamamlama): LANDSLIDE_SUSCEPTIBILITY de
+        // (SRTM eğim + statik arazi örtüsü kompoziti) docx tablosunda "Yok
+        // (statik kompozit)" olarak işaretli — tıpkı yukarıdaki 4 analiz gibi
+        // tarihe hiç ihtiyaç duymuyor, ama bu listede eksikti.
+        var _ENV_URBAN_FULLY_STATIC_ANALYSES = [
+            'WATER_OCCURRENCE', 'WATER_SEASONALITY', 'FOREST_LOSS', 'CANOPY_HEIGHT_BIOMASS',
+            'LANDSLIDE_SUSCEPTIBILITY'
+        ];
+        function isEnvUrbanFullyStaticAnalysis(name) {
+            return _ENV_URBAN_FULLY_STATIC_ANALYSES.indexOf(name) !== -1;
+        }
+
+        // ===========================================================
+        // 🆕 ☁️ Bulut Oranı Önem Filtresi — hangi analizlerde "Bulutluluk
+        // Oranı (Maks)" kaydırıcısı GERÇEKTEN kullanılıyor?
+        // Kaynak: 27 analizlik tablo + veri kaynağı incelemesi.
+        //   1) SAR (Sentinel-1) tabanlı analizler → radar, bulut geçirir.
+        //   2) JRC/Hansen/Dynamic World/ESA/GEDI/VIIRS gibi HAZIR (precomputed)
+        //      composite ürünler → zaten bulutsuz, filtre uygulanamaz.
+        //   3) İklim/toprak nemi (CHIRPS/SMAP) → optik sensöre dayanmaz.
+        //   4) Sentinel-5P atmosferik analizler → kendi L2 QA (qa_value)
+        //      bayrağıyla filtrelenir, klasik "max bulut %" kavramı yok.
+        // Not: BUILDING_FOOTPRINT ve WATER_OCCURRENCE / WATER_SEASONALITY /
+        // FOREST_LOSS / CANOPY_HEIGHT_BIOMASS artık isBuildingFootprintAnalysis()
+        // / isEnvUrbanFullyStaticAnalysis() ile tam statik (tarih+ay+bulut)
+        // sayılıyor; bu listede de yer almaları zararsız (isStatic zaten
+        // öncelikli olarak devreye girip cloudIrrelevant kontrolünü ekarte eder).
+        // ===========================================================
+        var _CLOUD_IRRELEVANT_ANALYSES = [
+            'WATER_OCCURRENCE', 'WATER_SEASONALITY', 'RESERVOIR_VOLUME',
+            'FOREST_LOSS', 'CANOPY_HEIGHT_BIOMASS',
+            'URBAN_GROWTH', 'IMPERVIOUS_CHANGE', 'BUILDING_FOOTPRINT', 'NIGHTLIGHTS_ECONOMIC',
+            'DROUGHT_INDEX', 'FLOOD_MAPPING', 'LANDSLIDE_SUSCEPTIBILITY',
+            'DROUGHT_RISK_COMPOSITE', 'EARTHQUAKE_DAMAGE_PROXY',
+            'NO2_TIMESERIES', 'AEROSOL_OPTICAL_DEPTH', 'SO2_CO_ANOMALY',
+            // 🛠️ BUG FİX (FAZ 12 — eksik tamamlama): SST_TREND (NOAA OISST)
+            // zaten bulutsuz günlük kompozit bir üründür — bulut oranının bu
+            // analizde de hiçbir karşılığı yok, ama listede eksikti.
+            'SST_TREND'
+        ];
+        function isCloudIrrelevantAnalysis(name) {
+            return _CLOUD_IRRELEVANT_ANALYSES.indexOf(name) !== -1;
+        }
+
+        // ===========================================================
         // 📈 Zaman Serisi ve Değişim Analizi — erişim kademeleri
         // (bkz. HTML'deki #ts-subsection yorum bloğu). Statik veri
         // setleri (LULC/TOPO/SAR ailesi) zaman serisini desteklemez —
@@ -9752,7 +9904,8 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
         function _updateDateCloudControlsVisibility() {
             var meta = (typeof getSelectedAnalysisMeta === 'function') ? getSelectedAnalysisMeta() : null;
             var isStatic = !!(meta && (isLulcAnalysis(meta.analysisName) ||
-                isTopoAnalysis(meta.analysisName) || isBuildingFootprintAnalysis(meta.analysisName)));
+                isTopoAnalysis(meta.analysisName) || isBuildingFootprintAnalysis(meta.analysisName) ||
+                isEnvUrbanFullyStaticAnalysis(meta.analysisName)));
 
             var dateTitle = document.getElementById('date-section-title');
             var dateRow   = document.getElementById('date-range-row');
@@ -9784,6 +9937,23 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
                 if (monthWrap) monthWrap.classList.remove('open');
             }
 
+            // 🆕 ☁️ Bulut Oranı Önem Filtresi: LULC/TOPO/Bina (isStatic) DIŞINDA,
+            // ama veri kaynağı bulut filtresini desteklemeyen (SAR, hazır composite,
+            // iklim verisi, Sentinel-5P QA vb.) analizlerde SADECE bulut kaydırıcısı
+            // pasifleştirilir — tarih alanları ve Ay Seçimi normal (aktif) kalır,
+            // çünkü bu analizlerin çoğu hâlâ bir tarih aralığına ihtiyaç duyuyor.
+            var cloudIrrelevant = !isStatic && !!(meta && isCloudIrrelevantAnalysis(meta.analysisName));
+            var cloudGrp2 = document.getElementById('cloud-control-group-2');
+            var cloudSl2  = document.getElementById('cloud-slider-2');
+            [cloudGrp, cloudGrp2].forEach(function (el) {
+                if (!el) return;
+                el.style.opacity = cloudIrrelevant ? '0.35' : '';
+                el.style.pointerEvents = cloudIrrelevant ? 'none' : '';
+                el.style.userSelect = cloudIrrelevant ? 'none' : '';
+            });
+            if (cloudSl)  cloudSl.disabled  = isStatic || cloudIrrelevant;
+            if (cloudSl2) cloudSl2.disabled = cloudIrrelevant;
+
             _updateInfoBoxAvailability(isStatic);
             // 🆕 GÜNCELLEME: Eş Yükselti (TOPO_CONTOUR) seçiliyken de LULC ile
             // aynı şekilde Lejant ve Semboloji paneli (gradyan/sınıf düzenleyici)
@@ -9792,6 +9962,74 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
             _updateLulcRestrictedUI(!!(meta && (isLulcAnalysis(meta.analysisName) || meta.analysisName === 'TOPO_CONTOUR')));
             _setGalleryPanelRestricted(isStatic);
             _updateTsSubsectionAvailability();
+            // 🆕 ADIM 3 — Çift tarih UI mantığı: bu fonksiyon zaten her analiz
+            // seçim değişiminde (sylva-module, uydu-analiz-checkbox, uydu-veriseti-checkbox)
+            // çağrıldığı için, "Dönem 2" bloğunun açık/kapalı durumu da BURADA,
+            // tek merkezi noktadan, her seçim değişiminde yeniden değerlendirilir.
+            _sylvaSyncSecondPeriodUI(meta);
+        }
+
+        // ============================================================
+        // 🆕 ADIM 3 — Dönem 2 (çift tarih) UI bloğunun aç/kapa mantığı
+        // ------------------------------------------------------------
+        // NOT (kontrol edildi): "sylva-module" analiz kutucukları AYNI panel
+        // (details.main-module-details) içinde birbirini dışlamıyor — çoklu
+        // seçime izin veriliyor (bkz. ~line 10041 civarındaki karşılıklı
+        // dışlama kodu ve oradaki yorum). Yani "🌆 Çevresel ve Kentsel
+        // Analizler" panelinde aynı anda birden fazla kutu işaretli olabilir;
+        // bu tam anlamıyla radio-benzeri değil. Bu nedenle Dönem 2 bloğunun
+        // görünürlüğü, uygulamanın zaten "tek aktif analiz" olarak kabul
+        // ettiği getSelectedAnalysisMeta() sonucuna bağlanıyor (aynı öncelik
+        // sırası diğer tüm Lejant/Bilgi Kutusu/Galeri mantığında da kullanılıyor).
+        // Çoklu seçimde ikinci bloğun ne zaman gösterileceği konusu — ör.
+        // "herhangi biri çift dönem istiyorsa göster" — sonraki bir adımda
+        // netleştirilebilir; şimdilik mevcut tek-meta önceliğiyle tutarlı.
+        // ============================================================
+        var _sylvaPeriod2Initialized = false;
+        function _sylvaEnsurePeriod2Init() {
+            if (_sylvaPeriod2Initialized) return;
+            if (typeof window._sylvaDPInit === 'function') {
+                window._sylvaDPInit('start2');
+                window._sylvaDPInit('end2');
+            }
+            // 🆕 Dönem 1'de olduğu gibi Dönem 2 tarihleri de açılır açılmaz
+            // otomatik olarak "son 1 ay" ile dolduruluyor — önceden bu alanlar
+            // boş kalıyor, günler Dönem 1'deki gibi otomatik yazılmıyordu.
+            if (typeof window._sylvaSetDefaultDateRangePeriod2 === 'function') {
+                window._sylvaSetDefaultDateRangePeriod2();
+            }
+            var cs2 = document.getElementById('cloud-slider-2');
+            var cv2 = document.getElementById('cloud-val-2');
+            if (cs2 && cv2) {
+                cs2.addEventListener('input', function () { cv2.textContent = '%' + this.value; });
+            }
+            _sylvaPeriod2Initialized = true;
+        }
+        function _sylvaClearPeriod2() {
+            if (typeof window._sylvaDPSetValue === 'function') {
+                window._sylvaDPSetValue('start2', null);
+                window._sylvaDPSetValue('end2', null);
+            }
+            var cs2 = document.getElementById('cloud-slider-2');
+            var cv2 = document.getElementById('cloud-val-2');
+            if (cs2) cs2.value = 10;
+            if (cv2) cv2.textContent = '%10';
+        }
+        // explicitMeta verilmezse mevcut seçimi kendi hesaplar (bkz. yukarıdaki çağrı).
+        function _sylvaSyncSecondPeriodUI(explicitMeta) {
+            var section = document.getElementById('period2-section');
+            if (!section) return;
+            var meta = explicitMeta || ((typeof getSelectedAnalysisMeta === 'function') ? getSelectedAnalysisMeta() : null);
+            var needsSecond = !!(meta && meta.requiresSecondPeriod);
+            if (needsSecond) {
+                section.style.display = '';
+                _sylvaEnsurePeriod2Init();
+            } else if (section.style.display !== 'none') {
+                // Tarihsiz/tek-tarihli bir kutuya geçildi (ya da hiç seçim kalmadı):
+                // açık olan Dönem 2 bloğu temizlenip kapatılır.
+                _sylvaClearPeriod2();
+                section.style.display = 'none';
+            }
         }
 
         // 🏘️ Arazi Kullanımı / Land Cover ailesi seçiliyken:
@@ -10023,8 +10261,16 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
                 r.addEventListener('change', function () {
                     if (r.checked) {
                         var ownDetails = r.closest('details.main-module-details');
+                        // 🆕 "🌆 Çevresel ve Kentsel Analizler" panelinde artık TAM radio
+                        // davranışı isteniyor: bu panelin içinde aynı anda yalnızca 1 kutu
+                        // işaretli kalabilir. Diğer eski modül panelleri (Arazi Kullanımı,
+                        // DEM vb.) için önceki davranış (aynı panel içi çoklu seçime izin)
+                        // AYNEN korunuyor — yalnızca bu paneli hedefliyoruz.
+                        var isEnvUrbanPanel = !!(ownDetails && ownDetails.id === 'env-urban-analyses-details');
                         document.querySelectorAll('input[name="sylva-module"]:checked').forEach(function (other) {
-                            if (other !== r && other.closest('details.main-module-details') !== ownDetails) {
+                            if (other === r) return;
+                            var sameDetails = other.closest('details.main-module-details') === ownDetails;
+                            if (!sameDetails || (sameDetails && isEnvUrbanPanel)) {
                                 other.checked = false;
                             }
                         });
@@ -11592,7 +11838,10 @@ function selectRamp(name) {
                     classesRaw: null,
                     sensorKey: sensorRadio ? sensorRadio.value : null,
                     sensorLabel: sensorRadio ? sensorRadio.getAttribute('data-sensor-label') : null,
-                    needsGallery: true
+                    needsGallery: true,
+                    // 🆕 ADIM 3: .uydu-analiz-checkbox (NDVI/NDWI vb. galeri-bağımlı
+                    // indeksler) ailesinde şu an çift-dönem gerektiren analiz yok.
+                    requiresSecondPeriod: false
                 };
             }
 
@@ -11608,7 +11857,9 @@ function selectRamp(name) {
                     legendMin: '', legendMax: '',
                     classesRaw: null,
                     isRgbGallery: true,
-                    needsGallery: true
+                    needsGallery: true,
+                    // 🆕 ADIM 3: ham RGB galeri seçimi çift-dönem kavramına dahil değil.
+                    requiresSecondPeriod: false
                 };
             }
 
@@ -11623,7 +11874,17 @@ function selectRamp(name) {
                     legendMax: checked.getAttribute('data-legend-max') || '+1',
                     classesRaw: checked.getAttribute('data-legend-classes'),
                     sensorLabel: null,
-                    needsGallery: legendType === 'image'
+                    needsGallery: legendType === 'image',
+                    // 🆕 ADIM 3 — Çift tarih UI mantığı: bu analiz kutusu iki bağımsız
+                    // dönem (öncesi/sonrası) gerektiriyor mu? Kaynak: 27 analiz tablosundaki
+                    // "Tarih Gereksinimi" sütunu, HTML'deki data-requires-second-period
+                    // niteliğinden okunuyor (bkz. "🌆 Çevresel ve Kentsel Analizler" paneli).
+                    requiresSecondPeriod: checked.getAttribute('data-requires-second-period') === 'true',
+                    // 🆕 FAZ 12 — ADIM 5: Grafik entegrasyonu. Her analiz kutusunun
+                    // data-chart-type niteliğinden ('pie'|'line'|'bar') okunuyor; yoksa
+                    // null döner ve render katmanı mevcut global sütun/pasta seçicisine
+                    // (currentChartType) geri düşer.
+                    chartType: checked.getAttribute('data-chart-type') || null
                 };
             }
 
@@ -11747,7 +12008,14 @@ function selectRamp(name) {
                         legendMax: checked.getAttribute('data-legend-max') || '+1',
                         classesRaw: checked.getAttribute('data-legend-classes'),
                         sensorLabel: null,
-                        needsGallery: legendType === 'image'
+                        needsGallery: legendType === 'image',
+                        // 🆕 FAZ 12 — ADIM 3/5: getSelectedAnalysisMeta() (tekil) ile
+                        // AYNI iki alan burada da (çoğul/liste sürümü) eksikti.
+                        // runAnalysis() dispatch döngüsü BU listeyi kullanıyor, tekil
+                        // fonksiyonu değil — bu yüzden çift-dönem ve grafik tipi
+                        // bilgisi olmadan gerçek analiz çağrısına hiç ulaşmıyordu.
+                        requiresSecondPeriod: checked.getAttribute('data-requires-second-period') === 'true',
+                        chartType: checked.getAttribute('data-chart-type') || null
                     }
                 });
             });
@@ -14002,7 +14270,7 @@ function selectRamp(name) {
             var _cSvg = document.getElementById('stats-chart-svg-wrap');
             if (_cSvg) {
                 _cSvg.className = 'chart-placeholder';
-                _cSvg.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:80px;color:#94a3b8;font-size:0.78rem;text-align:center;padding:0 12px;" id="chart-empty-placeholder" data-i18n="chart_empty">' + (typeof t === 'function' ? t('chart_empty','📊 🥧 After the analysis is complete, the area and percentage distribution of classified data will appear here.') : '📊 🥧 After the analysis is complete, the area and percentage distribution of classified data will appear here.') + '</div>';
+                _cSvg.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:80px;color:#94a3b8;font-size:0.78rem;text-align:center;padding:0 12px;" id="chart-empty-placeholder" data-i18n="chart_empty">' + (typeof t === 'function' ? t('chart_empty','Shows the distribution and percentage ratios of classified data comparatively.') : 'Shows the distribution and percentage ratios of classified data comparatively.') + '</div>';
             }
             var _cTbl = document.getElementById('stats-chart-table');
             if (_cTbl) _cTbl.innerHTML = '';
@@ -14196,6 +14464,19 @@ function selectRamp(name) {
 
             var metaList = getSelectedAnalysisMetaList();
             if (!metaList.length) { sylvaAlert(t('no_analysis'), 'warning'); return; }
+
+            // 🆕 FAZ 12 — ADIM 5: metaList içinde chartType:'line' olan bir analiz
+            // varsa (ör. UHI_TREND, NO2_TIMESERIES), Çizgi Grafik butonu bu
+            // çalıştırma için de kullanılabilir olmalı — yukarıdaki genel
+            // sıfırlama (Zaman Serisi dışı her çalıştırmada Çizgi'yi
+            // pasifleştiren blok, metaList henüz hesaplanmadan önce çalıştı)
+            // bunu bilemezdi. Gerçek aktif/pasif + hangisinin "active" göründüğü
+            // son karar, sonuç geldiğinde _sylvaRenderIndexAnalysisResult
+            // içinde meta.chartType'a göre kesinleşir.
+            if (metaList.some(function (m) { return m && m.chartType === 'line'; }) && _lineChartBtn) {
+                _lineChartBtn.classList.remove('disabled-chart');
+                _lineChartBtn.disabled = false;
+            }
 
             // 🛠️ KÖK NEDEN DÜZELTMESİ: Bu bayrak eskiden SADECE senkronizasyon
             // açıldıktan sonraki İLK "Analizi Çalıştır" çalıştırmasında true
@@ -14424,6 +14705,23 @@ function selectRamp(name) {
                     demSource: demSourceRadio ? demSourceRadio.value : 'SRTM',
                     months:    window.sylvaSelectedMonths || [],
                 };
+                // 🆕 FAZ 12 — ADIM 3: Çift tarih UI mantığı — dispatch. Bu analiz
+                // requiresSecondPeriod:true ise (bkz. getSelectedAnalysisMetaList()
+                // ve "Dönem 2" UI bloğu — period2-section), bağımsız 2. dönem
+                // start/end/bulut/ay değerleri de isteğe eklenir. server.py bu
+                // alanları YALNIZCA ilgili analiz dallarında (build_result_image
+                // içindeki yeni elif'ler) okur; startDate2/endDate2 adlandırması
+                // dosyada zaten var olan dNBR ipucu metniyle (bkz. ts_dnbr_tooltip
+                // ve i18n'i) aynı kalıbı izliyor.
+                if (meta.requiresSecondPeriod) {
+                    var startInput2 = document.getElementById('date-start2');
+                    var endInput2 = document.getElementById('date-end2');
+                    var cloudSlider2El = document.getElementById('cloud-slider-2');
+                    analyzePayload.startDate2 = startInput2 ? (startInput2.value || '') : '';
+                    analyzePayload.endDate2 = endInput2 ? (endInput2.value || '') : '';
+                    analyzePayload.maxCloud2 = cloudSlider2El ? parseInt(cloudSlider2El.value, 10) : maxCloud;
+                    analyzePayload.months2 = window.sylvaSelectedMonths2 || [];
+                }
                 // 🛠️ BUG FİX (Harita gri tonlamalı, Lejant renkli — birbirini
                 // tutmuyordu): server.py'de her indeks için varsayılan görsel
                 // ('vis') paleti sabit ['black','white'] idi ve bu SADECE
@@ -15419,7 +15717,38 @@ function selectRamp(name) {
             renderAnalysisLegend(meta, false, _pane);
             if (data.stats) {
                 updateStatsTable(data.stats, _pane);
-                renderChart(data.stats, meta, _pane);
+                // 🆕 FAZ 12 — ADIM 5: chartType:'line' taşıyan analizler (ör.
+                // UHI_TREND, NO2_TIMESERIES — bkz. meta.chartType) için server.py
+                // varsa data.series alanında (_renderLineChart'ın zaten Zaman
+                // Serisi modülünden bildiği {series:[{index,points:[{date,value}]}]}
+                // biçiminde) küçük bir seri döndürür. Bu alan gelmişse çizgi
+                // grafik gösterilir VE Sütun/Pasta butonları Zaman Serisi'ndekiyle
+                // BİREBİR aynı şekilde pasifleştirilir. data.series gelmemişse
+                // (o analiz için henüz seri desteği eklenmemişse) hiçbir analiz
+                // grafiksiz kalmasın diye mevcut sütun/pasta grafiğine GÜVENLE
+                // geri düşülür.
+                var _btnBarR = document.getElementById('btn-chart-bar');
+                var _btnPieR = document.getElementById('btn-chart-pie');
+                var _btnLineR = document.getElementById('btn-chart-line');
+                if (meta.chartType === 'line' && data.series && data.series.length && typeof _renderLineChart === 'function') {
+                    _renderLineChart({ series: data.series });
+                    lastChartData = null;
+                    var _tableWrapR = document.getElementById('stats-chart-table');
+                    if (_tableWrapR) _tableWrapR.innerHTML = '';
+                    if (_btnBarR) { _btnBarR.classList.remove('active'); _btnBarR.classList.add('disabled-chart'); _btnBarR.disabled = true; }
+                    if (_btnPieR) { _btnPieR.classList.remove('active'); _btnPieR.classList.add('disabled-chart'); _btnPieR.disabled = true; }
+                    if (_btnLineR) { _btnLineR.classList.remove('disabled-chart'); _btnLineR.disabled = false; _btnLineR.classList.add('active'); }
+                } else {
+                    if (meta && meta.chartType) {
+                        if (_btnLineR) { _btnLineR.classList.remove('active'); _btnLineR.classList.add('disabled-chart'); _btnLineR.disabled = true; }
+                        if (_btnBarR) { _btnBarR.classList.remove('disabled-chart'); _btnBarR.disabled = false; _btnBarR.classList.toggle('active', (meta.chartType || 'bar') === 'bar'); }
+                        if (_btnPieR) { _btnPieR.classList.remove('disabled-chart'); _btnPieR.disabled = false; _btnPieR.classList.toggle('active', meta.chartType === 'pie'); }
+                        if (typeof window.setChartType === 'function' && (meta.chartType === 'bar' || meta.chartType === 'pie')) {
+                            currentChartType = meta.chartType;
+                        }
+                    }
+                    renderChart(data.stats, meta, _pane);
+                }
                 appendRealStatsToLegend(data.stats, _pane);
             }
             if (data.realStats) {
@@ -15627,6 +15956,22 @@ function selectRamp(name) {
             'TOPO_TWI', 'TOPO_SPI', 'TOPO_STI',
             'TOPO_HILLSHADE_MULTI', 'TOPO_SOLAR', 'TOPO_SHADOW', 'TOPO_CONTOUR',
             'SAR', 'BUILDING_FOOTPRINT',
+            // 🆕 FAZ 12 — ADIM 4: 27 yeni "Çevresel ve Kentsel Analizler"
+            // kutusunun 26'sı (BUILDING_FOOTPRINT zaten yukarıda) — bunlar
+            // NDVI/NDWI gibi sahne galerisi (data.scenes) BEKLEMEZ; bu listeye
+            // eklenmezlerse eski kod onları "else" dalına düşürüp Bilgi
+            // Kutusu'nu tamamen TEMİZLİYORDU (bkz. _sylvaRenderIndexAnalysisResult
+            // içindeki _STATIC_DATASETS.indexOf(...) dallanması) — kullanıcının
+            // "bilgi kutusu ... olsun" isteğinin karşılanmamasının kök nedeni
+            // buydu. Artık LULC/TOPO/SAR ile birebir aynı yoldan
+            // renderDatasetInfoCard() ile kendi _DATASET_INFO kartlarını alırlar.
+            'UHI_LST', 'UHI_TREND', 'LST_LULC_CORRELATION',
+            'WATER_OCCURRENCE', 'WATER_CHANGE', 'WATER_SEASONALITY', 'RESERVOIR_VOLUME', 'WATER_QUALITY_PROXY',
+            'VEG_CHANGE', 'FOREST_LOSS', 'BURN_SEVERITY', 'CANOPY_HEIGHT_BIOMASS', 'FOREST_HEALTH',
+            'URBAN_GROWTH', 'IMPERVIOUS_CHANGE', 'NIGHTLIGHTS_ECONOMIC',
+            'DROUGHT_INDEX', 'FLOOD_MAPPING', 'LANDSLIDE_SUSCEPTIBILITY', 'DROUGHT_RISK_COMPOSITE', 'EARTHQUAKE_DAMAGE_PROXY',
+            'NO2_TIMESERIES', 'AEROSOL_OPTICAL_DEPTH', 'SO2_CO_ANOMALY',
+            'COASTLINE_CHANGE', 'SST_TREND',
         ];
 
         var _DATASET_INFO = {
@@ -15782,7 +16127,224 @@ function selectRamp(name) {
                     ['ib_value_range', 'vi_sar_range'],
                     ['ib_independence', 'vi_sar_indep']
                 ]
-            }
+            },
+            // 🆕 FAZ 12 — ADIM 4: 27 yeni Çevresel/Kentsel analiz kutusunun 26'sı
+            // için Bilgi Kutusu içeriği (BUILDING_FOOTPRINT kendi ayrı OSM/Overpass
+            // iş akışını kullandığından zaten yukarıda). 'ib_desc' satırının DEĞERİ
+            // kasıtlı olarak env_xxx anahtarının KENDİSİ — renderDatasetInfoCard()
+            // bunu t() ile çözümler, böylece açıklama satırı checkbox etiketiyle AYNI,
+            // zaten 30 dile çevrilmiş metni gösterir (ekstra çeviri anahtarı gerekmez).
+            // 'ib_source'/'ib_resolution' değerleri (veri seti adı/çözünürlük) bilinçli
+            // olarak literal bırakıldı — NDVI/SAR kartlarındaki mevcut kalıpla aynı
+            // (özel isimler zaten dilden bağımsızdır).
+            UHI_LST: {
+                title: "🌡️ Kentsel Isı Adası (LST)",
+                rows: [
+                    ['ib_source', "Landsat ST_B10 / MODIS MOD11A2 LST"],
+                    ['ib_resolution', "30–1000 m (sensöre göre)"],
+                    ['ib_desc', "env_uhi_lst"]
+                ]
+            },
+            UHI_TREND: {
+                title: "🌡️📈 Zamansal Isı Değişim Trendi",
+                rows: [
+                    ['ib_source', "Landsat/MODIS LST — 2 dönem farkı"],
+                    ['ib_resolution', "30–1000 m"],
+                    ['ib_desc', "env_uhi_trend"]
+                ]
+            },
+            LST_LULC_CORRELATION: {
+                title: "🌡️🗺️ Arazi Örtüsü–Sıcaklık İlişkilendirme",
+                rows: [
+                    ['ib_source', "LST + Dynamic World / ESA WorldCover"],
+                    ['ib_resolution', "10–30 m"],
+                    ['ib_desc', "env_lst_lulc_corr"]
+                ]
+            },
+            WATER_OCCURRENCE: {
+                title: "💧 Su Yüzeyi Geçmişi",
+                rows: [
+                    ['ib_source', "JRC Global Surface Water v1.4"],
+                    ['ib_resolution', "30 m (1984–2021)"],
+                    ['ib_desc', "env_water_occ"]
+                ]
+            },
+            WATER_CHANGE: {
+                title: "💧📉 Su Yüzeyi Değişim Alanları",
+                rows: [
+                    ['ib_source', "Sentinel-2/Landsat NDWI — 2 dönem farkı"],
+                    ['ib_resolution', "10–30 m"],
+                    ['ib_desc', "env_water_change"]
+                ]
+            },
+            WATER_SEASONALITY: {
+                title: "💧🗓️ Mevsimsel Su Değişimi",
+                rows: [
+                    ['ib_source', "JRC Global Surface Water — Seasonality"],
+                    ['ib_resolution', "30 m"],
+                    ['ib_desc', "env_water_season"]
+                ]
+            },
+            RESERVOIR_VOLUME: {
+                title: "💧🏞️ Rezervuar/Göl Hacim Değişim Tahmini",
+                rows: [
+                    ['ib_source', "JRC Su Yüzeyi + SRTM DEM (tahmini)"],
+                    ['ib_resolution', "30 m"],
+                    ['ib_desc', "env_reservoir_volume"]
+                ]
+            },
+            WATER_QUALITY_PROXY: {
+                title: "💧🔬 Su Kalitesi Proxy",
+                rows: [
+                    ['ib_source', "Sentinel-2 (NDCI/bulanıklık proxy)"],
+                    ['ib_resolution', "10 m"],
+                    ['ib_desc', "env_water_quality"]
+                ]
+            },
+            VEG_CHANGE: {
+                title: "🌳📉 Bitki Örtüsü Değişimi",
+                rows: [
+                    ['ib_source', "Sentinel-2/Landsat NDVI — 2 dönem farkı"],
+                    ['ib_resolution', "10–30 m"],
+                    ['ib_desc', "env_veg_change"]
+                ]
+            },
+            FOREST_LOSS: {
+                title: "🌲 Orman Kaybı/Kazanımı (Hansen)",
+                rows: [
+                    ['ib_source', "Hansen Global Forest Change v1.13"],
+                    ['ib_resolution', "~31 m (2000–2025)"],
+                    ['ib_desc', "env_forest_loss"]
+                ]
+            },
+            BURN_SEVERITY: {
+                title: "🔥 Yanık Şiddeti (dNBR)",
+                rows: [
+                    ['ib_source', "Sentinel-2/Landsat NBR — öncesi/sonrası"],
+                    ['ib_resolution', "10–30 m"],
+                    ['ib_desc', "env_burn_sev"]
+                ]
+            },
+            CANOPY_HEIGHT_BIOMASS: {
+                title: "🌲📏 Kanopi Yüksekliği / Biyokütle-Karbon",
+                rows: [
+                    ['ib_source', "NASA GEDI L2A/L4A"],
+                    ['ib_resolution', "25 m (2019–günümüz, LiDAR örneklem)"],
+                    ['ib_desc', "env_canopy_biomass"]
+                ]
+            },
+            FOREST_HEALTH: {
+                title: "🌲🩺 Orman Sağlığı İzleme",
+                rows: [
+                    ['ib_source', "Sentinel-2/Landsat NBR/NDMI — 2 dönem trendi"],
+                    ['ib_resolution', "10–30 m"],
+                    ['ib_desc', "env_forest_health"]
+                ]
+            },
+            URBAN_GROWTH: {
+                title: "🏙️ Kentsel Genişleme",
+                rows: [
+                    ['ib_source', "Dynamic World / ESA WorldCover — 2 dönem farkı"],
+                    ['ib_resolution', "10 m"],
+                    ['ib_desc', "env_urban_growth"]
+                ]
+            },
+            IMPERVIOUS_CHANGE: {
+                title: "🏙️📈 Geçirimsiz Yüzey Değişimi",
+                rows: [
+                    ['ib_source', "Dynamic World (built olasılık bandı)"],
+                    ['ib_resolution', "10 m"],
+                    ['ib_desc', "env_impervious"]
+                ]
+            },
+            NIGHTLIGHTS_ECONOMIC: {
+                title: "🌃 Gece Işıkları — Ekonomik Aktivite Değişimi",
+                rows: [
+                    ['ib_source', "NOAA VIIRS DNB (VCMSLCFG)"],
+                    ['ib_resolution', "~464 m"],
+                    ['ib_desc', "env_nightlights"]
+                ]
+            },
+            DROUGHT_INDEX: {
+                title: "🏜️ Kuraklık İzleme",
+                rows: [
+                    ['ib_source', "CHIRPS Yağış + NASA SMAP Toprak Nemi"],
+                    ['ib_resolution', "~5.5 km (CHIRPS) / 11 km (SMAP)"],
+                    ['ib_desc', "env_drought"]
+                ]
+            },
+            FLOOD_MAPPING: {
+                title: "🌊 Sel/Taşkın Haritalama (SAR)",
+                rows: [
+                    ['ib_source', "Sentinel-1 GRD — öncesi/sonrası"],
+                    ['ib_resolution', "10 m"],
+                    ['ib_desc', "env_flood"]
+                ]
+            },
+            LANDSLIDE_SUSCEPTIBILITY: {
+                title: "⛰️⚠️ Heyelan Duyarlılık Haritası",
+                rows: [
+                    ['ib_source', "SRTM eğim + arazi örtüsü (statik kompozit)"],
+                    ['ib_resolution', "30 m"],
+                    ['ib_desc', "env_landslide"]
+                ]
+            },
+            DROUGHT_RISK_COMPOSITE: {
+                title: "🏜️📊 Kuraklık Riski Kompozit İndeksi",
+                rows: [
+                    ['ib_source', "CHIRPS + NDVI (VCI) + SMAP"],
+                    ['ib_resolution', "~5.5 km"],
+                    ['ib_desc', "env_drought_risk_composite"]
+                ]
+            },
+            EARTHQUAKE_DAMAGE_PROXY: {
+                title: "🏚️ Deprem Sonrası Hasar Proxy",
+                rows: [
+                    ['ib_source', "Sentinel-1 SAR — geri saçılım değişim proxy"],
+                    ['ib_resolution', "10 m"],
+                    ['ib_desc', "env_earthquake_damage"]
+                ]
+            },
+            NO2_TIMESERIES: {
+                title: "🌬️ NO₂ Zaman Serisi",
+                rows: [
+                    ['ib_source', "Sentinel-5P TROPOMI (COPERNICUS/S5P/OFFL/L3_NO2)"],
+                    ['ib_resolution', "~1113 m"],
+                    ['ib_desc', "env_no2_series"]
+                ]
+            },
+            AEROSOL_OPTICAL_DEPTH: {
+                title: "🌫️ Aerosol Optik Derinliği",
+                rows: [
+                    ['ib_source', "Sentinel-5P TROPOMI (L3_AER_AI)"],
+                    ['ib_resolution', "~1113 m"],
+                    ['ib_desc', "env_aerosol_depth"]
+                ]
+            },
+            SO2_CO_ANOMALY: {
+                title: "🌬️⚠️ SO₂/CO Anomali Haritası",
+                rows: [
+                    ['ib_source', "Sentinel-5P TROPOMI (L3_SO2 / L3_CO)"],
+                    ['ib_resolution', "~1113 m"],
+                    ['ib_desc', "env_so2_co_anomaly"]
+                ]
+            },
+            COASTLINE_CHANGE: {
+                title: "🏖️ Kıyı Çizgisi Değişimi",
+                rows: [
+                    ['ib_source', "Sentinel-2/Landsat NDWI — 2 dönem farkı"],
+                    ['ib_resolution', "10–30 m"],
+                    ['ib_desc', "env_coastline_change"]
+                ]
+            },
+            SST_TREND: {
+                title: "🌊🌡️ Deniz Yüzey Sıcaklığı (SST) Trend",
+                rows: [
+                    ['ib_source', "NOAA CDR OISST v2.1"],
+                    ['ib_resolution', "~27.8 km"],
+                    ['ib_desc', "env_sst_trend"]
+                ]
+            },
         };
 
         // NDVI bandı ve çözünürlüğü seçilen sensöre göre değişir. Bu tablo,
@@ -15912,7 +16474,35 @@ function selectRamp(name) {
             'TOPO_HILLSHADE_MULTI': { key: 'topo_item_hillshade_multi', emoji: '🌗 ' },
             'TOPO_SOLAR':        { key: 'topo_item_solar',          emoji: '☀️ ' },
             'TOPO_SHADOW':       { key: 'topo_item_shadow',         emoji: '🌑 ' },
-            'TOPO_CONTOUR':      { key: 'topo_contour_label',       emoji: '📏 ' }
+            'TOPO_CONTOUR':      { key: 'topo_contour_label',       emoji: '📏 ' },
+            // 🆕 FAZ 12 — ADIM 4: yukarıdaki 26 yeni _DATASET_INFO girdisinin
+            // başlıklarını da (TOPO ailesiyle aynı desende) seçili dilde göstermek için.
+            UHI_LST: { key: "env_uhi_lst", emoji: "🌡️ " },
+            UHI_TREND: { key: "env_uhi_trend", emoji: "🌡️ " },
+            LST_LULC_CORRELATION: { key: "env_lst_lulc_corr", emoji: "🌡️ " },
+            WATER_OCCURRENCE: { key: "env_water_occ", emoji: "💧 " },
+            WATER_CHANGE: { key: "env_water_change", emoji: "💧 " },
+            WATER_SEASONALITY: { key: "env_water_season", emoji: "💧 " },
+            RESERVOIR_VOLUME: { key: "env_reservoir_volume", emoji: "💧 " },
+            WATER_QUALITY_PROXY: { key: "env_water_quality", emoji: "💧 " },
+            VEG_CHANGE: { key: "env_veg_change", emoji: "🌳 " },
+            FOREST_LOSS: { key: "env_forest_loss", emoji: "🌲 " },
+            BURN_SEVERITY: { key: "env_burn_sev", emoji: "🔥 " },
+            CANOPY_HEIGHT_BIOMASS: { key: "env_canopy_biomass", emoji: "🌲 " },
+            FOREST_HEALTH: { key: "env_forest_health", emoji: "🌲 " },
+            URBAN_GROWTH: { key: "env_urban_growth", emoji: "🏙️ " },
+            IMPERVIOUS_CHANGE: { key: "env_impervious", emoji: "🏙️ " },
+            NIGHTLIGHTS_ECONOMIC: { key: "env_nightlights", emoji: "🌃 " },
+            DROUGHT_INDEX: { key: "env_drought", emoji: "🏜️ " },
+            FLOOD_MAPPING: { key: "env_flood", emoji: "🌊 " },
+            LANDSLIDE_SUSCEPTIBILITY: { key: "env_landslide", emoji: "⛰️ " },
+            DROUGHT_RISK_COMPOSITE: { key: "env_drought_risk_composite", emoji: "🏜️ " },
+            EARTHQUAKE_DAMAGE_PROXY: { key: "env_earthquake_damage", emoji: "🏚️ " },
+            NO2_TIMESERIES: { key: "env_no2_series", emoji: "🌬️ " },
+            AEROSOL_OPTICAL_DEPTH: { key: "env_aerosol_depth", emoji: "🌫️ " },
+            SO2_CO_ANOMALY: { key: "env_so2_co_anomaly", emoji: "🌬️ " },
+            COASTLINE_CHANGE: { key: "env_coastline_change", emoji: "🏖️ " },
+            SST_TREND: { key: "env_sst_trend", emoji: "🌊 " },
         };
 
         // ── LULC sınıf tanımları — kod (sunucudan dönen histogram anahtarı),
@@ -17783,7 +18373,18 @@ function selectRamp(name) {
         // ── Histogram → 7 bin → bar/pie SVG grafiği ─────────────────
         // stats: sunucudan gelen tam nesne  { value: { ... } }
         function renderChart(stats, meta, paneId) {
-             if (typeof currentClassificationType !== 'undefined' && currentClassificationType !== 'classified') return;
+             // 🆕 FAZ 12 — ADIM 5: 27 yeni Çevresel/Kentsel analiz kutusunun her
+             // biri artık kendi data-chart-type niteliğini taşıyor (meta.chartType
+             // — bkz. getSelectedAnalysisMetaList()). Bu analizler için grafik,
+             // kullanıcının "Sınıflandırılmış" görünüm tercihinden (aşağıdaki
+             // currentClassificationType — mevcut/eski analizlerde SADECE bu mod
+             // açıkken grafik gösterilir) BAĞIMSIZ olarak HER ZAMAN gösterilir;
+             // kullanıcı "🚀 Analizi Çalıştır"a bastığında grafiğin de otomatik
+             // gelmesini istedi. meta.chartType TAŞIMAYAN mevcut analizlerin
+             // (NDVI vb.) davranışı DEĞİŞMEDİ — onlar hâlâ yalnızca
+             // "Sınıflandırılmış" mod açıkken grafik gösterir.
+             var _hasOwnChartType = !!(meta && meta.chartType);
+             if (!_hasOwnChartType && typeof currentClassificationType !== 'undefined' && currentClassificationType !== 'classified') return;
             var hist = (stats && stats.value) ? stats.value : null;
             if (!hist) return;
             var keys = Object.keys(hist).map(Number).sort(function(a, b) { return a - b; });
@@ -18157,12 +18758,18 @@ function selectRamp(name) {
         }
 
         function setChartType(type) {
+            // 🛠️ Analiz henüz çalıştırılmadıysa (veri yoksa) Sütun/Pasta Grafik
+            // butonuna basmak onu "seçili" (active) duruma getirmemeli — buton
+            // görünüşte tepki verip aslında hiçbir şey göstermiyordu. Artık
+            // seçim yalnızca "🚀 Analizi Çalıştır" sonrası gerçek veri geldiğinde
+            // değişiyor; veri yokken tıklama sessizce hiçbir şey yapmaz.
+            if (!lastChartData) return;
             currentChartType = type;
             var btnBar = document.getElementById('btn-chart-bar');
             var btnPie = document.getElementById('btn-chart-pie');
             if (btnBar) btnBar.classList.toggle('active', type === 'bar');
             if (btnPie) btnPie.classList.toggle('active', type === 'pie');
-            if (lastChartData) renderStatsChart(lastChartData);
+            renderStatsChart(lastChartData);
         }
 
         function polarToCartesian(cx, cy, r, angleDeg) {
@@ -25396,6 +26003,9 @@ var SYLVA_TRANSLATIONS = {
     lbl_area: 'Area:', lbl_perimeter: 'Perimeter:',
     date_title: 'Date Selection', date_start: 'Start', date_end: 'End',
     cloud_label: 'Cloud Cover (Max)',
+    date_title_2: 'Period 2',
+    cloud_label_2: 'Cloud Cover (Max) — Period 2',
+    month_label_2: 'Month Selection — Period 2',
     analysis_modules: 'Analysis & Data Modules',
     sec_satellite_img: '🛰️ Satellite Image',
     sec_satellite_analysis: '🌍 Satellite Data and Analyses',
@@ -25562,7 +26172,7 @@ var SYLVA_TRANSLATIONS = {
     no_geom: 'No valid workspace geometry found. Please check the AOI.',
     server_error: 'Cannot connect to server. Is server.py running? ',
     run_analysis: '🚀 Run Analysis', running: '⏳ Running…', stack_analysis_toggle: '🗂️ Add to Previous Analysis',
-    no_stats: 'No statistics', run_first: 'Run an analysis first.', chart_empty: '📊 🥧 After the analysis is complete, the area and percentage distribution of classified data will appear here.', chart_line_note: '📈 Line Chart is exclusively for Time Series & Change Analysis.', chart_classified_only: 'Charts are only available in Classified mode.',
+    no_stats: 'No statistics', run_first: 'Run an analysis first.', chart_empty: 'Shows the distribution and percentage ratios of classified data comparatively.', chart_line_note: '📈 Line Chart is exclusively for Time Series & Change Analysis.', chart_classified_only: 'Charts are only available in Classified mode.',
     lbl_class: 'Class', lbl_pixel: 'Pixel', lbl_value: 'Value',
     aoi_hint: 'Define a Workspace (AOI) on the map for hectare values.',
     shp_error: 'SHP read error: ', shp_hint: '\nHint: Select .shp, .shx and .dbf files together.',
@@ -25636,23 +26246,39 @@ var SYLVA_TRANSLATIONS = {
     sec_env_urban: '🌆 Environmental & Urban Analyses',
     env_urban_desc: 'Composite environmental and urban analyses computed via Google Earth Engine, combining multiple data layers (satellite imagery, DEM, multi-temporal series).',
     env_coming_soon: '🔒 Coming Soon',
-    env_uhi_group: '🌡️ Urban Heat Island Analyses',
-    env_water_group: '💧 Surface Water Change Analyses',
+    env_uhi_group: '🌡️ Urban Heat Island',
+    env_water_group: '💧 Surface Water & Hydrology',
     env_veg_group: '🌳 Vegetation & Forest Change',
     env_urban_dev_group: '🏙️ Urban Development & Land Change',
     env_risk_group: '⚠️ Environmental Risk & Monitoring',
-    env_uhi_lst: 'Urban Heat Island Intensity (UHI Intensity)',
-    env_uhi_trend: 'Temporal Heat Change Trend (LST Trend)',
-    env_water_occ: 'Surface Water History (Surface Water Occurrence)',
-    env_water_change: 'Surface Water Change Areas (Multi-temporal NDWI Difference)',
-    env_water_season: 'Seasonal Water Change (Seasonality)',
-    env_veg_change: 'Vegetation Change (Multi-temporal NDVI Difference)',
-    env_forest_loss: 'Forest Loss / Gain (Forest Change)',
-    env_burn_sev: 'Burn Severity (dNBR — Pre/Post)',
-    env_urban_growth: 'Urban Expansion Analysis (Multi-temporal LULC Difference)',
-    env_impervious: 'Impervious Surface Change (Impervious Surface)',
-    env_drought: 'Drought Monitoring (Soil Moisture / SPI Based)',
-    env_flood: 'Flood Mapping (SAR Based)',
+    env_air_group: '🌬️ Air Quality',
+    env_coastal_group: '🏖️ Coastal & Marine',
+    env_uhi_lst: 'Urban Heat Island Intensity',
+    env_uhi_trend: 'Temporal Heat Change Trend',
+    env_lst_lulc_corr: 'Land Cover–Temperature Correlation',
+    env_water_occ: 'Surface Water History',
+    env_water_change: 'Surface Water Change Areas',
+    env_water_season: 'Seasonal Water Change',
+    env_reservoir_volume: 'Reservoir/Lake Volume Change Estimate',
+    env_water_quality: 'Water Quality Proxy',
+    env_veg_change: 'Vegetation Change',
+    env_forest_loss: 'Forest Loss / Gain',
+    env_burn_sev: 'Burn Severity',
+    env_canopy_biomass: 'Canopy Height / Biomass-Carbon',
+    env_forest_health: 'Forest Health Monitoring',
+    env_urban_growth: 'Urban Expansion',
+    env_impervious: 'Impervious Surface Change',
+    env_nightlights: 'Nighttime Lights — Economic Activity Change',
+    env_drought: 'Drought Monitoring',
+    env_flood: 'Flood Mapping',
+    env_landslide: 'Landslide Susceptibility Map',
+    env_drought_risk_composite: 'Drought Risk Composite Index',
+    env_earthquake_damage: 'Post-Earthquake Damage Proxy',
+    env_no2_series: 'NO₂ Time Series',
+    env_aerosol_depth: 'Aerosol Optical Depth',
+    env_so2_co_anomaly: 'SO₂/CO Anomaly Map',
+    env_coastline_change: 'Coastline Change',
+    env_sst_trend: 'Sea Surface Temperature (SST) Trend',
     dp_placeholder: 'Select date',
     ws_stroke_lbl: 'Stroke Color', ws_fill_lbl: 'Fill Color',
     raw_bands_selected: 'bands selected', lbl_selected_img: '✅ Selected image:',
@@ -25911,6 +26537,9 @@ var SYLVA_TRANSLATIONS = {
     lbl_area: 'Maydon:', lbl_perimeter: 'Perimetr:',
     date_title: 'Sana tanlash', date_start: 'Boshlanish', date_end: 'Tugash',
     cloud_label: 'Bulutlilik (Maksimal)',
+    date_title_2: 'Davr 2',
+    cloud_label_2: 'Bulutlilik (Maksimal) — Davr 2',
+    month_label_2: 'Oy tanlash — Davr 2',
     analysis_modules: 'Tahlil va maʼlumot modullari',
     sec_satellite_img: '🛰️ Sputnik tasviri',
     sec_satellite_analysis: "🌍 Sun’iy yo‘ldosh ma’lumotlari va tahlillar",
@@ -26066,7 +26695,7 @@ var SYLVA_TRANSLATIONS = {
     no_geom: 'Toʻgʻri ish maydoni geometriyasi topilmadi. Iltimos, AOI ni tekshiring.',
     server_error: 'Serverga ulanib boʻlmadi. server.py ishlayaptimi? ',
     run_analysis: '🚀 Tahlilni ishga tushirish', running: '⏳ Ishlamoqda…', stack_analysis_toggle: '🗂️ Oldingi tahlilga qo\'shish',
-    no_stats: 'Statistika yoʻq', run_first: 'Avval tahlilni ishga tushiring.', chart_empty: '📊 🥧 Tahlil tugagandan so\'ng, tasniflangan ma\'lumotlarning maydon va foiz taqsimoti bu yerda ko\'rinadi.', chart_line_note: '📈 Chiziqli grafik Vaqt qatori va o\'zgarish tahlili uchun maxsus mo\'ljallangan.', chart_classified_only: 'Diagrammalar faqat Tasniflangan rejimida mavjud.',
+    no_stats: 'Statistika yoʻq', run_first: 'Avval tahlilni ishga tushiring.', chart_empty: 'Tasniflangan ma\'lumotlarning taqsimoti va foiz nisbatlarini qiyosiy tarzda ko\'rsatadi.', chart_line_note: '📈 Chiziqli grafik Vaqt qatori va o\'zgarish tahlili uchun maxsus mo\'ljallangan.', chart_classified_only: 'Diagrammalar faqat Tasniflangan rejimida mavjud.',
     lbl_class: 'Sinf', lbl_pixel: 'Piksel', lbl_value: 'Qiymat',
     aoi_hint: 'Gektar qiymatlari uchun xaritada Ish maydonini (AOI) belgilang.',
     shp_error: 'SHP oʻqish xatosi: ', shp_hint: '\nMaslahat: .shp, .shx va .dbf fayllarini birga tanlang.',
@@ -26153,6 +26782,22 @@ var SYLVA_TRANSLATIONS = {
     env_impervious: 'O\'tkazmaydigan yuzalar o\'zgarishi (Impervious Surface)',
     env_drought: 'Qo\'rg\'oqchilik monitoringi (Tuproq namligi / SPI)',
     env_flood: 'Toshqin xaritasi (SAR)',
+    env_lst_lulc_corr: 'Yer Qoplami–Harorat Korrelyatsiyasi',
+    env_reservoir_volume: 'Suv Ombori/Ko\'l Hajmi O\'zgarishini Baholash',
+    env_water_quality: 'Suv Sifati Proksi Ko\'rsatkichi',
+    env_canopy_biomass: 'Toj Balandligi / Biomassa-Uglerod',
+    env_forest_health: 'O\'rmon Salomatligi Monitoringi',
+    env_nightlights: 'Tungi Yorug\'lik — Iqtisodiy Faollik O\'zgarishi',
+    env_air_group: '🌬️ Havo Sifati',
+    env_no2_series: 'NO₂ Vaqt Qatori',
+    env_aerosol_depth: 'Aerozol Optik Chuqurligi',
+    env_so2_co_anomaly: 'SO₂/CO Anomaliya Xaritasi',
+    env_coastal_group: '🏖️ Qirg\'oq va Dengiz',
+    env_coastline_change: 'Qirg\'oq Chizig\'ining O\'zgarishi',
+    env_sst_trend: 'Dengiz Sathi Harorati (SST) Trendi',
+    env_landslide: 'Ko\'chkiga Moyillik Xaritasi',
+    env_drought_risk_composite: 'Qurg\'oqchilik Xavfi Kompozit Indeksi',
+    env_earthquake_damage: 'Zilziladan Keyingi Zarar Proksi Ko\'rsatkichi',
     dp_placeholder: 'Sanani tanlang',
     ws_stroke_lbl: 'Chiziq rangi', ws_fill_lbl: 'Toʻldirish rangi',
     raw_bands_selected: 'kanal tanlandi', lbl_selected_img: '✅ Tanlangan tasvir:',
@@ -26409,6 +27054,9 @@ var SYLVA_TRANSLATIONS = {
     lbl_area: 'Εμβαδόν:', lbl_perimeter: 'Περίμετρος:',
     date_title: 'Επιλογή Ημερομηνίας', date_start: 'Έναρξη', date_end: 'Λήξη',
     cloud_label: 'Νεφοκάλυψη (Μέγ.)',
+    date_title_2: 'Περίοδος 2',
+    cloud_label_2: 'Νεφοκάλυψη (Μέγ.) — Περίοδος 2',
+    month_label_2: 'Επιλογή Μηνών — Περίοδος 2',
     analysis_modules: 'Ενότητες Ανάλυσης & Δεδομένων',
     sec_satellite_img: '🛰️ Δορυφορική Εικόνα',
     sec_satellite_analysis: '🌍 Δορυφορικά δεδομένα και αναλύσεις',
@@ -26566,7 +27214,7 @@ var SYLVA_TRANSLATIONS = {
     no_geom: 'Δεν βρέθηκε έγκυρη γεωμετρία χώρου εργασίας. Παρακαλώ ελέγξτε το AOI.',
     server_error: 'Δεν είναι δυνατή η σύνδεση με τον διακομιστή. Εκτελείται το server.py; ',
     run_analysis: '🚀 Εκτέλεση Ανάλυσης', running: '⏳ Εκτελείται…', stack_analysis_toggle: '🗂️ Προσθήκη στην Προηγούμενη Ανάλυση',
-    no_stats: 'Δεν υπάρχουν στατιστικά', run_first: 'Εκτελέστε πρώτα μια ανάλυση.', chart_empty: '📊 🥧 Μετά την ολοκλήρωση της ανάλυσης, η κατανομή εμβαδού και ποσοστού των ταξινομημένων δεδομένων θα εμφανιστεί εδώ.', chart_line_note: '📈 Το γραμμικό γράφημα προορίζεται αποκλειστικά για Ανάλυση χρονοσειράς & μεταβολής.', chart_classified_only: 'Τα γραφήματα είναι διαθέσιμα μόνο σε λειτουργία Ταξινομημένο.',
+    no_stats: 'Δεν υπάρχουν στατιστικά', run_first: 'Εκτελέστε πρώτα μια ανάλυση.', chart_empty: 'Εμφανίζει συγκριτικά την κατανομή και τα ποσοστά των ταξινομημένων δεδομένων.', chart_line_note: '📈 Το γραμμικό γράφημα προορίζεται αποκλειστικά για Ανάλυση χρονοσειράς & μεταβολής.', chart_classified_only: 'Τα γραφήματα είναι διαθέσιμα μόνο σε λειτουργία Ταξινομημένο.',
     lbl_class: 'Κλάση', lbl_pixel: 'Εικονοστοιχείο', lbl_value: 'Τιμή',
     aoi_hint: 'Ορίστε έναν Χώρο Εργασίας (AOI) στον χάρτη για τιμές εκταρίων.',
     shp_error: 'Σφάλμα ανάγνωσης SHP: ', shp_hint: '\nΥπόδειξη: Επιλέξτε μαζί τα αρχεία .shp, .shx και .dbf.',
@@ -26657,6 +27305,22 @@ var SYLVA_TRANSLATIONS = {
     env_impervious: 'Μεταβολή Αδιαπέρατων Επιφανειών (Impervious Surface)',
     env_drought: 'Παρακολούθηση Ξηρασίας (Υγρασία Εδάφους / SPI)',
     env_flood: 'Χαρτογράφηση Πλημμυρών (SAR)',
+    env_lst_lulc_corr: 'Συσχέτιση Κάλυψης Γης–Θερμοκρασίας',
+    env_reservoir_volume: 'Εκτίμηση Μεταβολής Όγκου Ταμιευτήρα/Λίμνης',
+    env_water_quality: 'Έμμεσος Δείκτης Ποιότητας Νερού',
+    env_canopy_biomass: 'Ύψος Κόμης / Βιομάζα-Άνθρακας',
+    env_forest_health: 'Παρακολούθηση Υγείας Δασών',
+    env_nightlights: 'Νυχτερινός Φωτισμός — Μεταβολή Οικονομικής Δραστηριότητας',
+    env_air_group: '🌬️ Ποιότητα Αέρα',
+    env_no2_series: 'Χρονοσειρά NO₂',
+    env_aerosol_depth: 'Οπτικό Βάθος Αερολυμάτων',
+    env_so2_co_anomaly: 'Χάρτης Ανωμαλιών SO₂/CO',
+    env_coastal_group: '🏖️ Ακτές και Θάλασσα',
+    env_coastline_change: 'Μεταβολή Ακτογραμμής',
+    env_sst_trend: 'Τάση Θερμοκρασίας Επιφάνειας Θάλασσας (SST)',
+    env_landslide: 'Χάρτης Επιδεκτικότητας σε Κατολισθήσεις',
+    env_drought_risk_composite: 'Σύνθετος Δείκτης Κινδύνου Ξηρασίας',
+    env_earthquake_damage: 'Έμμεσος Δείκτης Ζημιών Μετά τον Σεισμό',
     dp_placeholder: 'Επιλέξτε ημερομηνία',
     ws_stroke_lbl: 'Χρώμα Περιγράμματος', ws_fill_lbl: 'Χρώμα Γεμίσματος',
     raw_bands_selected: 'κανάλια επιλέχθηκαν', lbl_selected_img: '✅ Επιλεγμένη εικόνα:',
@@ -26913,6 +27577,9 @@ var SYLVA_TRANSLATIONS = {
     lbl_area: 'Площ:', lbl_perimeter: 'Периметър:',
     date_title: 'Избор на дата', date_start: 'Начало', date_end: 'Край',
     cloud_label: 'Облачност (макс.)',
+    date_title_2: 'Период 2',
+    cloud_label_2: 'Облачност (макс.) — Период 2',
+    month_label_2: 'Избор на месеци — Период 2',
     analysis_modules: 'Модули за анализ и данни',
     sec_satellite_img: '🛰️ Сателитно изображение',
     sec_satellite_analysis: '🌍 Сателитни данни и анализи',
@@ -27070,7 +27737,7 @@ var SYLVA_TRANSLATIONS = {
     no_geom: 'Не е намерена валидна геометрия на работната област. Проверете AOI.',
     server_error: 'Не може да се установи връзка със сървъра. Стартиран ли е server.py? ',
     run_analysis: '🚀 Стартирай анализа', running: '⏳ Изпълнява се…', stack_analysis_toggle: '🗂️ Добавяне към предишния анализ',
-    no_stats: 'Няма статистика', run_first: 'Първо стартирайте анализа.', chart_empty: '📊 🥧 След завършване на анализа, разпределението на площта и процента на класифицираните данни ще се покаже тук.', chart_line_note: '📈 Линейната диаграма е предназначена изключително за Анализ на времеви редове и промени.', chart_classified_only: 'Диаграмите са достъпни само в режим на класификация.',
+    no_stats: 'Няма статистика', run_first: 'Първо стартирайте анализа.', chart_empty: 'Показва сравнително разпределението и процентните съотношения на класифицираните данни.', chart_line_note: '📈 Линейната диаграма е предназначена изключително за Анализ на времеви редове и промени.', chart_classified_only: 'Диаграмите са достъпни само в режим на класификация.',
     lbl_class: 'Клас', lbl_pixel: 'Пиксел', lbl_value: 'Стойност',
     aoi_hint: 'Определете работна област (AOI) на картата за стойности в хектари.',
     shp_error: 'Грешка при четене на SHP: ', shp_hint: '\nСъвет: изберете файловете .shp, .shx и .dbf заедно.',
@@ -27161,6 +27828,22 @@ var SYLVA_TRANSLATIONS = {
     env_impervious: 'Промяна на Непропускливи Повърхности (Impervious Surface)',
     env_drought: 'Мониторинг на Суша (Почвена Влага / SPI)',
     env_flood: 'Картографиране на Наводнения (SAR)',
+    env_lst_lulc_corr: 'Корелация Земно Покритие–Температура',
+    env_reservoir_volume: 'Оценка на Промяната в Обема на Язовир/Езеро',
+    env_water_quality: 'Прокси Показател за Качество на Водата',
+    env_canopy_biomass: 'Височина на Короните / Биомаса-Въглерод',
+    env_forest_health: 'Мониторинг на Здравето на Горите',
+    env_nightlights: 'Нощно Осветление — Промяна в Икономическата Активност',
+    env_air_group: '🌬️ Качество на Въздуха',
+    env_no2_series: 'Времеви Ред на NO₂',
+    env_aerosol_depth: 'Оптична Дълбочина на Аерозолите',
+    env_so2_co_anomaly: 'Карта на Аномалиите на SO₂/CO',
+    env_coastal_group: '🏖️ Крайбрежие и Море',
+    env_coastline_change: 'Промяна на Бреговата Линия',
+    env_sst_trend: 'Тенденция на Температурата на Морската Повърхност (SST)',
+    env_landslide: 'Карта на Предразположеност към Свлачища',
+    env_drought_risk_composite: 'Композитен Индекс на Риска от Суша',
+    env_earthquake_damage: 'Прокси Показател за Щети след Земетресение',
     dp_placeholder: 'Изберете дата',
     ws_stroke_lbl: 'Цвят на контура', ws_fill_lbl: 'Цвят на запълване',
     raw_bands_selected: 'избрани канала', lbl_selected_img: '✅ Избрано изображение:',
@@ -27417,6 +28100,9 @@ var SYLVA_TRANSLATIONS = {
     lbl_area: 'Alan:', lbl_perimeter: 'Çevre:',
     date_title: 'Tarih Seçimi', date_start: 'Başlangıç', date_end: 'Bitiş',
     cloud_label: 'Bulutluluk Oranı (Maks)',
+    month_label_2: 'Ay Seçimi — Dönem 2',
+    date_title_2: 'Dönem 2',
+    cloud_label_2: 'Bulutluluk Oranı (Maks) — Dönem 2',
     analysis_modules: 'Analiz ve Veri Modülleri',
     sec_satellite_img: '🛰️ Uydu Görüntüsü',
     sec_satellite_analysis: '🌍 Uydu Verileri ve Analizler',
@@ -27581,7 +28267,7 @@ var SYLVA_TRANSLATIONS = {
     no_geom: 'Geçerli bir çalışma alanı geometrisi bulunamadı. Lütfen AOI\'yi kontrol edin.',
     server_error: 'Sunucuya bağlanılamadı. server.py çalışıyor mu? ',
     run_analysis: '🚀 Analizi Çalıştır', running: '⏳ Çalışıyor…', stack_analysis_toggle: '🗂️ Önceki Analizin Üzerine Ekle',
-    no_stats: 'İstatistik yok', run_first: 'Önce bir analiz çalıştırın.', chart_empty: '📊 🥧 Analiz tamamlandığında sınıflandırılmış verilerin alan ve yüzde dağılımı burada görünecek.', chart_line_note: '📈 Çizgi Grafik yalnızca Zaman Serisi ve Değişim Analizi için özeldir.', chart_classified_only: 'Grafikler yalnızca Sınıflandırılmış modda kullanılabilir.',
+    no_stats: 'İstatistik yok', run_first: 'Önce bir analiz çalıştırın.', chart_empty: 'Sınıflandırılmış verilerin dağılım ve yüzdelik oranlarını karşılaştırmalı olarak gösterir.', chart_line_note: '📈 Çizgi Grafik yalnızca Zaman Serisi ve Değişim Analizi için özeldir.', chart_classified_only: 'Grafikler yalnızca Sınıflandırılmış modda kullanılabilir.',
     lbl_class: 'Sınıf', lbl_pixel: 'Piksel', lbl_value: 'Değer',
     aoi_hint: 'Hektar için haritada bir Çalışma Alanı (AOI) tanımlayın.',
     shp_error: 'SHP okuma hatası: ', shp_hint: '\nİpucu: Tam bileşen desteği için .shp, .shx ve .dbf dosyalarını birlikte seçin.',
@@ -27653,23 +28339,39 @@ var SYLVA_TRANSLATIONS = {
     sec_env_urban: '🌆 Çevresel ve Kentsel Analizler',
     env_urban_desc: 'Google Earth Engine üzerinden hesaplanan, birden fazla veri katmanını (uydu görüntüsü, DEM, çok-zamanlı seri) bir araya getiren bileşik çevresel ve kentsel analizler.',
     env_coming_soon: '🔒 Yakında',
-    env_uhi_group: '🌡️ Kentsel Isı Adası Analizleri',
-    env_water_group: '💧 Su Yüzeyi Değişim Analizleri',
+    env_uhi_group: '🌡️ Kentsel Isı Adası',
+    env_water_group: '💧 Su Yüzeyi ve Hidroloji',
     env_veg_group: '🌳 Bitki Örtüsü ve Orman Değişimi',
     env_urban_dev_group: '🏙️ Kentsel Gelişim ve Arazi Değişimi',
     env_risk_group: '⚠️ Çevresel Risk ve İzleme',
-    env_uhi_lst: 'Kentsel Isı Adası Yoğunluğu (UHI Intensity)',
-    env_uhi_trend: 'Zamansal Isı Değişim Trendi (LST Trend)',
-    env_water_occ: 'Su Yüzeyi Geçmişi (Surface Water Occurrence)',
-    env_water_change: 'Su Yüzeyi Değişim Alanları (Çok-zamanlı NDWI Farkı)',
-    env_water_season: 'Mevsimsel Su Değişimi (Seasonality)',
-    env_veg_change: 'Bitki Örtüsü Değişimi (Çok-zamanlı NDVI Farkı)',
-    env_forest_loss: 'Orman Kaybı / Kazanımı (Forest Change)',
-    env_burn_sev: 'Yanık Şiddeti (dNBR — Öncesi/Sonrası)',
-    env_urban_growth: 'Kentsel Genişleme Analizi (Çok-zamanlı LULC Farkı)',
-    env_impervious: 'Geçirimsiz Yüzey Değişimi (Impervious Surface)',
-    env_drought: 'Kuraklık İzleme (Toprak Nemi / SPI Bazlı)',
-    env_flood: 'Sel / Taşkın Haritalama (SAR Bazlı)',
+    env_air_group: '🌬️ Hava Kalitesi',
+    env_coastal_group: '🏖️ Kıyı ve Deniz',
+    env_uhi_lst: 'Kentsel Isı Adası Yoğunluğu',
+    env_uhi_trend: 'Zamansal Isı Değişim Trendi',
+    env_lst_lulc_corr: 'Arazi Örtüsü–Sıcaklık İlişkilendirme',
+    env_water_occ: 'Su Yüzeyi Geçmişi',
+    env_water_change: 'Su Yüzeyi Değişim Alanları',
+    env_water_season: 'Mevsimsel Su Değişimi',
+    env_reservoir_volume: 'Rezervuar/Göl Hacim Değişim Tahmini',
+    env_water_quality: 'Su Kalitesi Proxy',
+    env_veg_change: 'Bitki Örtüsü Değişimi',
+    env_forest_loss: 'Orman Kaybı/Kazanımı',
+    env_burn_sev: 'Yanık Şiddeti',
+    env_canopy_biomass: 'Kanopi Yüksekliği / Biyokütle-Karbon',
+    env_forest_health: 'Orman Sağlığı İzleme',
+    env_urban_growth: 'Kentsel Genişleme',
+    env_impervious: 'Geçirimsiz Yüzey Değişimi',
+    env_nightlights: 'Gece Işıkları — Ekonomik Aktivite Değişimi',
+    env_drought: 'Kuraklık İzleme',
+    env_flood: 'Sel/Taşkın Haritalama',
+    env_landslide: 'Heyelan Duyarlılık Haritası',
+    env_drought_risk_composite: 'Kuraklık Riski Kompozit İndeksi',
+    env_earthquake_damage: 'Deprem Sonrası Hasar Proxy',
+    env_no2_series: 'NO₂ Zaman Serisi',
+    env_aerosol_depth: 'Aerosol Optik Derinliği',
+    env_so2_co_anomaly: 'SO₂/CO Anomali Haritası',
+    env_coastline_change: 'Kıyı Çizgisi Değişimi',
+    env_sst_trend: 'Deniz Yüzey Sıcaklığı (SST) Trend',
     dp_placeholder: 'Tarih seçin',
     ws_stroke_lbl: 'Dış Kenar Rengi', ws_fill_lbl: 'İç Dolgu Rengi',
     raw_bands_selected: 'bant seçildi', lbl_selected_img: '✅ Seçili görüntü:',
@@ -27928,6 +28630,9 @@ var SYLVA_TRANSLATIONS = {
     lbl_area: 'Sahə:', lbl_perimeter: 'Perimetr:',
     date_title: 'Tarix Seçimi', date_start: 'Başlanğıc', date_end: 'Son',
     cloud_label: 'Buludluluq Nisbəti (Maks)',
+    date_title_2: 'Dövr 2',
+    cloud_label_2: 'Buludluluq Nisbəti (Maks) — Dövr 2',
+    month_label_2: 'Ay Seçimi — Dövr 2',
     analysis_modules: 'Təhlil və Məlumat Modulları',
     sec_satellite_img: '🛰️ Peyk Görüntüsü',
     sec_satellite_analysis: '🌍 Peyk Məlumatları və Təhlillər',
@@ -28083,7 +28788,7 @@ var SYLVA_TRANSLATIONS = {
     no_geom: 'Düzgün bir iş sahəsi həndəsəsi tapılmadı. Lütfən AOI-ni yoxlayın.',
     server_error: 'Serverə qoşulmaq mümkün olmadı. server.py işləyir mi? ',
     run_analysis: '🚀 Təhlili İşə Sal', running: '⏳ İşləyir…', stack_analysis_toggle: '🗂️ Əvvəlki Təhlilin Üzərinə Əlavə Et',
-    no_stats: 'Statistika yoxdur', run_first: 'Əvvəlcə bir təhlil işə salın.', chart_empty: '📊 🥧 Analiz tamamlandıqdan sonra təsnif edilmiş məlumatların sahə və faiz paylanması burada görünəcək.', chart_line_note: '📈 Xətt qrafiki Zaman seriyası və dəyişiklik təhlili üçün xüsusi nəzərdə tutulmuşdur.', chart_classified_only: 'Qrafiklər yalnız Təsnif edilmiş rejimdə istifadə edilə bilər.',
+    no_stats: 'Statistika yoxdur', run_first: 'Əvvəlcə bir təhlil işə salın.', chart_empty: 'Təsnif edilmiş məlumatların paylanmasını və faiz nisbətlərini müqayisəli şəkildə göstərir.', chart_line_note: '📈 Xətt qrafiki Zaman seriyası və dəyişiklik təhlili üçün xüsusi nəzərdə tutulmuşdur.', chart_classified_only: 'Qrafiklər yalnız Təsnif edilmiş rejimdə istifadə edilə bilər.',
     lbl_class: 'Sinif', lbl_pixel: 'Piksel', lbl_value: 'Dəyər',
     aoi_hint: 'Hektar üçün xəritədə bir İş Sahəsi (AOI) təyin edin.',
     shp_error: 'SHP oxuma xətası: ', shp_hint: '\nMəsləhət: Tam komponent dəstəyi üçün .shp, .shx və .dbf fayllarını birlikdə seçin.',
@@ -28172,6 +28877,22 @@ var SYLVA_TRANSLATIONS = {
     env_impervious: 'Keçirimsiz Səthi Dəyişikliyi (Impervious Surface)',
     env_drought: 'Quraqlıq Monitorinqi (Torpaq Nəmliyi / SPI)',
     env_flood: 'Daşqın Xəritəsi (SAR)',
+    env_lst_lulc_corr: 'Torpaq Örtüyü–Temperatur Korrelyasiyası',
+    env_reservoir_volume: 'Su Anbarı/Göl Həcmi Dəyişikliyi Qiymətləndirməsi',
+    env_water_quality: 'Su Keyfiyyəti Proksi',
+    env_canopy_biomass: 'Tac Hündürlüyü / Biokütlə-Karbon',
+    env_forest_health: 'Meşə Sağlamlığının Monitorinqi',
+    env_nightlights: 'Gecə İşıqları — İqtisadi Fəaliyyət Dəyişikliyi',
+    env_air_group: '🌬️ Hava Keyfiyyəti',
+    env_no2_series: 'NO₂ Zaman Sırası',
+    env_aerosol_depth: 'Aerozol Optik Dərinliyi',
+    env_so2_co_anomaly: 'SO₂/CO Anomaliya Xəritəsi',
+    env_coastal_group: '🏖️ Sahil və Dəniz',
+    env_coastline_change: 'Sahil Xəttinin Dəyişməsi',
+    env_sst_trend: 'Dəniz Səthi Temperaturu (SST) Trendi',
+    env_landslide: 'Sürüşmə Həssaslıq Xəritəsi',
+    env_drought_risk_composite: 'Quraqlıq Riski Kompozit İndeksi',
+    env_earthquake_damage: 'Zəlzələdən Sonrakı Zərər Proksi',
     dp_placeholder: 'Tarix seçin',
     ws_stroke_lbl: 'Xarici Kənar Rəngi', ws_fill_lbl: 'Daxili Doldurma Rəngi',
     raw_bands_selected: 'zolaq seçildi', lbl_selected_img: '✅ Seçilmiş görüntü:',
@@ -28428,6 +29149,9 @@ var SYLVA_TRANSLATIONS = {
     lbl_area: 'Terület:', lbl_perimeter: 'Kerület:',
     date_title: 'Dátumválasztás', date_start: 'Kezdés', date_end: 'Befejezés',
     cloud_label: 'Felhőborítás Aránya (Max)',
+    date_title_2: '2. időszak',
+    cloud_label_2: 'Felhőborítás Aránya (Max) — 2. időszak',
+    month_label_2: 'Hónap kiválasztása — 2. időszak',
     analysis_modules: 'Elemzési és Adatmodulok',
     sec_satellite_img: '🛰️ Műholdkép',
     sec_satellite_analysis: '🌍 Műholdas adatok és elemzések',
@@ -28583,7 +29307,7 @@ var SYLVA_TRANSLATIONS = {
     no_geom: 'Nem található érvényes munkaterület geometria. Kérjük, ellenőrizze az AOI-t.',
     server_error: 'Nem sikerült csatlakozni a szerverhez. Fut a server.py? ',
     run_analysis: '🚀 Elemzés Futtatása', running: '⏳ Fut…', stack_analysis_toggle: '🗂️ Hozzáadás az előző elemzéshez',
-    no_stats: 'Nincs statisztika', run_first: 'Előbb futtasson egy elemzést.', chart_empty: '📊 🥧 Az elemzés befejezése után a besorolt adatok terület- és százalékeloszlása itt jelenik meg.', chart_line_note: '📈 A vonaldiagram kizárólag az Idősor- és változáselemzéshez áll rendelkezésre.', chart_classified_only: 'A diagramok csak Osztályozott módban használhatók.',
+    no_stats: 'Nincs statisztika', run_first: 'Előbb futtasson egy elemzést.', chart_empty: 'A besorolt adatok eloszlását és százalékos arányait összehasonlítva jeleníti meg.', chart_line_note: '📈 A vonaldiagram kizárólag az Idősor- és változáselemzéshez áll rendelkezésre.', chart_classified_only: 'A diagramok csak Osztályozott módban használhatók.',
     lbl_class: 'Osztály', lbl_pixel: 'Pixel', lbl_value: 'Érték',
     aoi_hint: 'A hektárok megjelenítéséhez határozzon meg egy Munkaterületet (AOI) a térképen.',
     shp_error: 'SHP olvasási hiba: ', shp_hint: '\nTipp: A teljes komponens-támogatáshoz válassza együtt a .shp, .shx és .dbf fájlokat.',
@@ -28672,6 +29396,22 @@ var SYLVA_TRANSLATIONS = {
     env_impervious: 'Vízáteresztő Felület Változás (Impervious Surface)',
     env_drought: 'Aszálymonitoring (Talajnedvesség / SPI)',
     env_flood: 'Árvíztérképezés (SAR)',
+    env_lst_lulc_corr: 'Felszínborítás–Hőmérséklet Korreláció',
+    env_reservoir_volume: 'Víztározó/Tó Térfogatváltozás-becslés',
+    env_water_quality: 'Vízminőségi Proxy',
+    env_canopy_biomass: 'Lombkorona-magasság / Biomassza-szén',
+    env_forest_health: 'Erdőegészség-monitoring',
+    env_nightlights: 'Éjszakai Fények – Gazdasági Aktivitás Változása',
+    env_air_group: '🌬️ Levegőminőség',
+    env_no2_series: 'NO₂ Idősor',
+    env_aerosol_depth: 'Aeroszol Optikai Vastagság',
+    env_so2_co_anomaly: 'SO₂/CO Anomáliatérkép',
+    env_coastal_group: '🏖️ Part és Tenger',
+    env_coastline_change: 'Partvonal-változás',
+    env_sst_trend: 'Tengerfelszín-hőmérséklet (SST) Trend',
+    env_landslide: 'Földcsuszamlás-veszélyeztetettségi Térkép',
+    env_drought_risk_composite: 'Aszálykockázati Kompozit Index',
+    env_earthquake_damage: 'Földrengés Utáni Kárproxy',
     dp_placeholder: 'Válasszon dátumot',
     ws_stroke_lbl: 'Kontúrszín', ws_fill_lbl: 'Kitöltési Szín',
     raw_bands_selected: 'sáv kiválasztva', lbl_selected_img: '✅ Kiválasztott kép:',
@@ -28927,6 +29667,9 @@ var SYLVA_TRANSLATIONS = {
     lbl_area: 'Аудан:', lbl_perimeter: 'Периметр:',
     date_title: 'Күн таңдау', date_start: 'Басталуы', date_end: 'Аяқталуы',
     cloud_label: 'Бұлттылық (Макс)',
+    date_title_2: '2-кезең',
+    cloud_label_2: 'Бұлттылық (Макс) — 2-кезең',
+    month_label_2: 'Ай таңдау — 2-кезең',
     analysis_modules: 'Талдау және деректер модульдері',
     sec_satellite_img: '🛰️ Жерсерік суреті',
     sec_satellite_analysis: '🌍 Жерсерік деректері және талдаулар',
@@ -29082,7 +29825,7 @@ var SYLVA_TRANSLATIONS = {
     no_geom: 'Жарамды жұмыс кеңістігі геометриясы табылмады. AOI-ды тексеріңіз.',
     server_error: 'Серверге қосылу мүмкін болмады. server.py іске қосылған ба? ',
     run_analysis: '🚀 Талдауды іске қосу', running: '⏳ Жұмыс жасалуда…', stack_analysis_toggle: '🗂️ Алдыңғы талдауға қосу',
-    no_stats: 'Статистика жоқ', run_first: 'Алдымен талдауды іске қосыңыз.', chart_empty: '📊 🥧 Талдау аяқталғаннан кейін жіктелген деректердің аудан және пайыз бөлінісі мұнда көрінеді.', chart_line_note: '📈 Сызықтық диаграмма арнайы Уақыт қатары және өзгеріс талдауы үшін арналған.', chart_classified_only: 'Диаграммалар тек Жіктелген режимде қол жетімді.',
+    no_stats: 'Статистика жоқ', run_first: 'Алдымен талдауды іске қосыңыз.', chart_empty: 'Жіктелген деректердің таралуы мен пайыздық арақатынасын салыстырмалы түрде көрсетеді.', chart_line_note: '📈 Сызықтық диаграмма арнайы Уақыт қатары және өзгеріс талдауы үшін арналған.', chart_classified_only: 'Диаграммалар тек Жіктелген режимде қол жетімді.',
     lbl_class: 'Класс', lbl_pixel: 'Пиксель', lbl_value: 'Мән',
     aoi_hint: 'Гектар мәндері үшін картада жұмыс кеңістігін (AOI) анықтаңыз.',
     shp_error: 'SHP оқу қатесі: ', shp_hint: '\nКеңес: .shp, .shx және .dbf файлдарын бірге таңдаңыз.',
@@ -29170,6 +29913,22 @@ var SYLVA_TRANSLATIONS = {
     env_impervious: 'Өтпейтін беттің өзгерісі (Impervious Surface)',
     env_drought: 'Қуаңшылықты бақылау (Топырақ ылғалдылығы / SPI)',
     env_flood: 'Су тасқыны картасы (SAR)',
+    env_lst_lulc_corr: 'Жер Жамылғысы–Температура Корреляциясы',
+    env_reservoir_volume: 'Су Қоймасы/Көл Көлемінің Өзгеруін Бағалау',
+    env_water_quality: 'Су Сапасының Прокси Көрсеткіші',
+    env_canopy_biomass: 'Тәж Биіктігі / Биомасса-Көміртегі',
+    env_forest_health: 'Орман Денсаулығы Мониторингі',
+    env_nightlights: 'Түнгі Жарықтар — Экономикалық Белсенділік Өзгерісі',
+    env_air_group: '🌬️ Ауа Сапасы',
+    env_no2_series: 'NO₂ Уақыттық Қатары',
+    env_aerosol_depth: 'Аэрозоль Оптикалық Тереңдігі',
+    env_so2_co_anomaly: 'SO₂/CO Аномалия Картасы',
+    env_coastal_group: '🏖️ Жағалау және Теңіз',
+    env_coastline_change: 'Жағалау Сызығының Өзгеруі',
+    env_sst_trend: 'Теңіз Бетінің Температурасы (SST) Тренді',
+    env_landslide: 'Сырғыма Бейімділігі Картасы',
+    env_drought_risk_composite: 'Құрғақшылық Қаупінің Құрама Индексі',
+    env_earthquake_damage: 'Жерсілкінісінен Кейінгі Зиян Прокси Көрсеткіші',
     dp_placeholder: 'Күн таңдаңыз',
     ws_stroke_lbl: 'Контур түсі', ws_fill_lbl: 'Толтыру түсі',
     raw_bands_selected: 'арна таңдалды', lbl_selected_img: '✅ Таңдалған сурет:',
@@ -29410,6 +30169,9 @@ var SYLVA_TRANSLATIONS = {
     lbl_area: 'Fläche:', lbl_perimeter: 'Umfang:',
     date_title: 'Datumsauswahl', date_start: 'Start', date_end: 'Ende',
     cloud_label: 'Bewölkung (Max)',
+    date_title_2: 'Zeitraum 2',
+    cloud_label_2: 'Bewölkung (Max) — Zeitraum 2',
+    month_label_2: 'Monatsauswahl — Zeitraum 2',
     analysis_modules: 'Analyse- & Datenmodule',
     sec_satellite_img: '🛰️ Satellitenbild',
     sec_satellite_analysis: '🌍 Satellitendaten und Analysen',
@@ -29577,7 +30339,7 @@ var SYLVA_TRANSLATIONS = {
     no_geom: 'Keine gültige Arbeitsbereich-Geometrie gefunden. Bitte AOI prüfen.',
     server_error: 'Verbindung zum Server fehlgeschlagen. Läuft server.py? ',
     run_analysis: '🚀 Analyse starten', running: '⏳ Läuft…', stack_analysis_toggle: '🗂️ Zur vorherigen Analyse hinzufügen',
-    no_stats: 'Keine Statistik', run_first: 'Führen Sie zuerst eine Analyse aus.', chart_empty: '📊 🥧 Nach Abschluss der Analyse wird hier die Flächen- und Prozentverteilung der klassifizierten Daten angezeigt.', chart_line_note: '📈 Liniendiagramm ist ausschließlich für Zeitreihen- & Änderungsanalyse vorgesehen.', chart_classified_only: 'Diagramme sind nur im Klassifizierten Modus verfügbar.',
+    no_stats: 'Keine Statistik', run_first: 'Führen Sie zuerst eine Analyse aus.', chart_empty: 'Zeigt die Verteilung und die prozentualen Anteile der klassifizierten Daten im Vergleich.', chart_line_note: '📈 Liniendiagramm ist ausschließlich für Zeitreihen- & Änderungsanalyse vorgesehen.', chart_classified_only: 'Diagramme sind nur im Klassifizierten Modus verfügbar.',
     lbl_class: 'Klasse', lbl_pixel: 'Pixel', lbl_value: 'Wert',
     aoi_hint: 'Definieren Sie einen Arbeitsbereich (AOI) für Hektarwerte.',
     shp_error: 'SHP-Lesefehler: ', shp_hint: '\nHinweis: .shp, .shx und .dbf zusammen auswählen.',
@@ -29666,6 +30428,22 @@ var SYLVA_TRANSLATIONS = {
     env_impervious: 'Versiegelte Flächenveränderung (Impervious Surface)',
     env_drought: 'Dürreüberwachung (Bodenfeuchte / SPI-basiert)',
     env_flood: 'Überschwemmungskartierung (SAR-basiert)',
+    env_lst_lulc_corr: 'Landbedeckung–Temperatur-Korrelation',
+    env_reservoir_volume: 'Stausee-/Seevolumenänderungsschätzung',
+    env_water_quality: 'Wasserqualitäts-Proxy',
+    env_canopy_biomass: 'Baumkronenhöhe / Biomasse-Kohlenstoff',
+    env_forest_health: 'Waldgesundheits-Monitoring',
+    env_nightlights: 'Nachtlichter – Veränderung der Wirtschaftsaktivität',
+    env_air_group: '🌬️ Luftqualität',
+    env_no2_series: 'NO₂-Zeitreihe',
+    env_aerosol_depth: 'Aerosoloptische Dicke',
+    env_so2_co_anomaly: 'SO₂/CO-Anomaliekarte',
+    env_coastal_group: '🏖️ Küste und Meer',
+    env_coastline_change: 'Küstenlinienänderung',
+    env_sst_trend: 'Meeresoberflächentemperatur (SST)-Trend',
+    env_landslide: 'Hangrutschungs-Anfälligkeitskarte',
+    env_drought_risk_composite: 'Dürrerisiko-Kompositindex',
+    env_earthquake_damage: 'Post-Erdbeben-Schadensproxy',
     dp_placeholder: 'Datum wählen',
     ws_stroke_lbl: 'Strichfarbe', ws_fill_lbl: 'Füllfarbe',
     raw_bands_selected: 'Bänder ausgewählt', lbl_selected_img: '✅ Ausgewähltes Bild:',
@@ -29915,6 +30693,9 @@ var SYLVA_TRANSLATIONS = {
     lbl_area: 'Surface :', lbl_perimeter: 'Périmètre :',
     date_title: 'Sélection de date', date_start: 'Début', date_end: 'Fin',
     cloud_label: 'Couverture nuageuse (Max)',
+    date_title_2: 'Période 2',
+    cloud_label_2: 'Couverture nuageuse (Max) — Période 2',
+    month_label_2: 'Sélection des mois — Période 2',
     analysis_modules: 'Modules d\'analyse & données',
     sec_satellite_img: '🛰️ Image satellite',
     sec_satellite_analysis: '🌍 Données et analyses satellitaires',
@@ -30082,7 +30863,7 @@ var SYLVA_TRANSLATIONS = {
     no_geom: 'Aucune géométrie valide trouvée. Vérifiez l\'AOI.',
     server_error: 'Connexion au serveur impossible. server.py fonctionne-t-il ? ',
     run_analysis: '🚀 Lancer l\'analyse', running: '⏳ En cours…', stack_analysis_toggle: '🗂️ Ajouter à l\'analyse précédente',
-    no_stats: 'Pas de statistiques', run_first: 'Lancez d\'abord une analyse.', chart_empty: '📊 🥧 Une fois l\'analyse terminée, la répartition en surface et en pourcentage des données classifiées apparaîtra ici.', chart_line_note: '📈 Le graphique linéaire est exclusivement dédié à l\'analyse des séries temporelles et des changements.', chart_classified_only: 'Les graphiques sont uniquement disponibles en mode Classifié.',
+    no_stats: 'Pas de statistiques', run_first: 'Lancez d\'abord une analyse.', chart_empty: 'Affiche de manière comparative la répartition et les pourcentages des données classifiées.', chart_line_note: '📈 Le graphique linéaire est exclusivement dédié à l\'analyse des séries temporelles et des changements.', chart_classified_only: 'Les graphiques sont uniquement disponibles en mode Classifié.',
     lbl_class: 'Classe', lbl_pixel: 'Pixel', lbl_value: 'Valeur',
     aoi_hint: 'Définissez un espace de travail (AOI) pour les hectares.',
     shp_error: 'Erreur lecture SHP : ', shp_hint: '\nAstuce : sélectionnez .shp, .shx et .dbf ensemble.',
@@ -30171,6 +30952,22 @@ var SYLVA_TRANSLATIONS = {
     env_impervious: 'Variation des Surfaces Imperméables (Impervious Surface)',
     env_drought: 'Surveillance de la Sécheresse (Humidité du Sol / SPI)',
     env_flood: 'Cartographie des Inondations (SAR)',
+    env_lst_lulc_corr: 'Corrélation occupation du sol – température',
+    env_reservoir_volume: 'Estimation de la variation de volume des réservoirs/lacs',
+    env_water_quality: 'Proxy de qualité de l’eau',
+    env_canopy_biomass: 'Hauteur de canopée / biomasse-carbone',
+    env_forest_health: 'Surveillance de la santé forestière',
+    env_nightlights: 'Lumières nocturnes — évolution de l’activité économique',
+    env_air_group: '🌬️ Qualité de l’air',
+    env_no2_series: 'Série temporelle NO₂',
+    env_aerosol_depth: 'Épaisseur optique des aérosols',
+    env_so2_co_anomaly: 'Carte d’anomalies SO₂/CO',
+    env_coastal_group: '🏖️ Littoral et marin',
+    env_coastline_change: 'Évolution du trait de côte',
+    env_sst_trend: 'Tendance de la température de surface de la mer (TSM)',
+    env_landslide: 'Carte de susceptibilité aux glissements de terrain',
+    env_drought_risk_composite: 'Indice composite de risque de sécheresse',
+    env_earthquake_damage: 'Proxy de dommages post-séisme',
     dp_placeholder: 'Choisir une date',
     ws_stroke_lbl: 'Couleur contour', ws_fill_lbl: 'Couleur remplissage',
     raw_bands_selected: 'bandes sélectionnées', lbl_selected_img: '✅ Image sélectionnée :',
@@ -30420,6 +31217,9 @@ var SYLVA_TRANSLATIONS = {
     lbl_area: 'Área:', lbl_perimeter: 'Perímetro:',
     date_title: 'Selección de fechas', date_start: 'Inicio', date_end: 'Fin',
     cloud_label: 'Nubosidad (Máx)',
+    date_title_2: 'Período 2',
+    cloud_label_2: 'Nubosidad (Máx) — Período 2',
+    month_label_2: 'Selección de meses — Período 2',
     analysis_modules: 'Módulos de análisis & datos',
     sec_satellite_img: '🛰️ Imagen satelital',
     sec_satellite_analysis: '🌍 Datos y análisis satelitales',
@@ -30587,7 +31387,7 @@ var SYLVA_TRANSLATIONS = {
     no_geom: 'No se encontró geometría válida. Verifique el AOI.',
     server_error: 'No se puede conectar al servidor. ¿Está ejecutando server.py? ',
     run_analysis: '🚀 Ejecutar análisis', running: '⏳ Ejecutando…', stack_analysis_toggle: '🗂️ Añadir al análisis anterior',
-    no_stats: 'Sin estadísticas', run_first: 'Primero ejecute un análisis.', chart_empty: '📊 🥧 Una vez completado el análisis, aquí aparecerá la distribución de área y porcentaje de los datos clasificados.', chart_line_note: '📈 El gráfico de líneas es exclusivo para Análisis de serie temporal y cambio.', chart_classified_only: 'Los gráficos solo están disponibles en el modo Clasificado.',
+    no_stats: 'Sin estadísticas', run_first: 'Primero ejecute un análisis.', chart_empty: 'Muestra de forma comparativa la distribución y los porcentajes de los datos clasificados.', chart_line_note: '📈 El gráfico de líneas es exclusivo para Análisis de serie temporal y cambio.', chart_classified_only: 'Los gráficos solo están disponibles en el modo Clasificado.',
     lbl_class: 'Clase', lbl_pixel: 'Píxel', lbl_value: 'Valor',
     aoi_hint: 'Defina un área de trabajo (AOI) para valores en hectáreas.',
     shp_error: 'Error al leer SHP: ', shp_hint: '\nSeleccione .shp, .shx y .dbf juntos.',
@@ -30676,6 +31476,22 @@ var SYLVA_TRANSLATIONS = {
     env_impervious: 'Cambio de Superficie Impermeable (Impervious Surface)',
     env_drought: 'Monitoreo de Sequía (Humedad del Suelo / SPI)',
     env_flood: 'Mapeo de Inundaciones (SAR)',
+    env_lst_lulc_corr: 'Correlación cobertura del suelo–temperatura',
+    env_reservoir_volume: 'Estimación del cambio de volumen de embalses/lagos',
+    env_water_quality: 'Proxy de calidad del agua',
+    env_canopy_biomass: 'Altura del dosel / biomasa-carbono',
+    env_forest_health: 'Monitoreo de la salud forestal',
+    env_nightlights: 'Luces nocturnas — cambio en la actividad económica',
+    env_air_group: '🌬️ Calidad del aire',
+    env_no2_series: 'Serie temporal de NO₂',
+    env_aerosol_depth: 'Profundidad óptica de aerosoles',
+    env_so2_co_anomaly: 'Mapa de anomalías de SO₂/CO',
+    env_coastal_group: '🏖️ Costero y marino',
+    env_coastline_change: 'Cambio de la línea de costa',
+    env_sst_trend: 'Tendencia de la temperatura superficial del mar (TSM)',
+    env_landslide: 'Mapa de susceptibilidad a deslizamientos',
+    env_drought_risk_composite: 'Índice compuesto de riesgo de sequía',
+    env_earthquake_damage: 'Proxy de daños post-terremoto',
     dp_placeholder: 'Seleccionar fecha',
     ws_stroke_lbl: 'Color trazo', ws_fill_lbl: 'Color relleno',
     raw_bands_selected: 'bandas seleccionadas', lbl_selected_img: '✅ Imagen seleccionada:',
@@ -30925,6 +31741,9 @@ var SYLVA_TRANSLATIONS = {
     lbl_area: 'Área:', lbl_perimeter: 'Perímetro:',
     date_title: 'Seleção de datas', date_start: 'Início', date_end: 'Fim',
     cloud_label: 'Nebulosidade (Máx)',
+    date_title_2: 'Período 2',
+    cloud_label_2: 'Nebulosidade (Máx) — Período 2',
+    month_label_2: 'Seleção de meses — Período 2',
     analysis_modules: 'Módulos de análise & dados',
     sec_satellite_img: '🛰️ Imagem de satélite',
     sec_satellite_analysis: '🌍 Dados e análises de satélite',
@@ -31092,7 +31911,7 @@ var SYLVA_TRANSLATIONS = {
     no_geom: 'Não foi encontrada geometria válida. Verifique a AOI.',
     server_error: 'Não é possível ligar ao servidor. O server.py está em execução? ',
     run_analysis: '🚀 Executar análise', running: '⏳ A executar…', stack_analysis_toggle: '🗂️ Adicionar à análise anterior',
-    no_stats: 'Sem estatísticas', run_first: 'Execute primeiro uma análise.', chart_empty: '📊 🥧 Após a conclusão da análise, a distribuição de área e porcentagem dos dados classificados aparecerá aqui.', chart_line_note: '📈 O gráfico de linhas é exclusivo para Análise de série temporal e mudança.', chart_classified_only: 'Os gráficos só estão disponíveis no modo Classificado.',
+    no_stats: 'Sem estatísticas', run_first: 'Execute primeiro uma análise.', chart_empty: 'Mostra de forma comparativa a distribuição e as porcentagens dos dados classificados.', chart_line_note: '📈 O gráfico de linhas é exclusivo para Análise de série temporal e mudança.', chart_classified_only: 'Os gráficos só estão disponíveis no modo Classificado.',
     lbl_class: 'Classe', lbl_pixel: 'Pixel', lbl_value: 'Valor',
     aoi_hint: 'Defina uma área de trabalho (AOI) para valores em hectares.',
     shp_error: 'Erro ao ler SHP: ', shp_hint: '\\nSelecione .shp, .shx e .dbf juntos.',
@@ -31181,6 +32000,22 @@ var SYLVA_TRANSLATIONS = {
     env_impervious: 'Mudança de Superfície Impermeável (Impervious Surface)',
     env_drought: 'Monitoramento de Seca (Umidade do Solo / SPI)',
     env_flood: 'Mapeamento de Inundações (SAR)',
+    env_lst_lulc_corr: 'Correlação cobertura do solo–temperatura',
+    env_reservoir_volume: 'Estimativa de variação de volume de reservatórios/lagos',
+    env_water_quality: 'Proxy de qualidade da água',
+    env_canopy_biomass: 'Altura do dossel / biomassa-carbono',
+    env_forest_health: 'Monitoramento da saúde florestal',
+    env_nightlights: 'Luzes noturnas — mudança na atividade econômica',
+    env_air_group: '🌬️ Qualidade do ar',
+    env_no2_series: 'Série temporal de NO₂',
+    env_aerosol_depth: 'Profundidade ótica de aerossóis',
+    env_so2_co_anomaly: 'Mapa de anomalias de SO₂/CO',
+    env_coastal_group: '🏖️ Costeiro e marinho',
+    env_coastline_change: 'Mudança da linha de costa',
+    env_sst_trend: 'Tendência da temperatura da superfície do mar (TSM)',
+    env_landslide: 'Mapa de suscetibilidade a deslizamentos',
+    env_drought_risk_composite: 'Índice composto de risco de seca',
+    env_earthquake_damage: 'Proxy de danos pós-sismo',
     dp_placeholder: 'Selecionar data',
     ws_stroke_lbl: 'Cor do traço', ws_fill_lbl: 'Cor de preenchimento',
     raw_bands_selected: 'bandas selecionadas', lbl_selected_img: '✅ Imagem selecionada:',
@@ -31430,6 +32265,9 @@ var SYLVA_TRANSLATIONS = {
     lbl_area: 'المساحة:', lbl_perimeter: 'المحيط:',
     date_title: 'اختيار التاريخ', date_start: 'البداية', date_end: 'النهاية',
     cloud_label: 'الغطاء السحابي (الحد الأقصى)',
+    date_title_2: 'الفترة 2',
+    cloud_label_2: 'الغطاء السحابي (الحد الأقصى) — الفترة 2',
+    month_label_2: 'اختيار الأشهر — الفترة 2',
     analysis_modules: 'وحدات التحليل والبيانات',
     sec_satellite_img: '🛰️ صورة الأقمار الصناعية',
     sec_satellite_analysis: '🌍 بيانات وتحليلات الأقمار الصناعية',
@@ -31597,7 +32435,7 @@ var SYLVA_TRANSLATIONS = {
     no_geom: 'لم يتم العثور على هندسة صالحة. يرجى التحقق من AOI.',
     server_error: 'تعذر الاتصال بالخادم. هل server.py يعمل؟ ',
     run_analysis: '🚀 تشغيل التحليل', running: '⏳ جارٍ التشغيل…', stack_analysis_toggle: '🗂️ إضافة إلى التحليل السابق',
-    no_stats: 'لا إحصائيات', run_first: 'شغّل تحليلاً أولاً.', chart_empty: '📊 🥧 بعد اكتمال التحليل، ستظهر هنا توزيع المساحة والنسبة المئوية للبيانات المصنفة.', chart_line_note: '📈 مخطط الخط مخصص حصرياً لـ تحليل السلاسل الزمنية والتغيير.', chart_classified_only: 'المخططات متاحة فقط في وضع التصنيف.',
+    no_stats: 'لا إحصائيات', run_first: 'شغّل تحليلاً أولاً.', chart_empty: 'يعرض توزيع ونسب البيانات المصنفة بشكل مقارن.', chart_line_note: '📈 مخطط الخط مخصص حصرياً لـ تحليل السلاسل الزمنية والتغيير.', chart_classified_only: 'المخططات متاحة فقط في وضع التصنيف.',
     lbl_class: 'الفئة', lbl_pixel: 'بكسل', lbl_value: 'قيمة',
     aoi_hint: 'حدد منطقة عمل (AOI) لقيم الهكتار.',
     shp_error: 'خطأ في قراءة SHP: ', shp_hint: '\nحدد .shp و.shx و.dbf معاً.',
@@ -31686,6 +32524,22 @@ var SYLVA_TRANSLATIONS = {
     env_impervious: 'تغير السطح غير المنفذ (Impervious Surface)',
     env_drought: 'رصد الجفاف (رطوبة التربة / SPI)',
     env_flood: 'رسم خرائط الفيضانات (SAR)',
+    env_lst_lulc_corr: 'ارتباط الغطاء الأرضي بدرجة الحرارة',
+    env_reservoir_volume: 'تقدير تغير حجم الخزانات/البحيرات',
+    env_water_quality: 'مؤشر غير مباشر لجودة المياه',
+    env_canopy_biomass: 'ارتفاع المظلة الشجرية / الكتلة الحيوية-الكربون',
+    env_forest_health: 'رصد صحة الغابات',
+    env_nightlights: 'الأضواء الليلية — تغير النشاط الاقتصادي',
+    env_air_group: '🌬️ جودة الهواء',
+    env_no2_series: 'السلسلة الزمنية لـ NO₂',
+    env_aerosol_depth: 'العمق البصري للهباء الجوي',
+    env_so2_co_anomaly: 'خريطة الشذوذ لـ SO₂/CO',
+    env_coastal_group: '🏖️ الساحلي والبحري',
+    env_coastline_change: 'تغير الخط الساحلي',
+    env_sst_trend: 'اتجاه درجة حرارة سطح البحر (SST)',
+    env_landslide: 'خريطة قابلية وقوع الانهيارات الأرضية',
+    env_drought_risk_composite: 'المؤشر المركب لمخاطر الجفاف',
+    env_earthquake_damage: 'مؤشر غير مباشر لأضرار ما بعد الزلزال',
     dp_placeholder: 'اختر التاريخ',
     ws_stroke_lbl: 'لون الحد', ws_fill_lbl: 'لون التعبئة',
     raw_bands_selected: 'نطاقات محددة', lbl_selected_img: '✅ الصورة المحددة:',
@@ -31935,6 +32789,9 @@ var SYLVA_TRANSLATIONS = {
     lbl_area: 'مساحت:', lbl_perimeter: 'محیط:',
     date_title: 'انتخاب تاریخ', date_start: 'شروع', date_end: 'پایان',
     cloud_label: 'پوشش ابری (حداکثر)',
+    date_title_2: 'دوره ۲',
+    cloud_label_2: 'پوشش ابری (حداکثر) — دوره ۲',
+    month_label_2: 'انتخاب ماه — دوره ۲',
     analysis_modules: 'ماژول‌های تحلیل و داده',
     sec_satellite_img: '🛰️ تصویر ماهواره‌ای',
     sec_satellite_analysis: '🌍 داده‌ها و تحلیل‌های ماهواره‌ای',
@@ -32102,7 +32959,7 @@ var SYLVA_TRANSLATIONS = {
     no_geom: 'هندسه معتبری یافت نشد. لطفاً AOI را بررسی کنید.',
     server_error: 'اتصال به سرور ممکن نیست. آیا server.py در حال اجراست؟ ',
     run_analysis: '🚀 اجرای تحلیل', running: '⏳ در حال اجرا…', stack_analysis_toggle: '🗂️ افزودن به تحلیل قبلی',
-    no_stats: 'آماری موجود نیست', run_first: 'ابتدا یک تحلیل اجرا کنید.', chart_empty: '📊 🥧 پس از اتمام تحلیل، توزیع مساحت و درصد داده‌های طبقه‌بندی‌شده اینجا نمایش داده می‌شود.', chart_line_note: '📈 نمودار خطی منحصراً برای آنالیز سری زمانی و تغییر است.', chart_classified_only: 'نمودارها فقط در حالت طبقه‌بندی‌شده در دسترس هستند.',
+    no_stats: 'آماری موجود نیست', run_first: 'ابتدا یک تحلیل اجرا کنید.', chart_empty: 'توزیع و نسبت‌های درصدی داده‌های طبقه‌بندی‌شده را به‌صورت مقایسه‌ای نمایش می‌دهد.', chart_line_note: '📈 نمودار خطی منحصراً برای آنالیز سری زمانی و تغییر است.', chart_classified_only: 'نمودارها فقط در حالت طبقه‌بندی‌شده در دسترس هستند.',
     lbl_class: 'کلاس', lbl_pixel: 'پیکسل', lbl_value: 'مقدار',
     aoi_hint: 'برای مقادیر هکتار یک فضای کاری (AOI) تعریف کنید.',
     shp_error: 'خطا در خواندن SHP: ', shp_hint: '\n.shp، .shx و .dbf را با هم انتخاب کنید.',
@@ -32191,6 +33048,22 @@ var SYLVA_TRANSLATIONS = {
     env_impervious: 'تغییر سطح نفوذناپذیر (Impervious Surface)',
     env_drought: 'پایش خشکسالی (رطوبت خاک / SPI)',
     env_flood: 'نقشه‌برداری سیل (SAR)',
+    env_lst_lulc_corr: 'همبستگی پوشش اراضی با دما',
+    env_reservoir_volume: 'برآورد تغییر حجم مخزن/دریاچه',
+    env_water_quality: 'شاخص غیرمستقیم کیفیت آب',
+    env_canopy_biomass: 'ارتفاع تاج پوشش / زیست‌توده-کربن',
+    env_forest_health: 'پایش سلامت جنگل',
+    env_nightlights: 'نورهای شبانه — تغییر فعالیت اقتصادی',
+    env_air_group: '🌬️ کیفیت هوا',
+    env_no2_series: 'سری زمانی NO₂',
+    env_aerosol_depth: 'عمق نوری ائروسل',
+    env_so2_co_anomaly: 'نقشه ناهنجاری SO₂/CO',
+    env_coastal_group: '🏖️ ساحلی و دریایی',
+    env_coastline_change: 'تغییر خط ساحلی',
+    env_sst_trend: 'روند دمای سطح دریا (SST)',
+    env_landslide: 'نقشه حساسیت به زمین‌لغزش',
+    env_drought_risk_composite: 'شاخص ترکیبی خطر خشکسالی',
+    env_earthquake_damage: 'شاخص غیرمستقیم خسارت پس از زلزله',
     dp_placeholder: 'تاریخ را انتخاب کنید',
     ws_stroke_lbl: 'رنگ خط', ws_fill_lbl: 'رنگ پر',
     raw_bands_selected: 'باند انتخاب‌شده', lbl_selected_img: '✅ تصویر انتخاب‌شده:',
@@ -32440,6 +33313,9 @@ var SYLVA_TRANSLATIONS = {
     lbl_area: '面积：', lbl_perimeter: '周长：',
     date_title: '日期选择', date_start: '开始', date_end: '结束',
     cloud_label: '云量（最大）',
+    date_title_2: '第二期',
+    cloud_label_2: '云量（最大） — 第二期',
+    month_label_2: '月份选择 — 第二期',
     analysis_modules: '分析与数据模块',
     sec_satellite_img: '🛰️ 卫星图像',
     sec_satellite_analysis: '🌍 卫星数据与分析',
@@ -32607,7 +33483,7 @@ var SYLVA_TRANSLATIONS = {
     no_geom: '未找到有效的工作区几何形状。请检查 AOI。',
     server_error: '无法连接到服务器。server.py 是否正在运行？',
     run_analysis: '🚀 运行分析', running: '⏳ 运行中…', stack_analysis_toggle: '🗂️ 添加到之前的分析',
-    no_stats: '无统计数据', run_first: '请先运行分析。', chart_empty: '📊 🥧 分析完成后，分类数据的面积和百分比分布将显示在这里。', chart_line_note: '📈 折线图专用于 时间序列与变化分析。', chart_classified_only: '图表仅在分类模式下可用。',
+    no_stats: '无统计数据', run_first: '请先运行分析。', chart_empty: '以对比方式显示分类数据的分布和百分比。', chart_line_note: '📈 折线图专用于 时间序列与变化分析。', chart_classified_only: '图表仅在分类模式下可用。',
     lbl_class: '类别', lbl_pixel: '像素', lbl_value: '值',
     aoi_hint: '请在地图上定义工作区 (AOI) 以获取公顷值。',
     shp_error: 'SHP 读取错误：', shp_hint: '\n请同时选择 .shp、.shx 和 .dbf 文件。',
@@ -32696,6 +33572,22 @@ var SYLVA_TRANSLATIONS = {
     env_impervious: '不透水面变化 (Impervious Surface)',
     env_drought: '干旱监测（土壤湿度 / SPI）',
     env_flood: '洪水制图 (SAR)',
+    env_lst_lulc_corr: '土地覆盖与温度相关性',
+    env_reservoir_volume: '水库/湖泊蓄水量变化估算',
+    env_water_quality: '水质代用指标',
+    env_canopy_biomass: '冠层高度/生物量-碳',
+    env_forest_health: '森林健康监测',
+    env_nightlights: '夜间灯光—经济活动变化',
+    env_air_group: '🌬️ 空气质量',
+    env_no2_series: 'NO₂时间序列',
+    env_aerosol_depth: '气溶胶光学厚度',
+    env_so2_co_anomaly: 'SO₂/CO异常图',
+    env_coastal_group: '🏖️ 海岸与海洋',
+    env_coastline_change: '海岸线变化',
+    env_sst_trend: '海表温度（SST）趋势',
+    env_landslide: '滑坡易发性图',
+    env_drought_risk_composite: '干旱风险综合指数',
+    env_earthquake_damage: '震后损毁代用指标',
     dp_placeholder: '选择日期',
     ws_stroke_lbl: '描边颜色', ws_fill_lbl: '填充颜色',
     raw_bands_selected: '个波段已选择', lbl_selected_img: '✅ 已选图像：',
@@ -32945,6 +33837,9 @@ var SYLVA_TRANSLATIONS = {
     lbl_area: '面積：', lbl_perimeter: '周囲長：',
     date_title: '日付選択', date_start: '開始', date_end: '終了',
     cloud_label: '雲量（最大）',
+    date_title_2: '期間2',
+    cloud_label_2: '雲量（最大） — 期間2',
+    month_label_2: '月選択 — 期間2',
     analysis_modules: '分析・データモジュール',
     sec_satellite_img: '🛰️ 衛星画像',
     sec_satellite_analysis: '🌍 衛星データと分析',
@@ -33112,7 +34007,7 @@ var SYLVA_TRANSLATIONS = {
     no_geom: '有効なジオメトリが見つかりません。AOIを確認してください。',
     server_error: 'サーバーに接続できません。server.pyは起動していますか？',
     run_analysis: '🚀 解析を実行', running: '⏳ 実行中…', stack_analysis_toggle: '🗂️ 前回の解析に追加',
-    no_stats: '統計データなし', run_first: '最初に解析を実行してください。', chart_empty: '📊 🥧 分析が完了すると、分類データの面積とパーセント分布がここに表示されます。', chart_line_note: '📈 折れ線グラフは 時系列・変化分析 専用です。', chart_classified_only: 'グラフは分類モードでのみ使用できます。',
+    no_stats: '統計データなし', run_first: '最初に解析を実行してください。', chart_empty: '分類データの分布と割合を比較して表示します。', chart_line_note: '📈 折れ線グラフは 時系列・変化分析 専用です。', chart_classified_only: 'グラフは分類モードでのみ使用できます。',
     lbl_class: 'クラス', lbl_pixel: 'ピクセル', lbl_value: '値',
     aoi_hint: 'ヘクタール値のためにワークスペース (AOI) を定義してください。',
     shp_error: 'SHP読み取りエラー：', shp_hint: '\n.shp、.shx、.dbfを一緒に選択してください。',
@@ -33201,6 +34096,22 @@ var SYLVA_TRANSLATIONS = {
     env_impervious: '不透水面変化 (Impervious Surface)',
     env_drought: '干ばつモニタリング（土壌水分 / SPI）',
     env_flood: '洪水マッピング (SAR)',
+    env_lst_lulc_corr: '土地被覆と温度の相関',
+    env_reservoir_volume: '貯水池・湖の水量変化推定',
+    env_water_quality: '水質代替指標',
+    env_canopy_biomass: '樹冠高/バイオマス炭素',
+    env_forest_health: '森林健康モニタリング',
+    env_nightlights: '夜間光—経済活動の変化',
+    env_air_group: '🌬️ 大気質',
+    env_no2_series: 'NO₂時系列',
+    env_aerosol_depth: 'エアロゾル光学的厚さ',
+    env_so2_co_anomaly: 'SO₂/CO異常マップ',
+    env_coastal_group: '🏖️ 沿岸・海洋',
+    env_coastline_change: '海岸線変化',
+    env_sst_trend: '海面水温（SST）トレンド',
+    env_landslide: '地すべり危険度マップ',
+    env_drought_risk_composite: '干ばつリスク複合指数',
+    env_earthquake_damage: '震後被害代替指標',
     dp_placeholder: '日付を選択',
     ws_stroke_lbl: '線色', ws_fill_lbl: '塗り色',
     raw_bands_selected: 'バンドが選択されました', lbl_selected_img: '✅ 選択した画像：',
@@ -33450,6 +34361,9 @@ var SYLVA_TRANSLATIONS = {
     lbl_area: '면적:', lbl_perimeter: '둘레:',
     date_title: '날짜 선택', date_start: '시작', date_end: '종료',
     cloud_label: '구름 양 (최대)',
+    date_title_2: '기간 2',
+    cloud_label_2: '구름 양 (최대) — 기간 2',
+    month_label_2: '월 선택 — 기간 2',
     analysis_modules: '분석 및 데이터 모듈',
     sec_satellite_img: '🛰️ 위성 이미지',
     sec_satellite_analysis: '🌍 위성 데이터 및 분석',
@@ -33617,7 +34531,7 @@ var SYLVA_TRANSLATIONS = {
     no_geom: '유효한 작업 공간 형상을 찾을 수 없습니다. AOI를 확인하세요.',
     server_error: '서버에 연결할 수 없습니다. server.py가 실행 중인가요? ',
     run_analysis: '🚀 분석 실행', running: '⏳ 실행 중…', stack_analysis_toggle: '🗂️ 이전 분석에 추가',
-    no_stats: '통계 없음', run_first: '먼저 분석을 실행하세요.', chart_empty: '📊 🥧 분석이 완료되면 분류된 데이터의 면적 및 백분율 분포가 여기에 표시됩니다.', chart_line_note: '📈 꺾은선 그래프는 시계열 및 변화 분석 전용입니다.', chart_classified_only: '차트는 분류 모드에서만 사용할 수 있습니다.',
+    no_stats: '통계 없음', run_first: '먼저 분석을 실행하세요.', chart_empty: '분류된 데이터의 분포와 백분율을 비교하여 보여줍니다.', chart_line_note: '📈 꺾은선 그래프는 시계열 및 변화 분석 전용입니다.', chart_classified_only: '차트는 분류 모드에서만 사용할 수 있습니다.',
     lbl_class: '클래스', lbl_pixel: '픽셀', lbl_value: '값',
     aoi_hint: '헥타르 값을 위해 작업 공간 (AOI)을 정의하세요.',
     shp_error: 'SHP 읽기 오류: ', shp_hint: '\n.shp, .shx, .dbf를 함께 선택하세요.',
@@ -33706,6 +34620,22 @@ var SYLVA_TRANSLATIONS = {
     env_impervious: '불투수면 변화 (Impervious Surface)',
     env_drought: '가뭄 모니터링 (토양 수분 / SPI)',
     env_flood: '홍수 매핑 (SAR)',
+    env_lst_lulc_corr: '토지피복–지표온도 상관관계',
+    env_reservoir_volume: '저수지/호수 부피 변화 추정',
+    env_water_quality: '수질 대리지표',
+    env_canopy_biomass: '수관 높이 / 바이오매스-탄소',
+    env_forest_health: '산림 건강 모니터링',
+    env_nightlights: '야간 조명 — 경제활동 변화',
+    env_air_group: '🌬️ 대기질',
+    env_no2_series: 'NO₂ 시계열',
+    env_aerosol_depth: '에어로졸 광학 두께',
+    env_so2_co_anomaly: 'SO₂/CO 이상 지도',
+    env_coastal_group: '🏖️ 해안 및 해양',
+    env_coastline_change: '해안선 변화',
+    env_sst_trend: '해수면 온도 (SST) 추세',
+    env_landslide: '산사태 취약성 지도',
+    env_drought_risk_composite: '가뭄 위험 복합 지수',
+    env_earthquake_damage: '지진 후 피해 대리지표',
     dp_placeholder: '날짜 선택',
     ws_stroke_lbl: '선 색상', ws_fill_lbl: '채우기 색상',
     raw_bands_selected: '밴드 선택됨', lbl_selected_img: '✅ 선택된 이미지:',
@@ -33955,6 +34885,9 @@ var SYLVA_TRANSLATIONS = {
     lbl_area: 'क्षेत्रफल:', lbl_perimeter: 'परिधि:',
     date_title: 'तिथि चयन', date_start: 'प्रारंभ', date_end: 'समाप्ति',
     cloud_label: 'बादल आवरण (अधिकतम)',
+    date_title_2: 'अवधि 2',
+    cloud_label_2: 'बादल आवरण (अधिकतम) — अवधि 2',
+    month_label_2: 'माह चयन — अवधि 2',
     analysis_modules: 'विश्लेषण और डेटा मॉड्यूल',
     sec_satellite_img: '🛰️ उपग्रह छवि',
     sec_satellite_analysis: '🌍 उपग्रह डेटा और विश्लेषण',
@@ -34094,7 +35027,7 @@ var SYLVA_TRANSLATIONS = {
     no_geom: 'कोई मान्य कार्यक्षेत्र ज्यामिति नहीं मिली। AOI जांचें।',
     server_error: 'सर्वर से कनेक्ट नहीं हो सका। क्या server.py चल रहा है? ',
     run_analysis: '🚀 विश्लेषण चलाएं', running: '⏳ चल रहा है…', stack_analysis_toggle: '🗂️ पिछले विश्लेषण में जोड़ें',
-    no_stats: 'कोई आंकड़े नहीं', run_first: 'पहले विश्लेषण चलाएं।', chart_empty: '📊 🥧 विश्लेषण पूरा होने के बाद, वर्गीकृत डेटा का क्षेत्र और प्रतिशत वितरण यहाँ दिखाई देगा।', chart_line_note: '📈 रेखा चार्ट विशेष रूप से समय श्रृंखला और परिवर्तन विश्लेषण के लिए है।', chart_classified_only: 'चार्ट केवल वर्गीकृत मोड में उपलब्ध हैं।',
+    no_stats: 'कोई आंकड़े नहीं', run_first: 'पहले विश्लेषण चलाएं।', chart_empty: 'वर्गीकृत डेटा के वितरण और प्रतिशत अनुपात को तुलनात्मक रूप से दिखाता है।', chart_line_note: '📈 रेखा चार्ट विशेष रूप से समय श्रृंखला और परिवर्तन विश्लेषण के लिए है।', chart_classified_only: 'चार्ट केवल वर्गीकृत मोड में उपलब्ध हैं।',
     lbl_class: 'वर्ग', lbl_pixel: 'पिक्सेल', lbl_value: 'मान',
     aoi_hint: 'हेक्टेयर मानों के लिए कार्यक्षेत्र (AOI) परिभाषित करें।',
     shp_error: 'SHP पढ़ने में त्रुटि: ', shp_hint: '\n.shp, .shx और .dbf एक साथ चुनें।',
@@ -34183,6 +35116,22 @@ var SYLVA_TRANSLATIONS = {
     env_impervious: 'अभेद्य सतह परिवर्तन (Impervious Surface)',
     env_drought: 'सूखा निगरानी (मृदा नमी / SPI)',
     env_flood: 'बाढ़ मानचित्रण (SAR)',
+    env_lst_lulc_corr: 'भूमि आवरण–तापमान सहसंबंध',
+    env_reservoir_volume: 'जलाशय/झील आयतन परिवर्तन अनुमान',
+    env_water_quality: 'जल गुणवत्ता प्रॉक्सी',
+    env_canopy_biomass: 'कैनोपी ऊँचाई / जैवभार-कार्बन',
+    env_forest_health: 'वन स्वास्थ्य निगरानी',
+    env_nightlights: 'रात्रिकालीन प्रकाश — आर्थिक गतिविधि परिवर्तन',
+    env_air_group: '🌬️ वायु गुणवत्ता',
+    env_no2_series: 'NO₂ समय श्रृंखला',
+    env_aerosol_depth: 'एरोसोल प्रकाशिक गहराई',
+    env_so2_co_anomaly: 'SO₂/CO विसंगति मानचित्र',
+    env_coastal_group: '🏖️ तटीय एवं समुद्री',
+    env_coastline_change: 'तटरेखा परिवर्तन',
+    env_sst_trend: 'समुद्र सतह तापमान (SST) प्रवृत्ति',
+    env_landslide: 'भूस्खलन संवेदनशीलता मानचित्र',
+    env_drought_risk_composite: 'सूखा जोखिम समग्र सूचकांक',
+    env_earthquake_damage: 'भूकंप-पश्चात क्षति प्रॉक्सी',
     dp_placeholder: 'तिथि चुनें',
     ws_stroke_lbl: 'रेखा रंग', ws_fill_lbl: 'भरण रंग',
     raw_bands_selected: 'बैंड चुने गए', lbl_selected_img: '✅ चयनित छवि:',
@@ -34460,6 +35409,9 @@ var SYLVA_TRANSLATIONS = {
     lbl_area: 'Luas:', lbl_perimeter: 'Keliling:',
     date_title: 'Pilih Tanggal', date_start: 'Mulai', date_end: 'Selesai',
     cloud_label: 'Tutupan Awan (Maks)',
+    date_title_2: 'Periode 2',
+    cloud_label_2: 'Tutupan Awan (Maks) — Periode 2',
+    month_label_2: 'Pilihan Bulan — Periode 2',
     analysis_modules: 'Modul Analisis & Data',
     sec_satellite_img: '🛰️ Citra Satelit',
     sec_satellite_analysis: '🌍 Data dan Analisis Satelit',
@@ -34599,7 +35551,7 @@ var SYLVA_TRANSLATIONS = {
     no_geom: 'Tidak ditemukan geometri valid. Periksa AOI.',
     server_error: 'Tidak dapat terhubung ke server. Apakah server.py berjalan? ',
     run_analysis: '🚀 Jalankan Analisis', running: '⏳ Berjalan…', stack_analysis_toggle: '🗂️ Tambahkan ke Analisis Sebelumnya',
-    no_stats: 'Tidak ada statistik', run_first: 'Jalankan analisis terlebih dahulu.', chart_empty: '📊 🥧 Setelah analisis selesai, distribusi luas dan persentase data yang diklasifikasikan akan muncul di sini.', chart_line_note: '📈 Grafik Garis khusus untuk Analisis Deret Waktu & Perubahan.', chart_classified_only: 'Grafik hanya tersedia dalam mode Terklasifikasi.',
+    no_stats: 'Tidak ada statistik', run_first: 'Jalankan analisis terlebih dahulu.', chart_empty: 'Menampilkan distribusi dan persentase data terklasifikasi secara komparatif.', chart_line_note: '📈 Grafik Garis khusus untuk Analisis Deret Waktu & Perubahan.', chart_classified_only: 'Grafik hanya tersedia dalam mode Terklasifikasi.',
     lbl_class: 'Kelas', lbl_pixel: 'Piksel', lbl_value: 'Nilai',
     aoi_hint: 'Tentukan ruang kerja (AOI) untuk nilai hektar.',
     shp_error: 'Kesalahan baca SHP: ', shp_hint: '\nPilih .shp, .shx, dan .dbf bersama.',
@@ -34688,6 +35640,22 @@ var SYLVA_TRANSLATIONS = {
     env_impervious: 'Perubahan Permukaan Kedap Air (Impervious Surface)',
     env_drought: 'Pemantauan Kekeringan (Kelembaban Tanah / SPI)',
     env_flood: 'Pemetaan Banjir (SAR)',
+    env_lst_lulc_corr: 'Korelasi Tutupan Lahan–Suhu',
+    env_reservoir_volume: 'Estimasi Perubahan Volume Waduk/Danau',
+    env_water_quality: 'Proksi Kualitas Air',
+    env_canopy_biomass: 'Tinggi Kanopi / Biomassa-Karbon',
+    env_forest_health: 'Pemantauan Kesehatan Hutan',
+    env_nightlights: 'Cahaya Malam Hari — Perubahan Aktivitas Ekonomi',
+    env_air_group: '🌬️ Kualitas Udara',
+    env_no2_series: 'Deret Waktu NO₂',
+    env_aerosol_depth: 'Kedalaman Optik Aerosol',
+    env_so2_co_anomaly: 'Peta Anomali SO₂/CO',
+    env_coastal_group: '🏖️ Pesisir dan Kelautan',
+    env_coastline_change: 'Perubahan Garis Pantai',
+    env_sst_trend: 'Tren Suhu Permukaan Laut (SST)',
+    env_landslide: 'Peta Kerentanan Gerakan Tanah',
+    env_drought_risk_composite: 'Indeks Komposit Risiko Kekeringan',
+    env_earthquake_damage: 'Proksi Kerusakan Pasca-Gempa',
     dp_placeholder: 'Pilih tanggal',
     ws_stroke_lbl: 'Warna Garis', ws_fill_lbl: 'Warna Isi',
     raw_bands_selected: 'band dipilih', lbl_selected_img: '✅ Gambar terpilih:',
@@ -34981,6 +35949,9 @@ var SYLVA_TRANSLATIONS = {
     lbl_area: 'Площадь:', lbl_perimeter: 'Периметр:',
     date_title: 'Выбор даты', date_start: 'Начало', date_end: 'Конец',
     cloud_label: 'Облачность (макс.)',
+    date_title_2: 'Период 2',
+    cloud_label_2: 'Облачность (макс.) — Период 2',
+    month_label_2: 'Выбор месяцев — Период 2',
     analysis_modules: 'Модули анализа и данных',
     sec_satellite_img: '🛰️ Спутниковый снимок',
     sec_satellite_analysis: '🌍 Спутниковые данные и анализы',
@@ -35138,7 +36109,7 @@ var SYLVA_TRANSLATIONS = {
     no_geom: 'Не найдена корректная геометрия рабочей области. Проверьте AOI.',
     server_error: 'Не удаётся подключиться к серверу. Запущен ли server.py? ',
     run_analysis: '🚀 Запустить анализ', running: '⏳ Выполняется…', stack_analysis_toggle: '🗂️ Добавить к предыдущему анализу',
-    no_stats: 'Нет статистики', run_first: 'Сначала запустите анализ.', chart_empty: '📊 🥧 После завершения анализа здесь отобразится распределение площади и процентов классифицированных данных.', chart_line_note: '📈 Линейный график предназначен исключительно для Анализа временных рядов и изменений.', chart_classified_only: 'Графики доступны только в режиме классификации.',
+    no_stats: 'Нет статистики', run_first: 'Сначала запустите анализ.', chart_empty: 'Показывает распределение и процентные соотношения классифицированных данных в сравнении.', chart_line_note: '📈 Линейный график предназначен исключительно для Анализа временных рядов и изменений.', chart_classified_only: 'Графики доступны только в режиме классификации.',
     lbl_class: 'Класс', lbl_pixel: 'Пиксель', lbl_value: 'Значение',
     aoi_hint: 'Определите рабочую область (AOI) на карте для значений в гектарах.',
     shp_error: 'Ошибка чтения SHP: ', shp_hint: '\nПодсказка: выберите файлы .shp, .shx и .dbf вместе.',
@@ -35229,6 +36200,22 @@ var SYLVA_TRANSLATIONS = {
     env_impervious: 'Изменение водонепроницаемых поверхностей (Impervious Surface)',
     env_drought: 'Мониторинг засухи (Влажность почвы / SPI)',
     env_flood: 'Картирование наводнений (SAR)',
+    env_lst_lulc_corr: 'Корреляция земного покрова и температуры',
+    env_reservoir_volume: 'Оценка изменения объёма водохранилища/озера',
+    env_water_quality: 'Прокси-показатель качества воды',
+    env_canopy_biomass: 'Высота полога / Биомасса-углерод',
+    env_forest_health: 'Мониторинг состояния лесов',
+    env_nightlights: 'Ночные огни — изменение экономической активности',
+    env_air_group: '🌬️ Качество воздуха',
+    env_no2_series: 'Временной ряд NO₂',
+    env_aerosol_depth: 'Аэрозольная оптическая толщина',
+    env_so2_co_anomaly: 'Карта аномалий SO₂/CO',
+    env_coastal_group: '🏖️ Побережье и море',
+    env_coastline_change: 'Изменение береговой линии',
+    env_sst_trend: 'Тренд температуры поверхности моря (SST)',
+    env_landslide: 'Карта подверженности оползням',
+    env_drought_risk_composite: 'Композитный индекс риска засухи',
+    env_earthquake_damage: 'Прокси-показатель ущерба после землетрясения',
     dp_placeholder: 'Выберите дату',
     ws_stroke_lbl: 'Цвет обводки', ws_fill_lbl: 'Цвет заливки',
     raw_bands_selected: 'каналов выбрано', lbl_selected_img: '✅ Выбранное изображение:',
@@ -35484,6 +36471,9 @@ var SYLVA_TRANSLATIONS = {
     lbl_area: 'พื้นที่:', lbl_perimeter: 'เส้นรอบวง:',
     date_title: 'เลือกวันที่', date_start: 'เริ่มต้น', date_end: 'สิ้นสุด',
     cloud_label: 'ความครอบคลุมเมฆ (สูงสุด)',
+    date_title_2: 'ช่วงที่ 2',
+    cloud_label_2: 'ความครอบคลุมเมฆ (สูงสุด) — ช่วงที่ 2',
+    month_label_2: 'เลือกเดือน — ช่วงที่ 2',
     analysis_modules: 'โมดูลการวิเคราะห์ & ข้อมูล',
     sec_satellite_img: '🛰️ ภาพดาวเทียม',
     sec_satellite_analysis: '🌍 ข้อมูลและการวิเคราะห์ดาวเทียม',
@@ -35640,7 +36630,7 @@ var SYLVA_TRANSLATIONS = {
     no_geom: 'ไม่พบรูปเรขาคณิตพื้นที่ทำงานที่ถูกต้อง กรุณาตรวจสอบ AOI',
     server_error: 'ไม่สามารถเชื่อมต่อกับเซิร์ฟเวอร์ server.py กำลังทำงานอยู่หรือไม่? ',
     run_analysis: '🚀 เรียกใช้การวิเคราะห์', running: '⏳ กำลังทำงาน…', stack_analysis_toggle: '🗂️ เพิ่มลงในการวิเคราะห์ก่อนหน้า',
-    no_stats: 'ไม่มีสถิติ', run_first: 'เรียกใช้การวิเคราะห์ก่อน', chart_empty: '📊 🥧 เมื่อการวิเคราะห์เสร็จสิ้น การกระจายพื้นที่และเปอร์เซ็นต์ของข้อมูลที่จัดประเภทจะปรากฏที่นี่', chart_line_note: '📈 กราฟเส้นใช้สำหรับ การวิเคราะห์อนุกรมเวลาและการเปลี่ยนแปลง โดยเฉพาะ', chart_classified_only: 'แผนภูมิพร้อมใช้งานในโหมดแบ่งประเภทเท่านั้น',
+    no_stats: 'ไม่มีสถิติ', run_first: 'เรียกใช้การวิเคราะห์ก่อน', chart_empty: 'แสดงการกระจายและสัดส่วนเปอร์เซ็นต์ของข้อมูลที่จัดประเภทแบบเปรียบเทียบ', chart_line_note: '📈 กราฟเส้นใช้สำหรับ การวิเคราะห์อนุกรมเวลาและการเปลี่ยนแปลง โดยเฉพาะ', chart_classified_only: 'แผนภูมิพร้อมใช้งานในโหมดแบ่งประเภทเท่านั้น',
     lbl_class: 'ประเภท', lbl_pixel: 'พิกเซล', lbl_value: 'ค่า',
     aoi_hint: 'กำหนดพื้นที่ทำงาน (AOI) บนแผนที่สำหรับค่าเป็นเฮกตาร์',
     shp_error: 'ข้อผิดพลาดการอ่าน SHP: ', shp_hint: '\nคำแนะนำ: เลือกไฟล์ .shp, .shx และ .dbf พร้อมกัน',
@@ -35727,6 +36717,22 @@ var SYLVA_TRANSLATIONS = {
     env_impervious: 'การเปลี่ยนแปลงพื้นผิวทึบน้ำ (Impervious Surface)',
     env_drought: 'การติดตามภัยแล้ง (ความชื้นดิน / SPI)',
     env_flood: 'การทำแผนที่น้ำท่วม (SAR)',
+    env_lst_lulc_corr: 'ความสัมพันธ์ระหว่างสิ่งปกคลุมดินกับอุณหภูมิ',
+    env_reservoir_volume: 'การประเมินการเปลี่ยนแปลงปริมาตรอ่างเก็บน้ำ/ทะเลสาบ',
+    env_water_quality: 'ตัวแทนคุณภาพน้ำ',
+    env_canopy_biomass: 'ความสูงเรือนยอด / มวลชีวภาพ-คาร์บอน',
+    env_forest_health: 'การติดตามสุขภาพป่าไม้',
+    env_nightlights: 'แสงไฟยามค่ำคืน — การเปลี่ยนแปลงกิจกรรมทางเศรษฐกิจ',
+    env_air_group: '🌬️ คุณภาพอากาศ',
+    env_no2_series: 'อนุกรมเวลา NO₂',
+    env_aerosol_depth: 'ความลึกเชิงแสงของละอองลอย',
+    env_so2_co_anomaly: 'แผนที่ความผิดปกติของ SO₂/CO',
+    env_coastal_group: '🏖️ ชายฝั่งและทะเล',
+    env_coastline_change: 'การเปลี่ยนแปลงแนวชายฝั่ง',
+    env_sst_trend: 'แนวโน้มอุณหภูมิผิวน้ำทะเล (SST)',
+    env_landslide: 'แผนที่ความอ่อนไหวต่อดินถล่ม',
+    env_drought_risk_composite: 'ดัชนีรวมความเสี่ยงภัยแล้ง',
+    env_earthquake_damage: 'ตัวแทนความเสียหายหลังแผ่นดินไหว',
     dp_placeholder: 'เลือกวันที่',
     ws_stroke_lbl: 'สีเส้นขีด', ws_fill_lbl: 'สีเติม',
     raw_bands_selected: 'แบนด์ที่เลือก', lbl_selected_img: '✅ รูปภาพที่เลือก:',
@@ -35983,6 +36989,9 @@ var SYLVA_TRANSLATIONS = {
     lbl_area: 'ক্ষেত্রফল:', lbl_perimeter: 'পরিধি:',
     date_title: 'তারিখ নির্বাচন', date_start: 'শুরু', date_end: 'শেষ',
     cloud_label: 'মেঘের আচ্ছাদন (সর্বোচ্চ)',
+    date_title_2: 'সময়কাল ২',
+    cloud_label_2: 'মেঘের আচ্ছাদন (সর্বোচ্চ) — সময়কাল ২',
+    month_label_2: 'মাস নির্বাচন — সময়কাল ২',
     analysis_modules: 'বিশ্লেষণ ও ডেটা মডিউল',
     sec_satellite_img: '🛰️ স্যাটেলাইট চিত্র',
     sec_satellite_analysis: '🌍 স্যাটেলাইট ডেটা ও বিশ্লেষণ',
@@ -36140,7 +37149,7 @@ var SYLVA_TRANSLATIONS = {
     no_geom: 'কোনো বৈধ কর্মক্ষেত্র জ্যামিতি পাওয়া যায়নি। অনুগ্রহ করে AOI পরীক্ষা করুন।',
     server_error: 'সার্ভারের সাথে সংযোগ করা যাচ্ছে না। server.py চলছে কি? ',
     run_analysis: '🚀 বিশ্লেষণ চালান', running: '⏳ চলছে…', stack_analysis_toggle: '🗂️ পূর্ববর্তী বিশ্লেষণে যোগ করুন',
-    no_stats: 'কোনো পরিসংখ্যান নেই', run_first: 'প্রথমে একটি বিশ্লেষণ চালান।', chart_empty: '📊 🥧 বিশ্লেষণ সম্পূর্ণ হলে, শ্রেণীবদ্ধ ডেটার ক্ষেত্রফল ও শতাংশ বিতরণ এখানে দেখা যাবে।', chart_line_note: '📈 রেখা চার্ট শুধুমাত্র সময় সিরিজ ও পরিবর্তন বিশ্লেষণের জন্য।', chart_classified_only: 'চার্ট শুধুমাত্র শ্রেণীবদ্ধ মোডে পাওয়া যায়।',
+    no_stats: 'কোনো পরিসংখ্যান নেই', run_first: 'প্রথমে একটি বিশ্লেষণ চালান।', chart_empty: 'শ্রেণীবদ্ধ ডেটার বিতরণ এবং শতাংশ অনুপাত তুলনামূলকভাবে প্রদর্শন করে।', chart_line_note: '📈 রেখা চার্ট শুধুমাত্র সময় সিরিজ ও পরিবর্তন বিশ্লেষণের জন্য।', chart_classified_only: 'চার্ট শুধুমাত্র শ্রেণীবদ্ধ মোডে পাওয়া যায়।',
     lbl_class: 'শ্রেণি', lbl_pixel: 'পিক্সেল', lbl_value: 'মান',
     aoi_hint: 'হেক্টর মান পেতে মানচিত্রে একটি কর্মক্ষেত্র (AOI) নির্ধারণ করুন।',
     shp_error: 'SHP পড়ার ত্রুটি: ', shp_hint: '\\nইঙ্গিত: .shp, .shx এবং .dbf ফাইলগুলো একসাথে নির্বাচন করুন।',
@@ -36231,6 +37240,22 @@ var SYLVA_TRANSLATIONS = {
     env_impervious: 'অভেদ্য পৃষ্ঠের পরিবর্তন (Impervious Surface)',
     env_drought: 'খরা পর্যবেক্ষণ (মাটির আর্দ্রতা / SPI)',
     env_flood: 'বন্যার মানচিত্র (SAR)',
+    env_lst_lulc_corr: 'ভূমি আচ্ছাদন–তাপমাত্রা সহসম্পর্ক',
+    env_reservoir_volume: 'জলাধার/হ্রদ আয়তন পরিবর্তন প্রাক্কলন',
+    env_water_quality: 'পানির গুণমান প্রক্সি',
+    env_canopy_biomass: 'ক্যানোপি উচ্চতা / জৈববস্তু-কার্বন',
+    env_forest_health: 'বন স্বাস্থ্য পর্যবেক্ষণ',
+    env_nightlights: 'রাত্রিকালীন আলো — অর্থনৈতিক কর্মকাণ্ডের পরিবর্তন',
+    env_air_group: '🌬️ বায়ুর গুণমান',
+    env_no2_series: 'NO₂ সময় সিরিজ',
+    env_aerosol_depth: 'অ্যারোসল আলোকীয় গভীরতা',
+    env_so2_co_anomaly: 'SO₂/CO অসঙ্গতি মানচিত্র',
+    env_coastal_group: '🏖️ উপকূলীয় ও সামুদ্রিক',
+    env_coastline_change: 'উপকূলরেখার পরিবর্তন',
+    env_sst_trend: 'সমুদ্র পৃষ্ঠ তাপমাত্রা (SST) প্রবণতা',
+    env_landslide: 'ভূমিধস সংবেদনশীলতা মানচিত্র',
+    env_drought_risk_composite: 'খরা ঝুঁকি সমন্বিত সূচক',
+    env_earthquake_damage: 'ভূমিকম্প-পরবর্তী ক্ষতি প্রক্সি',
     dp_placeholder: 'তারিখ নির্বাচন করুন',
     ws_stroke_lbl: 'রেখার রং', ws_fill_lbl: 'ভরাট রং',
     raw_bands_selected: 'টি ব্যান্ড নির্বাচিত', lbl_selected_img: '✅ নির্বাচিত ছবি:',
@@ -36471,6 +37496,9 @@ var SYLVA_TRANSLATIONS = {
     lbl_area: 'Diện tích:', lbl_perimeter: 'Chu vi:',
     date_title: 'Chọn ngày', date_start: 'Bắt đầu', date_end: 'Kết thúc',
     cloud_label: 'Độ che phủ mây (Tối đa)',
+    date_title_2: 'Giai đoạn 2',
+    cloud_label_2: 'Độ che phủ mây (Tối đa) — Giai đoạn 2',
+    month_label_2: 'Chọn tháng — Giai đoạn 2',
     analysis_modules: 'Mô-đun phân tích & Dữ liệu',
     sec_satellite_img: '🛰️ Ảnh vệ tinh',
     sec_satellite_analysis: '🌍 Dữ liệu và phân tích vệ tinh',
@@ -36610,7 +37638,7 @@ var SYLVA_TRANSLATIONS = {
     no_geom: 'Không tìm thấy hình học hợp lệ. Vui lòng kiểm tra AOI.',
     server_error: 'Không thể kết nối tới máy chủ. Server.py có đang chạy không? ',
     run_analysis: '🚀 Chạy phân tích', running: '⏳ Đang chạy…', stack_analysis_toggle: '🗂️ Thêm vào phân tích trước đó',
-    no_stats: 'Không có số liệu thống kê', run_first: 'Vui lòng chạy phân tích trước.', chart_empty: '📊 🥧 Sau khi phân tích hoàn tất, phân bổ diện tích và tỷ lệ phần trăm của dữ liệu phân loại sẽ xuất hiện tại đây.', chart_line_note: '📈 Biểu đồ đường dành riêng cho Phân tích chuỗi thời gian và biến đổi.', chart_classified_only: 'Biểu đồ chỉ khả dụng ở chế độ Phân loại.',
+    no_stats: 'Không có số liệu thống kê', run_first: 'Vui lòng chạy phân tích trước.', chart_empty: 'Hiển thị phân bổ và tỷ lệ phần trăm của dữ liệu phân loại theo cách so sánh.', chart_line_note: '📈 Biểu đồ đường dành riêng cho Phân tích chuỗi thời gian và biến đổi.', chart_classified_only: 'Biểu đồ chỉ khả dụng ở chế độ Phân loại.',
     lbl_class: 'Lớp', lbl_pixel: 'Điểm ảnh', lbl_value: 'Giá trị',
     aoi_hint: 'Xác định khu vực làm việc (AOI) để tính giá trị theo hecta.',
     shp_error: 'Lỗi đọc SHP: ', shp_hint: '\nVui lòng chọn .shp, .shx và .dbf cùng nhau.',
@@ -36699,6 +37727,22 @@ var SYLVA_TRANSLATIONS = {
     env_impervious: 'Biến động Bề mặt Không thấm nước (Impervious Surface)',
     env_drought: 'Giám sát Hạn hán (Độ ẩm Đất / SPI)',
     env_flood: 'Lập bản đồ Lũ lụt (SAR)',
+    env_lst_lulc_corr: 'Tương quan Lớp phủ Đất–Nhiệt độ',
+    env_reservoir_volume: 'Ước tính Thay đổi Dung tích Hồ chứa/Hồ',
+    env_water_quality: 'Chỉ số Đại diện Chất lượng Nước',
+    env_canopy_biomass: 'Chiều cao Tán rừng / Sinh khối-Carbon',
+    env_forest_health: 'Giám sát Sức khỏe Rừng',
+    env_nightlights: 'Ánh sáng Ban đêm — Thay đổi Hoạt động Kinh tế',
+    env_air_group: '🌬️ Chất lượng Không khí',
+    env_no2_series: 'Chuỗi Thời gian NO₂',
+    env_aerosol_depth: 'Độ dày Quang học Sol khí',
+    env_so2_co_anomaly: 'Bản đồ Dị thường SO₂/CO',
+    env_coastal_group: '🏖️ Ven biển và Biển',
+    env_coastline_change: 'Thay đổi Đường bờ biển',
+    env_sst_trend: 'Xu hướng Nhiệt độ Bề mặt Biển (SST)',
+    env_landslide: 'Bản đồ Nguy cơ Sạt lở đất',
+    env_drought_risk_composite: 'Chỉ số Tổng hợp Nguy cơ Hạn hán',
+    env_earthquake_damage: 'Chỉ số Đại diện Thiệt hại Sau Động đất',
     dp_placeholder: 'Chọn ngày',
     ws_stroke_lbl: 'Màu đường viền', ws_fill_lbl: 'Màu tô',
     raw_bands_selected: 'kênh phổ đã chọn', lbl_selected_img: '✅ Ảnh đã chọn:',
@@ -36992,6 +38036,9 @@ var SYLVA_TRANSLATIONS = {
     lbl_area: 'رقبہ:', lbl_perimeter: 'محیط:',
     date_title: 'تاریخ کا انتخاب', date_start: 'آغاز', date_end: 'اختتام',
     cloud_label: 'بادل کی مقدار (زیادہ سے زیادہ)',
+    date_title_2: 'دورانیہ 2',
+    cloud_label_2: 'بادل کی مقدار (زیادہ سے زیادہ) — دورانیہ 2',
+    month_label_2: 'مہینے کا انتخاب — دورانیہ 2',
     analysis_modules: 'تجزیہ اور ڈیٹا ماڈیول',
     sec_satellite_img: '🛰️ سیٹلائٹ تصویر',
     desc_satellite_img: 'Google Earth Engine کے ذریعے AOI + تاریخ کی حد + بادل کی مقدار کے معیار سے مطابقت رکھنے والے اصل سیٹلائٹ مناظر اسکین کیے جاتے ہیں اور تھمب نیل کے ساتھ گیلری میں درج کیے جاتے ہیں۔',
@@ -37106,7 +38153,7 @@ var SYLVA_TRANSLATIONS = {
     no_geom: 'کوئی درست کام کی جگہ کی ہندسہ نہیں ملی۔ براہ کرم AOI چیک کریں۔',
     server_error: 'سرور سے رابطہ نہیں ہو سکا۔ کیا server.py چل رہا ہے؟ ',
     run_analysis: '🚀 تجزیہ چلائیں', running: '⏳ جاری ہے…', stack_analysis_toggle: '🗂️ پچھلے تجزیے میں شامل کریں',
-    no_stats: 'کوئی اعداد و شمار نہیں', run_first: 'پہلے ایک تجزیہ چلائیں۔', chart_empty: '📊 🥧 تجزیہ مکمل ہونے کے بعد، درجہ بندی شدہ ڈیٹا کی رقبہ اور فیصد تقسیم یہاں ظاہر ہوگی۔', chart_line_note: '📈 لائن چارٹ خصوصی طور پر وقت سیریز اور تبدیلی تجزیہ کے لیے ہے۔', chart_classified_only: 'چارٹ صرف درجہ بندی موڈ میں دستیاب ہیں۔',
+    no_stats: 'کوئی اعداد و شمار نہیں', run_first: 'پہلے ایک تجزیہ چلائیں۔', chart_empty: 'درجہ بندی شدہ ڈیٹا کی تقسیم اور فیصد تناسب کو موازنہ کے ساتھ ظاہر کرتا ہے۔', chart_line_note: '📈 لائن چارٹ خصوصی طور پر وقت سیریز اور تبدیلی تجزیہ کے لیے ہے۔', chart_classified_only: 'چارٹ صرف درجہ بندی موڈ میں دستیاب ہیں۔',
     lbl_class: 'درجہ', lbl_pixel: 'پکسل', lbl_value: 'قدر',
     aoi_hint: 'ہیکٹر کے لیے نقشے پر ایک کام کی جگہ (AOI) بنائیں۔',
     shp_error: 'SHP پڑھنے کی خرابی: ', shp_hint: '\nمشورہ: .shp، .shx اور .dbf فائلیں ایک ساتھ منتخب کریں۔',
@@ -37222,6 +38269,22 @@ var SYLVA_TRANSLATIONS = {
     env_impervious: 'ناقابل نفوذ سطح کی تبدیلی (Impervious Surface)',
     env_drought: 'خشک سالی کی نگرانی (مٹی کی نمی / SPI)',
     env_flood: 'سیلاب کی نقشہ سازی (SAR)',
+    env_lst_lulc_corr: 'زمینی پوشش–درجہ حرارت ارتباط',
+    env_reservoir_volume: 'ذخیرہ آب/جھیل کے حجم کی تبدیلی کا تخمینہ',
+    env_water_quality: 'پانی کے معیار کا پراکسی',
+    env_canopy_biomass: 'کینوپی کی اونچائی / بایوماس-کاربن',
+    env_forest_health: 'جنگلات کی صحت کی نگرانی',
+    env_nightlights: 'رات کی روشنیاں — معاشی سرگرمی میں تبدیلی',
+    env_air_group: '🌬️ ہوا کا معیار',
+    env_no2_series: 'NO₂ کا وقتی سلسلہ',
+    env_aerosol_depth: 'ایروسول کی آپٹیکل گہرائی',
+    env_so2_co_anomaly: 'SO₂/CO بے قاعدگی کا نقشہ',
+    env_coastal_group: '🏖️ ساحلی اور بحری',
+    env_coastline_change: 'ساحلی لکیر میں تبدیلی',
+    env_sst_trend: 'سطح سمندر کے درجہ حرارت (SST) کا رجحان',
+    env_landslide: 'تودہ گرنے کی حساسیت کا نقشہ',
+    env_drought_risk_composite: 'خشک سالی کے خطرے کا مرکب اشاریہ',
+    env_earthquake_damage: 'زلزلے کے بعد نقصان کا پراکسی',
     dp_placeholder: 'تاریخ منتخب کریں',
     ws_stroke_lbl: 'لکیر کا رنگ', ws_fill_lbl: 'بھرنے کا رنگ',
     raw_bands_selected: 'بینڈ منتخب', lbl_selected_img: '✅ منتخب تصویر:',
@@ -37500,6 +38563,9 @@ var SYLVA_TRANSLATIONS = {
     lbl_area: 'Powierzchnia:', lbl_perimeter: 'Obwód:',
     date_title: 'Wybór daty', date_start: 'Początek', date_end: 'Koniec',
     cloud_label: 'Zachmurzenie (maks.)',
+    date_title_2: 'Okres 2',
+    cloud_label_2: 'Zachmurzenie (maks.) — Okres 2',
+    month_label_2: 'Wybór miesięcy — Okres 2',
     analysis_modules: 'Moduły analizy i danych',
     sec_satellite_img: '🛰️ Obraz satelitarny',
     desc_satellite_img: 'Rzeczywiste sceny satelitarne spełniające kryteria AOI + zakres dat + zachmurzenie są skanowane przez Google Earth Engine i wyświetlane w galerii z miniaturami.',
@@ -37658,7 +38724,7 @@ var SYLVA_TRANSLATIONS = {
     no_geom: 'Nie znaleziono prawidłowej geometrii obszaru roboczego. Sprawdź AOI.',
     server_error: 'Nie można połączyć z serwerem. Czy server.py działa? ',
     run_analysis: '🚀 Uruchom analizę', running: '⏳ Obliczanie…', stack_analysis_toggle: '🗂️ Dodaj do poprzedniej analizy',
-    no_stats: 'Brak statystyk', run_first: 'Najpierw uruchom analizę.', chart_empty: '📊 🥧 Po zakończeniu analizy tutaj pojawi się rozkład powierzchni i procentowy danych sklasyfikowanych.', chart_line_note: '📈 Wykres liniowy jest przeznaczony wyłącznie dla Analizy szeregów czasowych i zmian.', chart_classified_only: 'Wykresy są dostępne tylko w trybie sklasyfikowanym.',
+    no_stats: 'Brak statystyk', run_first: 'Najpierw uruchom analizę.', chart_empty: 'Pokazuje rozkład i procentowe proporcje danych sklasyfikowanych w ujęciu porównawczym.', chart_line_note: '📈 Wykres liniowy jest przeznaczony wyłącznie dla Analizy szeregów czasowych i zmian.', chart_classified_only: 'Wykresy są dostępne tylko w trybie sklasyfikowanym.',
     lbl_class: 'Klasa', lbl_pixel: 'Piksel', lbl_value: 'Wartość',
     aoi_hint: 'Zdefiniuj obszar roboczy (AOI) na mapie, aby uzyskać wartości w hektarach.',
     shp_error: 'Błąd odczytu SHP: ', shp_hint: '\nWskazówka: Wybierz pliki .shp, .shx i .dbf razem.',
@@ -37742,6 +38808,22 @@ var SYLVA_TRANSLATIONS = {
     env_impervious: 'Zmiana Powierzchni Nieprzepuszczalnych (Impervious Surface)',
     env_drought: 'Monitoring Suszy (Wilgotność Gleby / SPI)',
     env_flood: 'Mapowanie Powodzi (SAR)',
+    env_lst_lulc_corr: 'Korelacja pokrycia terenu i temperatury',
+    env_reservoir_volume: 'Szacunek zmiany objętości zbiornika/jeziora',
+    env_water_quality: 'Proxy jakości wody',
+    env_canopy_biomass: 'Wysokość koron drzew / biomasa-węgiel',
+    env_forest_health: 'Monitoring zdrowia lasów',
+    env_nightlights: 'Światła nocne — zmiana aktywności gospodarczej',
+    env_air_group: '🌬️ Jakość powietrza',
+    env_no2_series: 'Szereg czasowy NO₂',
+    env_aerosol_depth: 'Grubość optyczna aerozolu',
+    env_so2_co_anomaly: 'Mapa anomalii SO₂/CO',
+    env_coastal_group: '🏖️ Wybrzeże i morze',
+    env_coastline_change: 'Zmiana linii brzegowej',
+    env_sst_trend: 'Trend temperatury powierzchni morza (SST)',
+    env_landslide: 'Mapa podatności na osuwiska',
+    env_drought_risk_composite: 'Złożony wskaźnik ryzyka suszy',
+    env_earthquake_damage: 'Proxy uszkodzeń po trzęsieniu ziemi',
     dp_placeholder: 'Wybierz datę',
     ws_stroke_lbl: 'Kolor obramowania', ws_fill_lbl: 'Kolor wypełnienia',
     raw_bands_selected: 'pasm wybranych', lbl_selected_img: '✅ Wybrany obraz:',
@@ -37998,6 +39080,9 @@ var SYLVA_TRANSLATIONS = {
     lbl_area: 'Keluasan:', lbl_perimeter: 'Perimeter:',
     date_title: 'Pemilihan Tarikh', date_start: 'Mula', date_end: 'Tamat',
     cloud_label: 'Litupan Awan (Maks)',
+    date_title_2: 'Tempoh 2',
+    cloud_label_2: 'Litupan Awan (Maks) — Tempoh 2',
+    month_label_2: 'Pemilihan Bulan — Tempoh 2',
     analysis_modules: 'Modul Analisis & Data',
     sec_satellite_img: '🛰️ Imej Satelit',
     sec_satellite_analysis: '🌍 Data dan Analisis Satelit',
@@ -38155,7 +39240,7 @@ var SYLVA_TRANSLATIONS = {
     no_geom: 'Tiada geometri ruang kerja yang sah ditemui. Sila semak AOI.',
     server_error: 'Tidak dapat menyambung ke pelayan. Adakah server.py sedang berjalan? ',
     run_analysis: '🚀 Jalankan Analisis', running: '⏳ Sedang berjalan…', stack_analysis_toggle: '🗂️ Tambah pada Analisis Terdahulu',
-    no_stats: 'Tiada statistik', run_first: 'Jalankan analisis dahulu.', chart_empty: '📊 🥧 Selepas analisis selesai, pengagihan luas dan peratusan data yang diklasifikasikan akan muncul di sini.', chart_line_note: '📈 Carta Garis adalah khusus untuk Analisis Siri Masa & Perubahan.', chart_classified_only: 'Carta hanya tersedia dalam mod Tertakrif.',
+    no_stats: 'Tiada statistik', run_first: 'Jalankan analisis dahulu.', chart_empty: 'Memaparkan taburan dan nisbah peratusan data terklasifikasi secara perbandingan.', chart_line_note: '📈 Carta Garis adalah khusus untuk Analisis Siri Masa & Perubahan.', chart_classified_only: 'Carta hanya tersedia dalam mod Tertakrif.',
     lbl_class: 'Kelas', lbl_pixel: 'Piksel', lbl_value: 'Nilai',
     aoi_hint: 'Tentukan Ruang Kerja (AOI) pada peta untuk nilai hektar.',
     shp_error: 'Ralat membaca SHP: ', shp_hint: '\nPetua: Pilih fail .shp, .shx dan .dbf bersama-sama.',
@@ -38246,6 +39331,22 @@ var SYLVA_TRANSLATIONS = {
     env_impervious: 'Perubahan Permukaan Tidak Telap Air (Impervious Surface)',
     env_drought: 'Pemantauan Kemarau (Kelembapan Tanah / SPI)',
     env_flood: 'Pemetaan Banjir (SAR)',
+    env_lst_lulc_corr: 'Korelasi Litupan Tanah–Suhu',
+    env_reservoir_volume: 'Anggaran Perubahan Isipadu Empangan/Tasik',
+    env_water_quality: 'Proksi Kualiti Air',
+    env_canopy_biomass: 'Ketinggian Kanopi / Biojisim-Karbon',
+    env_forest_health: 'Pemantauan Kesihatan Hutan',
+    env_nightlights: 'Cahaya Malam — Perubahan Aktiviti Ekonomi',
+    env_air_group: '🌬️ Kualiti Udara',
+    env_no2_series: 'Siri Masa NO₂',
+    env_aerosol_depth: 'Kedalaman Optik Aerosol',
+    env_so2_co_anomaly: 'Peta Anomali SO₂/CO',
+    env_coastal_group: '🏖️ Pesisir dan Marin',
+    env_coastline_change: 'Perubahan Garis Pantai',
+    env_sst_trend: 'Trend Suhu Permukaan Laut (SST)',
+    env_landslide: 'Peta Kerentanan Tanah Runtuh',
+    env_drought_risk_composite: 'Indeks Komposit Risiko Kemarau',
+    env_earthquake_damage: 'Proksi Kerosakan Pasca Gempa Bumi',
     dp_placeholder: 'Pilih tarikh',
     ws_stroke_lbl: 'Warna Garis', ws_fill_lbl: 'Warna Isi',
     raw_bands_selected: 'jalur dipilih', lbl_selected_img: '✅ Imej dipilih:',
@@ -38501,6 +39602,9 @@ var SYLVA_TRANSLATIONS = {
       lbl_area: 'Аянт:', lbl_perimeter: 'Периметр:',
       date_title: 'Күн тандоо', date_start: 'Башталышы', date_end: 'Аякталышы',
       cloud_label: 'Булуттуулук (Макс)',
+      date_title_2: '2-мезгил',
+      cloud_label_2: 'Булуттуулук (Макс) — 2-мезгил',
+      month_label_2: 'Ай тандоо — 2-мезгил',
       analysis_modules: 'Талдоо жана маалымат модулдары',
       sec_satellite_img: '🛰️ Спутник сүрөтү',
       sec_satellite_analysis: '🌍 Спутник маалыматтары жана талдоолор',
@@ -38656,7 +39760,7 @@ var SYLVA_TRANSLATIONS = {
       no_geom: 'Жарамдуу жумуш мейкиндиги геометриясы табылган жок. AOI-ды текшериңиз.',
       server_error: 'Серверге туташуу мүмкүн болгон жок. server.py иштеп жатабы? ',
       run_analysis: '🚀 Талдоону иштетүү', running: '⏳ Иштелүүдө…', stack_analysis_toggle: '🗂️ Мурунку талдоого кошуу',
-      no_stats: 'Статистика жок', run_first: 'Адегенде талдоону иштетиңиз.', chart_empty: '📊 🥧 Анализ аяктагандан кийин, классификацияланган маалыматтардын аянт жана пайыздык бөлүштүрүлүшү бул жерде көрүнөт.', chart_line_note: '📈 Сызыктык диаграмма Убакыт катары жана өзгөрүш талдоо үчүн гана арналган.', chart_classified_only: 'Диаграммалар Классификацияланган режимде гана жеткиликтүү.',
+      no_stats: 'Статистика жок', run_first: 'Адегенде талдоону иштетиңиз.', chart_empty: 'Классификацияланган маалыматтардын бөлүштүрүлүшүн жана пайыздык катышын салыштырмалуу көрсөтөт.', chart_line_note: '📈 Сызыктык диаграмма Убакыт катары жана өзгөрүш талдоо үчүн гана арналган.', chart_classified_only: 'Диаграммалар Классификацияланган режимде гана жеткиликтүү.',
       lbl_class: 'Класс', lbl_pixel: 'Пиксель', lbl_value: 'Маани',
       aoi_hint: 'Гектар маанилери үчүн картада жумуш мейкиндигин (AOI) аныктаңыз.',
       shp_error: 'SHP окуу катасы: ', shp_hint: '\nКеңеш: .shp, .shx жана .dbf файлдарын бирге тандаңыз.',
@@ -38744,6 +39848,22 @@ var SYLVA_TRANSLATIONS = {
     env_impervious: 'Суу өткөрбөөчү беттин өзгөрүшү (Impervious Surface)',
     env_drought: 'Кургакчылык мониторинги (Топурак нымдуулугу / SPI)',
     env_flood: 'Суу ташкын картасы (SAR)',
+      env_lst_lulc_corr: 'Жер каптоо–температура корреляциясы',
+      env_reservoir_volume: 'Суу сактагыч/көл көлөмүнүн өзгөрүү болжолу',
+      env_water_quality: 'Суу сапатынын прокси көрсөткүчү',
+      env_canopy_biomass: 'Дарак чатырынын бийиктиги / биомасса-көмүртек',
+      env_forest_health: 'Токойдун ден соолугунун мониторинги',
+      env_nightlights: 'Түнкү жарыктар — экономикалык активдүүлүктүн өзгөрүүсү',
+      env_air_group: '🌬️ Аба сапаты',
+      env_no2_series: 'NO₂ убакыттык катары',
+      env_aerosol_depth: 'Аэрозолдун оптикалык тереңдиги',
+      env_so2_co_anomaly: 'SO₂/CO аномалия картасы',
+      env_coastal_group: '🏖️ Жээк жана деңиз',
+      env_coastline_change: 'Жээк сызыгынын өзгөрүүсү',
+      env_sst_trend: 'Деңиз бетинин температурасынын (SST) тренди',
+      env_landslide: 'Жер көчкүгө ыктымалдуулук картасы',
+      env_drought_risk_composite: 'Кургакчылык тобокелдигинин композиттик индекси',
+      env_earthquake_damage: 'Жер титирөөдөн кийинки зыяндын прокси көрсөткүчү',
       dp_placeholder: 'Күн тандаңыз',
       ws_stroke_lbl: 'Контур түсү', ws_fill_lbl: 'Толтуруу түсү',
       raw_bands_selected: 'канал тандалды', lbl_selected_img: '✅ Тандалган сүрөт:',
@@ -38976,6 +40096,9 @@ var SYLVA_TRANSLATIONS = {
     lbl_area: 'Талбай:', lbl_perimeter: 'Периметр:',
     date_title: 'Огноо сонгох', date_start: 'Эхлэх', date_end: 'Дуусах',
     cloud_label: 'Үүлний хувь (Дээд хэмжээ)',
+    date_title_2: '2-р үе',
+    cloud_label_2: 'Үүлний хувь (Дээд хэмжээ) — 2-р үе',
+    month_label_2: 'Сар сонгох — 2-р үе',
     analysis_modules: 'Шинжилгээ ба Өгөгдлийн модулиуд',
     sec_satellite_img: '🛰️ Хиймэл дагуулын зураг',
     sec_satellite_analysis: '🌍 Хиймэл дагуулын өгөгдөл ба шинжилгээ',
@@ -39122,7 +40245,7 @@ var SYLVA_TRANSLATIONS = {
     no_geom: 'Хүчинтэй ажлын орчны геометр олдсонгүй. AOI-г шалгана уу.',
     server_error: 'Серверт холбогдох боломжгүй. server.py ажиллаж байна уу? ',
     run_analysis: '🚀 Шинжилгээ ажиллуулах', running: '⏳ Ажиллаж байна…', stack_analysis_toggle: '🗂️ Өмнөх шинжилгээнд нэмэх',
-    no_stats: 'Статистик байхгүй', run_first: 'Эхлээд шинжилгээ ажиллуулна уу.', chart_empty: '📊 🥧 Шинжилгээ дуусмагц ангилагдсан өгөгдлийн талбай ба хувийн хуваарилалт энд харагдана.',
+    no_stats: 'Статистик байхгүй', run_first: 'Эхлээд шинжилгээ ажиллуулна уу.', chart_empty: 'Ангилагдсан өгөгдлийн хуваарилалт ба хувийн харьцааг харьцуулж харуулна.',
     chart_line_note: '📈 Шугам диаграмм нь Цагийн цуврал ба өөрчлөлтийн шинжилгээ-д зориулагдсан.',
     chart_classified_only: 'Диаграмууд зөвхөн Ангилсан горимд боломжтой.',
     lbl_class: 'Анги', lbl_pixel: 'Пиксел', lbl_value: 'Утга',
@@ -39207,6 +40330,22 @@ var SYLVA_TRANSLATIONS = {
     env_impervious: 'Усан нэвтрэхгүй гадаргуугийн өөрчлөлт (Impervious Surface)',
     env_drought: 'Ганг хянах (Хөрсний чийглэг / SPI)',
     env_flood: 'Үерийн зураглал (SAR)',
+    env_lst_lulc_corr: 'Газрын бүрхэвч ба температурын хамаарал',
+    env_reservoir_volume: 'Усан сан/нуурын эзэлхүүний өөрчлөлтийн тооцоо',
+    env_water_quality: 'Усны чанарын прокси үзүүлэлт',
+    env_canopy_biomass: 'Модны титмийн өндөр / биомасс-нүүрстөрөгч',
+    env_forest_health: 'Ойн эрүүл мэндийн мониторинг',
+    env_nightlights: 'Шөнийн гэрэл — эдийн засгийн үйл ажиллагааны өөрчлөлт',
+    env_air_group: '🌬️ Агаарын чанар',
+    env_no2_series: 'NO₂ цаг хугацааны цуваа',
+    env_aerosol_depth: 'Аэрозолийн оптикийн гүн',
+    env_so2_co_anomaly: 'SO₂/CO аномалийн газрын зураг',
+    env_coastal_group: '🏖️ Эрэг ба тэнгис',
+    env_coastline_change: 'Эргийн шугамын өөрчлөлт',
+    env_sst_trend: 'Тэнгисийн гадаргын температурын (SST) хандлага',
+    env_landslide: 'Хөрсний нуралтын эрсдэлийн газрын зураг',
+    env_drought_risk_composite: 'Ган гачигийн эрсдэлийн нэгдсэн индекс',
+    env_earthquake_damage: 'Газар хөдлөлтийн дараах хохирлын прокси үзүүлэлт',
     dp_placeholder: 'Огноо сонгоно уу',
     ws_stroke_lbl: 'Хүрээний өнгө', ws_fill_lbl: 'Дүүргэх өнгө',
     raw_bands_selected: 'зурваас сонгогдлоо', lbl_selected_img: '✅ Сонгосон зураг:',
@@ -39441,6 +40580,9 @@ var SYLVA_TRANSLATIONS = {
       lbl_area: 'ფართობი:', lbl_perimeter: 'პერიმეტრი:',
       date_title: 'თარიღის შერჩევა', date_start: 'დასაწყისი', date_end: 'დასასრული',
       cloud_label: 'ღრუბლიანობა (მაქს)',
+      date_title_2: 'მე-2 პერიოდი',
+      cloud_label_2: 'ღრუბლიანობა (მაქს) — მე-2 პერიოდი',
+      month_label_2: 'თვის არჩევა — მე-2 პერიოდი',
       analysis_modules: 'ანალიზის და მონაცემების მოდულები',
       sec_satellite_img: '🛰️ სატელიტური გამოსახულება',
       sec_satellite_analysis: '🌍 სატელიტური მონაცემები და ანალიზი',
@@ -39596,7 +40738,7 @@ var SYLVA_TRANSLATIONS = {
       no_geom: 'სამუშაო სივრცის სწორი გეომეტრია ვერ მოიძებნა. შეამოწმეთ AOI.',
       server_error: 'სერვერთან დაკავშირება ვერ მოხერხდა. მუშაობს თუ არა server.py? ',
       run_analysis: '🚀 ანალიზის გაშვება', running: '⏳ მუშავდება…', stack_analysis_toggle: '🗂️ დამატება წინა ანალიზზე',
-      no_stats: 'სტატისტიკა არ არის', run_first: 'ჯერ გაუშვით ანალიზი.', chart_empty: '📊 🥧 ანალიზის დასრულების შემდეგ, კლასიფიცირებული მონაცემების ფართობისა და პროცენტული განაწილება აქ გამოჩნდება.', chart_line_note: '📈 სახაზი სქემა განკუთვნილია მხოლოდ დროის მწკრივი და ცვლილების ანალიზისთვის.', chart_classified_only: 'სქემები ხელმისაწვდომია მხოლოდ კლასიფიცირებულ რეჟიმში.',
+      no_stats: 'სტატისტიკა არ არის', run_first: 'ჯერ გაუშვით ანალიზი.', chart_empty: 'აჩვენებს კლასიფიცირებული მონაცემების განაწილებას და პროცენტულ თანაფარდობებს შედარებით.', chart_line_note: '📈 სახაზი სქემა განკუთვნილია მხოლოდ დროის მწკრივი და ცვლილების ანალიზისთვის.', chart_classified_only: 'სქემები ხელმისაწვდომია მხოლოდ კლასიფიცირებულ რეჟიმში.',
       lbl_class: 'კლასი', lbl_pixel: 'პიქსელი', lbl_value: 'მნიშვნელობა',
       aoi_hint: 'ჰექტარის მნიშვნელობებისთვის განსაზღვრეთ სამუშაო სივრცე (AOI) რუკაზე.',
       shp_error: 'SHP წაკითხვის შეცდომა: ', shp_hint: '\nრჩევა: ერთდროულად აირჩიეთ .shp, .shx და .dbf ფაილები.',
@@ -39681,6 +40823,22 @@ var SYLVA_TRANSLATIONS = {
     env_impervious: 'გაუმჭვირვალე ზედაპირების ცვლილება (Impervious Surface)',
     env_drought: 'გვალვის მონიტორინგი (ნიადაგის ტენიანობა / SPI)',
     env_flood: 'წყალდიდობის კარტოგრაფია (SAR)',
+      env_lst_lulc_corr: 'მიწის საფარისა და ტემპერატურის კორელაცია',
+      env_reservoir_volume: 'წყალსაცავის/ტბის მოცულობის ცვლილების შეფასება',
+      env_water_quality: 'წყლის ხარისხის პროქსი მაჩვენებელი',
+      env_canopy_biomass: 'ვარჯის სიმაღლე / ბიომასა-ნახშირბადი',
+      env_forest_health: 'ტყის ჯანმრთელობის მონიტორინგი',
+      env_nightlights: 'ღამის განათება — ეკონომიკური აქტივობის ცვლილება',
+      env_air_group: '🌬️ ჰაერის ხარისხი',
+      env_no2_series: 'NO₂ დროითი მწკრივი',
+      env_aerosol_depth: 'აეროზოლის ოპტიკური სიღრმე',
+      env_so2_co_anomaly: 'SO₂/CO ანომალიის რუკა',
+      env_coastal_group: '🏖️ სანაპირო და საზღვაო',
+      env_coastline_change: 'სანაპირო ზოლის ცვლილება',
+      env_sst_trend: 'ზღვის ზედაპირის ტემპერატურის (SST) ტენდენცია',
+      env_landslide: 'მეწყრისადმი მოწყვლადობის რუკა',
+      env_drought_risk_composite: 'გვალვის რისკის კომპოზიტური ინდექსი',
+      env_earthquake_damage: 'მიწისძვრის შემდგომი ზიანის პროქსი მაჩვენებელი',
       dp_placeholder: 'აირჩიეთ თარიღი',
       ws_stroke_lbl: 'კონტურის ფერი', ws_fill_lbl: 'შევსების ფერი',
       raw_bands_selected: 'არხი არჩეულია', lbl_selected_img: '✅ არჩეული სურათი:',
@@ -39923,6 +41081,9 @@ var SYLVA_TRANSLATIONS = {
     lbl_area: 'Area:', lbl_perimeter: 'Perimetro:',
     date_title: 'Selezione Data', date_start: 'Inizio', date_end: 'Fine',
     cloud_label: 'Copertura Nuvolosa (Max)',
+    date_title_2: 'Periodo 2',
+    cloud_label_2: 'Copertura Nuvolosa (Max) — Periodo 2',
+    month_label_2: 'Selezione mese — Periodo 2',
     analysis_modules: 'Moduli di Analisi e Dati',
     sec_satellite_img: '🛰️ Immagine Satellitare',
     sec_satellite_analysis: '🌍 Dati e analisi satellitari',
@@ -40079,7 +41240,7 @@ var SYLVA_TRANSLATIONS = {
     no_geom: "Nessuna geometria valida trovata. Controlla l'AOI.",
     server_error: 'Impossibile connettersi al server. Il server.py è in esecuzione? ',
     run_analysis: '🚀 Avvia Analisi', running: '⏳ In corso…', stack_analysis_toggle: '🗂️ Aggiungi all\'analisi precedente',
-    no_stats: 'Nessuna statistica', run_first: "Avvia prima un'analisi.", chart_empty: '📊 🥧 Al termine dell\'analisi, la distribuzione per area e percentuale dei dati classificati apparirà qui.', chart_line_note: '📈 Il grafico a linee è esclusivo per Analisi delle serie temporali e variazioni.', chart_classified_only: 'I grafici sono disponibili solo in modalità Classificata.',
+    no_stats: 'Nessuna statistica', run_first: "Avvia prima un'analisi.", chart_empty: 'Mostra in modo comparativo la distribuzione e le percentuali dei dati classificati.', chart_line_note: '📈 Il grafico a linee è esclusivo per Analisi delle serie temporali e variazioni.', chart_classified_only: 'I grafici sono disponibili solo in modalità Classificata.',
     lbl_class: 'Classe', lbl_pixel: 'Pixel', lbl_value: 'Valore',
     aoi_hint: "Definisci un'Area di Lavoro (AOI) sulla mappa per i valori in ettari.",
     shp_error: 'Errore lettura SHP: ', shp_hint: '\nSuggerimento: Seleziona i file .shp, .shx e .dbf insieme.',
@@ -40166,6 +41327,22 @@ var SYLVA_TRANSLATIONS = {
     env_impervious: 'Variazione Superficie Impermeabile (Impervious Surface)',
     env_drought: 'Monitoraggio della Siccità (Umidità del Suolo / SPI)',
     env_flood: 'Mappatura delle Inondazioni (SAR)',
+    env_lst_lulc_corr: 'Correlazione copertura del suolo–temperatura',
+    env_reservoir_volume: 'Stima della variazione di volume di invaso/lago',
+    env_water_quality: 'Proxy della qualità dell\'acqua',
+    env_canopy_biomass: 'Altezza della chioma / biomassa-carbonio',
+    env_forest_health: 'Monitoraggio della salute forestale',
+    env_nightlights: 'Luci notturne — variazione dell\'attività economica',
+    env_air_group: '🌬️ Qualità dell\'aria',
+    env_no2_series: 'Serie temporale NO₂',
+    env_aerosol_depth: 'Spessore ottico dell\'aerosol',
+    env_so2_co_anomaly: 'Mappa delle anomalie SO₂/CO',
+    env_coastal_group: '🏖️ Costiero e marino',
+    env_coastline_change: 'Variazione della linea di costa',
+    env_sst_trend: 'Trend della temperatura superficiale del mare (SST)',
+    env_landslide: 'Mappa di suscettibilità alle frane',
+    env_drought_risk_composite: 'Indice composito del rischio di siccità',
+    env_earthquake_damage: 'Proxy dei danni post-sisma',
     dp_placeholder: 'Seleziona data',
     ws_stroke_lbl: 'Colore Bordo', ws_fill_lbl: 'Colore Riempimento',
     raw_bands_selected: 'bande selezionate', lbl_selected_img: '✅ Immagine selezionata:',
@@ -41922,8 +43099,14 @@ function _parseInput(id){
 
 /* ── Open / close ────────────────────────────────────────── */
 function _open(id){
-  var other=id==='start'?'end':'start';
-  var op2=document.getElementById('dp-popup-'+other); if(op2) op2.classList.remove('open');
+  /* 🆕 ADIM 3: eskiden sadece 'start'/'end' birbirini kapatıyordu — artık
+     _pk içindeki (start/end/start2/end2...) TÜM diğer açık popup'lar kapatılır,
+     böylece Dönem 1 ve Dönem 2 takvimleri aynı anda açık kalmaz. */
+  Object.keys(_pk).forEach(function (other) {
+    if (other === id) return;
+    var op2 = document.getElementById('dp-popup-' + other);
+    if (op2) op2.classList.remove('open');
+  });
   _render(id);
   var popup=document.getElementById('dp-popup-'+id); if(popup) popup.classList.add('open');
 }
@@ -41966,10 +43149,16 @@ function _init(id){
   }
   _disp(id);
 }
+/* 🆕 ADIM 3: Dönem 2 bloğu, sayfa yüklendikten sonra dinamik olarak
+   'start2'/'end2' id'leri için bu init fonksiyonunu bir kez çağırabilsin
+   diye dışa açılıyor — bkz. _sylvaEnsurePeriod2Init(). */
+window._sylvaDPInit = _init;
 
 /* ── Global outside-click to close ──────────────────────── */
 document.addEventListener('click',function(e){
-  ['start','end'].forEach(function(id){
+  /* 🆕 ADIM 3: sabit ['start','end'] yerine _pk içinde kayıtlı TÜM id'ler
+     (Dönem 2 açıldıysa start2/end2 dahil) taranır. */
+  Object.keys(_pk).forEach(function(id){
     var w=document.getElementById('dp-wrap-'+id);
     if(w&&!w.contains(e.target))_close(id);
   });
@@ -41981,7 +43170,7 @@ document.addEventListener('click',function(e){
   var day=e.target.closest('.sylva-dp-day');
   if(day&&!day.classList.contains('other-month')&&!day.classList.contains('empty')){
     var iso=day.getAttribute('data-iso'); if(!iso) return;
-    ['start','end'].forEach(function(id){
+    Object.keys(_pk).forEach(function(id){
       var popup=document.getElementById('dp-popup-'+id);
       if(popup&&popup.contains(day)){
         _pk[id].sel=iso; var p=_parseIso(iso); _pk[id].vy=p.y; _pk[id].vm=p.m;
@@ -41993,7 +43182,7 @@ document.addEventListener('click',function(e){
   var yr=e.target.closest('.sylva-dp-yr');
   if(yr){
     var y=+yr.getAttribute('data-yr');
-    ['start','end'].forEach(function(id){
+    Object.keys(_pk).forEach(function(id){
       var popup=document.getElementById('dp-popup-'+id);
       if(popup&&popup.contains(yr)){
         _pk[id].vy=y; _pk[id].mode='days'; _render(id);
@@ -42024,19 +43213,25 @@ function _fmtIsoDate(d){
   var day=String(d.getDate()).padStart(2,'0');
   return y+'-'+m+'-'+day;
 }
-function _setDefaultOneMonthRange(){
-  var startNative=document.getElementById('date-start');
-  var endNative=document.getElementById('date-end');
+// 🆕 Genelleştirildi: aynı "son 1 ay" varsayılan mantığı artık herhangi bir
+// start/end id çifti için kullanılabiliyor — böylece Dönem 2 (start2/end2)
+// de Dönem 1 ile AYNI şekilde otomatik dolduruluyor (önceden yalnızca
+// start/end için çalışıyordu, Dönem 2 alanları boş kalıyordu).
+function _setDefaultOneMonthRangeFor(idStart, idEnd){
+  var startNative=document.getElementById('date-'+idStart);
+  var endNative=document.getElementById('date-'+idEnd);
   if ((startNative&&startNative.value) || (endNative&&endNative.value)) return;
+  if(!_pk[idStart]||!_pk[idEnd]) return;
   var end=new Date();
   var start=new Date(end.getFullYear(), end.getMonth()-1, end.getDate());
-  _pk.start.sel=_fmtIsoDate(start);
-  _pk.end.sel=_fmtIsoDate(end);
-  _pk.start.vy=start.getFullYear(); _pk.start.vm=start.getMonth()+1;
-  _pk.end.vy=end.getFullYear(); _pk.end.vm=end.getMonth()+1;
-  _disp('start');
-  _disp('end');
+  _pk[idStart].sel=_fmtIsoDate(start);
+  _pk[idEnd].sel=_fmtIsoDate(end);
+  _pk[idStart].vy=start.getFullYear(); _pk[idStart].vm=start.getMonth()+1;
+  _pk[idEnd].vy=end.getFullYear(); _pk[idEnd].vm=end.getMonth()+1;
+  _disp(idStart);
+  _disp(idEnd);
 }
+function _setDefaultOneMonthRange(){ _setDefaultOneMonthRangeFor('start','end'); }
 // 🆕 Ekran 1/Ekran 2 senkronizasyon mantığı (_sylvaSyncActivePaneControls),
 // henüz hiç tarih seçilmemiş bir panoya geçildiğinde alanları boş
 // state.dateStart/dateEnd ile sıfırlayabiliyordu — bu da varsayılan 1 aylık
@@ -42044,6 +43239,10 @@ function _setDefaultOneMonthRange(){
 // yaparak o senkronizasyon kodunun, alanlar boş kaldığında varsayılanı
 // yeniden uygulayabilmesini sağlıyoruz (bkz. window._sylvaSyncActivePaneControls).
 window._sylvaSetDefaultDateRange = _setDefaultOneMonthRange;
+// 🆕 Dönem 2 açıldığında (period2-section görünür olduğunda) aynı varsayılan
+// aralığı start2/end2 için uygulamak üzere dışa açılıyor — bkz.
+// _sylvaEnsurePeriod2Init() (~satır 9960).
+window._sylvaSetDefaultDateRangePeriod2 = function(){ _setDefaultOneMonthRangeFor('start2','end2'); };
 
 /* ── DOMContentLoaded ────────────────────────────────────── */
 document.addEventListener('DOMContentLoaded',function(){
@@ -42056,7 +43255,7 @@ document.addEventListener('DOMContentLoaded',function(){
   window.addEventListener('load', function () { setTimeout(_setDefaultOneMonthRange, 50); });
   window._sylvaDPRefresh=function(lang){
     _lang=lang;
-    ['start','end'].forEach(function(id){
+    Object.keys(_pk).forEach(function(id){
       _disp(id);  /* updates placeholder + reformats value in new locale */
       var popup=document.getElementById('dp-popup-'+id);
       if(popup&&popup.classList.contains('open'))_render(id);
@@ -50279,6 +51478,10 @@ document.addEventListener('keydown', function(e) {
                        'month-select-label', 'sylvaSelectedMonths');
         buildInstance('ts-month-select-wrap', 'ts-month-select-btn', 'ts-month-select-panel',
                        'ts-month-select-label', 'sylvaTsSelectedMonths');
+        // 🆕 Dönem 2 Ay Seçimi kutusu — yapı #period2-section görünür olmasa da
+        // (display:none) DOM'da mevcut olduğundan burada güvenle kurulabilir.
+        buildInstance('month-select-wrap-2', 'month-select-btn-2', 'month-select-panel-2',
+                       'month-select-label-2', 'sylvaSelectedMonths2');
     }
 
     // applySylvaLang() tarafından her dil değişiminde çağrılır.
