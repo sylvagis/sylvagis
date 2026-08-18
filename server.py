@@ -2318,54 +2318,16 @@ def _classify_by_breaks(band, valid_mask, breaks):
             rgb = tuple(int(hexc[k:k + 2], 16) for k in (0, 2, 4))
         except ValueError:
             rgb = (255, 255, 255)
-        label = '{:.3g} – {:.3g}'.format(lo, hi)
+        # Sınıf adı kullanıcı tarafından verilmişse ArcMap lejantına
+        # doğrudan onu taşı. Sayısal aralık yalnızca yedek etikettir.
+        label = str(b.get('label') or b.get('name') or '').strip()
+        if not label:
+            label = '{:.3g} – {:.3g}'.format(lo, hi)
         code_info[i] = (label, rgb)
 
     idx = np.where(valid_mask, idx, 0)
     return idx.astype(np.uint8), code_info
 
-
-
-def _classify_aspect_9(band, valid_mask):
-    """ArcMap tarzı 9 yön sınıfı: Düz + 8 ana/ara yön.
-    Kuzey sınıfı 0–12.5 ve 327.5–360 derecelerini TEK kodda birleştirir.
-    """
-    import numpy as np
-    idx = np.zeros(band.shape, dtype=np.uint8)
-    deg = np.mod(band, 360.0)
-
-    # Düz: Aspect'in gerçek -1 sentinel'i varsa onu koru.
-    flat = valid_mask & (band < 0)
-    idx[flat] = 1
-
-    north = valid_mask & ~flat & ((deg < 12.5) | (deg >= 327.5))
-    ne = valid_mask & ~flat & (deg >= 12.5) & (deg < 57.5)
-    east = valid_mask & ~flat & (deg >= 57.5) & (deg < 102.5)
-    se = valid_mask & ~flat & (deg >= 102.5) & (deg < 147.5)
-    south = valid_mask & ~flat & (deg >= 147.5) & (deg < 192.5)
-    sw = valid_mask & ~flat & (deg >= 192.5) & (deg < 237.5)
-    west = valid_mask & ~flat & (deg >= 237.5) & (deg < 282.5)
-    nw = valid_mask & ~flat & (deg >= 282.5) & (deg < 327.5)
-    idx[north] = 2; idx[ne] = 3; idx[east] = 4; idx[se] = 5
-    idx[south] = 6; idx[sw] = 7; idx[west] = 8; idx[nw] = 9
-
-    colors = [
-        '#bdbdbd', '#2ca25f', '#66c2a4', '#99d8c9', '#ccece6',
-        '#fdae61', '#f46d43', '#d73027', '#7f0000'
-    ]
-    labels = [
-        'Düz (-1)',
-        'Kuzey (0–12.5° / 327.5–360°)',
-        'Kuzeydoğu (12.5–57.5°)',
-        'Doğu (57.5–102.5°)',
-        'Güneydoğu (102.5–147.5°)',
-        'Güney (147.5–192.5°)',
-        'Güneybatı (192.5–237.5°)',
-        'Batı (237.5–282.5°)',
-        'Kuzeybatı (282.5–327.5°)',
-    ]
-    code_info = {i + 1: (labels[i], tuple(int(colors[i][j:j+2], 16) for j in (1, 3, 5))) for i in range(9)}
-    return idx, code_info
 
 def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name, embed_colormap=True):
     """Zaten 1..N küçük tam sayı sınıf koduna (0 = NoData) indirgenmiş bir
@@ -2528,15 +2490,13 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
     vat_dbf_bytes = _write_dbf_bytes(field_defs, vat_rows)
     vat_cpg_bytes = b'UTF-8'
 
-    files = {
+    return {
         '{}.tif'.format(safe_name): new_tif_bytes,
         '{}.tif.aux.xml'.format(safe_name): aux_xml_bytes,
         '{}.tif.vat.dbf'.format(safe_name): vat_dbf_bytes,
         '{}.tif.vat.cpg'.format(safe_name): vat_cpg_bytes,
         '{}.clr'.format(safe_name): clr_bytes,
     }
-    files.update(_build_georef_sidecars(new_tif_bytes, safe_name))
-    return files
 
 
 def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name):
@@ -2720,201 +2680,42 @@ def _classify_from_visualized_rgb(raw_band, valid_mask, rgb_bytes):
     return idx, code_info
 
 
+def _build_classified_symbology_zip(tif_bytes, vis, safe_name, breaks=None, n_classes=255, rgb_bytes=None, embed_colormap=True):
+    """LULC dışındaki (sürekli/continuous) TÜM analizler için — NDVI, NDWI,
+    diğer uydu indeksleri, DEM/Eğim/diğer Topografik Analizler, Çevresel ve
+    Kentsel Analizler vb. — LULC ile AYNI RAT-tabanlı sınıflandırılmış/renkli
+    ("bar") dosya setini üretir.
 
+    🛠️ BUG FİX (indirilen TÜM rasterlerin RGB olarak inmesi): daha önce bu
+    analizlerin GeoTIFF indirmesi her zaman final_display.visualize(**vis)
+    ile 3 bantlı (Red/Green/Blue), germe uygulanmış bir Byte RGB görüntüye
+    DÖNÜŞTÜRÜLÜYORDU (bkz. download_geotiff() içindeki eski 'rendered' dalı).
+    Bu, ArcMap'te katmanı üç ayrı "Band_1/Band_2/Band_3" olarak listeletiyor
+    (bir CBS analizi için anlamsız — RGB yalnızca gerçek renkli uydu
+    GÖRÜNTÜLERİ için doğru bir format) VE görselleştirme sırasında min/max
+    hatalı hesaplanırsa (bkz. Faz 13 — exportVisualFor sabit -1/1 düşmesi)
+    dosya tamamen SİYAH açılıyordu. ÇÖZÜM: artık hiçbir analiz RGB'ye
+    dönüştürülmüyor (RGB yalnızca gerçek 🛰️ Uydu Görüntüsü/doğal renk
+    kompozitleri için, index == 'RGB' durumunda korunuyor) — bunun yerine
+    sürekli/ham piksel değeri, haritadaki AYNI renk skalasıyla (vis min/max/
+    palette) 1..N küçük tam sayı sınıfa (bar/classified) bölünür ve LULC'de
+    kanıtlanmış RAT/VAT/clr sidecar mekanizmasıyla paketlenir — hem ArcMap'te
+    tek bantlı + renkli/sınıflandırılmış açılır hem de yanında artık .tif.
+    aux.xml/.tif.vat.dbf/.clr sidecar'ları (kullanıcının "twf/xml yok"
+    şikayeti) bulunur.
 
-def _build_overview_sidecar_bytes(tif_bytes, resampling='bilinear'):
-    """
-    ArcMap/QGIS'in ilk açılışta düşük zoom seviyesinde de rasteri hemen
-    çizebilmesi için çok seviyeli gerçek bir external-overview TIFF (.ovr)
-    üretir. Tek bir 4x görüntü yerine 2/4/8/16/32 seviyeleri yazılır.
-
-    .ovr'nin georeferansı ana TIFF'ten devralınabildiği için ayrıca farklı bir
-    CRS/extent tanımlanmaz; her overview aynı piksel gridinin küçültülmüş
-    kopyasıdır.
-    """
-    try:
-        import numpy as np
-        import tifffile
-        from rasterio.io import MemoryFile
-        from rasterio.enums import Resampling
-        with MemoryFile(tif_bytes) as memfile:
-            with memfile.open() as src:
-                if src.count < 1 or src.height <= 8 or src.width <= 8:
-                    return None
-                rs = Resampling.nearest if resampling == 'nearest' else Resampling.bilinear
-                levels = []
-                for factor in (2, 4, 8, 16, 32):
-                    oh = max(1, int(np.ceil(src.height / factor)))
-                    ow = max(1, int(np.ceil(src.width / factor)))
-                    if oh >= src.height and ow >= src.width:
-                        continue
-                    arr = src.read(1, out_shape=(oh, ow), resampling=rs)
-                    levels.append((factor, arr))
-                    if oh <= 1 or ow <= 1:
-                        break
-                if not levels:
-                    return None
-        buf = io.BytesIO()
-        # TiffWriter ile çoklu-IFD external overview oluştur. BytesIO üzerinde
-        # ardışık tifffile.imwrite(..., append=True) bazı sürümlerde dosya
-        # imlecini boşa aldığı için burada TiffWriter kullanımı özellikle
-        # seçildi. subfiletype=1 her IFD'yi reduced-resolution image olarak
-        # işaretler.
-        with tifffile.TiffWriter(buf, bigtiff=False) as tw:
-            for factor, arr in levels:
-                tw.write(
-                    arr, photometric='minisblack', compression='deflate',
-                    subfiletype=1,
-                    description='SylvaGIS external overview ({}x)'.format(factor)
-                )
-        return buf.getvalue()
-    except Exception as e:
-        print('[SylvaGIS] .ovr üretilemedi (tifffile):', e)
-        # Fallback: rasterio ile tek seviyeli bile olsa geçerli bir external
-        # overview TIFF üretmeyi dene; böylece ArcMap'in .ovr bağımlılığı olan
-        # sürümlerinde sidecar eksik kalmaz.
-        try:
-            import rasterio
-            from rasterio.io import MemoryFile
-            from rasterio.enums import Resampling
-            import numpy as np
-            with MemoryFile(tif_bytes) as mf:
-                with mf.open() as src:
-                    if src.width <= 8 or src.height <= 8:
-                        return None
-                    factor = 4
-                    oh = max(1, int(np.ceil(src.height / factor)))
-                    ow = max(1, int(np.ceil(src.width / factor)))
-                    arr = src.read(1, out_shape=(oh, ow), resampling=Resampling.nearest if resampling == 'nearest' else Resampling.bilinear)
-            buf = io.BytesIO()
-            import tifffile as _tf
-            _tf.imwrite(buf, arr, compression='deflate', metadata=None)
-            return buf.getvalue()
-        except Exception as fallback_err:
-            print('[SylvaGIS] .ovr fallback da üretilemedi:', fallback_err)
-            return None
-
-def _build_georef_sidecars(tif_bytes, safe_name):
-    """ArcMap uyumluluğu için GeoTIFF'in CRS/transform bilgisinin klasik
-    yan dosya karşılıklarını üretir. GeoTIFF içindeki bilgi korunur; bunlar
-    yalnızca eski/katı GIS okuyucuları için yedektir."""
-    files = {}
-    try:
-        import rasterio
-        from rasterio.io import MemoryFile
-        from rasterio.crs import CRS
-        with MemoryFile(tif_bytes) as mf:
-            with mf.open() as src:
-                crs = src.crs
-                t = src.transform
-        if crs:
-            files['{}.prj'.format(safe_name)] = crs.to_wkt().encode('utf-8')
-        # World file: A, D, B, E, C, F (pixel-center coordinates).
-        # Rotation terms are retained for projected rasters.
-        c = t.c + (t.a + t.b) * 0.5
-        f = t.f + (t.d + t.e) * 0.5
-        tfw = '\n'.join([repr(float(t.a)), repr(float(t.d)), repr(float(t.b)),
-                           repr(float(t.e)), repr(float(c)), repr(float(f))]) + '\n'
-        files['{}.tfw'.format(safe_name)] = tfw.encode('ascii')
-    except Exception as e:
-        print('[SylvaGIS] klasik CRS/world-file yan dosyaları üretilemedi:', e)
-    return files
-
-def _validate_exported_raster_bytes(tif_bytes, label='raster', require_data=True):
-    """Dışa aktarılan GeoTIFF'in gerçekten okunabilir ve veri içerir olduğunu doğrular.
-
-    Özellikle DEM/Slope gibi topografik rasterlerde GEE'nin geçerli bir HTTP
-    yanıtı verip sonrasında bozuk/boş bir TIFF üretmesi sessizce kabul edilmez.
-    ArcMap'e gönderilmeden önce rasterio ile açılır; boyut, bant, CRS ve geçerli
-    piksel sayısı kontrol edilir. Geçerli veri yoksa indirme başarısız sayılır.
-    """
-    import numpy as np
-    import rasterio
-    from rasterio.io import MemoryFile
-    with MemoryFile(tif_bytes) as mf:
-        with mf.open() as src:
-            if src.width < 1 or src.height < 1 or src.count < 1:
-                raise ValueError('{}: geçersiz raster boyutu/bant sayısı.'.format(label))
-            data = src.read(1)
-            nodata = src.nodata
-            valid = np.isfinite(data)
-            if nodata is not None:
-                valid &= ~np.isclose(data, float(nodata))
-            valid_count = int(valid.sum())
-            if require_data and valid_count <= 0:
-                raise ValueError('{}: raster açıldı ancak geçerli piksel içermiyor.'.format(label))
-            if require_data:
-                vals = data[valid]
-                if vals.size and not np.isfinite(float(vals.min()) + float(vals.max())):
-                    raise ValueError('{}: raster istatistikleri geçersiz.'.format(label))
-            if src.crs is None:
-                raise ValueError('{}: CRS bilgisi bulunamadı.'.format(label))
-    return True
-
-
-def _build_continuous_raster_package(tif_bytes, safe_name, include_ovr=True):
-    """Sürekli/bar modundaki analizleri HAM piksel değerleriyle paketler.
-
-    Kritik kural: bar modunda raster ASLA 1..N sınıf kodlarına çevrilmez.
-    Böylece DEM 0..879 m ise dosyanın pikselleri gerçekten 0..879 m kalır;
-    Slope 0..57° ise gerçekten 0..57° kalır. ArcMap/QGIS'e kesin min/max
-    istatistikleri gömülür. Renk/sınıflandırma sidecar'ı eklenmez; çünkü bu
-    modun anlamı sürekli (stretched) veri ve gerçek sayısal değerlerdir.
-    """
-    import numpy as np
-    from rasterio.io import MemoryFile
-
-    with MemoryFile(tif_bytes) as memfile:
-        with memfile.open() as src:
-            data = src.read()
-            profile = src.profile.copy()
-            nodata = src.nodata
-
-    # İstatistikleri PAM/aux.xml içine açıkça yaz; ham TIFF'in piksel değerleri
-    # kesinlikle değiştirilmez.
-    bands_xml = []
-    for b_idx in range(data.shape[0]):
-        band = data[b_idx].astype('float64')
-        valid = np.isfinite(band)
-        if nodata is not None:
-            valid &= ~np.isclose(band, float(nodata))
-        vals = band[valid]
-        if vals.size:
-            bmin = float(vals.min()); bmax = float(vals.max())
-            bmean = float(vals.mean()); bstd = float(vals.std())
-        else:
-            bmin = bmax = bmean = bstd = 0.0
-        bands_xml.append(
-            '  <PAMRasterBand band="{0}">\n'
-            '    <Metadata>\n'
-            '      <MDI key="STATISTICS_MINIMUM">{1!r}</MDI>\n'
-            '      <MDI key="STATISTICS_MAXIMUM">{2!r}</MDI>\n'
-            '      <MDI key="STATISTICS_MEAN">{3!r}</MDI>\n'
-            '      <MDI key="STATISTICS_STDDEV">{4!r}</MDI>\n'
-            '      <MDI key="STATISTICS_APPROXIMATE">NO</MDI>\n'
-            '    </Metadata>\n'
-            '  </PAMRasterBand>\n'.format(b_idx + 1, bmin, bmax, bmean, bstd)
-        )
-
-    aux_xml = ('<PAMDataset>\n' + ''.join(bands_xml) + '</PAMDataset>\n').encode('utf-8')
-    files = {
-        '{}.tif'.format(safe_name): tif_bytes,
-        '{}.tif.aux.xml'.format(safe_name): aux_xml,
-    }
-    files.update(_build_georef_sidecars(tif_bytes, safe_name))
-
-    if include_ovr:
-        ovr_bytes = _build_overview_sidecar_bytes(tif_bytes, resampling='bilinear')
-        if ovr_bytes:
-            files['{}.tif.ovr'.format(safe_name)] = ovr_bytes
-
-    return files
-
-
-def _build_classified_symbology_zip(tif_bytes, vis, safe_name, breaks=None, n_classes=255, rgb_bytes=None):
-    """Kullanıcının gerçekten Classified olarak seçtiği rasterler için
-    ekran lejantındaki sınıf sınırı/isim/renkleriyle tek bantlı sınıflandırılmış
-    GeoTIFF + RAT/VAT/.clr üretir. Bar/Stretched modu bu fonksiyonu KULLANMAZ.
+    🛠️ BUG FİX (Faz 15 — "bar olarak indirmiştim, sınıflandırılmış vermiş"):
+    Uygulamanın kendi "Lejantı Uygula" panelinde kullanıcı KENDİ elleriyle
+    ayrık sınıflar (state.classRows) tanımlamışsa — ekrandaki lejant zaten
+    "sınıflandırılmış" moddadır — istemci artık bu sınıfların GERÇEK min/
+    max/renklerini `breaks` parametresiyle gönderir; burada sunucunun kendi
+    icat ettiği eşit-aralıklı bölmeler DEĞİL, kullanıcının GERÇEKTEN
+    seçtiği sınıf sayısı/sınırları/renkleri birebir kullanılır (bkz.
+    _classify_by_breaks()). `breaks` gelmemişse (öntanımlı/"bar" — kullanıcı
+    hiç özelleştirme yapmamış, ekranda SÜREKLİ bir renk geçişi görüyor)
+    n_classes=255 ile 8-bit paletin TAMAMI dolu/anlamlı hale gelir — hem
+    boş satır KALMAZ hem de sonuç ArcMap'te pürüzsüz bir renk barına
+    yakın görünür.
     """
     import numpy as np
     from rasterio.io import MemoryFile
@@ -2930,16 +2731,43 @@ def _build_classified_symbology_zip(tif_bytes, vis, safe_name, breaks=None, n_cl
     valid = np.isfinite(band)
     if src_nodata is not None:
         valid &= ~np.isclose(band, float(src_nodata))
+
     if not np.any(valid):
         return None
 
-    if not (breaks and isinstance(breaks, list)):
-        return None
+    byte_band, code_info = None, None
 
-    byte_band, code_info = _classify_by_breaks(band, valid, breaks)
+    if breaks and isinstance(breaks, list) and len(breaks) >= 1:
+        byte_band, code_info = _classify_by_breaks(band, valid, breaks)
+        if not code_info:
+            breaks = None  # geçersiz/boş breaks — aşağıdaki moda düş
+
+    if not breaks:
+        # 🛠️ BUG FİX (Faz 16 — bkz. _classify_from_visualized_rgb() docstring'i):
+        # önce, haritadaki tile'ları üreten AYNI final_display.visualize(**vis)
+        # çağrısının GERÇEK piksel renklerini kullanmayı dene (varsa) — bu,
+        # ekranla BİREBİR renk eşleşmesini garanti eder. rgb_bytes sağlanmadıysa
+        # veya bir şekilde başarısız olursa, eski (kendi enterpolasyonumuzu
+        # kullanan) yönteme GÜVENLE düşülür — indirme asla kesintiye uğramaz.
+        if rgb_bytes:
+            byte_band, code_info = _classify_from_visualized_rgb(band, valid, rgb_bytes)
+
+        if not code_info:
+            vmin = vis.get('min') if isinstance(vis, dict) else None
+            vmax = vis.get('max') if isinstance(vis, dict) else None
+            palette = (vis.get('palette') if isinstance(vis, dict) else None) or ['000000', 'ffffff']
+            if vmin is None or vmax is None:
+                # Vis min/max sağlanmadıysa (beklenmedik durum) veriden hesapla —
+                # ArcMap'in en azından anlamlı bir sınıflandırma görmesi için.
+                finite_vals = band[valid]
+                vmin = float(np.nanmin(finite_vals)) if vmin is None else vmin
+                vmax = float(np.nanmax(finite_vals)) if vmax is None else vmax
+            byte_band, code_info = _classify_continuous_band(band, valid, vmin, vmax, palette, n_classes=n_classes)
+
     if not code_info:
         return None
-    return _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name)
+
+    return _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name, embed_colormap=embed_colormap)
 
 
 @app.route('/api/ping', methods=['GET'])
@@ -4248,37 +4076,6 @@ def _require_nonempty_image(image, empty_message):
     return image
 
 
-def _topo_default_visualization(index):
-    """Topografik analizlerin SylvaGIS ekranındaki varsayılan renk rampaları.
-
-    Bu harita yalnızca GEE görselleştirmesini değil, GeoTIFF export tarafındaki
-    vis bilgisini de aynı tutmak için tek kaynaktır.
-    """
-    ramps = {
-        'terrain': ['2c7bb6', 'abd9e9', 'ffffbf', 'fdae61', 'd7191c'],
-        'heat': ['313695', '4575b4', 'fdae61', 'd73027', 'a50026'],
-        'rainbow': ['ff0000', 'ffa500', 'ffff00', '008000', '0000ff', '4b0082', 'ee82ee'],
-        'gray': ['000000', 'ffffff'],
-        'red-yellow-green': ['d73027', 'fc8d59', 'fee08b', 'd9ef8b', '1a9850'],
-        'blue-ocean': ['08306b', '2171b5', '6baed6', 'c6dbef'],
-    }
-    ramp_by_index = {
-        'TOPO': 'terrain', 'TOPO_DEM': 'terrain',
-        'TOPO_SLOPE': 'heat', 'TOPO_ASPECT': 'rainbow',
-        'TOPO_HILLSHADE': 'gray', 'TOPO_RELIEF': 'terrain',
-        'TOPO_TPI': 'red-yellow-green', 'TOPO_TRI': 'heat',
-        'TOPO_ROUGHNESS': 'heat', 'TOPO_CURVATURE': 'red-yellow-green',
-        'TOPO_PLAN_CURV': 'red-yellow-green', 'TOPO_PROFILE_CURV': 'red-yellow-green',
-        'TOPO_FLOWDIR': 'rainbow', 'TOPO_FLOWACC': 'blue-ocean',
-        'TOPO_STREAM': 'blue-ocean', 'TOPO_TWI': 'blue-ocean',
-        'TOPO_SPI': 'blue-ocean', 'TOPO_STI': 'blue-ocean',
-        'TOPO_HILLSHADE_MULTI': 'gray', 'TOPO_SOLAR': 'heat',
-        'TOPO_SHADOW': 'gray', 'TOPO_CONTOUR': 'gray',
-    }
-    key = ramp_by_index.get(index, 'gray')
-    return ramps[key]
-
-
 def build_result_image(data, for_export=False):
     """
     Ortak analiz görüntüsü oluşturma mantığı.
@@ -4610,46 +4407,45 @@ def build_result_image(data, for_export=False):
         # ── Temel Topografik Analizler ────────────────────────────
         if index in ('TOPO', 'TOPO_DEM'):
             result = dem.rename('value')
-            vis = {'min': 0, 'max': 3000, 'palette': _topo_default_visualization(index)}
+            vis = {'min': 0, 'max': 3000, 'palette': ['black', 'white']}
 
         elif index == 'TOPO_SLOPE':
             result = slope.rename('value')
-            vis = {'min': 0, 'max': 60, 'palette': _topo_default_visualization(index)}
+            vis = {'min': 0, 'max': 60, 'palette': ['black', 'white']}
 
         elif index == 'TOPO_ASPECT':
-            # ArcMap uyumlu Aspect: düz alanlar -1, yönler 0..360°.
-            result = aspect.where(slope.lt(1), -1).rename('value')
-            vis = {'min': -1, 'max': 360, 'palette': _topo_default_visualization(index)}
+            result = aspect.rename('value')
+            vis = {'min': 0, 'max': 360, 'palette': ['black', 'white']}
 
         elif index == 'TOPO_HILLSHADE':
             result = terrain.select('hillshade').rename('value')
-            vis = {'min': 0, 'max': 255, 'palette': _topo_default_visualization(index)}
+            vis = {'min': 0, 'max': 255, 'palette': ['black', 'white']}
 
         elif index == 'TOPO_RELIEF':
             # Kabartmalı rölyef: hillshade + normalize yükseklik karışımı
             hs       = terrain.select('hillshade')
             elev_n   = dem.unitScale(0, 3000).multiply(80).add(175).clamp(0, 255)
             result   = hs.multiply(0.7).add(elev_n.multiply(0.3)).rename('value')
-            vis = {'min': 0, 'max': 255, 'palette': _topo_default_visualization(index)}
+            vis = {'min': 0, 'max': 255, 'palette': ['black', 'white']}
 
         # ── Morfometrik Analizler ─────────────────────────────────
         elif index == 'TOPO_TPI':
             # Topographic Position Index: DEM − odak ortalama
             focal_mean = dem.focalMean(radius=300, units='meters')
             result = dem.subtract(focal_mean).rename('value')
-            vis = {'min': -50, 'max': 50, 'palette': _topo_default_visualization(index)}
+            vis = {'min': -50, 'max': 50, 'palette': ['black', 'white']}
 
         elif index == 'TOPO_TRI':
             # Terrain Ruggedness Index: odak standart sapma
             result = dem.focalStdDev(radius=300, units='meters').rename('value')
-            vis = {'min': 0, 'max': 80, 'palette': _topo_default_visualization(index)}
+            vis = {'min': 0, 'max': 80, 'palette': ['black', 'white']}
 
         elif index == 'TOPO_ROUGHNESS':
             # Pürüzlülük: pencerede maksimum − minimum rakım
             focal_max = dem.focalMax(radius=300, units='meters')
             focal_min = dem.focalMin(radius=300, units='meters')
             result = focal_max.subtract(focal_min).rename('value')
-            vis = {'min': 0, 'max': 150, 'palette': _topo_default_visualization(index)}
+            vis = {'min': 0, 'max': 150, 'palette': ['black', 'white']}
 
         elif index in ('TOPO_CURVATURE', 'TOPO_PLAN_CURV', 'TOPO_PROFILE_CURV'):
             # 🛠️ BUG FİX (yoğun beyaz "tuz-biber" beneği — özellikle düz/az
@@ -4672,7 +4468,7 @@ def build_result_image(data, for_export=False):
             dem_smooth = dem.focalMean(radius=60, units='meters')
             kernel = ee.Kernel.laplacian8(normalize=False)
             result = dem_smooth.convolve(kernel).rename('value')
-            vis = {'min': -30, 'max': 30, 'palette': _topo_default_visualization(index)}
+            vis = {'min': -30, 'max': 30, 'palette': ['black', 'white']}
 
         # ── Hidrolojik Analizler ──────────────────────────────────
         elif index == 'TOPO_FLOWDIR':
@@ -4685,7 +4481,7 @@ def build_result_image(data, for_export=False):
             low_slope = ee.Image(90).subtract(slope.clamp(0, 90))
             elev_inv  = ee.Image(3000).subtract(dem.clamp(0, 3000))
             result = low_slope.add(elev_inv.divide(30)).rename('value')
-            vis = {'min': 0, 'max': 200, 'palette': _topo_default_visualization(index)}
+            vis = {'min': 0, 'max': 200, 'palette': ['black', 'white']}
 
         elif index == 'TOPO_STREAM':
             # Dere ağı: düşük eğim + negatif TPI (vadi tabanı) maskesi
@@ -4693,7 +4489,7 @@ def build_result_image(data, for_export=False):
             tpi_small   = dem.subtract(focal_mean2)
             stream_mask = slope.lt(5).And(tpi_small.lt(0))
             result = stream_mask.multiply(1).rename('value')
-            vis = {'min': 0, 'max': 1, 'palette': _topo_default_visualization(index)}
+            vis = {'min': 0, 'max': 1, 'palette': ['black', 'white']}
 
         elif index == 'TOPO_TWI':
             # Topographic Wetness Index: ln(a / tan(β))
@@ -4701,7 +4497,7 @@ def build_result_image(data, for_export=False):
             tan_slope = slope_rad.tan().max(ee.Image(0.001))
             acc_proxy = ee.Image(90).subtract(slope.clamp(0, 90)).max(ee.Image(1.0))
             result = acc_proxy.log().subtract(tan_slope.log()).rename('value')
-            vis = {'min': 0, 'max': 15, 'palette': _topo_default_visualization(index)}
+            vis = {'min': 0, 'max': 15, 'palette': ['black', 'white']}
 
         elif index == 'TOPO_SPI':
             # Stream Power Index: a × tan(β)
@@ -4709,7 +4505,7 @@ def build_result_image(data, for_export=False):
             tan_slope = slope_rad.tan().max(ee.Image(0.001))
             acc_proxy = ee.Image(90).subtract(slope.clamp(0, 90)).max(ee.Image(1.0))
             result = acc_proxy.multiply(tan_slope).rename('value')
-            vis = {'min': 0, 'max': 20, 'palette': _topo_default_visualization(index)}
+            vis = {'min': 0, 'max': 20, 'palette': ['black', 'white']}
 
         elif index == 'TOPO_STI':
             # Sediment Transport Index: (a/22.13)^0.6 × (sin(β)/0.0896)^1.3
@@ -4719,14 +4515,14 @@ def build_result_image(data, for_export=False):
             result = acc_proxy.divide(22.13).pow(0.6).multiply(
                 sin_slope.divide(0.0896).pow(1.3)
             ).rename('value')
-            vis = {'min': 0, 'max': 50, 'palette': _topo_default_visualization(index)}
+            vis = {'min': 0, 'max': 50, 'palette': ['black', 'white']}
 
         # ── Güneş ve Görünürlük Analizleri ───────────────────────
         elif index == 'TOPO_HILLSHADE_MULTI':
             # Çok yönlü kabartma: 8 azimuth açısı ortalaması
             hs_list = [ee.Terrain.hillshade(dem, az, 45) for az in [0, 45, 90, 135, 180, 225, 270, 315]]
             result = ee.ImageCollection(hs_list).mean().rename('value')
-            vis = {'min': 0, 'max': 255, 'palette': _topo_default_visualization(index)}
+            vis = {'min': 0, 'max': 255, 'palette': ['black', 'white']}
 
         elif index == 'TOPO_SOLAR':
             # Güneş radyasyonu vekisi: güneye-bakan eğimli alanlar daha fazla ışınım alır
@@ -4734,12 +4530,12 @@ def build_result_image(data, for_export=False):
             south_fac   = asp_rad.subtract(_math.pi).cos().multiply(0.5).add(0.5)
             slope_fac   = slope.divide(90).clamp(0, 1)
             result = south_fac.multiply(0.7).add(slope_fac.multiply(0.3)).rename('value')
-            vis = {'min': 0, 'max': 1, 'palette': _topo_default_visualization(index)}
+            vis = {'min': 0, 'max': 1, 'palette': ['black', 'white']}
 
         elif index == 'TOPO_SHADOW':
             # Gölge analizi: KD azimuth kabartması (düşük değer = gölge alan)
             result = ee.Terrain.hillshade(dem, 315, 45).rename('value')
-            vis = {'min': 0, 'max': 255, 'palette': _topo_default_visualization(index)}
+            vis = {'min': 0, 'max': 255, 'palette': ['black', 'white']}
 
         elif index == 'TOPO_CONTOUR':
             # 📏 Eş Yükselti (İzohips/Kontur) Çizgileri
@@ -4792,11 +4588,11 @@ def build_result_image(data, for_export=False):
             _dem_smooth = dem.focalMean(radius=45, units='meters').resample('bicubic')
             _signal = _dem_smooth.multiply(2 * _math.pi / _contour_interval).sin()
             result = _signal.zeroCrossing().rename('value')
-            vis = {'min': 0, 'max': 1, 'palette': _topo_default_visualization(index)}
+            vis = {'min': 0, 'max': 1, 'palette': ['black', 'white']}
 
         else:
             result = slope.rename('value')
-            vis = {'min': 0, 'max': 60, 'palette': _topo_default_visualization(index)}
+            vis = {'min': 0, 'max': 60, 'palette': ['black', 'white']}
 
         # ── 🛠️ BUG FİX: sabit/hardcoded germe aralıkları yerine AOI'nin
         # gerçek veri dağılımına göre dinamik germe uygula (bkz. yukarıdaki
@@ -4863,7 +4659,7 @@ def build_result_image(data, for_export=False):
             if index == 'TOPO_CONTOUR':
                 display_result = _dem_smooth.rename('value')
                 result = display_result
-                vis = {'min': 0, 'max': 3000, 'palette': _topo_default_visualization(index)}
+                vis = {'min': 0, 'max': 3000, 'palette': ['black', 'white']}
             else:
                 display_result = result
         elif class_breaks and isinstance(class_breaks, list) and len(class_breaks) > 0:
@@ -6990,46 +6786,73 @@ def download_geotiff():
         # False) bu adım atlanır — mevcut davranış korunur.
         aoi_geom_4326 = _call_with_retry(lambda: roi.getInfo()) if is_clip else None
 
-        # 🎨 Dışa aktarma sembolojisi: BAR/STRETCHED ile CLASSIFIED kesin olarak
-        # birbirinden ayrılır. BAR modunda ham piksel değerleri korunur;
-        # CLASSIFIED modunda yalnızca kullanıcının gerçek sınıf sınırları kullanılır.
+        # 🎨 ArcMap/QGIS "Siyah-Beyaz + Rakam" / "Hepsi RGB İniyor" SORUNU
+        # DÜZELTMESİ (bkz. _build_classified_symbology_zip() docstring'i):
+        # LULC ailesi (LULC, LULC_ESA, LULC_MODIS, LULC_CORINE) VE artık TÜM
+        # diğer analizler (NDVI, NDWI ve diğer uydu indeksleri, DEM/Eğim/
+        # diğer Topografik Analizler, Çevresel ve Kentsel Analizler vb.)
+        # ham GeoTIFF'in içine (ve yanına) Color Table + RAT gömülür;
+        # kullanıcıya tek bir .tif yerine .tif + .tif.aux.xml + .tif.vat.dbf/
+        # .cpg + .clr içeren bir ZIP sunulur — hepsi tek bantlı, gerçek/ham
+        # piksel bilgisi taşıyan, renkli/sınıflandırılmış ("bar") bir
+        # rasterdır. YALNIZCA gerçek 🛰️ Uydu Görüntüsü/doğal renk kompoziti
+        # (index == 'RGB') istisnadır — o zaten fiziksel olarak 3 bantlı bir
+        # görüntü olduğundan RGB olarak kalmaya devam eder.
+        # İstemci ekranda görülen renk paletini istediyse (sürekli indeks,
+        # DEM vb.) o min/max/palette aşağıdaki sınıflandırma adımında
+        # kullanılır — böylece indirilen dosyanın rengi haritadaki renk
+        # çubuğuyla eşleşir.
         requested_vis = req_data.get('visualization')
         requested_breaks = None
-        requested_mode = 'bar'
         if isinstance(requested_vis, dict):
             for _vis_key in ('min', 'max', 'palette'):
                 if requested_vis.get(_vis_key) not in (None, '', []):
                     vis[_vis_key] = requested_vis[_vis_key]
-            requested_mode = requested_vis.get('mode') or 'bar'
-            if requested_mode == 'classified' and isinstance(requested_vis.get('breaks'), list):
+            # 🛠️ BUG FİX (Faz 15 — "bar olarak indirmiştim, sınıflandırılmış
+            # vermiş"): istemci artık, kullanıcı ekranda "Lejantı Uygula"
+            # panelinde KENDİ sınıflarını tanımladıysa (mode:'classified')
+            # bu sınıfların gerçek min/max/renklerini 'breaks' alanında da
+            # gönderiyor (bkz. index.html — exportVisualFor()). Bu durumda
+            # aşağıdaki _build_classified_symbology_zip() çağrısı sunucunun
+            # kendi eşit-aralıklı 255 sınıfını DEĞİL, kullanıcının GERÇEKTEN
+            # ekranda gördüğü sınıfları birebir kullanır. mode:'bar' (veya
+            # hiç özelleştirilmemiş varsayılan) durumunda 'breaks' boş
+            # gelir ve sürekli/yoğun (255 sınıflı) moda düşülür.
+            if requested_vis.get('mode') == 'classified' and isinstance(requested_vis.get('breaks'), list):
                 requested_breaks = requested_vis['breaks']
-
-        # Bakı: kullanıcı özel sınıflar tanımlamadıysa ArcMap tarzı 9 yön sınıfı.
-        is_aspect = (lulc_index == 'TOPO_ASPECT')
-        if is_aspect and not requested_breaks:
-            requested_breaks = '__DEFAULT_ASPECT_9__'
-
         is_true_color_rgb = (lulc_index == 'RGB')
         export_image = final_display
+        # 🛠️ BUG FİX (indirilen TÜM rasterlerin RGB olarak inmesi): önceden
+        # 'rendered' bayrağı gönderildiğinde (istemci HER indirmede gönderir)
+        # LULC dışındaki her analiz de final_display.visualize(**vis) ile 3
+        # bantlı Byte RGB'ye dönüştürülüyordu. Artık bu dönüşüm SADECE gerçek
+        # RGB/doğal renk kompozit indirmelerinde uygulanır; diğer TÜM
+        # analizlerde ham/sürekli tek bant korunur ve aşağıda
+        # _build_classified_symbology_zip() ile ayrık renklendirilir.
+        #
+        # 🛠️ BUG FİX (Faz 16 — "1 KB'lık bozuk uydu görüntüsü indirmeleri,
+        # ArcMap'te açılmıyor"): Sentinel-2 gerçek renk indirmelerinde
+        # final_display, BİRAZ YUKARIDA (_is_byte_rgb_export bloğunda) ZATEN
+        # unitScale(v_min,v_max)+toByte() ile 0-255 Byte'a dönüştürülmüştü.
+        # Bu satır önceden KOŞULSUZ olarak final_display.visualize(**vis)'i
+        # BİR KEZ DAHA (vis={min:0,max:0.3 gibi ham yansıma aralığı}
+        # ile) uyguluyordu — yani ZATEN 0-255 olan bir görüntüyü SANKİ HÂLÂ
+        # 0-0.3 aralığındaymış gibi tekrar gerip 0-255'e sıkıştırıyordu. Bu
+        # çifte-germe, neredeyse TÜM pikselleri 255'e (veya tek bir değere)
+        # kilitleyip aşırı derecede sıkışan (LZW ile ~1 KB'a inen), pratikte
+        # boş/bozuk bir görüntü üretiyordu — kullanıcının bildirdiği "1 KB,
+        # ArcMap'te açılmıyor" BİREBİR budur. ÇÖZÜM: _is_byte_rgb_export
+        # zaten Byte'a çevirmişse .visualize() BİR DAHA çağrılmaz;
+        # final_display (zaten doğru renklerde) OLDUĞU GİBİ kullanılır.
         if req_data.get('rendered') and is_true_color_rgb and not _is_byte_rgb_export:
             try:
                 export_image = final_display.visualize(**vis)
+                # RGB görselleştirme Byte olduğundan NoData da Byte aralığında
+                # kalmalıdır; aksi ArcMap bazı TIFF'leri açmayı reddeder.
                 if nodata_value is not None:
                     nodata_value = 0
             except Exception as visual_err:
                 print('[SylvaGIS] Görsel GeoTIFF üretilemedi; ham bant indiriliyor: {}'.format(visual_err))
-
-        # Aspect'ın düz alanlarını ArcMap'teki -1 sentinel'ine dönüştür.
-        # Bu dönüşüm yalnızca gerçek Aspect dışa aktarımında yapılır.
-        if is_aspect:
-            try:
-                # build_result_image() içindeki slope değişkeni doğrudan burada
-                # erişilebilir olmadığından, GEE terrain aspect'in 0 değerini
-                # gerçek Kuzey olarak bırakıyoruz; mevcut -1 değerleri ise
-                # sınıflandırıcı tarafından Düz kabul ediliyor.
-                pass
-            except Exception:
-                pass
 
         tif_bytes = _download_band_geotiff_bytes(
             export_image, export_region, scale, crs, safe_name,
@@ -7037,28 +6860,6 @@ def download_geotiff():
             fallback_region_geom=roi.bounds(maxError=100),
             is_categorical=is_lulc_categorical
         )
-
-        # Topografik analizlerde AOI clip'i KESİN olmalı. GEE'nin bounding-box
-        # indirmesi veya ara mozaik yolu poligon maskesini kaybetse bile burada
-        # son kez strict=true uygulanır; böylece çalışma alanı dışında kare/
-        # dikdörtgen raster kullanıcıya asla gönderilmez.
-        if (isinstance(lulc_index, str) and lulc_index.startswith('TOPO')
-                and aoi_geom_4326 is not None and nodata_value is not None):
-            tif_bytes = _true_clip_tif_bytes(
-                tif_bytes, aoi_geom_4326, nodata_value, strict=True
-            )
-
-        # ArcMap'in zoom yapmadan ilk çizimde rasteri hemen göstermesi için
-        # ana TIFF'i tiled/compressed ve internal pyramid'li hale getir.
-        # Bu adım piksel değerlerini DEĞİŞTİRMEZ.
-        tif_bytes = _prepare_arcmap_raster_bytes(tif_bytes, build_internal_overviews=True)
-        # 🔒 ArcMap güvence kontrolü: optimizasyon/overview/reprojection sonrası
-        # TIFF'in hâlâ gerçek veri içerdiğini doğrula. Boş veya okunamayan DEM,
-        # Slope, TWI vb. dosyaların ZIP'e sessizce girmesine izin verme.
-        _validate_exported_raster_bytes(tif_bytes, label=lulc_index or safe_name, require_data=True)
-        # Internal pyramid yazımı bazı GDAL/rasterio sürümlerinde band metadata
-        # etiketlerini taşımayabilir; son kez kesin min/max istatistiklerini damgala.
-        tif_bytes = _stamp_exact_band_statistics(tif_bytes, nodata_value=nodata_value)
 
         sym_files = None
         if lulc_index in LULC_CLASS_DEFS:
@@ -7070,38 +6871,47 @@ def download_geotiff():
                 print('[SylvaGIS] ⚠️ LULC renk tablosu/RAT oluşturulamadı, ham .tif '
                       'olarak devam ediliyor: {}'.format(sym_err))
         elif not is_true_color_rgb:
+            # 🛠️ BUG FİX (Faz 16 — bkz. _classify_from_visualized_rgb()
+            # docstring'i): "bar" (özelleştirilmemiş/sürekli) modda, haritanın
+            # KENDİSİNİ üreten final_display.visualize(**vis) çağrısı burada
+            # AYRICA indirilir — aşağıdaki sınıflandırma, kendi enterpolasyon
+            # tahminimiz yerine bu GERÇEK render'ın piksel renklerini kullanır
+            # (ekranla garantili birebir eşleşme için). Kullanıcı kendi
+            # sınıflarını (breaks) tanımladıysa bu ek indirme GEREKMEZ — o
+            # zaten kendi tam renklerini kullanıyor, atlanır.
+            rgb_vis_bytes = None
+            if not requested_breaks:
+                try:
+                    rgb_vis_bytes = _download_band_geotiff_bytes(
+                        final_display.visualize(**vis), export_region, scale, crs, safe_name + '_rgbref',
+                        nodata_value=0, aoi_geom_4326=aoi_geom_4326,
+                        fallback_region_geom=roi.bounds(maxError=100),
+                        is_categorical=False
+                    )
+                except Exception as rgb_ref_err:
+                    print('[SylvaGIS] ⚠️ Ekran-birebir renk referansı indirilemedi, '
+                          'kendi enterpolasyonumuza düşülüyor: {}'.format(rgb_ref_err))
             try:
-                if is_aspect and requested_breaks == '__DEFAULT_ASPECT_9__':
-                    import numpy as np
-                    from rasterio.io import MemoryFile
-                    with MemoryFile(tif_bytes) as mf:
-                        with mf.open() as src:
-                            band = src.read(1).astype(np.float64)
-                            profile = src.profile.copy()
-                            src_nodata = src.nodata
-                    valid = np.isfinite(band)
-                    if src_nodata is not None:
-                        valid &= ~np.isclose(band, float(src_nodata))
-                    aspect_band, aspect_info = _classify_aspect_9(band, valid)
-                    sym_files = _build_symbology_files_from_classes(
-                        aspect_band, profile, aspect_info, safe_name
-                    )
-                elif requested_mode == 'classified' and isinstance(requested_breaks, list) and requested_breaks:
-                    sym_files = _build_classified_symbology_zip(
-                        tif_bytes, vis, safe_name, breaks=requested_breaks
-                    )
-                else:
-                    # BAR/STRETCHED: ham raster + kesin min/max + overview.
-                    # Burada artık 15/255 sınıf üretimi YOKTUR.
-                    sym_files = _build_continuous_raster_package(
-                        tif_bytes, safe_name, include_ovr=True
-                    )
+                # Bakı 9 sınıflı tematik rasterdir. ArcMap'in ColorMap için
+                # 16/256'ya yaptığı palette padding'i boş lejant satırları
+                # ürettiği için Bakı'da gömülü ColorMap kullanma; gerçek 9
+                # sınıfı RAT/VAT/.clr ile taşı. Diğer analizlerde mevcut
+                # semboloji davranışı korunur.
+                _aspect_no_colormap = (str(lulc_index or '').upper() == 'TOPO_ASPECT')
+                sym_files = _build_classified_symbology_zip(
+                    tif_bytes, vis, safe_name, breaks=requested_breaks,
+                    rgb_bytes=rgb_vis_bytes, embed_colormap=not _aspect_no_colormap)
             except Exception as sym_err:
                 traceback.print_exc()
                 sym_files = None
-                print('[SylvaGIS] ⚠️ Raster semboloji paketi oluşturulamadı, ham .tif '
-                      'olarak devam ediliyor: {}'.format(sym_err))
+                print('[SylvaGIS] ⚠️ Sınıflandırılmış renk tablosu/RAT oluşturulamadı, '
+                      'ham .tif olarak devam ediliyor: {}'.format(sym_err))
         else:
+            # 🛠️ BUG FİX ("uydu görüntülerinde zip dosyasında sadece tif var,
+            # diğer dosyalar yok"): gerçek RGB kompozitler RAT/Colormap
+            # alamaz (bkz. _build_rgb_symbology_zip docstring'i) ama artık
+            # diğer TÜM indirmelerle TUTARLI şekilde bir .tif.aux.xml
+            # sidecar'ı ile birlikte paketlenir.
             try:
                 sym_files = _build_rgb_symbology_zip(tif_bytes, safe_name)
             except Exception as sym_err:
@@ -7111,18 +6921,6 @@ def download_geotiff():
                       'olarak devam ediliyor: {}'.format(sym_err))
 
         if sym_files:
-            # Her raster paketine gerçek bir .ovr sidecar ekle. Kategorik
-            # sınıflarda nearest, sürekli verilerde bilinear kullanılır.
-            _sym_tif_key = '{}.tif'.format(safe_name)
-            if _sym_tif_key in sym_files:
-                # Her raster paketi için klasik CRS/world-file yan dosyalarını da taşı.
-                for _gf_name, _gf_bytes in _build_georef_sidecars(sym_files[_sym_tif_key], safe_name).items():
-                    sym_files.setdefault(_gf_name, _gf_bytes)
-            if _sym_tif_key in sym_files and '{}.tif.ovr'.format(safe_name) not in sym_files:
-                _ovr_mode = 'nearest' if (lulc_index in LULC_CLASS_DEFS or (is_aspect and requested_mode == 'classified')) else 'bilinear'
-                _ovr_bytes = _build_overview_sidecar_bytes(sym_files[_sym_tif_key], resampling=_ovr_mode)
-                if _ovr_bytes:
-                    sym_files['{}.tif.ovr'.format(safe_name)] = _ovr_bytes
             # Tek analiz için kullanıcı doğrudan TIFF istediğinde renk
             # tablosu gömülü TIFF'i döndür. Çoklu analizlerde ise sınıf
             # isimlerini taşıyan RAT/VAT yan dosyaları batch ZIP'e katılır.
@@ -7502,52 +7300,6 @@ def _ensure_output_crs(tif_bytes, target_crs, nodata_value=None, is_categorical=
     except Exception as reproj_err:
         print('[SylvaGIS] ❌ Yerel yeniden projeksiyon başarısız — dosya orijinal '
               'CRS\'iyle gönderiliyor:', reproj_err)
-        return tif_bytes
-
-
-def _prepare_arcmap_raster_bytes(tif_bytes, build_internal_overviews=True):
-    """ArcMap ilk açılış/zoom davranışı için TIFF'i kayıpsız optimize eder.
-
-    Piksel değerleri, CRS, transform, extent ve NoData aynen korunur. Dosya
-    tiled/deflate olarak yeniden yazılır ve mümkünse ana TIFF içine 2/4/8/16
-    seviyeli internal overview eklenir. Dış .ovr sidecar da ayrıca üretilmeye
-    devam eder; böylece ArcMap hem internal hem external pyramid yoluna sahip
-    olur.
-    """
-    try:
-        import rasterio
-        from rasterio.io import MemoryFile
-        from rasterio.enums import Resampling
-    except ImportError:
-        return tif_bytes
-    try:
-        with MemoryFile(tif_bytes) as mf:
-            with mf.open() as src:
-                profile = src.profile.copy()
-                data = src.read()
-                src_nodata = src.nodata
-        # Küçük rasterlerde tiled bloklar gereksiz olabilir ama ArcMap için
-        # 256x256 bloklar büyük/çok pikselli topografik rasterlerde belirgin
-        # şekilde daha hızlı ilk çizim sağlar.
-        profile.update(compress='deflate', predictor=2)
-        if data.shape[-1] >= 256 and data.shape[-2] >= 256:
-            profile.update(tiled=True, blockxsize=256, blockysize=256)
-        else:
-            profile.pop('tiled', None)
-            profile.pop('blockxsize', None)
-            profile.pop('blockysize', None)
-        with MemoryFile() as out:
-            with out.open(**profile) as dst:
-                dst.write(data)
-                if build_internal_overviews and dst.width > 64 and dst.height > 64:
-                    levels = [2, 4, 8, 16]
-                    levels = [f for f in levels if dst.width // f >= 1 and dst.height // f >= 1]
-                    if levels:
-                        dst.build_overviews(levels, Resampling.nearest if dst.dtypes[0].startswith(('uint','int')) else Resampling.bilinear)
-                        dst.update_tags(ns='rio_overview', resampling='nearest' if dst.dtypes[0].startswith(('uint','int')) else 'bilinear')
-            return out.read()
-    except Exception as prep_err:
-        print('[SylvaGIS] TIFF performans/pyramid optimizasyonu atlandı:', prep_err)
         return tif_bytes
 
 
@@ -8010,14 +7762,8 @@ def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata
     # pikseller kesin olarak NoData olur. LULC/ESA'da strict=True olduğu için
     # clip başarısız olursa asla clipsiz dikdörtgen dosya gönderilmez.
     if aoi_geom_4326 is not None and nodata_value is not None:
-        _force_topo_clip = False
-        try:
-            _force_topo_clip = str(base_name or '').upper().find('TOPO') >= 0
-        except Exception:
-            _force_topo_clip = False
         raw_bytes = _true_clip_tif_bytes(
-            raw_bytes, aoi_geom_4326, nodata_value,
-            strict=(is_categorical or _force_topo_clip)
+            raw_bytes, aoi_geom_4326, nodata_value, strict=is_categorical
         )
 
     return _stamp_exact_band_statistics(raw_bytes, nodata_value=nodata_value)
@@ -9319,7 +9065,7 @@ def download_geotiff_batch():
     if not isinstance(items, list) or len(items) < 2:
         return jsonify({'success': False, 'error': 'ZIP için en az iki raster analiz gerekir.'}), 400
     if len(items) > 100:
-        return jsonify({'success': False, 'error': 'Tek ZIP içinde en fazla 100 raster analiz indirilebilir.'}), 400
+        return jsonify({'success': False, 'error': 'Tek ZIP içinde en fazla 100 analiz indirilebilir.'}), 400
     # 🛠️ BUG FİX (Faz 18 — "toplu indirmede hata verdi, zip inmedi"):
     # ESKİDEN her öğe (ör. Arazi Kullanımı'nda seçili 4 katman: Dynamic
     # World, ESA WorldCover, MODIS, CORINE) burada SIRAYLA/senkron olarak
@@ -9428,11 +9174,12 @@ def download_geotiff_batch():
     # öğe başarılıysa ZIP yine üretilir, başarılı katmanlar İÇİNDE yer
     # alır ve başarısız katman(lar) ZIP'in içine eklenen bir
     # "INDIRILEMEYEN_KATMANLAR.txt" ile AÇIKÇA (sessizce değil) bildirilir.
-    if errors and not results:
-        traceback.print_exc()
+    # Toplu indirme eksik paket üretmemeli: tek bir analiz bile
+    # oluşturulamazsa kullanıcıya açık hata döndür ve yarım ZIP verme.
+    if errors:
         return jsonify({
             'success': False,
-            'error': '; '.join('{}: {}'.format(b, e) for b, e in errors)
+            'error': 'Toplu indirme tamamlanamadı: ' + '; '.join('{}: {}'.format(b, e) for b, e in errors)
         }), 500
 
     zip_buf = io.BytesIO()
@@ -9450,6 +9197,14 @@ def download_geotiff_batch():
                                 out_zip.writestr(member.filename, nested.read(member.filename))
                 else:
                     out_zip.writestr(base_r + '.tif', body)
+            if errors:
+                out_zip.writestr(
+                    'INDIRILEMEYEN_KATMANLAR.txt',
+                    'Aşağıdaki katman(lar) bu ZIP\'e dahil edilemedi:\n\n' +
+                    '\n'.join('- {}: {}'.format(b, e) for b, e in errors) +
+                    '\n\nDiğer tüm katmanlar bu ZIP içinde sorunsuz şekilde yer alıyor. '
+                    'Başarısız katman(lar)ı tekrar indirmeyi deneyebilirsiniz.'
+                )
         result = zip_buf.getvalue()
         response = Response(result, mimetype='application/zip')
         response.headers['Content-Disposition'] = 'attachment; filename="SylvaGIS_raster_analizleri.zip"'
