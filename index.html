@@ -4264,7 +4264,7 @@ tr.class-highlight-active {
                         <div class="sensor-group-label" data-i18n="topo_basic">🏔 Temel Topografik Analizler</div>
                         <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_DEM" data-ramp-key="terrain" data-legend-type="stretched" data-legend-min="0 m" data-legend-max="3000 m"> <span data-i18n="topo_dem_label">YSM / Yükseklik (DEM)</span></label>
                         <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_SLOPE" data-ramp-key="heat" data-legend-type="stretched" data-legend-min="0°" data-legend-max="60°"> <span data-i18n="topo_slope_label">Eğim (Slope)</span></label>
-                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_ASPECT" data-ramp-key="rainbow" data-legend-type="classified" data-legend-min="-1" data-legend-max="360°" data-legend-classes='[{"color":"#bdbdbd","label":"Düz (-1)","code":1},{"color":"#2ca25f","label":"Kuzey (0–12.5° / 327.5–360°)","code":2},{"color":"#66c2a4","label":"Kuzeydoğu (12.5–57.5°)","code":3},{"color":"#99d8c9","label":"Doğu (57.5–102.5°)","code":4},{"color":"#ccece6","label":"Güneydoğu (102.5–147.5°)","code":5},{"color":"#fdae61","label":"Güney (147.5–192.5°)","code":6},{"color":"#f46d43","label":"Güneybatı (192.5–237.5°)","code":7},{"color":"#d73027","label":"Batı (237.5–282.5°)","code":8},{"color":"#7f0000","label":"Kuzeybatı (282.5–327.5°)","code":9}]'> <span data-i18n="topo_aspect_label">Bakı (Aspect)</span></label>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_ASPECT" data-ramp-key="rainbow" data-legend-type="stretched" data-legend-min="0°" data-legend-max="360°"> <span data-i18n="topo_aspect_label">Bakı (Aspect)</span></label>
                         <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_HILLSHADE" data-ramp-key="gray" data-legend-type="stretched" data-legend-min-key="shadow_label" data-legend-max-key="light_label" data-legend-min="Gölge" data-legend-max="Işık"> <span data-i18n="topo_hillshade_label">Kabartma (Hillshade)</span></label>
                         <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_RELIEF" data-ramp-key="terrain" data-legend-type="stretched" data-legend-min-key="flat_label" data-legend-max-key="high_label" data-legend-min="Düz" data-legend-max="Yüksek"> <span data-i18n="topo_relief_label">Rölyef Haritası</span></label>
 
@@ -52175,6 +52175,27 @@ refresh();
     function exportVisualFor(pane, key) {
         var state = window._sylvaEditorStateByPane && window._sylvaEditorStateByPane[pane] && window._sylvaEditorStateByPane[pane][key];
         var colors = [], min, max, breaks = null;
+        // Bakı (Aspect) ArcMap'e her zaman 9 anlamlı yön sınıfıyla gider.
+        // Kullanıcı özel sınıflandırma yapmadıysa ekrandaki otomatik yön
+        // sınıfları export'a açıkça gönder; böylece eski 0–360 bar lejantına
+        // geri düşmez. Etiketler ayrıca sunucu tarafında VAT/RAT'a yazılır.
+        function defaultAspectBreaks() {
+            return [
+                {min:-1, max:-0.5, color:'d9d9d9', label:'Düz (-1)'},
+                {min:0, max:12.5, color:'1f9d55', label:'Kuzey (0–12.5° / 327.5–360°)'},
+                {min:12.5, max:57.5, color:'63c59a', label:'Kuzeydoğu (12.5–57.5°)'},
+                {min:57.5, max:102.5, color:'9bd7c8', label:'Doğu (57.5–102.5°)'},
+                {min:102.5, max:147.5, color:'c7e6d9', label:'Güneydoğu (102.5–147.5°)'},
+                {min:147.5, max:192.5, color:'f6b35a', label:'Güney (147.5–192.5°)'},
+                {min:192.5, max:237.5, color:'ef7d4a', label:'Güneybatı (192.5–237.5°)'},
+                {min:237.5, max:282.5, color:'d73027', label:'Batı (237.5–282.5°)'},
+                {min:282.5, max:327.5, color:'8b0000', label:'Kuzeybatı (282.5–327.5°)'}
+            ];
+        }
+        if (String(key || '').toUpperCase() === 'TOPO_ASPECT') {
+            var _aspectIsCustom = !!(state && state.classificationType === 'classified' && state.classRows && state.classRows.length >= 2);
+            if (!_aspectIsCustom) breaks = defaultAspectBreaks();
+        }
         // 🛠️ BUG FİX (Faz 15 — "bar olarak indirmiştim, sınıflandırılmış
         // vermiş"): önceden bu fonksiyon yalnızca İLK ve SON sınıfın min/
         // max'ını (ve renklerin düz bir listesini) döndürüyordu — sunucu
@@ -52187,12 +52208,9 @@ refresh();
         // AYRICA gönderiliyor — sunucu artık bunları birebir kullanıyor,
         // kendi sınıflandırmasını İCAT ETMİYOR (bkz. server.py —
         // _classify_by_breaks()).
-        // classRows yalnızca gerçekten CLASSIFIED moddaysa dışa aktarılır.
-        // STRETCHED/BAR modunda DOM'da eski sınıf satırları bulunabilir; bunları
-        // kullanmak rasteri yanlışlıkla 1..N sınıfa çeviriyordu.
-        if (state && state.classificationType === 'classified' && state.classRows && state.classRows.length) {
+        if (state && state.classRows && state.classRows.length && !(String(key || '').toUpperCase() === 'TOPO_ASPECT' && !(state.classificationType === 'classified'))) {
             breaks = state.classRows.map(function (row) {
-                return { min: parseFloat(row.min), max: parseFloat(row.max), color: String(row.color || '').replace(/^#/, '') };
+                return { min: parseFloat(row.min), max: parseFloat(row.max), color: String(row.color || '').replace(/^#/, ''), label: String(row.name || '').trim() };
             }).filter(function (b) { return isFinite(b.min) && isFinite(b.max) && b.color; });
             state.classRows.forEach(function (row) { if (row.color) colors.push(String(row.color).replace(/^#/, '')); });
             min = parseFloat(state.classRows[0].min); max = parseFloat(state.classRows[state.classRows.length - 1].max);
@@ -52240,16 +52258,26 @@ refresh();
         return { min:min, max:max, palette:colors, mode: (breaks && breaks.length) ? 'classified' : 'bar', breaks: breaks };
     }
     function rasterEntries(pane) {
-        var result = [], seen = {};
+        var result = [], seen = {}, seenKeys = {};
         var byLayer = window._sylvaLayerAnalyzePayloadByPane && window._sylvaLayerAnalyzePayloadByPane[pane] || {};
         var store = window._geeLayersByPane && window._geeLayersByPane[pane] || {};
-        Object.keys(store).forEach(function (key) {
+
+        // Çalışma ekranındaki TÜM analiz kaynaklarını birleştir: bazı raster
+        // katmanları görünür GEE store'da bulunurken bazıları yalnızca analiz
+        // payload sözlüğünde kalabiliyor. Toplu indirme ikisini de taramalı;
+        // aksi halde örneğin Slope ekranda seçili olduğu halde ZIP'e hiç
+        // girmeyebiliyordu.
+        var keys = Object.keys(byLayer);
+        Object.keys(store).forEach(function(k){ if (keys.indexOf(k) === -1) keys.push(k); });
+        keys.forEach(function (key) {
             var payload = byLayer[key];
+            if (!payload && store[key] && store[key]._analyzePayload) payload = store[key]._analyzePayload;
             var index = payload && payload.index;
             if (!payload || !index || /^(TOPO_CONTOUR|BUILDING_FOOTPRINT)$/i.test(index)) return;
             var fingerprint = JSON.stringify(payload);
             if (seen[fingerprint]) return;
             seen[fingerprint] = true;
+            seenKeys[key] = true;
             result.push({ key:key, payload:payload, index:index });
         });
         if (!result.length) {
@@ -52400,5 +52428,3 @@ refresh();
 </body>
 
 </html>
-
-
