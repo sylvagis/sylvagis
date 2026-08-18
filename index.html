@@ -52188,8 +52188,23 @@ refresh();
     function safeName(value) { return String(value || 'Analiz').replace(/[^a-z0-9_-]+/gi, '_').replace(/^_+|_+$/g, '') || 'Analiz'; }
     function exportVisualFor(pane, key) {
         var state = window._sylvaEditorStateByPane && window._sylvaEditorStateByPane[pane] && window._sylvaEditorStateByPane[pane][key];
-        var colors = [], min, max;
+        var colors = [], min, max, breaks = null;
+        // 🛠️ BUG FİX (Faz 15 — "bar olarak indirmiştim, sınıflandırılmış
+        // vermiş"): önceden bu fonksiyon yalnızca İLK ve SON sınıfın min/
+        // max'ını (ve renklerin düz bir listesini) döndürüyordu — sunucu
+        // tarafında hangi ekran modunda olduğumuz (sürekli "bar" mı, yoksa
+        // kullanıcının kendi tanımladığı ayrık "sınıflandırılmış" mı)
+        // KAYBOLUYORDU; sunucu her zaman KENDİ icat ettiği eşit-aralıklı bir
+        // sınıflandırma uyguluyordu. Artık kullanıcı classRows ile KENDİ
+        // sınıflarını tanımladıysa (Lejantı Uygula panelinde "Sınıflandırılmış"
+        // modu), o sınıfların GERÇEK min/max/renkleri 'breaks' dizisinde
+        // AYRICA gönderiliyor — sunucu artık bunları birebir kullanıyor,
+        // kendi sınıflandırmasını İCAT ETMİYOR (bkz. server.py —
+        // _classify_by_breaks()).
         if (state && state.classRows && state.classRows.length) {
+            breaks = state.classRows.map(function (row) {
+                return { min: parseFloat(row.min), max: parseFloat(row.max), color: String(row.color || '').replace(/^#/, '') };
+            }).filter(function (b) { return isFinite(b.min) && isFinite(b.max) && b.color; });
             state.classRows.forEach(function (row) { if (row.color) colors.push(String(row.color).replace(/^#/, '')); });
             min = parseFloat(state.classRows[0].min); max = parseFloat(state.classRows[state.classRows.length - 1].max);
         }
@@ -52233,7 +52248,7 @@ refresh();
         if (!colors.length) colors = ['000000', 'ffffff'];
         if (!isFinite(min)) min = -1;
         if (!isFinite(max) || max === min) max = 1;
-        return { min:min, max:max, palette:colors };
+        return { min:min, max:max, palette:colors, mode: (breaks && breaks.length) ? 'classified' : 'bar', breaks: breaks };
     }
     function rasterEntries(pane) {
         var result = [], seen = {};
