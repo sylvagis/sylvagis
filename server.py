@@ -7589,13 +7589,59 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
 
         params = {
             'name':   base_name,
-            'scale':  scale,
             'format': 'GEO_TIFF',
             'crs':    crs,
-            'region': region_geom,
         }
         if nodata_value is not None:
             params['formatOptions'] = {'noData': nodata_value}
+
+        # 🛠️ BUG FİX (Faz 17 — "lejant doğru ama arazi kullanımı verisi
+        # yanlış inmiş": ekranda çeşitli/doğru sınıflar görünürken indirilen
+        # dosyada AOI'nin neredeyse tamamı TEK bir baskın sınıfa (ör. "Tarım
+        # Alanı") sıkışıyor, yalnızca kenarda ince/doğru bir şerit kalıyor):
+        # KÖK NEDEN (GEE'nin bilinen bir davranışı): yalnızca 'scale' +
+        # 'region' + 'crs' verildiğinde GEE, piksel gridinin ORİJİNİNİ ve
+        # boyutlarını KENDİSİ, örtük/dahili bir hesaplamayla belirler. Bu
+        # hesaplama, kaynak görüntünün doğal piksel gridi (ör. ESA
+        # WorldCover/MODIS'in kendi native projeksiyonu) istenen crs/scale
+        # ile TAM örtüşmediğinde, GEE'nin görüntüyü örtük olarak yeniden
+        # örneklerken AOI'nin büyük bölümünü kaba/toplu bir örneklemeyle
+        # doldurmasına yol açabiliyor — yalnızca AOI kenarındaki pikseller
+        # (kaynak gridle örtüşmesi farklı olduğundan) ince ayrıntıyı
+        # koruyor. Bu, kullanıcının bildirdiği "ortada tek renk, kenarda
+        # ince doğru şerit" deseniyle birebir örtüşüyor.
+        # ÇÖZÜM: büyük-AOI karo-bölme yolunda ZATEN kanıtlanmış olan KESİN/
+        # deterministik piksel gridi tekniği (bkz. _split_bbox_grid_aligned()
+        # docstring'i — "TEK ORTAK bir piksel gridi", crsTransform +
+        # dimensions) artık TEK istekli (karo bölünmesi gerekmeyen) normal
+        # indirmelerde de kullanılıyor: 'scale'+'region' yerine, AOI'nin
+        # TAMAMINI kapsayan TEK bir karo (nx=ny=1) için hesaplanan
+        # crsTransform+dimensions GEE'ye gönderiliyor. Bu, GEE'nin örtük
+        # grid hesaplamasını TAMAMEN devre dışı bırakıp piksel gridinin
+        # KESİN olarak scale/origin'e göre, hiçbir belirsizlik olmadan
+        # tanımlanmasını sağlıyor — kategorik (LULC ailesi) veriler için
+        # özellikle kritik, çünkü nearest-neighbor örnekleme artık HER
+        # zaman öngörülebilir/sabit bir gridden yapılıyor.
+        # Bu hesaplama başarısız olursa (ör. küresel/sınırsız geometri —
+        # "must be bounded" hatası, global DEM gibi) ESKİ 'scale'+'region'
+        # yöntemine güvenle geri dönülür; aşağıdaki except bloğundaki
+        # fallback_region_geom mekanizması DEĞİŞTİRİLMEDEN aynen çalışır.
+        _primary_tile_spec = None
+        try:
+            _specs = _split_bbox_grid_aligned(region_geom, 1, 1, scale, crs)
+            if _specs:
+                _primary_tile_spec = _specs[0]
+        except Exception as _grid_err:
+            print('[SylvaGIS] ⚠️ Kesin piksel gridi hesaplanamadı, scale+region '
+                  'yöntemine geri dönülüyor: {}'.format(_grid_err))
+            _primary_tile_spec = None
+
+        if _primary_tile_spec is not None:
+            params['crsTransform'] = _primary_tile_spec['crsTransform']
+            params['dimensions']   = _primary_tile_spec['dimensions']
+        else:
+            params['scale']  = scale
+            params['region'] = region_geom
 
         url = _call_with_retry(lambda: img.getDownloadURL(params))
         r = _call_with_retry(lambda: requests.get(url, timeout=180), retries=2)
@@ -7622,6 +7668,15 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
                 'bounded' in err_str.lower() or 'clipToBoundsAndScale' in err_str
             ):
                 fb_params = dict(params)
+                # 🛠️ BUG FİX (Faz 17 — crsTransform/dimensions + region birlikte
+                # gönderilmesin): yukarıdaki KESİN piksel gridi denemesi
+                # başarılı olup params'a 'crsTransform'/'dimensions' eklemiş
+                # olabilir; bu durumda 'region' eklemeden önce onları
+                # kaldırıp yerine 'scale' konur — GEE'ye çelişkili/karma
+                # parametre seti (hem sabit grid hem de region) gönderilmez.
+                fb_params.pop('crsTransform', None)
+                fb_params.pop('dimensions', None)
+                fb_params['scale'] = scale
                 fb_params['region'] = fallback_region_geom
                 fb_url = _call_with_retry(lambda: img.getDownloadURL(fb_params))
                 fb_r = _call_with_retry(lambda: requests.get(fb_url, timeout=180), retries=2)
