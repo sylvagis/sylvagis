@@ -2221,41 +2221,200 @@ def _write_dbf_bytes(field_defs, rows):
     return header + field_descriptors + body + b'\x1a'
 
 
+def _named_color_to_hex(c):
+    """CSS renk adlarını ('black', 'white' vb.) hex koda çevirir; zaten hex
+    ise (baştaki '#' ile veya değil) olduğu gibi normalize eder."""
+    _NAMED = {
+        'black': '000000', 'white': 'ffffff', 'red': 'ff0000',
+        'green': '00ff00', 'blue': '0000ff', 'yellow': 'ffff00',
+        'orange': 'ffa500', 'purple': '800080', 'gray': '808080',
+        'grey': '808080', 'cyan': '00ffff', 'magenta': 'ff00ff',
+        'brown': 'a52a2a', 'pink': 'ffc0cb',
+    }
+    s = str(c).strip().lstrip('#')
+    if s.lower() in _NAMED:
+        return _NAMED[s.lower()]
+    return s
+
+
+def _interpolate_palette(palette, t):
+    """palette (hex string listesi, '#' olsun olmasın) üzerinde t∈[0,1]
+    konumundaki rengi doğrusal (lineer) enterpolasyonla döndürür.
+    Tek renkli paletlerde o renk sabit döner."""
+    hexes = [_named_color_to_hex(c) for c in (palette or ['ffffff'])] or ['ffffff']
+    if len(hexes) == 1:
+        h = hexes[0]
+        return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+    t = max(0.0, min(1.0, t))
+    pos = t * (len(hexes) - 1)
+    i0 = int(pos)
+    i1 = min(i0 + 1, len(hexes) - 1)
+    frac = pos - i0
+    c0 = hexes[i0]
+    c1 = hexes[i1]
+    rgb0 = tuple(int(c0[i:i + 2], 16) for i in (0, 2, 4))
+    rgb1 = tuple(int(c1[i:i + 2], 16) for i in (0, 2, 4))
+    return tuple(int(round(rgb0[k] + (rgb1[k] - rgb0[k]) * frac)) for k in range(3))
+
+
+def _classify_continuous_band(band, valid_mask, vmin, vmax, palette, n_classes=12):
+    """Sürekli (float) bir bandı, harita üzerindeki renk skalasıyla (palette)
+    aynı görünümü verecek şekilde 1..n_classes arası küçük tam sayı sınıf
+    koduna (0 = NoData) böler. Her sınıf, palette'ten enterpole edilmiş
+    KENDİ rengini ve sayısal aralığını ("min – max") etiket olarak alır.
+    Bu, indirilen dosyanın ArcMap/QGIS'te — tıpkı LULC'de olduğu gibi —
+    tek bantlı + Raster Attribute Table üzerinden RENKLİ/SINIFLANDIRILMIŞ
+    ("bar") açılmasını sağlar; haritada görülen sürekli renk geçişinin
+    ayrık (discrete) bir yaklaşıklığıdır."""
+    import numpy as np
+
+    vmin = float(vmin) if vmin is not None else 0.0
+    vmax = float(vmax) if vmax is not None else (vmin + 1.0)
+    if not np.isfinite(vmin):
+        vmin = 0.0
+    if not np.isfinite(vmax) or vmax <= vmin:
+        vmax = vmin + 1.0
+
+    frac = np.clip((band - vmin) / (vmax - vmin), 0.0, 1.0)
+    idx = np.clip(np.floor(frac * n_classes), 0, n_classes - 1).astype(np.uint8) + 1
+    idx = np.where(valid_mask, idx, 0).astype(np.uint8)
+
+    code_info = {}
+    for c in range(1, n_classes + 1):
+        lo = vmin + (c - 1) / n_classes * (vmax - vmin)
+        hi = vmin + c / n_classes * (vmax - vmin)
+        rgb = _interpolate_palette(palette, (c - 0.5) / n_classes)
+        label = '{:.3g} – {:.3g}'.format(lo, hi)
+        code_info[c] = (label, rgb)
+
+    return idx, code_info
+
+
+def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name):
+    """Zaten 1..N küçük tam sayı sınıf koduna (0 = NoData) indirgenmiş bir
+    banttan (byte_band) ve {kod: (etiket, (r,g,b))} sözlüğünden (code_info)
+    ArcMap/QGIS'in RENKLİ + İSİMLENDİRİLMİŞ açacağı bir dosya seti üretir:
+
+      1) {ad}.tif          — tek bantlı Byte GeoTIFF. NoData = 0.
+      2) {ad}.tif.aux.xml   — GDAL "Raster Attribute Table" (RAT) sidecar'ı.
+      3) {ad}.tif.vat.dbf/.cpg — ArcMap'in klasik Value Attribute Table'ı.
+      4) {ad}.clr           — klasik GDAL/ESRI renk eşleştirme dosyası
+                              (Symbology > Import ile manuel yükleme yedeği).
+
+    🛠️ BUG FİX (ArcMap lejantında onlarca boş/beyaz "sınıf" karesi
+    görünmesi — Faz 13'te siyahtan saydama çevrilmişti, ama ArcMap'in
+    "Colormap" sembolojisi GDAL'ın TIFF'e HER ZAMAN 256 girişli TAM bir
+    Palette tablosu olarak fiziksel yazdığı iç renk tablosunu (rasterio.
+    write_colormap) ham haliyle satır satır listelemeye devam ediyordu —
+    kullanılmayan onlarca/yüzlerce indeks artık siyah değil ama hâlâ
+    AYRI, ETİKETSİZ birer lejant satırı olarak görünüyordu. KÖK NEDEN:
+    dosyanın içine hiç embedded Palette color table YAZMAMAK. Bu fonksiyon
+    artık dst.write_colormap() ÇAĞIRMIYOR — TIFF düz Gray/tematik tek bant
+    olarak kalıyor. Renk/etiket bilgisi SADECE aşağıdaki RAT (.tif.aux.xml,
+    LAYER_TYPE=thematic + Usage=6/7/8 Red/Green/Blue alanları) ve .tif.vat.
+    dbf üzerinden taşınıyor — bu, ArcMap/ArcGIS Pro'nun tematik rasterları
+    Value/Class_Name'e göre otomatik renklendirmek için kullandığı YERLİ
+    mekanizmadır (Esri "Build Raster Attribute Table" ile üretilenle aynı
+    format) ve sembolojiyi "Unique Values" üzerinden SADECE gerçekte var
+    olan sınıflarla gösterir — hiçbir boş/fazladan satır ORTAYA ÇIKMAZ.
+    """
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from xml.sax.saxutils import escape as _xml_escape
+
+    new_profile = profile.copy()
+    new_profile.update(dtype='uint8', count=1, nodata=0, compress='lzw')
+    new_profile.pop('photometric', None)
+
+    with MemoryFile() as out_memfile:
+        with out_memfile.open(**new_profile) as dst:
+            dst.write(byte_band, 1)
+        new_tif_bytes = out_memfile.read()
+
+    # ── .clr (klasik GDAL/ESRI renk eşleştirme dosyası) ──────────────
+    clr_lines = ['0 255 255 255 0']
+    for code in sorted(code_info.keys()):
+        label, rgb = code_info[code]
+        clr_lines.append('{} {} {} {} 255'.format(code, rgb[0], rgb[1], rgb[2]))
+    clr_bytes = ('\n'.join(clr_lines) + '\n').encode('utf-8')
+
+    # ── .tif.aux.xml (GDAL Raster Attribute Table — isim/renk eşleştirme) ─
+    rows = ['      <Row index="0"><F>0</F><F>NoData</F><F>255</F><F>255</F><F>255</F></Row>']
+    for i, code in enumerate(sorted(code_info.keys()), start=1):
+        label, rgb = code_info[code]
+        rows.append(
+            '      <Row index="{}"><F>{}</F><F>{}</F><F>{}</F><F>{}</F><F>{}</F></Row>'.format(
+                i, code, _xml_escape(label), rgb[0], rgb[1], rgb[2]
+            )
+        )
+    aux_xml = (
+        '<PAMDataset>\n'
+        '  <PAMRasterBand band="1">\n'
+        '    <Metadata>\n'
+        '      <MDI key="LAYER_TYPE">thematic</MDI>\n'
+        '    </Metadata>\n'
+        '    <GDALRasterAttributeTable Row0Min="0" BinSize="1" tableType="thematic">\n'
+        '      <FieldDefn index="0"><Name>VALUE</Name><Type>1</Type><Usage>0</Usage></FieldDefn>\n'
+        '      <FieldDefn index="1"><Name>CLASS_NAME</Name><Type>2</Type><Usage>2</Usage></FieldDefn>\n'
+        '      <FieldDefn index="2"><Name>R</Name><Type>1</Type><Usage>6</Usage></FieldDefn>\n'
+        '      <FieldDefn index="3"><Name>G</Name><Type>1</Type><Usage>7</Usage></FieldDefn>\n'
+        '      <FieldDefn index="4"><Name>B</Name><Type>1</Type><Usage>8</Usage></FieldDefn>\n'
+        + '\n'.join(rows) + '\n'
+        '    </GDALRasterAttributeTable>\n'
+        '  </PAMRasterBand>\n'
+        '</PAMDataset>\n'
+    )
+    aux_xml_bytes = aux_xml.encode('utf-8')
+
+    # ── .tif.vat.dbf (Value Attribute Table) ──────────────────────────
+    # Klasik ArcMap, .tif.aux.xml RAT'ını Symbology > Unique Values
+    # ekranındaki "Label" sütununa güvenilir yansıtmayabilir; ArcMap'in bu
+    # iş için asıl yerli desteği "<ad>.tif.vat.dbf" adlı Value Attribute
+    # Table sidecar'ıdır (ArcCatalog'daki "Build Raster Attribute Table"
+    # aracının ürettiğiyle aynı format).
+    counts = np.bincount(byte_band.ravel(), minlength=256)
+    field_defs = [
+        ('VALUE', 'N', 10, 0),
+        ('COUNT', 'N', 12, 0),
+        ('CLASS_NAME', 'C', 60, 0),
+        ('RED', 'N', 3, 0),
+        ('GREEN', 'N', 3, 0),
+        ('BLUE', 'N', 3, 0),
+    ]
+    vat_rows = []
+    for code in sorted(code_info.keys()):
+        label, rgb = code_info[code]
+        vat_rows.append((code, int(counts[code]) if code < 256 else 0,
+                          label, rgb[0], rgb[1], rgb[2]))
+    vat_dbf_bytes = _write_dbf_bytes(field_defs, vat_rows)
+    vat_cpg_bytes = b'UTF-8'
+
+    return {
+        '{}.tif'.format(safe_name): new_tif_bytes,
+        '{}.tif.aux.xml'.format(safe_name): aux_xml_bytes,
+        '{}.tif.vat.dbf'.format(safe_name): vat_dbf_bytes,
+        '{}.tif.vat.cpg'.format(safe_name): vat_cpg_bytes,
+        '{}.clr'.format(safe_name): clr_bytes,
+    }
+
+
 def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name):
     """
     LULC ailesi (LULC, LULC_ESA, LULC_MODIS, LULC_CORINE) GeoTIFF'ini alır;
-    çıktısı, ArcMap/QGIS'te doğrudan RENKLİ ve İSİMLENDİRİLMİŞ açılan bir
-    ZIP paketidir:
-
-      1) {ad}.tif          — bandı Byte'a indirgenmiş, İÇİNE "Color Table"
-                              (GDAL Palette) GÖMÜLMÜŞ GeoTIFF. Bu sayede
-                              dosya, yanında hiçbir sidecar olmasa bile artık
-                              siyah-beyaz değil, kendi rengiyle açılır.
-      2) {ad}.tif.aux.xml   — GDAL "Raster Attribute Table" (RAT) sidecar'ı;
-                              ArcGIS/QGIS bunu .tif ile aynı klasörde
-                              otomatik bulur ve piksel değerlerini (1,2,3…)
-                              sınıf isimlerine ("Orman", "Tarım Alanı" vb.)
-                              çevirir (Identify / Öznitelik Tablosu).
-      3) {ad}.clr           — klasik GDAL/ESRI renk eşleştirme dosyası;
-                              ArcMap'te Symbology > Import ile manuel olarak
-                              da yüklenebilir (yedek yol).
-      4) OKUBENI.txt        — (KALDIRILDI) ArcMap/QGIS kullanım kılavuzu artık
-                              ZIP paketine eklenmiyor; paket sadece veri
-                              dosyalarını (.tif, .tif.aux.xml, .tif.vat.dbf/.cpg,
-                              .clr) içerir. Bkz. aşağıdaki BUG FİX notu.
+    çıktısı, ArcMap/QGIS'te doğrudan RENKLİ ve İSİMLENDİRİLMİŞ açılan, SADECE
+    gerçekte var olan sınıfları içeren bir dosya seti döndürür (bkz.
+    _build_symbology_files_from_classes() docstring'i — boş lejant satırı
+    üretmeme garantisi de dahil).
 
     Girdi verisi zaten sunucuda 1..N (veya Dynamic World için 0..8) gibi
     küçük, ardışık tam sayı sınıf kodlarına remaplenmiş halde gelir (bkz.
     build_result_image → LULC/LULC_ESA/LULC_MODIS/LULC_CORINE blokları).
-    Burada yapılan tek şey: NoData sentinel'ini (-9999) 0'a indirgemek,
-    bandı Byte'a çevirmek ve rasterio.write_colormap ile renk tablosunu
-    dosyanın içine yazmaktır — piksellerin taşıdığı SINIF BİLGİSİ hiçbir
+    Burada yapılan tek şey: NoData sentinel'ini (-9999) 0'a indirgemek ve
+    bandı Byte'a çevirmektir — piksellerin taşıdığı SINIF BİLGİSİ hiçbir
     şekilde değiştirilmez/kaybolmaz.
     """
     import numpy as np
-    import rasterio
     from rasterio.io import MemoryFile
-    from xml.sax.saxutils import escape as _xml_escape
 
     defs = LULC_CLASS_DEFS.get(index_name)
     if not defs:
@@ -2288,123 +2447,63 @@ def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name):
     out = np.where(valid, rounded + shift, 0)
     out = np.clip(out, 0, 255).astype(np.uint8)
 
-    new_profile = profile.copy()
-    new_profile.update(dtype='uint8', count=1, nodata=0, compress='lzw')
-    new_profile.pop('photometric', None)
+    return _build_symbology_files_from_classes(out, profile, shifted_info, safe_name)
 
-    with MemoryFile() as out_memfile:
-        with out_memfile.open(**new_profile) as dst:
-            dst.write(out, 1)
-            # 🛠️ BUG FİX (ArcMap lejantında onlarca boş/SİYAH "sınıf" karesi
-            # görünmesi): TIFF'in Palette (renk tablosu) modeli, GDAL'a göre
-            # HER ZAMAN 256 girişli TAM bir tablo olarak fiziksel olarak
-            # yazılır — biz yalnızca 0 (NoData) ve gerçek sınıf kodlarını
-            # (ör. 1..7) AÇIKÇA ayarlasak bile. Kod tarafında hiç DOKUNULMAYAN
-            # geri kalan onlarca/yüzlerce indeks (ör. 8..255) GDAL tarafından
-            # OTOMATİK olarak TAMAMEN OPAK SİYAH (0,0,0,255) ile doldurulur —
-            # bu, gerçek veride hiç var olmayan piksel değerleri için bile
-            # geçerlidir. Bu ortamda rasterio ile doğrudan doğrulandı: write_
-            # colormap'e yalnızca birkaç indeks verilse dahi geri okunan
-            # renk tablosu 0-255 arası TÜM indeksleri içeriyor ve boştaki
-            # her biri opak siyah. ArcMap (özellikle klasik ArcMap, RAT
-            # etiketlerini güvenilir okumadığı için — bkz. .tif.vat.dbf
-            # bloğundaki not) bu ham renk tablosunu doğrudan lejanda
-            # yansıtınca, kullanıcı gerçek sınıfların ALTINDA/YANINDA onlarca
-            # etiketsiz siyah kare görüyor — bildirilen hata tam olarak bu.
-            # ÇÖZÜM: kullanılmayan 256 indeksin TAMAMI, gerçek sınıflardan
-            # ÖNCE, NoData ile AYNI (tamamen SAYDAM, siyah DEĞİL) renge
-            # önceden ayarlanır. Böylece ArcMap'in ham renk tablosunu
-            # doğrudan okuduğu senaryoda bile "fazladan" girişler artık
-            # opak siyah değil, NoData ile görsel olarak AYNI/saydamdır —
-            # yazılımların çoğu aynı renkli ardışık girdileri tek satırda
-            # birleştirir; birleştirmeyenlerde bile artık alarm verici
-            # "bozuk veri" görüntüsü yerine zararsız/saydam bir satır kalır.
-            # Gerçek sınıf kodlarının/piksel verisinin KENDİSİ bu değişiklikle
-            # HİÇ etkilenmez — yalnızca kullanılmayan renk tablosu
-            # girişlerinin GÖRÜNÜMÜ değişir.
-            colormap = {i: (255, 255, 255, 0) for i in range(256)}
-            for code, (label, rgb) in shifted_info.items():
-                colormap[code] = (rgb[0], rgb[1], rgb[2], 255)
-            dst.write_colormap(1, colormap)
-        new_tif_bytes = out_memfile.read()
 
-    # ── .clr (klasik GDAL/ESRI renk eşleştirme dosyası) ──────────────
-    clr_lines = ['0 255 255 255 0']
-    for code in sorted(shifted_info.keys()):
-        label, rgb = shifted_info[code]
-        clr_lines.append('{} {} {} {} 255'.format(code, rgb[0], rgb[1], rgb[2]))
-    clr_bytes = ('\n'.join(clr_lines) + '\n').encode('utf-8')
+def _build_classified_symbology_zip(tif_bytes, vis, safe_name, n_classes=12):
+    """LULC dışındaki (sürekli/continuous) TÜM analizler için — NDVI, NDWI,
+    diğer uydu indeksleri, DEM/Eğim/diğer Topografik Analizler, Çevresel ve
+    Kentsel Analizler vb. — LULC ile AYNI RAT-tabanlı sınıflandırılmış/renkli
+    ("bar") dosya setini üretir.
 
-    # ── .tif.aux.xml (GDAL Raster Attribute Table — isim eşleştirme) ─
-    rows = ['      <Row index="0"><F>0</F><F>NoData</F><F>255</F><F>255</F><F>255</F></Row>']
-    for i, code in enumerate(sorted(shifted_info.keys()), start=1):
-        label, rgb = shifted_info[code]
-        rows.append(
-            '      <Row index="{}"><F>{}</F><F>{}</F><F>{}</F><F>{}</F><F>{}</F></Row>'.format(
-                i, code, _xml_escape(label), rgb[0], rgb[1], rgb[2]
-            )
-        )
-    aux_xml = (
-        '<PAMDataset>\n'
-        '  <PAMRasterBand band="1">\n'
-        '    <Metadata>\n'
-        '      <MDI key="LAYER_TYPE">thematic</MDI>\n'
-        '    </Metadata>\n'
-        '    <GDALRasterAttributeTable Row0Min="0" BinSize="1" tableType="thematic">\n'
-        '      <FieldDefn index="0"><Name>VALUE</Name><Type>1</Type><Usage>0</Usage></FieldDefn>\n'
-        '      <FieldDefn index="1"><Name>CLASS_NAME</Name><Type>2</Type><Usage>2</Usage></FieldDefn>\n'
-        '      <FieldDefn index="2"><Name>R</Name><Type>1</Type><Usage>6</Usage></FieldDefn>\n'
-        '      <FieldDefn index="3"><Name>G</Name><Type>1</Type><Usage>7</Usage></FieldDefn>\n'
-        '      <FieldDefn index="4"><Name>B</Name><Type>1</Type><Usage>8</Usage></FieldDefn>\n'
-        + '\n'.join(rows) + '\n'
-        '    </GDALRasterAttributeTable>\n'
-        '  </PAMRasterBand>\n'
-        '</PAMDataset>\n'
-    )
-    aux_xml_bytes = aux_xml.encode('utf-8')
+    🛠️ BUG FİX (indirilen TÜM rasterlerin RGB olarak inmesi): daha önce bu
+    analizlerin GeoTIFF indirmesi her zaman final_display.visualize(**vis)
+    ile 3 bantlı (Red/Green/Blue), germe uygulanmış bir Byte RGB görüntüye
+    DÖNÜŞTÜRÜLÜYORDU (bkz. download_geotiff() içindeki eski 'rendered' dalı).
+    Bu, ArcMap'te katmanı üç ayrı "Band_1/Band_2/Band_3" olarak listeletiyor
+    (bir CBS analizi için anlamsız — RGB yalnızca gerçek renkli uydu
+    GÖRÜNTÜLERİ için doğru bir format) VE görselleştirme sırasında min/max
+    hatalı hesaplanırsa (bkz. Faz 13 — exportVisualFor sabit -1/1 düşmesi)
+    dosya tamamen SİYAH açılıyordu. ÇÖZÜM: artık hiçbir analiz RGB'ye
+    dönüştürülmüyor (RGB yalnızca gerçek 🛰️ Uydu Görüntüsü/doğal renk
+    kompozitleri için, index == 'RGB' durumunda korunuyor) — bunun yerine
+    sürekli/ham piksel değeri, haritadaki AYNI renk skalasıyla (vis min/max/
+    palette) 1..N küçük tam sayı sınıfa (bar/classified) bölünür ve LULC'de
+    kanıtlanmış RAT/VAT/clr sidecar mekanizmasıyla paketlenir — hem ArcMap'te
+    tek bantlı + renkli/sınıflandırılmış açılır hem de yanında artık .tif.
+    aux.xml/.tif.vat.dbf/.clr sidecar'ları (kullanıcının "twf/xml yok"
+    şikayeti) bulunur.
+    """
+    import numpy as np
+    from rasterio.io import MemoryFile
 
-    # ── .tif.vat.dbf (Value Attribute Table) ──────────────────────────
-    # SORUN: Klasik ArcMap (ArcGIS Pro DEĞİL), yukarıdaki .tif.aux.xml
-    # RAT'ını Symbology > Unique Values ekranındaki "Label" sütununa
-    # GÜVENİLİR şekilde yansıtmaz — kullanıcı hâlâ sadece rakamları görür.
-    # ArcMap'in bu iş için asıl yerli/güvenilir desteği "<ad>.tif.vat.dbf"
-    # adlı bir Value Attribute Table sidecar'ıdır (ArcCatalog'daki "Build
-    # Raster Attribute Table" aracının ürettiği AYNI formattır). Bu dosya
-    # varken, Symbology > Unique Values ekranındaki "Value Field" açılır
-    # menüsünde "CLASS_NAME" seçeneği belirir; kullanıcı bunu seçip
-    # "Add All Values" dediğinde Label sütunu doğrudan sınıf isimleriyle
-    # dolar — rakamlarla tek tek uğraşmaya gerek kalmaz.
-    counts = np.bincount(out.ravel(), minlength=256)
-    field_defs = [
-        ('VALUE', 'N', 10, 0),
-        ('COUNT', 'N', 12, 0),
-        ('CLASS_NAME', 'C', 60, 0),
-        ('RED', 'N', 3, 0),
-        ('GREEN', 'N', 3, 0),
-        ('BLUE', 'N', 3, 0),
-    ]
-    vat_rows = []
-    for code in sorted(shifted_info.keys()):
-        label, rgb = shifted_info[code]
-        vat_rows.append((code, int(counts[code]) if code < 256 else 0,
-                          label, rgb[0], rgb[1], rgb[2]))
-    vat_dbf_bytes = _write_dbf_bytes(field_defs, vat_rows)
-    vat_cpg_bytes = b'UTF-8'
+    with MemoryFile(tif_bytes) as memfile:
+        with memfile.open() as src:
+            if src.count < 1:
+                return None
+            band = src.read(1).astype(np.float64)
+            profile = src.profile.copy()
+            src_nodata = src.nodata
 
-    # 🛠️ BUG FİX (Dışa Aktarma Paketi Temizliği): ZIP paketleri önceden
-    # "OKUBENI.txt" adlı bir kullanım kılavuzu içeriyordu. Bu salt
-    # bilgilendirme amaçlı bir metindi ve QGIS/ArcMap'in kendisi tarafından
-    # kullanılmıyordu — kullanıcı ZIP'i açtığında veri dosyalarının (.tif,
-    # .tif.aux.xml, .tif.vat.dbf/.cpg, .clr) arasında gereksiz bir dosya
-    # olarak duruyordu. Artık üretilmiyor; paket sadece gerçek veri
-    # dosyalarını içerir. (readme metni bilinçli olarak kaldırıldı.)
-    return {
-        '{}.tif'.format(safe_name): new_tif_bytes,
-        '{}.tif.aux.xml'.format(safe_name): aux_xml_bytes,
-        '{}.tif.vat.dbf'.format(safe_name): vat_dbf_bytes,
-        '{}.tif.vat.cpg'.format(safe_name): vat_cpg_bytes,
-        '{}.clr'.format(safe_name): clr_bytes,
-    }
+    valid = np.isfinite(band)
+    if src_nodata is not None:
+        valid &= ~np.isclose(band, float(src_nodata))
+
+    if not np.any(valid):
+        return None
+
+    vmin = vis.get('min') if isinstance(vis, dict) else None
+    vmax = vis.get('max') if isinstance(vis, dict) else None
+    palette = (vis.get('palette') if isinstance(vis, dict) else None) or ['000000', 'ffffff']
+    if vmin is None or vmax is None:
+        # Vis min/max sağlanmadıysa (beklenmedik durum) veriden hesapla —
+        # ArcMap'in en azından anlamlı bir sınıflandırma görmesi için.
+        finite_vals = band[valid]
+        vmin = float(np.nanmin(finite_vals)) if vmin is None else vmin
+        vmax = float(np.nanmax(finite_vals)) if vmax is None else vmax
+
+    byte_band, code_info = _classify_continuous_band(band, valid, vmin, vmax, palette, n_classes=n_classes)
+    return _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name)
 
 
 @app.route('/api/ping', methods=['GET'])
@@ -6474,23 +6573,37 @@ def download_geotiff():
         # False) bu adım atlanır — mevcut davranış korunur.
         aoi_geom_4326 = _call_with_retry(lambda: roi.getInfo()) if is_clip else None
 
-        # 🎨 ArcMap/QGIS "Siyah-Beyaz + Rakam" SORUNU DÜZELTMESİ:
-        # LULC ailesi (LULC, LULC_ESA, LULC_MODIS, LULC_CORINE) indirmelerinde
-        # ham GeoTIFF'in içine (ve yanına) Color Table + RAT gömülür; kullanıcıya
-        # tek bir .tif yerine .tif + .tif.aux.xml + .clr içeren bir ZIP sunulur.
-        # Diğer TÜM analizler (NDVI, DEM, RGB, TOPO vb.) etkilenmez; onlar
-        # önceki gibi doğrudan .tif olarak inmeye devam eder.
+        # 🎨 ArcMap/QGIS "Siyah-Beyaz + Rakam" / "Hepsi RGB İniyor" SORUNU
+        # DÜZELTMESİ (bkz. _build_classified_symbology_zip() docstring'i):
+        # LULC ailesi (LULC, LULC_ESA, LULC_MODIS, LULC_CORINE) VE artık TÜM
+        # diğer analizler (NDVI, NDWI ve diğer uydu indeksleri, DEM/Eğim/
+        # diğer Topografik Analizler, Çevresel ve Kentsel Analizler vb.)
+        # ham GeoTIFF'in içine (ve yanına) Color Table + RAT gömülür;
+        # kullanıcıya tek bir .tif yerine .tif + .tif.aux.xml + .tif.vat.dbf/
+        # .cpg + .clr içeren bir ZIP sunulur — hepsi tek bantlı, gerçek/ham
+        # piksel bilgisi taşıyan, renkli/sınıflandırılmış ("bar") bir
+        # rasterdır. YALNIZCA gerçek 🛰️ Uydu Görüntüsü/doğal renk kompoziti
+        # (index == 'RGB') istisnadır — o zaten fiziksel olarak 3 bantlı bir
+        # görüntü olduğundan RGB olarak kalmaya devam eder.
         # İstemci ekranda görülen renk paletini istediyse (sürekli indeks,
-        # DEM vb.) sayısal ham bandı değil aynı min/max + paletle üretilen
-        # 3 bantlı RGB GeoTIFF'i dışa aktar. ArcMap/QGIS böylece varsayılan
-        # gri germe uygulamaz ve görünüm haritadaki renk çubuğuyla eşleşir.
+        # DEM vb.) o min/max/palette aşağıdaki sınıflandırma adımında
+        # kullanılır — böylece indirilen dosyanın rengi haritadaki renk
+        # çubuğuyla eşleşir.
         requested_vis = req_data.get('visualization')
         if isinstance(requested_vis, dict):
             for _vis_key in ('min', 'max', 'palette'):
                 if requested_vis.get(_vis_key) not in (None, '', []):
                     vis[_vis_key] = requested_vis[_vis_key]
+        is_true_color_rgb = (lulc_index == 'RGB')
         export_image = final_display
-        if req_data.get('rendered') and not is_lulc_categorical:
+        # 🛠️ BUG FİX (indirilen TÜM rasterlerin RGB olarak inmesi): önceden
+        # 'rendered' bayrağı gönderildiğinde (istemci HER indirmede gönderir)
+        # LULC dışındaki her analiz de final_display.visualize(**vis) ile 3
+        # bantlı Byte RGB'ye dönüştürülüyordu. Artık bu dönüşüm SADECE gerçek
+        # RGB/doğal renk kompozit indirmelerinde uygulanır; diğer TÜM
+        # analizlerde ham/sürekli tek bant korunur ve aşağıda
+        # _build_classified_symbology_zip() ile ayrık renklendirilir.
+        if req_data.get('rendered') and is_true_color_rgb:
             try:
                 export_image = final_display.visualize(**vis)
                 # RGB görselleştirme Byte olduğundan NoData da Byte aralığında
@@ -6507,6 +6620,7 @@ def download_geotiff():
             is_categorical=is_lulc_categorical
         )
 
+        sym_files = None
         if lulc_index in LULC_CLASS_DEFS:
             try:
                 sym_files = _build_lulc_symbology_zip(tif_bytes, lulc_index, safe_name)
@@ -6515,23 +6629,31 @@ def download_geotiff():
                 sym_files = None
                 print('[SylvaGIS] ⚠️ LULC renk tablosu/RAT oluşturulamadı, ham .tif '
                       'olarak devam ediliyor: {}'.format(sym_err))
+        elif not is_true_color_rgb:
+            try:
+                sym_files = _build_classified_symbology_zip(tif_bytes, vis, safe_name)
+            except Exception as sym_err:
+                traceback.print_exc()
+                sym_files = None
+                print('[SylvaGIS] ⚠️ Sınıflandırılmış renk tablosu/RAT oluşturulamadı, '
+                      'ham .tif olarak devam ediliyor: {}'.format(sym_err))
 
-            if sym_files:
-                # Tek analiz için kullanıcı doğrudan TIFF istediğinde renk
-                # tablosu gömülü TIFF'i döndür. Çoklu analizlerde ise sınıf
-                # isimlerini taşıyan RAT/VAT yan dosyaları batch ZIP'e katılır.
-                if req_data.get('flatTiff'):
-                    tif_bytes = sym_files.get('{}.tif'.format(safe_name), tif_bytes)
-                else:
-                    zip_buf = io.BytesIO()
-                    with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-                        for fname, fbytes in sym_files.items():
-                            zf.writestr(fname, fbytes)
-                    zip_bytes = zip_buf.getvalue()
-                    resp = Response(zip_bytes, mimetype='application/zip')
-                    resp.headers['Content-Disposition'] = 'attachment; filename="{}.zip"'.format(safe_name)
-                    resp.headers['Content-Length'] = str(len(zip_bytes))
-                    return resp
+        if sym_files:
+            # Tek analiz için kullanıcı doğrudan TIFF istediğinde renk
+            # tablosu gömülü TIFF'i döndür. Çoklu analizlerde ise sınıf
+            # isimlerini taşıyan RAT/VAT yan dosyaları batch ZIP'e katılır.
+            if req_data.get('flatTiff'):
+                tif_bytes = sym_files.get('{}.tif'.format(safe_name), tif_bytes)
+            else:
+                zip_buf = io.BytesIO()
+                with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+                    for fname, fbytes in sym_files.items():
+                        zf.writestr(fname, fbytes)
+                zip_bytes = zip_buf.getvalue()
+                resp = Response(zip_bytes, mimetype='application/zip')
+                resp.headers['Content-Disposition'] = 'attachment; filename="{}.zip"'.format(safe_name)
+                resp.headers['Content-Length'] = str(len(zip_bytes))
+                return resp
 
         resp = Response(tif_bytes, mimetype='image/tiff')
         resp.headers['Content-Disposition'] = 'attachment; filename="{}.tif"'.format(safe_name)
