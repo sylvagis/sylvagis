@@ -215,6 +215,28 @@
         if (typeof window.t !== 'function') {
             window.t = function(key, fallback) { return fallback || key; };
         }
+
+        // API payload guard: every analysis request carries the currently selected UI language.
+        // This is used by the server for ArcMap/QGIS raster legend labels and does not
+        // change any non-analysis request.
+        (function(){
+            if (window.__sylvaLangFetchWrapped || typeof window.fetch !== 'function') return;
+            window.__sylvaLangFetchWrapped = true;
+            var _sylvaNativeFetch = window.fetch.bind(window);
+            window.fetch = function(input, init){
+                try {
+                    var _url = typeof input === 'string' ? input : (input && input.url ? input.url : '');
+                    if (/(\/api\/(analyze|download-geotiff-batch))/.test(String(_url||'')) && init && typeof init.body === 'string') {
+                        var _payload = JSON.parse(init.body);
+                        if (_payload && typeof _payload === 'object') {
+                            _payload.lang = (window._sylvaLang || 'en');
+                            init = Object.assign({}, init, {body: JSON.stringify(_payload)});
+                        }
+                    }
+                } catch(_e) {}
+                return _sylvaNativeFetch(input, init);
+            };
+        })();
     </script>
     <script>
         /* SylvaGIS — Early session check
@@ -4264,9 +4286,9 @@ tr.class-highlight-active {
                         <div class="sensor-group-label" data-i18n="topo_basic">🏔 Temel Topografik Analizler</div>
                         <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_DEM" data-ramp-key="terrain" data-legend-type="stretched" data-legend-min="0 m" data-legend-max="3000 m"> <span data-i18n="topo_dem_label">YSM / Yükseklik (DEM)</span></label>
                         <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_SLOPE" data-ramp-key="heat" data-legend-type="stretched" data-legend-min="0°" data-legend-max="60°"> <span data-i18n="topo_slope_label">Eğim (Slope)</span></label>
-                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_ASPECT" data-ramp-key="rainbow" data-legend-type="classified" data-legend-min="-1" data-legend-max="360°" data-legend-classes='[{"color":"#bdbdbd","label":"Düz (-1)","code":1},{"color":"#2ca25f","label":"Kuzey (0–12.5° / 327.5–360°)","code":2},{"color":"#66c2a4","label":"Kuzeydoğu (12.5–57.5°)","code":3},{"color":"#99d8c9","label":"Doğu (57.5–102.5°)","code":4},{"color":"#ccece6","label":"Güneydoğu (102.5–147.5°)","code":5},{"color":"#fdae61","label":"Güney (147.5–192.5°)","code":6},{"color":"#f46d43","label":"Güneybatı (192.5–237.5°)","code":7},{"color":"#d73027","label":"Batı (237.5–282.5°)","code":8},{"color":"#7f0000","label":"Kuzeybatı (282.5–327.5°)","code":9}]'> <span data-i18n="topo_aspect_label">Bakı (Aspect)</span></label>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_ASPECT" data-ramp-key="rainbow" data-legend-type="classified" data-legend-min="-1" data-legend-max="360°" data-legend-classes='[{"color":"#d9d9d9","label":"Düz (-1)","code":1},{"color":"#3c8d5a","label":"Kuzey (0–12.5° / 327.5–360°)","code":2},{"color":"#57b894","label":"Kuzeydoğu (12.5–57.5°)","code":3},{"color":"#8ed0c4","label":"Doğu (57.5–102.5°)","code":4},{"color":"#c8e1d9","label":"Güneydoğu (102.5–147.5°)","code":5},{"color":"#f4b35f","label":"Güney (147.5–192.5°)","code":6},{"color":"#ee7b3a","label":"Güneybatı (192.5–237.5°)","code":7},{"color":"#d83a2e","label":"Batı (237.5–282.5°)","code":8},{"color":"#8f1d14","label":"Kuzeybatı (282.5–327.5°)","code":9}]'> <span data-i18n="topo_aspect_label">Bakı (Aspect)</span></label>
                         <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_HILLSHADE" data-ramp-key="gray" data-legend-type="stretched" data-legend-min-key="shadow_label" data-legend-max-key="light_label" data-legend-min="Gölge" data-legend-max="Işık"> <span data-i18n="topo_hillshade_label">Kabartma (Hillshade)</span></label>
-                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_RELIEF" data-ramp-key="gray" data-legend-type="stretched" data-legend-min-key="flat_label" data-legend-max-key="high_label" data-legend-min="Düz" data-legend-max="Yüksek"> <span data-i18n="topo_relief_label">Rölyef Haritası</span></label>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_RELIEF" data-ramp-key="terrain" data-legend-type="stretched" data-legend-min-key="flat_label" data-legend-max-key="high_label" data-legend-min="Düz" data-legend-max="Yüksek"> <span data-i18n="topo_relief_label">Rölyef Haritası</span></label>
 
                         <!-- Morfometrik Analizler -->
                         <div class="sensor-group-label" style="margin-top:8px;" data-i18n="topo_morpho">⛰ Morfometrik Analizler</div>
@@ -5941,6 +5963,23 @@ tr.class-highlight-active {
         // zoom bitince analiz katmanı doğru karolarıyla birlikte tekrar
         // görünür olur (bkz. aşağıdaki showSylvaLoading tabanlı bekleme).
         var map = L.map('map', { zoomControl: false }).setView(HOME_VIEW.center, HOME_VIEW.zoom);
+        // Keep the active static-analysis information card visible during map
+        // movement/zoom. Some Leaflet redraw paths briefly toggle its display;
+        // restore it from the same checkbox preference without changing content.
+        function _sylvaRestoreStaticInfoBox(paneId){
+            try {
+                var key = paneId === 'map2' ? 'map2' : 'map';
+                var meta = window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[key];
+                var box = document.getElementById(key === 'map2' ? 'map2-info-box' : 'map-info-box');
+                var cb = document.getElementById('toggle-info-box');
+                if (!box || !box.innerHTML.trim() || !cb || cb.disabled || !window._sylvaLastStaticInfoMetaByPane) return;
+                var name = window._sylvaLastStaticInfoMetaByPane[key];
+                if (!name) return;
+                if (Array.isArray(_STATIC_DATASETS) && _STATIC_DATASETS.indexOf(name) !== -1 && cb.checked) box.style.display = 'block';
+            } catch(_e) {}
+        }
+        map.on('moveend zoomend', function(){ _sylvaRestoreStaticInfoBox('map'); });
+
         (function () {
             var _pane = null;
             map.on('zoomstart', function () {
@@ -10747,7 +10786,7 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
     "red-yellow-green": "linear-gradient(to right,#d73027,#fee08b,#1a9850)",
     "blue-white-red": "linear-gradient(to right,#313695,#ffffff,#a50026)",
     "black-white": "linear-gradient(to right,#000000,#ffffff)",
-    gray: "linear-gradient(to right,#f1f5f9,#64748b,#0f172a)",
+    gray: "linear-gradient(to right,#ffffff,#d1d5db,#6b7280)",
 
     brown: "linear-gradient(to right,#f5deb3,#8b5a2b)",
     green: "linear-gradient(to right,#b7e4c7,#1b4332)",
@@ -11706,13 +11745,7 @@ function selectRamp(name) {
             var _clTitleFallback = { en:'Classified Data', tr:'Sınıflandırılmış Veri', de:'Klassifizierte Daten',
               fr:'Données classifiées', es:'Datos clasificados', ar:'بيانات مصنفة', fa:'داده‌های طبقه‌بندی‌شده',
               zh:'分类数据', ja:'分類データ', ko:'분류 데이터', hi:'वर्गीकृत डेटा', id:'Data Terklasifikasi', ru:'Классифицированные данные', th:'ข้อมูลที่จำแนกประเภท', ms:'Data Terklasifikasi', el:'Ταξινομημένα Δεδομένα' };
-            var _currentMetaForTitle = window._lastAnalyzeMeta || null;
-            var _titleKeyForClass = _currentMetaForTitle && (typeof _DATASET_INFO_TITLE_KEYS !== 'undefined') ? _DATASET_INFO_TITLE_KEYS[_currentMetaForTitle.analysisName] : null;
-            var _rawClassTitle = titleEl ? titleEl.value.trim() : '';
-            var _isTechnicalClassTitle = /^TOPO(?:_|$)/i.test(_rawClassTitle);
-            var title = (_titleKeyForClass && (!_rawClassTitle || _isTechnicalClassTitle))
-                ? escapeHtml(_titleKeyForClass.emoji + t(_titleKeyForClass.key, _currentMetaForTitle.analysisName))
-                : (_rawClassTitle ? escapeHtml(_rawClassTitle) : (_clTitleFallback[_sylvaLang] || 'Classified Data'));
+            var title = (titleEl && titleEl.value.trim()) ? escapeHtml(titleEl.value.trim()) : (_clTitleFallback[_sylvaLang] || 'Classified Data');
 
             var rowsHtml = '<div style="display:flex;flex-direction:column;gap:2px;margin-top:5px;">' +
                 classes.map(function (c, i) {
@@ -12112,12 +12145,11 @@ function selectRamp(name) {
             }
 
              var _nativeLegendTitleKeys = { FOREST_LOSS: 'env_forest_loss', URBAN_GROWTH: 'env_urban_growth' };
-             var _titleKeyInfo = (typeof _DATASET_INFO_TITLE_KEYS !== 'undefined') ? _DATASET_INFO_TITLE_KEYS[meta.analysisName] : null;
-             var _legendTitle = _titleKeyInfo
-                 ? (_titleKeyInfo.emoji + t(_titleKeyInfo.key, meta.analysisName))
-                 : (meta.analysisName === 'BUILDING_FOOTPRINT'
-                     ? t('building_roof_detection', 'Building Roof Detection')
-                     : (_nativeLegendTitleKeys[meta.analysisName] ? t(_nativeLegendTitleKeys[meta.analysisName], meta.analysisName) : meta.analysisName));
+             var _datasetTitleEntry = (typeof _DATASET_INFO_TITLE_KEYS !== 'undefined') ? _DATASET_INFO_TITLE_KEYS[meta.analysisName] : null;
+             var _legendTitle = meta.analysisName === 'BUILDING_FOOTPRINT'
+                 ? t('building_roof_detection', 'Building Roof Detection')
+                 : (_datasetTitleEntry ? ((_datasetTitleEntry.emoji || '') + t(_datasetTitleEntry.key, meta.analysisName))
+                 : (_nativeLegendTitleKeys[meta.analysisName] ? t(_nativeLegendTitleKeys[meta.analysisName], meta.analysisName) : meta.analysisName));
              var html = '<b style="font-size:0.78rem;">' + escapeHtml(_legendTitle) + '</b>';
 
             if (legendType === 'classified') {
@@ -12152,10 +12184,17 @@ function selectRamp(name) {
                     try {
                         var classes = JSON.parse(meta.classesRaw);
                         html += '<div style="display:flex;flex-direction:column;gap:2px;margin-top:5px;">';
-                        classes.forEach(function (cls) {
+                        classes.forEach(function (cls, clsIdx) {
+                            var _aspectLbl = cls.label;
+                            if (meta.analysisName === 'TOPO_ASPECT') {
+                                var _ak = ['aspect_flat','aspect_north','aspect_northeast','aspect_east','aspect_southeast','aspect_south','aspect_southwest','aspect_west','aspect_northwest'][clsIdx];
+                                var _range = String(cls.label || '').replace(/^[^\(]*\s*/, '');
+                                _aspectLbl = t(_ak, cls.label);
+                                if (_range && _range.charAt(0) === '(') _aspectLbl += ' ' + _range;
+                            }
                             html += '<div style="display:flex;align-items:center;gap:4px;">'
                                 + '<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:' + cls.color + ';border:1px solid rgba(0,0,0,0.15);flex-shrink:0;"></span>'
-                                + '<span style="font-size:0.67rem;color:#334155;word-break:break-word;">' + escapeHtml(cls.label) + '</span>'
+                                + '<span style="font-size:0.67rem;color:#334155;word-break:break-word;">' + escapeHtml(_aspectLbl) + '</span>'
                                 + '</div>';
                         });
                         html += '</div>';
@@ -12251,17 +12290,35 @@ function selectRamp(name) {
 
             // Dil değişimi sırasında başlık ve input alanlarına dokunma
             if (!window._sylvaLangChanging) {
-                var _titleKeyForEditor = (typeof _DATASET_INFO_TITLE_KEYS !== 'undefined') ? _DATASET_INFO_TITLE_KEYS[meta.analysisName] : null;
-                var _localizedEditorTitle = _titleKeyForEditor ? ((_titleKeyForEditor.emoji || '') + t(_titleKeyForEditor.key, meta.analysisName)) : meta.analysisName;
                 var stretchedTitle = document.getElementById('stretched-title');
-                if (stretchedTitle) stretchedTitle.value = _localizedEditorTitle;
+                if (stretchedTitle) stretchedTitle.value = meta.analysisName;
                 var classifiedTitle = document.getElementById('classified-title');
-                if (classifiedTitle) classifiedTitle.value = _localizedEditorTitle;
+                if (classifiedTitle) classifiedTitle.value = meta.analysisName;
 
                 // ── Semboloji panelini doğru moda getir ─────────────────────────
                 // TOPO ve indeks analizler → Stretched; LULC vb. → Classified
                 if (typeof setClassificationType === 'function') {
                     setClassificationType(legendType === 'classified' ? 'classified' : 'stretched');
+                }
+
+                // Bakı (Aspect) is a native 9-class directional product, but its
+                // class editor remains user-editable. Preload the 9 native classes
+                // so the editor and map legend start from the same ranges/colors.
+                if (meta.analysisName === 'TOPO_ASPECT' && legendType === 'classified' && meta.classesRaw && typeof classCountSelect !== 'undefined') {
+                    try {
+                        var _aspectClasses = JSON.parse(meta.classesRaw);
+                        classCountSelect.value = String(_aspectClasses.length || 9);
+                        buildClassRows(_aspectClasses.length || 9);
+                        var _arows = document.querySelectorAll('#class-rows-container .classification-row');
+                        _aspectClasses.forEach(function(c, i) {
+                            var r = _arows[i]; if (!r) return;
+                            var mn = r.querySelector('.class-min'), mx = r.querySelector('.class-max'), nm = r.querySelector('.class-name'), sw = r.querySelector('.class-color-trigger');
+                            if (mn) mn.value = c.min !== undefined ? c.min : (i === 0 ? -1 : 0);
+                            if (mx) mx.value = c.max !== undefined ? c.max : 0;
+                            if (nm) { var ak = ['aspect_flat','aspect_north','aspect_northeast','aspect_east','aspect_southeast','aspect_south','aspect_southwest','aspect_west','aspect_northwest'][i]; nm.value = t(ak, c.label || ('Class '+(i+1))) + ' ' + (String(c.label||'').match(/\(.*\)$/)||[''])[0]; }
+                            if (sw) { sw.style.background = c.color; sw.setAttribute('data-selected-color', c.color); sw.removeAttribute('data-pending-color'); }
+                        });
+                    } catch(_aspectEditorErr) {}
                 }
 
                 // ── Stretched aralığını meta değerleriyle ön-doldur ─────────────
@@ -12756,6 +12813,11 @@ function selectRamp(name) {
             var store = window._geeLayersByPane[(paneId === 'map2') ? 'map2' : 'map'];
             if (store[layerKey]) { try { targetMap.removeLayer(store[layerKey]); } catch (e) {} delete store[layerKey]; }
             var layer = L.tileLayer(tileUrl, opts).addTo(targetMap);
+            // Re-apply AOI mask whenever Leaflet finishes replacing tiles.
+            layer.on('load', function(){
+                try { _updateGeeLayerAoiClip(paneId); } catch(_e) {}
+                setTimeout(function(){ try { _updateGeeLayerAoiClip(paneId); } catch(_e2) {} }, 100);
+            });
             store[layerKey] = layer;
             if (paneId === 'map2') { window._geeLayer2 = layer; } else { _geeLayer = layer; }
 
@@ -15813,7 +15875,12 @@ function selectRamp(name) {
             if (isTopoAnalysis(meta.analysisName)) { _setGalleryPanelRestricted(true); }
             (function() {
                 var _lsp = document.getElementById('legend-symbology-panel');
-                if (_lsp && !isLulcAnalysis(meta.analysisName) && !_isContourResultMeta) {
+                if (!_lsp) return;
+                if (meta.analysisName === 'TOPO_HILLSHADE') {
+                    _lsp.style.opacity = '0.35';
+                    _lsp.style.pointerEvents = 'none';
+                    _lsp.style.userSelect = 'none';
+                } else if (!isLulcAnalysis(meta.analysisName) && !_isContourResultMeta) {
                     _lsp.style.opacity = '1';
                     _lsp.style.pointerEvents = '';
                     _lsp.style.userSelect = '';
@@ -16829,7 +16896,8 @@ function selectRamp(name) {
             var box = document.getElementById(paneId === 'map2' ? 'map2-info-box' : 'map-info-box');
             if (!box) return;
             var key = (analysisName || '').toUpperCase();
-            box.removeAttribute('data-sylva-native-i18n');
+            window._sylvaLastStaticInfoMetaByPane = window._sylvaLastStaticInfoMetaByPane || {map:null,map2:null};
+            window._sylvaLastStaticInfoMetaByPane[paneId] = key;
             var info = _DATASET_INFO[key];
             if (!info) { box.style.display = 'none'; box.innerHTML = ''; return; }
 
@@ -17089,7 +17157,14 @@ function selectRamp(name) {
             _geeClipActive[paneId] = (clipMode !== 'full');
             if (lmap && !_geeClipHandlersBound[paneId]) {
                 _geeClipHandlersBound[paneId] = true;
-                lmap.on('move zoom viewreset resize zoomanim', function () { _updateGeeLayerAoiClip(paneId); });
+                lmap.on('move zoom viewreset resize zoomanim moveend zoomend', function () {
+                    _updateGeeLayerAoiClip(paneId);
+                    // Leaflet can replace the tile container just after zoom;
+                    // re-apply the exact AOI clip on the next rendering frames.
+                    setTimeout(function(){ _updateGeeLayerAoiClip(paneId); }, 0);
+                    setTimeout(function(){ _updateGeeLayerAoiClip(paneId); }, 80);
+                    setTimeout(function(){ _updateGeeLayerAoiClip(paneId); }, 220);
+                });
             }
             if (_geeClipActive[paneId]) {
                 _updateGeeLayerAoiClip(paneId);
@@ -27385,7 +27460,6 @@ var SYLVA_TRANSLATIONS = {
   
     before_after_label: '◀ Oldin | Keyin ▶',
     before_after_title: 'Qatlamni Surish',
-    search_boundary_modal_title: 'Chegara topildi', search_boundary_modal_message: 'Bu hududdan ishchi hudud sifatida foydalanilsinmi?',
   },
   el: { dlq_no_raster: "Δεν βρέθηκε διαθέσιμη ανάλυση ράστερ για λήψη.", dlq_preparing_btn: "Προετοιμασία…", dlq_preparing_active: "Προετοιμασία των αναλύσεων ράστερ στην ενεργή οθόνη…", dlq_progress: "{n}/{total} — προετοιμασία {name}…", dlq_session_error: "Δεν ήταν δυνατή η δημιουργία περιόδου ανάλυσης για {name}.", dlq_building_geotiff: "Δημιουργία αρχείου GeoTIFF…", dlq_ready: "Η λήψη είναι έτοιμη.", dlq_prepare_failed: "Δεν ήταν δυνατή η προετοιμασία της λήψης.", month_label: 'Επιλογή Μηνών', month_all: '(Όλα)', month_none: '(Κανένα)', month_selected_suffix: ' μήνες επιλεγμένοι', time_slider_lbl: "Χρονική γραμμή", playback_progress_lbl: "Πρόοδος αναπαραγωγής", skip_to_map: "Μετάβαση στον χάρτη", project_manager: "Διαχείριση Έργων", project_save_btn: "💾 Αποθήκευση", project_load_btn: "📂 Φόρτωση", project_none_saved: "Δεν υπάρχουν αποθηκευμένα έργα", project_name_placeholder: "Όνομα έργου...", project_save_title: "Αποθήκευση τρέχουσας προβολής και ρυθμίσεων", project_load_title: "Φόρτωση επιλεγμένου έργου", project_delete_title: "Διαγραφή επιλεγμένου έργου", analysis_history_title: "📜 Ιστορικό Αναλύσεων", analysis_history_empty: "Δεν υπάρχουν ακόμη ληφθείσες αναλύσεις. Μόλις κατεβάσετε ένα αποτέλεσμα, θα εμφανιστεί εδώ (τελευταίες 10 εγγραφές).", analysis_history_clear: "🗑️ Εκκαθάριση Ιστορικού", analysis_history_note: "Λήφθηκε στη συσκευή/Drive σας", analysis_history_clear_confirm: "Εκκαθάριση ιστορικού αναλύσεων;", welcome_title: 'Καλώς ήρθατε στο SylvaGIS', welcome_sub: 'Πλατφόρμα Δασικής Ανάλυσης & Τηλεπισκόπησης', nav_guide: '❓ Οδηγός', nav_guide_short: 'Οδηγός', nav_login: '👤 Σύνδεση Χρήστη', topo_dem_no_data_warning: 'Δεν βρέθηκαν δεδομένα για την περιοχή μελέτης σας στην επιλεγμένη πηγή DEM. Παρακαλώ αλλάξτε την πηγή δεδομένων.',
     login_title: 'Συνδεθείτε στον λογαριασμό σας', login_sub: 'Επιλέξτε Google, Apple ή Microsoft',
@@ -27909,7 +27983,6 @@ var SYLVA_TRANSLATIONS = {
   
     before_after_label: '◀ Πριν | Μετά ▶',
     before_after_title: 'Ολίσθηση Επιπέδου',
-    search_boundary_modal_title: 'Βρέθηκε όριο', search_boundary_modal_message: 'Θέλετε να χρησιμοποιήσετε αυτήν την περιοχή ως περιοχή εργασίας;',
   },
   bg: { dlq_no_raster: "Не е намерен растерен анализ за изтегляне.", dlq_preparing_btn: "Подготовка…", dlq_preparing_active: "Подготвят се растерните анализи на активния екран…", dlq_progress: "{n}/{total} — подготовка на {name}…", dlq_session_error: "Не можа да се създаде сесия за анализ за {name}.", dlq_building_geotiff: "Създаване на GeoTIFF файл…", dlq_ready: "Изтеглянето е готово.", dlq_prepare_failed: "Изтеглянето не можа да се подготви.", month_label: 'Избор на месеци', month_all: '(Всички)', month_none: '(Нито един)', month_selected_suffix: ' избрани месеца', time_slider_lbl: "Времеви плъзгач", playback_progress_lbl: "Напредък на възпроизвеждането", skip_to_map: "Към картата", project_manager: "Мениджър на проекти", project_save_btn: "💾 Запис", project_load_btn: "📂 Зареждане", project_none_saved: "Няма запазени проекти", project_name_placeholder: "Име на проект...", project_save_title: "Запазване на текущия изглед и настройки", project_load_title: "Зареждане на избрания проект", project_delete_title: "Изтриване на избрания проект", analysis_history_title: "📜 История на анализите", analysis_history_empty: "Все още няма изтеглени анализи. След като изтеглите резултат, той ще бъде показан тук (последните 10 записа).", analysis_history_clear: "🗑️ Изчистване на историята", analysis_history_note: "Изтеглено на вашето устройство/Drive", analysis_history_clear_confirm: "Изчистване на историята на анализите?", welcome_title: 'Добре дошли в SylvaGIS', welcome_sub: 'Платформа за горски анализ и дистанционно наблюдение', nav_guide: '❓ Ръководство', nav_guide_short: 'Ръководство', nav_login: '👤 Вход на потребител', topo_dem_no_data_warning: 'В избрания източник на DEM няма данни за вашата работна зона. Моля, сменете източника на данни.',
     login_title: 'Влезте в своя акаунт', login_sub: 'Изберете Google, Apple или Microsoft',
@@ -28433,7 +28506,6 @@ var SYLVA_TRANSLATIONS = {
   
     before_after_label: '◀ Преди | След ▶',
     before_after_title: 'Плъзгане на слой',
-    search_boundary_modal_title: 'Границата е намерена', search_boundary_modal_message: 'Искате ли да използвате тази област като работна област?',
   },
   tr: { dlq_no_raster: "İndirilebilir raster analiz bulunamadı.", dlq_preparing_btn: "Hazırlanıyor…", dlq_preparing_active: "Aktif ekrandaki raster analizler hazırlanıyor…", dlq_progress: "{n}/{total} — {name} hazırlanıyor…", dlq_session_error: "{name} için analiz oturumu oluşturulamadı.", dlq_building_geotiff: "GeoTIFF dosyası oluşturuluyor…", dlq_ready: "İndirme hazırlandı.", dlq_prepare_failed: "İndirme hazırlanamadı.", month_label: 'Ay Seçimi', month_all: '(Tümü)', month_none: '(Hiçbiri)', month_selected_suffix: ' ay seçili', time_slider_lbl: "Zaman ekseni", playback_progress_lbl: "Oynatma ilerlemesi", skip_to_map: "Haritaya geç", project_manager: "Proje Yöneticisi", project_save_btn: "💾 Kaydet", project_load_btn: "📂 Yükle", project_none_saved: "Kayıtlı proje yok", project_name_placeholder: "Proje adı...", project_save_title: "Mevcut görünüm ve ayarları kaydet", project_load_title: "Seçili projeyi yükle", project_delete_title: "Seçili projeyi sil", analysis_history_title: "📜 Analiz Geçmişi", analysis_history_empty: "Henüz indirilmiş bir analiz yok. Bir sonucu indirdiğinizde burada listelenir (son 10 kayıt).", analysis_history_clear: "🗑️ Geçmişi Temizle", analysis_history_note: "Cihazınıza/Drive'a indirildi", analysis_history_clear_confirm: "Analiz geçmişi temizlensin mi?", welcome_title: 'SylvaGIS\'e Hoş Geldiniz', welcome_sub: 'Orman Analizi ve Uzaktan Algılama Platformu', nav_guide: '❓ Rehber', nav_guide_short: 'Kılavuz', nav_login: '👤 Kullanıcı Girişi', topo_dem_no_data_warning: 'İstediğiniz DEM veri kaynağında çalışma alanınıza göre veri bulunamadı. Lütfen veri kaynağını değiştirin.',
     login_title: 'Hesabınızla Giriş Yapın', login_sub: 'Google, Apple veya Microsoft hesabınızı seçin',
@@ -29483,7 +29555,6 @@ var SYLVA_TRANSLATIONS = {
   
     before_after_label: '◀ Əvvəl | Sonra ▶',
     before_after_title: 'Qat Sürüşdürmə',
-    search_boundary_modal_title: 'Sərhəd tapıldı', search_boundary_modal_message: 'Bu sahəni iş sahəsi kimi istifadə etmək istəyirsiniz?',
   },
   hu: { dlq_no_raster: "Nem található letölthető raszteres elemzés.", dlq_preparing_btn: "Előkészítés…", dlq_preparing_active: "Az aktív képernyő raszteres elemzéseinek előkészítése…", dlq_progress: "{n}/{total} — {name} előkészítése…", dlq_session_error: "Nem sikerült elemzési munkamenetet létrehozni ehhez: {name}.", dlq_building_geotiff: "GeoTIFF fájl létrehozása…", dlq_ready: "A letöltés készen áll.", dlq_prepare_failed: "A letöltést nem sikerült előkészíteni.", month_label: 'Hónap kiválasztása', month_all: '(Mind)', month_none: '(Egyik sem)', month_selected_suffix: ' hónap kiválasztva', time_slider_lbl: "Idővonal csúszka", playback_progress_lbl: "Lejátszási folyamat", skip_to_map: "Ugrás a térképre", project_manager: "Projektkezelő", project_save_btn: "💾 Mentés", project_load_btn: "📂 Betöltés", project_none_saved: "Nincs mentett projekt", project_name_placeholder: "Projekt neve...", project_save_title: "Aktuális nézet és beállítások mentése", project_load_title: "Kiválasztott projekt betöltése", project_delete_title: "Kiválasztott projekt törlése", analysis_history_title: "📜 Elemzési Előzmények", analysis_history_empty: "Még nincs letöltött elemzés. Egy eredmény letöltése után itt fog megjelenni (utolsó 10 bejegyzés).", analysis_history_clear: "🗑️ Előzmények Törlése", analysis_history_note: "Letöltve az eszközére/Drive-jára", analysis_history_clear_confirm: "Törli az elemzési előzményeket?", welcome_title: 'Üdvözöljük a SylvaGIS-ben', welcome_sub: 'Erdőelemzési és Távérzékelési Platform', nav_guide: '❓ Útmutató', nav_guide_short: 'Útmutató', nav_login: '👤 Bejelentkezés', topo_dem_no_data_warning: 'A kiválasztott DEM adatforrásban nincs adat a munkaterületére. Kérjük, változtassa meg az adatforrást.',
     login_title: 'Jelentkezzen be fiókjával', login_sub: 'Válassza ki Google, Apple vagy Microsoft fiókját',
@@ -30003,7 +30074,6 @@ var SYLVA_TRANSLATIONS = {
   
     before_after_label: '◀ Előtte | Utána ▶',
     before_after_title: 'Réteg Húzása',
-    search_boundary_modal_title: 'Határ található', search_boundary_modal_message: 'Szeretné ezt a területet munkaterületként használni?',
   },
   kk: { dlq_no_raster: "Жүктеуге болатын растр талдауы табылмады.", dlq_preparing_btn: "Дайындалуда…", dlq_preparing_active: "Белсенді экрандағы растр талдаулары дайындалуда…", dlq_progress: "{n}/{total} — {name} дайындалуда…", dlq_session_error: "{name} үшін талдау сеансын жасау мүмкін болмады.", dlq_building_geotiff: "GeoTIFF файлы жасалуда…", dlq_ready: "Жүктеуге дайын.", dlq_prepare_failed: "Жүктеуді дайындау мүмкін болмады.", month_label: 'Ай таңдау', month_all: '(Барлығы)', month_none: '(Ешқайсысы)', month_selected_suffix: ' ай таңдалды', time_slider_lbl: "Уақыт жолағы", playback_progress_lbl: "Ойнату барысы", skip_to_map: "Картаға өту", project_manager: "Жоба менеджері", project_save_btn: "💾 Сақтау", project_load_btn: "📂 Жүктеу", project_none_saved: "Сақталған жоба жоқ", project_name_placeholder: "Жоба атауы...", project_save_title: "Ағымдағы көрініс пен параметрлерді сақтау", project_load_title: "Таңдалған жобаны жүктеу", project_delete_title: "Таңдалған жобаны жою", analysis_history_title: "📜 Талдау тарихы", analysis_history_empty: "Әзірге жүктеп алынған талдау жоқ. Нәтижені жүктеп алғанда, ол осында тізімделеді (соңғы 10 жазба).", analysis_history_clear: "🗑️ Тарихты тазалау", analysis_history_note: "Құрылғыңызға/Drive-ға жүктелді", analysis_history_clear_confirm: "Талдау тарихы тазалансын ба?", welcome_title: 'SylvaGIS-ке қош келдіңіз', welcome_sub: 'Орман талдауы және қашықтан зондтау платформасы', nav_guide: '❓ Нұсқаулық', nav_guide_short: 'Нұсқаулық', nav_login: '👤 Кіру', topo_dem_no_data_warning: 'Таңдалған DEM дереккөзінде жұмыс аймағыңыз үшін деректер табылмады. Дереккөзді өзгертіңіз.',
     login_title: 'Тіркелгіңізге кіріңіз', login_sub: 'Google, Apple немесе Microsoft таңдаңыз',
@@ -30521,7 +30591,6 @@ var SYLVA_TRANSLATIONS = {
   
     before_after_label: '◀ Бұрын | Кейін ▶',
     before_after_title: 'Қабатты Сырғыту',
-    search_boundary_modal_title: 'Шекара табылды', search_boundary_modal_message: 'Бұл аумақты жұмыс аймағы ретінде пайдаланғыңыз келе ме?',
   },
   de: { dlq_no_raster: "Keine herunterladbare Rasteranalyse gefunden.", dlq_preparing_btn: "Wird vorbereitet…", dlq_preparing_active: "Rasteranalysen des aktiven Bildschirms werden vorbereitet…", dlq_progress: "{n}/{total} — {name} wird vorbereitet…", dlq_session_error: "Für {name} konnte keine Analysesitzung erstellt werden.", dlq_building_geotiff: "GeoTIFF-Datei wird erstellt…", dlq_ready: "Download bereit.", dlq_prepare_failed: "Download konnte nicht vorbereitet werden.", month_label: 'Monatsauswahl', month_all: '(Alle)', month_none: '(Keine)', month_selected_suffix: ' Monate ausgewählt', time_slider_lbl: "Zeitschieberegler", playback_progress_lbl: "Wiedergabefortschritt", skip_to_map: "Zur Karte springen", project_manager: "Projektmanager", project_save_btn: "💾 Speichern", project_load_btn: "📂 Laden", project_none_saved: "Keine gespeicherten Projekte", project_name_placeholder: "Projektname...", project_save_title: "Aktuelle Ansicht und Einstellungen speichern", project_load_title: "Ausgewähltes Projekt laden", project_delete_title: "Ausgewähltes Projekt löschen", analysis_history_title: "📜 Analyseverlauf", analysis_history_empty: "Noch keine heruntergeladenen Analysen. Sobald Sie ein Ergebnis herunterladen, wird es hier aufgelistet (letzte 10 Einträge).", analysis_history_clear: "🗑️ Verlauf löschen", analysis_history_note: "Auf Ihr Gerät/Drive heruntergeladen", analysis_history_clear_confirm: "Analyseverlauf löschen?", welcome_title: 'Willkommen bei SylvaGIS', welcome_sub: 'Waldanalyse- und Fernerkundungsplattform', nav_guide: '❓ Hilfe', nav_guide_short: 'Handbuch', nav_login: '👤 Anmelden', topo_dem_no_data_warning: 'Für die gewählte DEM-Datenquelle liegen keine Daten für Ihr Arbeitsgebiet vor. Bitte wechseln Sie die Datenquelle.',
     sidebar_title: 'Arbeitsbereich & Datenauswahl',
@@ -31046,7 +31115,6 @@ var SYLVA_TRANSLATIONS = {
   
     before_after_label: '◀ Vorher | Nachher ▶',
     before_after_title: 'Ebenen-Wischer',
-    search_boundary_modal_title: 'Grenze gefunden', search_boundary_modal_message: 'Möchten Sie diesen Bereich als Arbeitsbereich verwenden?',
   },
   fr: { dlq_no_raster: "Aucune analyse raster téléchargeable trouvée.", dlq_preparing_btn: "Préparation…", dlq_preparing_active: "Préparation des analyses raster de l'écran actif…", dlq_progress: "{n}/{total} — préparation de {name}…", dlq_session_error: "Impossible de créer une session d'analyse pour {name}.", dlq_building_geotiff: "Création du fichier GeoTIFF…", dlq_ready: "Téléchargement prêt.", dlq_prepare_failed: "Le téléchargement n'a pas pu être préparé.", month_label: 'Sélection des mois', month_all: '(Tous)', month_none: '(Aucun)', month_selected_suffix: ' mois sélectionnés', time_slider_lbl: "Curseur temporel", playback_progress_lbl: "Progression de la lecture", skip_to_map: "Aller à la carte", project_manager: "Gestionnaire de projets", project_save_btn: "💾 Enregistrer", project_load_btn: "📂 Charger", project_none_saved: "Aucun projet enregistré", project_name_placeholder: "Nom du projet...", project_save_title: "Enregistrer la vue et les paramètres actuels", project_load_title: "Charger le projet sélectionné", project_delete_title: "Supprimer le projet sélectionné", analysis_history_title: "📜 Historique des analyses", analysis_history_empty: "Aucune analyse téléchargée pour l'instant. Une fois un résultat téléchargé, il apparaîtra ici (10 derniers enregistrements).", analysis_history_clear: "🗑️ Effacer l'historique", analysis_history_note: "Téléchargé sur votre appareil/Drive", analysis_history_clear_confirm: "Effacer l'historique des analyses ?", welcome_title: 'Bienvenue sur SylvaGIS', welcome_sub: 'Plateforme d\'analyse forestière et de télédétection', nav_guide: '❓ Guide', nav_guide_short: 'Manuel', nav_login: '👤 Connexion', topo_dem_no_data_warning: 'Aucune donnée disponible pour votre zone d\'étude dans la source DEM sélectionnée. Veuillez changer de source de données.',
     sidebar_title: 'Espace de travail & Sélection de données',
@@ -31571,7 +31639,6 @@ var SYLVA_TRANSLATIONS = {
   
     before_after_label: '◀ Avant | Après ▶',
     before_after_title: 'Balayage de Couche',
-    search_boundary_modal_title: 'Limite trouvée', search_boundary_modal_message: 'Voulez-vous utiliser cette zone comme zone de travail ?',
   },
   es: { dlq_no_raster: "No se encontró ningún análisis ráster descargable.", dlq_preparing_btn: "Preparando…", dlq_preparing_active: "Preparando los análisis ráster de la pantalla activa…", dlq_progress: "{n}/{total} — preparando {name}…", dlq_session_error: "No se pudo crear una sesión de análisis para {name}.", dlq_building_geotiff: "Generando archivo GeoTIFF…", dlq_ready: "Descarga lista.", dlq_prepare_failed: "No se pudo preparar la descarga.", month_label: 'Selección de meses', month_all: '(Todos)', month_none: '(Ninguno)', month_selected_suffix: ' meses seleccionados', time_slider_lbl: "Deslizador de tiempo", playback_progress_lbl: "Progreso de reproducción", skip_to_map: "Ir al mapa", project_manager: "Administrador de proyectos", project_save_btn: "💾 Guardar", project_load_btn: "📂 Cargar", project_none_saved: "No hay proyectos guardados", project_name_placeholder: "Nombre del proyecto...", project_save_title: "Guardar la vista y los ajustes actuales", project_load_title: "Cargar el proyecto seleccionado", project_delete_title: "Eliminar el proyecto seleccionado", analysis_history_title: "📜 Historial de análisis", analysis_history_empty: "Aún no hay análisis descargados. Cuando descargue un resultado, aparecerá aquí (últimos 10 registros).", analysis_history_clear: "🗑️ Borrar historial", analysis_history_note: "Descargado en su dispositivo/Drive", analysis_history_clear_confirm: "¿Borrar el historial de análisis?", welcome_title: 'Bienvenido a SylvaGIS', welcome_sub: 'Plataforma de Análisis Forestal y Teledetección', nav_guide: '❓ Guía', nav_guide_short: 'Manual', nav_login: '👤 Iniciar sesión', topo_dem_no_data_warning: 'No se encontraron datos para su área de trabajo en la fuente DEM seleccionada. Por favor, cambie la fuente de datos.',
     sidebar_title: 'Área de trabajo & Selección de datos',
@@ -32096,7 +32163,6 @@ var SYLVA_TRANSLATIONS = {
   
     before_after_label: '◀ Antes | Después ▶',
     before_after_title: 'Deslizador de Capas',
-    search_boundary_modal_title: 'Límite encontrada', search_boundary_modal_message: '¿Desea utilizar esta área como área de trabajo?',
   },
   pt: { dlq_no_raster: "Nenhuma análise raster para download foi encontrada.", dlq_preparing_btn: "Preparando…", dlq_preparing_active: "Preparando as análises raster da tela ativa…", dlq_progress: "{n}/{total} — preparando {name}…", dlq_session_error: "Não foi possível criar uma sessão de análise para {name}.", dlq_building_geotiff: "Gerando arquivo GeoTIFF…", dlq_ready: "Download pronto.", dlq_prepare_failed: "Não foi possível preparar o download.", month_label: 'Seleção de meses', month_all: '(Todos)', month_none: '(Nenhum)', month_selected_suffix: ' meses selecionados', time_slider_lbl: "Controle de tempo", playback_progress_lbl: "Progresso da reprodução", skip_to_map: "Ir para o mapa", project_manager: "Gerenciador de Projetos", project_save_btn: "💾 Salvar", project_load_btn: "📂 Carregar", project_none_saved: "Nenhum projeto salvo", project_name_placeholder: "Nome do projeto...", project_save_title: "Salvar a visualização e as configurações atuais", project_load_title: "Carregar o projeto selecionado", project_delete_title: "Excluir o projeto selecionado", analysis_history_title: "📜 Histórico de Análises", analysis_history_empty: "Ainda não há análises baixadas. Quando você baixar um resultado, ele será listado aqui (últimos 10 registros).", analysis_history_clear: "🗑️ Limpar Histórico", analysis_history_note: "Baixado no seu dispositivo/Drive", analysis_history_clear_confirm: "Limpar o histórico de análises?", welcome_title: 'Bem-vindo ao SylvaGIS', welcome_sub: 'Plataforma de Análise Florestal e Sensoriamento Remoto', nav_guide: '❓ Guia', nav_guide_short: 'Guia', nav_login: '👤 Iniciar sessão', topo_dem_no_data_warning: 'Não foram encontrados dados para a sua área de trabalho na fonte DEM selecionada. Por favor, altere a fonte de dados.',
     sidebar_title: 'Área de trabalho & Seleção de dados',
@@ -32621,7 +32687,6 @@ var SYLVA_TRANSLATIONS = {
   
     before_after_label: '◀ Antes | Depois ▶',
     before_after_title: 'Deslizador de Camadas',
-    search_boundary_modal_title: 'Limite encontrada', search_boundary_modal_message: 'Deseja usar esta área como área de trabalho?',
   },
   ar: { dlq_no_raster: "لم يتم العثور على تحليل نقطي قابل للتنزيل.", dlq_preparing_btn: "جارٍ التحضير…", dlq_preparing_active: "جارٍ تحضير التحليلات النقطية للشاشة النشطة…", dlq_progress: "{n}/{total} — جارٍ تحضير {name}…", dlq_session_error: "تعذر إنشاء جلسة تحليل لـ {name}.", dlq_building_geotiff: "جارٍ إنشاء ملف GeoTIFF…", dlq_ready: "التنزيل جاهز.", dlq_prepare_failed: "تعذر تحضير التنزيل.", month_label: 'اختيار الأشهر', month_all: '(الكل)', month_none: '(لا شيء)', month_selected_suffix: ' أشهر محددة', time_slider_lbl: "شريط الزمن", playback_progress_lbl: "تقدم التشغيل", skip_to_map: "الانتقال إلى الخريطة", project_manager: "مدير المشاريع", project_save_btn: "💾 حفظ", project_load_btn: "📂 تحميل", project_none_saved: "لا توجد مشاريع محفوظة", project_name_placeholder: "اسم المشروع...", project_save_title: "حفظ العرض والإعدادات الحالية", project_load_title: "تحميل المشروع المحدد", project_delete_title: "حذف المشروع المحدد", analysis_history_title: "📜 سجل التحليلات", analysis_history_empty: "لا توجد تحليلات تم تنزيلها بعد. بمجرد تنزيل نتيجة، ستظهر هنا (آخر 10 سجلات).", analysis_history_clear: "🗑️ مسح السجل", analysis_history_note: "تم التنزيل إلى جهازك/Drive", analysis_history_clear_confirm: "هل تريد مسح سجل التحليلات؟", welcome_title: 'مرحبًا بك في SylvaGIS', welcome_sub: 'منصة تحليل الغابات والاستشعار عن بعد', nav_guide: '❓ دليل', nav_guide_short: 'دليل', nav_login: '👤 تسجيل الدخول', topo_dem_no_data_warning: 'لا توجد بيانات لمنطقة عملك في مصدر بيانات DEM المحدد. يرجى تغيير مصدر البيانات.',
     sidebar_title: 'منطقة العمل واختيار البيانات',
@@ -33146,7 +33211,6 @@ var SYLVA_TRANSLATIONS = {
   
     before_after_label: '◀ قبل | بعد ▶',
     before_after_title: 'أداة تمرير الطبقة',
-    search_boundary_modal_title: 'تم العثور على حدود', search_boundary_modal_message: 'هل تريد استخدام هذه المنطقة كمنطقة عمل؟',
   },
   fa: { dlq_no_raster: "تحلیل رستری قابل دانلود یافت نشد.", dlq_preparing_btn: "در حال آماده‌سازی…", dlq_preparing_active: "در حال آماده‌سازی تحلیل‌های رستری صفحه فعال…", dlq_progress: "{n}/{total} — در حال آماده‌سازی {name}…", dlq_session_error: "ایجاد نشست تحلیل برای {name} ممکن نشد.", dlq_building_geotiff: "در حال ساخت فایل GeoTIFF…", dlq_ready: "دانلود آماده است.", dlq_prepare_failed: "آماده‌سازی دانلود ممکن نشد.", month_label: 'انتخاب ماه', month_all: '(همه)', month_none: '(هیچ‌کدام)', month_selected_suffix: ' ماه انتخاب شده', time_slider_lbl: "نوار زمان", playback_progress_lbl: "پیشرفت پخش", skip_to_map: "رفتن به نقشه", project_manager: "مدیر پروژه", project_save_btn: "💾 ذخیره", project_load_btn: "📂 بارگذاری", project_none_saved: "هیچ پروژه ذخیره‌شده‌ای وجود ندارد", project_name_placeholder: "نام پروژه...", project_save_title: "ذخیره نمای فعلی و تنظیمات", project_load_title: "بارگذاری پروژه انتخاب‌شده", project_delete_title: "حذف پروژه انتخاب‌شده", analysis_history_title: "📜 تاریخچه تحلیل‌ها", analysis_history_empty: "هنوز هیچ تحلیلی دانلود نشده است. پس از دانلود یک نتیجه، در اینجا فهرست می‌شود (۱۰ رکورد آخر).", analysis_history_clear: "🗑️ پاک‌کردن تاریخچه", analysis_history_note: "در دستگاه/Drive شما دانلود شد", analysis_history_clear_confirm: "تاریخچه تحلیل‌ها پاک شود؟", welcome_title: 'به SylvaGIS خوش آمدید', welcome_sub: 'پلتفرم تحلیل جنگل و سنجش از دور', nav_guide: '❓ راهنما', nav_guide_short: 'راهنما', nav_login: '👤 ورود کاربر', topo_dem_no_data_warning: 'در منبع DEM انتخابی، داده‌ای برای محدوده کاری شما یافت نشد. لطفاً منبع داده را تغییر دهید.',
     sidebar_title: 'فضای کاری و انتخاب داده',
@@ -33671,7 +33735,6 @@ var SYLVA_TRANSLATIONS = {
   
     before_after_label: '◀ قبل | بعد ▶',
     before_after_title: 'کشوی لایه',
-    search_boundary_modal_title: 'مرز پیدا شد', search_boundary_modal_message: 'آیا می‌خواهید از این ناحیه به‌عنوان محدوده کاری استفاده کنید؟',
   },
   zh: { dlq_no_raster: "未找到可下载的栅格分析。", dlq_preparing_btn: "准备中…", dlq_preparing_active: "正在准备当前屏幕的栅格分析…", dlq_progress: "{n}/{total} — 正在准备 {name}…", dlq_session_error: "无法为 {name} 创建分析会话。", dlq_building_geotiff: "正在生成 GeoTIFF 文件…", dlq_ready: "下载已就绪。", dlq_prepare_failed: "无法准备下载。", month_label: '月份选择', month_all: '(全部)', month_none: '(无)', month_selected_suffix: ' 个月已选择', time_slider_lbl: "时间滑块", playback_progress_lbl: "播放进度", skip_to_map: "跳转到地图", project_manager: "项目管理器", project_save_btn: "💾 保存", project_load_btn: "📂 加载", project_none_saved: "没有已保存的项目", project_name_placeholder: "项目名称...", project_save_title: "保存当前视图和设置", project_load_title: "加载所选项目", project_delete_title: "删除所选项目", analysis_history_title: "📜 分析历史", analysis_history_empty: "尚无已下载的分析。下载结果后，将在此处列出（最近10条记录）。", analysis_history_clear: "🗑️ 清除历史记录", analysis_history_note: "已下载到您的设备/Drive", analysis_history_clear_confirm: "确定要清除分析历史记录吗？", welcome_title: '欢迎使用 SylvaGIS', welcome_sub: '森林分析与遥感平台', nav_guide: '❓ 指南', nav_guide_short: '手册', nav_login: '👤 用户登录', topo_dem_no_data_warning: '所选DEM数据源中未找到您工作区域的数据。请更换数据源。',
     sidebar_title: '工作区与数据选择',
@@ -34196,7 +34259,6 @@ var SYLVA_TRANSLATIONS = {
   
     before_after_label: '◀ 之前 | 之后 ▶',
     before_after_title: '图层滑动比较',
-    search_boundary_modal_title: '发现边界', search_boundary_modal_message: '是否要将此区域用作工作区域？',
   },
   ja: { dlq_no_raster: "ダウンロード可能なラスター解析が見つかりません。", dlq_preparing_btn: "準備中…", dlq_preparing_active: "アクティブ画面のラスター解析を準備中…", dlq_progress: "{n}/{total} — {name} を準備中…", dlq_session_error: "{name} の解析セッションを作成できませんでした。", dlq_building_geotiff: "GeoTIFF ファイルを作成中…", dlq_ready: "ダウンロードの準備ができました。", dlq_prepare_failed: "ダウンロードを準備できませんでした。", month_label: '月選択', month_all: '(すべて)', month_none: '(なし)', month_selected_suffix: 'ヶ月選択済み', time_slider_lbl: "タイムスライダー", playback_progress_lbl: "再生進行状況", skip_to_map: "地図へスキップ", project_manager: "プロジェクトマネージャー", project_save_btn: "💾 保存", project_load_btn: "📂 読み込み", project_none_saved: "保存されたプロジェクトはありません", project_name_placeholder: "プロジェクト名...", project_save_title: "現在の表示と設定を保存", project_load_title: "選択したプロジェクトを読み込み", project_delete_title: "選択したプロジェクトを削除", analysis_history_title: "📜 分析履歴", analysis_history_empty: "まだダウンロードされた解析はありません。結果をダウンロードすると、ここに表示されます（直近10件）。", analysis_history_clear: "🗑️ 履歴を消去", analysis_history_note: "デバイス/Driveにダウンロード済み", analysis_history_clear_confirm: "分析履歴を消去しますか？", welcome_title: 'SylvaGISへようこそ', welcome_sub: '森林解析・リモートセンシングプラットフォーム', nav_guide: '❓ ガイド', nav_guide_short: 'マニュアル', nav_login: '👤 ログイン', topo_dem_no_data_warning: '選択したDEMデータソースには作業範囲のデータがありません。データソースを変更してください。',
     sidebar_title: 'ワークスペース＆データ選択',
@@ -34721,7 +34783,6 @@ var SYLVA_TRANSLATIONS = {
   
     before_after_label: '◀ 前 | 後 ▶',
     before_after_title: 'レイヤースワイプ',
-    search_boundary_modal_title: '境界が見つかりました', search_boundary_modal_message: 'このエリアを作業エリアとして使用しますか？',
   },
   ko: { dlq_no_raster: "다운로드할 수 있는 래스터 분석을 찾을 수 없습니다.", dlq_preparing_btn: "준비 중…", dlq_preparing_active: "활성 화면의 래스터 분석을 준비하는 중…", dlq_progress: "{n}/{total} — {name} 준비 중…", dlq_session_error: "{name}에 대한 분석 세션을 생성할 수 없습니다.", dlq_building_geotiff: "GeoTIFF 파일 생성 중…", dlq_ready: "다운로드 준비 완료.", dlq_prepare_failed: "다운로드를 준비할 수 없습니다.", month_label: '월 선택', month_all: '(전체)', month_none: '(없음)', month_selected_suffix: '개월 선택됨', time_slider_lbl: "시간 슬라이더", playback_progress_lbl: "재생 진행률", skip_to_map: "지도로 건너뛰기", project_manager: "프로젝트 관리자", project_save_btn: "💾 저장", project_load_btn: "📂 불러오기", project_none_saved: "저장된 프로젝트가 없습니다", project_name_placeholder: "프로젝트 이름...", project_save_title: "현재 보기와 설정 저장", project_load_title: "선택한 프로젝트 불러오기", project_delete_title: "선택한 프로젝트 삭제", analysis_history_title: "📜 분석 기록", analysis_history_empty: "아직 다운로드한 분석이 없습니다. 결과를 다운로드하면 여기에 표시됩니다(최근 10개).", analysis_history_clear: "🗑️ 기록 지우기", analysis_history_note: "기기/Drive에 다운로드됨", analysis_history_clear_confirm: "분석 기록을 지우시겠습니까?", welcome_title: 'SylvaGIS에 오신 것을 환영합니다', welcome_sub: '산림 분석 및 원격 탐사 플랫폼', nav_guide: '❓ 가이드', nav_guide_short: '매뉴얼', nav_login: '👤 사용자 로그인', topo_dem_no_data_warning: '선택한 DEM 데이터 소스에 작업 영역에 대한 데이터가 없습니다. 데이터 소스를 변경해 주세요.',
     sidebar_title: '작업 공간 및 데이터 선택',
@@ -35246,7 +35307,6 @@ var SYLVA_TRANSLATIONS = {
   
     before_after_label: '◀ 이전 | 이후 ▶',
     before_after_title: '레이어 스와이프',
-    search_boundary_modal_title: '경계를 찾았습니다', search_boundary_modal_message: '이 영역을 작업 영역으로 사용하시겠습니까?',
   },
   hi: { dlq_no_raster: "डाउनलोड करने योग्य रैस्टर विश्लेषण नहीं मिला।", dlq_preparing_btn: "तैयार हो रहा है…", dlq_preparing_active: "सक्रिय स्क्रीन के रैस्टर विश्लेषण तैयार किए जा रहे हैं…", dlq_progress: "{n}/{total} — {name} तैयार हो रहा है…", dlq_session_error: "{name} के लिए विश्लेषण सत्र नहीं बनाया जा सका।", dlq_building_geotiff: "GeoTIFF फ़ाइल बनाई जा रही है…", dlq_ready: "डाउनलोड तैयार है।", dlq_prepare_failed: "डाउनलोड तैयार नहीं किया जा सका।", month_label: 'माह चयन', month_all: '(सभी)', month_none: '(कोई नहीं)', month_selected_suffix: ' माह चयनित', time_slider_lbl: "समय स्लाइडर", playback_progress_lbl: "प्लेबैक प्रगति", skip_to_map: "मानचित्र पर जाएं", project_manager: "प्रोजेक्ट प्रबंधक", project_save_btn: "💾 सहेजें", project_load_btn: "📂 लोड करें", project_none_saved: "कोई सहेजा गया प्रोजेक्ट नहीं", project_name_placeholder: "प्रोजेक्ट का नाम...", project_save_title: "वर्तमान दृश्य और सेटिंग्स सहेजें", project_load_title: "चयनित प्रोजेक्ट लोड करें", project_delete_title: "चयनित प्रोजेक्ट हटाएं", analysis_history_title: "📜 विश्लेषण इतिहास", analysis_history_empty: "अभी तक कोई विश्लेषण डाउनलोड नहीं हुआ है। परिणाम डाउनलोड करने पर यह यहाँ सूचीबद्ध होगा (अंतिम 10 रिकॉर्ड)।", analysis_history_clear: "🗑️ इतिहास साफ़ करें", analysis_history_note: "आपके डिवाइस/Drive पर डाउनलोड हुआ", analysis_history_clear_confirm: "विश्लेषण इतिहास साफ़ करें?", welcome_title: 'SylvaGIS में आपका स्वागत है', welcome_sub: 'वन विश्लेषण और रिमोट सेंसिंग प्लेटफ़ॉर्म', nav_guide: '❓ मार्गदर्शिका', nav_guide_short: 'मैनुअल', nav_login: '👤 उपयोगकर्ता लॉगिन', topo_dem_no_data_warning: 'चयनित DEM डेटा स्रोत में आपके कार्य क्षेत्र के लिए डेटा उपलब्ध नहीं है। कृपया डेटा स्रोत बदलें।',
     sidebar_title: 'कार्यक्षेत्र और डेटा चयन',
@@ -35771,7 +35831,6 @@ var SYLVA_TRANSLATIONS = {
   
     before_after_label: '◀ पहले | बाद ▶',
     before_after_title: 'लेयर स्वाइप',
-    search_boundary_modal_title: 'सीमा मिली', search_boundary_modal_message: 'क्या आप इस क्षेत्र को कार्य क्षेत्र के रूप में उपयोग करना चाहते हैं?',
   },
   id: { dlq_no_raster: "Tidak ada analisis raster yang dapat diunduh.", dlq_preparing_btn: "Menyiapkan…", dlq_preparing_active: "Menyiapkan analisis raster pada layar aktif…", dlq_progress: "{n}/{total} — menyiapkan {name}…", dlq_session_error: "Tidak dapat membuat sesi analisis untuk {name}.", dlq_building_geotiff: "Membuat file GeoTIFF…", dlq_ready: "Unduhan siap.", dlq_prepare_failed: "Unduhan tidak dapat disiapkan.", month_label: 'Pilihan Bulan', month_all: '(Semua)', month_none: '(Tidak ada)', month_selected_suffix: ' bulan dipilih', time_slider_lbl: "Penggeser waktu", playback_progress_lbl: "Progres pemutaran", skip_to_map: "Lompat ke peta", project_manager: "Manajer Proyek", project_save_btn: "💾 Simpan", project_load_btn: "📂 Muat", project_none_saved: "Tidak ada proyek tersimpan", project_name_placeholder: "Nama proyek...", project_save_title: "Simpan tampilan dan pengaturan saat ini", project_load_title: "Muat proyek yang dipilih", project_delete_title: "Hapus proyek yang dipilih", analysis_history_title: "📜 Riwayat Analisis", analysis_history_empty: "Belum ada analisis yang diunduh. Setelah Anda mengunduh hasil, akan ditampilkan di sini (10 catatan terakhir).", analysis_history_clear: "🗑️ Hapus Riwayat", analysis_history_note: "Diunduh ke perangkat/Drive Anda", analysis_history_clear_confirm: "Hapus riwayat analisis?", welcome_title: 'Selamat Datang di SylvaGIS', welcome_sub: 'Platform Analisis Hutan & Penginderaan Jauh', nav_guide: '❓ Panduan', nav_guide_short: 'Manual', nav_login: '👤 Masuk', topo_dem_no_data_warning: 'Tidak ditemukan data untuk area kerja Anda pada sumber DEM yang dipilih. Silakan ganti sumber data.',
     sidebar_title: 'Ruang Kerja & Pemilihan Data',
@@ -36296,7 +36355,6 @@ var SYLVA_TRANSLATIONS = {
   
     before_after_label: '◀ Sebelum | Sesudah ▶',
     before_after_title: 'Geser Lapisan',
-    search_boundary_modal_title: 'Batas ditemukan', search_boundary_modal_message: 'Apakah Anda ingin menggunakan area ini sebagai area kerja?',
   },
   ru: { dlq_no_raster: "Растровый анализ для скачивания не найден.", dlq_preparing_btn: "Подготовка…", dlq_preparing_active: "Подготовка растровых анализов активного экрана…", dlq_progress: "{n}/{total} — подготовка {name}…", dlq_session_error: "Не удалось создать сеанс анализа для {name}.", dlq_building_geotiff: "Создание файла GeoTIFF…", dlq_ready: "Загрузка готова.", dlq_prepare_failed: "Не удалось подготовить загрузку.", month_label: 'Выбор месяцев', month_all: '(Все)', month_none: '(Нет)', month_selected_suffix: ' мес. выбрано', time_slider_lbl: "Временной слайдер", playback_progress_lbl: "Прогресс воспроизведения", skip_to_map: "Перейти к карте", project_manager: "Менеджер проектов", project_save_btn: "💾 Сохранить", project_load_btn: "📂 Загрузить", project_none_saved: "Нет сохранённых проектов", project_name_placeholder: "Название проекта...", project_save_title: "Сохранить текущий вид и настройки", project_load_title: "Загрузить выбранный проект", project_delete_title: "Удалить выбранный проект", analysis_history_title: "📜 История анализов", analysis_history_empty: "Пока нет загруженных анализов. Как только вы загрузите результат, он появится здесь (последние 10 записей).", analysis_history_clear: "🗑️ Очистить историю", analysis_history_note: "Загружено на ваше устройство/Drive", analysis_history_clear_confirm: "Очистить историю анализов?", welcome_title: 'Добро пожаловать в SylvaGIS', welcome_sub: 'Платформа анализа лесов и дистанционного зондирования', nav_guide: '❓ Гид', nav_guide_short: 'Руководство', nav_login: '👤 Вход пользователя', topo_dem_no_data_warning: 'В выбранном источнике DEM нет данных для вашей рабочей области. Пожалуйста, смените источник данных.',
     login_title: 'Войдите в свою учётную запись', login_sub: 'Выберите Google, Apple или Microsoft',
@@ -36820,7 +36878,6 @@ var SYLVA_TRANSLATIONS = {
   
     before_after_label: '◀ До | После ▶',
     before_after_title: 'Свайп слоя',
-    search_boundary_modal_title: 'Граница найдена', search_boundary_modal_message: 'Хотите использовать эту область как рабочую область?',
   },
   th: { dlq_no_raster: "ไม่พบการวิเคราะห์แบบราสเตอร์ที่ดาวน์โหลดได้", dlq_preparing_btn: "กำลังเตรียม…", dlq_preparing_active: "กำลังเตรียมการวิเคราะห์แบบราสเตอร์ของหน้าจอที่ใช้งานอยู่…", dlq_progress: "{n}/{total} — กำลังเตรียม {name}…", dlq_session_error: "ไม่สามารถสร้างเซสชันการวิเคราะห์สำหรับ {name} ได้", dlq_building_geotiff: "กำลังสร้างไฟล์ GeoTIFF…", dlq_ready: "พร้อมดาวน์โหลดแล้ว", dlq_prepare_failed: "ไม่สามารถเตรียมการดาวน์โหลดได้", month_label: 'เลือกเดือน', month_all: '(ทั้งหมด)', month_none: '(ไม่มี)', month_selected_suffix: ' เดือนที่เลือก', time_slider_lbl: "แถบเวลา", playback_progress_lbl: "ความคืบหน้าการเล่น", skip_to_map: "ข้ามไปที่แผนที่", project_manager: "ตัวจัดการโปรเจกต์", project_save_btn: "💾 บันทึก", project_load_btn: "📂 โหลด", project_none_saved: "ไม่มีโปรเจกต์ที่บันทึกไว้", project_name_placeholder: "ชื่อโปรเจกต์...", project_save_title: "บันทึกมุมมองและการตั้งค่าปัจจุบัน", project_load_title: "โหลดโปรเจกต์ที่เลือก", project_delete_title: "ลบโปรเจกต์ที่เลือก", analysis_history_title: "📜 ประวัติการวิเคราะห์", analysis_history_empty: "ยังไม่มีการวิเคราะห์ที่ดาวน์โหลด เมื่อคุณดาวน์โหลดผลลัพธ์ จะแสดงรายการที่นี่ (10 รายการล่าสุด)", analysis_history_clear: "🗑️ ล้างประวัติ", analysis_history_note: "ดาวน์โหลดไปยังอุปกรณ์/ไดรฟ์ของคุณแล้ว", analysis_history_clear_confirm: "ล้างประวัติการวิเคราะห์หรือไม่?", welcome_title: 'ยินดีต้อนรับสู่ SylvaGIS', welcome_sub: 'แพลตฟอร์มวิเคราะห์ป่าไม้และการสำรวจระยะไกล', nav_guide: '❓ คู่มือ', nav_guide_short: 'คู่มือ', nav_login: '👤 เข้าสู่ระบบ', topo_dem_no_data_warning: 'ไม่พบข้อมูลสำหรับพื้นที่ศึกษาของคุณในแหล่งข้อมูล DEM ที่เลือก กรุณาเปลี่ยนแหล่งข้อมูล',
     login_title: 'เข้าสู่บัญชีของคุณ', login_sub: 'เลือก Google, Apple หรือ Microsoft',
@@ -37338,7 +37395,6 @@ var SYLVA_TRANSLATIONS = {
   
     before_after_label: '◀ ก่อน | หลัง ▶',
     before_after_title: 'ปัดเลื่อนเลเยอร์',
-    search_boundary_modal_title: 'พบขอบเขต', search_boundary_modal_message: 'คุณต้องการใช้พื้นที่นี้เป็นพื้นที่ทำงานหรือไม่?',
   },
   bn: { dlq_no_raster: "ডাউনলোডযোগ্য র‍্যাস্টার বিশ্লেষণ পাওয়া যায়নি।", dlq_preparing_btn: "প্রস্তুত হচ্ছে…", dlq_preparing_active: "সক্রিয় স্ক্রিনের র‍্যাস্টার বিশ্লেষণ প্রস্তুত হচ্ছে…", dlq_progress: "{n}/{total} — {name} প্রস্তুত হচ্ছে…", dlq_session_error: "{name}-এর জন্য বিশ্লেষণ সেশন তৈরি করা যায়নি।", dlq_building_geotiff: "GeoTIFF ফাইল তৈরি হচ্ছে…", dlq_ready: "ডাউনলোড প্রস্তুত।", dlq_prepare_failed: "ডাউনলোড প্রস্তুত করা যায়নি।", month_label: 'মাস নির্বাচন', month_all: '(সব)', month_none: '(কোনোটি নয়)', month_selected_suffix: 'টি মাস নির্বাচিত', time_slider_lbl: "সময় স্লাইডার", playback_progress_lbl: "প্লেব্যাক অগ্রগতি", skip_to_map: "মানচিত্রে যান", project_manager: "প্রকল্প ব্যবস্থাপক", project_save_btn: "💾 সংরক্ষণ", project_load_btn: "📂 লোড", project_none_saved: "কোনো সংরক্ষিত প্রকল্প নেই", project_name_placeholder: "প্রকল্পের নাম...", project_save_title: "বর্তমান দৃশ্য ও সেটিংস সংরক্ষণ করুন", project_load_title: "নির্বাচিত প্রকল্প লোড করুন", project_delete_title: "নির্বাচিত প্রকল্প মুছুন", analysis_history_title: "📜 বিশ্লেষণ ইতিহাস", analysis_history_empty: "এখনও কোনো ডাউনলোড করা বিশ্লেষণ নেই। ফলাফল ডাউনলোড করলে এটি এখানে তালিকাভুক্ত হবে (সর্বশেষ ১০টি রেকর্ড)।", analysis_history_clear: "🗑️ ইতিহাস মুছুন", analysis_history_note: "আপনার ডিভাইস/ড্রাইভে ডাউনলোড হয়েছে", analysis_history_clear_confirm: "বিশ্লেষণ ইতিহাস মুছবেন?", welcome_title: 'SylvaGIS-এ স্বাগতম', welcome_sub: 'বন বিশ্লেষণ ও দূর অনুধাবন প্ল্যাটফর্ম', nav_guide: '❓ গাইড', nav_guide_short: 'গাইড', nav_login: '👤 ব্যবহারকারী লগইন', topo_dem_no_data_warning: 'নির্বাচিত DEM ডেটা উৎসে আপনার কার্যক্ষেত্রের জন্য কোনো ডেটা পাওয়া যায়নি। অনুগ্রহ করে ডেটা উৎস পরিবর্তন করুন।',
     login_title: 'আপনার অ্যাকাউন্টে সাইন ইন করুন', login_sub: 'Google, Apple বা Microsoft বেছে নিন',
@@ -37862,7 +37918,6 @@ var SYLVA_TRANSLATIONS = {
   
     before_after_label: '◀ আগে | পরে ▶',
     before_after_title: 'লেয়ার সোয়াইপ',
-    search_boundary_modal_title: 'সীমানা পাওয়া গেছে', search_boundary_modal_message: 'আপনি কি এই এলাকাটি কাজের এলাকা হিসেবে ব্যবহার করতে চান?',
   },
   vi: { dlq_no_raster: "Không tìm thấy phân tích raster nào để tải xuống.", dlq_preparing_btn: "Đang chuẩn bị…", dlq_preparing_active: "Đang chuẩn bị các phân tích raster của màn hình đang hoạt động…", dlq_progress: "{n}/{total} — đang chuẩn bị {name}…", dlq_session_error: "Không thể tạo phiên phân tích cho {name}.", dlq_building_geotiff: "Đang tạo tệp GeoTIFF…", dlq_ready: "Tải xuống đã sẵn sàng.", dlq_prepare_failed: "Không thể chuẩn bị tải xuống.", month_label: 'Chọn tháng', month_all: '(Tất cả)', month_none: '(Không có)', month_selected_suffix: ' tháng đã chọn', time_slider_lbl: "Thanh trượt thời gian", playback_progress_lbl: "Tiến trình phát", skip_to_map: "Chuyển đến bản đồ", project_manager: "Quản lý Dự án", project_save_btn: "💾 Lưu", project_load_btn: "📂 Tải", project_none_saved: "Chưa có dự án nào được lưu", project_name_placeholder: "Tên dự án...", project_save_title: "Lưu chế độ xem và cài đặt hiện tại", project_load_title: "Tải dự án đã chọn", project_delete_title: "Xóa dự án đã chọn", analysis_history_title: "📜 Lịch sử Phân tích", analysis_history_empty: "Chưa có phân tích nào được tải xuống. Khi bạn tải xuống một kết quả, nó sẽ được liệt kê ở đây (10 bản ghi gần nhất).", analysis_history_clear: "🗑️ Xóa Lịch sử", analysis_history_note: "Đã tải xuống thiết bị/Drive của bạn", analysis_history_clear_confirm: "Xóa lịch sử phân tích?", welcome_title: 'Chào mừng đến với SylvaGIS', welcome_sub: 'Nền tảng Phân tích Rừng & Viễn thám', nav_guide: '❓ Hướng dẫn', nav_guide_short: 'Cẩm nang', nav_login: '👤 Đăng nhập', topo_dem_no_data_warning: 'Không tìm thấy dữ liệu cho khu vực nghiên cứu của bạn trong nguồn DEM đã chọn. Vui lòng đổi nguồn dữ liệu.',
     sidebar_title: 'Không gian làm việc & Chọn dữ liệu',
@@ -38387,7 +38442,6 @@ var SYLVA_TRANSLATIONS = {
   
     before_after_label: '◀ Trước | Sau ▶',
     before_after_title: 'Vuốt Lớp',
-    search_boundary_modal_title: 'Đã tìm thấy ranh giới', search_boundary_modal_message: 'Bạn có muốn sử dụng khu vực này làm khu vực làm việc không?',
   },
 
   ur: { dlq_no_raster: "ڈاؤن لوڈ کے قابل رسٹر تجزیہ نہیں ملا۔", dlq_preparing_btn: "تیار ہو رہا ہے…", dlq_preparing_active: "فعال اسکرین کے رسٹر تجزیے تیار ہو رہے ہیں…", dlq_progress: "{n}/{total} — {name} تیار ہو رہا ہے…", dlq_session_error: "{name} کے لیے تجزیہ سیشن نہیں بنایا جا سکا۔", dlq_building_geotiff: "GeoTIFF فائل بنائی جا رہی ہے…", dlq_ready: "ڈاؤن لوڈ تیار ہے۔", dlq_prepare_failed: "ڈاؤن لوڈ تیار نہیں کیا جا سکا۔", month_label: 'مہینے کا انتخاب', month_all: '(تمام)', month_none: '(کوئی نہیں)', month_selected_suffix: ' مہینے منتخب', time_slider_lbl: "وقت سلائیڈر", playback_progress_lbl: "پلے بیک کی پیش رفت", skip_to_map: "نقشے پر جائیں", project_manager: "پراجیکٹ مینیجر", project_save_btn: "💾 محفوظ کریں", project_load_btn: "📂 لوڈ کریں", project_none_saved: "کوئی محفوظ شدہ پراجیکٹ نہیں", project_name_placeholder: "پراجیکٹ کا نام...", project_save_title: "موجودہ منظر اور ترتیبات محفوظ کریں", project_load_title: "منتخب پراجیکٹ لوڈ کریں", project_delete_title: "منتخب پراجیکٹ حذف کریں", analysis_history_title: "📜 تجزیہ کی تاریخ", analysis_history_empty: "ابھی تک کوئی ڈاؤن لوڈ شدہ تجزیہ نہیں ہے۔ نتیجہ ڈاؤن لوڈ کرنے پر یہ یہاں فہرست ہو جائے گا (آخری 10 ریکارڈز)۔", analysis_history_clear: "🗑️ تاریخ صاف کریں", analysis_history_note: "آپ کے آلے/Drive پر ڈاؤن لوڈ ہو گیا", analysis_history_clear_confirm: "تجزیہ کی تاریخ صاف کی جائے؟", welcome_title: 'SylvaGIS میں خوش آمدید', welcome_sub: 'جنگلاتی تجزیہ اور ریموٹ سینسنگ پلیٹ فارم', nav_guide: '❓ رہنما', nav_guide_short: 'رہنما', nav_login: '👤 صارف لاگ ان', topo_dem_no_data_warning: 'منتخب کردہ DEM ڈیٹا ماخذ میں آپ کے کام کے علاقے کے لیے کوئی ڈیٹا نہیں ملا۔ براہ کرم ڈیٹا ماخذ تبدیل کریں۔',
@@ -38916,7 +38970,6 @@ var SYLVA_TRANSLATIONS = {
   
     before_after_label: '◀ پہلے | بعد ▶',
     before_after_title: 'پرت سوائپ',
-    search_boundary_modal_title: 'حد مل گئی', search_boundary_modal_message: 'کیا آپ اس علاقے کو ورکنگ ایریا کے طور پر استعمال کرنا چاہتے ہیں؟',
   },
   pl: { dlq_no_raster: "Nie znaleziono analizy rastrowej do pobrania.", dlq_preparing_btn: "Przygotowywanie…", dlq_preparing_active: "Przygotowywanie analiz rastrowych aktywnego ekranu…", dlq_progress: "{n}/{total} — przygotowywanie {name}…", dlq_session_error: "Nie udało się utworzyć sesji analizy dla {name}.", dlq_building_geotiff: "Tworzenie pliku GeoTIFF…", dlq_ready: "Pobieranie gotowe.", dlq_prepare_failed: "Nie udało się przygotować pobierania.", month_label: 'Wybór miesięcy', month_all: '(Wszystkie)', month_none: '(Żaden)', month_selected_suffix: ' mies. wybranych', time_slider_lbl: "Suwak czasu", playback_progress_lbl: "Postęp odtwarzania", skip_to_map: "Przejdź do mapy", project_manager: "Menedżer Projektów", project_save_btn: "💾 Zapisz", project_load_btn: "📂 Wczytaj", project_none_saved: "Brak zapisanych projektów", project_name_placeholder: "Nazwa projektu...", project_save_title: "Zapisz bieżący widok i ustawienia", project_load_title: "Wczytaj wybrany projekt", project_delete_title: "Usuń wybrany projekt", analysis_history_title: "📜 Historia Analiz", analysis_history_empty: "Brak jeszcze pobranych analiz. Po pobraniu wyniku pojawi się on tutaj (ostatnie 10 wpisów).", analysis_history_clear: "🗑️ Wyczyść Historię", analysis_history_note: "Pobrano na Twoje urządzenie/Dysk", analysis_history_clear_confirm: "Wyczyścić historię analiz?", welcome_title: 'Witamy w SylvaGIS', welcome_sub: 'Platforma Analizy Lasów i Teledetekcji', nav_guide: '❓ Przewodnik', nav_guide_short: 'Pomoc', nav_login: '👤 Logowanie', topo_dem_no_data_warning: 'W wybranym źródle DEM brak danych dla Twojego obszaru roboczego. Proszę zmienić źródło danych.',
     login_title: 'Zaloguj się do swojego konta', login_sub: 'Wybierz Google, Apple lub Microsoft',
@@ -39433,7 +39486,6 @@ var SYLVA_TRANSLATIONS = {
   
     before_after_label: '◀ Przed | Po ▶',
     before_after_title: 'Przesuwanie Warstwy',
-    search_boundary_modal_title: 'Znaleziono granicę', search_boundary_modal_message: 'Czy chcesz użyć tego obszaru jako obszaru roboczego?',
   },
   ms: { dlq_no_raster: "Tiada analisis raster yang boleh dimuat turun dijumpai.", dlq_preparing_btn: "Sedang bersiap…", dlq_preparing_active: "Sedang menyediakan analisis raster skrin aktif…", dlq_progress: "{n}/{total} — menyediakan {name}…", dlq_session_error: "Tidak dapat mencipta sesi analisis untuk {name}.", dlq_building_geotiff: "Sedang menjana fail GeoTIFF…", dlq_ready: "Muat turun sedia.", dlq_prepare_failed: "Muat turun tidak dapat disediakan.", month_label: 'Pemilihan Bulan', month_all: '(Semua)', month_none: '(Tiada)', month_selected_suffix: ' bulan dipilih', time_slider_lbl: "Peluncur masa", playback_progress_lbl: "Kemajuan main balik", skip_to_map: "Langkau ke peta", project_manager: "Pengurus Projek", project_save_btn: "💾 Simpan", project_load_btn: "📂 Muat", project_none_saved: "Tiada projek disimpan", project_name_placeholder: "Nama projek...", project_save_title: "Simpan paparan dan tetapan semasa", project_load_title: "Muat projek yang dipilih", project_delete_title: "Padam projek yang dipilih", analysis_history_title: "📜 Sejarah Analisis", analysis_history_empty: "Belum ada analisis yang dimuat turun. Setelah anda memuat turun hasil, ia akan disenaraikan di sini (10 rekod terakhir).", analysis_history_clear: "🗑️ Kosongkan Sejarah", analysis_history_note: "Dimuat turun ke peranti/Drive anda", analysis_history_clear_confirm: "Kosongkan sejarah analisis?", welcome_title: 'Selamat Datang ke SylvaGIS', welcome_sub: 'Platform Analisis Hutan & Penderiaan Jauh', nav_guide: '❓ Panduan', nav_guide_short: 'Panduan', nav_login: '👤 Log Masuk Pengguna', topo_dem_no_data_warning: 'Tiada data ditemui untuk kawasan kerja anda dalam sumber DEM yang dipilih. Sila tukar sumber data.',
     login_title: 'Log masuk ke akaun anda', login_sub: 'Pilih Google, Apple atau Microsoft',
@@ -39957,7 +40009,6 @@ var SYLVA_TRANSLATIONS = {
   
     before_after_label: '◀ Sebelum | Selepas ▶',
     before_after_title: 'Leret Lapisan',
-    search_boundary_modal_title: 'Sempadan ditemui', search_boundary_modal_message: 'Adakah anda mahu menggunakan kawasan ini sebagai kawasan kerja?',
   },
   ky: { dlq_no_raster: "Жүктөп алууга болгон растр анализи табылган жок.", dlq_preparing_btn: "Даярдалууда…", dlq_preparing_active: "Активдүү экрандагы растр анализдери даярдалууда…", dlq_progress: "{n}/{total} — {name} даярдалууда…", dlq_session_error: "{name} үчүн анализ сессиясын түзүү мүмкүн болгон жок.", dlq_building_geotiff: "GeoTIFF файлы түзүлүүдө…", dlq_ready: "Жүктөөгө даяр.", dlq_prepare_failed: "Жүктөөнү даярдоо мүмкүн болгон жок.", month_label: 'Ай тандоо', month_all: '(Баары)', month_none: '(Эч кимиси)', month_selected_suffix: ' ай тандалды', time_slider_lbl: "Убакыт слайдери", playback_progress_lbl: "Ойнотуу прогресси", skip_to_map: "Картага өтүү", project_manager: "Долбоор менеджери", project_save_btn: "💾 Сактоо", project_load_btn: "📂 Жүктөө", project_none_saved: "Сакталган долбоор жок", project_name_placeholder: "Долбоордун аты...", project_save_title: "Учурдагы көрүнүштү жана параметрлерди сактоо", project_load_title: "Тандалган долбоорду жүктөө", project_delete_title: "Тандалган долбоорду өчүрүү", analysis_history_title: "📜 Талдоо тарыхы", analysis_history_empty: "Азырынча жүктөлгөн талдоо жок. Натыйжаны жүктөп алганда, ал бул жерде тизмеленет (акыркы 10 жазуу).", analysis_history_clear: "🗑️ Тарыхты тазалоо", analysis_history_note: "Түзмөгүңүзгө/Drive'га жүктөлдү", analysis_history_clear_confirm: "Талдоо тарыхы тазалансынбы?", welcome_title: 'SylvaGIS-ке кош келдиңиз', welcome_sub: 'Токой талдоо жана алыстан зондтоо платформасы', nav_guide: '❓ Колдонмо', nav_guide_short: 'Колдонмо', nav_login: '👤 Кирүү', topo_dem_no_data_warning: 'Тандалган DEM булагында жумуш аймагыңыз үчүн маалымат табылган жок. Маалымат булагын алмаштырыңыз.',
       login_title: 'Аккаунтуңузга кириңиз', login_sub: 'Google, Apple же Microsoft тандаңыз',
@@ -40452,7 +40503,6 @@ var SYLVA_TRANSLATIONS = {
     
     before_after_label: '◀ Мурун | Кийин ▶',
     before_after_title: 'Катмарды Сүрүү',
-    search_boundary_modal_title: 'Чек ара табылды', search_boundary_modal_message: 'Бул аймакты иш аймагы катары колдонгуңуз келеби?',
   },
   mn: { dlq_no_raster: "Татаж авах боломжтой растрын шинжилгээ олдсонгүй.", dlq_preparing_btn: "Бэлтгэж байна…", dlq_preparing_active: "Идэвхтэй дэлгэцийн растрын шинжилгээг бэлтгэж байна…", dlq_progress: "{n}/{total} — {name}-г бэлтгэж байна…", dlq_session_error: "{name}-д зориулсан шинжилгээний session үүсгэж чадсангүй.", dlq_building_geotiff: "GeoTIFF файл үүсгэж байна…", dlq_ready: "Татаж авахад бэлэн.", dlq_prepare_failed: "Татаж авахыг бэлтгэж чадсангүй.", month_label: 'Сар сонгох', month_all: '(Бүгд)', month_none: '(Хоосон)', month_selected_suffix: ' сар сонгосон', time_slider_lbl: "Цагийн слайдер", playback_progress_lbl: "Тоглуулалтын явц", skip_to_map: "Газрын зураг руу очих", project_manager: "Төслийн менежер", project_save_btn: "💾 Хадгалах", project_load_btn: "📂 Ачаалах", project_none_saved: "Хадгалсан төсөл алга", project_name_placeholder: "Төслийн нэр...", project_save_title: "Одоогийн харагдац болон тохиргоог хадгалах", project_load_title: "Сонгосон төслийг ачаалах", project_delete_title: "Сонгосон төслийг устгах", analysis_history_title: "📜 Шинжилгээний Түүх", analysis_history_empty: "Одоогоор татаж авсан шинжилгээ алга байна. Үр дүнг татаж авмагц энд жагсаагдана (сүүлийн 10 бичлэг).", analysis_history_clear: "🗑️ Түүхийг Цэвэрлэх", analysis_history_note: "Таны төхөөрөмж/Drive-д татагдсан", analysis_history_clear_confirm: "Шинжилгээний түүхийг цэвэрлэх үү?", welcome_title: 'SylvaGIS-д тавтай морилно уу', welcome_sub: 'Ойн шинжилгээ ба алсын зондын платформ', nav_guide: '❓ Гарын авлага', nav_guide_short: 'Гарын авлага', nav_login: '👤 Хэрэглэгч нэвтрэх', topo_dem_no_data_warning: 'Сонгосон DEM эх сурвалжид таны судалгааны талбайн мэдээлэл олдсонгүй. Эх сурвалжийг өөрчилнө үү.',
     login_title: 'Бүртгэлдээ нэвтрэх', login_sub: 'Google, Apple эсвэл Microsoft сонгоно уу',
@@ -40936,7 +40986,6 @@ var SYLVA_TRANSLATIONS = {
   
     before_after_label: '◀ Өмнө | Хойно ▶',
     before_after_title: 'Давхаргыг Шудрах',
-    search_boundary_modal_title: 'Хил хязгаар олдлоо', search_boundary_modal_message: 'Энэ талбайг ажлын талбай болгон ашиглах уу?',
   },
 
   ka: { dlq_no_raster: "ჩამოსატვირთი რასტრული ანალიზი ვერ მოიძებნა.", dlq_preparing_btn: "მზადდება…", dlq_preparing_active: "აქტიური ეკრანის რასტრული ანალიზები მზადდება…", dlq_progress: "{n}/{total} — {name} მზადდება…", dlq_session_error: "{name}-სთვის ანალიზის სესიის შექმნა ვერ მოხერხდა.", dlq_building_geotiff: "GeoTIFF ფაილი იქმნება…", dlq_ready: "ჩამოტვირთვა მზადაა.", dlq_prepare_failed: "ჩამოტვირთვის მომზადება ვერ მოხერხდა.", month_label: 'თვის არჩევა', month_all: '(ყველა)', month_none: '(არცერთი)', month_selected_suffix: ' თვე არჩეულია', time_slider_lbl: "დროის სლაიდერი", playback_progress_lbl: "დაკვრის პროგრესი", skip_to_map: "რუკაზე გადასვლა", project_manager: "პროექტის მენეჯერი", project_save_btn: "💾 შენახვა", project_load_btn: "📂 ჩატვირთვა", project_none_saved: "შენახული პროექტები არ არის", project_name_placeholder: "პროექტის სახელი...", project_save_title: "მიმდინარე ხედისა და პარამეტრების შენახვა", project_load_title: "არჩეული პროექტის ჩატვირთვა", project_delete_title: "არჩეული პროექტის წაშლა", analysis_history_title: "📜 ანალიზის ისტორია", analysis_history_empty: "ჯერ არ არის გადმოწერილი ანალიზი. შედეგის გადმოწერისას ის აქ გამოჩნდება (ბოლო 10 ჩანაწერი).", analysis_history_clear: "🗑️ ისტორიის გასუფთავება", analysis_history_note: "გადმოწერილია თქვენს მოწყობილობაზე/Drive-ზე", analysis_history_clear_confirm: "გავასუფთაოთ ანალიზის ისტორია?", welcome_title: 'მოგესალმებით SylvaGIS-ში', welcome_sub: 'ტყის ანალიზისა და დისტანციური ზონდირების პლატფორმა', nav_guide: '❓ სახელმძღვანელო', nav_guide_short: 'სახელმძღვანელო', nav_login: '👤 შესვლა', topo_dem_no_data_warning: 'შერჩეულ DEM მონაცემთა წყაროში თქვენი სამუშაო არეალისთვის მონაცემები ვერ მოიძებნა. გთხოვთ, შეცვალოთ მონაცემთა წყარო.',
@@ -41439,7 +41488,6 @@ var SYLVA_TRANSLATIONS = {
   
     before_after_label: '◀ ადრე | მერე ▶',
     before_after_title: 'ფენის გადაფურცვლა',
-    search_boundary_modal_title: 'საზღვარი ნაპოვნია', search_boundary_modal_message: 'გსურთ ამ არეალის სამუშაო არედ გამოყენება?',
   },
   it: { dlq_no_raster: "Nessuna analisi raster scaricabile trovata.", dlq_preparing_btn: "Preparazione…", dlq_preparing_active: "Preparazione delle analisi raster dello schermo attivo…", dlq_progress: "{n}/{total} — preparazione di {name}…", dlq_session_error: "Impossibile creare una sessione di analisi per {name}.", dlq_building_geotiff: "Creazione del file GeoTIFF…", dlq_ready: "Download pronto.", dlq_prepare_failed: "Impossibile preparare il download.", month_label: 'Selezione mese', month_all: '(Tutti)', month_none: '(Nessuno)', month_selected_suffix: ' mesi selezionati', time_slider_lbl: "Cursore temporale", playback_progress_lbl: "Avanzamento riproduzione", skip_to_map: "Vai alla mappa", project_manager: "Gestione Progetti", project_save_btn: "💾 Salva", project_load_btn: "📂 Carica", project_none_saved: "Nessun progetto salvato", project_name_placeholder: "Nome del progetto...", project_save_title: "Salva la vista e le impostazioni correnti", project_load_title: "Carica il progetto selezionato", project_delete_title: "Elimina il progetto selezionato", analysis_history_title: "📜 Cronologia Analisi", analysis_history_empty: "Nessuna analisi scaricata ancora. Una volta scaricato un risultato, verrà elencato qui (ultimi 10 record).", analysis_history_clear: "🗑️ Cancella Cronologia", analysis_history_note: "Scaricato sul tuo dispositivo/Drive", analysis_history_clear_confirm: "Cancellare la cronologia delle analisi?", welcome_title: 'Benvenuto in SylvaGIS', welcome_sub: 'Piattaforma di Analisi Forestale e Telerilevamento', nav_guide: '❓ Guida', nav_guide_short: 'Guida', nav_login: '👤 Accesso Utente', topo_dem_no_data_warning: 'Nessun dato trovato per la tua area di studio nella fonte DEM selezionata. Cambia la fonte dei dati.',
     login_title: 'Accedi al tuo account', login_sub: 'Scegli Google, Apple o Microsoft',
@@ -41980,7 +42028,6 @@ var SYLVA_TRANSLATIONS = {
   
     before_after_label: '◀ Prima | Dopo ▶',
     before_after_title: 'Scorrimento Livello',
-    search_boundary_modal_title: 'Confine trovato', search_boundary_modal_message: 'Vuoi usare quest’area come area di lavoro?',
   },
 };
 
@@ -42703,11 +42750,22 @@ var SYLVA_TRANSLATIONS = {
     if (lang === 'en') return; // English is already correct
     var T = SYLVA_TRANSLATIONS[lang];
     _RS_EN_KEYS.forEach(function(k) {
-      if (_enT[k] !== undefined) T[k] = _enT[k];
+      // Only provide an English fallback when a language truly has no value.
+      // Never overwrite an existing localized info-box / technical description.
+      if (_enT[k] !== undefined && T[k] === undefined) T[k] = _enT[k];
     });
   });
 })();
 // ─────────────────────────────────────────────────────────────────────────────
+
+
+// SylvaGIS — Boundary modal + Aspect legend labels (30-language, no English fallback).
+(function(){
+  var _boundaryI18n = {"en": {"search_boundary_modal_title": "Boundary found", "search_boundary_modal_message": "Would you like to use this area as your working area?", "btn_yes": "Yes", "btn_no": "No"}, "tr": {"search_boundary_modal_title": "Sınır bulundu", "search_boundary_modal_message": "Bu alanı çalışma alanı olarak kullanmak ister misiniz?", "btn_yes": "Evet", "btn_no": "Hayır"}, "uz": {"search_boundary_modal_title": "Chegara topildi", "search_boundary_modal_message": "Bu hududdan ishchi hudud sifatida foydalanmoqchimisiz?", "btn_yes": "Ha", "btn_no": "Yo‘q"}, "el": {"search_boundary_modal_title": "Βρέθηκε όριο", "search_boundary_modal_message": "Θέλετε να χρησιμοποιήσετε αυτήν την περιοχή ως περιοχή εργασίας;", "btn_yes": "Ναι", "btn_no": "Όχι"}, "bg": {"search_boundary_modal_title": "Намерена е граница", "search_boundary_modal_message": "Искате ли да използвате тази област като работна област;", "btn_yes": "Да", "btn_no": "Не"}, "az": {"search_boundary_modal_title": "Sərhəd tapıldı", "search_boundary_modal_message": "Bu ərazini iş sahəniz kimi istifadə etmək istəyirsiniz?", "btn_yes": "Bəli", "btn_no": "Xeyr"}, "hu": {"search_boundary_modal_title": "Határ található", "search_boundary_modal_message": "Szeretné ezt a területet munkaterületként használni?", "btn_yes": "Igen", "btn_no": "Nem"}, "kk": {"search_boundary_modal_title": "Шекара табылды", "search_boundary_modal_message": "Бұл аумақты жұмыс аумағы ретінде пайдаланғыңыз келе ме?", "btn_yes": "Иә", "btn_no": "Жоқ"}, "de": {"search_boundary_modal_title": "Grenze gefunden", "search_boundary_modal_message": "Möchten Sie dieses Gebiet als Arbeitsbereich verwenden?", "btn_yes": "Ja", "btn_no": "Nein"}, "fr": {"search_boundary_modal_title": "Limite trouvée", "search_boundary_modal_message": "Voulez-vous utiliser cette zone comme zone de travail ?", "btn_yes": "Oui", "btn_no": "Non"}, "es": {"search_boundary_modal_title": "Límite encontrada", "search_boundary_modal_message": "¿Desea utilizar esta zona como área de trabajo?", "btn_yes": "Sí", "btn_no": "No"}, "pt": {"search_boundary_modal_title": "Limite encontrada", "search_boundary_modal_message": "Deseja usar esta área como sua área de trabalho?", "btn_yes": "Sim", "btn_no": "Não"}, "ar": {"search_boundary_modal_title": "تم العثور على حدود", "search_boundary_modal_message": "هل تريد استخدام هذه المنطقة كمنطقة عمل؟", "btn_yes": "نعم", "btn_no": "لا"}, "fa": {"search_boundary_modal_title": "مرز پیدا شد", "search_boundary_modal_message": "آیا می‌خواهید از این محدوده به‌عنوان محدوده کاری استفاده کنید؟", "btn_yes": "بله", "btn_no": "خیر"}, "zh": {"search_boundary_modal_title": "找到边界", "search_boundary_modal_message": "是否要将此区域用作工作区域？", "btn_yes": "是", "btn_no": "否"}, "ja": {"search_boundary_modal_title": "境界が見つかりました", "search_boundary_modal_message": "このエリアを作業エリアとして使用しますか？", "btn_yes": "はい", "btn_no": "いいえ"}, "ko": {"search_boundary_modal_title": "경계를 찾았습니다", "search_boundary_modal_message": "이 영역을 작업 영역으로 사용하시겠습니까?", "btn_yes": "예", "btn_no": "아니요"}, "hi": {"search_boundary_modal_title": "सीमा मिली", "search_boundary_modal_message": "क्या आप इस क्षेत्र को अपने कार्य क्षेत्र के रूप में उपयोग करना चाहते हैं?", "btn_yes": "हाँ", "btn_no": "नहीं"}, "id": {"search_boundary_modal_title": "Batas ditemukan", "search_boundary_modal_message": "Apakah Anda ingin menggunakan area ini sebagai area kerja?", "btn_yes": "Ya", "btn_no": "Tidak"}, "ru": {"search_boundary_modal_title": "Граница найдена", "search_boundary_modal_message": "Использовать эту область как рабочую область?", "btn_yes": "Да", "btn_no": "Нет"}, "th": {"search_boundary_modal_title": "พบขอบเขต", "search_boundary_modal_message": "คุณต้องการใช้พื้นที่นี้เป็นพื้นที่ทำงานหรือไม่?", "btn_yes": "ใช่", "btn_no": "ไม่"}, "bn": {"search_boundary_modal_title": "সীমানা পাওয়া গেছে", "search_boundary_modal_message": "আপনি কি এই এলাকাটি কাজের এলাকা হিসেবে ব্যবহার করতে চান?", "btn_yes": "হ্যাঁ", "btn_no": "না"}, "vi": {"search_boundary_modal_title": "Đã tìm thấy ranh giới", "search_boundary_modal_message": "Bạn có muốn sử dụng khu vực này làm khu vực làm việc không?", "btn_yes": "Có", "btn_no": "Không"}, "ur": {"search_boundary_modal_title": "حد مل گئی", "search_boundary_modal_message": "کیا آپ اس علاقے کو اپنے ورکنگ ایریا کے طور پر استعمال کرنا چاہتے ہیں؟", "btn_yes": "ہاں", "btn_no": "نہیں"}, "pl": {"search_boundary_modal_title": "Znaleziono granicę", "search_boundary_modal_message": "Czy chcesz użyć tego obszaru jako obszaru roboczego?", "btn_yes": "Tak", "btn_no": "Nie"}, "ms": {"search_boundary_modal_title": "Sempadan ditemui", "search_boundary_modal_message": "Adakah anda mahu menggunakan kawasan ini sebagai kawasan kerja?", "btn_yes": "Ya", "btn_no": "Tidak"}, "ky": {"search_boundary_modal_title": "Чек ара табылды", "search_boundary_modal_message": "Бул аймакты иш аймагы катары колдонгуңуз келеби?", "btn_yes": "Ооба", "btn_no": "Жок"}, "mn": {"search_boundary_modal_title": "Хил олдлоо", "search_boundary_modal_message": "Энэ бүсийг ажлын бүс болгон ашиглах уу?", "btn_yes": "Тийм", "btn_no": "Үгүй"}, "ka": {"search_boundary_modal_title": "საზღვარი მოიძებნა", "search_boundary_modal_message": "გსურთ ეს ტერიტორია სამუშაო არედ გამოიყენოთ?", "btn_yes": "დიახ", "btn_no": "არა"}, "it": {"search_boundary_modal_title": "Confine trovato", "search_boundary_modal_message": "Vuoi utilizzare quest’area come area di lavoro?", "btn_yes": "Sì", "btn_no": "No"}};
+  Object.keys(_boundaryI18n).forEach(function(lang){ if(!SYLVA_TRANSLATIONS[lang]) return; Object.keys(_boundaryI18n[lang]).forEach(function(k){ SYLVA_TRANSLATIONS[lang][k]=_boundaryI18n[lang][k]; }); });
+  var _aspectWords = {"en": {"aspect_flat": "Flat", "aspect_north": "North", "aspect_northeast": "Northeast", "aspect_east": "East", "aspect_southeast": "Southeast", "aspect_south": "South", "aspect_southwest": "Southwest", "aspect_west": "West", "aspect_northwest": "Northwest"}, "uz": {"aspect_flat": "Tekis", "aspect_north": "Shimol", "aspect_northeast": "Shimoli-sharq", "aspect_east": "Sharq", "aspect_southeast": "Janubi-sharq", "aspect_south": "Janub", "aspect_southwest": "Janubi-g‘arb", "aspect_west": "G‘arb", "aspect_northwest": "Shimoli-g‘arb"}, "el": {"aspect_flat": "Επίπεδο", "aspect_north": "Βορράς", "aspect_northeast": "Βορειοανατολικά", "aspect_east": "Ανατολή", "aspect_southeast": "Νοτιοανατολικά", "aspect_south": "Νότος", "aspect_southwest": "Νοτιοδυτικά", "aspect_west": "Δύση", "aspect_northwest": "Βορειοδυτικά"}, "bg": {"aspect_flat": "Равен", "aspect_north": "Север", "aspect_northeast": "Североизток", "aspect_east": "Изток", "aspect_southeast": "Югоизток", "aspect_south": "Юг", "aspect_southwest": "Югозапад", "aspect_west": "Запад", "aspect_northwest": "Северозапад"}, "tr": {"aspect_flat": "Düz", "aspect_north": "Kuzey", "aspect_northeast": "Kuzeydoğu", "aspect_east": "Doğu", "aspect_southeast": "Güneydoğu", "aspect_south": "Güney", "aspect_southwest": "Güneybatı", "aspect_west": "Batı", "aspect_northwest": "Kuzeybatı"}, "az": {"aspect_flat": "Düz", "aspect_north": "Şimal", "aspect_northeast": "Şimal-şərq", "aspect_east": "Şərq", "aspect_southeast": "Cənub-şərq", "aspect_south": "Cənub", "aspect_southwest": "Cənub-qərb", "aspect_west": "Qərb", "aspect_northwest": "Şimal-qərb"}, "hu": {"aspect_flat": "Sík", "aspect_north": "Észak", "aspect_northeast": "Északkelet", "aspect_east": "Kelet", "aspect_southeast": "Délkelet", "aspect_south": "Dél", "aspect_southwest": "Délnyugat", "aspect_west": "Nyugat", "aspect_northwest": "Északnyugat"}, "kk": {"aspect_flat": "Жазық", "aspect_north": "Солтүстік", "aspect_northeast": "Солтүстік-шығыс", "aspect_east": "Шығыс", "aspect_southeast": "Оңтүстік-шығыс", "aspect_south": "Оңтүстік", "aspect_southwest": "Оңтүстік-батыс", "aspect_west": "Батыс", "aspect_northwest": "Солтүстік-батыс"}, "de": {"aspect_flat": "Flach", "aspect_north": "Nord", "aspect_northeast": "Nordost", "aspect_east": "Ost", "aspect_southeast": "Südost", "aspect_south": "Süd", "aspect_southwest": "Südwest", "aspect_west": "West", "aspect_northwest": "Nordwest"}, "fr": {"aspect_flat": "Plat", "aspect_north": "Nord", "aspect_northeast": "Nord-est", "aspect_east": "Est", "aspect_southeast": "Sud-est", "aspect_south": "Sud", "aspect_southwest": "Sud-ouest", "aspect_west": "Ouest", "aspect_northwest": "Nord-ouest"}, "es": {"aspect_flat": "Plano", "aspect_north": "Norte", "aspect_northeast": "Noreste", "aspect_east": "Este", "aspect_southeast": "Sureste", "aspect_south": "Sur", "aspect_southwest": "Suroeste", "aspect_west": "Oeste", "aspect_northwest": "Noroeste"}, "pt": {"aspect_flat": "Plano", "aspect_north": "Norte", "aspect_northeast": "Nordeste", "aspect_east": "Leste", "aspect_southeast": "Sudeste", "aspect_south": "Sul", "aspect_southwest": "Sudoeste", "aspect_west": "Oeste", "aspect_northwest": "Noroeste"}, "ar": {"aspect_flat": "مستوٍ", "aspect_north": "الشمال", "aspect_northeast": "الشمال الشرقي", "aspect_east": "الشرق", "aspect_southeast": "الجنوب الشرقي", "aspect_south": "الجنوب", "aspect_southwest": "الجنوب الغربي", "aspect_west": "الغرب", "aspect_northwest": "الشمال الغربي"}, "fa": {"aspect_flat": "مسطح", "aspect_north": "شمال", "aspect_northeast": "شمال‌شرق", "aspect_east": "شرق", "aspect_southeast": "جنوب‌شرق", "aspect_south": "جنوب", "aspect_southwest": "جنوب‌غرب", "aspect_west": "غرب", "aspect_northwest": "شمال‌غرب"}, "zh": {"aspect_flat": "平坦", "aspect_north": "北", "aspect_northeast": "东北", "aspect_east": "东", "aspect_southeast": "东南", "aspect_south": "南", "aspect_southwest": "西南", "aspect_west": "西", "aspect_northwest": "西北"}, "ja": {"aspect_flat": "平坦", "aspect_north": "北", "aspect_northeast": "北東", "aspect_east": "東", "aspect_southeast": "南東", "aspect_south": "南", "aspect_southwest": "南西", "aspect_west": "西", "aspect_northwest": "北西"}, "ko": {"aspect_flat": "평탄", "aspect_north": "북", "aspect_northeast": "북동", "aspect_east": "동", "aspect_southeast": "남동", "aspect_south": "남", "aspect_southwest": "남서", "aspect_west": "서", "aspect_northwest": "북서"}, "hi": {"aspect_flat": "समतल", "aspect_north": "उत्तर", "aspect_northeast": "उत्तर-पूर्व", "aspect_east": "पूर्व", "aspect_southeast": "दक्षिण-पूर्व", "aspect_south": "दक्षिण", "aspect_southwest": "दक्षिण-पश्चिम", "aspect_west": "पश्चिम", "aspect_northwest": "उत्तर-पश्चिम"}, "id": {"aspect_flat": "Datar", "aspect_north": "Utara", "aspect_northeast": "Timur Laut", "aspect_east": "Timur", "aspect_southeast": "Tenggara", "aspect_south": "Selatan", "aspect_southwest": "Barat Daya", "aspect_west": "Barat", "aspect_northwest": "Barat Laut"}, "ru": {"aspect_flat": "Ровный", "aspect_north": "Север", "aspect_northeast": "Северо-восток", "aspect_east": "Восток", "aspect_southeast": "Юго-восток", "aspect_south": "Юг", "aspect_southwest": "Юго-запад", "aspect_west": "Запад", "aspect_northwest": "Северо-запад"}, "th": {"aspect_flat": "ราบ", "aspect_north": "เหนือ", "aspect_northeast": "ตะวันออกเฉียงเหนือ", "aspect_east": "ตะวันออก", "aspect_southeast": "ตะวันออกเฉียงใต้", "aspect_south": "ใต้", "aspect_southwest": "ตะวันตกเฉียงใต้", "aspect_west": "ตะวันตก", "aspect_northwest": "ตะวันตกเฉียงเหนือ"}, "bn": {"aspect_flat": "সমতল", "aspect_north": "উত্তর", "aspect_northeast": "উত্তর-পূর্ব", "aspect_east": "পূর্ব", "aspect_southeast": "দক্ষিণ-পূর্ব", "aspect_south": "দক্ষিণ", "aspect_southwest": "দক্ষিণ-পশ্চিম", "aspect_west": "পশ্চিম", "aspect_northwest": "উত্তর-পশ্চিম"}, "vi": {"aspect_flat": "Bằng phẳng", "aspect_north": "Bắc", "aspect_northeast": "Đông Bắc", "aspect_east": "Đông", "aspect_southeast": "Đông Nam", "aspect_south": "Nam", "aspect_southwest": "Tây Nam", "aspect_west": "Tây", "aspect_northwest": "Tây Bắc"}, "ur": {"aspect_flat": "ہموار", "aspect_north": "شمال", "aspect_northeast": "شمال مشرق", "aspect_east": "مشرق", "aspect_southeast": "جنوب مشرق", "aspect_south": "جنوب", "aspect_southwest": "جنوب مغرب", "aspect_west": "مغرب", "aspect_northwest": "شمال مغرب"}, "pl": {"aspect_flat": "Płaski", "aspect_north": "Północ", "aspect_northeast": "Północny wschód", "aspect_east": "Wschód", "aspect_southeast": "Południowy wschód", "aspect_south": "Południe", "aspect_southwest": "Południowy zachód", "aspect_west": "Zachód", "aspect_northwest": "Północny zachód"}, "ms": {"aspect_flat": "Rata", "aspect_north": "Utara", "aspect_northeast": "Timur Laut", "aspect_east": "Timur", "aspect_southeast": "Tenggara", "aspect_south": "Selatan", "aspect_southwest": "Barat Daya", "aspect_west": "Barat", "aspect_northwest": "Barat Laut"}, "ky": {"aspect_flat": "Түз", "aspect_north": "Түндүк", "aspect_northeast": "Түндүк-чыгыш", "aspect_east": "Чыгыш", "aspect_southeast": "Түштүк-чыгыш", "aspect_south": "Түштүк", "aspect_southwest": "Түштүк-батыш", "aspect_west": "Батыш", "aspect_northwest": "Түндүк-батыш"}, "mn": {"aspect_flat": "Тэгш", "aspect_north": "Хойд", "aspect_northeast": "Зүүн хойд", "aspect_east": "Зүүн", "aspect_southeast": "Зүүн өмнөд", "aspect_south": "Өмнөд", "aspect_southwest": "Баруун өмнөд", "aspect_west": "Баруун", "aspect_northwest": "Баруун хойд"}, "ka": {"aspect_flat": "ბრტყელი", "aspect_north": "ჩრდილოეთი", "aspect_northeast": "ჩრდილო-აღმოსავლეთი", "aspect_east": "აღმოსავლეთი", "aspect_southeast": "სამხრეთ-აღმოსავლეთი", "aspect_south": "სამხრეთი", "aspect_southwest": "სამხრეთ-დასავლეთი", "aspect_west": "დასავლეთი", "aspect_northwest": "ჩრდილო-დასავლეთი"}, "it": {"aspect_flat": "Pianeggiante", "aspect_north": "Nord", "aspect_northeast": "Nord-est", "aspect_east": "Est", "aspect_southeast": "Sud-est", "aspect_south": "Sud", "aspect_southwest": "Sud-ovest", "aspect_west": "Ovest", "aspect_northwest": "Nord-ovest"}};
+  Object.keys(_aspectWords).forEach(function(lang){ if(!SYLVA_TRANSLATIONS[lang]) return; Object.keys(_aspectWords[lang]).forEach(function(k){ SYLVA_TRANSLATIONS[lang][k]=_aspectWords[lang][k]; }); });
+})();
 
 // RTL languages
 var SYLVA_RTL = { ar: true, fa: true, ur: true };
@@ -42800,9 +42858,63 @@ function sylvaRestoreLegendFixedState(state) {
     }
   }
 }
+function sylvaRefreshAspectEditorLanguage(lang) {
+  // Aspect dışındaki topografik analiz editörlerine dokunulmaz. Aspect'in
+  // 9 yön adı ise aynı min/max ve renklerle yalnızca metin olarak çevrilir.
+  try {
+    var m = (typeof window._lastAnalyzeMeta !== 'undefined') ? window._lastAnalyzeMeta : null;
+    if (!m || m.analysisName !== 'TOPO_ASPECT') return;
+    var keys = ['aspect_flat','aspect_north','aspect_northeast','aspect_east','aspect_southeast','aspect_south','aspect_southwest','aspect_west','aspect_northwest'];
+    var rows = document.querySelectorAll('#class-rows-container .classification-row');
+    rows.forEach(function(row, i) {
+      if (i >= keys.length) return;
+      var nameEl = row.querySelector('.class-name');
+      if (!nameEl) return;
+      var current = String(nameEl.value || '');
+      var range = (current.match(/\([^)]*\)$/) || [''])[0];
+      var translated = (typeof t === 'function' ? t(keys[i], '') : '') || current.replace(/\s*\([^)]*\)$/, '');
+      nameEl.value = translated + (range ? ' ' + range : '');
+      nameEl.setAttribute('data-aspect-language', lang);
+    });
+
+    // Harita üzerindeki Aspect lejantı da aynı renk/aralıkları koruyarak
+    // yalnızca yön isimlerini günceller. Yeni analiz/yeniden sınıflandırma
+    // çalıştırılmaz; mevcut GEE katmanı değişmez.
+    ['map-legend-box','map2-legend-box'].forEach(function(id) {
+      var box = document.getElementById(id);
+      if (!box) return;
+      var targets = box.querySelectorAll('.class-highlight-target');
+      targets.forEach(function(row, i) {
+        if (i >= keys.length) return;
+        var label = row.querySelector('span:last-child');
+        if (!label) return;
+        var txt = String(label.textContent || '');
+        var range = (txt.match(/\([^)]*\)$/) || [''])[0];
+        var translated = (typeof t === 'function' ? t(keys[i], '') : '') || txt.replace(/\s*\([^)]*\)$/, '');
+        label.textContent = translated + (range ? ' ' + range : '');
+      });
+    });
+  } catch (e) {
+    console.warn('[SylvaGIS] Aspect dil yenilemesi başarısız:', e);
+  }
+}
+
 // Apply language to DOM
 function applySylvaLang(lang) {
   if (!SYLVA_TRANSLATIONS[lang]) lang = 'en';
+  // Dil değişiminden ÖNCE aktif topografik analiz/lejantı yakala.
+  // Topografik ürünlerde (Aspect hariç) kullanıcı tarafından seçilmiş
+  // lejant/sınıflandırma dili ve değerleri dil değişiminde ASLA yeniden
+  // üretilmeyecek; yalnızca Aspect'in yön adları yeni dile çevrilecek.
+  var _sylvaLangPrevAnalysis = null;
+  try {
+    var _prevMeta = (typeof window._lastAnalyzeMeta !== 'undefined') ? window._lastAnalyzeMeta : null;
+    _sylvaLangPrevAnalysis = _prevMeta && _prevMeta.analysisName ? String(_prevMeta.analysisName) : null;
+  } catch (_langPrevMetaErr) {}
+  var _sylvaPreserveTopoLegend = !!(_sylvaLangPrevAnalysis && /^TOPO(?:_|$)/.test(_sylvaLangPrevAnalysis) && _sylvaLangPrevAnalysis !== 'TOPO_ASPECT');
+  var _sylvaIsAspectLangSwitch = _sylvaLangPrevAnalysis === 'TOPO_ASPECT';
+  window._sylvaLanguagePreserveTopoLegend = _sylvaPreserveTopoLegend;
+  window._sylvaLanguageAspectSwitch = _sylvaIsAspectLangSwitch;
   _sylvaLang = lang;
   sylvaSaveLang(lang);
 
@@ -42913,8 +43025,10 @@ function applySylvaLang(lang) {
     });
   }
 
-  // Otomatik üretilmiş sınıf adlarını yeni dile göre güncelle
-  document.querySelectorAll('.class-name[data-auto]').forEach(function(inp) {
+  // Topografik analizlerin (Aspect hariç) sınıf adları/dili, analiz
+  // oluşturulduğu andaki dilde SABİT kalır. Dil değişimi bunları yeniden
+  // üretmez. Aspect ise aşağıdaki özel yenilemeyle yeni dile çevrilir.
+  if (!_sylvaPreserveTopoLegend) document.querySelectorAll('.class-name[data-auto]').forEach(function(inp) {
     var n = inp.getAttribute('data-auto');
     if (n) {
       var _cw = { en:'Class', tr:'Sınıf', de:'Klasse', fr:'Classe', es:'Clase',
@@ -43048,9 +43162,25 @@ function applySylvaLang(lang) {
   var _sylvaLegendFixedState = (typeof sylvaCaptureLegendFixedState === 'function') ? sylvaCaptureLegendFixedState() : null;
   window._sylvaLangChanging = true;
   try {
-  if (typeof window.sylvaRefreshStatsChart === 'function') window.sylvaRefreshStatsChart();
+  if (_sylvaIsAspectLangSwitch) {
+    sylvaRefreshAspectEditorLanguage(lang);
+    // Aspect'in çevrilmiş sınıf adlarını katmana ait kalıcı editör
+    // snapshot'ına da yaz; böylece indirme/katman geri çağırma sırasında
+    // eski dildeki isimler geri gelmez. Renk ve min/max değerleri aynen korunur.
+    try {
+      var _aspPane = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
+      var _aspKey = window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[_aspPane];
+      if (_aspKey && typeof window._sylvaSaveEditorStateForLayer === 'function') window._sylvaSaveEditorStateForLayer(_aspPane, _aspKey);
+    } catch (_aspSaveErr) {}
+  }
+  // Topografik ürünlerde (Aspect hariç) mevcut sınıf adlarını/legend'i
+  // yeniden üreten dinamik chart/legend fonksiyonlarını dil değişiminde
+  // çalıştırma. Böylece örn. Korece kurulmuş TWI sınıfları İngilizceye
+  // geçince sıfırlanmaz. Kullanıcı semboloji panelinden daha sonra yine
+  // değiştirebilir.
+  if (!_sylvaPreserveTopoLegend && typeof window.sylvaRefreshStatsChart === 'function') window.sylvaRefreshStatsChart();
   if (typeof window.sylvaRefreshRgbLegend === 'function') window.sylvaRefreshRgbLegend();
-  if (typeof window.sylvaRefreshDynamicLegend === 'function') window.sylvaRefreshDynamicLegend();
+  if (!_sylvaPreserveTopoLegend && typeof window.sylvaRefreshDynamicLegend === 'function') window.sylvaRefreshDynamicLegend();
 
   // LULC lejantını seçili dile göre yenile (analiz çalıştırılmışsa)
   if (typeof _lastAnalyzeMeta !== 'undefined' && _lastAnalyzeMeta) {
@@ -43067,7 +43197,11 @@ function applySylvaLang(lang) {
       var _curActiveMeta = (typeof getSelectedAnalysisMeta === 'function') ? getSelectedAnalysisMeta() : null;
       var _isCurrentlyImageMode = _curActiveMeta && _curActiveMeta.legendType === 'image';
       if (!_isCurrentlyImageMode) {
-        if (typeof renderAnalysisLegend === 'function') {
+        // Topografik analizlerde dil değişimi lejantı/sınıfları SIFIRLAMAZ.
+        // Kullanıcının önceki dilde oluşturduğu renk, aralık ve sınıf adları
+        // aynen korunur. Tek istisna: Aspect; onun 9 yön adı seçili dile göre
+        // güncellenir.
+        if (!_sylvaPreserveTopoLegend && typeof renderAnalysisLegend === 'function') {
           renderAnalysisLegend(_lastAnalyzeMeta);
         }
       }
@@ -43121,6 +43255,10 @@ function applySylvaLang(lang) {
     if (typeof sylvaRestoreLegendFixedState === 'function') sylvaRestoreLegendFixedState(_sylvaLegendFixedState);
     window._sylvaLangChanging = false;
   }
+  // Bir sonraki analiz yeni davranışla başlasın; bu bayrak yalnızca bu dil
+  // geçişinin korunması için kullanılır.
+  window._sylvaLanguagePreserveTopoLegend = false;
+  window._sylvaLanguageAspectSwitch = false;
 
   // AOI name input: update placeholder + auto-generated value per language
   var _aoiInp = document.getElementById('raw-bands-aoi-name');
@@ -52098,7 +52236,7 @@ document.querySelectorAll('#env-urban-analyses-details input[data-analysis]').fo
 /* Sunucunun yerleşik sınıflarıyla gelen katmanlar (ör. Orman Kaybı/Kazanımı)
    kullanıcı tanımlı renk/aralıkla yeniden boyanamaz. Sürekli/bar değerli
    katmanlarda aynı semboloji düzenleyicisi normal olarak açık kalır. */
-function setNativeLegendEditorLocked(meta){var locked=!!(meta&&meta.legendType==='classified'&&meta.classesRaw&&String(meta.analysisName||'').toUpperCase()!=='TOPO_ASPECT');var group=document.getElementById('classification-type-group');var stretch=document.getElementById('stretched-settings');var classified=document.getElementById('classified-settings');var title=document.getElementById('classified-title');if(group){group.style.opacity=locked?'.48':'1';group.style.pointerEvents=locked?'none':'';group.setAttribute('aria-disabled',locked?'true':'false')}if(stretch)stretch.style.pointerEvents=locked?'none':'';if(classified)classified.style.pointerEvents=locked?'none':'';if(title&&locked)title.value=(meta.analysisName||title.value);document.querySelectorAll('#classification-type-group button,#stretched-settings input,#stretched-settings button,#classified-settings input,#classified-settings button,#classified-settings select').forEach(function(el){if(locked){el.setAttribute('data-native-legend-lock','1');el.disabled=true}else if(el.getAttribute('data-native-legend-lock')==='1'){el.disabled=false;el.removeAttribute('data-native-legend-lock')}})}
+function setNativeLegendEditorLocked(meta){var locked=!!(meta&&meta.legendType==='classified'&&meta.classesRaw&&meta.analysisName!=='TOPO_ASPECT');var group=document.getElementById('classification-type-group');var stretch=document.getElementById('stretched-settings');var classified=document.getElementById('classified-settings');var title=document.getElementById('classified-title');if(group){group.style.opacity=locked?'.48':'1';group.style.pointerEvents=locked?'none':'';group.setAttribute('aria-disabled',locked?'true':'false')}if(stretch)stretch.style.pointerEvents=locked?'none':'';if(classified)classified.style.pointerEvents=locked?'none':'';if(title&&locked)title.value=(meta.analysisName||title.value);document.querySelectorAll('#classification-type-group button,#stretched-settings input,#stretched-settings button,#classified-settings input,#classified-settings button,#classified-settings select').forEach(function(el){if(locked){el.setAttribute('data-native-legend-lock','1');el.disabled=true}else if(el.getAttribute('data-native-legend-lock')==='1'){el.disabled=false;el.removeAttribute('data-native-legend-lock')}})}
 var oldLegend=window.renderAnalysisLegend;if(typeof oldLegend==='function'){window.renderAnalysisLegend=function(meta){var r=oldLegend.apply(this,arguments);setNativeLegendEditorLocked(meta);return r}}
 /* Katman geçişinde eski bir sınıflı durumun editörü açık bırakmaması için
    aktif analiz seçiminin değişimini de izler. */
@@ -52125,7 +52263,7 @@ var oldRenderChart=window.renderChart;if(typeof oldRenderChart==='function'){win
 /* Bilgi kartını üreten mevcut işlevden sonra çeviri uygulanır; böylece
    Source/Resolution/Description ve içerik aynı anda çevrilir. */
 var oldDatasetInfo=window.renderDatasetInfoCard;if(typeof oldDatasetInfo==='function'){window.renderDatasetInfoCard=function(analysisName,paneId){var r=oldDatasetInfo.apply(this,arguments);localizeMapInfoBox(document.getElementById(paneId==='map2'?'map2-info-box':'map-info-box'),selectedInfoLang());return r}}
-var oldApply=window.applySylvaLang;if(typeof oldApply==='function'){window.applySylvaLang=function(lang){var r=oldApply.apply(this,arguments);refreshInfoButtons(lang);try{var m=window._lastAnalyzeMeta||null;if(m&&m.analysisName&&typeof window.renderDatasetInfoCard==='function'){window.renderDatasetInfoCard(m.analysisName,'map');window.renderDatasetInfoCard(m.analysisName,'map2')}}catch(e){}refreshVisibleInfoBoxes(lang);if(typeof window.sylvaSyncLocalizedLegendTitles==='function')window.sylvaSyncLocalizedLegendTitles();return r}}
+var oldApply=window.applySylvaLang;if(typeof oldApply==='function'){window.applySylvaLang=function(lang){var r=oldApply.apply(this,arguments);refreshInfoButtons(lang);refreshVisibleInfoBoxes(lang);return r}}
 refreshInfoButtons(selectedInfoLang());
 }());
 </script>
@@ -52152,14 +52290,8 @@ function hideEmptyLegendDates(){document.querySelectorAll('.real-stats-row').for
 /* Sunucunun kendine ait kategorileri olan katmanların sembolojisi değişmez.
    Editör kapalı görünür, fakat kullanıcı hangi nedenle kapalı olduğunu
    anlayabilsin diye şeffaf bırakılır. */
-function nativeClassified(){var meta=window._lastAnalyzeMeta;return!!(meta&&meta.legendType==='classified'&&meta.classesRaw&&String(meta.analysisName||'').toUpperCase()!=='TOPO_ASPECT')}
-function sylvaLegendIsHillshade(meta){var k=String(meta&&meta.analysisName||'').toUpperCase();return k==='TOPO_HILLSHADE'||k==='TOPO_RELIEF'||k==='TOPO_HILLSHADE_MULTI'}
-function sylvaLocalizedAnalysisTitle(meta){if(!meta)return '';var k=String(meta.analysisName||'').toUpperCase();var info=(typeof _DATASET_INFO_TITLE_KEYS!=='undefined')?_DATASET_INFO_TITLE_KEYS[k]:null;return info?((info.emoji||'')+t(info.key,k)):k}
-function sylvaSyncLocalizedLegendTitles(){var m=window._lastAnalyzeMeta||null;if(!m)return;var title=sylvaLocalizedAnalysisTitle(m);['classified-title','stretched-title'].forEach(function(id){var el=document.getElementById(id);if(el&&title)el.value=title});document.querySelectorAll('#map-legend-box,#map2-legend-box').forEach(function(box){var old=box.querySelector('b');if(old&&title&&(/^TOPO(?:_|$)/.test(String(old.textContent||'').trim())||/^[A-Z0-9_]+$/.test(String(old.textContent||'').trim())))old.textContent=title})}
-window.sylvaSyncLocalizedLegendTitles=sylvaSyncLocalizedLegendTitles
-function syncNativeClassEditorState(){var meta=window._lastAnalyzeMeta||null;var locked=nativeClassified()||sylvaLegendIsHillshade(meta);var group=document.getElementById('classification-type-group');var stretch=document.getElementById('stretched-settings');var classified=document.getElementById('classified-settings');[group,stretch,classified].forEach(function(el){if(!el)return;el.style.opacity=locked?'.18':'';el.style.pointerEvents=locked?'none':'';el.style.filter=locked?'grayscale(1)':'';el.style.backgroundColor=locked?'rgba(255,255,255,.18)':'';el.setAttribute('aria-disabled',locked?'true':'false')});document.querySelectorAll('#classification-type-group button,#stretched-settings input,#stretched-settings button,#classified-settings input,#classified-settings button,#classified-settings select').forEach(function(el){if(locked){el.disabled=true;el.setAttribute('data-native-symbol-disabled','1')}else if(el.getAttribute('data-native-symbol-disabled')==='1'){el.disabled=false;el.removeAttribute('data-native-symbol-disabled')}});if(sylvaLegendIsHillshade(meta)){var ramp=document.getElementById('selectedRamp');if(ramp){ramp.setAttribute('data-ramp','gray');ramp.style.background='linear-gradient(90deg,#f2f2f2,#666666)'}}}
-function sylvaEnforceHillshadeGray(){var m=window._lastAnalyzeMeta;if(!sylvaLegendIsHillshade(m))return;var ramp=document.getElementById('selectedRamp');if(ramp){ramp.setAttribute('data-ramp','gray');ramp.style.background='linear-gradient(90deg,#f2f2f2,#666666)'}document.querySelectorAll('#classification-type-group,#stretched-settings,#classified-settings').forEach(function(el){el.style.opacity='.18';el.style.pointerEvents='none';el.style.filter='grayscale(1)';el.style.backgroundColor='rgba(255,255,255,.18)'})}
-setInterval(function(){try{sylvaEnforceHillshadeGray();sylvaSyncLocalizedLegendTitles();}catch(e){}},500)
+function nativeClassified(){var meta=window._lastAnalyzeMeta;return!!(meta&&meta.legendType==='classified'&&meta.classesRaw&&meta.analysisName!=='TOPO_ASPECT')}
+function syncNativeClassEditorState(){var locked=nativeClassified();var group=document.getElementById('classification-type-group');var stretch=document.getElementById('stretched-settings');var classified=document.getElementById('classified-settings');[group,stretch,classified].forEach(function(el){if(!el)return;el.style.opacity=locked?'.42':'';el.style.pointerEvents=locked?'none':'';el.setAttribute('aria-disabled',locked?'true':'false')});document.querySelectorAll('#classification-type-group button,#stretched-settings input,#stretched-settings button,#classified-settings input,#classified-settings button,#classified-settings select').forEach(function(el){if(locked){el.disabled=true;el.setAttribute('data-native-symbol-disabled','1')}else if(el.getAttribute('data-native-symbol-disabled')==='1'){el.disabled=false;el.removeAttribute('data-native-symbol-disabled')}})}
 
 /* Sürekli veride ilk sınıflandırma, genel gri kategorik paletten değil,
    ekranda görünen renk çubuğundan üretilir. Kullanıcı renk kutusundan renk
@@ -52220,7 +52352,7 @@ refresh();
     function safeName(value) { return String(value || 'Analiz').replace(/[^a-z0-9_-]+/gi, '_').replace(/^_+|_+$/g, '') || 'Analiz'; }
     function exportVisualFor(pane, key) {
         var state = window._sylvaEditorStateByPane && window._sylvaEditorStateByPane[pane] && window._sylvaEditorStateByPane[pane][key];
-        var colors = [], min, max, breaks = null, classLabels = null;
+        var colors = [], min, max, breaks = null;
         // 🛠️ BUG FİX (Faz 15 — "bar olarak indirmiştim, sınıflandırılmış
         // vermiş"): önceden bu fonksiyon yalnızca İLK ve SON sınıfın min/
         // max'ını (ve renklerin düz bir listesini) döndürüyordu — sunucu
@@ -52238,69 +52370,10 @@ refresh();
         // kullanmak rasteri yanlışlıkla 1..N sınıfa çeviriyordu.
         if (state && state.classificationType === 'classified' && state.classRows && state.classRows.length) {
             breaks = state.classRows.map(function (row) {
-                return { min: parseFloat(row.min), max: parseFloat(row.max), color: String(row.color || '').replace(/^#/, ''), label: String(row.name || '') };
+                return { min: parseFloat(row.min), max: parseFloat(row.max), color: String(row.color || '').replace(/^#/, ''), label: String(row.name || '').trim() };
             }).filter(function (b) { return isFinite(b.min) && isFinite(b.max) && b.color; });
             state.classRows.forEach(function (row) { if (row.color) colors.push(String(row.color).replace(/^#/, '')); });
             min = parseFloat(state.classRows[0].min); max = parseFloat(state.classRows[state.classRows.length - 1].max);
-        }
-        // Yerleşik sınıflandırılmış analizlerde de yalnızca kod numarası
-        // indirme dosyasına gitmesin: seçili dildeki sınıf adlarını gönder.
-        if ((!breaks || !breaks.length) && key && typeof LULC_CLASS_DEFS !== 'undefined' && LULC_CLASS_DEFS[key]) {
-            classLabels = {};
-            LULC_CLASS_DEFS[key].forEach(function (d) {
-                var lbl = d.key && typeof t === 'function' ? t(d.key, d.label) : d.label;
-                classLabels[String(d.code)] = lbl || d.label;
-            });
-        }
-        if ((!breaks || !breaks.length) && String(key).toUpperCase() === 'TOPO_ASPECT') {
-            // Aspect sınıfları için seçili dildeki yön adlarını kullan.
-            var lang = (typeof window._sylvaLang === 'string' ? window._sylvaLang : 'tr');
-            var A = {
-              tr:['Düz','Kuzey','Kuzeydoğu','Doğu','Güneydoğu','Güney','Güneybatı','Batı','Kuzeybatı'],
-              en:['Flat','North','Northeast','East','Southeast','South','Southwest','West','Northwest'],
-              de:['Flach','Norden','Nordost','Osten','Südost','Süden','Südwest','Westen','Nordwest'],
-              fr:['Plat','Nord','Nord-est','Est','Sud-est','Sud','Sud-ouest','Ouest','Nord-ouest'],
-              es:['Plano','Norte','Noreste','Este','Sureste','Sur','Suroeste','Oeste','Noroeste'],
-              pt:['Plano','Norte','Nordeste','Leste','Sudeste','Sul','Sudoeste','Oeste','Noroeste'],
-              it:['Piano','Nord','Nord-est','Est','Sud-est','Sud','Sud-ovest','Ovest','Nord-ovest'],
-              nl:['Vlak','Noord','Noordoost','Oost','Zuidoost','Zuid','Zuidwest','West','Noordwest'],
-              pl:['Płaski','Północ','Północny wschód','Wschód','Południowy wschód','Południe','Południowy zachód','Zachód','Północny zachód'],
-              ru:['Ровный','Север','Северо-восток','Восток','Юго-восток','Юг','Юго-запад','Запад','Северо-запад'],
-              uk:['Рівний','Північ','Північний схід','Схід','Південний схід','Південь','Південний захід','Захід','Північний захід'],
-              ar:['مستوٍ','شمال','شمال شرقي','شرق','جنوب شرقي','جنوب','جنوب غربي','غرب','شمال غربي'],
-              fa:['مسطح','شمال','شمال‌شرقی','شرق','جنوب‌شرقی','جنوب','جنوب‌غربی','غرب','شمال‌غربی'],
-              zh:['平坦','北','东北','东','东南','南','西南','西','西北'],
-              ja:['平坦','北','北東','東','南東','南','南西','西','北西'],
-              ko:['평탄','북','북동','동','남동','남','남서','서','북서'],
-              hi:['समतल','उत्तर','उत्तर-पूर्व','पूर्व','दक्षिण-पूर्व','दक्षिण','दक्षिण-पश्चिम','पश्चिम','उत्तर-पश्चिम'],
-              id:['Datar','Utara','Timur Laut','Timur','Tenggara','Selatan','Barat Daya','Barat','Barat Laut'],
-              ms:['Rata','Utara','Timur Laut','Timur','Tenggara','Selatan','Barat Daya','Barat','Barat Laut'],
-              th:['ราบ','เหนือ','ตะวันออกเฉียงเหนือ','ตะวันออก','ตะวันออกเฉียงใต้','ใต้','ตะวันตกเฉียงใต้','ตะวันตก','ตะวันตกเฉียงเหนือ'],
-              vi:['Bằng phẳng','Bắc','Đông Bắc','Đông','Đông Nam','Nam','Tây Nam','Tây','Tây Bắc'],
-              bn:['সমতল','উত্তর','উত্তর-পূর্ব','পূর্ব','দক্ষিণ-পূর্ব','দক্ষিণ','দক্ষিণ-পশ্চিম','পশ্চিম','উত্তর-পশ্চিম'],
-              ur:['ہموار','شمال','شمال مشرق','مشرق','جنوب مشرق','جنوب','جنوب مغرب','مغرب','شمال مغرب'],
-              el:['Επίπεδο','Βορράς','Βορειοανατολικά','Ανατολή','Νοτιοανατολικά','Νότος','Νοτιοδυτικά','Δύση','Βορειοδυτικά'],
-              uz:['Tekis','Shimol','Shimoli-sharq','Sharq','Janubi-sharq','Janub','Janubi-g‘arb','G‘arb','Shimoli-g‘arb'],
-              az:['Düz','Şimal','Şimal-şərq','Şərq','Cənub-şərq','Cənub','Cənub-qərb','Qərb','Şimal-qərb'],
-              bg:['Равен','Север','Североизток','Изток','Югоизток','Юг','Югозапад','Запад','Северозапад'],
-              hu:['Sík','Észak','Északkelet','Kelet','Délkelet','Dél','Délnyugat','Nyugat','Északnyugat'],
-              ka:['ბრტყელი','ჩრდილოეთი','ჩრდილო-აღმოსავლეთი','აღმოსავლეთი','სამხრეთ-აღმოსავლეთი','სამხრეთი','სამხრეთ-დასავლეთი','დასავლეთი','ჩრდილო-დასავლეთი'],
-              kk:['Жазық','Солтүстік','Солтүстік-шығыс','Шығыс','Оңтүстік-шығыс','Оңтүстік','Оңтүстік-батыс','Батыс','Солтүстік-батыс'],
-              ky:['Түз','Түндүк','Түндүк-чыгыш','Чыгыш','Түштүк-чыгыш','Түштүк','Түштүк-батыш','Батыш','Түндүк-батыш'],
-              mn:['Тэгш','Хойд','Зүүн хойд','Зүүн','Зүүн өмнөд','Өмнөд','Баруун өмнөд','Баруун','Баруун хойд'],
-              uz:['Tekis','Shimol','Shimoli-sharq','Sharq','Janubi-sharq','Janub','Janubi-g‘arb','G‘arb','Shimoli-g‘arb'],
-              el:['Επίπεδο','Βόρεια','Βορειοανατολικά','Ανατολικά','Νοτιοανατολικά','Νότια','Νοτιοδυτικά','Δυτικά','Βορειοδυτικά'],
-              bg:['Равен','Север','Североизток','Изток','Югоизток','Юг','Югозапад','Запад','Северозапад'],
-              az:['Düz','Şimal','Şimal-şərq','Şərq','Cənub-şərq','Cənub','Cənub-qərb','Qərb','Şimal-qərb'],
-              bn:['সমতল','উত্তর','উত্তর-পূর্ব','পূর্ব','দক্ষিণ-পূর্ব','দক্ষিণ','দক্ষিণ-পশ্চিম','পশ্চিম','উত্তর-পশ্চিম'],
-              vi:['Phẳng','Bắc','Đông Bắc','Đông','Đông Nam','Nam','Tây Nam','Tây','Tây Bắc'],
-              ur:['ہموار','شمال','شمال مشرق','مشرق','جنوب مشرق','جنوب','جنوب مغرب','مغرب','شمال مغرب'],
-              ms:['Rata','Utara','Timur Laut','Timur','Tenggara','Selatan','Barat Daya','Barat','Barat Laut'],
-              th:['ราบ','เหนือ','ตะวันออกเฉียงเหนือ','ตะวันออก','ตะวันออกเฉียงใต้','ใต้','ตะวันตกเฉียงใต้','ตะวันตก','ตะวันตกเฉียงเหนือ']
-            };
-            var names=A[lang]||A.en;
-            var ranges=['(-1)','(0–12.5° / 327.5–360°)','(12.5–57.5°)','(57.5–102.5°)','(102.5–147.5°)','(147.5–192.5°)','(192.5–237.5°)','(237.5–282.5°)','(282.5–327.5°)'];
-            classLabels={}; names.forEach(function(n,i){classLabels[String(i+1)]=n+' '+ranges[i]});
         }
         var ramp = state && state.rampDataAttr;
         if (!colors.length && ramp && ramp !== '__gee__' && typeof sampleRampColors === 'function') {
@@ -52342,7 +52415,7 @@ refresh();
         if (!colors.length) colors = ['000000', 'ffffff'];
         if (!isFinite(min)) min = -1;
         if (!isFinite(max) || max === min) max = 1;
-        return { min:min, max:max, palette:colors, mode: (breaks && breaks.length) ? 'classified' : 'bar', breaks: breaks, classLabels: classLabels, language: (typeof window._sylvaLang==='string' ? window._sylvaLang : 'en') };
+        return { min:min, max:max, palette:colors, mode: (breaks && breaks.length) ? 'classified' : 'bar', breaks: breaks };
     }
     function rasterEntries(pane) {
         var result = [], seen = {};
@@ -52502,21 +52575,6 @@ refresh();
     };
 }());
 </script>
-
-
-<!-- SylvaGIS final topographic UI polish: localized titles, Aspect editor enabled, Hillshade panel locked -->
-<script id="sylva-final-topographic-ui-polish">
-(function(){'use strict';
-function activeMeta(){return window._lastAnalyzeMeta||null}
-function isHillshade(name){name=String(name||'').toUpperCase();return name==='TOPO_HILLSHADE'||name==='TOPO_HILLSHADE_MULTI'||name==='TOPO_RELIEF'}
-function setControlsDisabled(panel,disabled){if(!panel)return;panel.querySelectorAll('button,input,select,textarea').forEach(function(el){if(disabled){if(!el.hasAttribute('data-sylva-hs-disabled')){el.setAttribute('data-sylva-hs-disabled','1');el.disabled=true}}else if(el.hasAttribute('data-sylva-hs-disabled')){el.disabled=false;el.removeAttribute('data-sylva-hs-disabled')}})}
-function sync(){var m=activeMeta(),name=m&&m.analysisName;var panel=document.getElementById('legend-symbology-panel');if(!panel)return;var hill=isHillshade(name);if(hill){panel.style.opacity='.35';panel.style.pointerEvents='none';panel.style.userSelect='none';panel.setAttribute('aria-disabled','true');setControlsDisabled(panel,true)}else if(String(name||'').toUpperCase()==='TOPO_ASPECT'){panel.style.opacity='1';panel.style.pointerEvents='auto';panel.style.userSelect='';panel.removeAttribute('aria-disabled');setControlsDisabled(panel,false);var g=document.getElementById('classification-type-group');var st=document.getElementById('stretched-settings');var cl=document.getElementById('classified-settings');[g,st,cl].forEach(function(el){if(el){el.style.opacity='1';el.style.pointerEvents='auto';el.setAttribute('aria-disabled','false')}});panel.querySelectorAll('[data-native-legend-lock],[data-native-symbol-disabled]').forEach(function(el){el.disabled=false;el.removeAttribute('data-native-legend-lock');el.removeAttribute('data-native-symbol-disabled')})}}
-window._sylvaSyncTopographicUIPolish=sync;
-new MutationObserver(function(){setTimeout(sync,0)}).observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['style','disabled','aria-disabled','class']});
-document.addEventListener('change',function(e){if(e.target&&e.target.matches('input[data-analysis]'))setTimeout(sync,20)});document.addEventListener('click',function(){setTimeout(sync,20)});setTimeout(sync,100);
-}());
-</script>
-
 </body>
 
 </html>
