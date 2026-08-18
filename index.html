@@ -4266,7 +4266,7 @@ tr.class-highlight-active {
                         <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_SLOPE" data-ramp-key="heat" data-legend-type="stretched" data-legend-min="0°" data-legend-max="60°"> <span data-i18n="topo_slope_label">Eğim (Slope)</span></label>
                         <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_ASPECT" data-ramp-key="rainbow" data-legend-type="classified" data-legend-min="-1" data-legend-max="360°" data-legend-classes='[{"color":"#bdbdbd","label":"Düz (-1)","code":1},{"color":"#2ca25f","label":"Kuzey (0–12.5° / 327.5–360°)","code":2},{"color":"#66c2a4","label":"Kuzeydoğu (12.5–57.5°)","code":3},{"color":"#99d8c9","label":"Doğu (57.5–102.5°)","code":4},{"color":"#ccece6","label":"Güneydoğu (102.5–147.5°)","code":5},{"color":"#fdae61","label":"Güney (147.5–192.5°)","code":6},{"color":"#f46d43","label":"Güneybatı (192.5–237.5°)","code":7},{"color":"#d73027","label":"Batı (237.5–282.5°)","code":8},{"color":"#7f0000","label":"Kuzeybatı (282.5–327.5°)","code":9}]'> <span data-i18n="topo_aspect_label">Bakı (Aspect)</span></label>
                         <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_HILLSHADE" data-ramp-key="gray" data-legend-type="stretched" data-legend-min-key="shadow_label" data-legend-max-key="light_label" data-legend-min="Gölge" data-legend-max="Işık"> <span data-i18n="topo_hillshade_label">Kabartma (Hillshade)</span></label>
-                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_RELIEF" data-ramp-key="terrain" data-legend-type="stretched" data-legend-min-key="flat_label" data-legend-max-key="high_label" data-legend-min="Düz" data-legend-max="Yüksek"> <span data-i18n="topo_relief_label">Rölyef Haritası</span></label>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_RELIEF" data-ramp-key="gray" data-legend-type="stretched" data-legend-min-key="flat_label" data-legend-max-key="high_label" data-legend-min="Düz" data-legend-max="Yüksek"> <span data-i18n="topo_relief_label">Rölyef Haritası</span></label>
 
                         <!-- Morfometrik Analizler -->
                         <div class="sensor-group-label" style="margin-top:8px;" data-i18n="topo_morpho">⛰ Morfometrik Analizler</div>
@@ -11706,7 +11706,13 @@ function selectRamp(name) {
             var _clTitleFallback = { en:'Classified Data', tr:'Sınıflandırılmış Veri', de:'Klassifizierte Daten',
               fr:'Données classifiées', es:'Datos clasificados', ar:'بيانات مصنفة', fa:'داده‌های طبقه‌بندی‌شده',
               zh:'分类数据', ja:'分類データ', ko:'분류 데이터', hi:'वर्गीकृत डेटा', id:'Data Terklasifikasi', ru:'Классифицированные данные', th:'ข้อมูลที่จำแนกประเภท', ms:'Data Terklasifikasi', el:'Ταξινομημένα Δεδομένα' };
-            var title = (titleEl && titleEl.value.trim()) ? escapeHtml(titleEl.value.trim()) : (_clTitleFallback[_sylvaLang] || 'Classified Data');
+            var _currentMetaForTitle = window._lastAnalyzeMeta || null;
+            var _titleKeyForClass = _currentMetaForTitle && (typeof _DATASET_INFO_TITLE_KEYS !== 'undefined') ? _DATASET_INFO_TITLE_KEYS[_currentMetaForTitle.analysisName] : null;
+            var _rawClassTitle = titleEl ? titleEl.value.trim() : '';
+            var _isTechnicalClassTitle = /^TOPO(?:_|$)/i.test(_rawClassTitle);
+            var title = (_titleKeyForClass && (!_rawClassTitle || _isTechnicalClassTitle))
+                ? escapeHtml(_titleKeyForClass.emoji + t(_titleKeyForClass.key, _currentMetaForTitle.analysisName))
+                : (_rawClassTitle ? escapeHtml(_rawClassTitle) : (_clTitleFallback[_sylvaLang] || 'Classified Data'));
 
             var rowsHtml = '<div style="display:flex;flex-direction:column;gap:2px;margin-top:5px;">' +
                 classes.map(function (c, i) {
@@ -12106,9 +12112,12 @@ function selectRamp(name) {
             }
 
              var _nativeLegendTitleKeys = { FOREST_LOSS: 'env_forest_loss', URBAN_GROWTH: 'env_urban_growth' };
-             var _legendTitle = meta.analysisName === 'BUILDING_FOOTPRINT'
-                 ? t('building_roof_detection', 'Building Roof Detection')
-                 : (_nativeLegendTitleKeys[meta.analysisName] ? t(_nativeLegendTitleKeys[meta.analysisName], meta.analysisName) : meta.analysisName);
+             var _titleKeyInfo = (typeof _DATASET_INFO_TITLE_KEYS !== 'undefined') ? _DATASET_INFO_TITLE_KEYS[meta.analysisName] : null;
+             var _legendTitle = _titleKeyInfo
+                 ? (_titleKeyInfo.emoji + t(_titleKeyInfo.key, meta.analysisName))
+                 : (meta.analysisName === 'BUILDING_FOOTPRINT'
+                     ? t('building_roof_detection', 'Building Roof Detection')
+                     : (_nativeLegendTitleKeys[meta.analysisName] ? t(_nativeLegendTitleKeys[meta.analysisName], meta.analysisName) : meta.analysisName));
              var html = '<b style="font-size:0.78rem;">' + escapeHtml(_legendTitle) + '</b>';
 
             if (legendType === 'classified') {
@@ -16818,6 +16827,8 @@ function selectRamp(name) {
             var box = document.getElementById(paneId === 'map2' ? 'map2-info-box' : 'map-info-box');
             if (!box) return;
             var key = (analysisName || '').toUpperCase();
+            if (/^TOPO(?:_|$)/.test(key)) box.setAttribute('data-sylva-native-i18n','1');
+            else box.removeAttribute('data-sylva-native-i18n');
             var info = _DATASET_INFO[key];
             if (!info) { box.style.display = 'none'; box.innerHTML = ''; return; }
 
@@ -52058,7 +52069,7 @@ document.querySelectorAll('#env-urban-analyses-details input[data-analysis]').fo
 /* Sunucunun yerleşik sınıflarıyla gelen katmanlar (ör. Orman Kaybı/Kazanımı)
    kullanıcı tanımlı renk/aralıkla yeniden boyanamaz. Sürekli/bar değerli
    katmanlarda aynı semboloji düzenleyicisi normal olarak açık kalır. */
-function setNativeLegendEditorLocked(meta){var locked=!!(meta&&meta.legendType==='classified'&&meta.classesRaw);var group=document.getElementById('classification-type-group');var stretch=document.getElementById('stretched-settings');var classified=document.getElementById('classified-settings');var title=document.getElementById('classified-title');if(group){group.style.opacity=locked?'.48':'1';group.style.pointerEvents=locked?'none':'';group.setAttribute('aria-disabled',locked?'true':'false')}if(stretch)stretch.style.pointerEvents=locked?'none':'';if(classified)classified.style.pointerEvents=locked?'none':'';if(title&&locked)title.value=(meta.analysisName||title.value);document.querySelectorAll('#classification-type-group button,#stretched-settings input,#stretched-settings button,#classified-settings input,#classified-settings button,#classified-settings select').forEach(function(el){if(locked){el.setAttribute('data-native-legend-lock','1');el.disabled=true}else if(el.getAttribute('data-native-legend-lock')==='1'){el.disabled=false;el.removeAttribute('data-native-legend-lock')}})}
+function setNativeLegendEditorLocked(meta){var locked=!!(meta&&meta.legendType==='classified'&&meta.classesRaw&&String(meta.analysisName||'').toUpperCase()!=='TOPO_ASPECT');var group=document.getElementById('classification-type-group');var stretch=document.getElementById('stretched-settings');var classified=document.getElementById('classified-settings');var title=document.getElementById('classified-title');if(group){group.style.opacity=locked?'.48':'1';group.style.pointerEvents=locked?'none':'';group.setAttribute('aria-disabled',locked?'true':'false')}if(stretch)stretch.style.pointerEvents=locked?'none':'';if(classified)classified.style.pointerEvents=locked?'none':'';if(title&&locked)title.value=(meta.analysisName||title.value);document.querySelectorAll('#classification-type-group button,#stretched-settings input,#stretched-settings button,#classified-settings input,#classified-settings button,#classified-settings select').forEach(function(el){if(locked){el.setAttribute('data-native-legend-lock','1');el.disabled=true}else if(el.getAttribute('data-native-legend-lock')==='1'){el.disabled=false;el.removeAttribute('data-native-legend-lock')}})}
 var oldLegend=window.renderAnalysisLegend;if(typeof oldLegend==='function'){window.renderAnalysisLegend=function(meta){var r=oldLegend.apply(this,arguments);setNativeLegendEditorLocked(meta);return r}}
 /* Katman geçişinde eski bir sınıflı durumun editörü açık bırakmaması için
    aktif analiz seçiminin değişimini de izler. */
@@ -52075,7 +52086,7 @@ function refreshInfoButtons(lang){var text=INFO_BUTTON_TEXT[lang]||INFO_BUTTON_T
    metnin her dil değişiminde Türkçeye geri dönüp yeniden çevrilmesini sağlar. */
 function translateAnyInfoText(text,lang){var u='https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl='+encodeURIComponent(lang)+'&dt=t&q='+encodeURIComponent(text);return fetch(u).then(function(r){if(!r.ok)throw Error('translate');return r.json()}).then(function(j){return(j[0]||[]).map(function(p){return p[0]||''}).join('')})}
 window.sylvaTranslateEnvText=translateAnyInfoText;
-function localizeMapInfoBox(box,lang){if(!box||lang==='tr'||!window.fetch)return;var els=Array.prototype.slice.call(box.querySelectorAll('td,div')).filter(function(el){return el.children.length===0&&el.textContent.trim()});els.forEach(function(el){var original=el.getAttribute('data-env-original');if(!original){original=el.textContent.trim();el.setAttribute('data-env-original',original)}translateAnyInfoText(original,lang).then(function(v){if(v&&document.body.contains(el))el.textContent=v}).catch(function(){})})}
+function localizeMapInfoBox(box,lang){if(!box||box.getAttribute('data-sylva-native-i18n')==='1'||lang==='tr'||!window.fetch)return;var els=Array.prototype.slice.call(box.querySelectorAll('td,div')).filter(function(el){return el.children.length===0&&el.textContent.trim()});els.forEach(function(el){var original=el.getAttribute('data-env-original');if(!original){original=el.textContent.trim();el.setAttribute('data-env-original',original)}translateAnyInfoText(original,lang).then(function(v){if(v&&document.body.contains(el))el.textContent=v}).catch(function(){})})}
 function refreshVisibleInfoBoxes(lang){['map-info-box','map2-info-box'].forEach(function(id){localizeMapInfoBox(document.getElementById(id),lang)})}
 /* Sınıflandırılmış analizler, histogramı 7 sayısal aralığa bölmez. Sunulan
    sınıf tanımlarını (sıra = sınıf kodu) kullanır; böylece grafik/tabloda
@@ -52112,7 +52123,7 @@ function hideEmptyLegendDates(){document.querySelectorAll('.real-stats-row').for
 /* Sunucunun kendine ait kategorileri olan katmanların sembolojisi değişmez.
    Editör kapalı görünür, fakat kullanıcı hangi nedenle kapalı olduğunu
    anlayabilsin diye şeffaf bırakılır. */
-function nativeClassified(){var meta=window._lastAnalyzeMeta;return!!(meta&&meta.legendType==='classified'&&meta.classesRaw)}
+function nativeClassified(){var meta=window._lastAnalyzeMeta;return!!(meta&&meta.legendType==='classified'&&meta.classesRaw&&String(meta.analysisName||'').toUpperCase()!=='TOPO_ASPECT')}
 function syncNativeClassEditorState(){var locked=nativeClassified();var group=document.getElementById('classification-type-group');var stretch=document.getElementById('stretched-settings');var classified=document.getElementById('classified-settings');[group,stretch,classified].forEach(function(el){if(!el)return;el.style.opacity=locked?'.42':'';el.style.pointerEvents=locked?'none':'';el.setAttribute('aria-disabled',locked?'true':'false')});document.querySelectorAll('#classification-type-group button,#stretched-settings input,#stretched-settings button,#classified-settings input,#classified-settings button,#classified-settings select').forEach(function(el){if(locked){el.disabled=true;el.setAttribute('data-native-symbol-disabled','1')}else if(el.getAttribute('data-native-symbol-disabled')==='1'){el.disabled=false;el.removeAttribute('data-native-symbol-disabled')}})}
 
 /* Sürekli veride ilk sınıflandırma, genel gri kategorik paletten değil,
@@ -52174,7 +52185,7 @@ refresh();
     function safeName(value) { return String(value || 'Analiz').replace(/[^a-z0-9_-]+/gi, '_').replace(/^_+|_+$/g, '') || 'Analiz'; }
     function exportVisualFor(pane, key) {
         var state = window._sylvaEditorStateByPane && window._sylvaEditorStateByPane[pane] && window._sylvaEditorStateByPane[pane][key];
-        var colors = [], min, max, breaks = null;
+        var colors = [], min, max, breaks = null, classLabels = null;
         // 🛠️ BUG FİX (Faz 15 — "bar olarak indirmiştim, sınıflandırılmış
         // vermiş"): önceden bu fonksiyon yalnızca İLK ve SON sınıfın min/
         // max'ını (ve renklerin düz bir listesini) döndürüyordu — sunucu
@@ -52192,10 +52203,60 @@ refresh();
         // kullanmak rasteri yanlışlıkla 1..N sınıfa çeviriyordu.
         if (state && state.classificationType === 'classified' && state.classRows && state.classRows.length) {
             breaks = state.classRows.map(function (row) {
-                return { min: parseFloat(row.min), max: parseFloat(row.max), color: String(row.color || '').replace(/^#/, '') };
+                return { min: parseFloat(row.min), max: parseFloat(row.max), color: String(row.color || '').replace(/^#/, ''), label: String(row.name || '') };
             }).filter(function (b) { return isFinite(b.min) && isFinite(b.max) && b.color; });
             state.classRows.forEach(function (row) { if (row.color) colors.push(String(row.color).replace(/^#/, '')); });
             min = parseFloat(state.classRows[0].min); max = parseFloat(state.classRows[state.classRows.length - 1].max);
+        }
+        // Yerleşik sınıflandırılmış analizlerde de yalnızca kod numarası
+        // indirme dosyasına gitmesin: seçili dildeki sınıf adlarını gönder.
+        if ((!breaks || !breaks.length) && key && typeof LULC_CLASS_DEFS !== 'undefined' && LULC_CLASS_DEFS[key]) {
+            classLabels = {};
+            LULC_CLASS_DEFS[key].forEach(function (d) {
+                var lbl = d.key && typeof t === 'function' ? t(d.key, d.label) : d.label;
+                classLabels[String(d.code)] = lbl || d.label;
+            });
+        }
+        if ((!breaks || !breaks.length) && String(key).toUpperCase() === 'TOPO_ASPECT') {
+            // Aspect sınıfları için seçili dildeki yön adlarını kullan.
+            var lang = (typeof window._sylvaLang === 'string' ? window._sylvaLang : 'tr');
+            var A = {
+              tr:['Düz','Kuzey','Kuzeydoğu','Doğu','Güneydoğu','Güney','Güneybatı','Batı','Kuzeybatı'],
+              en:['Flat','North','Northeast','East','Southeast','South','Southwest','West','Northwest'],
+              de:['Flach','Norden','Nordost','Osten','Südost','Süden','Südwest','Westen','Nordwest'],
+              fr:['Plat','Nord','Nord-est','Est','Sud-est','Sud','Sud-ouest','Ouest','Nord-ouest'],
+              es:['Plano','Norte','Noreste','Este','Sureste','Sur','Suroeste','Oeste','Noroeste'],
+              pt:['Plano','Norte','Nordeste','Leste','Sudeste','Sul','Sudoeste','Oeste','Noroeste'],
+              it:['Piano','Nord','Nord-est','Est','Sud-est','Sud','Sud-ovest','Ovest','Nord-ovest'],
+              nl:['Vlak','Noord','Noordoost','Oost','Zuidoost','Zuid','Zuidwest','West','Noordwest'],
+              pl:['Płaski','Północ','Północny wschód','Wschód','Południowy wschód','Południe','Południowy zachód','Zachód','Północny zachód'],
+              ru:['Ровный','Север','Северо-восток','Восток','Юго-восток','Юг','Юго-запад','Запад','Северо-запад'],
+              uk:['Рівний','Північ','Північний схід','Схід','Південний схід','Південь','Південний захід','Захід','Північний захід'],
+              ar:['مستوٍ','شمال','شمال شرقي','شرق','جنوب شرقي','جنوب','جنوب غربي','غرب','شمال غربي'],
+              fa:['مسطح','شمال','شمال‌شرقی','شرق','جنوب‌شرقی','جنوب','جنوب‌غربی','غرب','شمال‌غربی'],
+              zh:['平坦','北','东北','东','东南','南','西南','西','西北'],
+              ja:['平坦','北','北東','東','南東','南','南西','西','北西'],
+              ko:['평탄','북','북동','동','남동','남','남서','서','북서'],
+              hi:['समतल','उत्तर','उत्तर-पूर्व','पूर्व','दक्षिण-पूर्व','दक्षिण','दक्षिण-पश्चिम','पश्चिम','उत्तर-पश्चिम'],
+              id:['Datar','Utara','Timur Laut','Timur','Tenggara','Selatan','Barat Daya','Barat','Barat Laut'],
+              ms:['Rata','Utara','Timur Laut','Timur','Tenggara','Selatan','Barat Daya','Barat','Barat Laut'],
+              th:['ราบ','เหนือ','ตะวันออกเฉียงเหนือ','ตะวันออก','ตะวันออกเฉียงใต้','ใต้','ตะวันตกเฉียงใต้','ตะวันตก','ตะวันตกเฉียงเหนือ'],
+              vi:['Bằng phẳng','Bắc','Đông Bắc','Đông','Đông Nam','Nam','Tây Nam','Tây','Tây Bắc'],
+              bn:['সমতল','উত্তর','উত্তর-পূর্ব','পূর্ব','দক্ষিণ-পূর্ব','দক্ষিণ','দক্ষিণ-পশ্চিম','পশ্চিম','উত্তর-পশ্চিম'],
+              ur:['ہموار','شمال','شمال مشرق','مشرق','جنوب مشرق','جنوب','جنوب مغرب','مغرب','شمال مغرب'],
+              el:['Επίπεδο','Βορράς','Βορειοανατολικά','Ανατολή','Νοτιοανατολικά','Νότος','Νοτιοδυτικά','Δύση','Βορειοδυτικά'],
+              uz:['Tekis','Shimol','Shimoli-sharq','Sharq','Janubi-sharq','Janub','Janubi-g‘arb','G‘arb','Shimoli-g‘arb'],
+              az:['Düz','Şimal','Şimal-şərq','Şərq','Cənub-şərq','Cənub','Cənub-qərb','Qərb','Şimal-qərb'],
+              bg:['Равен','Север','Североизток','Изток','Югоизток','Юг','Югозапад','Запад','Северозапад'],
+              hu:['Sík','Észak','Északkelet','Kelet','Délkelet','Dél','Délnyugat','Nyugat','Északnyugat'],
+              ka:['ბრტყელი','ჩრდილოეთი','ჩრდილო-აღმოსავლეთი','აღმოსავლეთი','სამხრეთ-აღმოსავლეთი','სამხრეთი','სამხრეთ-დასავლეთი','დასავლეთი','ჩრდილო-დასავლეთი'],
+              kk:['Жазық','Солтүстік','Солтүстік-шығыс','Шығыс','Оңтүстік-шығыс','Оңтүстік','Оңтүстік-батыс','Батыс','Солтүстік-батыс'],
+              ky:['Түз','Түндүк','Түндүк-чыгыш','Чыгыш','Түштүк-чыгыш','Түштүк','Түштүк-батыш','Батыш','Түндүк-батыш'],
+              mn:['Тэгш','Хойд','Зүүн хойд','Зүүн','Зүүн өмнөд','Өмнөд','Баруун өмнөд','Баруун','Баруун хойд']
+            };
+            var names=A[lang]||A.en;
+            var ranges=['(-1)','(0–12.5° / 327.5–360°)','(12.5–57.5°)','(57.5–102.5°)','(102.5–147.5°)','(147.5–192.5°)','(192.5–237.5°)','(237.5–282.5°)','(282.5–327.5°)'];
+            classLabels={}; names.forEach(function(n,i){classLabels[String(i+1)]=n+' '+ranges[i]});
         }
         var ramp = state && state.rampDataAttr;
         if (!colors.length && ramp && ramp !== '__gee__' && typeof sampleRampColors === 'function') {
@@ -52237,7 +52298,7 @@ refresh();
         if (!colors.length) colors = ['000000', 'ffffff'];
         if (!isFinite(min)) min = -1;
         if (!isFinite(max) || max === min) max = 1;
-        return { min:min, max:max, palette:colors, mode: (breaks && breaks.length) ? 'classified' : 'bar', breaks: breaks };
+        return { min:min, max:max, palette:colors, mode: (breaks && breaks.length) ? 'classified' : 'bar', breaks: breaks, classLabels: classLabels };
     }
     function rasterEntries(pane) {
         var result = [], seen = {};
@@ -52397,6 +52458,21 @@ refresh();
     };
 }());
 </script>
+
+
+<!-- SylvaGIS final topographic UI polish: localized titles, Aspect editor enabled, Hillshade panel locked -->
+<script id="sylva-final-topographic-ui-polish">
+(function(){'use strict';
+function activeMeta(){return window._lastAnalyzeMeta||null}
+function isHillshade(name){name=String(name||'').toUpperCase();return name==='TOPO_HILLSHADE'||name==='TOPO_HILLSHADE_MULTI'||name==='TOPO_RELIEF'}
+function setControlsDisabled(panel,disabled){if(!panel)return;panel.querySelectorAll('button,input,select,textarea').forEach(function(el){if(disabled){if(!el.hasAttribute('data-sylva-hs-disabled')){el.setAttribute('data-sylva-hs-disabled','1');el.disabled=true}}else if(el.hasAttribute('data-sylva-hs-disabled')){el.disabled=false;el.removeAttribute('data-sylva-hs-disabled')}})}
+function sync(){var m=activeMeta(),name=m&&m.analysisName;var panel=document.getElementById('legend-symbology-panel');if(!panel)return;var hill=isHillshade(name);if(hill){panel.style.opacity='.35';panel.style.pointerEvents='none';panel.style.userSelect='none';panel.setAttribute('aria-disabled','true');setControlsDisabled(panel,true)}else if(String(name||'').toUpperCase()==='TOPO_ASPECT'){panel.style.opacity='1';panel.style.pointerEvents='auto';panel.style.userSelect='';panel.removeAttribute('aria-disabled');setControlsDisabled(panel,false);var g=document.getElementById('classification-type-group');var st=document.getElementById('stretched-settings');var cl=document.getElementById('classified-settings');[g,st,cl].forEach(function(el){if(el){el.style.opacity='1';el.style.pointerEvents='auto';el.setAttribute('aria-disabled','false')}});panel.querySelectorAll('[data-native-legend-lock],[data-native-symbol-disabled]').forEach(function(el){el.disabled=false;el.removeAttribute('data-native-legend-lock');el.removeAttribute('data-native-symbol-disabled')})}}
+window._sylvaSyncTopographicUIPolish=sync;
+new MutationObserver(function(){setTimeout(sync,0)}).observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['style','disabled','aria-disabled','class']});
+document.addEventListener('change',function(e){if(e.target&&e.target.matches('input[data-analysis]'))setTimeout(sync,20)});document.addEventListener('click',function(){setTimeout(sync,20)});setTimeout(sync,100);
+}());
+</script>
+
 </body>
 
 </html>
