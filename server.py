@@ -2395,10 +2395,14 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
     # LULC çıktılarında kesin olarak kaldırıyoruz. Renk + sınıf adı yalnızca
     # gerçek sınıfları içeren .clr / VAT / RAT sidecar'larından gelir.
     new_profile.pop('photometric', None)
-    # NBITS'i KORU. ArcMap 8-bit varsayılanına düşürülürse 256 adet
-    # colormap satırı üretir; 9 sınıflı Bakı gibi analizlerde 4-bit TIFF
-    # yalnızca 16 giriş taşır ve gereksiz satırları dramatik biçimde azaltır.
-    new_profile['nbits'] = nbits
+    # ARCMap BOŞ KUTU FİX (KÖK NEDEN): NBITS=4 gibi dar bir piksel alanı
+    # ArcMap'in legend/Unique Values motorunda 0..15 arasındaki TÜM olası
+    # kodları satır olarak göstermesine neden olabiliyor. Örneğin 9 sınıflı
+    # Bakı rasterında gerçek 9 sınıfa ek 6 isimsiz kutu tam olarak bu yüzden
+    # oluşuyordu. Bu nedenle sınıflandırılmış dışa aktarımlarda NBITS'i
+    # KESİNLİKLE yazmıyoruz; raster normal UInt8 olarak kalıyor ve VAT/RAT
+    # yalnızca GERÇEK sınıf satırlarını içeriyor.
+    new_profile.pop('nbits', None)
     new_profile.pop('colormap', None)
 
     with MemoryFile() as out_memfile:
@@ -2861,11 +2865,12 @@ def _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=Non
                '# RAW VALUES PRESERVED: {} - {}\n'.format(mn, mx)).encode('utf-8')
 
     files = {
-        '{}.tif'.format(safe_name): final_tif,
-        '{}.tif.aux.xml'.format(safe_name): aux,
-        '{}.clr'.format(safe_name): clr,
+        # RAW bilimsel raster: gerçek piksel değerleri + doğru min/max.
+        '{}_RAW_VALUES.tif'.format(safe_name): final_tif,
+        '{}_RAW_VALUES.tif.aux.xml'.format(safe_name): aux,
+        '{}_RAW_VALUES.clr'.format(safe_name): clr,
     }
-    files.update(_build_arcmap_georeferencing_sidecars(final_tif, safe_name))
+    files.update(_build_arcmap_georeferencing_sidecars(final_tif, '{}_RAW_VALUES'.format(safe_name)))
     return files
 
 
@@ -7209,8 +7214,14 @@ def download_geotiff():
                     try:
                         _display_tif = _build_colorized_display_tif(tif_bytes, vis, safe_name, nodata_value=nodata_value)
                         if _display_tif:
-                            sym_files['{}_ARCMAP_RENKLI.tif'.format(safe_name)] = _display_tif
-                            sym_files.update(_build_arcmap_georeferencing_sidecars(_display_tif, '{}_ARCMAP_RENKLI'.format(safe_name)))
+                            # Kullanıcı ZIP'i açıp doğrudan ana .tif'i ArcMap'e
+                            # sürüklediğinde artık analiz ekranındaki renkler
+                            # gelsin. Bilimsel ham değerler ayrı bir
+                            # *_RAW_VALUES.tif olarak aynı ZIP'te korunuyor.
+                            sym_files['{}.tif'.format(safe_name)] = _display_tif
+                            sym_files.update(_build_arcmap_georeferencing_sidecars(_display_tif, safe_name))
+                            # Renkli görüntünün istatistikleri de yardımcı XML
+                            # ile taşınsın; gerçek min/max ise RAW_VALUES'ta.
                     except Exception as _display_err:
                         print('[SylvaGIS] ⚠️ Renkli ArcMap eşlikçi raster üretilemedi: {}'.format(_display_err))
                 except Exception as sym_err:
