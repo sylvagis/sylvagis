@@ -2335,7 +2335,7 @@ def _classify_by_breaks(band, valid_mask, breaks):
     return idx.astype(np.uint8), code_info
 
 
-def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name, embed_colormap=True):
+def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name, embed_colormap=False):
     """Zaten 1..N küçük tam sayı sınıf koduna (0 = NoData) indirgenmiş bir
     banttan (byte_band) ve {kod: (etiket, (r,g,b))} sözlüğünden (code_info)
     ArcMap/QGIS'in RENKLİ + İSİMLENDİRİLMİŞ açacağı bir dosya seti üretir:
@@ -2401,6 +2401,21 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
     with MemoryFile() as out_memfile:
         with out_memfile.open(**new_profile) as dst:
             dst.write(byte_band, 1)
+            # 🔒 AOI MASKESİ KORUMA FİXİ (ArcMap ölçek değişiminde AOI dışı
+            # verinin dikdörtgen olarak görünmesi): _true_clip_tif_bytes()
+            # poligon dışını NoData olarak doğru biçimde hazırlasa da bu
+            # fonksiyon TIFF'i yeniden yazarken yalnızca piksel dizisini
+            # kopyalıyor ve GDAL'ın iç maskesini kaybediyordu. ArcMap yakın
+            # ölçekte NoData etiketini kullanırken, uzak ölçekte oluşturulan
+            # overview/pyramid katmanında bu maske kaybolunca kaynak rasterin
+            # bounding-box'ı görünür hale geliyordu. Hem NoData hem de gerçek
+            # GDAL maskesini yeniden yazıyoruz; böylece TÜM ölçeklerde yalnızca
+            # AOI içindeki sınıflar render edilir.
+            try:
+                _valid_mask_u8 = (byte_band != 0)
+                dst.write_mask((_valid_mask_u8.astype('uint8') * 255))
+            except Exception:
+                pass
             # 🛠️ ARCMap BOŞ LEJANT FİXİ:
             # ESA/MODIS/CORINE gibi 11/17/44 sınıflı LULC rasterlerinde
             # GeoTIFF ColorMap, NBITS nedeniyle zorunlu olarak 16/32/64
@@ -2434,6 +2449,16 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
                     STATISTICS_MAXIMUM=repr(float(max_code)),
                     STATISTICS_APPROXIMATE='NO',
                 )
+            # ArcMap/QGIS uzak yakınlaştırmada rasteri kaldırmasın diye dahili piramitler.
+            levels = [2,4,8,16,32]
+            levels = [lv for lv in levels if dst.width // lv >= 32 and dst.height // lv >= 32]
+            if levels:
+                try:
+                    from rasterio.enums import Resampling
+                    dst.build_overviews(levels, Resampling.nearest)
+                    dst.update_tags(ns='rio_overview', resampling='nearest')
+                except Exception:
+                    pass
         new_tif_bytes = out_memfile.read()
 
     # ── .clr (klasik GDAL/ESRI renk eşleştirme dosyası) ──────────────
@@ -2495,6 +2520,13 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
                           label, rgb[0], rgb[1], rgb[2]))
     vat_dbf_bytes = _write_dbf_bytes(field_defs, vat_rows)
     vat_cpg_bytes = b'UTF-8'
+    legend_json = json.dumps({
+        'format': 'SylvaGIS raster legend',
+        'classes': [
+            {'value': int(code), 'label': str(code_info[code][0]), 'color': '#{:02x}{:02x}{:02x}'.format(*code_info[code][1])}
+            for code in sorted(code_info.keys())
+        ]
+    }, ensure_ascii=False, indent=2).encode('utf-8')
 
     return {
         '{}.tif'.format(safe_name): new_tif_bytes,
@@ -2502,6 +2534,7 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
         '{}.tif.vat.dbf'.format(safe_name): vat_dbf_bytes,
         '{}.tif.vat.cpg'.format(safe_name): vat_cpg_bytes,
         '{}.clr'.format(safe_name): clr_bytes,
+        '{}.legend.json'.format(safe_name): legend_json,
     }
 
 
@@ -2786,6 +2819,17 @@ def _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=Non
     with MemoryFile() as out_mem:
         with out_mem.open(**profile) as dst:
             dst.write(data)
+            # 🔒 AOI/NoData maskesini TIFF yeniden yazımında koru.
+            # Aksi halde ArcMap overview/pyramid seviyelerinde poligon dışı
+            # bounding-box pikselleri yeniden görünür hale gelebilir.
+            try:
+                _mask_arr = np.ones((data.shape[1], data.shape[2]), dtype=np.uint8) * 255
+                if src_nodata is not None:
+                    _mask_arr[np.isclose(data[0].astype(np.float64), float(src_nodata))] = 0
+                _mask_arr[~np.isfinite(data[0].astype(np.float64))] = 0
+                dst.write_mask(_mask_arr)
+            except Exception:
+                pass
             for i, (mn, mx, mean, std) in enumerate(stats, start=1):
                 dst.update_tags(i,
                     STATISTICS_MINIMUM=repr(mn),
@@ -7052,7 +7096,7 @@ def download_geotiff():
                         _band, _valid,
                         labels=(requested_vis.get('classLabels') if isinstance(requested_vis, dict) else None)
                     )
-                    sym_files = _build_symbology_files_from_classes(_byte, _profile, _codes, safe_name)
+                    sym_files = _build_symbology_files_from_classes(_byte, _profile, _codes, safe_name, embed_colormap=False)
                 except Exception as aspect_err:
                     traceback.print_exc()
                     sym_files = None
@@ -7087,21 +7131,18 @@ def download_geotiff():
                       'olarak devam ediliyor: {}'.format(sym_err))
 
         if sym_files:
-            # Tek analiz için kullanıcı doğrudan TIFF istediğinde renk
-            # tablosu gömülü TIFF'i döndür. Çoklu analizlerde ise sınıf
-            # isimlerini taşıyan RAT/VAT yan dosyaları batch ZIP'e katılır.
-            if req_data.get('flatTiff'):
-                tif_bytes = sym_files.get('{}.tif'.format(safe_name), tif_bytes)
-            else:
-                zip_buf = io.BytesIO()
-                with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-                    for fname, fbytes in sym_files.items():
-                        zf.writestr(fname, fbytes)
-                zip_bytes = zip_buf.getvalue()
-                resp = Response(zip_bytes, mimetype='application/zip')
-                resp.headers['Content-Disposition'] = 'attachment; filename="{}.zip"'.format(safe_name)
-                resp.headers['Content-Length'] = str(len(zip_bytes))
-                return resp
+            # TEK analiz dahil tüm raster indirmeleri daima ZIP'tir.
+            # ZIP içinde GeoTIFF + RAT/VAT/.clr + legend.json bulunur; böylece
+            # ArcMap/QGIS sınıf isimleri ve renkleri dosyayla birlikte taşır.
+            zip_buf = io.BytesIO()
+            with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+                for fname, fbytes in sym_files.items():
+                    zf.writestr(fname, fbytes)
+            zip_bytes = zip_buf.getvalue()
+            resp = Response(zip_bytes, mimetype='application/zip')
+            resp.headers['Content-Disposition'] = 'attachment; filename="{}.zip"'.format(safe_name)
+            resp.headers['Content-Length'] = str(len(zip_bytes))
+            return resp
 
         # 🛠️ BUG FİX ("her ne olursa olsun tüm veriler zip olarak sorunsuz
         # insin"): sym_files hiç üretilemediyse (yukarıdaki üç dalın hepsi
