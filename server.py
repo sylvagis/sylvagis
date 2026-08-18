@@ -2721,7 +2721,15 @@ def _classify_from_visualized_rgb(raw_band, valid_mask, rgb_bytes):
 
 
 def _build_overview_sidecar_bytes(tif_bytes, resampling='bilinear'):
-    """Tek bant GeoTIFF için dış .ovr TIFF sidecar üretir."""
+    """
+    ArcMap/QGIS'in ilk açılışta düşük zoom seviyesinde de rasteri hemen
+    çizebilmesi için çok seviyeli gerçek bir external-overview TIFF (.ovr)
+    üretir. Tek bir 4x görüntü yerine 2/4/8/16/32 seviyeleri yazılır.
+
+    .ovr'nin georeferansı ana TIFF'ten devralınabildiği için ayrıca farklı bir
+    CRS/extent tanımlanmaz; her overview aynı piksel gridinin küçültülmüş
+    kopyasıdır.
+    """
     try:
         import numpy as np
         import tifffile
@@ -2731,14 +2739,32 @@ def _build_overview_sidecar_bytes(tif_bytes, resampling='bilinear'):
             with memfile.open() as src:
                 if src.count < 1 or src.height <= 8 or src.width <= 8:
                     return None
-                factor = 4
-                oh = max(1, int(np.ceil(src.height / factor)))
-                ow = max(1, int(np.ceil(src.width / factor)))
                 rs = Resampling.nearest if resampling == 'nearest' else Resampling.bilinear
-                arr = src.read(1, out_shape=(oh, ow), resampling=rs)
+                levels = []
+                for factor in (2, 4, 8, 16, 32):
+                    oh = max(1, int(np.ceil(src.height / factor)))
+                    ow = max(1, int(np.ceil(src.width / factor)))
+                    if oh >= src.height and ow >= src.width:
+                        continue
+                    arr = src.read(1, out_shape=(oh, ow), resampling=rs)
+                    levels.append((factor, arr))
+                    if oh <= 1 or ow <= 1:
+                        break
+                if not levels:
+                    return None
         buf = io.BytesIO()
-        tifffile.imwrite(buf, arr, photometric='minisblack', compression='deflate',
-                         subfiletype=1, description='SylvaGIS external overview (4x)')
+        # TiffWriter ile çoklu-IFD external overview oluştur. BytesIO üzerinde
+        # ardışık tifffile.imwrite(..., append=True) bazı sürümlerde dosya
+        # imlecini boşa aldığı için burada TiffWriter kullanımı özellikle
+        # seçildi. subfiletype=1 her IFD'yi reduced-resolution image olarak
+        # işaretler.
+        with tifffile.TiffWriter(buf, bigtiff=False) as tw:
+            for factor, arr in levels:
+                tw.write(
+                    arr, photometric='minisblack', compression='deflate',
+                    subfiletype=1,
+                    description='SylvaGIS external overview ({}x)'.format(factor)
+                )
         return buf.getvalue()
     except Exception as e:
         print('[SylvaGIS] .ovr üretilemedi:', e)
@@ -4139,6 +4165,37 @@ def _require_nonempty_image(image, empty_message):
     return image
 
 
+def _topo_default_visualization(index):
+    """Topografik analizlerin SylvaGIS ekranındaki varsayılan renk rampaları.
+
+    Bu harita yalnızca GEE görselleştirmesini değil, GeoTIFF export tarafındaki
+    vis bilgisini de aynı tutmak için tek kaynaktır.
+    """
+    ramps = {
+        'terrain': ['2c7bb6', 'abd9e9', 'ffffbf', 'fdae61', 'd7191c'],
+        'heat': ['313695', '4575b4', 'fdae61', 'd73027', 'a50026'],
+        'rainbow': ['ff0000', 'ffa500', 'ffff00', '008000', '0000ff', '4b0082', 'ee82ee'],
+        'gray': ['000000', 'ffffff'],
+        'red-yellow-green': ['d73027', 'fc8d59', 'fee08b', 'd9ef8b', '1a9850'],
+        'blue-ocean': ['08306b', '2171b5', '6baed6', 'c6dbef'],
+    }
+    ramp_by_index = {
+        'TOPO': 'terrain', 'TOPO_DEM': 'terrain',
+        'TOPO_SLOPE': 'heat', 'TOPO_ASPECT': 'rainbow',
+        'TOPO_HILLSHADE': 'gray', 'TOPO_RELIEF': 'terrain',
+        'TOPO_TPI': 'red-yellow-green', 'TOPO_TRI': 'heat',
+        'TOPO_ROUGHNESS': 'heat', 'TOPO_CURVATURE': 'red-yellow-green',
+        'TOPO_PLAN_CURV': 'red-yellow-green', 'TOPO_PROFILE_CURV': 'red-yellow-green',
+        'TOPO_FLOWDIR': 'rainbow', 'TOPO_FLOWACC': 'blue-ocean',
+        'TOPO_STREAM': 'blue-ocean', 'TOPO_TWI': 'blue-ocean',
+        'TOPO_SPI': 'blue-ocean', 'TOPO_STI': 'blue-ocean',
+        'TOPO_HILLSHADE_MULTI': 'gray', 'TOPO_SOLAR': 'heat',
+        'TOPO_SHADOW': 'gray', 'TOPO_CONTOUR': 'gray',
+    }
+    key = ramp_by_index.get(index, 'gray')
+    return ramps[key]
+
+
 def build_result_image(data, for_export=False):
     """
     Ortak analiz görüntüsü oluşturma mantığı.
@@ -4470,46 +4527,46 @@ def build_result_image(data, for_export=False):
         # ── Temel Topografik Analizler ────────────────────────────
         if index in ('TOPO', 'TOPO_DEM'):
             result = dem.rename('value')
-            vis = {'min': 0, 'max': 3000, 'palette': ['black', 'white']}
+            vis = {'min': 0, 'max': 3000, 'palette': _topo_default_visualization(index)}
 
         elif index == 'TOPO_SLOPE':
             result = slope.rename('value')
-            vis = {'min': 0, 'max': 60, 'palette': ['black', 'white']}
+            vis = {'min': 0, 'max': 60, 'palette': _topo_default_visualization(index)}
 
         elif index == 'TOPO_ASPECT':
             # ArcMap uyumlu Aspect: düz alanlar -1, yönler 0..360°.
             result = aspect.where(slope.lt(1), -1).rename('value')
-            vis = {'min': -1, 'max': 360, 'palette': ['black', 'white']}
+            vis = {'min': -1, 'max': 360, 'palette': _topo_default_visualization(index)}
 
         elif index == 'TOPO_HILLSHADE':
             result = terrain.select('hillshade').rename('value')
-            vis = {'min': 0, 'max': 255, 'palette': ['black', 'white']}
+            vis = {'min': 0, 'max': 255, 'palette': _topo_default_visualization(index)}
 
         elif index == 'TOPO_RELIEF':
             # Kabartmalı rölyef: hillshade + normalize yükseklik karışımı
             hs       = terrain.select('hillshade')
             elev_n   = dem.unitScale(0, 3000).multiply(80).add(175).clamp(0, 255)
             result   = hs.multiply(0.7).add(elev_n.multiply(0.3)).rename('value')
-            vis = {'min': 0, 'max': 255, 'palette': ['black', 'white']}
+            vis = {'min': 0, 'max': 255, 'palette': _topo_default_visualization(index)}
 
         # ── Morfometrik Analizler ─────────────────────────────────
         elif index == 'TOPO_TPI':
             # Topographic Position Index: DEM − odak ortalama
             focal_mean = dem.focalMean(radius=300, units='meters')
             result = dem.subtract(focal_mean).rename('value')
-            vis = {'min': -50, 'max': 50, 'palette': ['black', 'white']}
+            vis = {'min': -50, 'max': 50, 'palette': _topo_default_visualization(index)}
 
         elif index == 'TOPO_TRI':
             # Terrain Ruggedness Index: odak standart sapma
             result = dem.focalStdDev(radius=300, units='meters').rename('value')
-            vis = {'min': 0, 'max': 80, 'palette': ['black', 'white']}
+            vis = {'min': 0, 'max': 80, 'palette': _topo_default_visualization(index)}
 
         elif index == 'TOPO_ROUGHNESS':
             # Pürüzlülük: pencerede maksimum − minimum rakım
             focal_max = dem.focalMax(radius=300, units='meters')
             focal_min = dem.focalMin(radius=300, units='meters')
             result = focal_max.subtract(focal_min).rename('value')
-            vis = {'min': 0, 'max': 150, 'palette': ['black', 'white']}
+            vis = {'min': 0, 'max': 150, 'palette': _topo_default_visualization(index)}
 
         elif index in ('TOPO_CURVATURE', 'TOPO_PLAN_CURV', 'TOPO_PROFILE_CURV'):
             # 🛠️ BUG FİX (yoğun beyaz "tuz-biber" beneği — özellikle düz/az
@@ -4532,7 +4589,7 @@ def build_result_image(data, for_export=False):
             dem_smooth = dem.focalMean(radius=60, units='meters')
             kernel = ee.Kernel.laplacian8(normalize=False)
             result = dem_smooth.convolve(kernel).rename('value')
-            vis = {'min': -30, 'max': 30, 'palette': ['black', 'white']}
+            vis = {'min': -30, 'max': 30, 'palette': _topo_default_visualization(index)}
 
         # ── Hidrolojik Analizler ──────────────────────────────────
         elif index == 'TOPO_FLOWDIR':
@@ -4545,7 +4602,7 @@ def build_result_image(data, for_export=False):
             low_slope = ee.Image(90).subtract(slope.clamp(0, 90))
             elev_inv  = ee.Image(3000).subtract(dem.clamp(0, 3000))
             result = low_slope.add(elev_inv.divide(30)).rename('value')
-            vis = {'min': 0, 'max': 200, 'palette': ['black', 'white']}
+            vis = {'min': 0, 'max': 200, 'palette': _topo_default_visualization(index)}
 
         elif index == 'TOPO_STREAM':
             # Dere ağı: düşük eğim + negatif TPI (vadi tabanı) maskesi
@@ -4553,7 +4610,7 @@ def build_result_image(data, for_export=False):
             tpi_small   = dem.subtract(focal_mean2)
             stream_mask = slope.lt(5).And(tpi_small.lt(0))
             result = stream_mask.multiply(1).rename('value')
-            vis = {'min': 0, 'max': 1, 'palette': ['black', 'white']}
+            vis = {'min': 0, 'max': 1, 'palette': _topo_default_visualization(index)}
 
         elif index == 'TOPO_TWI':
             # Topographic Wetness Index: ln(a / tan(β))
@@ -4561,7 +4618,7 @@ def build_result_image(data, for_export=False):
             tan_slope = slope_rad.tan().max(ee.Image(0.001))
             acc_proxy = ee.Image(90).subtract(slope.clamp(0, 90)).max(ee.Image(1.0))
             result = acc_proxy.log().subtract(tan_slope.log()).rename('value')
-            vis = {'min': 0, 'max': 15, 'palette': ['black', 'white']}
+            vis = {'min': 0, 'max': 15, 'palette': _topo_default_visualization(index)}
 
         elif index == 'TOPO_SPI':
             # Stream Power Index: a × tan(β)
@@ -4569,7 +4626,7 @@ def build_result_image(data, for_export=False):
             tan_slope = slope_rad.tan().max(ee.Image(0.001))
             acc_proxy = ee.Image(90).subtract(slope.clamp(0, 90)).max(ee.Image(1.0))
             result = acc_proxy.multiply(tan_slope).rename('value')
-            vis = {'min': 0, 'max': 20, 'palette': ['black', 'white']}
+            vis = {'min': 0, 'max': 20, 'palette': _topo_default_visualization(index)}
 
         elif index == 'TOPO_STI':
             # Sediment Transport Index: (a/22.13)^0.6 × (sin(β)/0.0896)^1.3
@@ -4579,14 +4636,14 @@ def build_result_image(data, for_export=False):
             result = acc_proxy.divide(22.13).pow(0.6).multiply(
                 sin_slope.divide(0.0896).pow(1.3)
             ).rename('value')
-            vis = {'min': 0, 'max': 50, 'palette': ['black', 'white']}
+            vis = {'min': 0, 'max': 50, 'palette': _topo_default_visualization(index)}
 
         # ── Güneş ve Görünürlük Analizleri ───────────────────────
         elif index == 'TOPO_HILLSHADE_MULTI':
             # Çok yönlü kabartma: 8 azimuth açısı ortalaması
             hs_list = [ee.Terrain.hillshade(dem, az, 45) for az in [0, 45, 90, 135, 180, 225, 270, 315]]
             result = ee.ImageCollection(hs_list).mean().rename('value')
-            vis = {'min': 0, 'max': 255, 'palette': ['black', 'white']}
+            vis = {'min': 0, 'max': 255, 'palette': _topo_default_visualization(index)}
 
         elif index == 'TOPO_SOLAR':
             # Güneş radyasyonu vekisi: güneye-bakan eğimli alanlar daha fazla ışınım alır
@@ -4594,12 +4651,12 @@ def build_result_image(data, for_export=False):
             south_fac   = asp_rad.subtract(_math.pi).cos().multiply(0.5).add(0.5)
             slope_fac   = slope.divide(90).clamp(0, 1)
             result = south_fac.multiply(0.7).add(slope_fac.multiply(0.3)).rename('value')
-            vis = {'min': 0, 'max': 1, 'palette': ['black', 'white']}
+            vis = {'min': 0, 'max': 1, 'palette': _topo_default_visualization(index)}
 
         elif index == 'TOPO_SHADOW':
             # Gölge analizi: KD azimuth kabartması (düşük değer = gölge alan)
             result = ee.Terrain.hillshade(dem, 315, 45).rename('value')
-            vis = {'min': 0, 'max': 255, 'palette': ['black', 'white']}
+            vis = {'min': 0, 'max': 255, 'palette': _topo_default_visualization(index)}
 
         elif index == 'TOPO_CONTOUR':
             # 📏 Eş Yükselti (İzohips/Kontur) Çizgileri
@@ -4652,11 +4709,11 @@ def build_result_image(data, for_export=False):
             _dem_smooth = dem.focalMean(radius=45, units='meters').resample('bicubic')
             _signal = _dem_smooth.multiply(2 * _math.pi / _contour_interval).sin()
             result = _signal.zeroCrossing().rename('value')
-            vis = {'min': 0, 'max': 1, 'palette': ['black', 'white']}
+            vis = {'min': 0, 'max': 1, 'palette': _topo_default_visualization(index)}
 
         else:
             result = slope.rename('value')
-            vis = {'min': 0, 'max': 60, 'palette': ['black', 'white']}
+            vis = {'min': 0, 'max': 60, 'palette': _topo_default_visualization(index)}
 
         # ── 🛠️ BUG FİX: sabit/hardcoded germe aralıkları yerine AOI'nin
         # gerçek veri dağılımına göre dinamik germe uygula (bkz. yukarıdaki
@@ -4723,7 +4780,7 @@ def build_result_image(data, for_export=False):
             if index == 'TOPO_CONTOUR':
                 display_result = _dem_smooth.rename('value')
                 result = display_result
-                vis = {'min': 0, 'max': 3000, 'palette': ['black', 'white']}
+                vis = {'min': 0, 'max': 3000, 'palette': _topo_default_visualization(index)}
             else:
                 display_result = result
         elif class_breaks and isinstance(class_breaks, list) and len(class_breaks) > 0:
@@ -6898,6 +6955,21 @@ def download_geotiff():
             is_categorical=is_lulc_categorical
         )
 
+        # Topografik analizlerde AOI clip'i KESİN olmalı. GEE'nin bounding-box
+        # indirmesi veya ara mozaik yolu poligon maskesini kaybetse bile burada
+        # son kez strict=true uygulanır; böylece çalışma alanı dışında kare/
+        # dikdörtgen raster kullanıcıya asla gönderilmez.
+        if (isinstance(lulc_index, str) and lulc_index.startswith('TOPO')
+                and aoi_geom_4326 is not None and nodata_value is not None):
+            tif_bytes = _true_clip_tif_bytes(
+                tif_bytes, aoi_geom_4326, nodata_value, strict=True
+            )
+
+        # ArcMap'in zoom yapmadan ilk çizimde rasteri hemen göstermesi için
+        # ana TIFF'i tiled/compressed ve internal pyramid'li hale getir.
+        # Bu adım piksel değerlerini DEĞİŞTİRMEZ.
+        tif_bytes = _prepare_arcmap_raster_bytes(tif_bytes, build_internal_overviews=True)
+
         sym_files = None
         if lulc_index in LULC_CLASS_DEFS:
             try:
@@ -7336,6 +7408,52 @@ def _ensure_output_crs(tif_bytes, target_crs, nodata_value=None, is_categorical=
     except Exception as reproj_err:
         print('[SylvaGIS] ❌ Yerel yeniden projeksiyon başarısız — dosya orijinal '
               'CRS\'iyle gönderiliyor:', reproj_err)
+        return tif_bytes
+
+
+def _prepare_arcmap_raster_bytes(tif_bytes, build_internal_overviews=True):
+    """ArcMap ilk açılış/zoom davranışı için TIFF'i kayıpsız optimize eder.
+
+    Piksel değerleri, CRS, transform, extent ve NoData aynen korunur. Dosya
+    tiled/deflate olarak yeniden yazılır ve mümkünse ana TIFF içine 2/4/8/16
+    seviyeli internal overview eklenir. Dış .ovr sidecar da ayrıca üretilmeye
+    devam eder; böylece ArcMap hem internal hem external pyramid yoluna sahip
+    olur.
+    """
+    try:
+        import rasterio
+        from rasterio.io import MemoryFile
+        from rasterio.enums import Resampling
+    except ImportError:
+        return tif_bytes
+    try:
+        with MemoryFile(tif_bytes) as mf:
+            with mf.open() as src:
+                profile = src.profile.copy()
+                data = src.read()
+                src_nodata = src.nodata
+        # Küçük rasterlerde tiled bloklar gereksiz olabilir ama ArcMap için
+        # 256x256 bloklar büyük/çok pikselli topografik rasterlerde belirgin
+        # şekilde daha hızlı ilk çizim sağlar.
+        profile.update(compress='deflate', predictor=2)
+        if data.shape[-1] >= 256 and data.shape[-2] >= 256:
+            profile.update(tiled=True, blockxsize=256, blockysize=256)
+        else:
+            profile.pop('tiled', None)
+            profile.pop('blockxsize', None)
+            profile.pop('blockysize', None)
+        with MemoryFile() as out:
+            with out.open(**profile) as dst:
+                dst.write(data)
+                if build_internal_overviews and dst.width > 64 and dst.height > 64:
+                    levels = [2, 4, 8, 16]
+                    levels = [f for f in levels if dst.width // f >= 1 and dst.height // f >= 1]
+                    if levels:
+                        dst.build_overviews(levels, Resampling.nearest if dst.dtypes[0].startswith(('uint','int')) else Resampling.bilinear)
+                        dst.update_tags(ns='rio_overview', resampling='nearest' if dst.dtypes[0].startswith(('uint','int')) else 'bilinear')
+            return out.read()
+    except Exception as prep_err:
+        print('[SylvaGIS] TIFF performans/pyramid optimizasyonu atlandı:', prep_err)
         return tif_bytes
 
 
@@ -7798,8 +7916,14 @@ def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata
     # pikseller kesin olarak NoData olur. LULC/ESA'da strict=True olduğu için
     # clip başarısız olursa asla clipsiz dikdörtgen dosya gönderilmez.
     if aoi_geom_4326 is not None and nodata_value is not None:
+        _force_topo_clip = False
+        try:
+            _force_topo_clip = str(base_name or '').upper().find('TOPO') >= 0
+        except Exception:
+            _force_topo_clip = False
         raw_bytes = _true_clip_tif_bytes(
-            raw_bytes, aoi_geom_4326, nodata_value, strict=is_categorical
+            raw_bytes, aoi_geom_4326, nodata_value,
+            strict=(is_categorical or _force_topo_clip)
         )
 
     return _stamp_exact_band_statistics(raw_bytes, nodata_value=nodata_value)
