@@ -6669,7 +6669,7 @@ tr.class-highlight-active {
                     // 🛠️ DÜZELTME (Zoom'da Veri Kaybolması): bkz. _sylvaReplaceGeeLayer — maxNativeZoom
                     // artık 16'da tutuluyor, GEE sunucusunun derin zoom'da hesaplanmış
                     // karoları güvenilir üretemediği durumlarda veri kaybolmasın diye.
-                    maxZoom: 24, maxNativeZoom: 16,
+                    minZoom: 0, maxZoom: 24, minNativeZoom: 8, maxNativeZoom: 16,
                     attribution: srcLayer.options && srcLayer.options.attribution
                 });
                 window._geeLayersByPane.map2[key] = clone;
@@ -7059,7 +7059,7 @@ tr.class-highlight-active {
                     // 🛠️ DÜZELTME (Zoom'da Veri Kaybolması): bkz. _sylvaReplaceGeeLayer — maxNativeZoom
                     // artık 16'da tutuluyor, GEE sunucusunun derin zoom'da hesaplanmış
                     // karoları güvenilir üretemediği durumlarda veri kaybolmasın diye.
-                    maxZoom: 24, maxNativeZoom: 16,
+                    minZoom: 0, maxZoom: 24, minNativeZoom: 8, maxNativeZoom: 16,
                     attribution: srcLayer && srcLayer.options && srcLayer.options.attribution
                 });
 
@@ -12539,7 +12539,7 @@ function selectRamp(name) {
             // (upscale) gösterir — kullanıcı istediği kadar (maxZoom:24'e kadar)
             // zoom yapsa bile veri ARTIK HİÇBİR ZAMAN sunucu hatası yüzünden
             // kaybolmaz; sadece çok aşırı yakınlaşmada hafif bulanıklaşır.
-            var opts = Object.assign({ opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane', maxZoom: 24, maxNativeZoom: 16 }, options || {});
+            var opts = Object.assign({ opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane', minZoom: 0, maxZoom: 24, minNativeZoom: 8, maxNativeZoom: 16 }, options || {});
             var _rgKey = (paneId === 'map2') ? 'map2' : 'map';
             // 🛠️ BUG FİX: Sınıflandırma/Stretched/Sahne değişimi bu fonksiyonu
             // çağırarak katmanı yeniden boyanmış haliyle değiştiriyordu, ama
@@ -12727,6 +12727,11 @@ function selectRamp(name) {
 
         window._geeLayersByPane = window._geeLayersByPane || { map: {}, map2: {} };
         function _sylvaAddGeeLayer(paneId, layerKey, tileUrl, options) {
+            // Düşük zoom güvenliği: GEE analiz karoları bazı projelerde çok
+            // küçük zoom seviyelerinde boş/siyah karo döndürebiliyor. Leaflet
+            // zoom 8 altına indiğinde son gerçek analiz karosunu küçülterek
+            // kullansın; çalışma alanı uzaklaştırıldığında raster kaybolmasın.
+
             var targetMap = _sylvaTargetMap(paneId);
             // 🛠️ DÜZELTME (Zoom'da Veri Kaybolması): bkz. _sylvaReplaceGeeLayer
             // içindeki açıklama — aynı maxZoom/maxNativeZoom eksikliği burada
@@ -12740,7 +12745,7 @@ function selectRamp(name) {
             // davranış (yeni katman geldiğinde diğerleri gizlenir, "tek
             // seferde tek görünür katman") AYNEN korunur.
             var _hideOthers = (options && options.hideOthers === false) ? false : true;
-            var opts = Object.assign({ opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane', maxZoom: 24, maxNativeZoom: 16 }, options || {});
+            var opts = Object.assign({ opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane', minZoom: 0, maxZoom: 24, minNativeZoom: 8, maxNativeZoom: 16 }, options || {});
             delete opts.hideOthers; // Leaflet tileLayer seçeneği değil, sadece bu fonksiyona özel bayrak
             var store = window._geeLayersByPane[(paneId === 'map2') ? 'map2' : 'map'];
             if (store[layerKey]) { try { targetMap.removeLayer(store[layerKey]); } catch (e) {} delete store[layerKey]; }
@@ -18885,7 +18890,7 @@ function selectRamp(name) {
                 var _oldLayer = window._classHighlightLayerByPane[_pane];
                 if (_oldLayer) { try { _sylvaTargetMap(_pane).removeLayer(_oldLayer); } catch (e) {} }
                 window._classHighlightLayerByPane[_pane] = L.tileLayer(data.tileUrl, {
-                    opacity: 0.95, zIndex: 20, crossOrigin: true, pane: 'geeAnalysisPane', maxZoom: 24, maxNativeZoom: 16
+                    opacity: 0.95, zIndex: 20, crossOrigin: true, pane: 'geeAnalysisPane', minZoom: 0, maxZoom: 24, minNativeZoom: 8, maxNativeZoom: 16
                 }).addTo(_sylvaTargetMap(_pane));
             })
             .catch(function (err) {
@@ -52174,6 +52179,9 @@ refresh();
     function safeName(value) { return String(value || 'Analiz').replace(/[^a-z0-9_-]+/gi, '_').replace(/^_+|_+$/g, '') || 'Analiz'; }
     function exportVisualFor(pane, key) {
         var state = window._sylvaEditorStateByPane && window._sylvaEditorStateByPane[pane] && window._sylvaEditorStateByPane[pane][key];
+        var layerState = window._sylvaIndexAnalysisStates && window._sylvaIndexAnalysisStates[pane] && window._sylvaIndexAnalysisStates[pane][key];
+        var layerMeta = layerState && layerState.meta;
+        var nativeClassifiedLayer = !!(layerMeta && layerMeta.legendType === 'classified' && layerMeta.classesRaw);
         var colors = [], min, max, breaks = null;
         // 🛠️ BUG FİX (Faz 15 — "bar olarak indirmiştim, sınıflandırılmış
         // vermiş"): önceden bu fonksiyon yalnızca İLK ve SON sınıfın min/
@@ -52190,7 +52198,7 @@ refresh();
         // classRows yalnızca gerçekten CLASSIFIED moddaysa dışa aktarılır.
         // STRETCHED/BAR modunda DOM'da eski sınıf satırları bulunabilir; bunları
         // kullanmak rasteri yanlışlıkla 1..N sınıfa çeviriyordu.
-        if (state && state.classificationType === 'classified' && state.classRows && state.classRows.length) {
+        if (!nativeClassifiedLayer && state && state.classificationType === 'classified' && state.classRows && state.classRows.length) {
             breaks = state.classRows.map(function (row) {
                 return { min: parseFloat(row.min), max: parseFloat(row.max), color: String(row.color || '').replace(/^#/, '') };
             }).filter(function (b) { return isFinite(b.min) && isFinite(b.max) && b.color; });
