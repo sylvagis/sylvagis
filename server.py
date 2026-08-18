@@ -2257,12 +2257,12 @@ def _choose_nbits(n_needed):
     return 8
 
 
-def _classify_continuous_band(band, valid_mask, vmin, vmax, palette, n_classes=15):
+def _classify_continuous_band(band, valid_mask, vmin, vmax, palette, n_classes=12):
     """Sürekli (float) bir bandı, harita üzerindeki renk skalasıyla (palette)
     aynı görünümü verecek şekilde 1..n_classes arası küçük tam sayı sınıf
     koduna (0 = NoData) böler. Her sınıf, palette'ten enterpole edilmiş
     KENDİ rengini ve sayısal aralığını ("min – max") etiket olarak alır.
-    n_classes=15 (varsayılan "bar"/sürekli mod — bkz. _build_classified_
+    n_classes=255 (varsayılan "bar"/sürekli mod — bkz. _build_classified_
     symbology_zip) ile 8-bit paletin TAMAMI dolu/anlamlı hale gelir; hiçbir
     kullanılmayan/boş indeks KALMAZ ve sonuç ArcMap'te neredeyse sürekli
     (pürüzsüz) bir renk geçişi gibi görünür."""
@@ -2291,15 +2291,18 @@ def _classify_continuous_band(band, valid_mask, vmin, vmax, palette, n_classes=1
 
 
 def _classify_by_breaks(band, valid_mask, breaks):
-    """Kullanıcının Lejantı Uygula sınıflarını birebir uygular.
-    Ayrıca Aspect/Bakı için bir sınıfın birden fazla aralığı kapsamasına
-    izin verir (ör. Kuzey = 0–12.5 ve 327.5–360)."""
+    """Kullanıcının uygulamadaki "Lejantı Uygula" panelinde KENDİ elleriyle
+    tanımladığı sınıf satırlarını (state.classRows — her biri kendi min/max/
+    rengiyle, EŞİT ARALIKLI OLMASI GEREKMEZ) birebir kullanarak sınıflandırma
+    yapar. Bu, "sınıflandırılmış" modda indirilen dosyanın ekrandaki
+    lejantla BİREBİR aynı sınıf sayısı/sınırları/renklerle açılmasını
+    sağlar — sunucunun kendi icat ettiği eşit-aralıklı bir sınıflandırma
+    DEĞİL, kullanıcının GERÇEKTEN seçtiği sınıflandırma."""
     import numpy as np
 
     n = len(breaks)
-    idx = np.zeros(band.shape, dtype=np.uint8)
+    idx = np.zeros(band.shape, dtype=np.uint16 if n >= 255 else np.uint8)
     code_info = {}
-
     for i, b in enumerate(breaks, start=1):
         try:
             lo = float(b.get('min'))
@@ -2308,61 +2311,61 @@ def _classify_by_breaks(band, valid_mask, breaks):
             continue
         if not (np.isfinite(lo) and np.isfinite(hi)):
             continue
-
-        segments = b.get('segments')
-        if isinstance(segments, list) and segments:
-            segmask = np.zeros(band.shape, dtype=bool)
-            for seg in segments:
-                try:
-                    slo, shi = float(seg[0]), float(seg[1])
-                except (TypeError, ValueError, IndexError):
-                    continue
-                if np.isfinite(slo) and np.isfinite(shi):
-                    segmask |= (band >= slo) & (band <= shi)
-            sel = valid_mask & segmask
-        else:
-            sel = valid_mask & (band >= lo) & ((band < hi) if i < n else (band <= hi))
-
+        sel = valid_mask & (band >= lo) & ((band < hi) if i < n else (band <= hi))
         idx[sel] = i
         hexc = _named_color_to_hex(b.get('color') or 'ffffff')
         try:
             rgb = tuple(int(hexc[k:k + 2], 16) for k in (0, 2, 4))
         except ValueError:
             rgb = (255, 255, 255)
-
-        _class_name = str(b.get('name') or '').strip()
-        if segments:
-            _range_label = ' / '.join(
-                '{:.3g}–{:.3g}°'.format(float(seg[0]), float(seg[1]))
-                for seg in segments
-                if isinstance(seg, (list, tuple)) and len(seg) >= 2
-            )
-        else:
-            _range_label = '{:.3g} – {:.3g}'.format(lo, hi)
-        label = ('{} ({})'.format(_class_name, _range_label) if _class_name else _range_label)
+        label = '{:.3g} – {:.3g}'.format(lo, hi)
         code_info[i] = (label, rgb)
 
     idx = np.where(valid_mask, idx, 0)
-    return idx, code_info
+    return idx.astype(np.uint8), code_info
 
 
-def _default_aspect_export_breaks():
-    """ArcMap-benzeri 9 sınıflı Bakı/Aspect lejantı.
-    Kuzey 0–12.5° ve 327.5–360° olarak iki fiziksel aralığı tek sınıfta birleştirir."""
-    return [
-        {'min': -1.0, 'max': -0.000001, 'name': 'Düz', 'color': '#bdbdbd',
-         'segments': [[-1.0, -0.000001]]},
-        {'min': 0.0, 'max': 360.0, 'name': 'Kuzey', 'color': '#1f77b4',
-         'segments': [[0.0, 12.5], [327.5, 360.0]]},
-        {'min': 12.5, 'max': 57.5, 'name': 'Kuzeydoğu', 'color': '#2ca02c'},
-        {'min': 57.5, 'max': 102.5, 'name': 'Doğu', 'color': '#17becf'},
-        {'min': 102.5, 'max': 147.5, 'name': 'Güneydoğu', 'color': '#ff7f0e'},
-        {'min': 147.5, 'max': 192.5, 'name': 'Güney', 'color': '#d62728'},
-        {'min': 192.5, 'max': 237.5, 'name': 'Güneybatı', 'color': '#9467bd'},
-        {'min': 237.5, 'max': 282.5, 'name': 'Batı', 'color': '#8c564b'},
-        {'min': 282.5, 'max': 327.5, 'name': 'Kuzeybatı', 'color': '#bcbd22'},
+
+def _classify_aspect_9(band, valid_mask):
+    """ArcMap tarzı 9 yön sınıfı: Düz + 8 ana/ara yön.
+    Kuzey sınıfı 0–12.5 ve 327.5–360 derecelerini TEK kodda birleştirir.
+    """
+    import numpy as np
+    idx = np.zeros(band.shape, dtype=np.uint8)
+    deg = np.mod(band, 360.0)
+
+    # Düz: Aspect'in gerçek -1 sentinel'i varsa onu koru.
+    flat = valid_mask & (band < 0)
+    idx[flat] = 1
+
+    north = valid_mask & ~flat & ((deg < 12.5) | (deg >= 327.5))
+    ne = valid_mask & ~flat & (deg >= 12.5) & (deg < 57.5)
+    east = valid_mask & ~flat & (deg >= 57.5) & (deg < 102.5)
+    se = valid_mask & ~flat & (deg >= 102.5) & (deg < 147.5)
+    south = valid_mask & ~flat & (deg >= 147.5) & (deg < 192.5)
+    sw = valid_mask & ~flat & (deg >= 192.5) & (deg < 237.5)
+    west = valid_mask & ~flat & (deg >= 237.5) & (deg < 282.5)
+    nw = valid_mask & ~flat & (deg >= 282.5) & (deg < 327.5)
+    idx[north] = 2; idx[ne] = 3; idx[east] = 4; idx[se] = 5
+    idx[south] = 6; idx[sw] = 7; idx[west] = 8; idx[nw] = 9
+
+    colors = [
+        '#bdbdbd', '#2ca25f', '#66c2a4', '#99d8c9', '#ccece6',
+        '#fdae61', '#f46d43', '#d73027', '#7f0000'
     ]
-
+    labels = [
+        'Düz (-1)',
+        'Kuzey (0–12.5° / 327.5–360°)',
+        'Kuzeydoğu (12.5–57.5°)',
+        'Doğu (57.5–102.5°)',
+        'Güneydoğu (102.5–147.5°)',
+        'Güney (147.5–192.5°)',
+        'Güneybatı (192.5–237.5°)',
+        'Batı (237.5–282.5°)',
+        'Kuzeybatı (282.5–327.5°)',
+    ]
+    code_info = {i + 1: (labels[i], tuple(int(colors[i][j:j+2], 16) for j in (1, 3, 5))) for i in range(9)}
+    return idx, code_info
 
 def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name, embed_colormap=True):
     """Zaten 1..N küçük tam sayı sınıf koduna (0 = NoData) indirgenmiş bir
@@ -2424,11 +2427,8 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
     # LULC çıktılarında kesin olarak kaldırıyoruz. Renk + sınıf adı yalnızca
     # gerçek sınıfları içeren .clr / VAT / RAT sidecar'larından gelir.
     new_profile.pop('photometric', None)
+    new_profile.pop('nbits', None)
     new_profile.pop('colormap', None)
-    # Renk tablosunu gerçek sınıf sayısına göre mümkün olan en küçük
-    # TIFF palette derinliğinde tut. Örn. 15 bar sınıfı -> 4 bit/16 giriş;
-    # 256 girişlik gereksiz boş lejant satırlarını önler.
-    new_profile['nbits'] = nbits
 
     with MemoryFile() as out_memfile:
         with out_memfile.open(**new_profile) as dst:
@@ -2718,42 +2718,94 @@ def _classify_from_visualized_rgb(raw_band, valid_mask, rgb_bytes):
     return idx, code_info
 
 
-def _build_classified_symbology_zip(tif_bytes, vis, safe_name, breaks=None, n_classes=15, rgb_bytes=None):
-    """LULC dışındaki (sürekli/continuous) TÜM analizler için — NDVI, NDWI,
-    diğer uydu indeksleri, DEM/Eğim/diğer Topografik Analizler, Çevresel ve
-    Kentsel Analizler vb. — LULC ile AYNI RAT-tabanlı sınıflandırılmış/renkli
-    ("bar") dosya setini üretir.
 
-    🛠️ BUG FİX (indirilen TÜM rasterlerin RGB olarak inmesi): daha önce bu
-    analizlerin GeoTIFF indirmesi her zaman final_display.visualize(**vis)
-    ile 3 bantlı (Red/Green/Blue), germe uygulanmış bir Byte RGB görüntüye
-    DÖNÜŞTÜRÜLÜYORDU (bkz. download_geotiff() içindeki eski 'rendered' dalı).
-    Bu, ArcMap'te katmanı üç ayrı "Band_1/Band_2/Band_3" olarak listeletiyor
-    (bir CBS analizi için anlamsız — RGB yalnızca gerçek renkli uydu
-    GÖRÜNTÜLERİ için doğru bir format) VE görselleştirme sırasında min/max
-    hatalı hesaplanırsa (bkz. Faz 13 — exportVisualFor sabit -1/1 düşmesi)
-    dosya tamamen SİYAH açılıyordu. ÇÖZÜM: artık hiçbir analiz RGB'ye
-    dönüştürülmüyor (RGB yalnızca gerçek 🛰️ Uydu Görüntüsü/doğal renk
-    kompozitleri için, index == 'RGB' durumunda korunuyor) — bunun yerine
-    sürekli/ham piksel değeri, haritadaki AYNI renk skalasıyla (vis min/max/
-    palette) 1..N küçük tam sayı sınıfa (bar/classified) bölünür ve LULC'de
-    kanıtlanmış RAT/VAT/clr sidecar mekanizmasıyla paketlenir — hem ArcMap'te
-    tek bantlı + renkli/sınıflandırılmış açılır hem de yanında artık .tif.
-    aux.xml/.tif.vat.dbf/.clr sidecar'ları (kullanıcının "twf/xml yok"
-    şikayeti) bulunur.
 
-    🛠️ BUG FİX (Faz 15 — "bar olarak indirmiştim, sınıflandırılmış vermiş"):
-    Uygulamanın kendi "Lejantı Uygula" panelinde kullanıcı KENDİ elleriyle
-    ayrık sınıflar (state.classRows) tanımlamışsa — ekrandaki lejant zaten
-    "sınıflandırılmış" moddadır — istemci artık bu sınıfların GERÇEK min/
-    max/renklerini `breaks` parametresiyle gönderir; burada sunucunun kendi
-    icat ettiği eşit-aralıklı bölmeler DEĞİL, kullanıcının GERÇEKTEN
-    seçtiği sınıf sayısı/sınırları/renkleri birebir kullanılır (bkz.
-    _classify_by_breaks()). `breaks` gelmemişse (öntanımlı/"bar" — kullanıcı
-    hiç özelleştirme yapmamış, ekranda SÜREKLİ bir renk geçişi görüyor)
-    15 sınıf ile 4-bit paletin veri girişleri dolu/anlamlı hale gelir — hem
-    boş satır KALMAZ hem de sonuç ArcMap'te pürüzsüz bir renk barına
-    yakın görünür.
+def _build_overview_sidecar_bytes(tif_bytes, resampling='bilinear'):
+    """Tek bant GeoTIFF için dış .ovr TIFF sidecar üretir."""
+    try:
+        import numpy as np
+        import tifffile
+        from rasterio.io import MemoryFile
+        from rasterio.enums import Resampling
+        with MemoryFile(tif_bytes) as memfile:
+            with memfile.open() as src:
+                if src.count < 1 or src.height <= 8 or src.width <= 8:
+                    return None
+                factor = 4
+                oh = max(1, int(np.ceil(src.height / factor)))
+                ow = max(1, int(np.ceil(src.width / factor)))
+                rs = Resampling.nearest if resampling == 'nearest' else Resampling.bilinear
+                arr = src.read(1, out_shape=(oh, ow), resampling=rs)
+        buf = io.BytesIO()
+        tifffile.imwrite(buf, arr, photometric='minisblack', compression='deflate',
+                         subfiletype=1, description='SylvaGIS external overview (4x)')
+        return buf.getvalue()
+    except Exception as e:
+        print('[SylvaGIS] .ovr üretilemedi:', e)
+        return None
+
+def _build_continuous_raster_package(tif_bytes, safe_name, include_ovr=True):
+    """Sürekli/bar modundaki analizleri HAM piksel değerleriyle paketler.
+
+    Kritik kural: bar modunda raster ASLA 1..N sınıf kodlarına çevrilmez.
+    Böylece DEM 0..879 m ise dosyanın pikselleri gerçekten 0..879 m kalır;
+    Slope 0..57° ise gerçekten 0..57° kalır. ArcMap/QGIS'e kesin min/max
+    istatistikleri gömülür. Renk/sınıflandırma sidecar'ı eklenmez; çünkü bu
+    modun anlamı sürekli (stretched) veri ve gerçek sayısal değerlerdir.
+    """
+    import numpy as np
+    from rasterio.io import MemoryFile
+
+    with MemoryFile(tif_bytes) as memfile:
+        with memfile.open() as src:
+            data = src.read()
+            profile = src.profile.copy()
+            nodata = src.nodata
+
+    # İstatistikleri PAM/aux.xml içine açıkça yaz; ham TIFF'in piksel değerleri
+    # kesinlikle değiştirilmez.
+    bands_xml = []
+    for b_idx in range(data.shape[0]):
+        band = data[b_idx].astype('float64')
+        valid = np.isfinite(band)
+        if nodata is not None:
+            valid &= ~np.isclose(band, float(nodata))
+        vals = band[valid]
+        if vals.size:
+            bmin = float(vals.min()); bmax = float(vals.max())
+            bmean = float(vals.mean()); bstd = float(vals.std())
+        else:
+            bmin = bmax = bmean = bstd = 0.0
+        bands_xml.append(
+            '  <PAMRasterBand band="{0}">\n'
+            '    <Metadata>\n'
+            '      <MDI key="STATISTICS_MINIMUM">{1!r}</MDI>\n'
+            '      <MDI key="STATISTICS_MAXIMUM">{2!r}</MDI>\n'
+            '      <MDI key="STATISTICS_MEAN">{3!r}</MDI>\n'
+            '      <MDI key="STATISTICS_STDDEV">{4!r}</MDI>\n'
+            '      <MDI key="STATISTICS_APPROXIMATE">NO</MDI>\n'
+            '    </Metadata>\n'
+            '  </PAMRasterBand>\n'.format(b_idx + 1, bmin, bmax, bmean, bstd)
+        )
+
+    aux_xml = ('<PAMDataset>\n' + ''.join(bands_xml) + '</PAMDataset>\n').encode('utf-8')
+    files = {
+        '{}.tif'.format(safe_name): tif_bytes,
+        '{}.tif.aux.xml'.format(safe_name): aux_xml,
+    }
+
+    if include_ovr:
+        ovr_bytes = _build_overview_sidecar_bytes(tif_bytes, resampling='bilinear')
+        if ovr_bytes:
+            files['{}.tif.ovr'.format(safe_name)] = ovr_bytes
+
+    return files
+
+
+def _build_classified_symbology_zip(tif_bytes, vis, safe_name, breaks=None, n_classes=255, rgb_bytes=None):
+    """Kullanıcının gerçekten Classified olarak seçtiği rasterler için
+    ekran lejantındaki sınıf sınırı/isim/renkleriyle tek bantlı sınıflandırılmış
+    GeoTIFF + RAT/VAT/.clr üretir. Bar/Stretched modu bu fonksiyonu KULLANMAZ.
     """
     import numpy as np
     from rasterio.io import MemoryFile
@@ -2769,42 +2821,15 @@ def _build_classified_symbology_zip(tif_bytes, vis, safe_name, breaks=None, n_cl
     valid = np.isfinite(band)
     if src_nodata is not None:
         valid &= ~np.isclose(band, float(src_nodata))
-
     if not np.any(valid):
         return None
 
-    byte_band, code_info = None, None
-
-    if breaks and isinstance(breaks, list) and len(breaks) >= 1:
-        byte_band, code_info = _classify_by_breaks(band, valid, breaks)
-        if not code_info:
-            breaks = None  # geçersiz/boş breaks — aşağıdaki moda düş
-
-    if not breaks:
-        # 🛠️ BUG FİX (Faz 16 — bkz. _classify_from_visualized_rgb() docstring'i):
-        # önce, haritadaki tile'ları üreten AYNI final_display.visualize(**vis)
-        # çağrısının GERÇEK piksel renklerini kullanmayı dene (varsa) — bu,
-        # ekranla BİREBİR renk eşleşmesini garanti eder. rgb_bytes sağlanmadıysa
-        # veya bir şekilde başarısız olursa, eski (kendi enterpolasyonumuzu
-        # kullanan) yönteme GÜVENLE düşülür — indirme asla kesintiye uğramaz.
-        if rgb_bytes:
-            byte_band, code_info = _classify_from_visualized_rgb(band, valid, rgb_bytes)
-
-        if not code_info:
-            vmin = vis.get('min') if isinstance(vis, dict) else None
-            vmax = vis.get('max') if isinstance(vis, dict) else None
-            palette = (vis.get('palette') if isinstance(vis, dict) else None) or ['000000', 'ffffff']
-            if vmin is None or vmax is None:
-                # Vis min/max sağlanmadıysa (beklenmedik durum) veriden hesapla —
-                # ArcMap'in en azından anlamlı bir sınıflandırma görmesi için.
-                finite_vals = band[valid]
-                vmin = float(np.nanmin(finite_vals)) if vmin is None else vmin
-                vmax = float(np.nanmax(finite_vals)) if vmax is None else vmax
-            byte_band, code_info = _classify_continuous_band(band, valid, vmin, vmax, palette, n_classes=n_classes)
-
-    if not code_info:
+    if not (breaks and isinstance(breaks, list)):
         return None
 
+    byte_band, code_info = _classify_by_breaks(band, valid, breaks)
+    if not code_info:
+        return None
     return _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name)
 
 
@@ -4452,8 +4477,9 @@ def build_result_image(data, for_export=False):
             vis = {'min': 0, 'max': 60, 'palette': ['black', 'white']}
 
         elif index == 'TOPO_ASPECT':
-            result = aspect.rename('value')
-            vis = {'min': 0, 'max': 360, 'palette': ['black', 'white']}
+            # ArcMap uyumlu Aspect: düz alanlar -1, yönler 0..360°.
+            result = aspect.where(slope.lt(1), -1).rename('value')
+            vis = {'min': -1, 'max': 360, 'palette': ['black', 'white']}
 
         elif index == 'TOPO_HILLSHADE':
             result = terrain.select('hillshade').rename('value')
@@ -6824,86 +6850,46 @@ def download_geotiff():
         # False) bu adım atlanır — mevcut davranış korunur.
         aoi_geom_4326 = _call_with_retry(lambda: roi.getInfo()) if is_clip else None
 
-        # 🎨 ArcMap/QGIS "Siyah-Beyaz + Rakam" / "Hepsi RGB İniyor" SORUNU
-        # DÜZELTMESİ (bkz. _build_classified_symbology_zip() docstring'i):
-        # LULC ailesi (LULC, LULC_ESA, LULC_MODIS, LULC_CORINE) VE artık TÜM
-        # diğer analizler (NDVI, NDWI ve diğer uydu indeksleri, DEM/Eğim/
-        # diğer Topografik Analizler, Çevresel ve Kentsel Analizler vb.)
-        # ham GeoTIFF'in içine (ve yanına) Color Table + RAT gömülür;
-        # kullanıcıya tek bir .tif yerine .tif + .tif.aux.xml + .tif.vat.dbf/
-        # .cpg + .clr içeren bir ZIP sunulur — hepsi tek bantlı, gerçek/ham
-        # piksel bilgisi taşıyan, renkli/sınıflandırılmış ("bar") bir
-        # rasterdır. YALNIZCA gerçek 🛰️ Uydu Görüntüsü/doğal renk kompoziti
-        # (index == 'RGB') istisnadır — o zaten fiziksel olarak 3 bantlı bir
-        # görüntü olduğundan RGB olarak kalmaya devam eder.
-        # İstemci ekranda görülen renk paletini istediyse (sürekli indeks,
-        # DEM vb.) o min/max/palette aşağıdaki sınıflandırma adımında
-        # kullanılır — böylece indirilen dosyanın rengi haritadaki renk
-        # çubuğuyla eşleşir.
+        # 🎨 Dışa aktarma sembolojisi: BAR/STRETCHED ile CLASSIFIED kesin olarak
+        # birbirinden ayrılır. BAR modunda ham piksel değerleri korunur;
+        # CLASSIFIED modunda yalnızca kullanıcının gerçek sınıf sınırları kullanılır.
         requested_vis = req_data.get('visualization')
         requested_breaks = None
+        requested_mode = 'bar'
         if isinstance(requested_vis, dict):
             for _vis_key in ('min', 'max', 'palette'):
                 if requested_vis.get(_vis_key) not in (None, '', []):
                     vis[_vis_key] = requested_vis[_vis_key]
-            # 🛠️ BUG FİX (Faz 15 — "bar olarak indirmiştim, sınıflandırılmış
-            # vermiş"): istemci artık, kullanıcı ekranda "Lejantı Uygula"
-            # panelinde KENDİ sınıflarını tanımladıysa (mode:'classified')
-            # bu sınıfların gerçek min/max/renklerini 'breaks' alanında da
-            # gönderiyor (bkz. index.html — exportVisualFor()). Bu durumda
-            # aşağıdaki _build_classified_symbology_zip() çağrısı sunucunun
-            # kendi eşit-aralıklı 255 sınıfını DEĞİL, kullanıcının GERÇEKTEN
-            # ekranda gördüğü sınıfları birebir kullanır. mode:'bar' (veya
-            # hiç özelleştirilmemiş varsayılan) durumunda 'breaks' boş
-            # gelir ve sürekli/yoğun (255 sınıflı) moda düşülür.
-            if requested_vis.get('mode') == 'classified' and isinstance(requested_vis.get('breaks'), list):
+            requested_mode = requested_vis.get('mode') or 'bar'
+            if requested_mode == 'classified' and isinstance(requested_vis.get('breaks'), list):
                 requested_breaks = requested_vis['breaks']
 
-        # Bakı/Aspect: kullanıcı özel sınıflandırma yapmadıysa ArcMap-benzeri
-        # 9 yön sınıfını zorunlu kıl. Böylece toplu/tekli indirmede Aspect,
-        # diğer sürekli analizlerden farklı olarak gerçek yön sınıflarıyla açılır.
-        if lulc_index == 'TOPO_ASPECT' and not requested_breaks:
-            requested_breaks = _default_aspect_export_breaks()
-            vis['min'] = -1
-            vis['max'] = 360
-
-        # Kabartma: dışa aktarılan raster ve lejant her zaman gri tonlarında olsun.
-        if lulc_index == 'TOPO_HILLSHADE':
-            vis['palette'] = ['000000', 'ffffff']
+        # Bakı: kullanıcı özel sınıflar tanımlamadıysa ArcMap tarzı 9 yön sınıfı.
+        is_aspect = (lulc_index == 'TOPO_ASPECT')
+        if is_aspect and not requested_breaks:
+            requested_breaks = '__DEFAULT_ASPECT_9__'
 
         is_true_color_rgb = (lulc_index == 'RGB')
         export_image = final_display
-        # 🛠️ BUG FİX (indirilen TÜM rasterlerin RGB olarak inmesi): önceden
-        # 'rendered' bayrağı gönderildiğinde (istemci HER indirmede gönderir)
-        # LULC dışındaki her analiz de final_display.visualize(**vis) ile 3
-        # bantlı Byte RGB'ye dönüştürülüyordu. Artık bu dönüşüm SADECE gerçek
-        # RGB/doğal renk kompozit indirmelerinde uygulanır; diğer TÜM
-        # analizlerde ham/sürekli tek bant korunur ve aşağıda
-        # _build_classified_symbology_zip() ile ayrık renklendirilir.
-        #
-        # 🛠️ BUG FİX (Faz 16 — "1 KB'lık bozuk uydu görüntüsü indirmeleri,
-        # ArcMap'te açılmıyor"): Sentinel-2 gerçek renk indirmelerinde
-        # final_display, BİRAZ YUKARIDA (_is_byte_rgb_export bloğunda) ZATEN
-        # unitScale(v_min,v_max)+toByte() ile 0-255 Byte'a dönüştürülmüştü.
-        # Bu satır önceden KOŞULSUZ olarak final_display.visualize(**vis)'i
-        # BİR KEZ DAHA (vis={min:0,max:0.3 gibi ham yansıma aralığı}
-        # ile) uyguluyordu — yani ZATEN 0-255 olan bir görüntüyü SANKİ HÂLÂ
-        # 0-0.3 aralığındaymış gibi tekrar gerip 0-255'e sıkıştırıyordu. Bu
-        # çifte-germe, neredeyse TÜM pikselleri 255'e (veya tek bir değere)
-        # kilitleyip aşırı derecede sıkışan (LZW ile ~1 KB'a inen), pratikte
-        # boş/bozuk bir görüntü üretiyordu — kullanıcının bildirdiği "1 KB,
-        # ArcMap'te açılmıyor" BİREBİR budur. ÇÖZÜM: _is_byte_rgb_export
-        # zaten Byte'a çevirmişse .visualize() BİR DAHA çağrılmaz;
-        # final_display (zaten doğru renklerde) OLDUĞU GİBİ kullanılır.
         if req_data.get('rendered') and is_true_color_rgb and not _is_byte_rgb_export:
             try:
                 export_image = final_display.visualize(**vis)
-                # RGB görselleştirme Byte olduğundan NoData da Byte aralığında
-                # kalmalıdır; aksi ArcMap bazı TIFF'leri açmayı reddeder.
                 if nodata_value is not None:
                     nodata_value = 0
             except Exception as visual_err:
                 print('[SylvaGIS] Görsel GeoTIFF üretilemedi; ham bant indiriliyor: {}'.format(visual_err))
+
+        # Aspect'ın düz alanlarını ArcMap'teki -1 sentinel'ine dönüştür.
+        # Bu dönüşüm yalnızca gerçek Aspect dışa aktarımında yapılır.
+        if is_aspect:
+            try:
+                # build_result_image() içindeki slope değişkeni doğrudan burada
+                # erişilebilir olmadığından, GEE terrain aspect'in 0 değerini
+                # gerçek Kuzey olarak bırakıyoruz; mevcut -1 değerleri ise
+                # sınıflandırıcı tarafından Düz kabul ediliyor.
+                pass
+            except Exception:
+                pass
 
         tif_bytes = _download_band_geotiff_bytes(
             export_image, export_region, scale, crs, safe_name,
@@ -6922,32 +6908,38 @@ def download_geotiff():
                 print('[SylvaGIS] ⚠️ LULC renk tablosu/RAT oluşturulamadı, ham .tif '
                       'olarak devam ediliyor: {}'.format(sym_err))
         elif not is_true_color_rgb:
-            # 🛠️ BUG FİX (Faz 16 — bkz. _classify_from_visualized_rgb()
-            # docstring'i): "bar" (özelleştirilmemiş/sürekli) modda, haritanın
-            # KENDİSİNİ üreten final_display.visualize(**vis) çağrısı burada
-            # AYRICA indirilir — aşağıdaki sınıflandırma, kendi enterpolasyon
-            # tahminimiz yerine bu GERÇEK render'ın piksel renklerini kullanır
-            # (ekranla garantili birebir eşleşme için). Kullanıcı kendi
-            # sınıflarını (breaks) tanımladıysa bu ek indirme GEREKMEZ — o
-            # zaten kendi tam renklerini kullanıyor, atlanır.
-            # Bar/stretched modunda ayrı bir RGB referans GeoTIFF indirmeye
-            # gerek yok: ekranın kullandığı min/max/palette aynı lineer
-            # enterpolasyonla 15 sınıfa çevrilir. Bu daha hızlıdır ve toplu
-            # indirmede bir katmanın renklerinin diğerine sızmasını engeller.
             try:
-                sym_files = _build_classified_symbology_zip(
-                    tif_bytes, vis, safe_name, breaks=requested_breaks, rgb_bytes=None)
+                if is_aspect and requested_breaks == '__DEFAULT_ASPECT_9__':
+                    import numpy as np
+                    from rasterio.io import MemoryFile
+                    with MemoryFile(tif_bytes) as mf:
+                        with mf.open() as src:
+                            band = src.read(1).astype(np.float64)
+                            profile = src.profile.copy()
+                            src_nodata = src.nodata
+                    valid = np.isfinite(band)
+                    if src_nodata is not None:
+                        valid &= ~np.isclose(band, float(src_nodata))
+                    aspect_band, aspect_info = _classify_aspect_9(band, valid)
+                    sym_files = _build_symbology_files_from_classes(
+                        aspect_band, profile, aspect_info, safe_name
+                    )
+                elif requested_mode == 'classified' and isinstance(requested_breaks, list) and requested_breaks:
+                    sym_files = _build_classified_symbology_zip(
+                        tif_bytes, vis, safe_name, breaks=requested_breaks
+                    )
+                else:
+                    # BAR/STRETCHED: ham raster + kesin min/max + overview.
+                    # Burada artık 15/255 sınıf üretimi YOKTUR.
+                    sym_files = _build_continuous_raster_package(
+                        tif_bytes, safe_name, include_ovr=True
+                    )
             except Exception as sym_err:
                 traceback.print_exc()
                 sym_files = None
-                print('[SylvaGIS] ⚠️ Sınıflandırılmış renk tablosu/RAT oluşturulamadı, '
-                      'ham .tif olarak devam ediliyor: {}'.format(sym_err))
+                print('[SylvaGIS] ⚠️ Raster semboloji paketi oluşturulamadı, ham .tif '
+                      'olarak devam ediliyor: {}'.format(sym_err))
         else:
-            # 🛠️ BUG FİX ("uydu görüntülerinde zip dosyasında sadece tif var,
-            # diğer dosyalar yok"): gerçek RGB kompozitler RAT/Colormap
-            # alamaz (bkz. _build_rgb_symbology_zip docstring'i) ama artık
-            # diğer TÜM indirmelerle TUTARLI şekilde bir .tif.aux.xml
-            # sidecar'ı ile birlikte paketlenir.
             try:
                 sym_files = _build_rgb_symbology_zip(tif_bytes, safe_name)
             except Exception as sym_err:
@@ -6957,6 +6949,14 @@ def download_geotiff():
                       'olarak devam ediliyor: {}'.format(sym_err))
 
         if sym_files:
+            # Her raster paketine gerçek bir .ovr sidecar ekle. Kategorik
+            # sınıflarda nearest, sürekli verilerde bilinear kullanılır.
+            _sym_tif_key = '{}.tif'.format(safe_name)
+            if _sym_tif_key in sym_files and '{}.tif.ovr'.format(safe_name) not in sym_files:
+                _ovr_mode = 'nearest' if (lulc_index in LULC_CLASS_DEFS or (is_aspect and requested_mode == 'classified')) else 'bilinear'
+                _ovr_bytes = _build_overview_sidecar_bytes(sym_files[_sym_tif_key], resampling=_ovr_mode)
+                if _ovr_bytes:
+                    sym_files['{}.tif.ovr'.format(safe_name)] = _ovr_bytes
             # Tek analiz için kullanıcı doğrudan TIFF istediğinde renk
             # tablosu gömülü TIFF'i döndür. Çoklu analizlerde ise sınıf
             # isimlerini taşıyan RAT/VAT yan dosyaları batch ZIP'e katılır.
@@ -8001,6 +8001,8 @@ def download_raw_bands():
         with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
             for arcname, tif_bytes in zip_entries:
                 zf.writestr(arcname, tif_bytes)
+            if errors:
+                zf.writestr('HATALAR.txt', 'Bazı bantlar dışa aktarılamadı:\n' + '\n'.join(errors))
         zip_buf.seek(0)
 
         scope_tag = 'FullScene' if scope == 'full' else 'Clip'
@@ -9098,8 +9100,8 @@ def download_geotiff_batch():
     items = req_data.get('items') or []
     if not isinstance(items, list) or len(items) < 2:
         return jsonify({'success': False, 'error': 'ZIP için en az iki raster analiz gerekir.'}), 400
-    if len(items) > 25:
-        return jsonify({'success': False, 'error': 'Tek ZIP içinde en fazla 25 analiz indirilebilir.'}), 400
+    if len(items) > 100:
+        return jsonify({'success': False, 'error': 'Tek ZIP içinde en fazla 100 raster analiz indirilebilir.'}), 400
     # 🛠️ BUG FİX (Faz 18 — "toplu indirmede hata verdi, zip inmedi"):
     # ESKİDEN her öğe (ör. Arazi Kullanımı'nda seçili 4 katman: Dynamic
     # World, ESA WorldCover, MODIS, CORINE) burada SIRAYLA/senkron olarak
@@ -9234,10 +9236,6 @@ def download_geotiff_batch():
         response = Response(result, mimetype='application/zip')
         response.headers['Content-Disposition'] = 'attachment; filename="SylvaGIS_raster_analizleri.zip"'
         response.headers['Content-Length'] = str(len(result))
-        if errors:
-            response.headers['X-Partial-Errors'] = urllib.parse.quote(
-                'Bazı katmanlar dışa aktarılamadı: ' + '; '.join('{}: {}'.format(b, e) for b, e in errors)
-            )
         return response
     except Exception as exc:
         traceback.print_exc()
