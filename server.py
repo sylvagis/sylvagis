@@ -2335,7 +2335,7 @@ def _classify_by_breaks(band, valid_mask, breaks):
     return idx.astype(np.uint8), code_info
 
 
-def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name, embed_colormap=True):
+def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name, embed_colormap=False):
     """Zaten 1..N küçük tam sayı sınıf koduna (0 = NoData) indirgenmiş bir
     banttan (byte_band) ve {kod: (etiket, (r,g,b))} sözlüğünden (code_info)
     ArcMap/QGIS'in RENKLİ + İSİMLENDİRİLMİŞ açacağı bir dosya seti üretir:
@@ -2465,7 +2465,7 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
         '    </Metadata>\n'
         '    <GDALRasterAttributeTable Row0Min="0" BinSize="1" tableType="thematic">\n'
         '      <FieldDefn index="0"><Name>VALUE</Name><Type>1</Type><Usage>0</Usage></FieldDefn>\n'
-        '      <FieldDefn index="1"><Name>CLASS_NAME</Name><Type>2</Type><Usage>2</Usage></FieldDefn>\n'
+        '      <FieldDefn index="1"><Name>CLASSNAME</Name><Type>2</Type><Usage>2</Usage></FieldDefn>\n'
         '      <FieldDefn index="2"><Name>R</Name><Type>1</Type><Usage>6</Usage></FieldDefn>\n'
         '      <FieldDefn index="3"><Name>G</Name><Type>1</Type><Usage>7</Usage></FieldDefn>\n'
         '      <FieldDefn index="4"><Name>B</Name><Type>1</Type><Usage>8</Usage></FieldDefn>\n'
@@ -2486,7 +2486,7 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
     field_defs = [
         ('VALUE', 'N', 10, 0),
         ('COUNT', 'N', 12, 0),
-        ('CLASS_NAME', 'C', 60, 0),
+        ('CLASSNAME', 'C', 80, 0),
         ('RED', 'N', 3, 0),
         ('GREEN', 'N', 3, 0),
         ('BLUE', 'N', 3, 0),
@@ -2867,6 +2867,96 @@ def _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=Non
     }
     files.update(_build_arcmap_georeferencing_sidecars(final_tif, safe_name))
     return files
+
+
+
+def _build_colorized_display_tif(tif_bytes, vis, safe_name, nodata_value=None):
+    """Create a separate RGB GeoTIFF whose pixels use the same ramp as the
+    SylvaGIS analysis display, while leaving the scientific/raw raster intact.
+
+    ArcMap's Stretched renderer does not store an arbitrary web color ramp
+    inside a floating-point TIFF. A colorized RGB companion is therefore the
+    reliable way to make the downloaded visual appearance stable. The raw
+    TIFF remains the authoritative analysis raster.
+    """
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from rasterio.enums import Resampling
+
+    with MemoryFile(tif_bytes) as mf:
+        with mf.open() as src:
+            data = src.read(1).astype(np.float64)
+            profile = src.profile.copy()
+            src_nodata = src.nodata if nodata_value is None else nodata_value
+
+    valid = np.isfinite(data)
+    if src_nodata is not None:
+        try:
+            valid &= ~np.isclose(data, float(src_nodata))
+        except Exception:
+            pass
+    if not np.any(valid):
+        return None
+
+    vmin = vis.get('min') if isinstance(vis, dict) else None
+    vmax = vis.get('max') if isinstance(vis, dict) else None
+    try:
+        vmin = float(vmin)
+    except Exception:
+        vmin = float(np.nanmin(data[valid]))
+    try:
+        vmax = float(vmax)
+    except Exception:
+        vmax = float(np.nanmax(data[valid]))
+    if not np.isfinite(vmin):
+        vmin = float(np.nanmin(data[valid]))
+    if not np.isfinite(vmax) or vmax <= vmin:
+        vmax = vmin + 1.0
+
+    palette = (vis.get('palette') if isinstance(vis, dict) else None) or ['000000', 'ffffff']
+    frac = np.clip((data - vmin) / (vmax - vmin), 0.0, 1.0)
+    from math import floor
+
+    def _rgb_at(t):
+        return _interpolate_palette(palette, float(t))
+
+    # Vectorized interpolation through the existing SylvaGIS ramp helper.
+    # Build a 256-entry LUT; this preserves the ramp closely while keeping
+    # the RGB companion compact and fast to render at all zoom levels.
+    lut = np.array([_rgb_at(i / 255.0) for i in range(256)], dtype=np.uint8)
+    q = np.clip(np.rint(frac * 255.0), 0, 255).astype(np.uint8)
+    rgb = lut[q]
+    alpha = np.where(valid, 255, 0).astype(np.uint8)
+
+    out_profile = profile.copy()
+    out_profile.update(driver='GTiff', dtype='uint8', count=4, nodata=0,
+                       compress='lzw', photometric='RGB', interleave='pixel')
+    out_profile.pop('nbits', None)
+    if out_profile.get('tiled'):
+        # Preserve existing block geometry where valid.
+        pass
+    else:
+        out_profile.pop('blockxsize', None); out_profile.pop('blockysize', None)
+
+    with MemoryFile() as out_mem:
+        with out_mem.open(**out_profile) as dst:
+            dst.write(rgb[:, :, 0], 1)
+            dst.write(rgb[:, :, 1], 2)
+            dst.write(rgb[:, :, 2], 3)
+            dst.write(alpha, 4)
+            dst.set_band_description(1, 'Red')
+            dst.set_band_description(2, 'Green')
+            dst.set_band_description(3, 'Blue')
+            dst.set_band_description(4, 'Alpha')
+            levels = [2, 4, 8, 16]
+            levels = [lv for lv in levels if data.shape[1] // lv >= 32 and data.shape[0] // lv >= 32]
+            if levels:
+                try:
+                    dst.build_overviews(levels, Resampling.nearest)
+                    dst.update_tags(ns='rio_overview', resampling='nearest')
+                except Exception:
+                    pass
+        return out_mem.read()
 
 
 def _build_classified_symbology_zip(tif_bytes, vis, safe_name, breaks=None, n_classes=255, rgb_bytes=None):
@@ -7081,6 +7171,13 @@ def download_geotiff():
                                 _valid &= ~__import__('numpy').isclose(_band, float(_src.nodata))
                     _byte, _codes = _classify_default_aspect(_band, _valid)
                     sym_files = _build_symbology_files_from_classes(_byte, _profile, _codes, safe_name)
+                    try:
+                        _display_tif = _build_colorized_display_tif(tif_bytes, vis, safe_name, nodata_value=nodata_value)
+                        if _display_tif:
+                            sym_files['{}_ARCMAP_RENKLI.tif'.format(safe_name)] = _display_tif
+                            sym_files.update(_build_arcmap_georeferencing_sidecars(_display_tif, '{}_ARCMAP_RENKLI'.format(safe_name)))
+                    except Exception as _display_err:
+                        print('[SylvaGIS] ⚠️ Aspect renkli eşlikçi üretilemedi: {}'.format(_display_err))
                 except Exception as aspect_err:
                     traceback.print_exc()
                     sym_files = None
@@ -7089,6 +7186,15 @@ def download_geotiff():
                 try:
                     sym_files = _build_classified_symbology_zip(
                         tif_bytes, vis, safe_name, breaks=requested_breaks)
+                    # Renkleri ArcMap'te sabitleyen görsel eşlikçi. Sınıf kodları
+                    # ve VAT/CLR ham sınıflandırılmış TIFF'te korunur.
+                    try:
+                        _display_tif = _build_colorized_display_tif(tif_bytes, vis, safe_name, nodata_value=nodata_value)
+                        if _display_tif:
+                            sym_files['{}_ARCMAP_RENKLI.tif'.format(safe_name)] = _display_tif
+                            sym_files.update(_build_arcmap_georeferencing_sidecars(_display_tif, '{}_ARCMAP_RENKLI'.format(safe_name)))
+                    except Exception as _display_err:
+                        print('[SylvaGIS] ⚠️ Sınıflandırılmış renkli eşlikçi üretilemedi: {}'.format(_display_err))
                 except Exception as sym_err:
                     traceback.print_exc()
                     sym_files = None
@@ -7096,6 +7202,17 @@ def download_geotiff():
             else:
                 try:
                     sym_files = _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=nodata_value)
+                    # 🆕 ArcMap renk sabitleme: ham/float rasterın piksel değerlerine
+                    # dokunmadan, analiz ekranındaki rampayı taşıyan ayrı bir RGB
+                    # görüntü eşlikçisi oluştur. Böylece ArcMap'in varsayılan
+                    # siyah-beyaz Stretched renderer'ına bağımlı kalınmaz.
+                    try:
+                        _display_tif = _build_colorized_display_tif(tif_bytes, vis, safe_name, nodata_value=nodata_value)
+                        if _display_tif:
+                            sym_files['{}_ARCMAP_RENKLI.tif'.format(safe_name)] = _display_tif
+                            sym_files.update(_build_arcmap_georeferencing_sidecars(_display_tif, '{}_ARCMAP_RENKLI'.format(safe_name)))
+                    except Exception as _display_err:
+                        print('[SylvaGIS] ⚠️ Renkli ArcMap eşlikçi raster üretilemedi: {}'.format(_display_err))
                 except Exception as sym_err:
                     traceback.print_exc()
                     sym_files = None
