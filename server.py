@@ -33,9 +33,7 @@ CORS(app)
 # bir kısmının hiç oluşmamasına yol açabiliyor. Raster indirme tek kuyruğa
 # alınır; bu veri doğruluğunu değiştirmez, yalnızca indirme güvenilirliğini artırır.
 _GEE_EXPORT_LOCK = threading.Lock()
-_GEE_EXPORT_LAST_FINISHED = 0.0
-_GEE_EXPORT_MIN_GAP_SECONDS = 4.0
-print('SylvaGIS server.py yüklendi — versiyon: topo-export-v5-arcmap-sidecars-nbits-retry-2026-08-18')
+print('SylvaGIS server.py yüklendi — versiyon: topo-export-v4-raw-continuous-aspect9-429-safe-2026-08-18')
 
 
 # ════════════════════════════════════════════════════════════════
@@ -169,7 +167,7 @@ def _api_method_not_allowed(error):
 # devam ederdi. Aşağıdaki yardımcı fonksiyon, GEE/ağ çağrılarını üstel
 # geri çekilme (exponential backoff) ile otomatik olarak yeniden dener;
 # yalnızca TÜM denemeler tükendiğinde asıl hatayı yukarı fırlatır.
-def _call_with_retry(fn, *args, retries=6, base_delay=3.0, **kwargs):
+def _call_with_retry(fn, *args, retries=3, base_delay=1.5, **kwargs):
     """
     fn(*args, **kwargs) çağrısını dener; geçici (transient) bir ağ/GEE
     hatasıyla karşılaşırsa kısa bir bekleme sonrası tekrar dener.
@@ -204,8 +202,7 @@ def _call_with_retry(fn, *args, retries=6, base_delay=3.0, **kwargs):
             if attempt < retries:
                 delay = base_delay * (2 ** attempt)
                 if any(m in msg for m in _rate_limit_markers):
-                    delay *= 3.0
-                    delay = min(delay, 90.0)
+                    delay *= 2.0
                 print('[SylvaGIS] ⚠️ Geçici hata (deneme {}/{}), {:.1f} sn sonra '
                       'tekrar denenecek: {}'.format(attempt + 1, retries + 1, delay, e))
                 time.sleep(delay)
@@ -2328,7 +2325,12 @@ def _classify_by_breaks(band, valid_mask, breaks):
             rgb = tuple(int(hexc[k:k + 2], 16) for k in (0, 2, 4))
         except ValueError:
             rgb = (255, 255, 255)
-        label = str(b.get('label') or b.get('name') or '{:.3g} – {:.3g}'.format(lo, hi)).strip()
+        # Kullanıcının Lejantı Uygula panelinde verdiği sınıf adı varsa
+        # ArcMap'e SAYISAL kodu değil bu adı taşı. Böylece ör.
+        # "Kuzey", "Kuzeydoğu" veya seçili dildeki sınıf adı
+        # raster attribute table/VAT içinde doğrudan görünür.
+        _user_label = str(b.get('label') or '').strip()
+        label = _user_label or '{:.3g} – {:.3g}'.format(lo, hi)
         code_info[i] = (label, rgb)
 
     idx = np.where(valid_mask, idx, 0)
@@ -2395,13 +2397,6 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
     # LULC çıktılarında kesin olarak kaldırıyoruz. Renk + sınıf adı yalnızca
     # gerçek sınıfları içeren .clr / VAT / RAT sidecar'larından gelir.
     new_profile.pop('photometric', None)
-    # ARCMap BOŞ KUTU FİX (KÖK NEDEN): NBITS=4 gibi dar bir piksel alanı
-    # ArcMap'in legend/Unique Values motorunda 0..15 arasındaki TÜM olası
-    # kodları satır olarak göstermesine neden olabiliyor. Örneğin 9 sınıflı
-    # Bakı rasterında gerçek 9 sınıfa ek 6 isimsiz kutu tam olarak bu yüzden
-    # oluşuyordu. Bu nedenle sınıflandırılmış dışa aktarımlarda NBITS'i
-    # KESİNLİKLE yazmıyoruz; raster normal UInt8 olarak kalıyor ve VAT/RAT
-    # yalnızca GERÇEK sınıf satırlarını içeriyor.
     new_profile.pop('nbits', None)
     new_profile.pop('colormap', None)
 
@@ -2468,7 +2463,7 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
         '      <MDI key="LAYER_TYPE">thematic</MDI>\n'
         '    </Metadata>\n'
         '    <GDALRasterAttributeTable Row0Min="0" BinSize="1" tableType="thematic">\n'
-        '      <FieldDefn index="0"><Name>VALUE</Name><Type>1</Type><Usage>0</Usage></FieldDefn>\n'
+        '      <FieldDefn index="0"><Name>Value</Name><Type>1</Type><Usage>0</Usage></FieldDefn>\n'
         '      <FieldDefn index="1"><Name>ClassName</Name><Type>2</Type><Usage>2</Usage></FieldDefn>\n'
         '      <FieldDefn index="2"><Name>Red</Name><Type>1</Type><Usage>6</Usage></FieldDefn>\n'
         '      <FieldDefn index="3"><Name>Green</Name><Type>1</Type><Usage>7</Usage></FieldDefn>\n'
@@ -2488,12 +2483,12 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
     # aracının ürettiğiyle aynı format).
     counts = np.bincount(byte_band.ravel(), minlength=256)
     field_defs = [
-        ('VALUE', 'N', 10, 0),
-        ('COUNT', 'N', 12, 0),
-        ('CLASSNAME', 'C', 80, 0),
-        ('RED', 'N', 3, 0),
-        ('GREEN', 'N', 3, 0),
-        ('BLUE', 'N', 3, 0),
+        ('Value', 'N', 10, 0),
+        ('Count', 'N', 12, 0),
+        ('ClassName', 'C', 60, 0),
+        ('Red', 'N', 3, 0),
+        ('Green', 'N', 3, 0),
+        ('Blue', 'N', 3, 0),
     ]
     vat_rows = []
     for code in sorted(code_info.keys()):
@@ -2503,18 +2498,16 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
     vat_dbf_bytes = _write_dbf_bytes(field_defs, vat_rows)
     vat_cpg_bytes = b'UTF-8'
 
-    files = {
+    return {
         '{}.tif'.format(safe_name): new_tif_bytes,
         '{}.tif.aux.xml'.format(safe_name): aux_xml_bytes,
         '{}.tif.vat.dbf'.format(safe_name): vat_dbf_bytes,
         '{}.tif.vat.cpg'.format(safe_name): vat_cpg_bytes,
         '{}.clr'.format(safe_name): clr_bytes,
     }
-    files.update(_build_arcmap_georeferencing_sidecars(new_tif_bytes, safe_name))
-    return files
 
 
-def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name):
+def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name, localized_labels=None):
     """
     LULC ailesi (LULC, LULC_ESA, LULC_MODIS, LULC_CORINE) GeoTIFF'ini alır;
     çıktısı, ArcMap/QGIS'te doğrudan RENKLİ ve İSİMLENDİRİLMİŞ açılan, SADECE
@@ -2538,10 +2531,16 @@ def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name):
 
     # kod -> (isim, (r,g,b))
     code_info = {}
+    localized_labels = localized_labels if isinstance(localized_labels, dict) else {}
     for d in defs:
         hexc = d['color'].lstrip('#')
         rgb = tuple(int(hexc[i:i + 2], 16) for i in (0, 2, 4))
-        code_info[d['code']] = (d['label'], rgb)
+        # ArcMap'te görünen sınıf adı, kullanıcının seçtiği UI diliyle aynı
+        # olmalıdır. İstemci, SYLVA_TRANSLATIONS içindeki aynı class key'lerini
+        # gönderir; gönderilmezse geriye dönük uyumluluk için Türkçe backend adı
+        # kullanılır.
+        _label = str(localized_labels.get(str(d['code'])) or localized_labels.get(d['code']) or '').strip()
+        code_info[d['code']] = (_label or d['label'], rgb)
 
     # Dynamic World (LULC) kodları 0'dan başlıyor; 0'ı yalnızca NoData'ya
     # ayırabilmek için TÜM kodları +1 kaydırıyoruz. Diğer LULC ailesi
@@ -2716,7 +2715,7 @@ _DEFAULT_ASPECT_BREAKS = [
 # yardımcı sınıflandırıcı. _classify_by_breaks() son sınıf mantığı 0–360
 # tek aralıkta çalıştığından, Aspect için özel olarak iki parçalı Kuzey
 # aralığını tek sınıf kodunda birleştiriyoruz.
-def _classify_default_aspect(band, valid_mask, labels_override=None):
+def _classify_default_aspect(band, valid_mask):
     import numpy as np
     idx = np.zeros(band.shape, dtype=np.uint8)
     # Düz = -1
@@ -2734,49 +2733,32 @@ def _classify_default_aspect(band, valid_mask, labels_override=None):
         (217,217,217), (60,141,90), (87,184,148), (142,208,196),
         (200,225,217), (244,179,95), (238,123,58), (216,58,46), (143,29,20)
     ]
-    default_labels = [
+    labels = [
         'Düz (-1)', 'Kuzey (0–12.5° / 327.5–360°)',
         'Kuzeydoğu (12.5–57.5°)', 'Doğu (57.5–102.5°)',
         'Güneydoğu (102.5–147.5°)', 'Güney (147.5–192.5°)',
         'Güneybatı (192.5–237.5°)', 'Batı (237.5–282.5°)',
         'Kuzeybatı (282.5–327.5°)'
     ]
-    labels = list(labels_override) if isinstance(labels_override, (list, tuple)) and len(labels_override) == 9 else default_labels
-    return idx, {i+1: (str(labels[i]), colors[i]) for i in range(9)}
+    return idx, {i+1: (labels[i], colors[i]) for i in range(9)}
 
 
-def _build_arcmap_georeferencing_sidecars(tif_bytes, safe_name):
-    """GeoTIFF'in gömülü jeoreferansına ek olarak ArcMap'in eski/katı
-    sürümleri için .prj ve .tfw yan dosyalarını üretir. TIFF'in piksel
-    değerlerine dokunmaz; yalnızca CRS ve affine dönüşümü metin olarak
-    dışarı verir."""
-    import rasterio
-    from rasterio.io import MemoryFile
-    try:
-        with MemoryFile(tif_bytes) as mf:
-            with mf.open() as src:
-                crs = src.crs
-                transform = src.transform
-        out = {}
-        if crs:
-            try:
-                out['{}.prj'.format(safe_name)] = crs.to_wkt().encode('utf-8')
-            except Exception:
-                pass
-        if transform:
-            # World file sırası: A, D, B, E, C, F; C/F piksel merkezidir.
-            a = float(transform.a)
-            d = float(transform.d)
-            b = float(transform.b)
-            e = float(transform.e)
-            c = float(transform.c + 0.5 * transform.a + 0.5 * transform.b)
-            f = float(transform.f + 0.5 * transform.d + 0.5 * transform.e)
-            tfw = '\n'.join('{:.15g}'.format(v) for v in (a, d, b, e, c, f)) + '\n'
-            out['{}.tfw'.format(safe_name)] = tfw.encode('ascii')
-        return out
-    except Exception as exc:
-        print('[SylvaGIS] ArcMap .prj/.tfw sidecar üretilemedi:', exc)
-        return {}
+def _localize_aspect_code_info(code_info, labels):
+    """Varsayılan Aspect 9 sınıfının adlarını istemcinin seçtiği dile taşır.
+
+    labels, index.html tarafındaki aynı 9 sınıflık sözlükten gelir. Renkler
+    ve sınıf kodları değişmez; yalnızca CLASS_NAME/Label metni yerelleştirilir.
+    """
+    if not isinstance(labels, (list, tuple)) or len(labels) < len(code_info):
+        return code_info
+    out = {}
+    for code, (_old_label, rgb) in code_info.items():
+        try:
+            label = str(labels[int(code) - 1]).strip()
+        except Exception:
+            label = _old_label
+        out[code] = (label or _old_label, rgb)
+    return out
 
 
 def _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=None):
@@ -2865,104 +2847,11 @@ def _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=Non
         clr = ('# SylvaGIS continuous raster reference\n'
                '# RAW VALUES PRESERVED: {} - {}\n'.format(mn, mx)).encode('utf-8')
 
-    files = {
-        # RAW bilimsel raster: gerçek piksel değerleri + doğru min/max.
-        '{}_RAW_VALUES.tif'.format(safe_name): final_tif,
-        '{}_RAW_VALUES.tif.aux.xml'.format(safe_name): aux,
-        '{}_RAW_VALUES.clr'.format(safe_name): clr,
+    return {
+        '{}.tif'.format(safe_name): final_tif,
+        '{}.tif.aux.xml'.format(safe_name): aux,
+        '{}.clr'.format(safe_name): clr,
     }
-    files.update(_build_arcmap_georeferencing_sidecars(final_tif, '{}_RAW_VALUES'.format(safe_name)))
-    return files
-
-
-
-def _build_colorized_display_tif(tif_bytes, vis, safe_name, nodata_value=None):
-    """Create a separate RGB GeoTIFF whose pixels use the same ramp as the
-    SylvaGIS analysis display, while leaving the scientific/raw raster intact.
-
-    ArcMap's Stretched renderer does not store an arbitrary web color ramp
-    inside a floating-point TIFF. A colorized RGB companion is therefore the
-    reliable way to make the downloaded visual appearance stable. The raw
-    TIFF remains the authoritative analysis raster.
-    """
-    import numpy as np
-    from rasterio.io import MemoryFile
-    from rasterio.enums import Resampling
-
-    with MemoryFile(tif_bytes) as mf:
-        with mf.open() as src:
-            data = src.read(1).astype(np.float64)
-            profile = src.profile.copy()
-            src_nodata = src.nodata if nodata_value is None else nodata_value
-
-    valid = np.isfinite(data)
-    if src_nodata is not None:
-        try:
-            valid &= ~np.isclose(data, float(src_nodata))
-        except Exception:
-            pass
-    if not np.any(valid):
-        return None
-
-    vmin = vis.get('min') if isinstance(vis, dict) else None
-    vmax = vis.get('max') if isinstance(vis, dict) else None
-    try:
-        vmin = float(vmin)
-    except Exception:
-        vmin = float(np.nanmin(data[valid]))
-    try:
-        vmax = float(vmax)
-    except Exception:
-        vmax = float(np.nanmax(data[valid]))
-    if not np.isfinite(vmin):
-        vmin = float(np.nanmin(data[valid]))
-    if not np.isfinite(vmax) or vmax <= vmin:
-        vmax = vmin + 1.0
-
-    palette = (vis.get('palette') if isinstance(vis, dict) else None) or ['000000', 'ffffff']
-    frac = np.clip((data - vmin) / (vmax - vmin), 0.0, 1.0)
-    from math import floor
-
-    def _rgb_at(t):
-        return _interpolate_palette(palette, float(t))
-
-    # Vectorized interpolation through the existing SylvaGIS ramp helper.
-    # Build a 256-entry LUT; this preserves the ramp closely while keeping
-    # the RGB companion compact and fast to render at all zoom levels.
-    lut = np.array([_rgb_at(i / 255.0) for i in range(256)], dtype=np.uint8)
-    q = np.clip(np.rint(frac * 255.0), 0, 255).astype(np.uint8)
-    rgb = lut[q]
-    alpha = np.where(valid, 255, 0).astype(np.uint8)
-
-    out_profile = profile.copy()
-    out_profile.update(driver='GTiff', dtype='uint8', count=4, nodata=0,
-                       compress='lzw', photometric='RGB', interleave='pixel')
-    out_profile.pop('nbits', None)
-    if out_profile.get('tiled'):
-        # Preserve existing block geometry where valid.
-        pass
-    else:
-        out_profile.pop('blockxsize', None); out_profile.pop('blockysize', None)
-
-    with MemoryFile() as out_mem:
-        with out_mem.open(**out_profile) as dst:
-            dst.write(rgb[:, :, 0], 1)
-            dst.write(rgb[:, :, 1], 2)
-            dst.write(rgb[:, :, 2], 3)
-            dst.write(alpha, 4)
-            dst.set_band_description(1, 'Red')
-            dst.set_band_description(2, 'Green')
-            dst.set_band_description(3, 'Blue')
-            dst.set_band_description(4, 'Alpha')
-            levels = [2, 4, 8, 16]
-            levels = [lv for lv in levels if data.shape[1] // lv >= 32 and data.shape[0] // lv >= 32]
-            if levels:
-                try:
-                    dst.build_overviews(levels, Resampling.nearest)
-                    dst.update_tags(ns='rio_overview', resampling='nearest')
-                except Exception:
-                    pass
-        return out_mem.read()
 
 
 def _build_classified_symbology_zip(tif_bytes, vis, safe_name, breaks=None, n_classes=255, rgb_bytes=None):
@@ -7094,13 +6983,8 @@ def download_geotiff():
         # çubuğuyla eşleşir.
         requested_vis = req_data.get('visualization')
         requested_breaks = None
-        # KÖK DÜZELTME: İstemci görselleştirme nesnesini eski/önceki katmandan
-        # taşısa bile, sınıflandırmanın asıl kaynağı analiz oturumundaki
-        # classBreaks'tir. Böylece "Lejantı Uygula" sonrası indirilen raster
-        # mutlaka ekranda uygulanmış sınıflar + renklerle üretilir.
-        _session_breaks = data.get('classBreaks')
-        if isinstance(_session_breaks, list) and _session_breaks:
-            requested_breaks = _session_breaks
+        requested_aspect_labels = None
+        requested_lulc_labels = None
         if isinstance(requested_vis, dict):
             for _vis_key in ('min', 'max', 'palette'):
                 if requested_vis.get(_vis_key) not in (None, '', []):
@@ -7115,11 +6999,13 @@ def download_geotiff():
             # ekranda gördüğü sınıfları birebir kullanır. mode:'bar' (veya
             # hiç özelleştirilmemiş varsayılan) durumunda 'breaks' boş
             # gelir ve sürekli/yoğun (255 sınıflı) moda düşülür.
-            if requested_vis.get('mode') == 'classified' and isinstance(requested_vis.get('breaks'), list) and requested_vis.get('breaks'):
+            if requested_vis.get('mode') == 'classified' and isinstance(requested_vis.get('breaks'), list):
                 requested_breaks = requested_vis['breaks']
+            # Varsayılan/native Aspect sınıfları da istemcinin seçili dilindeki
+            # isimleriyle paketlensin. Kullanıcı daha sonra sınıflandırmayı
+            # değiştirirse requested_breaks içindeki kendi etiketleri önceliklidir.
             requested_aspect_labels = requested_vis.get('aspectLabels') if isinstance(requested_vis.get('aspectLabels'), list) else None
-        else:
-            requested_aspect_labels = None
+            requested_lulc_labels = requested_vis.get('lulcLabels') if isinstance(requested_vis.get('lulcLabels'), dict) else None
         is_true_color_rgb = (lulc_index == 'RGB')
         export_image = final_display
         # 🛠️ BUG FİX (indirilen TÜM rasterlerin RGB olarak inmesi): önceden
@@ -7164,7 +7050,8 @@ def download_geotiff():
         sym_files = None
         if lulc_index in LULC_CLASS_DEFS:
             try:
-                sym_files = _build_lulc_symbology_zip(tif_bytes, lulc_index, safe_name)
+                sym_files = _build_lulc_symbology_zip(
+                    tif_bytes, lulc_index, safe_name, localized_labels=requested_lulc_labels)
             except Exception as sym_err:
                 traceback.print_exc()
                 sym_files = None
@@ -7185,7 +7072,9 @@ def download_geotiff():
                             _valid = __import__('numpy').isfinite(_band)
                             if _src.nodata is not None:
                                 _valid &= ~__import__('numpy').isclose(_band, float(_src.nodata))
-                    _byte, _codes = _classify_default_aspect(_band, _valid, labels_override=requested_aspect_labels)
+                    _byte, _codes = _classify_default_aspect(_band, _valid)
+                    if requested_aspect_labels:
+                        _codes = _localize_aspect_code_info(_codes, requested_aspect_labels)
                     sym_files = _build_symbology_files_from_classes(_byte, _profile, _codes, safe_name)
                 except Exception as aspect_err:
                     traceback.print_exc()
@@ -7202,23 +7091,6 @@ def download_geotiff():
             else:
                 try:
                     sym_files = _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=nodata_value)
-                    # 🆕 ArcMap renk sabitleme: ham/float rasterın piksel değerlerine
-                    # dokunmadan, analiz ekranındaki rampayı taşıyan ayrı bir RGB
-                    # görüntü eşlikçisi oluştur. Böylece ArcMap'in varsayılan
-                    # siyah-beyaz Stretched renderer'ına bağımlı kalınmaz.
-                    try:
-                        _display_tif = _build_colorized_display_tif(tif_bytes, vis, safe_name, nodata_value=nodata_value)
-                        if _display_tif:
-                            # Kullanıcı ZIP'i açıp doğrudan ana .tif'i ArcMap'e
-                            # sürüklediğinde artık analiz ekranındaki renkler
-                            # gelsin. Bilimsel ham değerler ayrı bir
-                            # *_RAW_VALUES.tif olarak aynı ZIP'te korunuyor.
-                            sym_files['{}.tif'.format(safe_name)] = _display_tif
-                            sym_files.update(_build_arcmap_georeferencing_sidecars(_display_tif, safe_name))
-                            # Renkli görüntünün istatistikleri de yardımcı XML
-                            # ile taşınsın; gerçek min/max ise RAW_VALUES'ta.
-                    except Exception as _display_err:
-                        print('[SylvaGIS] ⚠️ Renkli ArcMap eşlikçi raster üretilemedi: {}'.format(_display_err))
                 except Exception as sym_err:
                     traceback.print_exc()
                     sym_files = None
@@ -7238,20 +7110,21 @@ def download_geotiff():
                       'olarak devam ediliyor: {}'.format(sym_err))
 
         if sym_files:
-            # KÖK DÜZELTME: TEK raster indirilse bile artık her zaman ZIP.
-            # Kullanıcıya TIFF'in yanında .aux.xml/.vat.dbf/.cpg/.clr/.prj/.tfw
-            # gibi gerekli yan dosyaları eksiksiz vermek için flatTiff seçeneği
-            # sunucu tarafında tamamen yok sayılır. Böylece 1 analiz ve 20 analiz
-            # aynı güvenilir paketleme davranışını kullanır.
-            zip_buf = io.BytesIO()
-            with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-                for fname, fbytes in sym_files.items():
-                    zf.writestr(fname, fbytes)
-            zip_bytes = zip_buf.getvalue()
-            resp = Response(zip_bytes, mimetype='application/zip')
-            resp.headers['Content-Disposition'] = 'attachment; filename="{}.zip"'.format(safe_name)
-            resp.headers['Content-Length'] = str(len(zip_bytes))
-            return resp
+            # Tek analiz için kullanıcı doğrudan TIFF istediğinde renk
+            # tablosu gömülü TIFF'i döndür. Çoklu analizlerde ise sınıf
+            # isimlerini taşıyan RAT/VAT yan dosyaları batch ZIP'e katılır.
+            if req_data.get('flatTiff'):
+                tif_bytes = sym_files.get('{}.tif'.format(safe_name), tif_bytes)
+            else:
+                zip_buf = io.BytesIO()
+                with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+                    for fname, fbytes in sym_files.items():
+                        zf.writestr(fname, fbytes)
+                zip_bytes = zip_buf.getvalue()
+                resp = Response(zip_bytes, mimetype='application/zip')
+                resp.headers['Content-Disposition'] = 'attachment; filename="{}.zip"'.format(safe_name)
+                resp.headers['Content-Length'] = str(len(zip_bytes))
+                return resp
 
         # 🛠️ BUG FİX ("her ne olursa olsun tüm veriler zip olarak sorunsuz
         # insin"): sym_files hiç üretilemediyse (yukarıdaki üç dalın hepsi
@@ -8065,23 +7938,13 @@ def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata
     olası bir CRS yeniden örneklemesi en_yakın_komşu kullansın.
     """
     # Earth Engine Restricted Mode altında aynı anda yapılan export istekleri
-    # 429 concurrency hatası verebilir. Tek süreçte indirmeleri sıraya al ve
-    # ardışık exportlar arasında kısa bir nefes aralığı bırak. Bu özellikle
-    # toplu TOPO/DEM indirmelerinde, harita karolarından hemen sonra başlayan
-    # ikinci exportun 429 almasını engeller.
-    global _GEE_EXPORT_LAST_FINISHED
+    # 429 concurrency hatası verebilir. Tek süreçte indirmeleri sıraya al.
     with _GEE_EXPORT_LOCK:
-        _elapsed = time.time() - _GEE_EXPORT_LAST_FINISHED
-        if _elapsed < _GEE_EXPORT_MIN_GAP_SECONDS:
-            time.sleep(_GEE_EXPORT_MIN_GAP_SECONDS - _elapsed)
-        try:
-            raw_bytes = _download_band_geotiff_bytes_impl(
-                img, region_geom, scale, crs, base_name,
-                nodata_value=nodata_value, aoi_geom_4326=aoi_geom_4326,
-                fallback_region_geom=fallback_region_geom
-            )
-        finally:
-            _GEE_EXPORT_LAST_FINISHED = time.time()
+        raw_bytes = _download_band_geotiff_bytes_impl(
+            img, region_geom, scale, crs, base_name,
+            nodata_value=nodata_value, aoi_geom_4326=aoi_geom_4326,
+            fallback_region_geom=fallback_region_geom
+        )
     # 🔒 GEE ne dönerse dönsün, kullanıcının seçtiği CRS'i kesin olarak
     # garanti eden güvence katmanı — bkz. _ensure_output_crs() docstring'i.
     raw_bytes = _ensure_output_crs(raw_bytes, crs, nodata_value=nodata_value, is_categorical=is_categorical)
