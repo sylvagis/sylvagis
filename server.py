@@ -33,7 +33,9 @@ CORS(app)
 # bir kısmının hiç oluşmamasına yol açabiliyor. Raster indirme tek kuyruğa
 # alınır; bu veri doğruluğunu değiştirmez, yalnızca indirme güvenilirliğini artırır.
 _GEE_EXPORT_LOCK = threading.Lock()
-print('SylvaGIS server.py yüklendi — versiyon: topo-export-v4-raw-continuous-aspect9-429-safe-2026-08-18')
+_GEE_EXPORT_LAST_FINISHED = 0.0
+_GEE_EXPORT_MIN_GAP_SECONDS = 4.0
+print('SylvaGIS server.py yüklendi — versiyon: topo-export-v5-arcmap-sidecars-nbits-retry-2026-08-18')
 
 
 # ════════════════════════════════════════════════════════════════
@@ -167,7 +169,7 @@ def _api_method_not_allowed(error):
 # devam ederdi. Aşağıdaki yardımcı fonksiyon, GEE/ağ çağrılarını üstel
 # geri çekilme (exponential backoff) ile otomatik olarak yeniden dener;
 # yalnızca TÜM denemeler tükendiğinde asıl hatayı yukarı fırlatır.
-def _call_with_retry(fn, *args, retries=3, base_delay=1.5, **kwargs):
+def _call_with_retry(fn, *args, retries=6, base_delay=3.0, **kwargs):
     """
     fn(*args, **kwargs) çağrısını dener; geçici (transient) bir ağ/GEE
     hatasıyla karşılaşırsa kısa bir bekleme sonrası tekrar dener.
@@ -202,7 +204,8 @@ def _call_with_retry(fn, *args, retries=3, base_delay=1.5, **kwargs):
             if attempt < retries:
                 delay = base_delay * (2 ** attempt)
                 if any(m in msg for m in _rate_limit_markers):
-                    delay *= 2.0
+                    delay *= 3.0
+                    delay = min(delay, 90.0)
                 print('[SylvaGIS] ⚠️ Geçici hata (deneme {}/{}), {:.1f} sn sonra '
                       'tekrar denenecek: {}'.format(attempt + 1, retries + 1, delay, e))
                 time.sleep(delay)
@@ -2325,7 +2328,7 @@ def _classify_by_breaks(band, valid_mask, breaks):
             rgb = tuple(int(hexc[k:k + 2], 16) for k in (0, 2, 4))
         except ValueError:
             rgb = (255, 255, 255)
-        label = '{:.3g} – {:.3g}'.format(lo, hi)
+        label = str(b.get('label') or b.get('name') or '{:.3g} – {:.3g}'.format(lo, hi)).strip()
         code_info[i] = (label, rgb)
 
     idx = np.where(valid_mask, idx, 0)
@@ -2392,7 +2395,10 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
     # LULC çıktılarında kesin olarak kaldırıyoruz. Renk + sınıf adı yalnızca
     # gerçek sınıfları içeren .clr / VAT / RAT sidecar'larından gelir.
     new_profile.pop('photometric', None)
-    new_profile.pop('nbits', None)
+    # NBITS'i KORU. ArcMap 8-bit varsayılanına düşürülürse 256 adet
+    # colormap satırı üretir; 9 sınıflı Bakı gibi analizlerde 4-bit TIFF
+    # yalnızca 16 giriş taşır ve gereksiz satırları dramatik biçimde azaltır.
+    new_profile['nbits'] = nbits
     new_profile.pop('colormap', None)
 
     with MemoryFile() as out_memfile:
@@ -2493,13 +2499,15 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
     vat_dbf_bytes = _write_dbf_bytes(field_defs, vat_rows)
     vat_cpg_bytes = b'UTF-8'
 
-    return {
+    files = {
         '{}.tif'.format(safe_name): new_tif_bytes,
         '{}.tif.aux.xml'.format(safe_name): aux_xml_bytes,
         '{}.tif.vat.dbf'.format(safe_name): vat_dbf_bytes,
         '{}.tif.vat.cpg'.format(safe_name): vat_cpg_bytes,
         '{}.clr'.format(safe_name): clr_bytes,
     }
+    files.update(_build_arcmap_georeferencing_sidecars(new_tif_bytes, safe_name))
+    return files
 
 
 def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name):
@@ -2732,6 +2740,40 @@ def _classify_default_aspect(band, valid_mask):
     return idx, {i+1: (labels[i], colors[i]) for i in range(9)}
 
 
+def _build_arcmap_georeferencing_sidecars(tif_bytes, safe_name):
+    """GeoTIFF'in gömülü jeoreferansına ek olarak ArcMap'in eski/katı
+    sürümleri için .prj ve .tfw yan dosyalarını üretir. TIFF'in piksel
+    değerlerine dokunmaz; yalnızca CRS ve affine dönüşümü metin olarak
+    dışarı verir."""
+    import rasterio
+    from rasterio.io import MemoryFile
+    try:
+        with MemoryFile(tif_bytes) as mf:
+            with mf.open() as src:
+                crs = src.crs
+                transform = src.transform
+        out = {}
+        if crs:
+            try:
+                out['{}.prj'.format(safe_name)] = crs.to_wkt().encode('utf-8')
+            except Exception:
+                pass
+        if transform:
+            # World file sırası: A, D, B, E, C, F; C/F piksel merkezidir.
+            a = float(transform.a)
+            d = float(transform.d)
+            b = float(transform.b)
+            e = float(transform.e)
+            c = float(transform.c + 0.5 * transform.a + 0.5 * transform.b)
+            f = float(transform.f + 0.5 * transform.d + 0.5 * transform.e)
+            tfw = '\n'.join('{:.15g}'.format(v) for v in (a, d, b, e, c, f)) + '\n'
+            out['{}.tfw'.format(safe_name)] = tfw.encode('ascii')
+        return out
+    except Exception as exc:
+        print('[SylvaGIS] ArcMap .prj/.tfw sidecar üretilemedi:', exc)
+        return {}
+
+
 def _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=None):
     """Sürekli/bar analizlerde HAM sayısal rasterı korur.
 
@@ -2818,11 +2860,13 @@ def _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=Non
         clr = ('# SylvaGIS continuous raster reference\n'
                '# RAW VALUES PRESERVED: {} - {}\n'.format(mn, mx)).encode('utf-8')
 
-    return {
+    files = {
         '{}.tif'.format(safe_name): final_tif,
         '{}.tif.aux.xml'.format(safe_name): aux,
         '{}.clr'.format(safe_name): clr,
     }
+    files.update(_build_arcmap_georeferencing_sidecars(final_tif, safe_name))
+    return files
 
 
 def _build_classified_symbology_zip(tif_bytes, vis, safe_name, breaks=None, n_classes=255, rgb_bytes=None):
@@ -7899,13 +7943,23 @@ def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata
     olası bir CRS yeniden örneklemesi en_yakın_komşu kullansın.
     """
     # Earth Engine Restricted Mode altında aynı anda yapılan export istekleri
-    # 429 concurrency hatası verebilir. Tek süreçte indirmeleri sıraya al.
+    # 429 concurrency hatası verebilir. Tek süreçte indirmeleri sıraya al ve
+    # ardışık exportlar arasında kısa bir nefes aralığı bırak. Bu özellikle
+    # toplu TOPO/DEM indirmelerinde, harita karolarından hemen sonra başlayan
+    # ikinci exportun 429 almasını engeller.
+    global _GEE_EXPORT_LAST_FINISHED
     with _GEE_EXPORT_LOCK:
-        raw_bytes = _download_band_geotiff_bytes_impl(
-            img, region_geom, scale, crs, base_name,
-            nodata_value=nodata_value, aoi_geom_4326=aoi_geom_4326,
-            fallback_region_geom=fallback_region_geom
-        )
+        _elapsed = time.time() - _GEE_EXPORT_LAST_FINISHED
+        if _elapsed < _GEE_EXPORT_MIN_GAP_SECONDS:
+            time.sleep(_GEE_EXPORT_MIN_GAP_SECONDS - _elapsed)
+        try:
+            raw_bytes = _download_band_geotiff_bytes_impl(
+                img, region_geom, scale, crs, base_name,
+                nodata_value=nodata_value, aoi_geom_4326=aoi_geom_4326,
+                fallback_region_geom=fallback_region_geom
+            )
+        finally:
+            _GEE_EXPORT_LAST_FINISHED = time.time()
     # 🔒 GEE ne dönerse dönsün, kullanıcının seçtiği CRS'i kesin olarak
     # garanti eden güvence katmanı — bkz. _ensure_output_crs() docstring'i.
     raw_bytes = _ensure_output_crs(raw_bytes, crs, nodata_value=nodata_value, is_categorical=is_categorical)
