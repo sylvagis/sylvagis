@@ -7446,14 +7446,25 @@ def _true_clip_tif_bytes(tif_bytes, aoi_geom_4326, nodata_value):
 
                 post_valid_ratio = _valid_ratio(out_image, nodata_value)
 
-                # Kırpma öncesi zaten anlamlı miktarda geçerli piksel vardıysa
-                # (>%1) ama kırpma sonrası bunun neredeyse tamamı (>%95'i)
-                # kaybolduysa, bu kırpmanın YANLIŞ ÇALIŞTIĞININ işaretidir.
-                if pre_valid_ratio > 0.01 and post_valid_ratio < pre_valid_ratio * 0.05:
-                    print('[SylvaGIS] ⚠️ Yerel true-clip sonrası geçerli piksel oranı '
-                          'şüpheli derecede düştü ({:.4f} → {:.4f}) — sonuç GÜVENİLMEZ '
-                          'kabul edilip GEE\'nin kendi kırpmasıyla gelen orijinal dosyaya '
-                          'güvenle geri dönülüyor.'.format(pre_valid_ratio, post_valid_ratio))
+                # 🛠️ ESA WorldCover / ince veya çok düzensiz AOI düzeltmesi:
+                # Eski güvenlik heuristiği, AOI'nin raster bounding-box'ına oranı
+                # %5'ten küçük olduğunda gerçek ve DOĞRU bir polygon clip'ini yanlışlıkla
+                # "bozuk" sayıp orijinal dikdörtgen TIFF'e geri dönüyordu. 10 m ESA
+                # WorldCover'da bu durum özellikle sık görülür: veri geçerli olsa bile
+                # AOI'nin bounding-box içindeki kapladığı piksel oranı çok düşük olabilir.
+                # Sonuç ArcMap'te tam kare/dikdörtgen görünür.
+                #
+                # rasterio.mask() zaten geometri raster ile örtüşmüyorsa exception
+                # üretir. Bu yüzden artık oran tabanlı %5 geri dönüşü YAPMIYORUZ.
+                # Yalnızca clip sonucu gerçekten sıfır geçerli piksel kaldıysa ve
+                # kaynakta anlamlı veri varsa güvenlik amacıyla orijinal dosyaya dön.
+                # Böylece geçerli ama dar/düzensiz ESA AOI'leri kesin olarak polygon
+                # şeklinde kırpılır; diğer veri setlerinin mevcut davranışı korunur.
+                if pre_valid_ratio > 0.01 and post_valid_ratio <= 0.0:
+                    print('[SylvaGIS] ⚠️ Yerel true-clip sonrası hiç geçerli piksel kalmadı '
+                          "({:.4f} → {:.4f}) — sonuç GÜVENİLMEZ kabul edilip GEE'nin "
+                          'kendi kırpmasıyla gelen orijinal dosyaya dönülüyor.'.format(
+                              pre_valid_ratio, post_valid_ratio))
                     return tif_bytes
 
                 out_meta = src.meta.copy()
