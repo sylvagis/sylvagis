@@ -7589,59 +7589,34 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
 
         params = {
             'name':   base_name,
+            'scale':  scale,
             'format': 'GEO_TIFF',
             'crs':    crs,
+            'region': region_geom,
         }
         if nodata_value is not None:
             params['formatOptions'] = {'noData': nodata_value}
 
-        # 🛠️ BUG FİX (Faz 17 — "lejant doğru ama arazi kullanımı verisi
-        # yanlış inmiş": ekranda çeşitli/doğru sınıflar görünürken indirilen
-        # dosyada AOI'nin neredeyse tamamı TEK bir baskın sınıfa (ör. "Tarım
-        # Alanı") sıkışıyor, yalnızca kenarda ince/doğru bir şerit kalıyor):
-        # KÖK NEDEN (GEE'nin bilinen bir davranışı): yalnızca 'scale' +
-        # 'region' + 'crs' verildiğinde GEE, piksel gridinin ORİJİNİNİ ve
-        # boyutlarını KENDİSİ, örtük/dahili bir hesaplamayla belirler. Bu
-        # hesaplama, kaynak görüntünün doğal piksel gridi (ör. ESA
-        # WorldCover/MODIS'in kendi native projeksiyonu) istenen crs/scale
-        # ile TAM örtüşmediğinde, GEE'nin görüntüyü örtük olarak yeniden
-        # örneklerken AOI'nin büyük bölümünü kaba/toplu bir örneklemeyle
-        # doldurmasına yol açabiliyor — yalnızca AOI kenarındaki pikseller
-        # (kaynak gridle örtüşmesi farklı olduğundan) ince ayrıntıyı
-        # koruyor. Bu, kullanıcının bildirdiği "ortada tek renk, kenarda
-        # ince doğru şerit" deseniyle birebir örtüşüyor.
-        # ÇÖZÜM: büyük-AOI karo-bölme yolunda ZATEN kanıtlanmış olan KESİN/
-        # deterministik piksel gridi tekniği (bkz. _split_bbox_grid_aligned()
-        # docstring'i — "TEK ORTAK bir piksel gridi", crsTransform +
-        # dimensions) artık TEK istekli (karo bölünmesi gerekmeyen) normal
-        # indirmelerde de kullanılıyor: 'scale'+'region' yerine, AOI'nin
-        # TAMAMINI kapsayan TEK bir karo (nx=ny=1) için hesaplanan
-        # crsTransform+dimensions GEE'ye gönderiliyor. Bu, GEE'nin örtük
-        # grid hesaplamasını TAMAMEN devre dışı bırakıp piksel gridinin
-        # KESİN olarak scale/origin'e göre, hiçbir belirsizlik olmadan
-        # tanımlanmasını sağlıyor — kategorik (LULC ailesi) veriler için
-        # özellikle kritik, çünkü nearest-neighbor örnekleme artık HER
-        # zaman öngörülebilir/sabit bir gridden yapılıyor.
-        # Bu hesaplama başarısız olursa (ör. küresel/sınırsız geometri —
-        # "must be bounded" hatası, global DEM gibi) ESKİ 'scale'+'region'
-        # yöntemine güvenle geri dönülür; aşağıdaki except bloğundaki
-        # fallback_region_geom mekanizması DEĞİŞTİRİLMEDEN aynen çalışır.
-        _primary_tile_spec = None
-        try:
-            _specs = _split_bbox_grid_aligned(region_geom, 1, 1, scale, crs)
-            if _specs:
-                _primary_tile_spec = _specs[0]
-        except Exception as _grid_err:
-            print('[SylvaGIS] ⚠️ Kesin piksel gridi hesaplanamadı, scale+region '
-                  'yöntemine geri dönülüyor: {}'.format(_grid_err))
-            _primary_tile_spec = None
-
-        if _primary_tile_spec is not None:
-            params['crsTransform'] = _primary_tile_spec['crsTransform']
-            params['dimensions']   = _primary_tile_spec['dimensions']
-        else:
-            params['scale']  = scale
-            params['region'] = region_geom
+        # 🛠️ GERİ ALINDI (Faz 17 → Faz 18): burada önceden — büyük-AOI
+        # karo-bölme yolundaki (_split_bbox_grid_aligned) deterministik
+        # crsTransform+dimensions tekniği TEK istekli/normal indirmelere de
+        # uygulanmıştı ("ortada tek renk, kenarda ince doğru şerit"
+        # şüphesiyle). Bu değişiklik HER TEK indirmeye (LULC dahil TÜM
+        # analizler, hem tekli hem toplu/batch indirmeler) GEE'ye ekstra bir
+        # senkron .getInfo() ağ isteği (roi.transform().bounds().getInfo())
+        # ekliyordu — bu, kanıtlanmamış/spekülatif bir düzeltmeydi ve kısa
+        # süre sonra kullanıcı YENİ ve SOMUT hatalar bildirdi: tekli
+        # indirmede "Failed to fetch" ve toplu indirmede zip'in hiç
+        # inmemesi. .har kaydında zaten görülen Cloud Run 503 istikrarsızlığı
+        # göz önüne alındığında, HER indirmeye eklenen bu fazladan zorunlu
+        # GEE round-trip'in gecikme/başarısızlık olasılığını artırdığı ve
+        # gözlemlenen yeni hatalarla zamansal olarak birebir örtüştüğü
+        # değerlendirildi. Kanıtlanmamış bir iyileştirme, KANITLANMIŞ yeni
+        # bir gerilemeye (regresyona) değmez — bu yüzden Faz 16'nın basit ve
+        # güvenilir 'scale'+'region'+'crs' yöntemine GERİ DÖNÜLDÜ. Büyük-AOI
+        # karo-bölme yolu (_split_bbox_grid_aligned, aşağıdaki except bloğu)
+        # DEĞİŞMEDEN kalmaya devam ediyor — o zaten yalnızca GERÇEKTEN
+        # gerektiğinde (boyut sınırı aşıldığında) devreye giriyor.
 
         url = _call_with_retry(lambda: img.getDownloadURL(params))
         r = _call_with_retry(lambda: requests.get(url, timeout=180), retries=2)
@@ -7668,15 +7643,6 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
                 'bounded' in err_str.lower() or 'clipToBoundsAndScale' in err_str
             ):
                 fb_params = dict(params)
-                # 🛠️ BUG FİX (Faz 17 — crsTransform/dimensions + region birlikte
-                # gönderilmesin): yukarıdaki KESİN piksel gridi denemesi
-                # başarılı olup params'a 'crsTransform'/'dimensions' eklemiş
-                # olabilir; bu durumda 'region' eklemeden önce onları
-                # kaldırıp yerine 'scale' konur — GEE'ye çelişkili/karma
-                # parametre seti (hem sabit grid hem de region) gönderilmez.
-                fb_params.pop('crsTransform', None)
-                fb_params.pop('dimensions', None)
-                fb_params['scale'] = scale
                 fb_params['region'] = fallback_region_geom
                 fb_url = _call_with_retry(lambda: img.getDownloadURL(fb_params))
                 fb_r = _call_with_retry(lambda: requests.get(fb_url, timeout=180), retries=2)
@@ -9114,29 +9080,78 @@ def download_geotiff_batch():
         return jsonify({'success': False, 'error': 'ZIP için en az iki raster analiz gerekir.'}), 400
     if len(items) > 25:
         return jsonify({'success': False, 'error': 'Tek ZIP içinde en fazla 25 analiz indirilebilir.'}), 400
+    # 🛠️ BUG FİX (Faz 18 — "toplu indirmede hata verdi, zip inmedi"):
+    # ESKİDEN her öğe (ör. Arazi Kullanımı'nda seçili 4 katman: Dynamic
+    # World, ESA WorldCover, MODIS, CORINE) burada SIRAYLA/senkron olarak
+    # indiriliyordu — her biri kendi GEE indirme + yeniden deneme (retry)
+    # süresini tam olarak bekletiyordu. N öğeli bir toplu indirmenin
+    # toplam süresi TÜM öğelerin sürelerinin TOPLAMI kadar oluyordu; bu da
+    # (özellikle .har kaydında görülen Cloud Run 503/istikrarsızlığı ile
+    # birleşince) tarayıcının veya aradaki bir ağ geçidinin (reverse
+    # proxy/CDN) isteği zaman aşımına uğratıp bağlantıyı kesmesine — yani
+    # kullanıcının bildirdiği "zip hiç inmedi" belirtisine — yol açabiliyordu.
+    # ÇÖZÜM: öğeler artık bir ThreadPoolExecutor ile PARALEL indiriliyor
+    # (indirme G/Ç-ağırlıklı bir işlem olduğundan — HTTP isteği + bekleme —
+    # Python'ın GIL'i burada gerçek bir darboğaz oluşturmaz). Toplam süre,
+    # tüm öğelerin toplamı yerine EN YAVAŞ tek öğenin süresine yaklaşır.
+    # Eşzamanlılık, GEE'nin kendi "too many concurrent aggregations" (429)
+    # kotasını gereksiz yere zorlamamak için makul bir üst sınırla (4)
+    # sınırlanıyor — bu zaten _call_with_retry() içinde ayrıca ele alınan
+    # (uzun geri-çekilme ile yeniden denenen) bir senaryodur.
+    # ZipFile nesnesinin kendisi thread-safe DEĞİLDİR; bu yüzden yalnızca
+    # ağır G/Ç (GEE indirme) işi paralel thread'lerde yapılır, sonuçlar
+    # ana thread'de SIRAYLA zip'e yazılır.
+    used_names = set()
+    prepared_items = []
+    for pos, item in enumerate(items, 1):
+        if not isinstance(item, dict):
+            continue
+        item = dict(item)
+        base = re.sub(r'[^A-Za-z0-9_.-]+', '_', str(item.get('filename') or 'SylvaGIS_{}'.format(pos))).strip('._') or 'SylvaGIS_{}'.format(pos)
+        while base.lower() in used_names:
+            base = '{}_{}'.format(base, pos)
+        used_names.add(base.lower())
+        item['filename'] = base
+        # Çoklu ZIP'te LULC RAT/VAT yan dosyaları korunur.
+        item['flatTiff'] = False
+        prepared_items.append((pos, base, item))
+
+    def _fetch_one(pos, base, item):
+        with app.test_request_context('/api/download-geotiff', method='POST', json=item):
+            response = download_geotiff()
+        if isinstance(response, tuple):
+            response = response[0]
+        if not isinstance(response, Response) or response.status_code >= 400:
+            raise RuntimeError('{}. analiz indirilemedi.'.format(base))
+        return base, (response.content_type or '').lower(), response.get_data()
+
+    results = {}
+    errors = []
+    max_workers = min(4, max(1, len(prepared_items)))
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        future_map = {
+            pool.submit(_fetch_one, pos, base, item): (pos, base)
+            for pos, base, item in prepared_items
+        }
+        for future in as_completed(future_map):
+            pos, base = future_map[future]
+            try:
+                results[pos] = future.result()
+            except Exception as item_err:
+                errors.append((base, str(item_err)))
+
+    if errors:
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': '; '.join('{}: {}'.format(b, e) for b, e in errors)
+        }), 500
+
     zip_buf = io.BytesIO()
     try:
         with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as out_zip:
-            used_names = set()
-            for pos, item in enumerate(items, 1):
-                if not isinstance(item, dict):
-                    continue
-                item = dict(item)
-                base = re.sub(r'[^A-Za-z0-9_.-]+', '_', str(item.get('filename') or 'SylvaGIS_{}'.format(pos))).strip('._') or 'SylvaGIS_{}'.format(pos)
-                while base.lower() in used_names:
-                    base = '{}_{}'.format(base, pos)
-                used_names.add(base.lower())
-                item['filename'] = base
-                # Çoklu ZIP'te LULC RAT/VAT yan dosyaları korunur.
-                item['flatTiff'] = False
-                with app.test_request_context('/api/download-geotiff', method='POST', json=item):
-                    response = download_geotiff()
-                if isinstance(response, tuple):
-                    response = response[0]
-                if not isinstance(response, Response) or response.status_code >= 400:
-                    raise RuntimeError('{}. analiz indirilemedi.'.format(base))
-                body = response.get_data()
-                content_type = (response.content_type or '').lower()
+            for pos, base, _item in prepared_items:
+                base_r, content_type, body = results[pos]
                 if 'application/zip' in content_type or body[:2] == b'PK':
                     # LULC renk tablosu/RAT dosyalarını ana ZIP'e doğrudan aç.
                     with zipfile.ZipFile(io.BytesIO(body), 'r') as nested:
@@ -9144,7 +9159,7 @@ def download_geotiff_batch():
                             if not member.is_dir():
                                 out_zip.writestr(member.filename, nested.read(member.filename))
                 else:
-                    out_zip.writestr(base + '.tif', body)
+                    out_zip.writestr(base_r + '.tif', body)
         result = zip_buf.getvalue()
         response = Response(result, mimetype='application/zip')
         response.headers['Content-Disposition'] = 'attachment; filename="SylvaGIS_raster_analizleri.zip"'
