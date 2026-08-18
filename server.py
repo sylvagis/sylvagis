@@ -2257,12 +2257,12 @@ def _choose_nbits(n_needed):
     return 8
 
 
-def _classify_continuous_band(band, valid_mask, vmin, vmax, palette, n_classes=12):
+def _classify_continuous_band(band, valid_mask, vmin, vmax, palette, n_classes=15):
     """Sürekli (float) bir bandı, harita üzerindeki renk skalasıyla (palette)
     aynı görünümü verecek şekilde 1..n_classes arası küçük tam sayı sınıf
     koduna (0 = NoData) böler. Her sınıf, palette'ten enterpole edilmiş
     KENDİ rengini ve sayısal aralığını ("min – max") etiket olarak alır.
-    n_classes=255 (varsayılan "bar"/sürekli mod — bkz. _build_classified_
+    n_classes=15 (varsayılan "bar"/sürekli mod — bkz. _build_classified_
     symbology_zip) ile 8-bit paletin TAMAMI dolu/anlamlı hale gelir; hiçbir
     kullanılmayan/boş indeks KALMAZ ve sonuç ArcMap'te neredeyse sürekli
     (pürüzsüz) bir renk geçişi gibi görünür."""
@@ -2290,83 +2290,16 @@ def _classify_continuous_band(band, valid_mask, vmin, vmax, palette, n_classes=1
     return idx.astype(np.uint8), code_info
 
 
-def _default_aspect_class_definitions():
-    """SylvaGIS'in Bakı (Aspect) için kullandığı 9 sınıflı pusula
-    lejantı. Kuzey sınıfı 0–12.5° ve 327.5–360° aralığını birlikte kapsar.
-    """
-    return [
-        {'code': 1, 'name': 'Düz',        'color': '#808080'},
-        {'code': 2, 'name': 'Kuzey',      'color': '#2c7bb6'},
-        {'code': 3, 'name': 'Kuzeydoğu',  'color': '#00a6ca'},
-        {'code': 4, 'name': 'Doğu',       'color': '#1a9850'},
-        {'code': 5, 'name': 'Güneydoğu',  'color': '#91cf60'},
-        {'code': 6, 'name': 'Güney',      'color': '#ffffbf'},
-        {'code': 7, 'name': 'Güneybatı',  'color': '#fdae61'},
-        {'code': 8, 'name': 'Batı',       'color': '#d7191c'},
-        {'code': 9, 'name': 'Kuzeybatı',  'color': '#7b3294'},
-    ]
-
-
-def _build_aspect_classified_image(result):
-    """Aspect'i 9 sınıflı pusula kategorilerine çevirir.
-    result'te düz alanlar -1, diğer pikseller 0..360 derecedir.
-    """
-    defs = _default_aspect_class_definitions()
-    classified = ee.Image(0)
-    # Düz
-    classified = classified.where(result.eq(-1), 1)
-    # Kuzey: 0..12.5 ve 327.5..360
-    north = result.gte(0).And(result.lt(12.5)).Or(result.gte(327.5).And(result.lte(360)))
-    classified = classified.where(north, 2)
-    ranges = [
-        (12.5, 57.5, 3), (57.5, 102.5, 4), (102.5, 147.5, 5),
-        (147.5, 192.5, 6), (192.5, 237.5, 7), (237.5, 282.5, 8),
-        (282.5, 327.5, 9),
-    ]
-    for lo, hi, code in ranges:
-        classified = classified.where(result.gte(lo).And(result.lt(hi)), code)
-    classified = classified.updateMask(result.mask())
-    vis = {'min': 1, 'max': 9, 'palette': [d['color'].lstrip('#') for d in defs]}
-    return classified, vis, defs
-
-
-def _classify_aspect_band(band, valid_mask):
-    """Ham Aspect bandını export için 9 sınıfa dönüştürür."""
-    import numpy as np
-    defs = _default_aspect_class_definitions()
-    out = np.zeros(band.shape, dtype=np.uint8)
-    out[valid_mask & np.isclose(band, -1)] = 1
-    north = valid_mask & (((band >= 0) & (band < 12.5)) | ((band >= 327.5) & (band <= 360)))
-    out[north] = 2
-    ranges = [(12.5,57.5,3),(57.5,102.5,4),(102.5,147.5,5),
-              (147.5,192.5,6),(192.5,237.5,7),(237.5,282.5,8),(282.5,327.5,9)]
-    for lo, hi, code in ranges:
-        out[valid_mask & (band >= lo) & (band < hi)] = code
-    code_info = {}
-    labels = [
-        'Düz (-1)', 'Kuzey (0–12.5° / 327.5–360°)', 'Kuzeydoğu (12.5–57.5°)',
-        'Doğu (57.5–102.5°)', 'Güneydoğu (102.5–147.5°)', 'Güney (147.5–192.5°)',
-        'Güneybatı (192.5–237.5°)', 'Batı (237.5–282.5°)', 'Kuzeybatı (282.5–327.5°)'
-    ]
-    for d, label in zip(defs, labels):
-        h = d['color'].lstrip('#')
-        code_info[d['code']] = (label, tuple(int(h[i:i+2],16) for i in (0,2,4)))
-    return out, code_info
-
-
 def _classify_by_breaks(band, valid_mask, breaks):
-    """Kullanıcının uygulamadaki "Lejantı Uygula" panelinde KENDİ elleriyle
-    tanımladığı sınıf satırlarını (state.classRows — her biri kendi min/max/
-    rengiyle, EŞİT ARALIKLI OLMASI GEREKMEZ) birebir kullanarak sınıflandırma
-    yapar. Bu, "sınıflandırılmış" modda indirilen dosyanın ekrandaki
-    lejantla BİREBİR aynı sınıf sayısı/sınırları/renklerle açılmasını
-    sağlar — sunucunun kendi icat ettiği eşit-aralıklı bir sınıflandırma
-    DEĞİL, kullanıcının GERÇEKTEN seçtiği sınıflandırma."""
+    """Kullanıcının Lejantı Uygula sınıflarını birebir uygular.
+    Ayrıca Aspect/Bakı için bir sınıfın birden fazla aralığı kapsamasına
+    izin verir (ör. Kuzey = 0–12.5 ve 327.5–360)."""
     import numpy as np
 
     n = len(breaks)
-    idx = np.zeros(band.shape, dtype=np.uint16 if n >= 255 else np.uint8)
+    idx = np.zeros(band.shape, dtype=np.uint8)
     code_info = {}
+
     for i, b in enumerate(breaks, start=1):
         try:
             lo = float(b.get('min'))
@@ -2375,25 +2308,60 @@ def _classify_by_breaks(band, valid_mask, breaks):
             continue
         if not (np.isfinite(lo) and np.isfinite(hi)):
             continue
-        if b.get('wrap'):
-            # Aspect'te Kuzey sınıfı iki uçta birleşir: lo..hi ve
-            # 327.5..360. Kullanıcı diğer sınıfları değiştirebilir; bu
-            # özel satır yalnızca wrap işaretli ise uygulanır.
-            sel = valid_mask & (((band >= lo) & (band <= hi)) |
-                                ((band >= 327.5) & (band <= 360)))
+
+        segments = b.get('segments')
+        if isinstance(segments, list) and segments:
+            segmask = np.zeros(band.shape, dtype=bool)
+            for seg in segments:
+                try:
+                    slo, shi = float(seg[0]), float(seg[1])
+                except (TypeError, ValueError, IndexError):
+                    continue
+                if np.isfinite(slo) and np.isfinite(shi):
+                    segmask |= (band >= slo) & (band <= shi)
+            sel = valid_mask & segmask
         else:
             sel = valid_mask & (band >= lo) & ((band < hi) if i < n else (band <= hi))
+
         idx[sel] = i
         hexc = _named_color_to_hex(b.get('color') or 'ffffff')
         try:
             rgb = tuple(int(hexc[k:k + 2], 16) for k in (0, 2, 4))
         except ValueError:
             rgb = (255, 255, 255)
-        label = str(b.get('label') or '{:.3g} – {:.3g}'.format(lo, hi))
+
+        _class_name = str(b.get('name') or '').strip()
+        if segments:
+            _range_label = ' / '.join(
+                '{:.3g}–{:.3g}°'.format(float(seg[0]), float(seg[1]))
+                for seg in segments
+                if isinstance(seg, (list, tuple)) and len(seg) >= 2
+            )
+        else:
+            _range_label = '{:.3g} – {:.3g}'.format(lo, hi)
+        label = ('{} ({})'.format(_class_name, _range_label) if _class_name else _range_label)
         code_info[i] = (label, rgb)
 
     idx = np.where(valid_mask, idx, 0)
-    return idx.astype(np.uint8), code_info
+    return idx, code_info
+
+
+def _default_aspect_export_breaks():
+    """ArcMap-benzeri 9 sınıflı Bakı/Aspect lejantı.
+    Kuzey 0–12.5° ve 327.5–360° olarak iki fiziksel aralığı tek sınıfta birleştirir."""
+    return [
+        {'min': -1.0, 'max': -0.000001, 'name': 'Düz', 'color': '#bdbdbd',
+         'segments': [[-1.0, -0.000001]]},
+        {'min': 0.0, 'max': 360.0, 'name': 'Kuzey', 'color': '#1f77b4',
+         'segments': [[0.0, 12.5], [327.5, 360.0]]},
+        {'min': 12.5, 'max': 57.5, 'name': 'Kuzeydoğu', 'color': '#2ca02c'},
+        {'min': 57.5, 'max': 102.5, 'name': 'Doğu', 'color': '#17becf'},
+        {'min': 102.5, 'max': 147.5, 'name': 'Güneydoğu', 'color': '#ff7f0e'},
+        {'min': 147.5, 'max': 192.5, 'name': 'Güney', 'color': '#d62728'},
+        {'min': 192.5, 'max': 237.5, 'name': 'Güneybatı', 'color': '#9467bd'},
+        {'min': 237.5, 'max': 282.5, 'name': 'Batı', 'color': '#8c564b'},
+        {'min': 282.5, 'max': 327.5, 'name': 'Kuzeybatı', 'color': '#bcbd22'},
+    ]
 
 
 def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name, embed_colormap=True):
@@ -2456,8 +2424,11 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
     # LULC çıktılarında kesin olarak kaldırıyoruz. Renk + sınıf adı yalnızca
     # gerçek sınıfları içeren .clr / VAT / RAT sidecar'larından gelir.
     new_profile.pop('photometric', None)
-    new_profile.pop('nbits', None)
     new_profile.pop('colormap', None)
+    # Renk tablosunu gerçek sınıf sayısına göre mümkün olan en küçük
+    # TIFF palette derinliğinde tut. Örn. 15 bar sınıfı -> 4 bit/16 giriş;
+    # 256 girişlik gereksiz boş lejant satırlarını önler.
+    new_profile['nbits'] = nbits
 
     with MemoryFile() as out_memfile:
         with out_memfile.open(**new_profile) as dst:
@@ -2747,7 +2718,7 @@ def _classify_from_visualized_rgb(raw_band, valid_mask, rgb_bytes):
     return idx, code_info
 
 
-def _build_classified_symbology_zip(tif_bytes, vis, safe_name, breaks=None, n_classes=15, rgb_bytes=None, aspect_mode=False):
+def _build_classified_symbology_zip(tif_bytes, vis, safe_name, breaks=None, n_classes=15, rgb_bytes=None):
     """LULC dışındaki (sürekli/continuous) TÜM analizler için — NDVI, NDWI,
     diğer uydu indeksleri, DEM/Eğim/diğer Topografik Analizler, Çevresel ve
     Kentsel Analizler vb. — LULC ile AYNI RAT-tabanlı sınıflandırılmış/renkli
@@ -2780,7 +2751,7 @@ def _build_classified_symbology_zip(tif_bytes, vis, safe_name, breaks=None, n_cl
     seçtiği sınıf sayısı/sınırları/renkleri birebir kullanılır (bkz.
     _classify_by_breaks()). `breaks` gelmemişse (öntanımlı/"bar" — kullanıcı
     hiç özelleştirme yapmamış, ekranda SÜREKLİ bir renk geçişi görüyor)
-    n_classes=255 ile 8-bit paletin TAMAMI dolu/anlamlı hale gelir — hem
+    15 sınıf ile 4-bit paletin veri girişleri dolu/anlamlı hale gelir — hem
     boş satır KALMAZ hem de sonuç ArcMap'te pürüzsüz bir renk barına
     yakın görünür.
     """
@@ -2804,30 +2775,32 @@ def _build_classified_symbology_zip(tif_bytes, vis, safe_name, breaks=None, n_cl
 
     byte_band, code_info = None, None
 
-    if aspect_mode and not (breaks and isinstance(breaks, list) and len(breaks) >= 1):
-        byte_band, code_info = _classify_aspect_band(band, valid)
-
     if breaks and isinstance(breaks, list) and len(breaks) >= 1:
         byte_band, code_info = _classify_by_breaks(band, valid, breaks)
         if not code_info:
             breaks = None  # geçersiz/boş breaks — aşağıdaki moda düş
 
-    if not breaks and not code_info:
-        # Sürekli/bar modunda ham bandı, ekrandaki vis min/max + palette
-        # ile eşit aralıklı 15 sınıfa ayır. Önceki sürümde final_display.visualize()
-        # referans TIFF'indeki benzersiz RGB renklerini sınıf kabul etmek, bazı
-        # AOI/ölçek kombinasyonlarında yalnızca 2 renk üretip '0–0 / 1–57' gibi
-        # yanlış lejantlara ve ardından yüzlerce boş palette satırına yol açıyordu.
-        # Bu nedenle RGB referans yolu artık sürekli/bar dışa aktarımında
-        # kullanılmıyor; gerçek değer aralıkları korunuyor.
-        vmin = vis.get('min') if isinstance(vis, dict) else None
-        vmax = vis.get('max') if isinstance(vis, dict) else None
-        palette = (vis.get('palette') if isinstance(vis, dict) else None) or ['000000', 'ffffff']
-        if vmin is None or vmax is None:
-            finite_vals = band[valid]
-            vmin = float(np.nanmin(finite_vals)) if vmin is None else vmin
-            vmax = float(np.nanmax(finite_vals)) if vmax is None else vmax
-        byte_band, code_info = _classify_continuous_band(band, valid, vmin, vmax, palette, n_classes=n_classes)
+    if not breaks:
+        # 🛠️ BUG FİX (Faz 16 — bkz. _classify_from_visualized_rgb() docstring'i):
+        # önce, haritadaki tile'ları üreten AYNI final_display.visualize(**vis)
+        # çağrısının GERÇEK piksel renklerini kullanmayı dene (varsa) — bu,
+        # ekranla BİREBİR renk eşleşmesini garanti eder. rgb_bytes sağlanmadıysa
+        # veya bir şekilde başarısız olursa, eski (kendi enterpolasyonumuzu
+        # kullanan) yönteme GÜVENLE düşülür — indirme asla kesintiye uğramaz.
+        if rgb_bytes:
+            byte_band, code_info = _classify_from_visualized_rgb(band, valid, rgb_bytes)
+
+        if not code_info:
+            vmin = vis.get('min') if isinstance(vis, dict) else None
+            vmax = vis.get('max') if isinstance(vis, dict) else None
+            palette = (vis.get('palette') if isinstance(vis, dict) else None) or ['000000', 'ffffff']
+            if vmin is None or vmax is None:
+                # Vis min/max sağlanmadıysa (beklenmedik durum) veriden hesapla —
+                # ArcMap'in en azından anlamlı bir sınıflandırma görmesi için.
+                finite_vals = band[valid]
+                vmin = float(np.nanmin(finite_vals)) if vmin is None else vmin
+                vmax = float(np.nanmax(finite_vals)) if vmax is None else vmax
+            byte_band, code_info = _classify_continuous_band(band, valid, vmin, vmax, palette, n_classes=n_classes)
 
     if not code_info:
         return None
@@ -4036,12 +4009,7 @@ def build_classified_image(result, class_breaks):
 
     classified = ee.Image(0)
     for i, cls in enumerate(class_breaks, start=1):
-        if cls.get('wrap'):
-            mask = result.gte(cls['min']).And(result.lte(cls['max'])).Or(
-                result.gte(327.5).And(result.lte(360))
-            )
-        else:
-            mask = result.gte(cls['min']).And(result.lte(cls['max']))
+        mask = result.gte(cls['min']).And(result.lte(cls['max']))
         classified = classified.where(mask, i)
 
     classified = classified.updateMask(result.mask())
@@ -4484,10 +4452,8 @@ def build_result_image(data, for_export=False):
             vis = {'min': 0, 'max': 60, 'palette': ['black', 'white']}
 
         elif index == 'TOPO_ASPECT':
-            # Düz alanları -1 olarak işaretle; varsayılan harita sınıflandırması
-            # frontend tarafından 9 pusula sınıfı olarak uygulanır.
-            result = aspect.where(slope.lt(0.0001), -1).rename('value')
-            vis = {'min': -1, 'max': 360, 'palette': ['black', 'white']}
+            result = aspect.rename('value')
+            vis = {'min': 0, 'max': 360, 'palette': ['black', 'white']}
 
         elif index == 'TOPO_HILLSHADE':
             result = terrain.select('hillshade').rename('value')
@@ -4735,17 +4701,12 @@ def build_result_image(data, for_export=False):
             else:
                 display_result = result
         elif class_breaks and isinstance(class_breaks, list) and len(class_breaks) > 0:
-            if index == 'TOPO_ASPECT' and data.get('aspectDefault'):
-                display_result, vis, _aspect_defs = _build_aspect_classified_image(result)
+            classified_img, classified_vis = build_classified_image(result, class_breaks)
+            if classified_img is not None:
+                display_result = classified_img
+                vis = classified_vis
             else:
-                classified_img, classified_vis = build_classified_image(result, class_breaks)
-                if classified_img is not None:
-                    display_result = classified_img
-                    vis = classified_vis
-                else:
-                    display_result = result
-        elif index == 'TOPO_ASPECT' and data.get('aspectDefault'):
-            display_result, vis, _aspect_defs = _build_aspect_classified_image(result)
+                display_result = result
         elif index == 'TOPO_CONTOUR':
             # 0 değerli pikselleri selfMask ile tamamen saydamlaştır.
             # Böylece seçilen renk yalnızca eş yükselti çizgisinde görünür;
@@ -5906,13 +5867,6 @@ def build_result_image(data, for_export=False):
     custom_min     = data.get('min')
     custom_max     = data.get('max')
 
-    # 🌗 Hillshade yalnızca gri tonlarında gösterilir. İstemci yanlışlıkla
-    # renkli bir palette gönderse bile Kabartma katmanının görseli renklendirilmez.
-    # Bu kural dışa aktarım verisinin ham değerlerini değiştirmez; yalnızca
-    # ekrandaki GEE tile görselleştirmesini siyah-beyaz tutar.
-    if index == 'TOPO_HILLSHADE':
-        custom_palette = ['000000', 'ffffff']
-
     if for_export:
         # GeoTIFF indirme: orijinal bar skalasındaki ham değerler.
         display_result = result
@@ -6523,7 +6477,6 @@ def analyze():
             'visMin':    vis.get('min'),
             'visMax':    vis.get('max'),
             'visPalette': vis.get('palette', []),
-            'aspectClasses': (_default_aspect_class_definitions() if data.get('index') == 'TOPO_ASPECT' else None),
             'nativeCrs': native_crs
         })
 
@@ -6905,11 +6858,19 @@ def download_geotiff():
             # gelir ve sürekli/yoğun (255 sınıflı) moda düşülür.
             if requested_vis.get('mode') == 'classified' and isinstance(requested_vis.get('breaks'), list):
                 requested_breaks = requested_vis['breaks']
-        # Bakı, kullanıcı özel bir sınıflandırma göndermediyse bile her zaman
-        # 9 sınıflı pusula lejantıyla dışa aktarılır. Kuzey sınıfının 0–12.5°
-        # ve 327.5–360° iki parçalı olması nedeniyle özel numpy sınıflandırıcısı
-        # kullanılır.
-        is_aspect_export = (lulc_index == 'TOPO_ASPECT')
+
+        # Bakı/Aspect: kullanıcı özel sınıflandırma yapmadıysa ArcMap-benzeri
+        # 9 yön sınıfını zorunlu kıl. Böylece toplu/tekli indirmede Aspect,
+        # diğer sürekli analizlerden farklı olarak gerçek yön sınıflarıyla açılır.
+        if lulc_index == 'TOPO_ASPECT' and not requested_breaks:
+            requested_breaks = _default_aspect_export_breaks()
+            vis['min'] = -1
+            vis['max'] = 360
+
+        # Kabartma: dışa aktarılan raster ve lejant her zaman gri tonlarında olsun.
+        if lulc_index == 'TOPO_HILLSHADE':
+            vis['palette'] = ['000000', 'ffffff']
+
         is_true_color_rgb = (lulc_index == 'RGB')
         export_image = final_display
         # 🛠️ BUG FİX (indirilen TÜM rasterlerin RGB olarak inmesi): önceden
@@ -6969,22 +6930,13 @@ def download_geotiff():
             # (ekranla garantili birebir eşleşme için). Kullanıcı kendi
             # sınıflarını (breaks) tanımladıysa bu ek indirme GEREKMEZ — o
             # zaten kendi tam renklerini kullanıyor, atlanır.
-            rgb_vis_bytes = None
-            if not requested_breaks:
-                try:
-                    rgb_vis_bytes = _download_band_geotiff_bytes(
-                        final_display.visualize(**vis), export_region, scale, crs, safe_name + '_rgbref',
-                        nodata_value=0, aoi_geom_4326=aoi_geom_4326,
-                        fallback_region_geom=roi.bounds(maxError=100),
-                        is_categorical=False
-                    )
-                except Exception as rgb_ref_err:
-                    print('[SylvaGIS] ⚠️ Ekran-birebir renk referansı indirilemedi, '
-                          'kendi enterpolasyonumuza düşülüyor: {}'.format(rgb_ref_err))
+            # Bar/stretched modunda ayrı bir RGB referans GeoTIFF indirmeye
+            # gerek yok: ekranın kullandığı min/max/palette aynı lineer
+            # enterpolasyonla 15 sınıfa çevrilir. Bu daha hızlıdır ve toplu
+            # indirmede bir katmanın renklerinin diğerine sızmasını engeller.
             try:
                 sym_files = _build_classified_symbology_zip(
-                    tif_bytes, vis, safe_name, breaks=requested_breaks, rgb_bytes=rgb_vis_bytes,
-                    aspect_mode=is_aspect_export)
+                    tif_bytes, vis, safe_name, breaks=requested_breaks, rgb_bytes=None)
             except Exception as sym_err:
                 traceback.print_exc()
                 sym_files = None
@@ -8049,8 +8001,6 @@ def download_raw_bands():
         with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
             for arcname, tif_bytes in zip_entries:
                 zf.writestr(arcname, tif_bytes)
-            if errors:
-                zf.writestr('HATALAR.txt', 'Bazı bantlar dışa aktarılamadı:\n' + '\n'.join(errors))
         zip_buf.seek(0)
 
         scope_tag = 'FullScene' if scope == 'full' else 'Clip'
@@ -9280,18 +9230,14 @@ def download_geotiff_batch():
                                 out_zip.writestr(member.filename, nested.read(member.filename))
                 else:
                     out_zip.writestr(base_r + '.tif', body)
-            if errors:
-                out_zip.writestr(
-                    'INDIRILEMEYEN_KATMANLAR.txt',
-                    'Aşağıdaki katman(lar) bu ZIP\'e dahil edilemedi:\n\n' +
-                    '\n'.join('- {}: {}'.format(b, e) for b, e in errors) +
-                    '\n\nDiğer tüm katmanlar bu ZIP içinde sorunsuz şekilde yer alıyor. '
-                    'Başarısız katman(lar)ı tekrar indirmeyi deneyebilirsiniz.'
-                )
         result = zip_buf.getvalue()
         response = Response(result, mimetype='application/zip')
         response.headers['Content-Disposition'] = 'attachment; filename="SylvaGIS_raster_analizleri.zip"'
         response.headers['Content-Length'] = str(len(result))
+        if errors:
+            response.headers['X-Partial-Errors'] = urllib.parse.quote(
+                'Bazı katmanlar dışa aktarılamadı: ' + '; '.join('{}: {}'.format(b, e) for b, e in errors)
+            )
         return response
     except Exception as exc:
         traceback.print_exc()
