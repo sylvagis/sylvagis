@@ -10905,6 +10905,43 @@ function selectRamp(name) {
         // ===========================================================
         var currentClassificationType = 'stretched';
 
+        // Bakı (Aspect) varsayılanı: ArcMap benzeri 9 pusula sınıfı.
+        // Kuzey sınıfı 0–12.5° ile 327.5–360° aralığını birlikte kapsar.
+        var SYLVA_DEFAULT_ASPECT_CLASSES = [
+            { min:-1,    max:-1,    name:'Düz (-1)', color:'#808080' },
+            { min:0,     max:12.5,  name:'Kuzey (0–12.5° / 327.5–360°)', color:'#2c7bb6', wrap:true },
+            { min:12.5,  max:57.5,  name:'Kuzeydoğu (12.5–57.5°)', color:'#00a6ca' },
+            { min:57.5,  max:102.5, name:'Doğu (57.5–102.5°)', color:'#1a9850' },
+            { min:102.5, max:147.5, name:'Güneydoğu (102.5–147.5°)', color:'#91cf60' },
+            { min:147.5, max:192.5, name:'Güney (147.5–192.5°)', color:'#ffffbf' },
+            { min:192.5, max:237.5, name:'Güneybatı (192.5–237.5°)', color:'#fdae61' },
+            { min:237.5, max:282.5, name:'Batı (237.5–282.5°)', color:'#d7191c' },
+            { min:282.5, max:327.5, name:'Kuzeybatı (282.5–327.5°)', color:'#7b3294' }
+        ];
+
+        function sylvaPrepareDefaultAspectEditor() {
+            if (typeof setClassificationType === 'function') setClassificationType('classified');
+            if (typeof classCountSelect !== 'undefined' && classCountSelect) classCountSelect.value = '9';
+            if (typeof buildClassRows === 'function') buildClassRows(9);
+            var rows = document.querySelectorAll('#class-rows-container .classification-row');
+            SYLVA_DEFAULT_ASPECT_CLASSES.forEach(function(c, i) {
+                var row = rows[i];
+                if (!row) return;
+                var mn = row.querySelector('.class-min');
+                var mx = row.querySelector('.class-max');
+                var nm = row.querySelector('.class-name');
+                var sw = row.querySelector('.class-color-trigger');
+                if (mn) mn.value = c.min;
+                if (mx) mx.value = c.max;
+                if (nm) nm.value = c.name;
+                if (sw) {
+                    sw.style.background = c.color;
+                    sw.setAttribute('data-selected-color', c.color);
+                    sw.setAttribute('data-aspect-wrap', c.wrap ? '1' : '0');
+                }
+            });
+        }
+
         function setClassificationType(type) {
             currentClassificationType = type;
 
@@ -12090,6 +12127,19 @@ function selectRamp(name) {
             var legendBox = document.getElementById(paneId === 'map2' ? 'map2-legend-box' : 'map-legend-box');
             if (!legendBox) return;
 
+            // Bakı analizinde ilk görünüm 9 sınıflı pusula lejantıdır;
+            // native lock kapalı tutulduğu için kullanıcı Lejant/Semboloji
+            // panelinden istediği gibi değiştirebilir.
+            if (meta.analysisName === 'TOPO_ASPECT' && !meta.classesRaw) {
+                meta = Object.assign({}, meta, {
+                    legendType: 'classified',
+                    nativeLegendLocked: false,
+                    classesRaw: JSON.stringify(SYLVA_DEFAULT_ASPECT_CLASSES.map(function(c){
+                        return { color:c.color, label:c.name };
+                    })),
+                    legendMin: '-1', legendMax: '360'
+                });
+            }
             var legendType = meta.legendType || 'stretched';
 
             // 🌗 HILLSHADE ÖZEL GÖRÜNÜM: Kabartma haritasında lejant pasif ve
@@ -12101,9 +12151,8 @@ function selectRamp(name) {
             var _legendToggle = document.getElementById('toggle-legend');
             var _legendToggleWrap = document.getElementById('legend-toggle-row');
             if (_isHillshadeOnly) {
-                // Hillshade'ta Lejant GÖRÜNSÜN; ancak yalnızca pasif/şeffaf olsun.
                 if (_legendToggle) {
-                    _legendToggle.checked = true;
+                    _legendToggle.checked = false;
                     _legendToggle.disabled = true;
                     _legendToggle.setAttribute('aria-disabled', 'true');
                 }
@@ -12112,16 +12161,13 @@ function selectRamp(name) {
                     _legendToggleWrap.style.pointerEvents = 'none';
                     _legendToggleWrap.style.userSelect = 'none';
                 }
-                legendBox.style.display = '';
-                legendBox.style.opacity = '0.38';
+                legendBox.innerHTML = '';
+                legendBox.style.display = 'none';
+                legendBox.style.opacity = '0';
                 legendBox.style.pointerEvents = 'none';
-                legendBox.style.background = 'rgba(255,255,255,0.28)';
-                legendBox.style.boxShadow = 'none';
-                var _hillSymPanel = document.getElementById('legend-symbology-panel');
-                if (_hillSymPanel) {
-                    _hillSymPanel.style.opacity = '0.35';
-                    _hillSymPanel.style.pointerEvents = 'none';
-                    _hillSymPanel.style.userSelect = 'none';
+                if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[paneId]) {
+                    window._sylvaLegendInfoByPane[paneId].legendHTML = '';
+                    window._sylvaLegendInfoByPane[paneId].legendDisplay = 'none';
                 }
                 // Semboloji panelindeki kullanıcı rampasını da hillshade için
                 // etkisizleştir; harita daima siyah-beyaz kalır.
@@ -12143,14 +12189,6 @@ function selectRamp(name) {
                 }
                 legendBox.style.opacity = '';
                 legendBox.style.pointerEvents = '';
-                legendBox.style.background = '';
-                legendBox.style.boxShadow = '';
-                var _normalSymPanel = document.getElementById('legend-symbology-panel');
-                if (_normalSymPanel) {
-                    _normalSymPanel.style.opacity = '';
-                    _normalSymPanel.style.pointerEvents = '';
-                    _normalSymPanel.style.userSelect = '';
-                }
             }
 
             var selectedRampEl = document.getElementById('selectedRamp');
@@ -14837,7 +14875,14 @@ function selectRamp(name) {
                     maxCloud:  maxCloud,
                     demSource: demSourceRadio ? demSourceRadio.value : 'SRTM',
                     months:    window.sylvaSelectedMonths || [],
+                    aspectDefault: meta.analysisName === 'TOPO_ASPECT'
                 };
+                if (meta.analysisName === 'TOPO_ASPECT') {
+                    // İlk açılışta ekran ve dışa aktarım aynı 9 sınıflı Aspect
+                    // mantığını kullansın. Kullanıcı daha sonra Stretched veya
+                    // kendi Classified ayarına geçebilir.
+                    sylvaPrepareDefaultAspectEditor();
+                }
                 // 🆕 FAZ 12 — ADIM 3: Çift tarih UI mantığı — dispatch. Bu analiz
                 // requiresSecondPeriod:true ise (bkz. getSelectedAnalysisMetaList()
                 // ve "Dönem 2" UI bloğu — period2-section), bağımsız 2. dönem
@@ -52129,7 +52174,7 @@ document.querySelectorAll('#env-urban-analyses-details input[data-analysis]').fo
 /* Sunucunun yerleşik sınıflarıyla gelen katmanlar (ör. Orman Kaybı/Kazanımı)
    kullanıcı tanımlı renk/aralıkla yeniden boyanamaz. Sürekli/bar değerli
    katmanlarda aynı semboloji düzenleyicisi normal olarak açık kalır. */
-function setNativeLegendEditorLocked(meta){var locked=!!(meta&&meta.legendType==='classified'&&meta.classesRaw);var group=document.getElementById('classification-type-group');var stretch=document.getElementById('stretched-settings');var classified=document.getElementById('classified-settings');var title=document.getElementById('classified-title');if(group){group.style.opacity=locked?'.48':'1';group.style.pointerEvents=locked?'none':'';group.setAttribute('aria-disabled',locked?'true':'false')}if(stretch)stretch.style.pointerEvents=locked?'none':'';if(classified)classified.style.pointerEvents=locked?'none':'';if(title&&locked)title.value=(meta.analysisName||title.value);document.querySelectorAll('#classification-type-group button,#stretched-settings input,#stretched-settings button,#classified-settings input,#classified-settings button,#classified-settings select').forEach(function(el){if(locked){el.setAttribute('data-native-legend-lock','1');el.disabled=true}else if(el.getAttribute('data-native-legend-lock')==='1'){el.disabled=false;el.removeAttribute('data-native-legend-lock')}})}
+function setNativeLegendEditorLocked(meta){var locked=!!(meta&&meta.nativeLegendLocked!==false&&meta.legendType==='classified'&&meta.classesRaw);var group=document.getElementById('classification-type-group');var stretch=document.getElementById('stretched-settings');var classified=document.getElementById('classified-settings');var title=document.getElementById('classified-title');if(group){group.style.opacity=locked?'.48':'1';group.style.pointerEvents=locked?'none':'';group.setAttribute('aria-disabled',locked?'true':'false')}if(stretch)stretch.style.pointerEvents=locked?'none':'';if(classified)classified.style.pointerEvents=locked?'none':'';if(title&&locked)title.value=(meta.analysisName||title.value);document.querySelectorAll('#classification-type-group button,#stretched-settings input,#stretched-settings button,#classified-settings input,#classified-settings button,#classified-settings select').forEach(function(el){if(locked){el.setAttribute('data-native-legend-lock','1');el.disabled=true}else if(el.getAttribute('data-native-legend-lock')==='1'){el.disabled=false;el.removeAttribute('data-native-legend-lock')}})}
 var oldLegend=window.renderAnalysisLegend;if(typeof oldLegend==='function'){window.renderAnalysisLegend=function(meta){var r=oldLegend.apply(this,arguments);setNativeLegendEditorLocked(meta);return r}}
 /* Katman geçişinde eski bir sınıflı durumun editörü açık bırakmaması için
    aktif analiz seçiminin değişimini de izler. */
@@ -52258,9 +52303,11 @@ refresh();
         // AYRICA gönderiliyor — sunucu artık bunları birebir kullanıyor,
         // kendi sınıflandırmasını İCAT ETMİYOR (bkz. server.py —
         // _classify_by_breaks()).
-        if (state && state.classRows && state.classRows.length) {
-            breaks = state.classRows.map(function (row) {
-                return { min: parseFloat(row.min), max: parseFloat(row.max), color: String(row.color || '').replace(/^#/, '') };
+        if (state && state.classificationType === 'classified' && state.classRows && state.classRows.length) {
+            breaks = state.classRows.map(function (row, idx) {
+                return { min: parseFloat(row.min), max: parseFloat(row.max), color: String(row.color || '').replace(/^#/, ''),
+                    label: String(row.name || ''),
+                    wrap: String(key || '').toUpperCase().indexOf('TOPO_ASPECT') !== -1 && idx === 1 };
             }).filter(function (b) { return isFinite(b.min) && isFinite(b.max) && b.color; });
             state.classRows.forEach(function (row) { if (row.color) colors.push(String(row.color).replace(/^#/, '')); });
             min = parseFloat(state.classRows[0].min); max = parseFloat(state.classRows[state.classRows.length - 1].max);
