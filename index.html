@@ -25848,6 +25848,18 @@ function executeGeoTiffDownload() {
     var _gtiffPane = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
     var _gtiffAoiLayer = (_gtiffPane === 'map2' && typeof currentLayer2 !== 'undefined') ? currentLayer2 : currentLayer;
     var _gtiffRoi = (_dlClipMode === 'clip') ? _extractROIGeometry(_gtiffAoiLayer) : null;
+    // ESA WorldCover'da indirme, ekranda görünen AKTİF analiz payload'ının
+    // aynısını kullanır. Böylece sunucudaki son analiz kaydı başka bir LULC
+    // katmanına ait olsa bile indirilen ESA rasterı yanlış veri olmaz.
+    var _activeDownloadPayload = null;
+    try {
+        var _activePaneForDownload = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
+        var _candidateDownloadPayload = window._lastAnalyzePayloadByPane && window._lastAnalyzePayloadByPane[_activePaneForDownload];
+        if (_candidateDownloadPayload && _candidateDownloadPayload.index === 'LULC_ESA') {
+            _activeDownloadPayload = Object.assign({}, _candidateDownloadPayload);
+            if (_gtiffRoi) _activeDownloadPayload.roi = _gtiffRoi;
+        }
+    } catch (_esaPayloadErr) {}
     if (_dlClipMode === 'clip' && !_gtiffRoi) {
         if (btn) { btn.disabled = false; btn.textContent = t('gtiff_btn_download'); }
         if (cancelBtn) cancelBtn.disabled = false;
@@ -25883,7 +25895,8 @@ function executeGeoTiffDownload() {
             // roi: sunucu tarafında image.clip(roi) ile AOI dışı alanları
             // kırpmak/NoData yapmak için kullanılır (analiz ve ham bant
             // indirme uç noktalarıyla aynı alan adı ve GeoJSON formatı).
-            roi: _gtiffRoi
+            roi: _gtiffRoi,
+            analysisPayload: _activeDownloadPayload
         })
     })
     .then(function(r) {
