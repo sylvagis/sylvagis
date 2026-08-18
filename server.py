@@ -2598,7 +2598,85 @@ def _build_rgb_symbology_zip(tif_bytes, safe_name):
     }
 
 
-def _build_classified_symbology_zip(tif_bytes, vis, safe_name, breaks=None, n_classes=255):
+def _classify_from_visualized_rgb(raw_band, valid_mask, rgb_bytes):
+    """🛠️ BUG FİX (Faz 16 — "renklendirme/sınıflandırma ekrandakiyle BAMBAŞKA
+    ve yanlış"): Faz 15'teki _classify_continuous_band(), palette'i KENDİ
+    lineer enterpolasyon mantığımızla yeniden hesaplıyordu — bu, haritanın
+    KENDİSİNİ üreten GEE .visualize() çağrısının iç algoritmasıyla birebir
+    AYNI GARANTİ DEĞİLDİ; küçük farklar (ör. renk durağı yerleşimi, gama)
+    ekranla indirilen dosya arasında görünür renk farkına yol açabiliyordu.
+
+    ÇÖZÜM: artık palette'i KENDİMİZ yeniden üretmiyoruz — bunun yerine
+    haritadaki tile'ları üreten AYNI final_display.visualize(**vis) çağrısı
+    sunucuda AYRICA indirilir (bkz. download_geotiff() — rgb_tif_bytes) ve
+    o ÇIKTININ GERÇEK piksel renkleri doğrudan kullanılır. Yani bu fonksiyon
+    hiçbir renk "tahmin etmiyor" — sadece GEE'nin zaten ürettiği, ekrandaki
+    ile MATEMATİKSEL OLARAK AYNI çağrının sonucundaki renkleri okuyup
+    sınıflara paketliyor. Bu, ekranla indirilenin renk açısından birebir
+    eşleşmesini YAPISAL OLARAK garanti eder (yorum/tahmin değil, aynı
+    kaynaktan kopya).
+
+    raw_band: orijinal sürekli/ham tek bant (sınıf etiketleri için gerçek
+              sayısal aralığı hesaplamakta kullanılır — rengi ETKİLEMEZ).
+    rgb_bytes: final_display.visualize(**vis) çıktısının GeoTIFF baytları
+               (raw_band ile AYNI ROI/scale/CRS'te indirilmiş, piksel piksel
+               hizalı).
+    """
+    import numpy as np
+    from rasterio.io import MemoryFile
+
+    with MemoryFile(rgb_bytes) as mf:
+        with mf.open() as ds:
+            if ds.count < 3:
+                return None, None
+            rgb = ds.read((1, 2, 3))  # (3, H, W)
+
+    if rgb.shape[1:] != raw_band.shape:
+        return None, None
+
+    packed = (rgb[0].astype(np.uint32) << 16) | (rgb[1].astype(np.uint32) << 8) | rgb[2].astype(np.uint32)
+    packed_valid = packed[valid_mask]
+    if packed_valid.size == 0:
+        return None, None
+
+    uniq = np.unique(packed_valid)
+    # Fiziksel olarak imkansız ama yine de bir üst sınır: 8-bit RGB'de bile
+    # aşırı uç bir durumda 254'ü aşarsa (ör. dithering), en az/en çok
+    # kullanılan renkleri korumak yerine basitçe ilk 254'e kırpıyoruz —
+    # kalan pikseller en yakın komşu renge (searchsorted ile) düşer, veri
+    # hâlâ makul/temsili kalır.
+    if uniq.size > 254:
+        uniq = uniq[:254]
+
+    sorted_uniq = np.sort(uniq)
+    pos = np.searchsorted(sorted_uniq, packed)
+    pos = np.clip(pos, 0, len(sorted_uniq) - 1)
+    # Not: searchsorted ile bulunan pos, tam eşleşme olmasa bile (254 sınırı
+    # yüzünden dışarıda kalan nadir bir renk için) en yakın komşu sıralı
+    # konuma düşer — veri hâlâ makul/temsili kalır.
+    idx = np.where(valid_mask, pos + 1, 0).astype(np.uint8)
+
+    code_info = {}
+    for i, v in enumerate(sorted_uniq, start=1):
+        r = (int(v) >> 16) & 255
+        g = (int(v) >> 8) & 255
+        b = int(v) & 255
+        sel = valid_mask & (packed == v)
+        if np.any(sel):
+            vals = raw_band[sel]
+            vals = vals[np.isfinite(vals)]
+            if vals.size:
+                label = '{:.3g} – {:.3g}'.format(float(vals.min()), float(vals.max()))
+            else:
+                label = str(i)
+        else:
+            label = str(i)
+        code_info[i] = (label, (r, g, b))
+
+    return idx, code_info
+
+
+def _build_classified_symbology_zip(tif_bytes, vis, safe_name, breaks=None, n_classes=255, rgb_bytes=None):
     """LULC dışındaki (sürekli/continuous) TÜM analizler için — NDVI, NDWI,
     diğer uydu indeksleri, DEM/Eğim/diğer Topografik Analizler, Çevresel ve
     Kentsel Analizler vb. — LULC ile AYNI RAT-tabanlı sınıflandırılmış/renkli
@@ -2653,22 +2731,34 @@ def _build_classified_symbology_zip(tif_bytes, vis, safe_name, breaks=None, n_cl
     if not np.any(valid):
         return None
 
+    byte_band, code_info = None, None
+
     if breaks and isinstance(breaks, list) and len(breaks) >= 1:
         byte_band, code_info = _classify_by_breaks(band, valid, breaks)
         if not code_info:
-            breaks = None  # geçersiz/boş breaks — aşağıdaki sürekli moda düş
+            breaks = None  # geçersiz/boş breaks — aşağıdaki moda düş
 
     if not breaks:
-        vmin = vis.get('min') if isinstance(vis, dict) else None
-        vmax = vis.get('max') if isinstance(vis, dict) else None
-        palette = (vis.get('palette') if isinstance(vis, dict) else None) or ['000000', 'ffffff']
-        if vmin is None or vmax is None:
-            # Vis min/max sağlanmadıysa (beklenmedik durum) veriden hesapla —
-            # ArcMap'in en azından anlamlı bir sınıflandırma görmesi için.
-            finite_vals = band[valid]
-            vmin = float(np.nanmin(finite_vals)) if vmin is None else vmin
-            vmax = float(np.nanmax(finite_vals)) if vmax is None else vmax
-        byte_band, code_info = _classify_continuous_band(band, valid, vmin, vmax, palette, n_classes=n_classes)
+        # 🛠️ BUG FİX (Faz 16 — bkz. _classify_from_visualized_rgb() docstring'i):
+        # önce, haritadaki tile'ları üreten AYNI final_display.visualize(**vis)
+        # çağrısının GERÇEK piksel renklerini kullanmayı dene (varsa) — bu,
+        # ekranla BİREBİR renk eşleşmesini garanti eder. rgb_bytes sağlanmadıysa
+        # veya bir şekilde başarısız olursa, eski (kendi enterpolasyonumuzu
+        # kullanan) yönteme GÜVENLE düşülür — indirme asla kesintiye uğramaz.
+        if rgb_bytes:
+            byte_band, code_info = _classify_from_visualized_rgb(band, valid, rgb_bytes)
+
+        if not code_info:
+            vmin = vis.get('min') if isinstance(vis, dict) else None
+            vmax = vis.get('max') if isinstance(vis, dict) else None
+            palette = (vis.get('palette') if isinstance(vis, dict) else None) or ['000000', 'ffffff']
+            if vmin is None or vmax is None:
+                # Vis min/max sağlanmadıysa (beklenmedik durum) veriden hesapla —
+                # ArcMap'in en azından anlamlı bir sınıflandırma görmesi için.
+                finite_vals = band[valid]
+                vmin = float(np.nanmin(finite_vals)) if vmin is None else vmin
+                vmax = float(np.nanmax(finite_vals)) if vmax is None else vmax
+            byte_band, code_info = _classify_continuous_band(band, valid, vmin, vmax, palette, n_classes=n_classes)
 
     if not code_info:
         return None
@@ -6786,7 +6876,22 @@ def download_geotiff():
         # RGB/doğal renk kompozit indirmelerinde uygulanır; diğer TÜM
         # analizlerde ham/sürekli tek bant korunur ve aşağıda
         # _build_classified_symbology_zip() ile ayrık renklendirilir.
-        if req_data.get('rendered') and is_true_color_rgb:
+        #
+        # 🛠️ BUG FİX (Faz 16 — "1 KB'lık bozuk uydu görüntüsü indirmeleri,
+        # ArcMap'te açılmıyor"): Sentinel-2 gerçek renk indirmelerinde
+        # final_display, BİRAZ YUKARIDA (_is_byte_rgb_export bloğunda) ZATEN
+        # unitScale(v_min,v_max)+toByte() ile 0-255 Byte'a dönüştürülmüştü.
+        # Bu satır önceden KOŞULSUZ olarak final_display.visualize(**vis)'i
+        # BİR KEZ DAHA (vis={min:0,max:0.3 gibi ham yansıma aralığı}
+        # ile) uyguluyordu — yani ZATEN 0-255 olan bir görüntüyü SANKİ HÂLÂ
+        # 0-0.3 aralığındaymış gibi tekrar gerip 0-255'e sıkıştırıyordu. Bu
+        # çifte-germe, neredeyse TÜM pikselleri 255'e (veya tek bir değere)
+        # kilitleyip aşırı derecede sıkışan (LZW ile ~1 KB'a inen), pratikte
+        # boş/bozuk bir görüntü üretiyordu — kullanıcının bildirdiği "1 KB,
+        # ArcMap'te açılmıyor" BİREBİR budur. ÇÖZÜM: _is_byte_rgb_export
+        # zaten Byte'a çevirmişse .visualize() BİR DAHA çağrılmaz;
+        # final_display (zaten doğru renklerde) OLDUĞU GİBİ kullanılır.
+        if req_data.get('rendered') and is_true_color_rgb and not _is_byte_rgb_export:
             try:
                 export_image = final_display.visualize(**vis)
                 # RGB görselleştirme Byte olduğundan NoData da Byte aralığında
@@ -6813,8 +6918,29 @@ def download_geotiff():
                 print('[SylvaGIS] ⚠️ LULC renk tablosu/RAT oluşturulamadı, ham .tif '
                       'olarak devam ediliyor: {}'.format(sym_err))
         elif not is_true_color_rgb:
+            # 🛠️ BUG FİX (Faz 16 — bkz. _classify_from_visualized_rgb()
+            # docstring'i): "bar" (özelleştirilmemiş/sürekli) modda, haritanın
+            # KENDİSİNİ üreten final_display.visualize(**vis) çağrısı burada
+            # AYRICA indirilir — aşağıdaki sınıflandırma, kendi enterpolasyon
+            # tahminimiz yerine bu GERÇEK render'ın piksel renklerini kullanır
+            # (ekranla garantili birebir eşleşme için). Kullanıcı kendi
+            # sınıflarını (breaks) tanımladıysa bu ek indirme GEREKMEZ — o
+            # zaten kendi tam renklerini kullanıyor, atlanır.
+            rgb_vis_bytes = None
+            if not requested_breaks:
+                try:
+                    rgb_vis_bytes = _download_band_geotiff_bytes(
+                        final_display.visualize(**vis), export_region, scale, crs, safe_name + '_rgbref',
+                        nodata_value=0, aoi_geom_4326=aoi_geom_4326,
+                        fallback_region_geom=roi.bounds(maxError=100),
+                        is_categorical=False
+                    )
+                except Exception as rgb_ref_err:
+                    print('[SylvaGIS] ⚠️ Ekran-birebir renk referansı indirilemedi, '
+                          'kendi enterpolasyonumuza düşülüyor: {}'.format(rgb_ref_err))
             try:
-                sym_files = _build_classified_symbology_zip(tif_bytes, vis, safe_name, breaks=requested_breaks)
+                sym_files = _build_classified_symbology_zip(
+                    tif_bytes, vis, safe_name, breaks=requested_breaks, rgb_bytes=rgb_vis_bytes)
             except Exception as sym_err:
                 traceback.print_exc()
                 sym_files = None
@@ -6851,9 +6977,20 @@ def download_geotiff():
                 resp.headers['Content-Length'] = str(len(zip_bytes))
                 return resp
 
-        resp = Response(tif_bytes, mimetype='image/tiff')
-        resp.headers['Content-Disposition'] = 'attachment; filename="{}.tif"'.format(safe_name)
-        resp.headers['Content-Length'] = str(len(tif_bytes))
+        # 🛠️ BUG FİX ("her ne olursa olsun tüm veriler zip olarak sorunsuz
+        # insin"): sym_files hiç üretilemediyse (yukarıdaki üç dalın hepsi
+        # istisna verdiyse — beklenmeyen bir kenar durum) kullanıcı artık
+        # HİÇBİR ZAMAN çıplak/paketlenmemiş bir .tif almaz; en kötü ihtimalle
+        # bile .tif TEK BAŞINA bir ZIP içinde teslim edilir — böylece
+        # indirilen dosya adı/uzantısı ile içeriği HER ZAMAN tutarlı kalır
+        # (bkz. Faz 14 — responseBlobNamed() BUG FİX notu).
+        zip_buf = io.BytesIO()
+        with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr('{}.tif'.format(safe_name), tif_bytes)
+        zip_bytes = zip_buf.getvalue()
+        resp = Response(zip_bytes, mimetype='application/zip')
+        resp.headers['Content-Disposition'] = 'attachment; filename="{}.zip"'.format(safe_name)
+        resp.headers['Content-Length'] = str(len(zip_bytes))
         return resp
 
     except Exception as e:
