@@ -15862,6 +15862,22 @@ function selectRamp(name) {
                     applyClassificationToMap();
                 }
             }
+            // 🛠️ BUG FİX (ArcMap indirme "siyah ekran" sorununun kaynağı —
+            // bkz. exportVisualFor() içindeki asıl düzeltme notu): sunucunun
+            // bu analiz için hesapladığı GERÇEK min/max/palet burada, o
+            // katmanın kendi anahtarına (_thisLayerKey) göre saklanır; daha
+            // önce bu değerler yalnızca CSS renk çubuğunu boyamak için
+            // kullanılıp hemen atılıyordu — indirme sırasında tekrar
+            // erişilebilecek hiçbir yerde tutulmuyordu.
+            if (typeof _thisLayerKey !== 'undefined' && _thisLayerKey) {
+                window._sylvaLayerVisByPane = window._sylvaLayerVisByPane || { map: {}, map2: {} };
+                window._sylvaLayerVisByPane[_pane] = window._sylvaLayerVisByPane[_pane] || {};
+                window._sylvaLayerVisByPane[_pane][_thisLayerKey] = {
+                    min: (typeof data.visMin === 'number') ? data.visMin : parseFloat(data.visMin),
+                    max: (typeof data.visMax === 'number') ? data.visMax : parseFloat(data.visMax),
+                    palette: (data.visPalette && Array.isArray(data.visPalette)) ? data.visPalette : null
+                };
+            }
             if (data.visPalette && Array.isArray(data.visPalette) && data.visPalette.length >= 2) {
                 var _basePalette = data.visPalette.slice().map(function (color) {
                     color = String(color || '').trim();
@@ -52180,6 +52196,39 @@ refresh();
         var ramp = state && state.rampDataAttr;
         if (!colors.length && ramp && ramp !== '__gee__' && typeof sampleRampColors === 'function') {
             colors = sampleRampColors(ramp, 8).map(function (c) { return String(c).replace(/^#/, ''); });
+        }
+        // 🛠️ BUG FİX (ArcMap'te "siyah ekran"/tanımsız min-max — Uydu
+        // Analizleri VE Topografik Analizlerin TAMAMI): kullanıcı o katman
+        // için "Lejantı Uygula" panelini HİÇ açmadıysa (en yaygın/varsayılan
+        // kullanım şekli) — VEYA açıp mevcut sunucu paletini (rampDataAttr
+        // === '__gee__') değiştirmeden bıraktıysa — yukarıdaki iki blok da
+        // hiçbir şey doldurmaz ve kod önceden doğrudan SABİT min=-1/max=1 +
+        // siyah-beyaz 2 renge düşüyordu. Bu, gerçek değer aralığı [-1,1]
+        // OLMAYAN HER analiz için (Eğim 0-90°, DEM metre, LST °C, NDBI/BSI
+        // vb. — yani pratikte TÜM Topografik analizler ve birçok Uydu
+        // Analizi) .visualize() çağrısının dışa aktarılan GeoTIFF'i yanlış
+        // aralığa sıkıştırıp neredeyse tamamen TEK renge (çoğunlukla siyah)
+        // klemplemesine yol açıyordu — ArcMap'te bildirilen "siyah ekran"
+        // BİREBİR budur. (Haritanın EKRANDAKİ görünümü bundan ETKİLENMEZ —
+        // o, TAMAMEN AYRI bir yoldan, sunucunun kendi tileUrl/vis.min-max
+        // değerleriyle geliyor; bu yüzden yalnızca İNDİRME bozuk görünüyordu.)
+        // ÇÖZÜM: /api/analyze yanıtı zaten bu katman için sunucunun GERÇEK
+        // hesapladığı visMin/visMax/visPalette değerlerini döndürüyor (bkz.
+        // analyze() içindeki jsonify) — bunlar artık her analiz sonrası
+        // window._sylvaLayerVisByPane'e kaydediliyor (bkz. bu değişkenin
+        // doldurulduğu nokta, data.visPalette işlenirken). Burada — yalnızca
+        // yukarıdaki iki blok min/max/renk ÜRETEMEMİŞSE — önce bu GERÇEK
+        // sunucu değerleri denenir; yalnızca o da yoksa (ör. çok eski/bozuk
+        // bir oturum) en son çare olarak -1/1 + siyah-beyaza düşülür.
+        if (!colors.length || !isFinite(min) || !isFinite(max)) {
+            var _visFallback = window._sylvaLayerVisByPane && window._sylvaLayerVisByPane[pane] && window._sylvaLayerVisByPane[pane][key];
+            if (_visFallback) {
+                if (!colors.length && _visFallback.palette && _visFallback.palette.length >= 2) {
+                    colors = _visFallback.palette.map(function (c) { return String(c || '').replace(/^#/, ''); });
+                }
+                if (!isFinite(min) && isFinite(_visFallback.min)) min = _visFallback.min;
+                if (!isFinite(max) && isFinite(_visFallback.max)) max = _visFallback.max;
+            }
         }
         if (!colors.length) colors = ['000000', 'ffffff'];
         if (!isFinite(min)) min = -1;
