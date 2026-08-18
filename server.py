@@ -2295,7 +2295,34 @@ def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name):
     with MemoryFile() as out_memfile:
         with out_memfile.open(**new_profile) as dst:
             dst.write(out, 1)
-            colormap = {0: (255, 255, 255, 0)}
+            # 🛠️ BUG FİX (ArcMap lejantında onlarca boş/SİYAH "sınıf" karesi
+            # görünmesi): TIFF'in Palette (renk tablosu) modeli, GDAL'a göre
+            # HER ZAMAN 256 girişli TAM bir tablo olarak fiziksel olarak
+            # yazılır — biz yalnızca 0 (NoData) ve gerçek sınıf kodlarını
+            # (ör. 1..7) AÇIKÇA ayarlasak bile. Kod tarafında hiç DOKUNULMAYAN
+            # geri kalan onlarca/yüzlerce indeks (ör. 8..255) GDAL tarafından
+            # OTOMATİK olarak TAMAMEN OPAK SİYAH (0,0,0,255) ile doldurulur —
+            # bu, gerçek veride hiç var olmayan piksel değerleri için bile
+            # geçerlidir. Bu ortamda rasterio ile doğrudan doğrulandı: write_
+            # colormap'e yalnızca birkaç indeks verilse dahi geri okunan
+            # renk tablosu 0-255 arası TÜM indeksleri içeriyor ve boştaki
+            # her biri opak siyah. ArcMap (özellikle klasik ArcMap, RAT
+            # etiketlerini güvenilir okumadığı için — bkz. .tif.vat.dbf
+            # bloğundaki not) bu ham renk tablosunu doğrudan lejanda
+            # yansıtınca, kullanıcı gerçek sınıfların ALTINDA/YANINDA onlarca
+            # etiketsiz siyah kare görüyor — bildirilen hata tam olarak bu.
+            # ÇÖZÜM: kullanılmayan 256 indeksin TAMAMI, gerçek sınıflardan
+            # ÖNCE, NoData ile AYNI (tamamen SAYDAM, siyah DEĞİL) renge
+            # önceden ayarlanır. Böylece ArcMap'in ham renk tablosunu
+            # doğrudan okuduğu senaryoda bile "fazladan" girişler artık
+            # opak siyah değil, NoData ile görsel olarak AYNI/saydamdır —
+            # yazılımların çoğu aynı renkli ardışık girdileri tek satırda
+            # birleştirir; birleştirmeyenlerde bile artık alarm verici
+            # "bozuk veri" görüntüsü yerine zararsız/saydam bir satır kalır.
+            # Gerçek sınıf kodlarının/piksel verisinin KENDİSİ bu değişiklikle
+            # HİÇ etkilenmez — yalnızca kullanılmayan renk tablosu
+            # girişlerinin GÖRÜNÜMÜ değişir.
+            colormap = {i: (255, 255, 255, 0) for i in range(256)}
             for code, (label, rgb) in shifted_info.items():
                 colormap[code] = (rgb[0], rgb[1], rgb[2], 255)
             dst.write_colormap(1, colormap)
@@ -8651,4 +8678,3 @@ if __name__ == '__main__':
     # Proxy'yi kapatıp eski davranışa dönmek isterseniz: SYLVAGIS_TILE_PROXY=0
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
-    
