@@ -4149,13 +4149,44 @@ def build_result_image(data, for_export=False):
             eff_end   = today.isoformat()
             eff_start = (today - datetime.timedelta(days=365)).isoformat()
 
+        # 🛠️ BUG FİX (Faz 20 — "Dynamic World verisi ekrana hiç gelmiyor,
+        # indirmede 'Failed to fetch'"): KÖK NEDEN — seçilen AOI/tarih
+        # aralığında Dynamic World koleksiyonu (Sentinel-2 sahnelerinden
+        # türetildiği için) HİÇ görüntü içermiyorsa (ör. o bölgede/tarihte
+        # bulutsuz/uygun bir Sentinel-2 geçişi kaydedilmemişse), GEE'nin
+        # `.reduce(ee.Reducer.mode())` çağrısı BOŞ bir koleksiyon üzerinde
+        # ("bant isimleri" görüntülerden türetildiği için) SIFIR BANTLI bir
+        # görüntü üretir — hemen ardından gelen `.rename('value')` çağrısı
+        # bu durumda "The number of names (1) must match the number of
+        # bands specified (0)" hatasıyla BAŞARISIZ OLUR. Bu hata, hem
+        # harita karosu üretimini (`getMapId`/tile proxy — bu yüzden katman
+        # EKRANA HİÇ GELMEDİ) hem de GeoTIFF indirmesini (`getDownloadURL`
+        # — bu yüzden indirme "Failed to fetch" ile başarısız oldu) AYNI
+        # ANDA etkiler, çünkü ikisi de sunucu tarafında AYNI görüntü
+        # grafiğini değerlendirir. LULC_ESA/MODIS/CORINE bu hataya HİÇ
+        # yakalanmaz çünkü onlar `.first()` ile TEK, HER ZAMAN VAR OLAN bir
+        # global mozaik görüntüsü kullanır — koleksiyon boşluğu riski YOKTUR.
+        # ÇÖZÜM: `_dw_mode()` artık koleksiyonun GERÇEKTEN boş olup
+        # olmadığını `ee.Algorithms.If(...)` ile SUNUCU TARAFINDA (ekstra
+        # bir .getInfo() round-trip'i GEREKMEDEN, tamamen tembel/lazy
+        # olarak) kontrol ediyor: koleksiyon doluysa normal mod-kompoziti
+        # döndürüyor; BOŞSA — hata fırlatmak yerine — aynı bant adına
+        # ('value') sahip, TAMAMEN MASKELİ (boş/saydam) bir yer tutucu
+        # görüntü döndürüyor. Böylece görüntü grafiği ARTIK ASLA bant
+        # sayısı uyuşmazlığıyla çökmez; koleksiyon gerçekten boşsa kullanıcı
+        # (çökme yerine) o alanda dürüstçe boş/saydam bir katman görür —
+        # tıpkı `.unmask(dw_wide)` geniş-pencere yedeğinin zaten
+        # tasarlandığı gibi (ki bu yedek de artık güvenle çalışabiliyor,
+        # çünkü birincil pencere artık hata fırlatmak yerine düzgün bir
+        # maskeli görüntü üretiyor).
         def _dw_mode(s, e):
-            return (ee.ImageCollection('GOOGLE/DYNAMICWORLD/V1')
-                    .filterBounds(roi)
-                    .filterDate(s, e)
-                    .select('label')
-                    .reduce(ee.Reducer.mode())
-                    .rename('value'))
+            col = (ee.ImageCollection('GOOGLE/DYNAMICWORLD/V1')
+                   .filterBounds(roi)
+                   .filterDate(s, e)
+                   .select('label'))
+            reduced = col.reduce(ee.Reducer.mode()).rename('value')
+            placeholder = ee.Image.constant(0).rename('value').updateMask(ee.Image.constant(0))
+            return ee.Image(ee.Algorithms.If(col.size().gt(0), reduced, placeholder))
 
         dw = _dw_mode(eff_start, eff_end)
 
