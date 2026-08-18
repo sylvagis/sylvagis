@@ -4264,7 +4264,7 @@ tr.class-highlight-active {
                         <div class="sensor-group-label" data-i18n="topo_basic">🏔 Temel Topografik Analizler</div>
                         <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_DEM" data-ramp-key="terrain" data-legend-type="stretched" data-legend-min="0 m" data-legend-max="3000 m"> <span data-i18n="topo_dem_label">YSM / Yükseklik (DEM)</span></label>
                         <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_SLOPE" data-ramp-key="heat" data-legend-type="stretched" data-legend-min="0°" data-legend-max="60°"> <span data-i18n="topo_slope_label">Eğim (Slope)</span></label>
-                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_ASPECT" data-ramp-key="rainbow" data-legend-type="classified" data-legend-classes='[ {"color":"#bdbdbd","label":"Düz (-1)"}, {"color":"#542788","label":"Kuzey (0–12.5° / 327.5–360°)"}, {"color":"#2c7bb6","label":"Kuzeydoğu (12.5–57.5°)"}, {"color":"#00a6ca","label":"Doğu (57.5–102.5°)"}, {"color":"#00ccbc","label":"Güneydoğu (102.5–147.5°)"}, {"color":"#90eb9d","label":"Güney (147.5–192.5°)"}, {"color":"#ffff8c","label":"Güneybatı (192.5–237.5°)"}, {"color":"#fdae61","label":"Batı (237.5–282.5°)"}, {"color":"#d7191c","label":"Kuzeybatı (282.5–327.5°)"} ]'> <span data-i18n="topo_aspect_label">Bakı (Aspect)</span></label>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_ASPECT" data-ramp-key="rainbow" data-legend-type="stretched" data-legend-min="0°" data-legend-max="360°"> <span data-i18n="topo_aspect_label">Bakı (Aspect)</span></label>
                         <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_HILLSHADE" data-ramp-key="gray" data-legend-type="stretched" data-legend-min-key="shadow_label" data-legend-max-key="light_label" data-legend-min="Gölge" data-legend-max="Işık"> <span data-i18n="topo_hillshade_label">Kabartma (Hillshade)</span></label>
                         <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_RELIEF" data-ramp-key="terrain" data-legend-type="stretched" data-legend-min-key="flat_label" data-legend-max-key="high_label" data-legend-min="Düz" data-legend-max="Yüksek"> <span data-i18n="topo_relief_label">Rölyef Haritası</span></label>
 
@@ -6701,7 +6701,6 @@ tr.class-highlight-active {
                     window._sylvaLayerLegendSnapshotByPane.map2[key] = window._sylvaLayerLegendSnapshotByPane.map[key];
                 }
                 window._sylvaEditorStateByPane = window._sylvaEditorStateByPane || { map: {}, map2: {} };
-        window._sylvaUserClassifiedEditByPane = window._sylvaUserClassifiedEditByPane || { map: {}, map2: {} };
                 if (window._sylvaEditorStateByPane.map && window._sylvaEditorStateByPane.map[key] !== undefined) {
                     window._sylvaEditorStateByPane.map2[key] = window._sylvaEditorStateByPane.map[key];
                 }
@@ -11130,8 +11129,14 @@ function selectRamp(name) {
             var selectedRampEl = document.getElementById('selectedRamp');
             var rampName = selectedRampEl ? (selectedRampEl.getAttribute('data-ramp') || 'black-white') : 'black-white';
             if (rampName === '__gee__') rampName = 'black-white';
-            var palette  = sampleRampColors(rampName, 8); // GEE paleti için 8 renkli örnek (daha hassas geçiş)
-            if (typeof rampReversed !== 'undefined' && rampReversed) palette.reverse();
+            var palette;
+            if (meta.analysisName === 'TOPO_HILLSHADE') {
+                // Hillshade kullanıcı rampasından bağımsız olarak yalnızca gri.
+                palette = ['#000000', '#ffffff'];
+            } else {
+                palette = sampleRampColors(rampName, 8); // GEE paleti için 8 renkli örnek (daha hassas geçiş)
+                if (typeof rampReversed !== 'undefined' && rampReversed) palette.reverse();
+            }
             // GEE: palette renkleri # ön-eki olmadan gönderilmeli
             palette = palette.map(function(c) { return c.replace(/^#/, ''); });
 
@@ -11530,11 +11535,6 @@ function selectRamp(name) {
             // tıklanan) ekranı etkiler — kendi verisini ve kendi lejantını —
             // karşı ekranın verisine veya lejantına ASLA dokunmaz.
             var _acmActivePaneId = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
-            var _acmTopKeyForEdit = (window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[_acmActivePaneId]) || null;
-            if (_acmTopKeyForEdit) {
-                window._sylvaUserClassifiedEditByPane[_acmActivePaneId] = window._sylvaUserClassifiedEditByPane[_acmActivePaneId] || {};
-                window._sylvaUserClassifiedEditByPane[_acmActivePaneId][_acmTopKeyForEdit] = true;
-            }
             _sylvaApplyClassificationVisualsForPane(_acmActivePaneId, classes);
             updateStatsChartFromClasses(classes);
 
@@ -12091,6 +12091,68 @@ function selectRamp(name) {
             if (!legendBox) return;
 
             var legendType = meta.legendType || 'stretched';
+
+            // 🌗 HILLSHADE ÖZEL GÖRÜNÜM: Kabartma haritasında lejant pasif ve
+            // tamamen şeffaf/kapalı tutulur. Hillshade yalnızca gri tonlarında
+            // gösterilir; kullanıcı rampası veya lejant ayarları bu katmanı
+            // renklendiremez. Başka bir analize geçildiğinde normal lejant UI'si
+            // otomatik olarak tekrar etkinleşir.
+            var _isHillshadeOnly = meta.analysisName === 'TOPO_HILLSHADE';
+            var _legendToggle = document.getElementById('toggle-legend');
+            var _legendToggleWrap = document.getElementById('legend-toggle-row');
+            if (_isHillshadeOnly) {
+                // Hillshade'ta Lejant GÖRÜNSÜN; ancak yalnızca pasif/şeffaf olsun.
+                if (_legendToggle) {
+                    _legendToggle.checked = true;
+                    _legendToggle.disabled = true;
+                    _legendToggle.setAttribute('aria-disabled', 'true');
+                }
+                if (_legendToggleWrap) {
+                    _legendToggleWrap.style.opacity = '0.35';
+                    _legendToggleWrap.style.pointerEvents = 'none';
+                    _legendToggleWrap.style.userSelect = 'none';
+                }
+                legendBox.style.display = '';
+                legendBox.style.opacity = '0.38';
+                legendBox.style.pointerEvents = 'none';
+                legendBox.style.background = 'rgba(255,255,255,0.28)';
+                legendBox.style.boxShadow = 'none';
+                var _hillSymPanel = document.getElementById('legend-symbology-panel');
+                if (_hillSymPanel) {
+                    _hillSymPanel.style.opacity = '0.35';
+                    _hillSymPanel.style.pointerEvents = 'none';
+                    _hillSymPanel.style.userSelect = 'none';
+                }
+                // Semboloji panelindeki kullanıcı rampasını da hillshade için
+                // etkisizleştir; harita daima siyah-beyaz kalır.
+                var _hillRamp = document.getElementById('selectedRamp');
+                if (_hillRamp) {
+                    _hillRamp.style.background = 'linear-gradient(to right, #000000, #ffffff)';
+                    _hillRamp.setAttribute('data-ramp', 'gray');
+                }
+                return;
+            } else {
+                if (_legendToggle) {
+                    _legendToggle.disabled = false;
+                    _legendToggle.removeAttribute('aria-disabled');
+                }
+                if (_legendToggleWrap) {
+                    _legendToggleWrap.style.opacity = '1';
+                    _legendToggleWrap.style.pointerEvents = '';
+                    _legendToggleWrap.style.userSelect = '';
+                }
+                legendBox.style.opacity = '';
+                legendBox.style.pointerEvents = '';
+                legendBox.style.background = '';
+                legendBox.style.boxShadow = '';
+                var _normalSymPanel = document.getElementById('legend-symbology-panel');
+                if (_normalSymPanel) {
+                    _normalSymPanel.style.opacity = '';
+                    _normalSymPanel.style.pointerEvents = '';
+                    _normalSymPanel.style.userSelect = '';
+                }
+            }
+
             var selectedRampEl = document.getElementById('selectedRamp');
             var rampCss;
             if (window._sylvaLangChanging) {
@@ -14814,7 +14876,10 @@ function selectRamp(name) {
                     var _initRampEl = document.getElementById('selectedRamp');
                     var _initRampName = _initRampEl ? (_initRampEl.getAttribute('data-ramp') || 'black-white') : 'black-white';
                     if (_initRampName === '__gee__') _initRampName = 'black-white';
-                    if (typeof sampleRampColors === 'function') {
+                    if (meta.analysisName === 'TOPO_HILLSHADE') {
+                        // Hillshade her zaman gri tonlarında render edilir.
+                        analyzePayload.palette = ['000000', 'ffffff'];
+                    } else if (typeof sampleRampColors === 'function') {
                         var _initPalette = sampleRampColors(_initRampName, 8);
                         if (typeof rampReversed !== 'undefined' && rampReversed) _initPalette.reverse();
                         if (_initPalette && _initPalette.length) {
@@ -17293,7 +17358,7 @@ function selectRamp(name) {
                 index:     meta.analysisName,
                 maxCloud:  cloudSliderEl ? parseInt(cloudSliderEl.value, 10) : 20,
                 sceneId:   sceneId,
-                palette:   (function() {
+                palette:   (meta.analysisName === 'TOPO_HILLSHADE') ? ['black', 'white'] : (function() {
                     var rEl = document.getElementById('selectedRamp');
                     var rKey = rEl ? (rEl.getAttribute('data-ramp') || 'black-white') : 'black-white';
                     if (rKey === '__gee__') return ['black', 'white'];
@@ -52193,11 +52258,7 @@ refresh();
         // AYRICA gönderiliyor — sunucu artık bunları birebir kullanıyor,
         // kendi sınıflandırmasını İCAT ETMİYOR (bkz. server.py —
         // _classify_by_breaks()).
-        var _topoUserEdited = !!(window._sylvaUserClassifiedEditByPane &&
-            window._sylvaUserClassifiedEditByPane[pane] &&
-            window._sylvaUserClassifiedEditByPane[pane][key]);
-        if (state && state.classRows && state.classRows.length &&
-            (!/^TOPO(?:_|$)/i.test(key) || _topoUserEdited)) {
+        if (state && state.classRows && state.classRows.length) {
             breaks = state.classRows.map(function (row) {
                 return { min: parseFloat(row.min), max: parseFloat(row.max), color: String(row.color || '').replace(/^#/, '') };
             }).filter(function (b) { return isFinite(b.min) && isFinite(b.max) && b.color; });
