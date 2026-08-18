@@ -2150,164 +2150,6 @@ LULC_CLASS_DEFS = {
 }
 
 
-# ════════════════════════════════════════════════════════════════
-# 🏔️ TOPOGRAFİK DIŞA AKTARIM SINIFLARI
-# ════════════════════════════════════════════════════════════════
-# ArcMap/QGIS çıktısında topografik rasterler artık ham 0–100 / tek
-# gradyan yerine, ekrandaki analiz aralığından türetilen anlamlı sınıflarla
-# paketlenir. Kullanıcı kendi "Lejantı Uygula" sınıflarını gönderirse bunlar
-# her zaman önceliklidir.
-TOPO_EXPORT_CLASS_TEMPLATES = {
-    'TOPO_DEM': [
-        ('Çok düşük yükselti', '#2c7bb6'), ('Düşük yükselti', '#abd9e9'),
-        ('Orta yükselti', '#ffffbf'), ('Yüksek yükselti', '#fdae61'),
-        ('Çok yüksek yükselti', '#d7191c')],
-    'TOPO': [
-        ('Çok düşük yükselti', '#2c7bb6'), ('Düşük yükselti', '#abd9e9'),
-        ('Orta yükselti', '#ffffbf'), ('Yüksek yükselti', '#fdae61'),
-        ('Çok yüksek yükselti', '#d7191c')],
-    'TOPO_SLOPE': [
-        ('Düz / Çok düşük eğim', '#ffffcc'), ('Hafif eğim', '#ffeda0'),
-        ('Orta eğim', '#feb24c'), ('Dik eğim', '#f03b20'),
-        ('Çok dik eğim', '#bd0026')],
-    'TOPO_HILLSHADE': [
-        ('Çok koyu gölge', '#252525'), ('Gölge', '#636363'),
-        ('Orta aydınlık', '#969696'), ('Aydınlık', '#d9d9d9'),
-        ('Çok aydınlık', '#ffffff')],
-    'TOPO_RELIEF': [
-        ('Düşük rölyef', '#2c7bb6'), ('Orta-düşük rölyef', '#abd9e9'),
-        ('Orta rölyef', '#ffffbf'), ('Orta-yüksek rölyef', '#fdae61'),
-        ('Yüksek rölyef', '#d7191c')],
-    'TOPO_TPI': [
-        ('Belirgin çukur', '#2166ac'), ('Çukur', '#67a9cf'),
-        ('Düz / yakın sıfır', '#f7f7f7'), ('Tümsek', '#ef8a62'),
-        ('Belirgin tümsek', '#b2182b')],
-    'TOPO_TRI': [
-        ('Çok düşük pürüzlülük', '#edf8fb'), ('Düşük pürüzlülük', '#b2e2e2'),
-        ('Orta pürüzlülük', '#66c2a4'), ('Yüksek pürüzlülük', '#2ca25f'),
-        ('Çok yüksek pürüzlülük', '#006d2c')],
-    'TOPO_ROUGHNESS': [
-        ('Çok düşük pürüzlülük', '#edf8fb'), ('Düşük pürüzlülük', '#b2e2e2'),
-        ('Orta pürüzlülük', '#66c2a4'), ('Yüksek pürüzlülük', '#2ca25f'),
-        ('Çok yüksek pürüzlülük', '#006d2c')],
-    'TOPO_CURVATURE': [
-        ('Belirgin içbükey', '#2166ac'), ('İçbükey', '#67a9cf'),
-        ('Yaklaşık düz', '#f7f7f7'), ('Dışbükey', '#ef8a62'),
-        ('Belirgin dışbükey', '#b2182b')],
-    'TOPO_PLAN_CURV': [
-        ('Belirgin içbükey', '#2166ac'), ('İçbükey', '#67a9cf'),
-        ('Yaklaşık düz', '#f7f7f7'), ('Dışbükey', '#ef8a62'),
-        ('Belirgin dışbükey', '#b2182b')],
-    'TOPO_PROFILE_CURV': [
-        ('Belirgin içbükey', '#2166ac'), ('İçbükey', '#67a9cf'),
-        ('Yaklaşık düz', '#f7f7f7'), ('Dışbükey', '#ef8a62'),
-        ('Belirgin dışbükey', '#b2182b')],
-    'TOPO_FLOWDIR': [
-        ('Kuzey', '#542788'), ('Kuzeydoğu', '#2c7bb6'), ('Doğu', '#00a6ca'),
-        ('Güneydoğu', '#00ccbc'), ('Güney', '#90eb9d'), ('Güneybatı', '#ffff8c'),
-        ('Batı', '#fdae61'), ('Kuzeybatı', '#d7191c')],
-    'TOPO_FLOWACC': [
-        ('Çok düşük akış', '#eff3ff'), ('Düşük akış', '#c6dbef'),
-        ('Orta akış', '#9ecae1'), ('Yüksek akış', '#6baed6'),
-        ('Çok yüksek akış', '#2171b5')],
-    'TOPO_STREAM': [('Kara', '#d9d9d9'), ('Dere ağı', '#2166ac')],
-    'TOPO_TWI': [
-        ('Çok kuru', '#f7fcf0'), ('Kuru', '#ccebc5'), ('Orta', '#a8ddb5'),
-        ('Nemli', '#7bccc4'), ('Çok nemli', '#2b8cbe')],
-    'TOPO_SPI': [
-        ('Çok düşük akış gücü', '#f7fbff'), ('Düşük akış gücü', '#c6dbef'),
-        ('Orta akış gücü', '#6baed6'), ('Yüksek akış gücü', '#2171b5'),
-        ('Çok yüksek akış gücü', '#08306b')],
-    'TOPO_STI': [
-        ('Çok düşük taşınım', '#fff7bc'), ('Düşük taşınım', '#fec44f'),
-        ('Orta taşınım', '#fe9929'), ('Yüksek taşınım', '#ec7014'),
-        ('Çok yüksek taşınım', '#cc4c02')],
-    'TOPO_HILLSHADE_MULTI': [
-        ('Çok koyu gölge', '#252525'), ('Gölge', '#636363'),
-        ('Orta aydınlık', '#969696'), ('Aydınlık', '#d9d9d9'),
-        ('Çok aydınlık', '#ffffff')],
-    'TOPO_SOLAR': [
-        ('Çok düşük güneşlenme', '#ffffcc'), ('Düşük güneşlenme', '#ffeda0'),
-        ('Orta güneşlenme', '#feb24c'), ('Yüksek güneşlenme', '#f03b20'),
-        ('Çok yüksek güneşlenme', '#bd0026')],
-    'TOPO_SHADOW': [
-        ('Tam gölgeye yakın', '#252525'), ('Gölge', '#636363'),
-        ('Orta aydınlık', '#969696'), ('Aydınlık', '#d9d9d9'),
-        ('Tam aydınlığa yakın', '#ffffff')],
-}
-
-# Bakı için 9 mantıksal sınıf: Düz + 8 yön. Kuzey sınıfı 0–22.5 ve
-# 337.5–360 aralığını birlikte alır; rasterda aynı kod kullanılır.
-TOPO_ASPECT_CLASS_DEFS = [
-    {'code': 1, 'label': 'Düz', 'color': '#bdbdbd'},
-    {'code': 2, 'label': 'Kuzey', 'color': '#542788'},
-    {'code': 3, 'label': 'Kuzeydoğu', 'color': '#2c7bb6'},
-    {'code': 4, 'label': 'Doğu', 'color': '#00a6ca'},
-    {'code': 5, 'label': 'Güneydoğu', 'color': '#00ccbc'},
-    {'code': 6, 'label': 'Güney', 'color': '#90eb9d'},
-    {'code': 7, 'label': 'Güneybatı', 'color': '#ffff8c'},
-    {'code': 8, 'label': 'Batı', 'color': '#fdae61'},
-    {'code': 9, 'label': 'Kuzeybatı', 'color': '#d7191c'},
-]
-
-
-def _topo_default_breaks(index, vmin, vmax, palette=None):
-    """Topografik raster için ekran aralığına göre anlamlı varsayılan sınıflar."""
-    if index == 'TOPO_CONTOUR':
-        return None
-    if index == 'TOPO_ASPECT':
-        return [
-            {'min': -1, 'max': -1, 'label': 'Düz', 'color': '#bdbdbd'},
-            {'min': 0, 'max': 22.5, 'label': 'Kuzey (0–22.5°)', 'color': '#542788'},
-            {'min': 22.5, 'max': 67.5, 'label': 'Kuzeydoğu (12.5–57.5°)', 'color': '#2c7bb6'},
-            {'min': 67.5, 'max': 112.5, 'label': 'Doğu (57.5–102.5°)', 'color': '#00a6ca'},
-            {'min': 112.5, 'max': 157.5, 'label': 'Güneydoğu (102.5–147.5°)', 'color': '#00ccbc'},
-            {'min': 157.5, 'max': 202.5, 'label': 'Güney (147.5–192.5°)', 'color': '#90eb9d'},
-            {'min': 202.5, 'max': 247.5, 'label': 'Güneybatı (192.5–237.5°)', 'color': '#ffff8c'},
-            {'min': 247.5, 'max': 292.5, 'label': 'Batı (237.5–282.5°)', 'color': '#fdae61'},
-            {'min': 292.5, 'max': 337.5, 'label': 'Kuzeybatı (282.5–327.5°)', 'color': '#d7191c'},
-            {'min': 337.5, 'max': 360, 'label': 'Kuzey (337.5–360°)', 'color': '#542788'},
-        ]
-    defs = TOPO_EXPORT_CLASS_TEMPLATES.get(index)
-    if not defs:
-        return None
-    try:
-        lo, hi = float(vmin), float(vmax)
-    except (TypeError, ValueError):
-        return None
-    if not (math.isfinite(lo) and math.isfinite(hi)) or hi <= lo:
-        return None
-    n = len(defs)
-    out = []
-    for i, (label, color) in enumerate(defs):
-        a = lo + (hi - lo) * i / n
-        b = hi if i == n - 1 else lo + (hi - lo) * (i + 1) / n
-        if palette:
-            try:
-                rgb = _interpolate_palette(palette, (i + 0.5) / n)
-                color = '#{:02x}{:02x}{:02x}'.format(*rgb)
-            except Exception:
-                pass
-        out.append({'min': a, 'max': b, 'label': label, 'color': color})
-    return out
-
-
-
-def _topo_aspect_classified_ee(aspect):
-    """Bakı: Düz + 8 yön olmak üzere 9 sınıflı ArcMap-benzeri raster."""
-    out = ee.Image(0)
-    out = out.where(aspect.eq(-1), 1)
-    north = aspect.gte(0).And(aspect.lte(12.5)).Or(aspect.gt(327.5).And(aspect.lte(360)))
-    out = out.where(north, 2)
-    out = out.where(aspect.gt(12.5).And(aspect.lte(57.5)), 3)
-    out = out.where(aspect.gt(57.5).And(aspect.lte(102.5)), 4)
-    out = out.where(aspect.gt(102.5).And(aspect.lte(147.5)), 5)
-    out = out.where(aspect.gt(147.5).And(aspect.lte(192.5)), 6)
-    out = out.where(aspect.gt(192.5).And(aspect.lte(237.5)), 7)
-    out = out.where(aspect.gt(237.5).And(aspect.lte(282.5)), 8)
-    out = out.where(aspect.gt(282.5).And(aspect.lte(327.5)), 9)
-    return out.rename('value').updateMask(aspect.mask())
-
 def _write_dbf_bytes(field_defs, rows):
     """
     Minimal bir dBase III (.dbf) dosyasını sıfırdan (hiçbir ek kütüphane
@@ -2476,11 +2318,7 @@ def _classify_by_breaks(band, valid_mask, breaks):
             rgb = tuple(int(hexc[k:k + 2], 16) for k in (0, 2, 4))
         except ValueError:
             rgb = (255, 255, 255)
-        label = str(b.get('label') or b.get('name') or '{:.3g} – {:.3g}'.format(lo, hi))
-        # Sayısal aralık, isimlendirilmiş sınıfın yanında her zaman görünür;
-        # böylece ArcMap lejantı hem anlamlı adı hem gerçek sınırı taşır.
-        if not any(ch.isdigit() for ch in label):
-            label = '{} ({:.3g} – {:.3g})'.format(label, lo, hi)
+        label = '{:.3g} – {:.3g}'.format(lo, hi)
         code_info[i] = (label, rgb)
 
     idx = np.where(valid_mask, idx, 0)
@@ -2838,7 +2676,7 @@ def _classify_from_visualized_rgb(raw_band, valid_mask, rgb_bytes):
     return idx, code_info
 
 
-def _build_classified_symbology_zip(tif_bytes, vis, safe_name, breaks=None, n_classes=255, rgb_bytes=None, topo_index=None):
+def _build_classified_symbology_zip(tif_bytes, vis, safe_name, breaks=None, n_classes=255, rgb_bytes=None):
     """LULC dışındaki (sürekli/continuous) TÜM analizler için — NDVI, NDWI,
     diğer uydu indeksleri, DEM/Eğim/diğer Topografik Analizler, Çevresel ve
     Kentsel Analizler vb. — LULC ile AYNI RAT-tabanlı sınıflandırılmış/renkli
@@ -2894,58 +2732,29 @@ def _build_classified_symbology_zip(tif_bytes, vis, safe_name, breaks=None, n_cl
         return None
 
     byte_band, code_info = None, None
-    _topo_generated_breaks = False
 
-    # Topografik analizlerde kullanıcı özel sınıf vermediyse, ekranın gerçek
-    # min/max aralığından türetilen varsayılan sınıflandırmayı kullan.
-    if not breaks and topo_index and topo_index != 'TOPO_CONTOUR':
-        try:
-            vmin = vis.get('min') if isinstance(vis, dict) else None
-            vmax = vis.get('max') if isinstance(vis, dict) else None
-            breaks = _topo_default_breaks(topo_index, vmin, vmax, palette=(vis.get('palette') if isinstance(vis, dict) else None))
-            _topo_generated_breaks = bool(breaks)
-        except Exception:
-            breaks = None
-
-    # Aspect varsayılanı: Düz + 8 yön. Kuzeyin 0–12.5 ve 327.5–360
-    # bölümleri aynı raster koduna (2) atanır; toplam 9 sınıf korunur.
-    if _topo_generated_breaks and topo_index == 'TOPO_ASPECT':
-        import numpy as np
-        idx = np.zeros(band.shape, dtype=np.uint8)
-        idx[valid & (band == -1)] = 1
-        idx[valid & (((band >= 0) & (band <= 12.5)) | (band > 327.5) & (band <= 360))] = 2
-        idx[valid & (band > 12.5) & (band <= 57.5)] = 3
-        idx[valid & (band > 57.5) & (band <= 102.5)] = 4
-        idx[valid & (band > 102.5) & (band <= 147.5)] = 5
-        idx[valid & (band > 147.5) & (band <= 192.5)] = 6
-        idx[valid & (band > 192.5) & (band <= 237.5)] = 7
-        idx[valid & (band > 237.5) & (band <= 282.5)] = 8
-        idx[valid & (band > 282.5) & (band <= 327.5)] = 9
-        aspect_labels = [
-            'Düz (-1)', 'Kuzey (0–12.5° / 327.5–360°)', 'Kuzeydoğu (12.5–57.5°)',
-            'Doğu (57.5–102.5°)', 'Güneydoğu (102.5–147.5°)',
-            'Güney (147.5–192.5°)', 'Güneybatı (192.5–237.5°)',
-            'Batı (237.5–282.5°)', 'Kuzeybatı (282.5–327.5°)'
-        ]
-        aspect_colors = ['bdbdbd','542788','2c7bb6','00a6ca','00ccbc','90eb9d','ffff8c','fdae61','d7191c']
-        code_info = {i + 1: (aspect_labels[i], tuple(int(c[j:j+2],16) for j in (0,2,4))) for i,c in enumerate(aspect_colors)}
-        byte_band = idx
-
-    elif breaks and isinstance(breaks, list) and len(breaks) >= 1:
+    if breaks and isinstance(breaks, list) and len(breaks) >= 1:
         byte_band, code_info = _classify_by_breaks(band, valid, breaks)
         if not code_info:
-            breaks = None
+            breaks = None  # geçersiz/boş breaks — aşağıdaki moda düş
 
-    if not breaks and not code_info:
-        # Ekrandaki gerçek render renklerini kullanmayı dene; olmazsa vis
-        # min/max/paletinden üret.
+    if not breaks:
+        # 🛠️ BUG FİX (Faz 16 — bkz. _classify_from_visualized_rgb() docstring'i):
+        # önce, haritadaki tile'ları üreten AYNI final_display.visualize(**vis)
+        # çağrısının GERÇEK piksel renklerini kullanmayı dene (varsa) — bu,
+        # ekranla BİREBİR renk eşleşmesini garanti eder. rgb_bytes sağlanmadıysa
+        # veya bir şekilde başarısız olursa, eski (kendi enterpolasyonumuzu
+        # kullanan) yönteme GÜVENLE düşülür — indirme asla kesintiye uğramaz.
         if rgb_bytes:
             byte_band, code_info = _classify_from_visualized_rgb(band, valid, rgb_bytes)
+
         if not code_info:
             vmin = vis.get('min') if isinstance(vis, dict) else None
             vmax = vis.get('max') if isinstance(vis, dict) else None
             palette = (vis.get('palette') if isinstance(vis, dict) else None) or ['000000', 'ffffff']
             if vmin is None or vmax is None:
+                # Vis min/max sağlanmadıysa (beklenmedik durum) veriden hesapla —
+                # ArcMap'in en azından anlamlı bir sınıflandırma görmesi için.
                 finite_vals = band[valid]
                 vmin = float(np.nanmin(finite_vals)) if vmin is None else vmin
                 vmax = float(np.nanmax(finite_vals)) if vmax is None else vmax
@@ -4798,20 +4607,6 @@ def build_result_image(data, for_export=False):
             _dem_scale = 30  # SRTM/ALOS/Copernicus/NASADEM hepsi ~30 m nominal
             vis = _dynamic_stretch_vis(result, roi, _dem_scale, vis)
 
-        # 🧭 Bakı için varsayılan ekran sembolojisi: Düz + 8 yön.
-        # Kullanıcı kendi classBreaks göndermediyse haritadaki raster da
-        # ArcMap'teki sınıflandırılmış görünüm gibi 9 sınıfla açılır.
-        # Ham `result` korunur; istatistikler ve indirme gerçek derece değerleri
-        # üzerinden hesaplanmaya devam eder.
-        if index == 'TOPO_ASPECT' and not for_export and not class_breaks:
-            display_result = _topo_aspect_classified_ee(result)
-            vis = {
-                'min': 1, 'max': 9,
-                'palette': [d['color'].lstrip('#') for d in TOPO_ASPECT_CLASS_DEFS]
-            }
-        else:
-            display_result = result
-
         # ── Görsel mod / dışa aktarım modu ayrımı ──────────────────
         # 🛠️ BUG FİX: Dışa aktarım (for_export=True) ile ekran görüntüsü
         # (for_export=False) artık açık bir if/elif zinciriyle ayrılır.
@@ -6030,6 +5825,13 @@ def build_result_image(data, for_export=False):
     custom_min     = data.get('min')
     custom_max     = data.get('max')
 
+    # 🌗 Hillshade yalnızca gri tonlarında gösterilir. İstemci yanlışlıkla
+    # renkli bir palette gönderse bile Kabartma katmanının görseli renklendirilmez.
+    # Bu kural dışa aktarım verisinin ham değerlerini değiştirmez; yalnızca
+    # ekrandaki GEE tile görselleştirmesini siyah-beyaz tutar.
+    if index == 'TOPO_HILLSHADE':
+        custom_palette = ['000000', 'ffffff']
+
     if for_export:
         # GeoTIFF indirme: orijinal bar skalasındaki ham değerler.
         display_result = result
@@ -6411,30 +6213,20 @@ def analyze():
         # CRS'i taşır. Sorgu başarısız olursa sessizce None bırakılır ve
         # istemci tarafında güvenli varsayılan olan WGS 84'e düşülür.
         native_crs = None
-        # Topografik ürünlerde kaynak CRS sorgusu harita üretimine katkı
-        # sağlamaz; AOI merkezinden UTM dilimi doğrudan yerelde hesaplanabilir.
-        # Böylece her TOPO analizinde fazladan bir GEE getInfo() çağrısı kaldırılır.
-        if isinstance(data.get('index'), str) and data.get('index', '').startswith('TOPO'):
-            try:
-                _lon, _lat = _roi_center_lonlat(data.get('roi'))
-                native_crs = _utm_epsg_from_lonlat(_lon, _lat)
-            except Exception:
+        try:
+            _crs_source = crs_probe_img if crs_probe_img is not None else result
+            native_crs = _call_with_retry(
+                lambda: _crs_source.projection().crs().getInfo(), retries=1
+            )
+            # Savunmacı kontrol: beklenen tip str'dir. GEE beklenmedik bir
+            # yapı döndürürse (ör. sözlük) aşağıdaki .strip() çağrısı TÜM
+            # analizi 500 ile düşürüyordu; artık sessizce UTM yedeğine düşülür.
+            if native_crs is not None and not isinstance(native_crs, str):
                 native_crs = None
-        else:
-            try:
-                _crs_source = crs_probe_img if crs_probe_img is not None else result
-                native_crs = _call_with_retry(
-                    lambda: _crs_source.projection().crs().getInfo(), retries=1
-                )
-                # Savunmacı kontrol: beklenen tip str'dir. GEE beklenmedik bir
-                # yapı döndürürse (ör. sözlük) aşağıdaki .strip() çağrısı TÜM
-                # analizi 500 ile düşürüyordu; artık sessizce UTM yedeğine düşülür.
-                if native_crs is not None and not isinstance(native_crs, str):
-                    native_crs = None
-            except Exception as _crs_err:
-                native_crs = None
-                print('[SylvaGIS] ⚠️ nativeCrs doğrudan projeksiyon okuması başarısız '
-                      '(WGS84 geri dönüşüne geçiliyor, UTM merkez hesabı denenecek): {}'.format(_crs_err))
+        except Exception as _crs_err:
+            native_crs = None
+            print('[SylvaGIS] ⚠️ nativeCrs doğrudan projeksiyon okuması başarısız '
+                  '(WGS84 geri dönüşüne geçiliyor, UTM merkez hesabı denenecek): {}'.format(_crs_err))
 
         # 🌐 PROJEKSİYON ÖNCELİĞİ: Bazı veri setleri (LULC/Dynamic World,
         # ESA WorldCover, SRTM/NASADEM/ALOS DEM vb.) Earth Engine'de zaten
@@ -6493,92 +6285,74 @@ def analyze():
         # 🛠️ EK DÜZELTME: histogram hatası artık TÜM isteği düşürmüyor.
         # Lejant/grafik istatistiğe bağlıdır ama HARİTA KATMANI değildir;
         # istatistik alınamasa bile tile'lar gösterilebilmelidir.
-        _is_topo_analysis = (isinstance(data.get('index'), str) and data.get('index', '').startswith('TOPO') and data.get('index') != 'TOPO_CONTOUR')
-        if _is_topo_analysis:
-            # Topo tile'ı getMapId ile zaten üretildi. Histogram, büyük AOI'lerde
-            # response'u gereksiz yere bekletiyor ve kullanıcı harita verisini
-            # geç görüyor. Topografik lejant için gerçek min/max zaten `vis`
-            # içinde dinamik olarak hesaplandı; bu yüzden ilk ekranda histogram
-            # çağrısını atlayıp yanıtı hızlandırıyoruz.
+        try:
+            stats = _call_with_retry(
+                lambda: result.reduceRegion(
+                    reducer    = ee.Reducer.frequencyHistogram(),
+                    geometry   = roi,
+                    scale      = stats_scale,
+                    maxPixels  = 1e9,
+                    bestEffort = True,
+                ).getInfo()
+            )
+        except Exception as _stats_err:
             stats = {}
-        else:
-            try:
-                stats = _call_with_retry(
-                    lambda: result.reduceRegion(
-                        reducer    = ee.Reducer.frequencyHistogram(),
-                        geometry   = roi,
-                        scale      = stats_scale,
-                        maxPixels  = 1e9,
-                        bestEffort = True,
-                    ).getInfo()
-                )
-            except Exception as _stats_err:
-                stats = {}
-                print('[SylvaGIS] ⚠️ Histogram hesaplanamadı — katman yine de '
-                      'gösterilecek: {}'.format(_stats_err))
+            print('[SylvaGIS] ⚠️ Histogram hesaplanamadı — katman yine de '
+                  'gösterilecek: {}'.format(_stats_err))
 
         real_minmax = {}
-        if _is_topo_analysis:
-            # `_dynamic_stretch_vis()` zaten aynı AOI için min/max'ı hesapladı.
-            # Aynı min/max reducer'ını ikinci kez çağırmak yerine doğrudan kullan.
+        try:
+            # 🛠️ BUG FİX (performans / peş peşe analiz hatası): daha önce
+            # min/max ve ortalama İKİ AYRI reduceRegion() + getInfo() ağ
+            # çağrısıyla hesaplanıyordu. Tek bir kombine reducer ile bu iki
+            # çağrı TEK bir GEE isteğine indirilir — hem daha hızlı yanıt
+            # verir hem de kullanıcı arka arkaya analiz yaptığında GEE'nin
+            # eşzamanlı/istek-başına limitlerine çarpma ihtimalini azaltır.
+            combined_reducer = ee.Reducer.minMax().combine(
+                reducer2=ee.Reducer.mean(), sharedInputs=True
+            )
+
+            # 🆕 GÜNCELLEME: Eş Yükselti (TOPO_CONTOUR) için 'result' burada
+            # 0/1'lik İKİLİ bir kontur maskesidir — min/max her zaman 0/1
+            # çıkar ve lejant kutusunda kullanıcıya hiçbir anlamlı bilgi
+            # vermez. Bunun yerine, çalışma alanının GERÇEK yükselti
+            # (elevation) min/max değerleri hesaplanır — aynı DEM kaynağı
+            # seçim mantığı (SRTM/ALOS/Copernicus/NASADEM) burada tekrar
+            # uygulanarak.
+            _stats_img = result
+            if data.get('index') == 'TOPO_CONTOUR':
+                _stats_dem_source = data.get('demSource', 'SRTM')
+                _stats_srtm_fallback = ee.Image('USGS/SRTMGL1_003').select('elevation')
+                if _stats_dem_source == 'ALOS':
+                    _stats_dem = (ee.ImageCollection('JAXA/ALOS/AW3D30/V3_2')
+                                  .filterBounds(roi).mosaic().select('DSM').rename('elevation'))
+                    _stats_dem = _stats_dem.unmask(_stats_srtm_fallback)
+                elif _stats_dem_source == 'Copernicus':
+                    _stats_dem = (ee.ImageCollection('COPERNICUS/DEM/GLO30')
+                                  .filterBounds(roi).mosaic().select('DEM').rename('elevation'))
+                    _stats_dem = _stats_dem.unmask(_stats_srtm_fallback)
+                elif _stats_dem_source == 'NASADEM':
+                    _stats_dem = ee.Image('NASA/NASADEM_HGT/001').select('elevation')
+                else:
+                    _stats_dem = ee.Image('USGS/SRTMGL1_003').select('elevation')
+                _stats_img = _stats_dem.rename('value')
+
+            mm = _call_with_retry(
+                lambda: _stats_img.reduceRegion(
+                    reducer    = combined_reducer,
+                    geometry   = roi,
+                    scale      = stats_scale,
+                    maxPixels  = 1e9,
+                    bestEffort = True,
+                ).getInfo()
+            )
             real_minmax = {
-                'min': vis.get('min'),
-                'max': vis.get('max'),
-                'mean': None,
+                'min':  mm.get('value_min'),
+                'max':  mm.get('value_max'),
+                'mean': mm.get('value_mean')
             }
-        else:
-            try:
-                # 🛠️ BUG FİX (performans / peş peşe analiz hatası): daha önce
-                # min/max ve ortalama İKİ AYRI reduceRegion() + getInfo() ağ
-                # çağrısıyla hesaplanıyordu. Tek bir kombine reducer ile bu iki
-                # çağrı TEK bir GEE isteğine indirilir — hem daha hızlı yanıt
-                # verir hem de kullanıcı arka arkaya analiz yaptığında GEE'nin
-                # eşzamanlı/istek-başına limitlerine çarpma ihtimalini azaltır.
-                combined_reducer = ee.Reducer.minMax().combine(
-                    reducer2=ee.Reducer.mean(), sharedInputs=True
-                )
-
-                # 🆕 GÜNCELLEME: Eş Yükselti (TOPO_CONTOUR) için 'result' burada
-                # 0/1'lik İKİLİ bir kontur maskesidir — min/max her zaman 0/1
-                # çıkar ve lejant kutusunda kullanıcıya hiçbir anlamlı bilgi
-                # vermez. Bunun yerine, çalışma alanının GERÇEK yükselti
-                # (elevation) min/max değerleri hesaplanır — aynı DEM kaynağı
-                # seçim mantığı (SRTM/ALOS/Copernicus/NASADEM) burada tekrar
-                # uygulanarak.
-                _stats_img = result
-                if data.get('index') == 'TOPO_CONTOUR':
-                    _stats_dem_source = data.get('demSource', 'SRTM')
-                    _stats_srtm_fallback = ee.Image('USGS/SRTMGL1_003').select('elevation')
-                    if _stats_dem_source == 'ALOS':
-                        _stats_dem = (ee.ImageCollection('JAXA/ALOS/AW3D30/V3_2')
-                                      .filterBounds(roi).mosaic().select('DSM').rename('elevation'))
-                        _stats_dem = _stats_dem.unmask(_stats_srtm_fallback)
-                    elif _stats_dem_source == 'Copernicus':
-                        _stats_dem = (ee.ImageCollection('COPERNICUS/DEM/GLO30')
-                                      .filterBounds(roi).mosaic().select('DEM').rename('elevation'))
-                        _stats_dem = _stats_dem.unmask(_stats_srtm_fallback)
-                    elif _stats_dem_source == 'NASADEM':
-                        _stats_dem = ee.Image('NASA/NASADEM_HGT/001').select('elevation')
-                    else:
-                        _stats_dem = ee.Image('USGS/SRTMGL1_003').select('elevation')
-                    _stats_img = _stats_dem.rename('value')
-
-                mm = _call_with_retry(
-                    lambda: _stats_img.reduceRegion(
-                        reducer    = combined_reducer,
-                        geometry   = roi,
-                        scale      = stats_scale,
-                        maxPixels  = 1e9,
-                        bestEffort = True,
-                    ).getInfo()
-                )
-                real_minmax = {
-                    'min':  mm.get('value_min'),
-                    'max':  mm.get('value_max'),
-                    'mean': mm.get('value_mean')
-                }
-            except Exception:
-                pass
+        except Exception:
+            pass
 
         # NOT: tile_url yukarıda, istatistiklerden ÖNCE üretildi — burada
         # ikinci bir getMapId() çağrısı YOKTUR. (Eskiden bu satırda tekrar
@@ -7122,8 +6896,7 @@ def download_geotiff():
                           'kendi enterpolasyonumuza düşülüyor: {}'.format(rgb_ref_err))
             try:
                 sym_files = _build_classified_symbology_zip(
-                    tif_bytes, vis, safe_name, breaks=requested_breaks, rgb_bytes=rgb_vis_bytes,
-                    topo_index=(lulc_index if isinstance(lulc_index, str) and lulc_index.startswith('TOPO') else None))
+                    tif_bytes, vis, safe_name, breaks=requested_breaks, rgb_bytes=rgb_vis_bytes)
             except Exception as sym_err:
                 traceback.print_exc()
                 sym_files = None
