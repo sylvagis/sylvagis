@@ -2469,10 +2469,10 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
         '    </Metadata>\n'
         '    <GDALRasterAttributeTable Row0Min="0" BinSize="1" tableType="thematic">\n'
         '      <FieldDefn index="0"><Name>VALUE</Name><Type>1</Type><Usage>0</Usage></FieldDefn>\n'
-        '      <FieldDefn index="1"><Name>CLASSNAME</Name><Type>2</Type><Usage>2</Usage></FieldDefn>\n'
-        '      <FieldDefn index="2"><Name>R</Name><Type>1</Type><Usage>6</Usage></FieldDefn>\n'
-        '      <FieldDefn index="3"><Name>G</Name><Type>1</Type><Usage>7</Usage></FieldDefn>\n'
-        '      <FieldDefn index="4"><Name>B</Name><Type>1</Type><Usage>8</Usage></FieldDefn>\n'
+        '      <FieldDefn index="1"><Name>ClassName</Name><Type>2</Type><Usage>2</Usage></FieldDefn>\n'
+        '      <FieldDefn index="2"><Name>Red</Name><Type>1</Type><Usage>6</Usage></FieldDefn>\n'
+        '      <FieldDefn index="3"><Name>Green</Name><Type>1</Type><Usage>7</Usage></FieldDefn>\n'
+        '      <FieldDefn index="4"><Name>Blue</Name><Type>1</Type><Usage>8</Usage></FieldDefn>\n'
         + '\n'.join(rows) + '\n'
         '    </GDALRasterAttributeTable>\n'
         '  </PAMRasterBand>\n'
@@ -2716,7 +2716,7 @@ _DEFAULT_ASPECT_BREAKS = [
 # yardımcı sınıflandırıcı. _classify_by_breaks() son sınıf mantığı 0–360
 # tek aralıkta çalıştığından, Aspect için özel olarak iki parçalı Kuzey
 # aralığını tek sınıf kodunda birleştiriyoruz.
-def _classify_default_aspect(band, valid_mask):
+def _classify_default_aspect(band, valid_mask, labels_override=None):
     import numpy as np
     idx = np.zeros(band.shape, dtype=np.uint8)
     # Düz = -1
@@ -2734,14 +2734,15 @@ def _classify_default_aspect(band, valid_mask):
         (217,217,217), (60,141,90), (87,184,148), (142,208,196),
         (200,225,217), (244,179,95), (238,123,58), (216,58,46), (143,29,20)
     ]
-    labels = [
+    default_labels = [
         'Düz (-1)', 'Kuzey (0–12.5° / 327.5–360°)',
         'Kuzeydoğu (12.5–57.5°)', 'Doğu (57.5–102.5°)',
         'Güneydoğu (102.5–147.5°)', 'Güney (147.5–192.5°)',
         'Güneybatı (192.5–237.5°)', 'Batı (237.5–282.5°)',
         'Kuzeybatı (282.5–327.5°)'
     ]
-    return idx, {i+1: (labels[i], colors[i]) for i in range(9)}
+    labels = list(labels_override) if isinstance(labels_override, (list, tuple)) and len(labels_override) == 9 else default_labels
+    return idx, {i+1: (str(labels[i]), colors[i]) for i in range(9)}
 
 
 def _build_arcmap_georeferencing_sidecars(tif_bytes, safe_name):
@@ -7093,6 +7094,13 @@ def download_geotiff():
         # çubuğuyla eşleşir.
         requested_vis = req_data.get('visualization')
         requested_breaks = None
+        # KÖK DÜZELTME: İstemci görselleştirme nesnesini eski/önceki katmandan
+        # taşısa bile, sınıflandırmanın asıl kaynağı analiz oturumundaki
+        # classBreaks'tir. Böylece "Lejantı Uygula" sonrası indirilen raster
+        # mutlaka ekranda uygulanmış sınıflar + renklerle üretilir.
+        _session_breaks = data.get('classBreaks')
+        if isinstance(_session_breaks, list) and _session_breaks:
+            requested_breaks = _session_breaks
         if isinstance(requested_vis, dict):
             for _vis_key in ('min', 'max', 'palette'):
                 if requested_vis.get(_vis_key) not in (None, '', []):
@@ -7107,8 +7115,11 @@ def download_geotiff():
             # ekranda gördüğü sınıfları birebir kullanır. mode:'bar' (veya
             # hiç özelleştirilmemiş varsayılan) durumunda 'breaks' boş
             # gelir ve sürekli/yoğun (255 sınıflı) moda düşülür.
-            if requested_vis.get('mode') == 'classified' and isinstance(requested_vis.get('breaks'), list):
+            if requested_vis.get('mode') == 'classified' and isinstance(requested_vis.get('breaks'), list) and requested_vis.get('breaks'):
                 requested_breaks = requested_vis['breaks']
+            requested_aspect_labels = requested_vis.get('aspectLabels') if isinstance(requested_vis.get('aspectLabels'), list) else None
+        else:
+            requested_aspect_labels = None
         is_true_color_rgb = (lulc_index == 'RGB')
         export_image = final_display
         # 🛠️ BUG FİX (indirilen TÜM rasterlerin RGB olarak inmesi): önceden
@@ -7174,15 +7185,8 @@ def download_geotiff():
                             _valid = __import__('numpy').isfinite(_band)
                             if _src.nodata is not None:
                                 _valid &= ~__import__('numpy').isclose(_band, float(_src.nodata))
-                    _byte, _codes = _classify_default_aspect(_band, _valid)
+                    _byte, _codes = _classify_default_aspect(_band, _valid, labels_override=requested_aspect_labels)
                     sym_files = _build_symbology_files_from_classes(_byte, _profile, _codes, safe_name)
-                    try:
-                        _display_tif = _build_colorized_display_tif(tif_bytes, vis, safe_name, nodata_value=nodata_value)
-                        if _display_tif:
-                            sym_files['{}_ARCMAP_RENKLI.tif'.format(safe_name)] = _display_tif
-                            sym_files.update(_build_arcmap_georeferencing_sidecars(_display_tif, '{}_ARCMAP_RENKLI'.format(safe_name)))
-                    except Exception as _display_err:
-                        print('[SylvaGIS] ⚠️ Aspect renkli eşlikçi üretilemedi: {}'.format(_display_err))
                 except Exception as aspect_err:
                     traceback.print_exc()
                     sym_files = None
@@ -7191,15 +7195,6 @@ def download_geotiff():
                 try:
                     sym_files = _build_classified_symbology_zip(
                         tif_bytes, vis, safe_name, breaks=requested_breaks)
-                    # Renkleri ArcMap'te sabitleyen görsel eşlikçi. Sınıf kodları
-                    # ve VAT/CLR ham sınıflandırılmış TIFF'te korunur.
-                    try:
-                        _display_tif = _build_colorized_display_tif(tif_bytes, vis, safe_name, nodata_value=nodata_value)
-                        if _display_tif:
-                            sym_files['{}_ARCMAP_RENKLI.tif'.format(safe_name)] = _display_tif
-                            sym_files.update(_build_arcmap_georeferencing_sidecars(_display_tif, '{}_ARCMAP_RENKLI'.format(safe_name)))
-                    except Exception as _display_err:
-                        print('[SylvaGIS] ⚠️ Sınıflandırılmış renkli eşlikçi üretilemedi: {}'.format(_display_err))
                 except Exception as sym_err:
                     traceback.print_exc()
                     sym_files = None
@@ -7243,21 +7238,20 @@ def download_geotiff():
                       'olarak devam ediliyor: {}'.format(sym_err))
 
         if sym_files:
-            # Tek analiz için kullanıcı doğrudan TIFF istediğinde renk
-            # tablosu gömülü TIFF'i döndür. Çoklu analizlerde ise sınıf
-            # isimlerini taşıyan RAT/VAT yan dosyaları batch ZIP'e katılır.
-            if req_data.get('flatTiff'):
-                tif_bytes = sym_files.get('{}.tif'.format(safe_name), tif_bytes)
-            else:
-                zip_buf = io.BytesIO()
-                with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-                    for fname, fbytes in sym_files.items():
-                        zf.writestr(fname, fbytes)
-                zip_bytes = zip_buf.getvalue()
-                resp = Response(zip_bytes, mimetype='application/zip')
-                resp.headers['Content-Disposition'] = 'attachment; filename="{}.zip"'.format(safe_name)
-                resp.headers['Content-Length'] = str(len(zip_bytes))
-                return resp
+            # KÖK DÜZELTME: TEK raster indirilse bile artık her zaman ZIP.
+            # Kullanıcıya TIFF'in yanında .aux.xml/.vat.dbf/.cpg/.clr/.prj/.tfw
+            # gibi gerekli yan dosyaları eksiksiz vermek için flatTiff seçeneği
+            # sunucu tarafında tamamen yok sayılır. Böylece 1 analiz ve 20 analiz
+            # aynı güvenilir paketleme davranışını kullanır.
+            zip_buf = io.BytesIO()
+            with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+                for fname, fbytes in sym_files.items():
+                    zf.writestr(fname, fbytes)
+            zip_bytes = zip_buf.getvalue()
+            resp = Response(zip_bytes, mimetype='application/zip')
+            resp.headers['Content-Disposition'] = 'attachment; filename="{}.zip"'.format(safe_name)
+            resp.headers['Content-Length'] = str(len(zip_bytes))
+            return resp
 
         # 🛠️ BUG FİX ("her ne olursa olsun tüm veriler zip olarak sorunsuz
         # insin"): sym_files hiç üretilemediyse (yukarıdaki üç dalın hepsi
