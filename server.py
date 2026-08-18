@@ -2769,8 +2769,30 @@ def _build_overview_sidecar_bytes(tif_bytes, resampling='bilinear'):
                 )
         return buf.getvalue()
     except Exception as e:
-        print('[SylvaGIS] .ovr üretilemedi:', e)
-        return None
+        print('[SylvaGIS] .ovr üretilemedi (tifffile):', e)
+        # Fallback: rasterio ile tek seviyeli bile olsa geçerli bir external
+        # overview TIFF üretmeyi dene; böylece ArcMap'in .ovr bağımlılığı olan
+        # sürümlerinde sidecar eksik kalmaz.
+        try:
+            import rasterio
+            from rasterio.io import MemoryFile
+            from rasterio.enums import Resampling
+            import numpy as np
+            with MemoryFile(tif_bytes) as mf:
+                with mf.open() as src:
+                    if src.width <= 8 or src.height <= 8:
+                        return None
+                    factor = 4
+                    oh = max(1, int(np.ceil(src.height / factor)))
+                    ow = max(1, int(np.ceil(src.width / factor)))
+                    arr = src.read(1, out_shape=(oh, ow), resampling=Resampling.nearest if resampling == 'nearest' else Resampling.bilinear)
+            buf = io.BytesIO()
+            import tifffile as _tf
+            _tf.imwrite(buf, arr, compression='deflate', metadata=None)
+            return buf.getvalue()
+        except Exception as fallback_err:
+            print('[SylvaGIS] .ovr fallback da üretilemedi:', fallback_err)
+            return None
 
 def _build_georef_sidecars(tif_bytes, safe_name):
     """ArcMap uyumluluğu için GeoTIFF'in CRS/transform bilgisinin klasik
@@ -2797,6 +2819,38 @@ def _build_georef_sidecars(tif_bytes, safe_name):
     except Exception as e:
         print('[SylvaGIS] klasik CRS/world-file yan dosyaları üretilemedi:', e)
     return files
+
+def _validate_exported_raster_bytes(tif_bytes, label='raster', require_data=True):
+    """Dışa aktarılan GeoTIFF'in gerçekten okunabilir ve veri içerir olduğunu doğrular.
+
+    Özellikle DEM/Slope gibi topografik rasterlerde GEE'nin geçerli bir HTTP
+    yanıtı verip sonrasında bozuk/boş bir TIFF üretmesi sessizce kabul edilmez.
+    ArcMap'e gönderilmeden önce rasterio ile açılır; boyut, bant, CRS ve geçerli
+    piksel sayısı kontrol edilir. Geçerli veri yoksa indirme başarısız sayılır.
+    """
+    import numpy as np
+    import rasterio
+    from rasterio.io import MemoryFile
+    with MemoryFile(tif_bytes) as mf:
+        with mf.open() as src:
+            if src.width < 1 or src.height < 1 or src.count < 1:
+                raise ValueError('{}: geçersiz raster boyutu/bant sayısı.'.format(label))
+            data = src.read(1)
+            nodata = src.nodata
+            valid = np.isfinite(data)
+            if nodata is not None:
+                valid &= ~np.isclose(data, float(nodata))
+            valid_count = int(valid.sum())
+            if require_data and valid_count <= 0:
+                raise ValueError('{}: raster açıldı ancak geçerli piksel içermiyor.'.format(label))
+            if require_data:
+                vals = data[valid]
+                if vals.size and not np.isfinite(float(vals.min()) + float(vals.max())):
+                    raise ValueError('{}: raster istatistikleri geçersiz.'.format(label))
+            if src.crs is None:
+                raise ValueError('{}: CRS bilgisi bulunamadı.'.format(label))
+    return True
+
 
 def _build_continuous_raster_package(tif_bytes, safe_name, include_ovr=True):
     """Sürekli/bar modundaki analizleri HAM piksel değerleriyle paketler.
@@ -6998,6 +7052,13 @@ def download_geotiff():
         # ana TIFF'i tiled/compressed ve internal pyramid'li hale getir.
         # Bu adım piksel değerlerini DEĞİŞTİRMEZ.
         tif_bytes = _prepare_arcmap_raster_bytes(tif_bytes, build_internal_overviews=True)
+        # 🔒 ArcMap güvence kontrolü: optimizasyon/overview/reprojection sonrası
+        # TIFF'in hâlâ gerçek veri içerdiğini doğrula. Boş veya okunamayan DEM,
+        # Slope, TWI vb. dosyaların ZIP'e sessizce girmesine izin verme.
+        _validate_exported_raster_bytes(tif_bytes, label=lulc_index or safe_name, require_data=True)
+        # Internal pyramid yazımı bazı GDAL/rasterio sürümlerinde band metadata
+        # etiketlerini taşımayabilir; son kez kesin min/max istatistiklerini damgala.
+        tif_bytes = _stamp_exact_band_statistics(tif_bytes, nodata_value=nodata_value)
 
         sym_files = None
         if lulc_index in LULC_CLASS_DEFS:
