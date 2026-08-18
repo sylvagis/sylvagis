@@ -2325,19 +2325,17 @@ def _classify_by_breaks(band, valid_mask, breaks):
             rgb = tuple(int(hexc[k:k + 2], 16) for k in (0, 2, 4))
         except ValueError:
             rgb = (255, 255, 255)
-        # Kullanıcının Lejantı Uygula panelinde verdiği sınıf adı varsa
-        # ArcMap'e SAYISAL kodu değil bu adı taşı. Böylece ör.
-        # "Kuzey", "Kuzeydoğu" veya seçili dildeki sınıf adı
-        # raster attribute table/VAT içinde doğrudan görünür.
-        _user_label = str(b.get('label') or '').strip()
-        label = _user_label or '{:.3g} – {:.3g}'.format(lo, hi)
+        # Kullanıcının seçtiği dilde/sınıf adında gelen etiketi koru.
+        # Eski sürüm her zaman sadece sayısal aralık yazıyordu; bu nedenle
+        # ArcMap'te ör. Bakı sınıfları 1,2,3... olarak görünüyordu.
+        label = str(b.get('label') or b.get('name') or '{:.3g} – {:.3g}'.format(lo, hi))
         code_info[i] = (label, rgb)
 
     idx = np.where(valid_mask, idx, 0)
     return idx.astype(np.uint8), code_info
 
 
-def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name, embed_colormap=False):
+def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name, embed_colormap=True):
     """Zaten 1..N küçük tam sayı sınıf koduna (0 = NoData) indirgenmiş bir
     banttan (byte_band) ve {kod: (etiket, (r,g,b))} sözlüğünden (code_info)
     ArcMap/QGIS'in RENKLİ + İSİMLENDİRİLMİŞ açacağı bir dosya seti üretir:
@@ -2436,21 +2434,6 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
                     STATISTICS_MAXIMUM=repr(float(max_code)),
                     STATISTICS_APPROXIMATE='NO',
                 )
-            # ArcMap uzak zoom seviyelerinde rasteri yeniden hesaplamak
-            # zorunda kalmasın. Kategorik/sınıflandırılmış veride sınıf kodları
-            # karışmasın diye NEAREST kullanılır. Böylece yakınlaştırınca gelen
-            # veri ile uzaklaşınca kaybolan/kararan görüntü aynı sınıfları taşır.
-            _ov_levels = [2, 4, 8, 16, 32]
-            _ov_levels = [lv for lv in _ov_levels
-                          if new_profile.get('width', 0) // lv >= 32
-                          and new_profile.get('height', 0) // lv >= 32]
-            if _ov_levels:
-                try:
-                    from rasterio.enums import Resampling
-                    dst.build_overviews(_ov_levels, Resampling.nearest)
-                    dst.update_tags(ns='rio_overview', resampling='nearest')
-                except Exception:
-                    pass
         new_tif_bytes = out_memfile.read()
 
     # ── .clr (klasik GDAL/ESRI renk eşleştirme dosyası) ──────────────
@@ -2478,11 +2461,11 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
         '      <MDI key="LAYER_TYPE">thematic</MDI>\n'
         '    </Metadata>\n'
         '    <GDALRasterAttributeTable Row0Min="0" BinSize="1" tableType="thematic">\n'
-        '      <FieldDefn index="0"><Name>Value</Name><Type>1</Type><Usage>0</Usage></FieldDefn>\n'
-        '      <FieldDefn index="1"><Name>ClassName</Name><Type>2</Type><Usage>2</Usage></FieldDefn>\n'
-        '      <FieldDefn index="2"><Name>Red</Name><Type>1</Type><Usage>6</Usage></FieldDefn>\n'
-        '      <FieldDefn index="3"><Name>Green</Name><Type>1</Type><Usage>7</Usage></FieldDefn>\n'
-        '      <FieldDefn index="4"><Name>Blue</Name><Type>1</Type><Usage>8</Usage></FieldDefn>\n'
+        '      <FieldDefn index="0"><Name>VALUE</Name><Type>1</Type><Usage>0</Usage></FieldDefn>\n'
+        '      <FieldDefn index="1"><Name>CLASS_NAME</Name><Type>2</Type><Usage>2</Usage></FieldDefn>\n'
+        '      <FieldDefn index="2"><Name>R</Name><Type>1</Type><Usage>6</Usage></FieldDefn>\n'
+        '      <FieldDefn index="3"><Name>G</Name><Type>1</Type><Usage>7</Usage></FieldDefn>\n'
+        '      <FieldDefn index="4"><Name>B</Name><Type>1</Type><Usage>8</Usage></FieldDefn>\n'
         + '\n'.join(rows) + '\n'
         '    </GDALRasterAttributeTable>\n'
         '  </PAMRasterBand>\n'
@@ -2498,19 +2481,18 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
     # aracının ürettiğiyle aynı format).
     counts = np.bincount(byte_band.ravel(), minlength=256)
     field_defs = [
-        ('Value', 'N', 10, 0),
-        ('Count', 'N', 12, 0),
-        ('ClassName', 'C', 60, 0),
-        ('Label', 'C', 60, 0),
-        ('Red', 'N', 3, 0),
-        ('Green', 'N', 3, 0),
-        ('Blue', 'N', 3, 0),
+        ('VALUE', 'N', 10, 0),
+        ('COUNT', 'N', 12, 0),
+        ('CLASS_NAME', 'C', 60, 0),
+        ('RED', 'N', 3, 0),
+        ('GREEN', 'N', 3, 0),
+        ('BLUE', 'N', 3, 0),
     ]
     vat_rows = []
     for code in sorted(code_info.keys()):
         label, rgb = code_info[code]
         vat_rows.append((code, int(counts[code]) if code < 256 else 0,
-                          label, label, rgb[0], rgb[1], rgb[2]))
+                          label, rgb[0], rgb[1], rgb[2]))
     vat_dbf_bytes = _write_dbf_bytes(field_defs, vat_rows)
     vat_cpg_bytes = b'UTF-8'
 
@@ -2523,7 +2505,7 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
     }
 
 
-def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name, localized_labels=None):
+def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name, label_overrides=None):
     """
     LULC ailesi (LULC, LULC_ESA, LULC_MODIS, LULC_CORINE) GeoTIFF'ini alır;
     çıktısı, ArcMap/QGIS'te doğrudan RENKLİ ve İSİMLENDİRİLMİŞ açılan, SADECE
@@ -2547,16 +2529,15 @@ def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name, localized_labels
 
     # kod -> (isim, (r,g,b))
     code_info = {}
-    localized_labels = localized_labels if isinstance(localized_labels, dict) else {}
     for d in defs:
         hexc = d['color'].lstrip('#')
         rgb = tuple(int(hexc[i:i + 2], 16) for i in (0, 2, 4))
-        # ArcMap'te görünen sınıf adı, kullanıcının seçtiği UI diliyle aynı
-        # olmalıdır. İstemci, SYLVA_TRANSLATIONS içindeki aynı class key'lerini
-        # gönderir; gönderilmezse geriye dönük uyumluluk için Türkçe backend adı
-        # kullanılır.
-        _label = str(localized_labels.get(str(d['code'])) or localized_labels.get(d['code']) or '').strip()
-        code_info[d['code']] = (_label or d['label'], rgb)
+        override = None
+        if isinstance(label_overrides, dict):
+            override = label_overrides.get(str(d['code']))
+            if override is None:
+                override = label_overrides.get(d['code'])
+        code_info[d['code']] = (str(override) if override else d['label'], rgb)
 
     # Dynamic World (LULC) kodları 0'dan başlıyor; 0'ı yalnızca NoData'ya
     # ayırabilmek için TÜM kodları +1 kaydırıyoruz. Diğer LULC ailesi
@@ -2731,7 +2712,7 @@ _DEFAULT_ASPECT_BREAKS = [
 # yardımcı sınıflandırıcı. _classify_by_breaks() son sınıf mantığı 0–360
 # tek aralıkta çalıştığından, Aspect için özel olarak iki parçalı Kuzey
 # aralığını tek sınıf kodunda birleştiriyoruz.
-def _classify_default_aspect(band, valid_mask):
+def _classify_default_aspect(band, valid_mask, labels=None):
     import numpy as np
     idx = np.zeros(band.shape, dtype=np.uint8)
     # Düz = -1
@@ -2749,35 +2730,19 @@ def _classify_default_aspect(band, valid_mask):
         (217,217,217), (60,141,90), (87,184,148), (142,208,196),
         (200,225,217), (244,179,95), (238,123,58), (216,58,46), (143,29,20)
     ]
-    labels = [
+    default_labels = [
         'Düz (-1)', 'Kuzey (0–12.5° / 327.5–360°)',
         'Kuzeydoğu (12.5–57.5°)', 'Doğu (57.5–102.5°)',
         'Güneydoğu (102.5–147.5°)', 'Güney (147.5–192.5°)',
         'Güneybatı (192.5–237.5°)', 'Batı (237.5–282.5°)',
         'Kuzeybatı (282.5–327.5°)'
     ]
-    return idx, {i+1: (labels[i], colors[i]) for i in range(9)}
+    if isinstance(labels, (list, tuple)) and len(labels) == 9:
+        default_labels = [str(x) if str(x).strip() else default_labels[i] for i, x in enumerate(labels)]
+    return idx, {i+1: (default_labels[i], colors[i]) for i in range(9)}
 
 
-def _localize_aspect_code_info(code_info, labels):
-    """Varsayılan Aspect 9 sınıfının adlarını istemcinin seçtiği dile taşır.
-
-    labels, index.html tarafındaki aynı 9 sınıflık sözlükten gelir. Renkler
-    ve sınıf kodları değişmez; yalnızca CLASS_NAME/Label metni yerelleştirilir.
-    """
-    if not isinstance(labels, (list, tuple)) or len(labels) < len(code_info):
-        return code_info
-    out = {}
-    for code, (_old_label, rgb) in code_info.items():
-        try:
-            label = str(labels[int(code) - 1]).strip()
-        except Exception:
-            label = _old_label
-        out[code] = (label or _old_label, rgb)
-    return out
-
-
-def _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=None, vis=None):
+def _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=None):
     """Sürekli/bar analizlerde HAM sayısal rasterı korur.
 
     Önceki sürüm sürekli rasterı 1..255 sınıfa çeviriyordu. Bunun sonucu
@@ -2860,26 +2825,8 @@ def _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=Non
     clr = b''
     if stats:
         mn, mx = stats[0][0], stats[0][1]
-        _vis = vis if isinstance(vis, dict) else {}
-        _vmin = _vis.get('min', mn)
-        _vmax = _vis.get('max', mx)
-        try:
-            _vmin = float(_vmin); _vmax = float(_vmax)
-        except Exception:
-            _vmin, _vmax = mn, mx
-        if not np.isfinite(_vmin) or not np.isfinite(_vmax) or _vmax <= _vmin:
-            _vmin, _vmax = mn, (mx if mx > mn else mn + 1.0)
-        _palette = _vis.get('palette') or ['000000', 'ffffff']
-        _lines = [
-            '# SylvaGIS continuous raster color reference',
-            '# RAW VALUES PRESERVED: {} - {}'.format(mn, mx),
-            '# Value Red Green Blue'
-        ]
-        for _i in range(256):
-            _value = _vmin + (_vmax - _vmin) * (_i / 255.0)
-            _rgb = _interpolate_palette(_palette, _i / 255.0)
-            _lines.append('{:.12g} {} {} {}'.format(_value, _rgb[0], _rgb[1], _rgb[2]))
-        clr = ('\n'.join(_lines) + '\n').encode('utf-8')
+        clr = ('# SylvaGIS continuous raster reference\n'
+               '# RAW VALUES PRESERVED: {} - {}\n'.format(mn, mx)).encode('utf-8')
 
     return {
         '{}.tif'.format(safe_name): final_tif,
@@ -4632,14 +4579,14 @@ def build_result_image(data, for_export=False):
 
         elif index == 'TOPO_HILLSHADE':
             result = terrain.select('hillshade').rename('value')
-            vis = {'min': 0, 'max': 255, 'palette': ['black', 'white']}
+            vis = {'min': 0, 'max': 255, 'palette': ['f2f2f2', '666666']}
 
         elif index == 'TOPO_RELIEF':
             # Kabartmalı rölyef: hillshade + normalize yükseklik karışımı
             hs       = terrain.select('hillshade')
             elev_n   = dem.unitScale(0, 3000).multiply(80).add(175).clamp(0, 255)
             result   = hs.multiply(0.7).add(elev_n.multiply(0.3)).rename('value')
-            vis = {'min': 0, 'max': 255, 'palette': ['black', 'white']}
+            vis = {'min': 0, 'max': 255, 'palette': ['f2f2f2', '666666']}
 
         # ── Morfometrik Analizler ─────────────────────────────────
         elif index == 'TOPO_TPI':
@@ -7017,8 +6964,6 @@ def download_geotiff():
         # çubuğuyla eşleşir.
         requested_vis = req_data.get('visualization')
         requested_breaks = None
-        requested_aspect_labels = None
-        requested_lulc_labels = None
         if isinstance(requested_vis, dict):
             for _vis_key in ('min', 'max', 'palette'):
                 if requested_vis.get(_vis_key) not in (None, '', []):
@@ -7035,11 +6980,6 @@ def download_geotiff():
             # gelir ve sürekli/yoğun (255 sınıflı) moda düşülür.
             if requested_vis.get('mode') == 'classified' and isinstance(requested_vis.get('breaks'), list):
                 requested_breaks = requested_vis['breaks']
-            # Varsayılan/native Aspect sınıfları da istemcinin seçili dilindeki
-            # isimleriyle paketlensin. Kullanıcı daha sonra sınıflandırmayı
-            # değiştirirse requested_breaks içindeki kendi etiketleri önceliklidir.
-            requested_aspect_labels = requested_vis.get('aspectLabels') if isinstance(requested_vis.get('aspectLabels'), list) else None
-            requested_lulc_labels = requested_vis.get('lulcLabels') if isinstance(requested_vis.get('lulcLabels'), dict) else None
         is_true_color_rgb = (lulc_index == 'RGB')
         export_image = final_display
         # 🛠️ BUG FİX (indirilen TÜM rasterlerin RGB olarak inmesi): önceden
@@ -7085,7 +7025,9 @@ def download_geotiff():
         if lulc_index in LULC_CLASS_DEFS:
             try:
                 sym_files = _build_lulc_symbology_zip(
-                    tif_bytes, lulc_index, safe_name, localized_labels=requested_lulc_labels)
+                    tif_bytes, lulc_index, safe_name,
+                    label_overrides=(requested_vis.get('classLabels') if isinstance(requested_vis, dict) else None)
+                )
             except Exception as sym_err:
                 traceback.print_exc()
                 sym_files = None
@@ -7106,9 +7048,10 @@ def download_geotiff():
                             _valid = __import__('numpy').isfinite(_band)
                             if _src.nodata is not None:
                                 _valid &= ~__import__('numpy').isclose(_band, float(_src.nodata))
-                    _byte, _codes = _classify_default_aspect(_band, _valid)
-                    if requested_aspect_labels:
-                        _codes = _localize_aspect_code_info(_codes, requested_aspect_labels)
+                    _byte, _codes = _classify_default_aspect(
+                        _band, _valid,
+                        labels=(requested_vis.get('classLabels') if isinstance(requested_vis, dict) else None)
+                    )
                     sym_files = _build_symbology_files_from_classes(_byte, _profile, _codes, safe_name)
                 except Exception as aspect_err:
                     traceback.print_exc()
@@ -7124,7 +7067,7 @@ def download_geotiff():
                     print('[SylvaGIS] ⚠️ Sınıflandırılmış semboloji oluşturulamadı: {}'.format(sym_err))
             else:
                 try:
-                    sym_files = _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=nodata_value, vis=vis)
+                    sym_files = _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=nodata_value)
                 except Exception as sym_err:
                     traceback.print_exc()
                     sym_files = None
@@ -7526,7 +7469,7 @@ def _ensure_output_crs(tif_bytes, target_crs, nodata_value=None, is_categorical=
         return tif_bytes
 
 
-def _stamp_exact_band_statistics(tif_bytes, nodata_value=None, is_categorical=False):
+def _stamp_exact_band_statistics(tif_bytes, nodata_value=None):
     """
     🛠️ BUG FİX (QGIS'te 0-47, ArcMap'te 0-54 — aynı .tif dosyası için
     FARKLI min/max değerleri görünüyordu):
@@ -7601,19 +7544,6 @@ def _stamp_exact_band_statistics(tif_bytes, nodata_value=None, is_categorical=Fa
                         STATISTICS_STDDEV=repr(b_std),
                         STATISTICS_APPROXIMATE='NO',
                     )
-                _ov_levels = [2, 4, 8, 16, 32]
-                _ov_levels = [lv for lv in _ov_levels
-                              if profile.get('width', 0) // lv >= 32
-                              and profile.get('height', 0) // lv >= 32]
-                if _ov_levels:
-                    try:
-                        from rasterio.enums import Resampling
-                        _ov_resampling = Resampling.nearest if is_categorical else Resampling.average
-                        dst.build_overviews(_ov_levels, _ov_resampling)
-                        dst.update_tags(ns='rio_overview',
-                                        resampling='nearest' if is_categorical else 'average')
-                    except Exception:
-                        pass
             try:
                 return out_memfile.read()
             finally:
@@ -8005,7 +7935,7 @@ def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata
             raw_bytes, aoi_geom_4326, nodata_value, strict=is_categorical
         )
 
-    return _stamp_exact_band_statistics(raw_bytes, nodata_value=nodata_value, is_categorical=is_categorical)
+    return _stamp_exact_band_statistics(raw_bytes, nodata_value=nodata_value)
 
 
 @app.route('/api/download-raw-bands', methods=['POST'])
@@ -9501,4 +9431,3 @@ if __name__ == '__main__':
     # Proxy'yi kapatıp eski davranışa dönmek isterseniz: SYLVAGIS_TILE_PROXY=0
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
-    
