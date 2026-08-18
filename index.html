@@ -4264,7 +4264,7 @@ tr.class-highlight-active {
                         <div class="sensor-group-label" data-i18n="topo_basic">🏔 Temel Topografik Analizler</div>
                         <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_DEM" data-ramp-key="terrain" data-legend-type="stretched" data-legend-min="0 m" data-legend-max="3000 m"> <span data-i18n="topo_dem_label">YSM / Yükseklik (DEM)</span></label>
                         <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_SLOPE" data-ramp-key="heat" data-legend-type="stretched" data-legend-min="0°" data-legend-max="60°"> <span data-i18n="topo_slope_label">Eğim (Slope)</span></label>
-                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_ASPECT" data-ramp-key="rainbow" data-legend-type="stretched" data-legend-min="0°" data-legend-max="360°"> <span data-i18n="topo_aspect_label">Bakı (Aspect)</span></label>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_ASPECT" data-ramp-key="rainbow" data-legend-type="classified" data-legend-classes='[ {"color":"#bdbdbd","label":"Düz (-1)"}, {"color":"#542788","label":"Kuzey (0–12.5° / 327.5–360°)"}, {"color":"#2c7bb6","label":"Kuzeydoğu (12.5–57.5°)"}, {"color":"#00a6ca","label":"Doğu (57.5–102.5°)"}, {"color":"#00ccbc","label":"Güneydoğu (102.5–147.5°)"}, {"color":"#90eb9d","label":"Güney (147.5–192.5°)"}, {"color":"#ffff8c","label":"Güneybatı (192.5–237.5°)"}, {"color":"#fdae61","label":"Batı (237.5–282.5°)"}, {"color":"#d7191c","label":"Kuzeybatı (282.5–327.5°)"} ]'> <span data-i18n="topo_aspect_label">Bakı (Aspect)</span></label>
                         <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_HILLSHADE" data-ramp-key="gray" data-legend-type="stretched" data-legend-min-key="shadow_label" data-legend-max-key="light_label" data-legend-min="Gölge" data-legend-max="Işık"> <span data-i18n="topo_hillshade_label">Kabartma (Hillshade)</span></label>
                         <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_RELIEF" data-ramp-key="terrain" data-legend-type="stretched" data-legend-min-key="flat_label" data-legend-max-key="high_label" data-legend-min="Düz" data-legend-max="Yüksek"> <span data-i18n="topo_relief_label">Rölyef Haritası</span></label>
 
@@ -6701,6 +6701,7 @@ tr.class-highlight-active {
                     window._sylvaLayerLegendSnapshotByPane.map2[key] = window._sylvaLayerLegendSnapshotByPane.map[key];
                 }
                 window._sylvaEditorStateByPane = window._sylvaEditorStateByPane || { map: {}, map2: {} };
+        window._sylvaUserClassifiedEditByPane = window._sylvaUserClassifiedEditByPane || { map: {}, map2: {} };
                 if (window._sylvaEditorStateByPane.map && window._sylvaEditorStateByPane.map[key] !== undefined) {
                     window._sylvaEditorStateByPane.map2[key] = window._sylvaEditorStateByPane.map[key];
                 }
@@ -11529,6 +11530,11 @@ function selectRamp(name) {
             // tıklanan) ekranı etkiler — kendi verisini ve kendi lejantını —
             // karşı ekranın verisine veya lejantına ASLA dokunmaz.
             var _acmActivePaneId = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+            var _acmTopKeyForEdit = (window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[_acmActivePaneId]) || null;
+            if (_acmTopKeyForEdit) {
+                window._sylvaUserClassifiedEditByPane[_acmActivePaneId] = window._sylvaUserClassifiedEditByPane[_acmActivePaneId] || {};
+                window._sylvaUserClassifiedEditByPane[_acmActivePaneId][_acmTopKeyForEdit] = true;
+            }
             _sylvaApplyClassificationVisualsForPane(_acmActivePaneId, classes);
             updateStatsChartFromClasses(classes);
 
@@ -52187,7 +52193,11 @@ refresh();
         // AYRICA gönderiliyor — sunucu artık bunları birebir kullanıyor,
         // kendi sınıflandırmasını İCAT ETMİYOR (bkz. server.py —
         // _classify_by_breaks()).
-        if (state && state.classRows && state.classRows.length) {
+        var _topoUserEdited = !!(window._sylvaUserClassifiedEditByPane &&
+            window._sylvaUserClassifiedEditByPane[pane] &&
+            window._sylvaUserClassifiedEditByPane[pane][key]);
+        if (state && state.classRows && state.classRows.length &&
+            (!/^TOPO(?:_|$)/i.test(key) || _topoUserEdited)) {
             breaks = state.classRows.map(function (row) {
                 return { min: parseFloat(row.min), max: parseFloat(row.max), color: String(row.color || '').replace(/^#/, '') };
             }).filter(function (b) { return isFinite(b.min) && isFinite(b.max) && b.color; });
@@ -52195,27 +52205,8 @@ refresh();
             min = parseFloat(state.classRows[0].min); max = parseFloat(state.classRows[state.classRows.length - 1].max);
         }
         var ramp = state && state.rampDataAttr;
-        // 🆕 TOPO/GENEL RASTER EXPORT SYNC: katmanın editör durumu henüz
-        // kaydedilmemişse bile (ör. yeni seçilen bir topografik katmanda
-        // kullanıcı Lejant panelini hiç açmadıysa) DOM'daki gerçek analiz
-        // meta'sından ekranın varsayılan ramp/min/max değerlerini al. Böylece
-        // sunucuya -1..1 + siyah-beyaz gibi jenerik bir fallback gönderilmez.
-        if (!ramp) {
-            try {
-                var _metaEl = document.querySelector('input[data-analysis="' + String(key).replace(/"/g, '\\"') + '"]');
-                if (_metaEl) {
-                    ramp = _metaEl.getAttribute('data-ramp-key') || null;
-                }
-            } catch (_) {}
-        }
         if (!colors.length && ramp && ramp !== '__gee__' && typeof sampleRampColors === 'function') {
             colors = sampleRampColors(ramp, 8).map(function (c) { return String(c).replace(/^#/, ''); });
-        }
-        if (state && state.classificationType === 'stretched' && state.stretchedUserEdited) {
-            var _sMin = parseFloat(state.stretchedMin);
-            var _sMax = parseFloat(state.stretchedMax);
-            if (isFinite(_sMin)) min = _sMin;
-            if (isFinite(_sMax)) max = _sMax;
         }
         // 🛠️ BUG FİX (ArcMap'te "siyah ekran"/tanımsız min-max — Uydu
         // Analizleri VE Topografik Analizlerin TAMAMI): kullanıcı o katman
