@@ -5288,7 +5288,7 @@ tr.class-highlight-active {
     </select>
 
 </div>
-            <div id="legend-symbology-panel" style="opacity:0.35;pointer-events:none;user-select:none;">
+            <div id="legend-symbology-panel" style="opacity:1;pointer-events:auto;user-select:auto;">
             <h3 data-i18n="legend_sym">Lejant ve Semboloji</h3>
 
 <!-- ===== SINIFLANDIRMA TÜRÜ SEÇİCİ ===== -->
@@ -11317,6 +11317,45 @@ function selectRamp(name) {
         }
 
         // Seçilen sınıf sayısına göre satırları (Min, Max, Lejant Adı, Renk, ➔) baştan oluşturur
+        function seedClassRowsFromNativeMeta(meta) {
+            if (!meta || !meta.classesRaw || !classRowsContainer || !classCountSelect) return;
+            var raw;
+            try { raw = JSON.parse(meta.classesRaw); } catch (e) { return; }
+            if (!Array.isArray(raw) || !raw.length) return;
+
+            var ranges = null;
+            if (meta.analysisName === 'TOPO_ASPECT') {
+                ranges = [
+                    [-1, -1], [0, 12.5], [12.5, 57.5], [57.5, 102.5],
+                    [102.5, 147.5], [147.5, 192.5], [192.5, 237.5],
+                    [237.5, 282.5], [282.5, 327.5]
+                ];
+            }
+            var count = raw.length;
+            classCountSelect.value = String(count);
+            classRowsContainer.innerHTML = '';
+            raw.forEach(function(cls, i) {
+                var r = ranges && ranges[i] ? ranges[i] : [
+                    Number(cls.min !== undefined ? cls.min : (cls.code !== undefined ? cls.code : i + 1)),
+                    Number(cls.max !== undefined ? cls.max : (cls.code !== undefined ? cls.code : i + 1))
+                ];
+                var color = cls.color || CLASS_COLOR_PALETTE[i % CLASS_COLOR_PALETTE.length];
+                var label = meta.analysisName === 'TOPO_ASPECT' ? sylvaTopoAspectLabel(cls, i) : (cls.label || ((typeof t === 'function' ? t('class_word') : 'Class') + ' ' + (i + 1)));
+                var row = document.createElement('div');
+                row.className = 'classification-row';
+                row.setAttribute('data-row', i);
+                row.innerHTML =
+                    '<input type="number" class="class-input class-min" value="' + r[0] + '" placeholder="Min">' +
+                    '<input type="number" class="class-input class-max" value="' + r[1] + '" placeholder="Max">' +
+                    '<input type="text" class="class-name" data-auto="' + (i + 1) + '" value="' + escapeHtml(label) + '" placeholder="' + (t('legend_name_placeholder') || 'Lejant Adı') + '">' +
+                    buildClassColorPickerHTML(i, color) +
+                    '<button type="button" class="apply-btn" data-row="' + i + '" title="Uygula">➔</button>';
+                classRowsContainer.appendChild(row);
+            });
+            currentClassificationType = 'classified';
+            if (typeof setClassificationType === 'function') setClassificationType('classified');
+        }
+
         function buildClassRows(count) {
             classRowsContainer.innerHTML = '';
 
@@ -12315,14 +12354,17 @@ function selectRamp(name) {
             // Dil değişimi sırasında başlık ve input alanlarına dokunma
             if (!window._sylvaLangChanging) {
                 var stretchedTitle = document.getElementById('stretched-title');
-                if (stretchedTitle) stretchedTitle.value = meta.analysisName;
+                if (stretchedTitle) stretchedTitle.value = _legendTitle;
                 var classifiedTitle = document.getElementById('classified-title');
-                if (classifiedTitle) classifiedTitle.value = meta.analysisName;
+                if (classifiedTitle) classifiedTitle.value = _legendTitle;
 
                 // ── Semboloji panelini doğru moda getir ─────────────────────────
                 // TOPO ve indeks analizler → Stretched; LULC vb. → Classified
                 if (typeof setClassificationType === 'function') {
                     setClassificationType(legendType === 'classified' ? 'classified' : 'stretched');
+                }
+                if (legendType === 'classified' && meta.classesRaw && typeof seedClassRowsFromNativeMeta === 'function') {
+                    seedClassRowsFromNativeMeta(meta);
                 }
 
                 // ── Stretched aralığını meta değerleriyle ön-doldur ─────────────
@@ -42708,33 +42750,13 @@ var SYLVA_TRANSLATIONS = {
     // clc_* (CORINE) class names removed → legend box class labels, must translate
     // ── SAR technical parameters ──────────────────────────────────────────
     'vi_sar_res', 'vi_sar_pol', 'vi_sar_unit', 'vi_sar_range', 'vi_sar_indep',
-    // ── DEM / topographic parameters ─────────────────────────────────────
-    'vi_dem_src', 'vi_dem_res', 'vi_dem_terrain', 'vi_dem_deriv',
-    'vi_dem_focal', 'vi_dem_aspect',
     // ── Land cover / analysis info values ────────────────────────────────
     'vi_lulc_res', 'vi_lulc_update', 'vi_lulc_classes', 'vi_lulc_classlist', 'vi_lulc_range',
     // 'vi_esa_update','vi_esa_classes','vi_esa_classlist' -> translatable content, removed
     'vi_modis_res', 'vi_modis_update', 'vi_modis_classes', 'vi_modis_classlist',
     'vi_corine_update', 'vi_corine_classes', 'vi_corine_classlist', 'vi_europe',
     'vi_unit_deg', 'vi_unit_m',
-    // ── Topo / slope / aspect technical description values ────────────────
-    'vi_slope_range', 'vi_slope_desc',
-    'vi_aspect_unit', 'vi_aspect_range', 'vi_aspect_desc',
-    'vi_hs_azimuth', 'vi_shadow_range', 'vi_hs_desc',
-    'vi_relief_src', 'vi_relief_method', 'vi_relief_desc',
-    'vi_tpi_method', 'vi_tpi_range', 'vi_tpi_desc',
-    'vi_tri_method', 'vi_tri_range', 'vi_tri_desc',
-    'vi_rough_method', 'vi_rough_desc',
-    'vi_curv_method', 'vi_curv_range', 'vi_curv_desc',
-    'vi_plan_desc', 'vi_prof_desc',
-    'vi_flowdir_method', 'vi_flowdir_note',
-    'vi_flowacc_src', 'vi_flowacc_method', 'vi_flowacc_note',
-    'vi_stream_src', 'vi_stream_method', 'vi_stream_range', 'vi_stream_desc',
-    'vi_twi_formula', 'vi_twi_desc', 'vi_spi_desc', 'vi_sti_desc',
-    'vi_hsm_src', 'vi_hsm_desc',
-    'vi_solar_method', 'vi_solar_range', 'vi_solar_note', 'vi_solar_src',
-    'vi_shadow_method', 'vi_shadow_desc',
-    'vi_laplacian1', 'vi_laplacian2'
+
   ];
   var _enT = SYLVA_TRANSLATIONS['en'] || {};
   Object.keys(SYLVA_TRANSLATIONS).forEach(function(lang) {
@@ -52136,7 +52158,27 @@ document.querySelectorAll('#env-urban-analyses-details input[data-analysis]').fo
 /* Sunucunun yerleşik sınıflarıyla gelen katmanlar (ör. Orman Kaybı/Kazanımı)
    kullanıcı tanımlı renk/aralıkla yeniden boyanamaz. Sürekli/bar değerli
    katmanlarda aynı semboloji düzenleyicisi normal olarak açık kalır. */
-function setNativeLegendEditorLocked(meta){var locked=!!(meta&&meta.legendType==='classified'&&meta.classesRaw);var group=document.getElementById('classification-type-group');var stretch=document.getElementById('stretched-settings');var classified=document.getElementById('classified-settings');var title=document.getElementById('classified-title');if(group){group.style.opacity=locked?'.48':'1';group.style.pointerEvents=locked?'none':'';group.setAttribute('aria-disabled',locked?'true':'false')}if(stretch)stretch.style.pointerEvents=locked?'none':'';if(classified)classified.style.pointerEvents=locked?'none':'';if(title&&locked)title.value=(meta.analysisName||title.value);document.querySelectorAll('#classification-type-group button,#stretched-settings input,#stretched-settings button,#classified-settings input,#classified-settings button,#classified-settings select').forEach(function(el){if(locked){el.setAttribute('data-native-legend-lock','1');el.disabled=true}else if(el.getAttribute('data-native-legend-lock')==='1'){el.disabled=false;el.removeAttribute('data-native-legend-lock')}})}
+function setNativeLegendEditorLocked(meta){
+  /* Native/classified analyses (Aspect, LULC, etc.) remain editable.  Their
+     default classes are only the initial symbology; the user may switch
+     classification type, class count, breaks, labels and colours. */
+  var group=document.getElementById('classification-type-group');
+  var stretch=document.getElementById('stretched-settings');
+  var classified=document.getElementById('classified-settings');
+  [group,stretch,classified].forEach(function(el){
+    if(!el)return;
+    el.style.opacity='1';
+    el.style.pointerEvents='auto';
+    el.style.userSelect='auto';
+    el.setAttribute('aria-disabled','false');
+  });
+  document.querySelectorAll('#classification-type-group button,#stretched-settings input,#stretched-settings button,#classified-settings input,#classified-settings button,#classified-settings select').forEach(function(el){
+    if(el.getAttribute('data-native-legend-lock')==='1'){
+      el.disabled=false;
+      el.removeAttribute('data-native-legend-lock');
+    }
+  });
+}
 var oldLegend=window.renderAnalysisLegend;if(typeof oldLegend==='function'){window.renderAnalysisLegend=function(meta){var r=oldLegend.apply(this,arguments);setNativeLegendEditorLocked(meta);return r}}
 /* Katman geçişinde eski bir sınıflı durumun editörü açık bırakmaması için
    aktif analiz seçiminin değişimini de izler. */
@@ -52216,7 +52258,25 @@ function hideEmptyLegendDates(){document.querySelectorAll('.real-stats-row').for
    Editör kapalı görünür, fakat kullanıcı hangi nedenle kapalı olduğunu
    anlayabilsin diye şeffaf bırakılır. */
 function nativeClassified(){var meta=window._lastAnalyzeMeta;return!!(meta&&meta.legendType==='classified'&&meta.classesRaw)}
-function syncNativeClassEditorState(){var locked=nativeClassified();var group=document.getElementById('classification-type-group');var stretch=document.getElementById('stretched-settings');var classified=document.getElementById('classified-settings');[group,stretch,classified].forEach(function(el){if(!el)return;el.style.opacity=locked?'.42':'';el.style.pointerEvents=locked?'none':'';el.setAttribute('aria-disabled',locked?'true':'false')});document.querySelectorAll('#classification-type-group button,#stretched-settings input,#stretched-settings button,#classified-settings input,#classified-settings button,#classified-settings select').forEach(function(el){if(locked){el.disabled=true;el.setAttribute('data-native-symbol-disabled','1')}else if(el.getAttribute('data-native-symbol-disabled')==='1'){el.disabled=false;el.removeAttribute('data-native-symbol-disabled')}})}
+function syncNativeClassEditorState(){
+  /* Classified/native analysis symbology is intentionally editable. */
+  var group=document.getElementById('classification-type-group');
+  var stretch=document.getElementById('stretched-settings');
+  var classified=document.getElementById('classified-settings');
+  [group,stretch,classified].forEach(function(el){
+    if(!el)return;
+    el.style.opacity='1';
+    el.style.pointerEvents='auto';
+    el.style.userSelect='auto';
+    el.setAttribute('aria-disabled','false');
+  });
+  document.querySelectorAll('#classification-type-group button,#stretched-settings input,#stretched-settings button,#classified-settings input,#classified-settings button,#classified-settings select').forEach(function(el){
+    if(el.getAttribute('data-native-symbol-disabled')==='1'){
+      el.disabled=false;
+      el.removeAttribute('data-native-symbol-disabled');
+    }
+  });
+}
 
 /* Sürekli veride ilk sınıflandırma, genel gri kategorik paletten değil,
    ekranda görünen renk çubuğundan üretilir. Kullanıcı renk kutusundan renk
@@ -52282,6 +52342,14 @@ refresh();
         // Böylece ArcMap'te 1,2,3... yerine seçilen dildeki gerçek arazi kullanım
         // sınıf adları (ör. Forest / Forêt / Wald / Orman vb.) görünür.
         var lulcLabels = null;
+        var aspectLabels = null;
+        if (key === 'TOPO_ASPECT' && typeof sylvaTopoAspectLabel === 'function') {
+            try {
+                var _aspectLang = (typeof window._sylvaLang === 'string' && window._sylvaLang) || 'en';
+                var _aspectRaw = (typeof SYLVA_TOPO_ASPECT_CLASSES !== 'undefined') ? (SYLVA_TOPO_ASPECT_CLASSES[_aspectLang] || SYLVA_TOPO_ASPECT_CLASSES.en) : null;
+                if (_aspectRaw && _aspectRaw.length === 9) aspectLabels = _aspectRaw.slice();
+            } catch (eAspectLabels) {}
+        }
         var _lulcDefs = (typeof LULC_CLASS_DEFS !== 'undefined') ? LULC_CLASS_DEFS[key] : null;
         if (_lulcDefs && typeof t === 'function') {
             lulcLabels = {};
@@ -52308,7 +52376,7 @@ refresh();
         // kullanmak rasteri yanlışlıkla 1..N sınıfa çeviriyordu.
         if (state && state.classificationType === 'classified' && state.classRows && state.classRows.length) {
             breaks = state.classRows.map(function (row) {
-                return { min: parseFloat(row.min), max: parseFloat(row.max), color: String(row.color || '').replace(/^#/, '') };
+                return { min: parseFloat(row.min), max: parseFloat(row.max), color: String(row.color || '').replace(/^#/, ''), label: String(row.name || '').trim() };
             }).filter(function (b) { return isFinite(b.min) && isFinite(b.max) && b.color; });
             state.classRows.forEach(function (row) { if (row.color) colors.push(String(row.color).replace(/^#/, '')); });
             min = parseFloat(state.classRows[0].min); max = parseFloat(state.classRows[state.classRows.length - 1].max);
@@ -52353,7 +52421,7 @@ refresh();
         if (!colors.length) colors = ['000000', 'ffffff'];
         if (!isFinite(min)) min = -1;
         if (!isFinite(max) || max === min) max = 1;
-        return { min:min, max:max, palette:colors, mode: (breaks && breaks.length) ? 'classified' : 'bar', breaks: breaks, lulcLabels: lulcLabels };
+        return { min:min, max:max, palette:colors, mode: (breaks && breaks.length) ? 'classified' : 'bar', breaks: breaks, lulcLabels: lulcLabels, aspectLabels: aspectLabels };
     }
     function rasterEntries(pane) {
         var result = [], seen = {};
