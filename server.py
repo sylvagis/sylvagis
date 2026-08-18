@@ -2528,13 +2528,15 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
     vat_dbf_bytes = _write_dbf_bytes(field_defs, vat_rows)
     vat_cpg_bytes = b'UTF-8'
 
-    return {
+    files = {
         '{}.tif'.format(safe_name): new_tif_bytes,
         '{}.tif.aux.xml'.format(safe_name): aux_xml_bytes,
         '{}.tif.vat.dbf'.format(safe_name): vat_dbf_bytes,
         '{}.tif.vat.cpg'.format(safe_name): vat_cpg_bytes,
         '{}.clr'.format(safe_name): clr_bytes,
     }
+    files.update(_build_georef_sidecars(new_tif_bytes, safe_name))
+    return files
 
 
 def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name):
@@ -2770,6 +2772,32 @@ def _build_overview_sidecar_bytes(tif_bytes, resampling='bilinear'):
         print('[SylvaGIS] .ovr üretilemedi:', e)
         return None
 
+def _build_georef_sidecars(tif_bytes, safe_name):
+    """ArcMap uyumluluğu için GeoTIFF'in CRS/transform bilgisinin klasik
+    yan dosya karşılıklarını üretir. GeoTIFF içindeki bilgi korunur; bunlar
+    yalnızca eski/katı GIS okuyucuları için yedektir."""
+    files = {}
+    try:
+        import rasterio
+        from rasterio.io import MemoryFile
+        from rasterio.crs import CRS
+        with MemoryFile(tif_bytes) as mf:
+            with mf.open() as src:
+                crs = src.crs
+                t = src.transform
+        if crs:
+            files['{}.prj'.format(safe_name)] = crs.to_wkt().encode('utf-8')
+        # World file: A, D, B, E, C, F (pixel-center coordinates).
+        # Rotation terms are retained for projected rasters.
+        c = t.c + (t.a + t.b) * 0.5
+        f = t.f + (t.d + t.e) * 0.5
+        tfw = '\n'.join([repr(float(t.a)), repr(float(t.d)), repr(float(t.b)),
+                           repr(float(t.e)), repr(float(c)), repr(float(f))]) + '\n'
+        files['{}.tfw'.format(safe_name)] = tfw.encode('ascii')
+    except Exception as e:
+        print('[SylvaGIS] klasik CRS/world-file yan dosyaları üretilemedi:', e)
+    return files
+
 def _build_continuous_raster_package(tif_bytes, safe_name, include_ovr=True):
     """Sürekli/bar modundaki analizleri HAM piksel değerleriyle paketler.
 
@@ -2819,6 +2847,7 @@ def _build_continuous_raster_package(tif_bytes, safe_name, include_ovr=True):
         '{}.tif'.format(safe_name): tif_bytes,
         '{}.tif.aux.xml'.format(safe_name): aux_xml,
     }
+    files.update(_build_georef_sidecars(tif_bytes, safe_name))
 
     if include_ovr:
         ovr_bytes = _build_overview_sidecar_bytes(tif_bytes, resampling='bilinear')
@@ -7024,6 +7053,10 @@ def download_geotiff():
             # Her raster paketine gerçek bir .ovr sidecar ekle. Kategorik
             # sınıflarda nearest, sürekli verilerde bilinear kullanılır.
             _sym_tif_key = '{}.tif'.format(safe_name)
+            if _sym_tif_key in sym_files:
+                # Her raster paketi için klasik CRS/world-file yan dosyalarını da taşı.
+                for _gf_name, _gf_bytes in _build_georef_sidecars(sym_files[_sym_tif_key], safe_name).items():
+                    sym_files.setdefault(_gf_name, _gf_bytes)
             if _sym_tif_key in sym_files and '{}.tif.ovr'.format(safe_name) not in sym_files:
                 _ovr_mode = 'nearest' if (lulc_index in LULC_CLASS_DEFS or (is_aspect and requested_mode == 'classified')) else 'bilinear'
                 _ovr_bytes = _build_overview_sidecar_bytes(sym_files[_sym_tif_key], resampling=_ovr_mode)
