@@ -6669,7 +6669,7 @@ tr.class-highlight-active {
                     // 🛠️ DÜZELTME (Zoom'da Veri Kaybolması): bkz. _sylvaReplaceGeeLayer — maxNativeZoom
                     // artık 16'da tutuluyor, GEE sunucusunun derin zoom'da hesaplanmış
                     // karoları güvenilir üretemediği durumlarda veri kaybolmasın diye.
-                    minZoom: 0, maxZoom: 24, minNativeZoom: 8, maxNativeZoom: 16,
+                    maxZoom: 24, maxNativeZoom: 16,
                     attribution: srcLayer.options && srcLayer.options.attribution
                 });
                 window._geeLayersByPane.map2[key] = clone;
@@ -7059,7 +7059,7 @@ tr.class-highlight-active {
                     // 🛠️ DÜZELTME (Zoom'da Veri Kaybolması): bkz. _sylvaReplaceGeeLayer — maxNativeZoom
                     // artık 16'da tutuluyor, GEE sunucusunun derin zoom'da hesaplanmış
                     // karoları güvenilir üretemediği durumlarda veri kaybolmasın diye.
-                    minZoom: 0, maxZoom: 24, minNativeZoom: 8, maxNativeZoom: 16,
+                    maxZoom: 24, maxNativeZoom: 16,
                     attribution: srcLayer && srcLayer.options && srcLayer.options.attribution
                 });
 
@@ -12070,6 +12070,72 @@ function selectRamp(name) {
         // (Eski runAnalysis() içindeki lejant üretim mantığının doğrudan devamıdır;
         //  ek olarak: ramp CSS'in YANLIŞLIKLA iki kere "linear-gradient(...)" içine
         //  sarılması hatası düzeltildi — ramps[key] zaten tam bir gradient string'idir.)
+        // ── Topografik lejant adları ─────────────────────────────────────────
+        // Lejant başlığında teknik analiz kodunu (TOPO_ASPECT vb.) gösterme.
+        // Seçili dildeki gerçek analiz adı kullanılır. Bakı sınıfları da aynı
+        // dilde gösterilir; sayısal açı aralıkları bilimsel değer olarak korunur.
+        function sylvaTopoLegendTitle(meta) {
+            var n = String(meta && meta.analysisName || '');
+            var map = (typeof _DATASET_INFO_TITLE_KEYS !== 'undefined') ? _DATASET_INFO_TITLE_KEYS : null;
+            if (map && map[n] && typeof t === 'function') {
+                var v = t(map[n].key, '');
+                if (v) return v;
+            }
+            var fallback = {
+                TOPO:'topo_dem_label', TOPO_DEM:'topo_dem_label', TOPO_SLOPE:'topo_slope_label',
+                TOPO_ASPECT:'topo_aspect_label', TOPO_HILLSHADE:'topo_hillshade_label', TOPO_RELIEF:'topo_relief_label',
+                TOPO_TPI:'topo_item_tpi', TOPO_TRI:'topo_item_tri', TOPO_ROUGHNESS:'topo_item_roughness',
+                TOPO_CURVATURE:'topo_item_curvature', TOPO_PLAN_CURV:'topo_item_plan_curv',
+                TOPO_PROFILE_CURV:'topo_item_profile_curv', TOPO_FLOWDIR:'topo_item_flowdir',
+                TOPO_FLOWACC:'topo_item_flowacc', TOPO_STREAM:'topo_item_stream', TOPO_TWI:'topo_item_twi',
+                TOPO_SPI:'topo_item_spi', TOPO_STI:'topo_item_sti', TOPO_HILLSHADE_MULTI:'topo_item_hillshade_multi',
+                TOPO_SOLAR:'topo_item_solar', TOPO_SHADOW:'topo_item_shadow', TOPO_CONTOUR:'topo_contour_label'
+            };
+            if (fallback[n] && typeof t === 'function') return t(fallback[n], n);
+            return n.replace(/^TOPO_?/,'').replace(/_/g,' ');
+        }
+
+        var SYLVA_TOPO_ASPECT_CLASSES = {
+            en:['Flat','North','Northeast','East','Southeast','South','Southwest','West','Northwest'],
+            tr:['Düz','Kuzey','Kuzeydoğu','Doğu','Güneydoğu','Güney','Güneybatı','Batı','Kuzeybatı'],
+            de:['Flach','Nord','Nordost','Ost','Südost','Süd','Südwest','West','Nordwest'],
+            fr:['Plat','Nord','Nord-est','Est','Sud-est','Sud','Sud-ouest','Ouest','Nord-ouest'],
+            es:['Plano','Norte','Noreste','Este','Sureste','Sur','Suroeste','Oeste','Noroeste'],
+            pt:['Plano','Norte','Nordeste','Leste','Sudeste','Sul','Sudoeste','Oeste','Noroeste'],
+            it:['Pianeggiante','Nord','Nord-est','Est','Sud-est','Sud','Sud-ovest','Ovest','Nord-ovest'],
+            ru:['Ровный','Север','Северо-восток','Восток','Юго-восток','Юг','Юго-запад','Запад','Северо-запад'],
+            ar:['مستوٍ','شمال','شمال شرقي','شرق','جنوب شرقي','جنوب','جنوب غربي','غرب','شمال غربي'],
+            fa:['مسطح','شمال','شمال‌شرقی','شرق','جنوب‌شرقی','جنوب','جنوب‌غربی','غرب','شمال‌غربی'],
+            zh:['平坦','北','东北','东','东南','南','西南','西','西北'],
+            ja:['平坦','北','北東','東','南東','南','南西','西','北西'],
+            ko:['평탄','북쪽','북동쪽','동쪽','남동쪽','남쪽','남서쪽','서쪽','북서쪽'],
+            hi:['समतल','उत्तर','उत्तर-पूर्व','पूर्व','दक्षिण-पूर्व','दक्षिण','दक्षिण-पश्चिम','पश्चिम','उत्तर-पश्चिम'],
+            id:['Datar','Utara','Timur Laut','Timur','Tenggara','Selatan','Barat Daya','Barat','Barat Laut'],
+            az:['Düz','Şimal','Şimal-şərq','Şərq','Cənub-şərq','Cənub','Cənub-qərb','Qərb','Şimal-qərb'],
+            kk:['Тегіс','Солтүстік','Солтүстік-шығыс','Шығыс','Оңтүстік-шығыс','Оңтүстік','Оңтүстік-батыс','Батыс','Солтүстік-батыс'],
+            uz:['Tekis','Shimol','Shimoli-sharq','Sharq','Janubi-sharq','Janub','Janubi-gʻarb','Gʻarb','Shimoli-gʻarb'],
+            ky:['Түз','Түндүк','Түндүк-чыгыш','Чыгыш','Түштүк-чыгыш','Түштүк','Түштүк-батыш','Батыш','Түндүк-батыш'],
+            pl:['Płaski','Północ','Północny wschód','Wschód','Południowy wschód','Południe','Południowy zachód','Zachód','Północny zachód'],
+            el:['Επίπεδο','Βορράς','Βορειοανατολικά','Ανατολή','Νοτιοανατολικά','Νότος','Νοτιοδυτικά','Δύση','Βορειοδυτικά'],
+            bg:['Равен','Север','Североизток','Изток','Югоизток','Юг','Югозапад','Запад','Северозапад'],
+            hu:['Sík','Észak','Északkelet','Kelet','Délkelet','Dél','Délnyugat','Nyugat','Északnyugat'],
+            th:['ราบ','เหนือ','ตะวันออกเฉียงเหนือ','ตะวันออก','ตะวันออกเฉียงใต้','ใต้','ตะวันตกเฉียงใต้','ตะวันตก','ตะวันตกเฉียงเหนือ'],
+            vi:['Bằng phẳng','Bắc','Đông Bắc','Đông','Đông Nam','Nam','Tây Nam','Tây','Tây Bắc'],
+            bn:['সমতল','উত্তর','উত্তর-পূর্ব','পূর্ব','দক্ষিণ-পূর্ব','দক্ষিণ','দক্ষিণ-পশ্চিম','পশ্চিম','উত্তর-পশ্চিম'],
+            ur:['ہموار','شمال','شمال مشرق','مشرق','جنوب مشرق','جنوب','جنوب مغرب','مغرب','شمال مغرب'],
+            ms:['Rata','Utara','Timur Laut','Timur','Tenggara','Selatan','Barat Daya','Barat','Barat Laut'],
+            mn:['Хавтгай','Хойд','Зүүн хойд','Зүүн','Зүүн өмнөд','Өмнөд','Баруун өмнөд','Баруун','Баруун хойд'],
+            ka:['ბრტყელი','ჩრდილოეთი','ჩრდილო-აღმოსავლეთი','აღმოსავლეთი','სამხრეთ-აღმოსავლეთი','სამხრეთი','სამხრეთ-დასავლეთი','დასავლეთი','ჩრდილო-დასავლეთი']
+        };
+        function sylvaTopoAspectLabel(cls, index) {
+            var code = Number(cls && (cls.code !== undefined ? cls.code : index + 1));
+            var lang = (typeof window._sylvaLang === 'string' && window._sylvaLang) || 'en';
+            var arr = SYLVA_TOPO_ASPECT_CLASSES[lang] || SYLVA_TOPO_ASPECT_CLASSES.en;
+            var i = Math.max(0, Math.min(arr.length - 1, code - 1));
+            var ranges = ['(-1)','(0–12.5° / 327.5–360°)','(12.5–57.5°)','(57.5–102.5°)','(102.5–147.5°)','(147.5–192.5°)','(192.5–237.5°)','(237.5–282.5°)','(282.5–327.5°)'];
+            return arr[i] + ' ' + ranges[i];
+        }
+
         function renderAnalysisLegend(meta, keepHidden, paneId) {
             // 🛠️ BUG FİX: Bu fonksiyon her analizden önce/sonra çalışır ve
             // eskiden HER ZAMAN #map-legend-box'a (Ekran 1) yazardı. Ekran 2
@@ -12106,9 +12172,12 @@ function selectRamp(name) {
             }
 
              var _nativeLegendTitleKeys = { FOREST_LOSS: 'env_forest_loss', URBAN_GROWTH: 'env_urban_growth' };
-             var _legendTitle = meta.analysisName === 'BUILDING_FOOTPRINT'
-                 ? t('building_roof_detection', 'Building Roof Detection')
-                 : (_nativeLegendTitleKeys[meta.analysisName] ? t(_nativeLegendTitleKeys[meta.analysisName], meta.analysisName) : meta.analysisName);
+             var _isTopoLegend = /^TOPO(?:_|$)/.test(String(meta.analysisName || ''));
+             var _legendTitle = _isTopoLegend
+                 ? sylvaTopoLegendTitle(meta)
+                 : (meta.analysisName === 'BUILDING_FOOTPRINT'
+                     ? t('building_roof_detection', 'Building Roof Detection')
+                     : (_nativeLegendTitleKeys[meta.analysisName] ? t(_nativeLegendTitleKeys[meta.analysisName], meta.analysisName) : meta.analysisName));
              var html = '<b style="font-size:0.78rem;">' + escapeHtml(_legendTitle) + '</b>';
 
             if (legendType === 'classified') {
@@ -12143,10 +12212,13 @@ function selectRamp(name) {
                     try {
                         var classes = JSON.parse(meta.classesRaw);
                         html += '<div style="display:flex;flex-direction:column;gap:2px;margin-top:5px;">';
-                        classes.forEach(function (cls) {
+                        classes.forEach(function (cls, idx) {
+                            var _clsLabel = (meta.analysisName === 'TOPO_ASPECT')
+                                ? sylvaTopoAspectLabel(cls, idx)
+                                : cls.label;
                             html += '<div style="display:flex;align-items:center;gap:4px;">'
                                 + '<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:' + cls.color + ';border:1px solid rgba(0,0,0,0.15);flex-shrink:0;"></span>'
-                                + '<span style="font-size:0.67rem;color:#334155;word-break:break-word;">' + escapeHtml(cls.label) + '</span>'
+                                + '<span style="font-size:0.67rem;color:#334155;word-break:break-word;">' + escapeHtml(_clsLabel) + '</span>'
                                 + '</div>';
                         });
                         html += '</div>';
@@ -12539,7 +12611,7 @@ function selectRamp(name) {
             // (upscale) gösterir — kullanıcı istediği kadar (maxZoom:24'e kadar)
             // zoom yapsa bile veri ARTIK HİÇBİR ZAMAN sunucu hatası yüzünden
             // kaybolmaz; sadece çok aşırı yakınlaşmada hafif bulanıklaşır.
-            var opts = Object.assign({ opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane', minZoom: 0, maxZoom: 24, minNativeZoom: 8, maxNativeZoom: 16 }, options || {});
+            var opts = Object.assign({ opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane', maxZoom: 24, maxNativeZoom: 16 }, options || {});
             var _rgKey = (paneId === 'map2') ? 'map2' : 'map';
             // 🛠️ BUG FİX: Sınıflandırma/Stretched/Sahne değişimi bu fonksiyonu
             // çağırarak katmanı yeniden boyanmış haliyle değiştiriyordu, ama
@@ -12727,11 +12799,6 @@ function selectRamp(name) {
 
         window._geeLayersByPane = window._geeLayersByPane || { map: {}, map2: {} };
         function _sylvaAddGeeLayer(paneId, layerKey, tileUrl, options) {
-            // Düşük zoom güvenliği: GEE analiz karoları bazı projelerde çok
-            // küçük zoom seviyelerinde boş/siyah karo döndürebiliyor. Leaflet
-            // zoom 8 altına indiğinde son gerçek analiz karosunu küçülterek
-            // kullansın; çalışma alanı uzaklaştırıldığında raster kaybolmasın.
-
             var targetMap = _sylvaTargetMap(paneId);
             // 🛠️ DÜZELTME (Zoom'da Veri Kaybolması): bkz. _sylvaReplaceGeeLayer
             // içindeki açıklama — aynı maxZoom/maxNativeZoom eksikliği burada
@@ -12745,7 +12812,7 @@ function selectRamp(name) {
             // davranış (yeni katman geldiğinde diğerleri gizlenir, "tek
             // seferde tek görünür katman") AYNEN korunur.
             var _hideOthers = (options && options.hideOthers === false) ? false : true;
-            var opts = Object.assign({ opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane', minZoom: 0, maxZoom: 24, minNativeZoom: 8, maxNativeZoom: 16 }, options || {});
+            var opts = Object.assign({ opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane', maxZoom: 24, maxNativeZoom: 16 }, options || {});
             delete opts.hideOthers; // Leaflet tileLayer seçeneği değil, sadece bu fonksiyona özel bayrak
             var store = window._geeLayersByPane[(paneId === 'map2') ? 'map2' : 'map'];
             if (store[layerKey]) { try { targetMap.removeLayer(store[layerKey]); } catch (e) {} delete store[layerKey]; }
@@ -16826,17 +16893,23 @@ function selectRamp(name) {
             var info = _DATASET_INFO[key];
             if (!info) { box.style.display = 'none'; box.innerHTML = ''; return; }
 
+            var _infoLang = (typeof _sylvaLang === 'string' && _sylvaLang) || selectedInfoLang();
+            var _infoT = (typeof SYLVA_TRANSLATIONS !== 'undefined' && SYLVA_TRANSLATIONS[_infoLang]) ? SYLVA_TRANSLATIONS[_infoLang] : (SYLVA_TRANSLATIONS && SYLVA_TRANSLATIONS.en ? SYLVA_TRANSLATIONS.en : {});
+            function _infoText(token, fallback) {
+                if (Object.prototype.hasOwnProperty.call(_infoT, token)) return _infoT[token];
+                return fallback || token;
+            }
             var rows = info.rows.map(function(r) {
                 return '<tr>'
-                    + '<td style="padding:2px 5px 2px 0;color:#64748b;font-size:0.69rem;white-space:nowrap;font-weight:600;vertical-align:top;width:38%;">' + t(r[0]) + '</td>'
-                    + '<td style="padding:2px 0;color:#1e293b;font-size:0.69rem;word-break:break-word;">' + t(r[1]) + '</td>'
+                    + '<td style="padding:2px 5px 2px 0;color:#64748b;font-size:0.69rem;white-space:nowrap;font-weight:600;vertical-align:top;width:38%;">' + _infoText(r[0], r[0]) + '</td>'
+                    + '<td style="padding:2px 0;color:#1e293b;font-size:0.69rem;word-break:break-word;">' + _infoText(r[1], r[1]) + '</td>'
                     + '</tr>';
             }).join('');
 
-            // Başlık: i18n haritasında kayıtlıysa seçilen dilde göster, yoksa orijinal title
+            // Başlık: i18n haritasında kayıtlıysa seçilen dilde göster.
             var _itk = _DATASET_INFO_TITLE_KEYS && _DATASET_INFO_TITLE_KEYS[key];
-            var _infoTitle = (_itk && typeof t === 'function')
-                ? (_itk.emoji + t(_itk.key))
+            var _infoTitle = (_itk && Object.prototype.hasOwnProperty.call(_infoT, _itk.key))
+                ? (_itk.emoji + _infoT[_itk.key])
                 : info.title;
 
             box.innerHTML =
@@ -18890,7 +18963,7 @@ function selectRamp(name) {
                 var _oldLayer = window._classHighlightLayerByPane[_pane];
                 if (_oldLayer) { try { _sylvaTargetMap(_pane).removeLayer(_oldLayer); } catch (e) {} }
                 window._classHighlightLayerByPane[_pane] = L.tileLayer(data.tileUrl, {
-                    opacity: 0.95, zIndex: 20, crossOrigin: true, pane: 'geeAnalysisPane', minZoom: 0, maxZoom: 24, minNativeZoom: 8, maxNativeZoom: 16
+                    opacity: 0.95, zIndex: 20, crossOrigin: true, pane: 'geeAnalysisPane', maxZoom: 24, maxNativeZoom: 16
                 }).addTo(_sylvaTargetMap(_pane));
             })
             .catch(function (err) {
@@ -52074,14 +52147,39 @@ document.addEventListener('change',function(e){var input=e.target;if(!input||!in
 (function(){'use strict';
 /* Mavi i düğmesinin araç ipucu/erişilebilirlik metni — uygulamanın 30 dili. */
 var INFO_BUTTON_TEXT={tr:'Bu analiz hakkında bilgi',en:'Information about this analysis',de:'Informationen zu dieser Analyse',fr:'Informations sur cette analyse',es:'Información sobre este análisis',pt:'Informações sobre esta análise',ar:'معلومات عن هذا التحليل',fa:'اطلاعات درباره این تحلیل',zh:'有关此分析的信息',ja:'この分析についての情報',ko:'이 분석에 대한 정보',hi:'इस विश्लेषण की जानकारी',id:'Informasi tentang analisis ini',ru:'Информация об этом анализе',th:'ข้อมูลเกี่ยวกับการวิเคราะห์นี้',bn:'এই বিশ্লেষণ সম্পর্কে তথ্য',vi:'Thông tin về phân tích này',ur:'اس تجزیے کے بارے میں معلومات',pl:'Informacje o tej analizie',ms:'Maklumat tentang analisis ini',el:'Πληροφορίες για αυτή την ανάλυση',uz:'Bu tahlil haqida ma’lumot',az:'Bu analiz haqqında məlumat',bg:'Информация за този анализ',hu:'Információ erről az elemzésről',it:'Informazioni su questa analisi',ka:'ინფორმაცია ამ ანალიზის შესახებ',kk:'Осы талдау туралы ақпарат',ky:'Бул талдоо тууралуу маалымат',mn:'Энэ шинжилгээний тухай мэдээлэл'};
-function selectedInfoLang(){return (typeof window._sylvaLang==='string'&&window._sylvaLang)||'en'}
+function selectedInfoLang(){
+  var l=(typeof _sylvaLang==='string'&&_sylvaLang)||
+        (typeof window._sylvaLang==='string'&&window._sylvaLang)||'en';
+  return (typeof SYLVA_TRANSLATIONS!=='undefined'&&SYLVA_TRANSLATIONS[l])?l:'en';
+}
 function refreshInfoButtons(lang){var text=INFO_BUTTON_TEXT[lang]||INFO_BUTTON_TEXT.en;document.querySelectorAll('#env-urban-analyses-details .env-info-btn').forEach(function(btn){btn.title=text;btn.setAttribute('aria-label',text)})}
-/* Kart içindeki sabit değerleri de seçili dile çevirir. `data-env-original`
-   metnin her dil değişiminde Türkçeye geri dönüp yeniden çevrilmesini sağlar. */
-function translateAnyInfoText(text,lang){var u='https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl='+encodeURIComponent(lang)+'&dt=t&q='+encodeURIComponent(text);return fetch(u).then(function(r){if(!r.ok)throw Error('translate');return r.json()}).then(function(j){return(j[0]||[]).map(function(p){return p[0]||''}).join('')})}
+/* Bilgi kartları için harici makine çevirisi KULLANILMAZ.
+   Tüm bilgi kutusu metinleri doğrudan SYLVA_TRANSLATIONS içindeki seçili
+   dilden alınır. Böylece kartın bir satırı Türkçe, başka satırı İngilizce
+   kalmaz ve ağ/Google Translate erişimine bağlı davranış oluşmaz. */
+function translateAnyInfoText(text,lang){
+  var key=String(text==null?'':text);
+  var T=(typeof SYLVA_TRANSLATIONS!=='undefined'&&SYLVA_TRANSLATIONS[lang])?SYLVA_TRANSLATIONS[lang]:null;
+  if(T && Object.prototype.hasOwnProperty.call(T,key)) return Promise.resolve(T[key]);
+  return Promise.resolve(key);
+}
 window.sylvaTranslateEnvText=translateAnyInfoText;
-function localizeMapInfoBox(box,lang){if(!box||lang==='tr'||!window.fetch)return;var els=Array.prototype.slice.call(box.querySelectorAll('td,div')).filter(function(el){return el.children.length===0&&el.textContent.trim()});els.forEach(function(el){var original=el.getAttribute('data-env-original');if(!original){original=el.textContent.trim();el.setAttribute('data-env-original',original)}translateAnyInfoText(original,lang).then(function(v){if(v&&document.body.contains(el))el.textContent=v}).catch(function(){})})}
-function refreshVisibleInfoBoxes(lang){['map-info-box','map2-info-box'].forEach(function(id){localizeMapInfoBox(document.getElementById(id),lang)})}
+function localizeMapInfoBox(box,lang){
+  /* Eski dinamik çeviri kancası korunur; ancak bilgi kartının gerçek
+     içeriği renderDatasetInfoCard tarafından seçili dil sözlüğünden
+     yeniden üretildiği için burada metne dokunulmaz. */
+  return box||null;
+}
+function refreshVisibleInfoBoxes(lang){
+  var meta=(typeof _lastAnalyzeMeta!=='undefined')?_lastAnalyzeMeta:null;
+  if(!meta)return;
+  var n=String(meta.analysisName||'').toUpperCase();
+  var statics=['LULC_ESA','LULC_MODIS','LULC_CORINE','TOPO','TOPO_DEM','TOPO_SLOPE','TOPO_ASPECT','TOPO_HILLSHADE','TOPO_RELIEF','TOPO_TPI','TOPO_TRI','TOPO_ROUGHNESS','TOPO_CURVATURE','TOPO_PLAN_CURV','TOPO_PROFILE_CURV','TOPO_FLOWDIR','TOPO_FLOWACC','TOPO_STREAM','TOPO_TWI','TOPO_SPI','TOPO_STI','TOPO_HILLSHADE_MULTI','TOPO_SOLAR','TOPO_SHADOW','TOPO_CONTOUR','SAR'];
+  if(statics.indexOf(n)!==-1 && typeof renderDatasetInfoCard==='function'){
+    renderDatasetInfoCard(n,'map');
+    renderDatasetInfoCard(n,'map2');
+  }
+}
 /* Sınıflandırılmış analizler, histogramı 7 sayısal aralığa bölmez. Sunulan
    sınıf tanımlarını (sıra = sınıf kodu) kullanır; böylece grafik/tabloda
    gerçek sınıf adı ve aynı lejant rengi yer alır. */
@@ -52089,7 +52187,7 @@ function renderClassifiedChart(stats,meta,paneId){var hist=(stats&&stats.value)|
 var oldRenderChart=window.renderChart;if(typeof oldRenderChart==='function'){window.renderChart=function(stats,meta,paneId){var lulc=['LULC','LULC_ESA','LULC_MODIS','LULC_CORINE'];if(meta&&lulc.indexOf(meta.analysisName)===-1&&meta.legendType==='classified'&&meta.classesRaw&&renderClassifiedChart(stats,meta,paneId))return;return oldRenderChart.apply(this,arguments)}}
 /* Bilgi kartını üreten mevcut işlevden sonra çeviri uygulanır; böylece
    Source/Resolution/Description ve içerik aynı anda çevrilir. */
-var oldDatasetInfo=window.renderDatasetInfoCard;if(typeof oldDatasetInfo==='function'){window.renderDatasetInfoCard=function(analysisName,paneId){var r=oldDatasetInfo.apply(this,arguments);localizeMapInfoBox(document.getElementById(paneId==='map2'?'map2-info-box':'map-info-box'),selectedInfoLang());return r}}
+var oldDatasetInfo=window.renderDatasetInfoCard;if(typeof oldDatasetInfo==='function'){window.renderDatasetInfoCard=function(analysisName,paneId){return oldDatasetInfo.apply(this,arguments)}}
 var oldApply=window.applySylvaLang;if(typeof oldApply==='function'){window.applySylvaLang=function(lang){var r=oldApply.apply(this,arguments);refreshInfoButtons(lang);refreshVisibleInfoBoxes(lang);return r}}
 refreshInfoButtons(selectedInfoLang());
 }());
@@ -52101,7 +52199,7 @@ refreshInfoButtons(selectedInfoLang());
    de seçili 30 dile çevirir. Sunucu veya ağ erişimi yoksa özgün etiket korunur. */
 function lang(){return(typeof window._sylvaLang==='string'&&window._sylvaLang)||'en'}
 function nativeMeta(){return window._lastAnalyzeMeta||null}
-function translateClassLabels(){var m=nativeMeta(),l=lang();if(!m||m.legendType!=='classified'||!m.classesRaw||l==='tr'||typeof window.sylvaTranslateEnvText!=='function')return;var labels=[];try{labels=JSON.parse(m.classesRaw).map(function(c){return String(c.label||'').trim()}).filter(Boolean)}catch(e){return}if(!labels.length)return;var roots=[document.getElementById('map-legend-box'),document.getElementById('map2-legend-box'),document.getElementById('stats-chart-table'),document.getElementById('map-stats-table'),document.getElementById('map2-stats-table')];roots.forEach(function(root){if(!root)return;Array.prototype.slice.call(root.querySelectorAll('span,td,div')).forEach(function(el){if(el.children.length)return;var shown=el.textContent.trim(),original=el.getAttribute('data-env-native-class')||shown;if(labels.indexOf(original)===-1)return;el.setAttribute('data-env-native-class',original);if(el.getAttribute('data-env-native-lang')===l)return;el.setAttribute('data-env-native-lang',l);window.sylvaTranslateEnvText(original,l).then(function(v){if(v&&el.getAttribute('data-env-native-lang')===l)el.textContent=v}).catch(function(){})});Array.prototype.slice.call(root.querySelectorAll('tbody tr td:first-child')).forEach(function(cell){var node=Array.prototype.slice.call(cell.childNodes).filter(function(n){return n.nodeType===3&&n.nodeValue.trim()})[0];if(!node)return;var original=cell.getAttribute('data-env-native-class')||node.nodeValue.trim();if(labels.indexOf(original)===-1)return;cell.setAttribute('data-env-native-class',original);if(cell.getAttribute('data-env-native-lang')===l)return;cell.setAttribute('data-env-native-lang',l);window.sylvaTranslateEnvText(original,l).then(function(v){if(v&&cell.getAttribute('data-env-native-lang')===l)node.nodeValue=' '+v}).catch(function(){})})})}
+function translateClassLabels(){var m=nativeMeta(),l=lang();if(!m||m.legendType!=='classified'||!m.classesRaw||m.analysisName==='TOPO_ASPECT'||l==='tr'||typeof window.sylvaTranslateEnvText!=='function')return;var labels=[];try{labels=JSON.parse(m.classesRaw).map(function(c){return String(c.label||'').trim()}).filter(Boolean)}catch(e){return}if(!labels.length)return;var roots=[document.getElementById('map-legend-box'),document.getElementById('map2-legend-box'),document.getElementById('stats-chart-table'),document.getElementById('map-stats-table'),document.getElementById('map2-stats-table')];roots.forEach(function(root){if(!root)return;Array.prototype.slice.call(root.querySelectorAll('span,td,div')).forEach(function(el){if(el.children.length)return;var shown=el.textContent.trim(),original=el.getAttribute('data-env-native-class')||shown;if(labels.indexOf(original)===-1)return;el.setAttribute('data-env-native-class',original);if(el.getAttribute('data-env-native-lang')===l)return;el.setAttribute('data-env-native-lang',l);window.sylvaTranslateEnvText(original,l).then(function(v){if(v&&el.getAttribute('data-env-native-lang')===l)el.textContent=v}).catch(function(){})});Array.prototype.slice.call(root.querySelectorAll('tbody tr td:first-child')).forEach(function(cell){var node=Array.prototype.slice.call(cell.childNodes).filter(function(n){return n.nodeType===3&&n.nodeValue.trim()})[0];if(!node)return;var original=cell.getAttribute('data-env-native-class')||node.nodeValue.trim();if(labels.indexOf(original)===-1)return;cell.setAttribute('data-env-native-class',original);if(cell.getAttribute('data-env-native-lang')===l)return;cell.setAttribute('data-env-native-lang',l);window.sylvaTranslateEnvText(original,l).then(function(v){if(v&&cell.getAttribute('data-env-native-lang')===l)node.nodeValue=' '+v}).catch(function(){})})})}
 var scheduled=false;function queue(){if(scheduled)return;scheduled=true;setTimeout(function(){scheduled=false;translateClassLabels()},30)}
 new MutationObserver(queue).observe(document.body,{subtree:true,childList:true,characterData:true});
 document.addEventListener('change',queue);queue();
@@ -52177,46 +52275,22 @@ refresh();
     'use strict';
     function activePane() { return typeof window._sylvaActivePaneId === 'function' ? window._sylvaActivePaneId() : 'map'; }
     function safeName(value) { return String(value || 'Analiz').replace(/[^a-z0-9_-]+/gi, '_').replace(/^_+|_+$/g, '') || 'Analiz'; }
-    function _sylvaAspectLabelsForLang(lang) {
-        var L = {
-            tr:['Düz (-1)','Kuzey (0–12.5° / 327.5–360°)','Kuzeydoğu (12.5–57.5°)','Doğu (57.5–102.5°)','Güneydoğu (102.5–147.5°)','Güney (147.5–192.5°)','Güneybatı (192.5–237.5°)','Batı (237.5–282.5°)','Kuzeybatı (282.5–327.5°)'],
-            en:['Flat (-1)','North (0–12.5° / 327.5–360°)','Northeast (12.5–57.5°)','East (57.5–102.5°)','Southeast (102.5–147.5°)','South (147.5–192.5°)','Southwest (192.5–237.5°)','West (237.5–282.5°)','Northwest (282.5–327.5°)'],
-            ko:['평지 (-1)','북쪽 (0–12.5° / 327.5–360°)','북동쪽 (12.5–57.5°)','동쪽 (57.5–102.5°)','남동쪽 (102.5–147.5°)','남쪽 (147.5–192.5°)','남서쪽 (192.5–237.5°)','서쪽 (237.5–282.5°)','북서쪽 (282.5–327.5°)'],
-            de:['Flach (-1)','Nord (0–12.5° / 327.5–360°)','Nordost (12.5–57.5°)','Ost (57.5–102.5°)','Südost (102.5–147.5°)','Süd (147.5–192.5°)','Südwest (192.5–237.5°)','West (237.5–282.5°)','Nordwest (282.5–327.5°)'],
-            fr:['Plat (-1)','Nord (0–12.5° / 327.5–360°)','Nord-est (12.5–57.5°)','Est (57.5–102.5°)','Sud-est (102.5–147.5°)','Sud (147.5–192.5°)','Sud-ouest (192.5–237.5°)','Ouest (237.5–282.5°)','Nord-ouest (282.5–327.5°)'],
-            es:['Plano (-1)','Norte (0–12.5° / 327.5–360°)','Noreste (12.5–57.5°)','Este (57.5–102.5°)','Sureste (102.5–147.5°)','Sur (147.5–192.5°)','Suroeste (192.5–237.5°)','Oeste (237.5–282.5°)','Noroeste (282.5–327.5°)'],
-            pt:['Plano (-1)','Norte (0–12.5° / 327.5–360°)','Nordeste (12.5–57.5°)','Leste (57.5–102.5°)','Sudeste (102.5–147.5°)','Sul (147.5–192.5°)','Sudoeste (192.5–237.5°)','Oeste (237.5–282.5°)','Noroeste (282.5–327.5°)'],
-            it:['Pianeggiante (-1)','Nord (0–12.5° / 327.5–360°)','Nord-est (12.5–57.5°)','Est (57.5–102.5°)','Sud-est (102.5–147.5°)','Sud (147.5–192.5°)','Sud-ovest (192.5–237.5°)','Ovest (237.5–282.5°)','Nord-ovest (282.5–327.5°)'],
-            ru:['Ровный (-1)','Север (0–12.5° / 327.5–360°)','Северо-восток (12.5–57.5°)','Восток (57.5–102.5°)','Юго-восток (102.5–147.5°)','Юг (147.5–192.5°)','Юго-запад (192.5–237.5°)','Запад (237.5–282.5°)','Северо-запад (282.5–327.5°)'],
-            ar:['مستوٍ (-1)','شمال (0–12.5° / 327.5–360°)','شمال شرقي (12.5–57.5°)','شرق (57.5–102.5°)','جنوب شرقي (102.5–147.5°)','جنوب (147.5–192.5°)','جنوب غربي (192.5–237.5°)','غرب (237.5–282.5°)','شمال غربي (282.5–327.5°)'],
-            fa:['مسطح (-1)','شمال (0–12.5° / 327.5–360°)','شمال‌شرق (12.5–57.5°)','شرق (57.5–102.5°)','جنوب‌شرق (102.5–147.5°)','جنوب (147.5–192.5°)','جنوب‌غرب (192.5–237.5°)','غرب (237.5–282.5°)','شمال‌غرب (282.5–327.5°)'],
-            zh:['平坦 (-1)','北 (0–12.5° / 327.5–360°)','东北 (12.5–57.5°)','东 (57.5–102.5°)','东南 (102.5–147.5°)','南 (147.5–192.5°)','西南 (192.5–237.5°)','西 (237.5–282.5°)','西北 (282.5–327.5°)'],
-            ja:['平坦 (-1)','北 (0–12.5° / 327.5–360°)','北東 (12.5–57.5°)','東 (57.5–102.5°)','南東 (102.5–147.5°)','南 (147.5–192.5°)','南西 (192.5–237.5°)','西 (237.5–282.5°)','北西 (282.5–327.5°)'],
-            hi:['समतल (-1)','उत्तर (0–12.5° / 327.5–360°)','उत्तर-पूर्व (12.5–57.5°)','पूर्व (57.5–102.5°)','दक्षिण-पूर्व (102.5–147.5°)','दक्षिण (147.5–192.5°)','दक्षिण-पश्चिम (192.5–237.5°)','पश्चिम (237.5–282.5°)','उत्तर-पश्चिम (282.5–327.5°)'],
-            id:['Datar (-1)','Utara (0–12.5° / 327.5–360°)','Timur Laut (12.5–57.5°)','Timur (57.5–102.5°)','Tenggara (102.5–147.5°)','Selatan (147.5–192.5°)','Barat Daya (192.5–237.5°)','Barat (237.5–282.5°)','Barat Laut (282.5–327.5°)'],
-            th:['ราบ (-1)','เหนือ (0–12.5° / 327.5–360°)','ตะวันออกเฉียงเหนือ (12.5–57.5°)','ตะวันออก (57.5–102.5°)','ตะวันออกเฉียงใต้ (102.5–147.5°)','ใต้ (147.5–192.5°)','ตะวันตกเฉียงใต้ (192.5–237.5°)','ตะวันตก (237.5–282.5°)','ตะวันตกเฉียงเหนือ (282.5–327.5°)'],
-            vi:['Bằng phẳng (-1)','Bắc (0–12.5° / 327.5–360°)','Đông Bắc (12.5–57.5°)','Đông (57.5–102.5°)','Đông Nam (102.5–147.5°)','Nam (147.5–192.5°)','Tây Nam (192.5–237.5°)','Tây (237.5–282.5°)','Tây Bắc (282.5–327.5°)'],
-            pl:['Płaski (-1)','Północ (0–12.5° / 327.5–360°)','Północny wschód (12.5–57.5°)','Wschód (57.5–102.5°)','Południowy wschód (102.5–147.5°)','Południe (147.5–192.5°)','Południowy zachód (192.5–237.5°)','Zachód (237.5–282.5°)','Północny zachód (282.5–327.5°)'],
-            ms:['Rata (-1)','Utara (0–12.5° / 327.5–360°)','Timur Laut (12.5–57.5°)','Timur (57.5–102.5°)','Tenggara (102.5–147.5°)','Selatan (147.5–192.5°)','Barat Daya (192.5–237.5°)','Barat (237.5–282.5°)','Barat Laut (282.5–327.5°)'],
-            az:['Düz (-1)','Şimal (0–12.5° / 327.5–360°)','Şimal-şərq (12.5–57.5°)','Şərq (57.5–102.5°)','Cənub-şərq (102.5–147.5°)','Cənub (147.5–192.5°)','Cənub-qərb (192.5–237.5°)','Qərb (237.5–282.5°)','Şimal-qərb (282.5–327.5°)'],
-            kk:['Жазық (-1)','Солтүстік (0–12.5° / 327.5–360°)','Солтүстік-шығыс (12.5–57.5°)','Шығыс (57.5–102.5°)','Оңтүстік-шығыс (102.5–147.5°)','Оңтүстік (147.5–192.5°)','Оңтүстік-батыс (192.5–237.5°)','Батыс (237.5–282.5°)','Солтүстік-батыс (282.5–327.5°)'],
-            ky:['Тегиз (-1)','Түндүк (0–12.5° / 327.5–360°)','Түндүк-чыгыш (12.5–57.5°)','Чыгыш (57.5–102.5°)','Түштүк-чыгыш (102.5–147.5°)','Түштүк (147.5–192.5°)','Түштүк-батыш (192.5–237.5°)','Батыш (237.5–282.5°)','Түндүк-батыш (282.5–327.5°)'],
-            mn:['Тэгш (-1)','Хойд (0–12.5° / 327.5–360°)','Зүүн хойд (12.5–57.5°)','Зүүн (57.5–102.5°)','Зүүн өмнөд (102.5–147.5°)','Өмнөд (147.5–192.5°)','Баруун өмнөд (192.5–237.5°)','Баруун (237.5–282.5°)','Баруун хойд (282.5–327.5°)'],
-            ka:['ბრტყელი (-1)','ჩრდილოეთი (0–12.5° / 327.5–360°)','ჩრდილო-აღმოსავლეთი (12.5–57.5°)','აღმოსავლეთი (57.5–102.5°)','სამხრეთ-აღმოსავლეთი (102.5–147.5°)','სამხრეთი (147.5–192.5°)','სამხრეთ-დასავლეთი (192.5–237.5°)','დასავლეთი (237.5–282.5°)','ჩრდილო-დასავლეთი (282.5–327.5°)'],
-            hu:['Sík (-1)','Észak (0–12.5° / 327.5–360°)','Északkelet (12.5–57.5°)','Kelet (57.5–102.5°)','Délkelet (102.5–147.5°)','Dél (147.5–192.5°)','Délnyugat (192.5–237.5°)','Nyugat (237.5–282.5°)','Északnyugat (282.5–327.5°)'],
-            bg:['Равен (-1)','Север (0–12.5° / 327.5–360°)','Североизток (12.5–57.5°)','Изток (57.5–102.5°)','Югоизток (102.5–147.5°)','Юг (147.5–192.5°)','Югозапад (192.5–237.5°)','Запад (237.5–282.5°)','Северозапад (282.5–327.5°)'],
-            el:['Επίπεδο (-1)','Βορράς (0–12.5° / 327.5–360°)','Βορειοανατολικά (12.5–57.5°)','Ανατολικά (57.5–102.5°)','Νοτιοανατολικά (102.5–147.5°)','Νότια (147.5–192.5°)','Νοτιοδυτικά (192.5–237.5°)','Δυτικά (237.5–282.5°)','Βορειοδυτικά (282.5–327.5°)'],
-            bn:['সমতল (-1)','উত্তর (0–12.5° / 327.5–360°)','উত্তর-পূর্ব (12.5–57.5°)','পূর্ব (57.5–102.5°)','দক্ষিণ-পূর্ব (102.5–147.5°)','দক্ষিণ (147.5–192.5°)','দক্ষিণ-পশ্চিম (192.5–237.5°)','পশ্চিম (237.5–282.5°)','উত্তর-পশ্চিম (282.5–327.5°)'],
-            uz:['Tekis (-1)','Shimol (0–12.5° / 327.5–360°)','Shimoli-sharq (12.5–57.5°)','Sharq (57.5–102.5°)','Janubi-sharq (102.5–147.5°)','Janub (147.5–192.5°)','Janubi-g‘arb (192.5–237.5°)','G‘arb (237.5–282.5°)','Shimoli-g‘arb (282.5–327.5°)']
-        };
-        return L[lang] || L.en;
-    }
     function exportVisualFor(pane, key) {
         var state = window._sylvaEditorStateByPane && window._sylvaEditorStateByPane[pane] && window._sylvaEditorStateByPane[pane][key];
-        var layerState = window._sylvaIndexAnalysisStates && window._sylvaIndexAnalysisStates[pane] && window._sylvaIndexAnalysisStates[pane][key];
-        var layerMeta = layerState && layerState.meta;
-        var nativeClassifiedLayer = !!(layerMeta && layerMeta.legendType === 'classified' && layerMeta.classesRaw);
         var colors = [], min, max, breaks = null;
+        // LULC raster/VAT sınıf adlarını aktif UI diliyle birlikte sunucuya taşı.
+        // Böylece ArcMap'te 1,2,3... yerine seçilen dildeki gerçek arazi kullanım
+        // sınıf adları (ör. Forest / Forêt / Wald / Orman vb.) görünür.
+        var lulcLabels = null;
+        var _lulcDefs = (typeof LULC_CLASS_DEFS !== 'undefined') ? LULC_CLASS_DEFS[key] : null;
+        if (_lulcDefs && typeof t === 'function') {
+            lulcLabels = {};
+            _lulcDefs.forEach(function (d) {
+                if (!d || d.code === undefined) return;
+                var translated = d.key ? t(d.key, d.label) : d.label;
+                if (translated) lulcLabels[String(d.code)] = translated;
+            });
+        }
         // 🛠️ BUG FİX (Faz 15 — "bar olarak indirmiştim, sınıflandırılmış
         // vermiş"): önceden bu fonksiyon yalnızca İLK ve SON sınıfın min/
         // max'ını (ve renklerin düz bir listesini) döndürüyordu — sunucu
@@ -52232,9 +52306,9 @@ refresh();
         // classRows yalnızca gerçekten CLASSIFIED moddaysa dışa aktarılır.
         // STRETCHED/BAR modunda DOM'da eski sınıf satırları bulunabilir; bunları
         // kullanmak rasteri yanlışlıkla 1..N sınıfa çeviriyordu.
-        if (!nativeClassifiedLayer && state && state.classificationType === 'classified' && state.classRows && state.classRows.length) {
+        if (state && state.classificationType === 'classified' && state.classRows && state.classRows.length) {
             breaks = state.classRows.map(function (row) {
-                return { min: parseFloat(row.min), max: parseFloat(row.max), color: String(row.color || '').replace(/^#/, ''), label: String(row.label || '').trim() };
+                return { min: parseFloat(row.min), max: parseFloat(row.max), color: String(row.color || '').replace(/^#/, '') };
             }).filter(function (b) { return isFinite(b.min) && isFinite(b.max) && b.color; });
             state.classRows.forEach(function (row) { if (row.color) colors.push(String(row.color).replace(/^#/, '')); });
             min = parseFloat(state.classRows[0].min); max = parseFloat(state.classRows[state.classRows.length - 1].max);
@@ -52279,8 +52353,7 @@ refresh();
         if (!colors.length) colors = ['000000', 'ffffff'];
         if (!isFinite(min)) min = -1;
         if (!isFinite(max) || max === min) max = 1;
-        var _lang = (typeof window._sylvaLang !== 'undefined' && window._sylvaLang) || 'en';
-        return { min:min, max:max, palette:colors, mode: (breaks && breaks.length) ? 'classified' : 'bar', breaks: breaks, aspectLabels: (key === 'TOPO_ASPECT' ? _sylvaAspectLabelsForLang(_lang) : null) };
+        return { min:min, max:max, palette:colors, mode: (breaks && breaks.length) ? 'classified' : 'bar', breaks: breaks, lulcLabels: lulcLabels };
     }
     function rasterEntries(pane) {
         var result = [], seen = {};
@@ -52339,9 +52412,8 @@ refresh();
     }
     function downloadBlob(blob, name) { var a=document.createElement('a'), url=URL.createObjectURL(blob); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(function(){URL.revokeObjectURL(url);}, 60000); }
 
-    // Aktif ekranın tüm raster katmanlarını bulur; 1 katman da olsa 2+ katman
-    // da olsa TEK ZIP üretir. Böylece gerekli raster yan dosyaları hiçbir
-    // durumda kaybolmaz.
+    // Eski tek-katman indirme fonksiyonunun yerine geçer. Aktif ekranın tüm
+    // raster katmanlarını bulur; 1 katman TIFF, 2+ katman tek ZIP üretir.
     window.executeGeoTiffDownload = function () {
         var pane = activePane(), entries = rasterEntries(pane);
         var status=document.getElementById('geotiff-status'), btn=document.getElementById('btn-geotiff-execute');
@@ -52426,9 +52498,7 @@ refresh();
             });
         }, Promise.resolve()).then(function () {
             if (status) status.textContent='⏳ ' + _dlqT('dlq_building_geotiff', 'GeoTIFF dosyası oluşturuluyor…');
-            if (items.length === 1) {
-                return responseBlobNamed('/api/download-geotiff', items[0], items[0].filename + '.zip');
-            }
+            if (items.length === 1) return responseBlobNamed('/api/download-geotiff', items[0], items[0].filename + '.tif');
             var _batchName = _gtiffIsAutoName
                 ? safeName('SylvaGIS_export_raster_analizleri' + (_gtiffDateEnd ? ('_' + _gtiffDateEnd) : ''))
                 : safeName(filename) + '_raster_analizleri';
