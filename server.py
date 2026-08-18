@@ -2436,6 +2436,21 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
                     STATISTICS_MAXIMUM=repr(float(max_code)),
                     STATISTICS_APPROXIMATE='NO',
                 )
+            # ArcMap uzak zoom seviyelerinde rasteri yeniden hesaplamak
+            # zorunda kalmasın. Kategorik/sınıflandırılmış veride sınıf kodları
+            # karışmasın diye NEAREST kullanılır. Böylece yakınlaştırınca gelen
+            # veri ile uzaklaşınca kaybolan/kararan görüntü aynı sınıfları taşır.
+            _ov_levels = [2, 4, 8, 16, 32]
+            _ov_levels = [lv for lv in _ov_levels
+                          if new_profile.get('width', 0) // lv >= 32
+                          and new_profile.get('height', 0) // lv >= 32]
+            if _ov_levels:
+                try:
+                    from rasterio.enums import Resampling
+                    dst.build_overviews(_ov_levels, Resampling.nearest)
+                    dst.update_tags(ns='rio_overview', resampling='nearest')
+                except Exception:
+                    pass
         new_tif_bytes = out_memfile.read()
 
     # ── .clr (klasik GDAL/ESRI renk eşleştirme dosyası) ──────────────
@@ -2486,6 +2501,7 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
         ('Value', 'N', 10, 0),
         ('Count', 'N', 12, 0),
         ('ClassName', 'C', 60, 0),
+        ('Label', 'C', 60, 0),
         ('Red', 'N', 3, 0),
         ('Green', 'N', 3, 0),
         ('Blue', 'N', 3, 0),
@@ -2494,7 +2510,7 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
     for code in sorted(code_info.keys()):
         label, rgb = code_info[code]
         vat_rows.append((code, int(counts[code]) if code < 256 else 0,
-                          label, rgb[0], rgb[1], rgb[2]))
+                          label, label, rgb[0], rgb[1], rgb[2]))
     vat_dbf_bytes = _write_dbf_bytes(field_defs, vat_rows)
     vat_cpg_bytes = b'UTF-8'
 
@@ -2761,7 +2777,7 @@ def _localize_aspect_code_info(code_info, labels):
     return out
 
 
-def _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=None):
+def _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=None, vis=None):
     """Sürekli/bar analizlerde HAM sayısal rasterı korur.
 
     Önceki sürüm sürekli rasterı 1..255 sınıfa çeviriyordu. Bunun sonucu
@@ -2844,8 +2860,26 @@ def _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=Non
     clr = b''
     if stats:
         mn, mx = stats[0][0], stats[0][1]
-        clr = ('# SylvaGIS continuous raster reference\n'
-               '# RAW VALUES PRESERVED: {} - {}\n'.format(mn, mx)).encode('utf-8')
+        _vis = vis if isinstance(vis, dict) else {}
+        _vmin = _vis.get('min', mn)
+        _vmax = _vis.get('max', mx)
+        try:
+            _vmin = float(_vmin); _vmax = float(_vmax)
+        except Exception:
+            _vmin, _vmax = mn, mx
+        if not np.isfinite(_vmin) or not np.isfinite(_vmax) or _vmax <= _vmin:
+            _vmin, _vmax = mn, (mx if mx > mn else mn + 1.0)
+        _palette = _vis.get('palette') or ['000000', 'ffffff']
+        _lines = [
+            '# SylvaGIS continuous raster color reference',
+            '# RAW VALUES PRESERVED: {} - {}'.format(mn, mx),
+            '# Value Red Green Blue'
+        ]
+        for _i in range(256):
+            _value = _vmin + (_vmax - _vmin) * (_i / 255.0)
+            _rgb = _interpolate_palette(_palette, _i / 255.0)
+            _lines.append('{:.12g} {} {} {}'.format(_value, _rgb[0], _rgb[1], _rgb[2]))
+        clr = ('\n'.join(_lines) + '\n').encode('utf-8')
 
     return {
         '{}.tif'.format(safe_name): final_tif,
@@ -7090,7 +7124,7 @@ def download_geotiff():
                     print('[SylvaGIS] ⚠️ Sınıflandırılmış semboloji oluşturulamadı: {}'.format(sym_err))
             else:
                 try:
-                    sym_files = _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=nodata_value)
+                    sym_files = _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=nodata_value, vis=vis)
                 except Exception as sym_err:
                     traceback.print_exc()
                     sym_files = None
@@ -7492,7 +7526,7 @@ def _ensure_output_crs(tif_bytes, target_crs, nodata_value=None, is_categorical=
         return tif_bytes
 
 
-def _stamp_exact_band_statistics(tif_bytes, nodata_value=None):
+def _stamp_exact_band_statistics(tif_bytes, nodata_value=None, is_categorical=False):
     """
     🛠️ BUG FİX (QGIS'te 0-47, ArcMap'te 0-54 — aynı .tif dosyası için
     FARKLI min/max değerleri görünüyordu):
@@ -7567,6 +7601,19 @@ def _stamp_exact_band_statistics(tif_bytes, nodata_value=None):
                         STATISTICS_STDDEV=repr(b_std),
                         STATISTICS_APPROXIMATE='NO',
                     )
+                _ov_levels = [2, 4, 8, 16, 32]
+                _ov_levels = [lv for lv in _ov_levels
+                              if profile.get('width', 0) // lv >= 32
+                              and profile.get('height', 0) // lv >= 32]
+                if _ov_levels:
+                    try:
+                        from rasterio.enums import Resampling
+                        _ov_resampling = Resampling.nearest if is_categorical else Resampling.average
+                        dst.build_overviews(_ov_levels, _ov_resampling)
+                        dst.update_tags(ns='rio_overview',
+                                        resampling='nearest' if is_categorical else 'average')
+                    except Exception:
+                        pass
             try:
                 return out_memfile.read()
             finally:
@@ -7958,7 +8005,7 @@ def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata
             raw_bytes, aoi_geom_4326, nodata_value, strict=is_categorical
         )
 
-    return _stamp_exact_band_statistics(raw_bytes, nodata_value=nodata_value)
+    return _stamp_exact_band_statistics(raw_bytes, nodata_value=nodata_value, is_categorical=is_categorical)
 
 
 @app.route('/api/download-raw-bands', methods=['POST'])
