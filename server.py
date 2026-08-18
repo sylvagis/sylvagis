@@ -26,7 +26,7 @@ from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
-print('SylvaGIS server.py yüklendi — versiyon: zip-export-v2-tiling (lejant-coklu-katman-2026-08-17)')
+print('SylvaGIS server.py yüklendi — versiyon: zip-export-v3-ESA-TRUE-CLIP-2026-08-18')
 
 
 # ════════════════════════════════════════════════════════════════
@@ -2325,7 +2325,7 @@ def _classify_by_breaks(band, valid_mask, breaks):
     return idx.astype(np.uint8), code_info
 
 
-def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name):
+def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name, embed_colormap=True):
     """Zaten 1..N küçük tam sayı sınıf koduna (0 = NoData) indirgenmiş bir
     banttan (byte_band) ve {kod: (etiket, (r,g,b))} sözlüğünden (code_info)
     ArcMap/QGIS'in RENKLİ + İSİMLENDİRİLMİŞ açacağı bir dosya seti üretir:
@@ -2381,24 +2381,35 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
 
     new_profile = profile.copy()
     new_profile.update(dtype='uint8', count=1, nodata=0, compress='lzw')
+    # ArcMap'te isimsiz kutuların ana nedeni olabilen gömülü ColorMap'i
+    # LULC çıktılarında kesin olarak kaldırıyoruz. Renk + sınıf adı yalnızca
+    # gerçek sınıfları içeren .clr / VAT / RAT sidecar'larından gelir.
     new_profile.pop('photometric', None)
-    if nbits < 8:
-        new_profile['nbits'] = nbits
+    new_profile.pop('nbits', None)
+    new_profile.pop('colormap', None)
 
     with MemoryFile() as out_memfile:
         with out_memfile.open(**new_profile) as dst:
             dst.write(byte_band, 1)
-            # 🎨 Embedded Palette (bkz. yukarıdaki Faz 15 notu): ArcMap'in
-            # sürükle-bırakta OTOMATİK doğru renkle açması için. Gerçek
-            # sınıfların DIŞINDA kalan (n_total'a kadar dolgu) indeksler,
-            # NoData ile aynı tamamen SAYDAM renge ayarlanır (Faz 13'teki
-            # "siyah değil saydam" ilkesiyle tutarlı) — nbits küçültme
-            # sayesinde bu dolgu artık genelde çok az veya SIFIR.
-            colormap = {i: (255, 255, 255, 0) for i in range(n_total)}
-            for code in real_codes:
-                _, rgb = code_info[code]
-                colormap[code] = (rgb[0], rgb[1], rgb[2], 255)
-            dst.write_colormap(1, colormap)
+            # 🛠️ ARCMap BOŞ LEJANT FİXİ:
+            # ESA/MODIS/CORINE gibi 11/17/44 sınıflı LULC rasterlerinde
+            # GeoTIFF ColorMap, NBITS nedeniyle zorunlu olarak 16/32/64
+            # girişlik bir palet üretir. ArcMap bu PALETTE girişlerinin
+            # tamamını legend'a satır olarak koyduğu için gerçek sınıfların
+            # yanında isimsiz boş kutular oluşuyordu (ESA'da 16 giriş = 11
+            # gerçek sınıf + 5 boş/NoData slotu).
+            #
+            # LULC dışa aktarımlarında artık embedded ColorMap KULLANILMIYOR.
+            # Bunun yerine gerçek sınıfları içeren VAT/RAT + RGB alanları
+            # kullanılıyor. Böylece ArcMap'in Unique Values tematik
+            # sembolojisi yalnızca gerçekten var olan sınıfları listeler;
+            # palette padding'inden gelen boş satırlar oluşmaz.
+            if embed_colormap:
+                colormap = {i: (255, 255, 255, 0) for i in range(n_total)}
+                for code in real_codes:
+                    _, rgb = code_info[code]
+                    colormap[code] = (rgb[0], rgb[1], rgb[2], 255)
+                dst.write_colormap(1, colormap)
             # 🛠️ BUG FİX (TÜM katmanların ArcMap'te AYNI jenerik "0–100"
             # lejantıyla açılması): ArcMap, dosyada gömülü STATISTICS_*
             # etiketi bulamazsa kendi varsayılan/jenerik aralığına düşüyor —
@@ -2416,15 +2427,17 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
         new_tif_bytes = out_memfile.read()
 
     # ── .clr (klasik GDAL/ESRI renk eşleştirme dosyası) ──────────────
-    clr_lines = ['0 255 255 255 0']
+    # Sadece gerçek sınıflar .clr içine yazılır; NoData/boş palette slotu
+    # eklenmez.
+    clr_lines = []
     for code in sorted(code_info.keys()):
         label, rgb = code_info[code]
         clr_lines.append('{} {} {} {} 255'.format(code, rgb[0], rgb[1], rgb[2]))
     clr_bytes = ('\n'.join(clr_lines) + '\n').encode('utf-8')
 
     # ── .tif.aux.xml (GDAL Raster Attribute Table — isim/renk eşleştirme) ─
-    rows = ['      <Row index="0"><F>0</F><F>NoData</F><F>255</F><F>255</F><F>255</F></Row>']
-    for i, code in enumerate(sorted(code_info.keys()), start=1):
+    rows = []
+    for i, code in enumerate(sorted(code_info.keys()), start=0):
         label, rgb = code_info[code]
         rows.append(
             '      <Row index="{}"><F>{}</F><F>{}</F><F>{}</F><F>{}</F><F>{}</F></Row>'.format(
@@ -2531,7 +2544,7 @@ def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name):
     out = np.where(valid, rounded + shift, 0)
     out = np.clip(out, 0, 255).astype(np.uint8)
 
-    return _build_symbology_files_from_classes(out, profile, shifted_info, safe_name)
+    return _build_symbology_files_from_classes(out, profile, shifted_info, safe_name, embed_colormap=False)
 
 
 def _build_rgb_symbology_zip(tif_bytes, safe_name):
@@ -7363,7 +7376,7 @@ def _stamp_exact_band_statistics(tif_bytes, nodata_value=None):
         return tif_bytes
 
 
-def _true_clip_tif_bytes(tif_bytes, aoi_geom_4326, nodata_value):
+def _true_clip_tif_bytes(tif_bytes, aoi_geom_4326, nodata_value, strict=False):
     """
     🔒 KESİN / GEE'DEN BAĞIMSIZ YEREL KIRPMA ("true clip").
 
@@ -7465,6 +7478,8 @@ def _true_clip_tif_bytes(tif_bytes, aoi_geom_4326, nodata_value):
                           "({:.4f} → {:.4f}) — sonuç GÜVENİLMEZ kabul edilip GEE'nin "
                           'kendi kırpmasıyla gelen orijinal dosyaya dönülüyor.'.format(
                               pre_valid_ratio, post_valid_ratio))
+                    if strict:
+                        raise ValueError('Yerel AOI clip sonucu hiç geçerli piksel kalmadı.')
                     return tif_bytes
 
                 out_meta = src.meta.copy()
@@ -7481,8 +7496,11 @@ def _true_clip_tif_bytes(tif_bytes, aoi_geom_4326, nodata_value):
                         dst.write(out_image)
                     return out_memfile.read()
     except Exception as clip_err:
-        print('[SylvaGIS] ❌ Yerel true-clip başarısız — GEE\'nin kendi kırpmasıyla '
-              'gelen orijinal dosya gönderiliyor:', clip_err)
+        print('[SylvaGIS] ❌ Yerel true-clip başarısız:', clip_err)
+        if strict:
+            # LULC/ESA için kesin davranış: clip başarısızsa dikdörtgen
+            # dosyayı sessizce kullanıcıya gönderme; hata ver.
+            raise
         return tif_bytes
 
 
@@ -7727,6 +7745,16 @@ def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata
     # 🔒 GEE ne dönerse dönsün, kullanıcının seçtiği CRS'i kesin olarak
     # garanti eden güvence katmanı — bkz. _ensure_output_crs() docstring'i.
     raw_bytes = _ensure_output_crs(raw_bytes, crs, nodata_value=nodata_value, is_categorical=is_categorical)
+
+    # 🔒 SON / NİHAİ AOI CLIP: GEE indirme + karo mozaik + CRS dönüşümünden
+    # SONRA tekrar uygulanır. Böylece son gönderilen TIFF'te AOI dışı
+    # pikseller kesin olarak NoData olur. LULC/ESA'da strict=True olduğu için
+    # clip başarısız olursa asla clipsiz dikdörtgen dosya gönderilmez.
+    if aoi_geom_4326 is not None and nodata_value is not None:
+        raw_bytes = _true_clip_tif_bytes(
+            raw_bytes, aoi_geom_4326, nodata_value, strict=is_categorical
+        )
+
     return _stamp_exact_band_statistics(raw_bytes, nodata_value=nodata_value)
 
 
