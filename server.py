@@ -62,7 +62,6 @@ def _sylva_safe_filename(text, allow_dots=True):
 
 # LULC ailesi indeks kodu → gerçek veri kaynağı etiketi (Sensör/Veri segmenti)
 _LULC_SOURCE_LABELS = {
-    'LULC': 'DynamicWorld',
     'LULC_ESA': 'ESA',
     'LULC_MODIS': 'MODIS',
     'LULC_CORINE': 'CORINE',
@@ -1983,7 +1982,7 @@ _last_analyze_native_crs = None
 # veri setleridir; tarih aralığı veya bulutluluk filtresi kullanmazlar ve
 # her zaman AOI sınırlarına göre kesilir (clip).
 LULC_FAMILY_INDICES = (
-    'LULC', 'LULC_ESA', 'LULC_MODIS', 'LULC_CORINE',
+    'LULC_ESA', 'LULC_MODIS', 'LULC_CORINE',
     # TOPO ailesi — DEM tabanlı statik analizler (tarih/bulutluluk filtresi yok)
     'TOPO', 'TOPO_DEM', 'TOPO_SLOPE', 'TOPO_ASPECT', 'TOPO_HILLSHADE',
     'TOPO_RELIEF', 'TOPO_TPI', 'TOPO_TRI', 'TOPO_ROUGHNESS',
@@ -2009,7 +2008,6 @@ LULC_FAMILY_INDICES = (
 #
 # ÇÖZÜM: her veri seti kendi doğal piksel boyutunda istatistiklenir.
 _NATIVE_STATS_SCALE = {
-    'LULC':        10,   # Dynamic World V1
     'LULC_ESA':    10,   # ESA WorldCover v200
     'LULC_CORINE': 100,  # CORINE Land Cover 2018
     'LULC_MODIS':  500,  # MODIS MCD12Q1
@@ -2071,17 +2069,6 @@ def _roi_center_lonlat(roi_coords):
 # sidecar (.tif.aux.xml) ve klasik bir .clr renk dosyası üretmek için
 # kullanılır. Bkz. _build_lulc_symbology_zip() ve /api/download-geotiff.
 LULC_CLASS_DEFS = {
-    'LULC': [  # Google Dynamic World V1 — band 'label', kod 0-8
-        {'code': 0, 'label': 'Su Kütlesi',              'color': '#419bdf'},
-        {'code': 1, 'label': 'Orman / Ağaçlık',          'color': '#397d49'},
-        {'code': 2, 'label': 'Çayır / Otlak',            'color': '#88b053'},
-        {'code': 3, 'label': 'Sulak Bitki Örtüsü',       'color': '#7a87c6'},
-        {'code': 4, 'label': 'Tarım Alanı',              'color': '#e49635'},
-        {'code': 5, 'label': 'Çalılık',                  'color': '#dfc35a'},
-        {'code': 6, 'label': 'Yapay / Kentsel Alan',     'color': '#c4281b'},
-        {'code': 7, 'label': 'Çıplak Toprak',            'color': '#a59b8f'},
-        {'code': 8, 'label': 'Kar / Buz',                'color': '#b39fe1'},
-    ],
     'LULC_ESA': [  # ESA WorldCover v200 — sunucuda 1..11'e yeniden kodlanmış sıra
         {'code': 1,  'label': 'Ağaç Örtüsü / Orman',          'color': '#006400'},
         {'code': 2,  'label': 'Çalılık',                      'color': '#ffbb22'},
@@ -4139,102 +4126,20 @@ def build_result_image(data, for_export=False):
     # ve tarih filtresi bloğunu tamamen atlarlar.
 
     if index == 'LULC':
-        # 🏘️ Arazi Kullanımı — Google Dynamic World V1 (10 m, güncel arazi
-        # örtüsü, 9 sınıf). Tarih/bulutluluk arayüzden kullanıcıya
-        # gösterilmediği için frontend boş gönderebilir; bu durumda
-        # "güncel" bir görüntü için son 365 günlük varsayılan aralık kullanılır.
-        eff_start, eff_end = start_date, end_date
-        if not eff_start or not eff_end:
-            today = datetime.date.today()
-            eff_end   = today.isoformat()
-            eff_start = (today - datetime.timedelta(days=365)).isoformat()
-
-        # 🛠️ BUG FİX (Faz 20 — "Dynamic World verisi ekrana hiç gelmiyor,
-        # indirmede 'Failed to fetch'"): KÖK NEDEN — seçilen AOI/tarih
-        # aralığında Dynamic World koleksiyonu (Sentinel-2 sahnelerinden
-        # türetildiği için) HİÇ görüntü içermiyorsa (ör. o bölgede/tarihte
-        # bulutsuz/uygun bir Sentinel-2 geçişi kaydedilmemişse), GEE'nin
-        # `.reduce(ee.Reducer.mode())` çağrısı BOŞ bir koleksiyon üzerinde
-        # ("bant isimleri" görüntülerden türetildiği için) SIFIR BANTLI bir
-        # görüntü üretir — hemen ardından gelen `.rename('value')` çağrısı
-        # bu durumda "The number of names (1) must match the number of
-        # bands specified (0)" hatasıyla BAŞARISIZ OLUR. Bu hata, hem
-        # harita karosu üretimini (`getMapId`/tile proxy — bu yüzden katman
-        # EKRANA HİÇ GELMEDİ) hem de GeoTIFF indirmesini (`getDownloadURL`
-        # — bu yüzden indirme "Failed to fetch" ile başarısız oldu) AYNI
-        # ANDA etkiler, çünkü ikisi de sunucu tarafında AYNI görüntü
-        # grafiğini değerlendirir. LULC_ESA/MODIS/CORINE bu hataya HİÇ
-        # yakalanmaz çünkü onlar `.first()` ile TEK, HER ZAMAN VAR OLAN bir
-        # global mozaik görüntüsü kullanır — koleksiyon boşluğu riski YOKTUR.
-        # ÇÖZÜM: `_dw_mode()` artık koleksiyonun GERÇEKTEN boş olup
-        # olmadığını `ee.Algorithms.If(...)` ile SUNUCU TARAFINDA (ekstra
-        # bir .getInfo() round-trip'i GEREKMEDEN, tamamen tembel/lazy
-        # olarak) kontrol ediyor: koleksiyon doluysa normal mod-kompoziti
-        # döndürüyor; BOŞSA — hata fırlatmak yerine — aynı bant adına
-        # ('value') sahip, TAMAMEN MASKELİ (boş/saydam) bir yer tutucu
-        # görüntü döndürüyor. Böylece görüntü grafiği ARTIK ASLA bant
-        # sayısı uyuşmazlığıyla çökmez; koleksiyon gerçekten boşsa kullanıcı
-        # (çökme yerine) o alanda dürüstçe boş/saydam bir katman görür —
-        # tıpkı `.unmask(dw_wide)` geniş-pencere yedeğinin zaten
-        # tasarlandığı gibi (ki bu yedek de artık güvenle çalışabiliyor,
-        # çünkü birincil pencere artık hata fırlatmak yerine düzgün bir
-        # maskeli görüntü üretiyor).
-        def _dw_mode(s, e):
-            col = (ee.ImageCollection('GOOGLE/DYNAMICWORLD/V1')
-                   .filterBounds(roi)
-                   .filterDate(s, e)
-                   .select('label'))
-            reduced = col.reduce(ee.Reducer.mode()).rename('value')
-            placeholder = ee.Image.constant(0).rename('value').updateMask(ee.Image.constant(0))
-            return ee.Image(ee.Algorithms.If(col.size().gt(0), reduced, placeholder))
-
-        dw = _dw_mode(eff_start, eff_end)
-
-        # 🛠️ BUG FİX (AOI'nin bir kısmı boş kalıyor — UYDU ANALİZLERİYLE
-        # AYNI KÖK NEDEN): Dynamic World, Sentinel-2 sahnelerinden türetilir
-        # ve Sentinel-2'nin MGRS tile ızgarasını miras alır. Dar bir tarih
-        # penceresinde (ör. son 365 gün yerine daha kısa bir aralık frontend'den
-        # geldiyse) AOI'yi kesen komşu tile'lardan biri o pencerede yeterli
-        # bulutsuz geçiş yapmamış olabilir — sonuçta o tile'ın kapladığı
-        # AOI kısmı boş/maskesiz kalır ve temel harita görünür.
-        # ÇÖZÜM: birincil pencerede boş kalan pikseller, ÇOK DAHA GENİŞ bir
-        # pencerede (son 3 yıl) hesaplanan aynı mod-kompozitle doldurulur.
-        # Sentinel-2'nin küresel düzenli tekrar-geçiş kaydı 3 yıl içinde her
-        # yeri defalarca kapsadığından bu, pratikte tüm boşlukları kapatır.
-        today = datetime.date.today()
-        _wide_end   = eff_end
-        _wide_start = (today - datetime.timedelta(days=3 * 365)).isoformat()
-        if _wide_start < eff_start:
-            dw_wide = _dw_mode(_wide_start, _wide_end)
-            dw = dw.unmask(dw_wide)
-
-        # 🛠️ BUG FİX (LULC indirmeleri ArcMap'te açılmıyordu — ham bant
-        # indirmesi ise sorunsuz çalışıyordu): bkz. download_raw_bands()
-        # içindeki AYNI kök nedenli düzeltme notu ("reproject() öncelik
-        # sırası"). Bir ImageCollection üzerinde .reduce()/mod bileşimi
-        # gibi bir indirgeme işleminden çıkan görüntünün VARSAYILAN
-        # projeksiyonu GEE tarafından somut/native bir piksel ızgarasına
-        # değil, belirsiz/varsayılan bir projeksiyona sıfırlanır. clip(roi)
-        # bu "somut olmayan" projeksiyon üzerinde çağrılırsa (aşağıda
-        # olduğu gibi), dışa aktarım ardışık düzeni AOI dışında tutarsız
-        # alan dahil edebilir ya da sonuç dosyanın piksel ızgarası/blok
-        # yapısını CBS yazılımlarının (özellikle ArcMap) güvenilir şekilde
-        # ayrıştıramayacağı şekilde bozabilir. ÇÖZÜM: clip() öncesi, görüntü
-        # açıkça kendi doğal çözünürlüğünde (bkz. _NATIVE_STATS_SCALE)
-        # somut bir piksel ızgarasına reproject() edilir — Landsat ham bant
-        # indirmesinde zaten uygulanan reproject()+clip() sırasıyla BİREBİR
-        # aynı ilke. Nearest-neighbor (varsayılan .reproject() davranışı,
-        # .resample() çağrılmadığı sürece) sınıf kodlarını korur.
-        dw = dw.reproject(crs='EPSG:4326', scale=_NATIVE_STATS_SCALE.get('LULC', 10))
-
-        palette = ['#419bdf', '#397d49', '#88b053', '#7a87c6',
-                   '#e49635', '#dfc35a', '#c4281b', '#a59b8f', '#b39fe1']
-        vis = {'min': 0, 'max': 8, 'palette': palette}
-        result = dw
-        # Mekansal Sınırlandırma: LULC sonucu her zaman AOI'ye göre kesilir
-        # (clipMode ne olursa olsun) — global/geniş ölçekli yansıtma yapılmaz.
-        final_display = dw.clip(roi)
-        return final_display, roi, result, vis, None
+        # 🗑️ KALDIRILDI (Faz 21) — Google Dynamic World V1 ("🛰️ Dynamic World V1
+        # (Current / 10 m)") kullanıcı isteği üzerine Arazi Kullanımı
+        # ailesinden TAMAMEN kaldırıldı: sürekli ekrana gelmeme ("boş
+        # koleksiyon" GEE çökmesi, bkz. Faz 20) ve indirme hatalarına yol
+        # açıyordu. İstemcideki (index.html) seçim kutusu da kaldırıldığı
+        # için normal kullanımda buraya HİÇ ulaşılmaz; bu, yalnızca eski
+        # önbelleğe alınmış bir istemci/bookmarklenmiş bir istek yine de
+        # 'LULC' gönderirse çökme yerine anlaşılır bir hata döndürmek
+        # için bırakılan bir güvenlik ağıdır.
+        raise Exception(
+            'Dynamic World V1 veri seti kaldırıldı. Lütfen Arazi Kullanımı '
+            'panelinden ESA WorldCover, MODIS MCD12Q1 veya CORINE Land Cover '
+            'seçeneklerinden birini kullanın.'
+        )
 
     if index == 'LULC_ESA':
         # 🏘️ Arazi Kullanımı — ESA WorldCover v200 (10 m global, 11 sınıf).
