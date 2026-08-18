@@ -9123,7 +9123,42 @@ def download_geotiff_batch():
             response = response[0]
         if not isinstance(response, Response) or response.status_code >= 400:
             raise RuntimeError('{}. analiz indirilemedi.'.format(base))
-        return base, (response.content_type or '').lower(), response.get_data()
+        content_type = (response.content_type or '').lower()
+        body = response.get_data()
+        # 🛠️ BUG FİX (Faz 19 — "Arazi Kullanımı'nda 4 katmanın hepsini
+        # birden indirdim, ama yalnızca Dynamic World 1 KB'lık BOZUK bir
+        # .tif olarak geldi, diğer 3'ü sorunsuzdu"): KÖK NEDEN —
+        # download_geotiff() bir analiz İÇİNDE başarısız olduğunda (ör.
+        # Dynamic World'ün .reduce(ee.Reducer.mode())+reproject()+geniş-
+        # pencere-doldurma zinciri, sabit .first() tabanlı ESA/MODIS/
+        # CORINE'e göre GEE tarafında başarısızlığa çok DAHA yatkın),
+        # hatayı `jsonify({'success': False, 'error': ...})` ile döndürür —
+        # ve bu YANIT VARSAYILAN OLARAK HTTP 200 STATÜSÜ taşır (401/410 gibi
+        # özel durumlar hariç). Yukarıdaki `response.status_code >= 400`
+        # kontrolü bu yüzden BU HATAYI YAKALAYAMIYORDU — JSON hata gövdesi
+        # ("{"success": false, "error": "..."}"), sanki GERÇEK bir .tif/zip
+        # içeriğiymiş gibi doğrudan `base + '.tif'` adıyla dış ZIP'e
+        # yazılıyordu. Sonuç: küçük (tipik olarak <1 KB) ama aslında bir
+        # JSON METNİ olan, ArcMap'in "bozuk"/açılamaz olarak gördüğü bir
+        # ".tif" dosyası — kullanıcının bildirdiği belirti BİREBİR budur.
+        # ÇÖZÜM: durum koduna ek olarak content-type'ın GERÇEKTEN bir
+        # raster/zip olduğu (application/json OLMADIĞI) doğrulanıyor; JSON
+        # ise gövdeden gerçek hata mesajı ayrıştırılıp o öğe için AÇIK bir
+        # hata fırlatılıyor — böylece o katman artık sessizce bozuk bir
+        # dosya olarak sızmıyor, toplu indirme kullanıcıya HANGİ katmanın
+        # neden başarısız olduğunu bildiren net bir hatayla sonuçlanıyor
+        # (diğer, başarılı katmanlar yine de doğru şekilde indirilmiş olur —
+        # bkz. az aşağıdaki "errors" toplama mantığı, tüm öğeler bitmeden
+        # ZIP asla kısmi/karışık içerikle üretilmez).
+        if 'application/json' in content_type or (body[:1] in (b'{', b'[')):
+            try:
+                err_msg = json.loads(body.decode('utf-8', errors='replace')).get('error')
+            except Exception:
+                err_msg = None
+            raise RuntimeError('{}. analiz indirilemedi: {}'.format(
+                base, err_msg or 'sunucu JSON hata gövdesi döndürdü (raster üretilemedi)'
+            ))
+        return base, content_type, body
 
     results = {}
     errors = []
@@ -9140,7 +9175,20 @@ def download_geotiff_batch():
             except Exception as item_err:
                 errors.append((base, str(item_err)))
 
-    if errors:
+    # 🛠️ BUG FİX (Faz 19 — "4 katmanın 3'ü sorunsuzdu, sadece biri
+    # bozuktu" senaryosunda TÜM toplu indirmeyi iptal etmemek): önceden
+    # TEK bir öğe başarısız olduğunda (yukarıdaki `errors` doluysa) TÜM
+    # istek 500 ile başarısız kılınıyordu — bu, 3 katman GERÇEKTEN
+    # başarıyla indirilmiş olsa bile kullanıcıya HİÇBİR dosya
+    # vermeyeceği anlamına gelirdi (önceki, sessizce bozuk dosya üreten
+    # davranıştan DAHA KÖTÜ bir kullanıcı deneyimi). Artık — ham bant
+    # indirmesinde (`raw_bands`/`download_raw_bands`) zaten kullanılan
+    # "HATALAR.txt" kısmi-hata deseniyle TUTARLI olarak — yalnızca TÜM
+    # öğeler başarısız olduysa istek tamamen başarısız sayılır; en az bir
+    # öğe başarılıysa ZIP yine üretilir, başarılı katmanlar İÇİNDE yer
+    # alır ve başarısız katman(lar) ZIP'in içine eklenen bir
+    # "INDIRILEMEYEN_KATMANLAR.txt" ile AÇIKÇA (sessizce değil) bildirilir.
+    if errors and not results:
         traceback.print_exc()
         return jsonify({
             'success': False,
@@ -9151,6 +9199,8 @@ def download_geotiff_batch():
     try:
         with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as out_zip:
             for pos, base, _item in prepared_items:
+                if pos not in results:
+                    continue
                 base_r, content_type, body = results[pos]
                 if 'application/zip' in content_type or body[:2] == b'PK':
                     # LULC renk tablosu/RAT dosyalarını ana ZIP'e doğrudan aç.
@@ -9160,6 +9210,14 @@ def download_geotiff_batch():
                                 out_zip.writestr(member.filename, nested.read(member.filename))
                 else:
                     out_zip.writestr(base_r + '.tif', body)
+            if errors:
+                out_zip.writestr(
+                    'INDIRILEMEYEN_KATMANLAR.txt',
+                    'Aşağıdaki katman(lar) bu ZIP\'e dahil edilemedi:\n\n' +
+                    '\n'.join('- {}: {}'.format(b, e) for b, e in errors) +
+                    '\n\nDiğer tüm katmanlar bu ZIP içinde sorunsuz şekilde yer alıyor. '
+                    'Başarısız katman(lar)ı tekrar indirmeyi deneyebilirsiniz.'
+                )
         result = zip_buf.getvalue()
         response = Response(result, mimetype='application/zip')
         response.headers['Content-Disposition'] = 'attachment; filename="SylvaGIS_raster_analizleri.zip"'
