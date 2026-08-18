@@ -4264,7 +4264,7 @@ tr.class-highlight-active {
                         <div class="sensor-group-label" data-i18n="topo_basic">🏔 Temel Topografik Analizler</div>
                         <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_DEM" data-ramp-key="terrain" data-legend-type="stretched" data-legend-min="0 m" data-legend-max="3000 m"> <span data-i18n="topo_dem_label">YSM / Yükseklik (DEM)</span></label>
                         <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_SLOPE" data-ramp-key="heat" data-legend-type="stretched" data-legend-min="0°" data-legend-max="60°"> <span data-i18n="topo_slope_label">Eğim (Slope)</span></label>
-                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_ASPECT" data-ramp-key="rainbow" data-legend-type="stretched" data-legend-min="-1" data-legend-max="360°"> <span data-i18n="topo_aspect_label">Bakı (Aspect)</span></label>
+                        <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_ASPECT" data-ramp-key="rainbow" data-legend-type="classified" data-legend-min="-1" data-legend-max="360°" data-legend-classes='[{"color":"#bdbdbd","label":"Düz (-1)","code":1},{"color":"#2ca25f","label":"Kuzey (0–12.5° / 327.5–360°)","code":2},{"color":"#66c2a4","label":"Kuzeydoğu (12.5–57.5°)","code":3},{"color":"#99d8c9","label":"Doğu (57.5–102.5°)","code":4},{"color":"#ccece6","label":"Güneydoğu (102.5–147.5°)","code":5},{"color":"#fdae61","label":"Güney (147.5–192.5°)","code":6},{"color":"#f46d43","label":"Güneybatı (192.5–237.5°)","code":7},{"color":"#d73027","label":"Batı (237.5–282.5°)","code":8},{"color":"#7f0000","label":"Kuzeybatı (282.5–327.5°)","code":9}]'> <span data-i18n="topo_aspect_label">Bakı (Aspect)</span></label>
                         <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_HILLSHADE" data-ramp-key="gray" data-legend-type="stretched" data-legend-min-key="shadow_label" data-legend-max-key="light_label" data-legend-min="Gölge" data-legend-max="Işık"> <span data-i18n="topo_hillshade_label">Kabartma (Hillshade)</span></label>
                         <label class="option-item"><input type="checkbox" name="sylva-module" data-analysis="TOPO_RELIEF" data-ramp-key="terrain" data-legend-type="stretched" data-legend-min-key="flat_label" data-legend-max-key="high_label" data-legend-min="Düz" data-legend-max="Yüksek"> <span data-i18n="topo_relief_label">Rölyef Haritası</span></label>
 
@@ -52400,3 +52400,41 @@ refresh();
 </body>
 
 </html>
+
+<script id="sylva-topo-selection-live-v9">
+(function(){
+  'use strict';
+  var topoPrefix = /^TOPO_(?!CONTOUR$)/i;
+  var timer = null;
+  function clearStaleTopoView(){
+    var pane = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
+    try { if (typeof _clearAllAnalysisOutputs === 'function') _clearAllAnalysisOutputs(pane); } catch(e) {}
+    try { if (typeof _sylvaClearGeeLayers === 'function') _sylvaClearGeeLayers(pane); } catch(e) {}
+    try { if (typeof _sylvaClearBuildingLayer === 'function') _sylvaClearBuildingLayer(pane); } catch(e) {}
+    var ids = [pane === 'map2' ? 'map2-legend-box' : 'map-legend-box', pane === 'map2' ? 'map2-info-box' : 'map-info-box'];
+    ids.forEach(function(id){ var el=document.getElementById(id); if(el){ el.innerHTML=''; el.style.display='none'; }});
+    window._lastAnalyzeMeta = null;
+    if (window._lastAnalyzeMetaByPane) window._lastAnalyzeMetaByPane[pane] = null;
+  }
+  document.addEventListener('change', function(e){
+    var cb=e.target;
+    if(!cb || cb.tagName!=='INPUT' || cb.type!=='checkbox' || cb.name!=='sylva-module' || !cb.checked) return;
+    var a=cb.getAttribute('data-analysis')||'';
+    if(!topoPrefix.test(a)) return;
+    // Seçim değiştiği anda eski rasterı kaldır: yeni analiz sonucu gelene kadar
+    // eski görüntü/lejant/bilgi kutusu ekranda kalmasın.
+    clearStaleTopoView();
+    // Bakı için editör doğrudan sınıflandırılmış moda geçsin; diğer topo analizleri
+    // seçildiğinde kendi varsayılan stretched/bar modunu korur.
+    if(a.toUpperCase()==='TOPO_ASPECT' && typeof setClassificationType==='function') {
+      try { setClassificationType('classified'); } catch(err) {}
+    }
+    clearTimeout(timer);
+    timer=setTimeout(function(){
+      if(typeof window.runAnalysis==='function') {
+        try { window.runAnalysis(); } catch(err) { console.warn('[SylvaGIS] canlı topo analiz çalıştırma:',err); }
+      }
+    }, 60);
+  });
+})();
+</script>
