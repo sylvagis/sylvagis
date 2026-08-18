@@ -26,7 +26,7 @@ from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
-print('SylvaGIS server.py yüklendi — versiyon: zip-export-v2-tiling (lejant-coklu-katman-2026-08-17)')
+print('SylvaGIS server.py yüklendi — versiyon: zip-export-v3-ESA-TRUE-CLIP-2026-08-18')
 
 
 # ════════════════════════════════════════════════════════════════
@@ -2068,6 +2068,36 @@ def _roi_center_lonlat(roi_coords):
 # ArcMap/QGIS'in otomatik okuyacağı bir Raster Attribute Table (RAT)
 # sidecar (.tif.aux.xml) ve klasik bir .clr renk dosyası üretmek için
 # kullanılır. Bkz. _build_lulc_symbology_zip() ve /api/download-geotiff.
+# ════════════════════════════════════════════════════════════════
+# 🏔️ TOPOGRAFİK RASTER DIŞA AKTARIM STİLLERİ
+# Ekrandaki topografik analizlerin varsayılan min/max + renk rampaları.
+# Frontend'deki data-ramp-key / data-legend-min/max ile birebir tutulur.
+# TOPO_CONTOUR burada YOKTUR; o vektör eş yükselti dışa aktarımıdır.
+# ════════════════════════════════════════════════════════════════
+TOPO_RASTER_EXPORT_STYLES = {
+    'TOPO':               {'min': 0,    'max': 60,  'palette': ['#2c7bb6', '#abd9e9', '#ffffbf', '#fdae61', '#d7191c']},
+    'TOPO_DEM':           {'min': 0,    'max': 3000,'palette': ['#2c7bb6', '#abd9e9', '#ffffbf', '#fdae61', '#d7191c']},
+    'TOPO_SLOPE':         {'min': 0,    'max': 60,  'palette': ['#ffffb2', '#fecc5c', '#fd8d3c', '#f03b20', '#bd0026']},
+    'TOPO_ASPECT':        {'min': 0,    'max': 360, 'palette': ['red', 'orange', 'yellow', 'green', 'blue', 'indigo', 'violet']},
+    'TOPO_HILLSHADE':     {'min': 0,    'max': 255, 'palette': ['#f1f5f9', '#64748b', '#0f172a']},
+    'TOPO_RELIEF':        {'min': 0,    'max': 255, 'palette': ['#2c7bb6', '#abd9e9', '#ffffbf', '#fdae61', '#d7191c']},
+    'TOPO_TPI':           {'min': -50,  'max': 50,  'palette': ['#d73027', '#fee08b', '#1a9850']},
+    'TOPO_TRI':           {'min': 0,    'max': 80,  'palette': ['#ffffb2', '#fecc5c', '#fd8d3c', '#f03b20', '#bd0026']},
+    'TOPO_ROUGHNESS':     {'min': 0,    'max': 150, 'palette': ['#ffffb2', '#fecc5c', '#fd8d3c', '#f03b20', '#bd0026']},
+    'TOPO_CURVATURE':     {'min': -30,  'max': 30,  'palette': ['#d73027', '#fee08b', '#1a9850']},
+    'TOPO_PLAN_CURV':     {'min': -30,  'max': 30,  'palette': ['#d73027', '#fee08b', '#1a9850']},
+    'TOPO_PROFILE_CURV':  {'min': -30,  'max': 30,  'palette': ['#d73027', '#fee08b', '#1a9850']},
+    'TOPO_FLOWDIR':       {'min': 0,    'max': 360, 'palette': ['red', 'orange', 'yellow', 'green', 'blue', 'indigo', 'violet']},
+    'TOPO_FLOWACC':       {'min': 0,    'max': 200, 'palette': ['#a0d8ef', '#003566']},
+    'TOPO_STREAM':        {'min': 0,    'max': 1,   'palette': ['#a0d8ef', '#003566']},
+    'TOPO_TWI':           {'min': 0,    'max': 15,  'palette': ['#a0d8ef', '#003566']},
+    'TOPO_SPI':           {'min': 0,    'max': 20,  'palette': ['#a0d8ef', '#003566']},
+    'TOPO_STI':           {'min': 0,    'max': 50,  'palette': ['#ffffb2', '#fecc5c', '#fd8d3c', '#f03b20', '#bd0026']},
+    'TOPO_HILLSHADE_MULTI': {'min': 0, 'max': 255, 'palette': ['#f1f5f9', '#64748b', '#0f172a']},
+    'TOPO_SOLAR':         {'min': 0,    'max': 1,   'palette': ['#ffffb2', '#fecc5c', '#fd8d3c', '#f03b20', '#bd0026']},
+    'TOPO_SHADOW':        {'min': 0,    'max': 255, 'palette': ['#f1f5f9', '#64748b', '#0f172a']},
+}
+
 LULC_CLASS_DEFS = {
     'LULC_ESA': [  # ESA WorldCover v200 — sunucuda 1..11'e yeniden kodlanmış sıra
         {'code': 1,  'label': 'Ağaç Örtüsü / Orman',          'color': '#006400'},
@@ -2325,7 +2355,7 @@ def _classify_by_breaks(band, valid_mask, breaks):
     return idx.astype(np.uint8), code_info
 
 
-def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name):
+def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name, embed_colormap=True):
     """Zaten 1..N küçük tam sayı sınıf koduna (0 = NoData) indirgenmiş bir
     banttan (byte_band) ve {kod: (etiket, (r,g,b))} sözlüğünden (code_info)
     ArcMap/QGIS'in RENKLİ + İSİMLENDİRİLMİŞ açacağı bir dosya seti üretir:
@@ -2381,24 +2411,35 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
 
     new_profile = profile.copy()
     new_profile.update(dtype='uint8', count=1, nodata=0, compress='lzw')
+    # ArcMap'te isimsiz kutuların ana nedeni olabilen gömülü ColorMap'i
+    # LULC çıktılarında kesin olarak kaldırıyoruz. Renk + sınıf adı yalnızca
+    # gerçek sınıfları içeren .clr / VAT / RAT sidecar'larından gelir.
     new_profile.pop('photometric', None)
-    if nbits < 8:
-        new_profile['nbits'] = nbits
+    new_profile.pop('nbits', None)
+    new_profile.pop('colormap', None)
 
     with MemoryFile() as out_memfile:
         with out_memfile.open(**new_profile) as dst:
             dst.write(byte_band, 1)
-            # 🎨 Embedded Palette (bkz. yukarıdaki Faz 15 notu): ArcMap'in
-            # sürükle-bırakta OTOMATİK doğru renkle açması için. Gerçek
-            # sınıfların DIŞINDA kalan (n_total'a kadar dolgu) indeksler,
-            # NoData ile aynı tamamen SAYDAM renge ayarlanır (Faz 13'teki
-            # "siyah değil saydam" ilkesiyle tutarlı) — nbits küçültme
-            # sayesinde bu dolgu artık genelde çok az veya SIFIR.
-            colormap = {i: (255, 255, 255, 0) for i in range(n_total)}
-            for code in real_codes:
-                _, rgb = code_info[code]
-                colormap[code] = (rgb[0], rgb[1], rgb[2], 255)
-            dst.write_colormap(1, colormap)
+            # 🛠️ ARCMap BOŞ LEJANT FİXİ:
+            # ESA/MODIS/CORINE gibi 11/17/44 sınıflı LULC rasterlerinde
+            # GeoTIFF ColorMap, NBITS nedeniyle zorunlu olarak 16/32/64
+            # girişlik bir palet üretir. ArcMap bu PALETTE girişlerinin
+            # tamamını legend'a satır olarak koyduğu için gerçek sınıfların
+            # yanında isimsiz boş kutular oluşuyordu (ESA'da 16 giriş = 11
+            # gerçek sınıf + 5 boş/NoData slotu).
+            #
+            # LULC dışa aktarımlarında artık embedded ColorMap KULLANILMIYOR.
+            # Bunun yerine gerçek sınıfları içeren VAT/RAT + RGB alanları
+            # kullanılıyor. Böylece ArcMap'in Unique Values tematik
+            # sembolojisi yalnızca gerçekten var olan sınıfları listeler;
+            # palette padding'inden gelen boş satırlar oluşmaz.
+            if embed_colormap:
+                colormap = {i: (255, 255, 255, 0) for i in range(n_total)}
+                for code in real_codes:
+                    _, rgb = code_info[code]
+                    colormap[code] = (rgb[0], rgb[1], rgb[2], 255)
+                dst.write_colormap(1, colormap)
             # 🛠️ BUG FİX (TÜM katmanların ArcMap'te AYNI jenerik "0–100"
             # lejantıyla açılması): ArcMap, dosyada gömülü STATISTICS_*
             # etiketi bulamazsa kendi varsayılan/jenerik aralığına düşüyor —
@@ -2416,15 +2457,17 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
         new_tif_bytes = out_memfile.read()
 
     # ── .clr (klasik GDAL/ESRI renk eşleştirme dosyası) ──────────────
-    clr_lines = ['0 255 255 255 0']
+    # Sadece gerçek sınıflar .clr içine yazılır; NoData/boş palette slotu
+    # eklenmez.
+    clr_lines = []
     for code in sorted(code_info.keys()):
         label, rgb = code_info[code]
         clr_lines.append('{} {} {} {} 255'.format(code, rgb[0], rgb[1], rgb[2]))
     clr_bytes = ('\n'.join(clr_lines) + '\n').encode('utf-8')
 
     # ── .tif.aux.xml (GDAL Raster Attribute Table — isim/renk eşleştirme) ─
-    rows = ['      <Row index="0"><F>0</F><F>NoData</F><F>255</F><F>255</F><F>255</F></Row>']
-    for i, code in enumerate(sorted(code_info.keys()), start=1):
+    rows = []
+    for i, code in enumerate(sorted(code_info.keys()), start=0):
         label, rgb = code_info[code]
         rows.append(
             '      <Row index="{}"><F>{}</F><F>{}</F><F>{}</F><F>{}</F><F>{}</F></Row>'.format(
@@ -2531,7 +2574,26 @@ def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name):
     out = np.where(valid, rounded + shift, 0)
     out = np.clip(out, 0, 255).astype(np.uint8)
 
-    return _build_symbology_files_from_classes(out, profile, shifted_info, safe_name)
+    return _build_symbology_files_from_classes(out, profile, shifted_info, safe_name, embed_colormap=False)
+
+
+def _build_topo_symbology_zip(tif_bytes, vis, safe_name, breaks=None):
+    """Topografik rasterleri (TOPO_CONTOUR hariç) LULC dışa aktarım standardına
+    bağlar: AOI'ye göre kesilmiş tek bantlı GeoTIFF + RAT/VAT + CLR.
+
+    Değerlerin sınıf ID'lerine dönüştürülmesi yalnızca semboloji katmanında yapılır;
+    ham analiz GeoTIFF'i ekrandaki min/max aralığına göre 32 küçük sınıfa bölünür.
+    Böylece ArcMap/QGIS'te açıldığında siyah-beyaz 0–100 varsayılanına düşmek yerine
+    analiz ekranındaki renk rampası ve min/max aralığı korunur. Kullanıcı "Lejantı
+    Uygula" ile kendi sınıflarını tanımladıysa breaks birebir kullanılır.
+    """
+    if breaks:
+        return _build_classified_symbology_zip(
+            tif_bytes, vis, safe_name, breaks=breaks, n_classes=32, rgb_bytes=None
+        )
+    return _build_classified_symbology_zip(
+        tif_bytes, vis, safe_name, breaks=None, n_classes=32, rgb_bytes=None
+    )
 
 
 def _build_rgb_symbology_zip(tif_bytes, safe_name):
@@ -4388,47 +4450,51 @@ def build_result_image(data, for_export=False):
         aspect  = terrain.select('aspect')
 
         # ── Temel Topografik Analizler ────────────────────────────
-        if index in ('TOPO', 'TOPO_DEM'):
+        if index == 'TOPO':
             result = dem.rename('value')
-            vis = {'min': 0, 'max': 3000, 'palette': ['black', 'white']}
+            vis = dict(TOPO_RASTER_EXPORT_STYLES['TOPO'])
+
+        elif index == 'TOPO_DEM':
+            result = dem.rename('value')
+            vis = dict(TOPO_RASTER_EXPORT_STYLES['TOPO_DEM'])
 
         elif index == 'TOPO_SLOPE':
             result = slope.rename('value')
-            vis = {'min': 0, 'max': 60, 'palette': ['black', 'white']}
+            vis = dict(TOPO_RASTER_EXPORT_STYLES['TOPO_SLOPE'])
 
         elif index == 'TOPO_ASPECT':
             result = aspect.rename('value')
-            vis = {'min': 0, 'max': 360, 'palette': ['black', 'white']}
+            vis = dict(TOPO_RASTER_EXPORT_STYLES['TOPO_ASPECT'])
 
         elif index == 'TOPO_HILLSHADE':
             result = terrain.select('hillshade').rename('value')
-            vis = {'min': 0, 'max': 255, 'palette': ['black', 'white']}
+            vis = dict(TOPO_RASTER_EXPORT_STYLES['TOPO_HILLSHADE'])
 
         elif index == 'TOPO_RELIEF':
             # Kabartmalı rölyef: hillshade + normalize yükseklik karışımı
             hs       = terrain.select('hillshade')
             elev_n   = dem.unitScale(0, 3000).multiply(80).add(175).clamp(0, 255)
             result   = hs.multiply(0.7).add(elev_n.multiply(0.3)).rename('value')
-            vis = {'min': 0, 'max': 255, 'palette': ['black', 'white']}
+            vis = dict(TOPO_RASTER_EXPORT_STYLES['TOPO_RELIEF'])
 
         # ── Morfometrik Analizler ─────────────────────────────────
         elif index == 'TOPO_TPI':
             # Topographic Position Index: DEM − odak ortalama
             focal_mean = dem.focalMean(radius=300, units='meters')
             result = dem.subtract(focal_mean).rename('value')
-            vis = {'min': -50, 'max': 50, 'palette': ['black', 'white']}
+            vis = dict(TOPO_RASTER_EXPORT_STYLES['TOPO_TPI'])
 
         elif index == 'TOPO_TRI':
             # Terrain Ruggedness Index: odak standart sapma
             result = dem.focalStdDev(radius=300, units='meters').rename('value')
-            vis = {'min': 0, 'max': 80, 'palette': ['black', 'white']}
+            vis = dict(TOPO_RASTER_EXPORT_STYLES['TOPO_TRI'])
 
         elif index == 'TOPO_ROUGHNESS':
             # Pürüzlülük: pencerede maksimum − minimum rakım
             focal_max = dem.focalMax(radius=300, units='meters')
             focal_min = dem.focalMin(radius=300, units='meters')
             result = focal_max.subtract(focal_min).rename('value')
-            vis = {'min': 0, 'max': 150, 'palette': ['black', 'white']}
+            vis = dict(TOPO_RASTER_EXPORT_STYLES['TOPO_ROUGHNESS'])
 
         elif index in ('TOPO_CURVATURE', 'TOPO_PLAN_CURV', 'TOPO_PROFILE_CURV'):
             # 🛠️ BUG FİX (yoğun beyaz "tuz-biber" beneği — özellikle düz/az
@@ -4451,20 +4517,20 @@ def build_result_image(data, for_export=False):
             dem_smooth = dem.focalMean(radius=60, units='meters')
             kernel = ee.Kernel.laplacian8(normalize=False)
             result = dem_smooth.convolve(kernel).rename('value')
-            vis = {'min': -30, 'max': 30, 'palette': ['black', 'white']}
+            vis = dict(TOPO_RASTER_EXPORT_STYLES['TOPO_CURVATURE'])
 
         # ── Hidrolojik Analizler ──────────────────────────────────
         elif index == 'TOPO_FLOWDIR':
             # Akış yönü vekisi: bakı açısı (su eğim yönünde akar)
             result = aspect.rename('value')
-            vis = {'min': 0, 'max': 360, 'palette': ['black', 'white']}
+            vis = dict(TOPO_RASTER_EXPORT_STYLES['TOPO_FLOWDIR'])
 
         elif index == 'TOPO_FLOWACC':
             # Akış birikimi vekisi: düşük eğim + düşük rakım = vadi tabanı
             low_slope = ee.Image(90).subtract(slope.clamp(0, 90))
             elev_inv  = ee.Image(3000).subtract(dem.clamp(0, 3000))
             result = low_slope.add(elev_inv.divide(30)).rename('value')
-            vis = {'min': 0, 'max': 200, 'palette': ['black', 'white']}
+            vis = dict(TOPO_RASTER_EXPORT_STYLES['TOPO_FLOWACC'])
 
         elif index == 'TOPO_STREAM':
             # Dere ağı: düşük eğim + negatif TPI (vadi tabanı) maskesi
@@ -4472,7 +4538,7 @@ def build_result_image(data, for_export=False):
             tpi_small   = dem.subtract(focal_mean2)
             stream_mask = slope.lt(5).And(tpi_small.lt(0))
             result = stream_mask.multiply(1).rename('value')
-            vis = {'min': 0, 'max': 1, 'palette': ['black', 'white']}
+            vis = dict(TOPO_RASTER_EXPORT_STYLES['TOPO_STREAM'])
 
         elif index == 'TOPO_TWI':
             # Topographic Wetness Index: ln(a / tan(β))
@@ -4480,7 +4546,7 @@ def build_result_image(data, for_export=False):
             tan_slope = slope_rad.tan().max(ee.Image(0.001))
             acc_proxy = ee.Image(90).subtract(slope.clamp(0, 90)).max(ee.Image(1.0))
             result = acc_proxy.log().subtract(tan_slope.log()).rename('value')
-            vis = {'min': 0, 'max': 15, 'palette': ['black', 'white']}
+            vis = dict(TOPO_RASTER_EXPORT_STYLES['TOPO_TWI'])
 
         elif index == 'TOPO_SPI':
             # Stream Power Index: a × tan(β)
@@ -4488,7 +4554,7 @@ def build_result_image(data, for_export=False):
             tan_slope = slope_rad.tan().max(ee.Image(0.001))
             acc_proxy = ee.Image(90).subtract(slope.clamp(0, 90)).max(ee.Image(1.0))
             result = acc_proxy.multiply(tan_slope).rename('value')
-            vis = {'min': 0, 'max': 20, 'palette': ['black', 'white']}
+            vis = dict(TOPO_RASTER_EXPORT_STYLES['TOPO_SPI'])
 
         elif index == 'TOPO_STI':
             # Sediment Transport Index: (a/22.13)^0.6 × (sin(β)/0.0896)^1.3
@@ -4498,14 +4564,14 @@ def build_result_image(data, for_export=False):
             result = acc_proxy.divide(22.13).pow(0.6).multiply(
                 sin_slope.divide(0.0896).pow(1.3)
             ).rename('value')
-            vis = {'min': 0, 'max': 50, 'palette': ['black', 'white']}
+            vis = dict(TOPO_RASTER_EXPORT_STYLES['TOPO_STI'])
 
         # ── Güneş ve Görünürlük Analizleri ───────────────────────
         elif index == 'TOPO_HILLSHADE_MULTI':
             # Çok yönlü kabartma: 8 azimuth açısı ortalaması
             hs_list = [ee.Terrain.hillshade(dem, az, 45) for az in [0, 45, 90, 135, 180, 225, 270, 315]]
             result = ee.ImageCollection(hs_list).mean().rename('value')
-            vis = {'min': 0, 'max': 255, 'palette': ['black', 'white']}
+            vis = dict(TOPO_RASTER_EXPORT_STYLES['TOPO_HILLSHADE_MULTI'])
 
         elif index == 'TOPO_SOLAR':
             # Güneş radyasyonu vekisi: güneye-bakan eğimli alanlar daha fazla ışınım alır
@@ -4513,12 +4579,12 @@ def build_result_image(data, for_export=False):
             south_fac   = asp_rad.subtract(_math.pi).cos().multiply(0.5).add(0.5)
             slope_fac   = slope.divide(90).clamp(0, 1)
             result = south_fac.multiply(0.7).add(slope_fac.multiply(0.3)).rename('value')
-            vis = {'min': 0, 'max': 1, 'palette': ['black', 'white']}
+            vis = dict(TOPO_RASTER_EXPORT_STYLES['TOPO_SOLAR'])
 
         elif index == 'TOPO_SHADOW':
             # Gölge analizi: KD azimuth kabartması (düşük değer = gölge alan)
             result = ee.Terrain.hillshade(dem, 315, 45).rename('value')
-            vis = {'min': 0, 'max': 255, 'palette': ['black', 'white']}
+            vis = dict(TOPO_RASTER_EXPORT_STYLES['TOPO_SHADOW'])
 
         elif index == 'TOPO_CONTOUR':
             # 📏 Eş Yükselti (İzohips/Kontur) Çizgileri
@@ -4571,11 +4637,11 @@ def build_result_image(data, for_export=False):
             _dem_smooth = dem.focalMean(radius=45, units='meters').resample('bicubic')
             _signal = _dem_smooth.multiply(2 * _math.pi / _contour_interval).sin()
             result = _signal.zeroCrossing().rename('value')
-            vis = {'min': 0, 'max': 1, 'palette': ['black', 'white']}
+            vis = dict(TOPO_RASTER_EXPORT_STYLES['TOPO_HILLSHADE'])
 
         else:
             result = slope.rename('value')
-            vis = {'min': 0, 'max': 60, 'palette': ['black', 'white']}
+            vis = dict(TOPO_RASTER_EXPORT_STYLES['TOPO_SLOPE'])
 
         # ── 🛠️ BUG FİX: sabit/hardcoded germe aralıkları yerine AOI'nin
         # gerçek veri dağılımına göre dinamik germe uygula (bkz. yukarıdaki
@@ -4642,7 +4708,7 @@ def build_result_image(data, for_export=False):
             if index == 'TOPO_CONTOUR':
                 display_result = _dem_smooth.rename('value')
                 result = display_result
-                vis = {'min': 0, 'max': 3000, 'palette': ['black', 'white']}
+                vis = dict(TOPO_RASTER_EXPORT_STYLES['TOPO_DEM'])
             else:
                 display_result = result
         elif class_breaks and isinstance(class_breaks, list) and len(class_breaks) > 0:
@@ -6536,22 +6602,8 @@ def download_geotiff():
         # hiç göndermezse (eski/güncellenmemiş istemci), önceki paylaşılan-
         # global davranış AYNEN korunur — bu değişiklik geriye dönük
         # tamamen uyumludur.
-        # ESA WorldCover özel doğruluk yolu: tekli GeoTIFF indirmesinde istemci,
-        # ekranda gerçekten aktif olan ESA analiz payload'ını da gönderir. Böylece
-        # sunucudaki paylaşılan _last_analyze_params başka bir katmana ait olsa bile
-        # indirme yanlış analizi kullanmaz. Diğer analizler mevcut akışlarını korur.
-        _requested_analysis_payload = req_data.get('analysisPayload')
-        _is_direct_esa_payload = (
-            isinstance(_requested_analysis_payload, dict) and
-            _requested_analysis_payload.get('index') == 'LULC_ESA'
-        )
-        analysis_id = None if _is_direct_esa_payload else req_data.get('analysisId')
-        if _is_direct_esa_payload:
-            data = dict(_requested_analysis_payload)
-            session_native_crs = None
-            if not data.get('roi') and not fresh_roi:
-                return jsonify({'success': False, 'error': 'ESA WorldCover analizinin çalışma alanı bulunamadı.'})
-        elif analysis_id:
+        analysis_id = req_data.get('analysisId')
+        if analysis_id:
             _session = _get_analysis_session(analysis_id)
             if _session is None:
                 return jsonify({
@@ -6562,7 +6614,7 @@ def download_geotiff():
             data, session_native_crs = _session
             if not data.get('roi'):
                 return jsonify({'success': False, 'error': 'Önce bir uydu analizi çalıştırın.'})
-        elif not _is_direct_esa_payload:
+        else:
             if not _last_analyze_params.get('roi'):
                 return jsonify({'success': False, 'error': 'Önce bir uydu analizi çalıştırın.'})
             data = dict(_last_analyze_params)
@@ -6855,8 +6907,7 @@ def download_geotiff():
             export_image, export_region, scale, crs, safe_name,
             nodata_value=nodata_value, aoi_geom_4326=aoi_geom_4326,
             fallback_region_geom=roi.bounds(maxError=100),
-            is_categorical=is_lulc_categorical,
-            strict_true_clip=(lulc_index == 'LULC_ESA')
+            is_categorical=is_lulc_categorical
         )
 
         sym_files = None
@@ -6868,6 +6919,14 @@ def download_geotiff():
                 sym_files = None
                 print('[SylvaGIS] ⚠️ LULC renk tablosu/RAT oluşturulamadı, ham .tif '
                       'olarak devam ediliyor: {}'.format(sym_err))
+        elif lulc_index in TOPO_RASTER_EXPORT_STYLES and lulc_index != 'TOPO_CONTOUR':
+            try:
+                sym_files = _build_topo_symbology_zip(
+                    tif_bytes, vis, safe_name, breaks=requested_breaks)
+            except Exception as sym_err:
+                traceback.print_exc()
+                sym_files = None
+                print('[SylvaGIS] ⚠️ Topografik renk tablosu/RAT oluşturulamadı, ham .tif olarak devam ediliyor: {}'.format(sym_err))
         elif not is_true_color_rgb:
             # 🛠️ BUG FİX (Faz 16 — bkz. _classify_from_visualized_rgb()
             # docstring'i): "bar" (özelleştirilmemiş/sürekli) modda, haritanın
@@ -7461,16 +7520,27 @@ def _true_clip_tif_bytes(tif_bytes, aoi_geom_4326, nodata_value, strict=False):
 
                 post_valid_ratio = _valid_ratio(out_image, nodata_value)
 
-                # Kırpma öncesi zaten anlamlı miktarda geçerli piksel vardıysa
-                # (>%1) ama kırpma sonrası bunun neredeyse tamamı (>%95'i)
-                # kaybolduysa, bu kırpmanın YANLIŞ ÇALIŞTIĞININ işaretidir.
-                if pre_valid_ratio > 0.01 and post_valid_ratio < pre_valid_ratio * 0.05:
-                    msg = ('Yerel true-clip sonrası geçerli piksel oranı şüpheli derecede düştü '
-                           '({:.4f} → {:.4f}).'.format(pre_valid_ratio, post_valid_ratio))
+                # 🛠️ ESA WorldCover / ince veya çok düzensiz AOI düzeltmesi:
+                # Eski güvenlik heuristiği, AOI'nin raster bounding-box'ına oranı
+                # %5'ten küçük olduğunda gerçek ve DOĞRU bir polygon clip'ini yanlışlıkla
+                # "bozuk" sayıp orijinal dikdörtgen TIFF'e geri dönüyordu. 10 m ESA
+                # WorldCover'da bu durum özellikle sık görülür: veri geçerli olsa bile
+                # AOI'nin bounding-box içindeki kapladığı piksel oranı çok düşük olabilir.
+                # Sonuç ArcMap'te tam kare/dikdörtgen görünür.
+                #
+                # rasterio.mask() zaten geometri raster ile örtüşmüyorsa exception
+                # üretir. Bu yüzden artık oran tabanlı %5 geri dönüşü YAPMIYORUZ.
+                # Yalnızca clip sonucu gerçekten sıfır geçerli piksel kaldıysa ve
+                # kaynakta anlamlı veri varsa güvenlik amacıyla orijinal dosyaya dön.
+                # Böylece geçerli ama dar/düzensiz ESA AOI'leri kesin olarak polygon
+                # şeklinde kırpılır; diğer veri setlerinin mevcut davranışı korunur.
+                if pre_valid_ratio > 0.01 and post_valid_ratio <= 0.0:
+                    print('[SylvaGIS] ⚠️ Yerel true-clip sonrası hiç geçerli piksel kalmadı '
+                          "({:.4f} → {:.4f}) — sonuç GÜVENİLMEZ kabul edilip GEE'nin "
+                          'kendi kırpmasıyla gelen orijinal dosyaya dönülüyor.'.format(
+                              pre_valid_ratio, post_valid_ratio))
                     if strict:
-                        raise RuntimeError(msg + ' ESA true-clip sonucu reddedildi.')
-                    print('[SylvaGIS] ⚠️ ' + msg + ' Sonuç güvenilmez kabul edilip '
-                          'GEE\'nin kendi kırpmasıyla gelen orijinal dosyaya güvenle geri dönülüyor.')
+                        raise ValueError('Yerel AOI clip sonucu hiç geçerli piksel kalmadı.')
                     return tif_bytes
 
                 out_meta = src.meta.copy()
@@ -7487,15 +7557,16 @@ def _true_clip_tif_bytes(tif_bytes, aoi_geom_4326, nodata_value, strict=False):
                         dst.write(out_image)
                     return out_memfile.read()
     except Exception as clip_err:
+        print('[SylvaGIS] ❌ Yerel true-clip başarısız:', clip_err)
         if strict:
+            # LULC/ESA için kesin davranış: clip başarısızsa dikdörtgen
+            # dosyayı sessizce kullanıcıya gönderme; hata ver.
             raise
-        print('[SylvaGIS] ❌ Yerel true-clip başarısız — GEE\'nin kendi kırpmasıyla '
-              'gelen orijinal dosya gönderiliyor:', clip_err)
         return tif_bytes
 
 
 def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, nodata_value=None,
-                                  aoi_geom_4326=None, fallback_region_geom=None, strict_true_clip=False):
+                                  aoi_geom_4326=None, fallback_region_geom=None):
     """
     Tek bir bandı GeoTIFF olarak indirir ve bayt dizisi (bytes) döndürür.
 
@@ -7584,7 +7655,7 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
             )
         content = r.content
         if aoi_geom_4326 is not None and nodata_value is not None:
-            content = _true_clip_tif_bytes(content, aoi_geom_4326, nodata_value, strict=strict_true_clip)
+            content = _true_clip_tif_bytes(content, aoi_geom_4326, nodata_value)
         return content
     except Exception as first_err:
         parsed = _parse_gee_size_limit_error(str(first_err))
@@ -7609,7 +7680,7 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
                     )
                 fb_content = fb_r.content
                 if aoi_geom_4326 is not None and nodata_value is not None:
-                    fb_content = _true_clip_tif_bytes(fb_content, aoi_geom_4326, nodata_value, strict=strict_true_clip)
+                    fb_content = _true_clip_tif_bytes(fb_content, aoi_geom_4326, nodata_value)
                 return fb_content
             raise
 
@@ -7704,9 +7775,7 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
                 merged_bytes = f.read()
 
             if aoi_geom_4326 is not None and nodata_value is not None:
-                merged_bytes = _true_clip_tif_bytes(
-                    merged_bytes, aoi_geom_4326, nodata_value, strict=strict_true_clip
-                )
+                merged_bytes = _true_clip_tif_bytes(merged_bytes, aoi_geom_4326, nodata_value)
             return merged_bytes
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
@@ -7714,7 +7783,7 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
 
 def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata_value=None,
                                   aoi_geom_4326=None, fallback_region_geom=None,
-                                  is_categorical=False, strict_true_clip=False):
+                                  is_categorical=False):
     """
     _download_band_geotiff_bytes_impl() için ince bir sarmalayıcı (wrapper).
     Tek istek / bounded-fallback / karo-mozaik yollarının HANGİSİ
@@ -7732,15 +7801,21 @@ def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata
     raw_bytes = _download_band_geotiff_bytes_impl(
         img, region_geom, scale, crs, base_name,
         nodata_value=nodata_value, aoi_geom_4326=aoi_geom_4326,
-        fallback_region_geom=fallback_region_geom, strict_true_clip=strict_true_clip
+        fallback_region_geom=fallback_region_geom
     )
     # 🔒 GEE ne dönerse dönsün, kullanıcının seçtiği CRS'i kesin olarak
     # garanti eden güvence katmanı — bkz. _ensure_output_crs() docstring'i.
     raw_bytes = _ensure_output_crs(raw_bytes, crs, nodata_value=nodata_value, is_categorical=is_categorical)
-    # ESA WorldCover için son güvence: CRS dönüşümünden SONRA gerçek AOI
-    # polygonuna tekrar kırp. Diğer analizlerin indirme akışı değişmez.
-    if strict_true_clip and aoi_geom_4326 is not None and nodata_value is not None:
-        raw_bytes = _true_clip_tif_bytes(raw_bytes, aoi_geom_4326, nodata_value, strict=True)
+
+    # 🔒 SON / NİHAİ AOI CLIP: GEE indirme + karo mozaik + CRS dönüşümünden
+    # SONRA tekrar uygulanır. Böylece son gönderilen TIFF'te AOI dışı
+    # pikseller kesin olarak NoData olur. LULC/ESA'da strict=True olduğu için
+    # clip başarısız olursa asla clipsiz dikdörtgen dosya gönderilmez.
+    if aoi_geom_4326 is not None and nodata_value is not None:
+        raw_bytes = _true_clip_tif_bytes(
+            raw_bytes, aoi_geom_4326, nodata_value, strict=is_categorical
+        )
+
     return _stamp_exact_band_statistics(raw_bytes, nodata_value=nodata_value)
 
 
@@ -9167,8 +9242,13 @@ def download_geotiff_batch():
                     # LULC renk tablosu/RAT dosyalarını ana ZIP'e doğrudan aç.
                     with zipfile.ZipFile(io.BytesIO(body), 'r') as nested:
                         for member in nested.infolist():
-                            if not member.is_dir():
-                                out_zip.writestr(member.filename, nested.read(member.filename))
+                            if member.is_dir():
+                                continue
+                            # ArcGIS/GDAL overview pyramids are cache artifacts, not source
+                            # raster data. Never ship them in SylvaGIS export ZIPs.
+                            if member.filename.lower().endswith('.ovr'):
+                                continue
+                            out_zip.writestr(member.filename, nested.read(member.filename))
                 else:
                     out_zip.writestr(base_r + '.tif', body)
             if errors:
