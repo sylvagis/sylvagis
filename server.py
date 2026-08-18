@@ -2257,15 +2257,28 @@ def _interpolate_palette(palette, t):
     return tuple(int(round(rgb0[k] + (rgb1[k] - rgb0[k]) * frac)) for k in range(3))
 
 
+def _choose_nbits(n_needed):
+    """0..n_needed-1 arası kodları (NoData dahil) barındırabilecek EN KÜÇÜK
+    "temiz"/yaygın desteklenen palet derinliğini (1, 2, 4 veya 8 bit —
+    yani 2, 4, 16 veya 256 girişlik bir renk tablosu) döndürür. Bkz.
+    _build_symbology_files_from_classes() — Faz 15 BUG FİX notu: bu, gömülü
+    renk tablosundaki KULLANILMAYAN/boş girişlerin sayısını, klasik 256
+    girişlik tabloya kıyasla mümkün olan en aza indirir."""
+    for nb in (1, 2, 4, 8):
+        if n_needed <= (1 << nb):
+            return nb
+    return 8
+
+
 def _classify_continuous_band(band, valid_mask, vmin, vmax, palette, n_classes=12):
     """Sürekli (float) bir bandı, harita üzerindeki renk skalasıyla (palette)
     aynı görünümü verecek şekilde 1..n_classes arası küçük tam sayı sınıf
     koduna (0 = NoData) böler. Her sınıf, palette'ten enterpole edilmiş
     KENDİ rengini ve sayısal aralığını ("min – max") etiket olarak alır.
-    Bu, indirilen dosyanın ArcMap/QGIS'te — tıpkı LULC'de olduğu gibi —
-    tek bantlı + Raster Attribute Table üzerinden RENKLİ/SINIFLANDIRILMIŞ
-    ("bar") açılmasını sağlar; haritada görülen sürekli renk geçişinin
-    ayrık (discrete) bir yaklaşıklığıdır."""
+    n_classes=255 (varsayılan "bar"/sürekli mod — bkz. _build_classified_
+    symbology_zip) ile 8-bit paletin TAMAMI dolu/anlamlı hale gelir; hiçbir
+    kullanılmayan/boş indeks KALMAZ ve sonuç ArcMap'te neredeyse sürekli
+    (pürüzsüz) bir renk geçişi gibi görünür."""
     import numpy as np
 
     vmin = float(vmin) if vmin is not None else 0.0
@@ -2276,8 +2289,8 @@ def _classify_continuous_band(band, valid_mask, vmin, vmax, palette, n_classes=1
         vmax = vmin + 1.0
 
     frac = np.clip((band - vmin) / (vmax - vmin), 0.0, 1.0)
-    idx = np.clip(np.floor(frac * n_classes), 0, n_classes - 1).astype(np.uint8) + 1
-    idx = np.where(valid_mask, idx, 0).astype(np.uint8)
+    idx = np.clip(np.floor(frac * n_classes), 0, n_classes - 1).astype(np.uint16) + 1
+    idx = np.where(valid_mask, idx, 0).astype(np.uint16 if n_classes >= 255 else np.uint8)
 
     code_info = {}
     for c in range(1, n_classes + 1):
@@ -2287,7 +2300,42 @@ def _classify_continuous_band(band, valid_mask, vmin, vmax, palette, n_classes=1
         label = '{:.3g} – {:.3g}'.format(lo, hi)
         code_info[c] = (label, rgb)
 
-    return idx, code_info
+    return idx.astype(np.uint8), code_info
+
+
+def _classify_by_breaks(band, valid_mask, breaks):
+    """Kullanıcının uygulamadaki "Lejantı Uygula" panelinde KENDİ elleriyle
+    tanımladığı sınıf satırlarını (state.classRows — her biri kendi min/max/
+    rengiyle, EŞİT ARALIKLI OLMASI GEREKMEZ) birebir kullanarak sınıflandırma
+    yapar. Bu, "sınıflandırılmış" modda indirilen dosyanın ekrandaki
+    lejantla BİREBİR aynı sınıf sayısı/sınırları/renklerle açılmasını
+    sağlar — sunucunun kendi icat ettiği eşit-aralıklı bir sınıflandırma
+    DEĞİL, kullanıcının GERÇEKTEN seçtiği sınıflandırma."""
+    import numpy as np
+
+    n = len(breaks)
+    idx = np.zeros(band.shape, dtype=np.uint16 if n >= 255 else np.uint8)
+    code_info = {}
+    for i, b in enumerate(breaks, start=1):
+        try:
+            lo = float(b.get('min'))
+            hi = float(b.get('max'))
+        except (TypeError, ValueError):
+            continue
+        if not (np.isfinite(lo) and np.isfinite(hi)):
+            continue
+        sel = valid_mask & (band >= lo) & ((band < hi) if i < n else (band <= hi))
+        idx[sel] = i
+        hexc = _named_color_to_hex(b.get('color') or 'ffffff')
+        try:
+            rgb = tuple(int(hexc[k:k + 2], 16) for k in (0, 2, 4))
+        except ValueError:
+            rgb = (255, 255, 255)
+        label = '{:.3g} – {:.3g}'.format(lo, hi)
+        code_info[i] = (label, rgb)
+
+    idx = np.where(valid_mask, idx, 0)
+    return idx.astype(np.uint8), code_info
 
 
 def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name):
@@ -2295,40 +2343,89 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
     banttan (byte_band) ve {kod: (etiket, (r,g,b))} sözlüğünden (code_info)
     ArcMap/QGIS'in RENKLİ + İSİMLENDİRİLMİŞ açacağı bir dosya seti üretir:
 
-      1) {ad}.tif          — tek bantlı Byte GeoTIFF. NoData = 0.
-      2) {ad}.tif.aux.xml   — GDAL "Raster Attribute Table" (RAT) sidecar'ı.
+      1) {ad}.tif          — tek bantlı Byte GeoTIFF, İÇİNE gömülü bir
+                              Color Table (GDAL Palette) ile. ArcMap bunu
+                              sürükle-bırakta OTOMATİK olarak "Colormap"
+                              sembolojisiyle, DOĞRU renklerle açar.
+      2) {ad}.tif.aux.xml   — GDAL "Raster Attribute Table" (RAT) sidecar'ı
+                              (Identify/Öznitelik Tablosu için sınıf adları).
       3) {ad}.tif.vat.dbf/.cpg — ArcMap'in klasik Value Attribute Table'ı.
       4) {ad}.clr           — klasik GDAL/ESRI renk eşleştirme dosyası
                               (Symbology > Import ile manuel yükleme yedeği).
 
-    🛠️ BUG FİX (ArcMap lejantında onlarca boş/beyaz "sınıf" karesi
-    görünmesi — Faz 13'te siyahtan saydama çevrilmişti, ama ArcMap'in
-    "Colormap" sembolojisi GDAL'ın TIFF'e HER ZAMAN 256 girişli TAM bir
-    Palette tablosu olarak fiziksel yazdığı iç renk tablosunu (rasterio.
-    write_colormap) ham haliyle satır satır listelemeye devam ediyordu —
-    kullanılmayan onlarca/yüzlerce indeks artık siyah değil ama hâlâ
-    AYRI, ETİKETSİZ birer lejant satırı olarak görünüyordu. KÖK NEDEN:
-    dosyanın içine hiç embedded Palette color table YAZMAMAK. Bu fonksiyon
-    artık dst.write_colormap() ÇAĞIRMIYOR — TIFF düz Gray/tematik tek bant
-    olarak kalıyor. Renk/etiket bilgisi SADECE aşağıdaki RAT (.tif.aux.xml,
-    LAYER_TYPE=thematic + Usage=6/7/8 Red/Green/Blue alanları) ve .tif.vat.
-    dbf üzerinden taşınıyor — bu, ArcMap/ArcGIS Pro'nun tematik rasterları
-    Value/Class_Name'e göre otomatik renklendirmek için kullandığı YERLİ
-    mekanizmadır (Esri "Build Raster Attribute Table" ile üretilenle aynı
-    format) ve sembolojiyi "Unique Values" üzerinden SADECE gerçekte var
-    olan sınıflarla gösterir — hiçbir boş/fazladan satır ORTAYA ÇIKMAZ.
+    🛠️ BUG FİX GEÇMİŞİ:
+    Faz 13: kullanılmayan 256 palet indeksi SİYAH → SAYDAM yapıldı, ama
+    ArcMap'in "Colormap" sekmesi hâlâ 256 girişin TAMAMINI (kullanılan/
+    kullanılmayan fark etmeksizin) ayrı birer lejant satırı olarak
+    listeliyordu — "boş kutu" şikayeti buydu.
+    Faz 14: embedded Palette TAMAMEN kaldırıldı, renk/etiket bilgisi sadece
+    RAT/VAT'a taşındı — "boş kutu" sorunu çözüldü AMA ArcMap'in RAT'ı
+    sürükle-bırakta OTOMATİK okumadığı ortaya çıktı (kullanıcı ekran
+    görüntüsü kanıtı: TÜM katmanlar aynı jenerik "0–100" lejantıyla, renksiz
+    açıldı) — yani ArcMap'in ham/varsayılan "Classified" render'ına
+    düşüyordu. KÖK NEDEN ŞİMDİ NET: ArcMap sürükle-bırakta SADECE gömülü bir
+    Palette (Colormap) varsa onu otomatik kullanıyor; RAT'ı OTOMATİK
+    uygulamıyor.
+    Faz 15 (bu fonksiyon): embedded Palette GERİ getirildi (otomatik doğru
+    renk için) — ANCAK artık TIFF'in "NBITS" (bit derinliği) etiketi,
+    gerçekte kaç sınıf olduğuna göre EN KÜÇÜK yeterli değere (1, 2, 4 veya
+    8 bit → 2, 4, 16 veya 256 girişlik tablo) ayarlanıyor (bkz.
+    _choose_nbits()) — bu, rasterio/GDAL ile bu ortamda DOĞRUDAN test edilip
+    doğrulandı (write_colormap + NBITS=4 → geri okunan colormap TAM 16 giriş
+    içeriyor, 256 DEĞİL). Sonuç: az sayıda sınıfı olan katmanlarda (ör. 12
+    sınıflı "bar" aralıkları, küçük LULC setleri) SIFIR veya çok az boş satır
+    kalıyor; "bar" modunda artık 255 sınıf kullanılıp paletin TAMAMI
+    doldurulduğu için hiç boş satır KALMIYOR. Sadece çok sayıda seyrek
+    sınıfı olan eski LULC setlerinde (MODIS 17, CORINE 44) 8-bit'e
+    düşülüyor ve kalan boşluklar yine Faz 13'teki gibi SAYDAM bırakılıyor.
+    Ayrıca artık gerçek STATISTICS_MINIMUM/MAXIMUM etiketleri de gömülüyor
+    (bkz. aşağı) — ArcMap'in istatistik bulamayınca TÜM katmanlarda AYNI
+    jenerik "0–100" lejantına düşmesini (bildirilen ikinci hata) önlemek
+    için.
     """
     import numpy as np
     from rasterio.io import MemoryFile
     from xml.sax.saxutils import escape as _xml_escape
 
+    real_codes = sorted(code_info.keys())
+    max_code = real_codes[-1] if real_codes else 0
+    nbits = _choose_nbits(max_code + 1)
+    n_total = 1 << nbits
+
     new_profile = profile.copy()
     new_profile.update(dtype='uint8', count=1, nodata=0, compress='lzw')
     new_profile.pop('photometric', None)
+    if nbits < 8:
+        new_profile['nbits'] = nbits
 
     with MemoryFile() as out_memfile:
         with out_memfile.open(**new_profile) as dst:
             dst.write(byte_band, 1)
+            # 🎨 Embedded Palette (bkz. yukarıdaki Faz 15 notu): ArcMap'in
+            # sürükle-bırakta OTOMATİK doğru renkle açması için. Gerçek
+            # sınıfların DIŞINDA kalan (n_total'a kadar dolgu) indeksler,
+            # NoData ile aynı tamamen SAYDAM renge ayarlanır (Faz 13'teki
+            # "siyah değil saydam" ilkesiyle tutarlı) — nbits küçültme
+            # sayesinde bu dolgu artık genelde çok az veya SIFIR.
+            colormap = {i: (255, 255, 255, 0) for i in range(n_total)}
+            for code in real_codes:
+                _, rgb = code_info[code]
+                colormap[code] = (rgb[0], rgb[1], rgb[2], 255)
+            dst.write_colormap(1, colormap)
+            # 🛠️ BUG FİX (TÜM katmanların ArcMap'te AYNI jenerik "0–100"
+            # lejantıyla açılması): ArcMap, dosyada gömülü STATISTICS_*
+            # etiketi bulamazsa kendi varsayılan/jenerik aralığına düşüyor —
+            # bu her katmanda AYNI görünüyordu çünkü hiçbiri gerçek
+            # istatistik taşımıyordu. Gerçek sınıf kod aralığı burada
+            # doğrudan gömülüyor (bkz. _stamp_exact_band_statistics — aynı
+            # ilke, burada sınıflandırılmış Byte bant için).
+            if real_codes:
+                dst.update_tags(
+                    1,
+                    STATISTICS_MINIMUM=repr(float(real_codes[0])),
+                    STATISTICS_MAXIMUM=repr(float(max_code)),
+                    STATISTICS_APPROXIMATE='NO',
+                )
         new_tif_bytes = out_memfile.read()
 
     # ── .clr (klasik GDAL/ESRI renk eşleştirme dosyası) ──────────────
@@ -2450,7 +2547,58 @@ def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name):
     return _build_symbology_files_from_classes(out, profile, shifted_info, safe_name)
 
 
-def _build_classified_symbology_zip(tif_bytes, vis, safe_name, n_classes=12):
+def _build_rgb_symbology_zip(tif_bytes, safe_name):
+    """🛰️ Gerçek Uydu Görüntüsü (doğal renk RGB kompoziti) indirmeleri için.
+    Bu FİZİKSEL olarak 3 bantlı bir görüntüdür — LULC/sınıflandırılmış
+    analizlerin aksine RAT/Colormap uygulanamaz (renk zaten Red/Green/Blue
+    bantlarının kendisinde). Ama kullanıcı, diğer TÜM indirmelerin artık
+    yanında sidecar dosyası taşıdığını, RGB indirmelerinde ise ZIP'te
+    SADECE .tif bulunduğunu bildirdi. Tutarlılık için ve ArcMap/QGIS'in her
+    bandın istatistiğini PAM sidecar'ından da (gömülü STATISTICS_* etiketine
+    ek olarak) okuyabilmesi için minimal bir .tif.aux.xml üretilip .tif ile
+    birlikte paketlenir."""
+    import numpy as np
+    from rasterio.io import MemoryFile
+
+    with MemoryFile(tif_bytes) as memfile:
+        with memfile.open() as src:
+            count = src.count
+            src_nodata = src.nodata
+            stats = []
+            for b in range(1, count + 1):
+                arr = src.read(b).astype(np.float64)
+                if src_nodata is not None:
+                    valid = arr[~np.isclose(arr, float(src_nodata))]
+                else:
+                    valid = arr.ravel()
+                valid = valid[np.isfinite(valid)]
+                if valid.size:
+                    stats.append((float(valid.min()), float(valid.max()),
+                                   float(valid.mean()), float(valid.std())))
+                else:
+                    stats.append((0.0, 0.0, 0.0, 0.0))
+
+    bands_xml = []
+    for i, (bmin, bmax, bmean, bstd) in enumerate(stats, start=1):
+        bands_xml.append(
+            '  <PAMRasterBand band="{0}">\n'
+            '    <Metadata>\n'
+            '      <MDI key="STATISTICS_MINIMUM">{1!r}</MDI>\n'
+            '      <MDI key="STATISTICS_MAXIMUM">{2!r}</MDI>\n'
+            '      <MDI key="STATISTICS_MEAN">{3!r}</MDI>\n'
+            '      <MDI key="STATISTICS_STDDEV">{4!r}</MDI>\n'
+            '    </Metadata>\n'
+            '  </PAMRasterBand>\n'.format(i, bmin, bmax, bmean, bstd)
+        )
+    aux_xml = ('<PAMDataset>\n' + ''.join(bands_xml) + '</PAMDataset>\n').encode('utf-8')
+
+    return {
+        '{}.tif'.format(safe_name): tif_bytes,
+        '{}.tif.aux.xml'.format(safe_name): aux_xml,
+    }
+
+
+def _build_classified_symbology_zip(tif_bytes, vis, safe_name, breaks=None, n_classes=255):
     """LULC dışındaki (sürekli/continuous) TÜM analizler için — NDVI, NDWI,
     diğer uydu indeksleri, DEM/Eğim/diğer Topografik Analizler, Çevresel ve
     Kentsel Analizler vb. — LULC ile AYNI RAT-tabanlı sınıflandırılmış/renkli
@@ -2473,6 +2621,19 @@ def _build_classified_symbology_zip(tif_bytes, vis, safe_name, n_classes=12):
     tek bantlı + renkli/sınıflandırılmış açılır hem de yanında artık .tif.
     aux.xml/.tif.vat.dbf/.clr sidecar'ları (kullanıcının "twf/xml yok"
     şikayeti) bulunur.
+
+    🛠️ BUG FİX (Faz 15 — "bar olarak indirmiştim, sınıflandırılmış vermiş"):
+    Uygulamanın kendi "Lejantı Uygula" panelinde kullanıcı KENDİ elleriyle
+    ayrık sınıflar (state.classRows) tanımlamışsa — ekrandaki lejant zaten
+    "sınıflandırılmış" moddadır — istemci artık bu sınıfların GERÇEK min/
+    max/renklerini `breaks` parametresiyle gönderir; burada sunucunun kendi
+    icat ettiği eşit-aralıklı bölmeler DEĞİL, kullanıcının GERÇEKTEN
+    seçtiği sınıf sayısı/sınırları/renkleri birebir kullanılır (bkz.
+    _classify_by_breaks()). `breaks` gelmemişse (öntanımlı/"bar" — kullanıcı
+    hiç özelleştirme yapmamış, ekranda SÜREKLİ bir renk geçişi görüyor)
+    n_classes=255 ile 8-bit paletin TAMAMI dolu/anlamlı hale gelir — hem
+    boş satır KALMAZ hem de sonuç ArcMap'te pürüzsüz bir renk barına
+    yakın görünür.
     """
     import numpy as np
     from rasterio.io import MemoryFile
@@ -2492,17 +2653,26 @@ def _build_classified_symbology_zip(tif_bytes, vis, safe_name, n_classes=12):
     if not np.any(valid):
         return None
 
-    vmin = vis.get('min') if isinstance(vis, dict) else None
-    vmax = vis.get('max') if isinstance(vis, dict) else None
-    palette = (vis.get('palette') if isinstance(vis, dict) else None) or ['000000', 'ffffff']
-    if vmin is None or vmax is None:
-        # Vis min/max sağlanmadıysa (beklenmedik durum) veriden hesapla —
-        # ArcMap'in en azından anlamlı bir sınıflandırma görmesi için.
-        finite_vals = band[valid]
-        vmin = float(np.nanmin(finite_vals)) if vmin is None else vmin
-        vmax = float(np.nanmax(finite_vals)) if vmax is None else vmax
+    if breaks and isinstance(breaks, list) and len(breaks) >= 1:
+        byte_band, code_info = _classify_by_breaks(band, valid, breaks)
+        if not code_info:
+            breaks = None  # geçersiz/boş breaks — aşağıdaki sürekli moda düş
 
-    byte_band, code_info = _classify_continuous_band(band, valid, vmin, vmax, palette, n_classes=n_classes)
+    if not breaks:
+        vmin = vis.get('min') if isinstance(vis, dict) else None
+        vmax = vis.get('max') if isinstance(vis, dict) else None
+        palette = (vis.get('palette') if isinstance(vis, dict) else None) or ['000000', 'ffffff']
+        if vmin is None or vmax is None:
+            # Vis min/max sağlanmadıysa (beklenmedik durum) veriden hesapla —
+            # ArcMap'in en azından anlamlı bir sınıflandırma görmesi için.
+            finite_vals = band[valid]
+            vmin = float(np.nanmin(finite_vals)) if vmin is None else vmin
+            vmax = float(np.nanmax(finite_vals)) if vmax is None else vmax
+        byte_band, code_info = _classify_continuous_band(band, valid, vmin, vmax, palette, n_classes=n_classes)
+
+    if not code_info:
+        return None
+
     return _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name)
 
 
@@ -6590,10 +6760,23 @@ def download_geotiff():
         # kullanılır — böylece indirilen dosyanın rengi haritadaki renk
         # çubuğuyla eşleşir.
         requested_vis = req_data.get('visualization')
+        requested_breaks = None
         if isinstance(requested_vis, dict):
             for _vis_key in ('min', 'max', 'palette'):
                 if requested_vis.get(_vis_key) not in (None, '', []):
                     vis[_vis_key] = requested_vis[_vis_key]
+            # 🛠️ BUG FİX (Faz 15 — "bar olarak indirmiştim, sınıflandırılmış
+            # vermiş"): istemci artık, kullanıcı ekranda "Lejantı Uygula"
+            # panelinde KENDİ sınıflarını tanımladıysa (mode:'classified')
+            # bu sınıfların gerçek min/max/renklerini 'breaks' alanında da
+            # gönderiyor (bkz. index.html — exportVisualFor()). Bu durumda
+            # aşağıdaki _build_classified_symbology_zip() çağrısı sunucunun
+            # kendi eşit-aralıklı 255 sınıfını DEĞİL, kullanıcının GERÇEKTEN
+            # ekranda gördüğü sınıfları birebir kullanır. mode:'bar' (veya
+            # hiç özelleştirilmemiş varsayılan) durumunda 'breaks' boş
+            # gelir ve sürekli/yoğun (255 sınıflı) moda düşülür.
+            if requested_vis.get('mode') == 'classified' and isinstance(requested_vis.get('breaks'), list):
+                requested_breaks = requested_vis['breaks']
         is_true_color_rgb = (lulc_index == 'RGB')
         export_image = final_display
         # 🛠️ BUG FİX (indirilen TÜM rasterlerin RGB olarak inmesi): önceden
@@ -6631,12 +6814,25 @@ def download_geotiff():
                       'olarak devam ediliyor: {}'.format(sym_err))
         elif not is_true_color_rgb:
             try:
-                sym_files = _build_classified_symbology_zip(tif_bytes, vis, safe_name)
+                sym_files = _build_classified_symbology_zip(tif_bytes, vis, safe_name, breaks=requested_breaks)
             except Exception as sym_err:
                 traceback.print_exc()
                 sym_files = None
                 print('[SylvaGIS] ⚠️ Sınıflandırılmış renk tablosu/RAT oluşturulamadı, '
                       'ham .tif olarak devam ediliyor: {}'.format(sym_err))
+        else:
+            # 🛠️ BUG FİX ("uydu görüntülerinde zip dosyasında sadece tif var,
+            # diğer dosyalar yok"): gerçek RGB kompozitler RAT/Colormap
+            # alamaz (bkz. _build_rgb_symbology_zip docstring'i) ama artık
+            # diğer TÜM indirmelerle TUTARLI şekilde bir .tif.aux.xml
+            # sidecar'ı ile birlikte paketlenir.
+            try:
+                sym_files = _build_rgb_symbology_zip(tif_bytes, safe_name)
+            except Exception as sym_err:
+                traceback.print_exc()
+                sym_files = None
+                print('[SylvaGIS] ⚠️ RGB sidecar oluşturulamadı, ham .tif '
+                      'olarak devam ediliyor: {}'.format(sym_err))
 
         if sym_files:
             # Tek analiz için kullanıcı doğrudan TIFF istediğinde renk
