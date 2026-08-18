@@ -52262,6 +52262,34 @@ refresh();
         return fetch((window.API_BASE || '') + url, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })
             .then(function (r) { if (!r.ok || (r.headers.get('Content-Type') || '').indexOf('application/json') >= 0) return r.json().then(function(d){throw new Error((d && d.error) || r.statusText);}); return r.blob(); });
     }
+    // 🛠️ BUG FİX (ArcMap "Could not add the specified file(s) — The document
+    // type is not supported for drag and drop"): sunucu artık tek katmanlı
+    // indirmelerde de — LULC'nin yanı sıra NDVI/DEM/Eğim/Çevresel-Kentsel
+    // Analizler vb. TÜM analizlerde — RAT/VAT/.clr yan dosyalarını taşıyan
+    // bir .zip döndürebiliyor (bkz. server.py — download_geotiff() artık
+    // her analiz için _build_classified_symbology_zip/_build_lulc_symbology_
+    // zip üretiyor). Önceden bu fonksiyon sunucunun GERÇEKTE ne döndürdüğüne
+    // bakmadan indirilen her tek-katman dosyasına KÖRÜKÖRÜNE ".tif" uzantısı
+    // ekliyordu (bkz. aşağıdaki eski 'items[0].filename + ".tif"' satırı) —
+    // sunucu bir .zip döndürdüğünde kullanıcı diskte İÇERİĞİ ZIP ama UZANTISI
+    // ".tif" olan bozuk bir dosya buluyordu; ArcMap'e sürükleyip bırakınca
+    // dosya uzantısına göre TIFF açmayı deniyor, içerik uyuşmadığı için
+    // "document type is not supported" hatası veriyordu. ÇÖZÜM: gerçek dosya
+    // adı/uzantısı artık sunucunun Content-Disposition başlığından okunur —
+    // tıpkı 📡 Ham Veri (Bantlar) indirmesinin zaten yaptığı gibi (bkz.
+    // downloadRawBands() içindeki aynı desen).
+    function responseBlobNamed(url, body, fallbackName) {
+        return fetch((window.API_BASE || '') + url, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })
+            .then(function (r) {
+                if (!r.ok || (r.headers.get('Content-Type') || '').indexOf('application/json') >= 0) {
+                    return r.json().then(function(d){throw new Error((d && d.error) || r.statusText);});
+                }
+                var cd = r.headers.get('Content-Disposition') || '';
+                var m = /filename="?([^"; ]+)"?/.exec(cd);
+                var name = m ? m[1] : fallbackName;
+                return r.blob().then(function (blob) { return { blob: blob, name: name }; });
+            });
+    }
     function downloadBlob(blob, name) { var a=document.createElement('a'), url=URL.createObjectURL(blob); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(function(){URL.revokeObjectURL(url);}, 60000); }
 
     // Eski tek-katman indirme fonksiyonunun yerine geçer. Aktif ekranın tüm
@@ -52337,14 +52365,20 @@ refresh();
                         var _suffix = _ts.type + (_ts.source ? ('_' + _ts.source) : '');
                         _entryFilename = safeName(filename + '_' + _suffix);
                     }
+                    // 🛠️ BUG FİX (bkz. responseBlobNamed() üstündeki not): flatTiff
+                    // artık tek katmanlı indirmede de 'false' gönderilir ki sunucu
+                    // — LULC'de olduğu gibi diğer TÜM analizlerde de — RAT/VAT/.clr
+                    // yan dosyalarını içeren tam paketi (.zip) döndürebilsin; gerçek
+                    // dosya adı/uzantısı aşağıda sunucunun Content-Disposition
+                    // başlığından okunur, artık körü körüne ".tif" eklenmez.
                     items.push({ analysisId:analysis.analysisId, filename:_entryFilename, scale:scale, crs:crs,
                         clipMode:entry.payload.clipMode || 'clip', roi:entry.payload.roi || null, rendered:true,
-                        visualization:exportVisualFor(pane, entry.key), flatTiff:true });
+                        visualization:exportVisualFor(pane, entry.key), flatTiff:false });
                 });
             });
         }, Promise.resolve()).then(function () {
             if (status) status.textContent='⏳ ' + _dlqT('dlq_building_geotiff', 'GeoTIFF dosyası oluşturuluyor…');
-            if (items.length === 1) return responseBlob('/api/download-geotiff', items[0]).then(function(b){ return {blob:b,name:items[0].filename + '.tif'}; });
+            if (items.length === 1) return responseBlobNamed('/api/download-geotiff', items[0], items[0].filename + '.tif');
             var _batchName = _gtiffIsAutoName
                 ? safeName('SylvaGIS_export_raster_analizleri' + (_gtiffDateEnd ? ('_' + _gtiffDateEnd) : ''))
                 : safeName(filename) + '_raster_analizleri';
