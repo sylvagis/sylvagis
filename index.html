@@ -12627,8 +12627,8 @@ function selectRamp(name) {
             // kaybolmaz; sadece çok aşırı yakınlaşmada hafif bulanıklaşır.
             var opts = Object.assign({
                 opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane',
-                minZoom: 0, maxZoom: 24, minNativeZoom: 0, maxNativeZoom: 20,
-                keepBuffer: 12, updateWhenZooming: true, updateWhenIdle: true
+                minZoom: 0, maxZoom: 24, minNativeZoom: 11, maxNativeZoom: 16,
+                keepBuffer: 16, updateWhenZooming: true, updateWhenIdle: true
             }, options || {});
             var _rgKey = (paneId === 'map2') ? 'map2' : 'map';
             // 🛠️ BUG FİX: Sınıflandırma/Stretched/Sahne değişimi bu fonksiyonu
@@ -12832,8 +12832,8 @@ function selectRamp(name) {
             var _hideOthers = (options && options.hideOthers === false) ? false : true;
             var opts = Object.assign({
                 opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane',
-                minZoom: 0, maxZoom: 24, minNativeZoom: 0, maxNativeZoom: 20,
-                keepBuffer: 12, updateWhenZooming: true, updateWhenIdle: true
+                minZoom: 0, maxZoom: 24, minNativeZoom: 11, maxNativeZoom: 16,
+                keepBuffer: 16, updateWhenZooming: true, updateWhenIdle: true
             }, options || {});
             delete opts.hideOthers; // Leaflet tileLayer seçeneği değil, sadece bu fonksiyona özel bayrak
             var store = window._geeLayersByPane[(paneId === 'map2') ? 'map2' : 'map'];
@@ -19081,7 +19081,7 @@ function selectRamp(name) {
                 var _oldLayer = window._classHighlightLayerByPane[_pane];
                 if (_oldLayer) { try { _sylvaTargetMap(_pane).removeLayer(_oldLayer); } catch (e) {} }
                 window._classHighlightLayerByPane[_pane] = L.tileLayer(data.tileUrl, {
-                    opacity: 0.95, zIndex: 20, crossOrigin: true, pane: 'geeAnalysisPane', maxZoom: 24, maxNativeZoom: 16
+                    opacity: 0.95, zIndex: 20, crossOrigin: true, pane: 'geeAnalysisPane', minZoom: 0, maxZoom: 24, minNativeZoom: 11, maxNativeZoom: 16, keepBuffer: 16
                 }).addTo(_sylvaTargetMap(_pane));
             })
             .catch(function (err) {
@@ -53090,9 +53090,9 @@ refresh();
   document.addEventListener('change',function(e){
     if(e.target && (e.target.matches('.sylva-layer-switch-visibility') || e.target.matches('input[data-analysis]'))) setTimeout(sync,30);
   });
-  document.addEventListener('click',function(e){
-    if(e.target && (e.target.closest('#btn-type-classified') || e.target.closest('#btn-type-stretched') || e.target.closest('#btn-apply-legend'))) setTimeout(sync,30);
-  });
+  // User classification controls must remain under direct user control;
+  // sync() is invoked on layer changes, not on the control click itself.
+
   var mo=new MutationObserver(function(){ clearTimeout(mo._t); mo._t=setTimeout(sync,40); });
   // Stil değişikliklerini gözlemleme; kilit fonksiyonunun kendi style yazımları
   // gözlemciyi tekrar tekrar tetikleyip görsel titreşim/yanıp sönme oluşturmasın.
@@ -53208,7 +53208,8 @@ refresh();
   }
   document.addEventListener('click',function(e){
     if(e.target&&e.target.closest&&e.target.closest('.sylva-layer-switch-item')) refresh();
-    if(e.target&&e.target.closest&&e.target.closest('#btn-apply-legend,#btn-type-classified,#btn-type-stretched,#btn-reverse-ramp')) refresh();
+    // Classification/reverse/apply are user edits. Do NOT restore the old
+    // per-layer snapshot here; that would immediately overwrite the click.
   });
   document.addEventListener('change',function(e){
     if(e.target&&e.target.classList&&e.target.classList.contains('sylva-layer-switch-visibility')) refresh();
@@ -53384,7 +53385,7 @@ refresh();
       layer.options.maxZoom=24;
       layer.options.minZoom=0;
       layer.options.maxNativeZoom=16;
-      layer.options.minNativeZoom=0;
+      layer.options.minNativeZoom=11;
       layer.options.keepBuffer=16;
       layer.options.updateWhenZooming=true;
       layer.options.updateWhenIdle=true;
@@ -53487,9 +53488,9 @@ refresh();
     if(!e.target || !e.target.closest) return;
     var item=e.target.closest('#map2-layer-switch-box .sylva-layer-switch-item');
     if(item){ setTimeout(refreshScreen2,40); setTimeout(refreshScreen2,220); }
-    if(e.target.closest('#btn-apply-legend,#btn-type-classified,#btn-type-stretched,#btn-reverse-ramp')){
-      setTimeout(refreshScreen2,80);
-    }
+    // Do not refresh/restore the editor after a user classification/reverse/apply click.
+    // The active pane already owns the DOM state; restoring here reverted the click.
+
   },true);
 
   // Analiz/indir/çıktı butonları ortak panelde olduğundan, butona basıldığı
@@ -53531,6 +53532,26 @@ refresh();
     };
     window._sylvaScreen2ParityLangWrapped=true;
   }
+})();
+</script>
+<script id="sylva-final-classification-control-hardening-20260819">
+(function(){
+  'use strict';
+  // Hardening: the controls must never be reset by a post-click state restore.
+  // setClassificationType is the single source of truth for the mode; the
+  // Apply button commits the current rows/ramp to the active raster.
+  function wire(){
+    var c=document.getElementById('btn-type-classified');
+    var s=document.getElementById('btn-type-stretched');
+    var a=document.getElementById('btn-apply-legend');
+    var r=document.getElementById('btn-reverse-ramp');
+    if(c && !c.getAttribute('data-sylva-hardwired')) c.setAttribute('data-sylva-hardwired','1');
+    if(s && !s.getAttribute('data-sylva-hardwired')) s.setAttribute('data-sylva-hardwired','1');
+    if(a && !a.getAttribute('data-sylva-hardwired')) a.setAttribute('data-sylva-hardwired','1');
+    if(r && !r.getAttribute('data-sylva-hardwired')) r.setAttribute('data-sylva-hardwired','1');
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',wire); else wire();
+  setTimeout(wire,250); setTimeout(wire,1000);
 })();
 </script>
 <script id="sylva-final-classification-open-fix-20260819">
