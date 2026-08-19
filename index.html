@@ -5288,7 +5288,7 @@ tr.class-highlight-active {
     </select>
 
 </div>
-            <div id="legend-symbology-panel" style="opacity:1;pointer-events:auto;user-select:auto;">
+            <div id="legend-symbology-panel" style="opacity:0.35;pointer-events:none;user-select:none;">
             <h3 data-i18n="legend_sym">Lejant ve Semboloji</h3>
 
 <!-- ===== SINIFLANDIRMA TÜRÜ SEÇİCİ ===== -->
@@ -12838,7 +12838,29 @@ function selectRamp(name) {
             delete opts.hideOthers; // Leaflet tileLayer seçeneği değil, sadece bu fonksiyona özel bayrak
             var store = window._geeLayersByPane[(paneId === 'map2') ? 'map2' : 'map'];
             if (store[layerKey]) { try { targetMap.removeLayer(store[layerKey]); } catch (e) {} delete store[layerKey]; }
+            // Eski analiz katmanı store dışında kalmış olsa bile (ör. önceki
+            // sınıflandırma/yeniden renklendirme akışından) haritada asılı
+            // kalmasın. Yeni analiz tek görünür katman modunda her zaman temiz
+            // bir raster ile başlar; stack modu açıkken geçmiş katman korunur.
+            if (_hideOthers) {
+                var _staleActive = (paneId === 'map2') ? window._geeLayer2 : (typeof _geeLayer !== 'undefined' ? _geeLayer : null);
+                if (_staleActive) {
+                    try { if (targetMap.hasLayer(_staleActive)) targetMap.removeLayer(_staleActive); } catch (e) {}
+                }
+                // Store dışında kalmış eski TWI/DEM/Curvature vb. GEE rasterlarını
+                // da temizle. Böylece sınıflandırma/renk güncellendiğinde eski
+                // mavi görüntü altta kalıp yeni veriyi maskeleyemez.
+                try {
+                    targetMap.eachLayer(function(_ly){
+                        if (_ly && _ly._sylvaIsGeeAnalysis && targetMap.hasLayer(_ly) && _ly !== layer) {
+                            try { targetMap.removeLayer(_ly); } catch(_e) {}
+                        }
+                    });
+                } catch(_scanErr) {}
+            }
             var layer = L.tileLayer(tileUrl, opts).addTo(targetMap);
+            layer._sylvaIsGeeAnalysis = true;
+            layer._sylvaAnalysisKey = layerKey;
             store[layerKey] = layer;
             if (paneId === 'map2') { window._geeLayer2 = layer; } else { _geeLayer = layer; }
 
@@ -21335,86 +21357,81 @@ function selectRamp(name) {
         })();
 
         // ============================================================
-        // B. TERSİNE ÇEVİR (REVERSE RAMP) — ROBUST
+        // B. TERSİNE ÇEVİR (REVERSE RAMP)
         // ============================================================
         var rampReversed = false;
 
         function reverseGradient(cssGradient) {
-            var match = String(cssGradient || '').match(/linear-gradient\(to right\s*,\s*(.+)\)$/s);
+            // "linear-gradient(to right, c1, c2, ...)" → stops tersine
+            var match = cssGradient.match(/linear-gradient\(to right\s*,\s*(.+)\)$/s);
             if (!match) return cssGradient;
             var stops = match[1].split(',').map(function(s){ return s.trim(); });
             stops.reverse();
             return 'linear-gradient(to right, ' + stops.join(', ') + ')';
         }
 
-        function _sylvaApplyReverseRampNow() {
-            var btn = document.getElementById('btn-reverse-ramp');
-            var selRamp = document.getElementById('selectedRamp');
-            if (!selRamp) return;
+        document.addEventListener('DOMContentLoaded', function() {
+            var btnReverse = document.getElementById('btn-reverse-ramp');
+            if (!btnReverse) return;
+            btnReverse.addEventListener('click', function() {
+                rampReversed = !rampReversed;
+                btnReverse.style.background = rampReversed ? '#dcfce7' : '#f0fdf4';
+                btnReverse.style.borderColor = rampReversed ? '#4ade80' : '#86efac';
+                btnReverse.style.fontWeight = rampReversed ? '800' : '600';
 
-            rampReversed = !rampReversed;
-            if (btn) {
-                btn.style.background = rampReversed ? '#dcfce7' : '#f0fdf4';
-                btn.style.borderColor = rampReversed ? '#4ade80' : '#86efac';
-                btn.style.fontWeight = rampReversed ? '800' : '600';
-            }
+                // Seçili ramp'i tersine çevir
+                var selRamp = document.getElementById('selectedRamp');
+                var currentBg = selRamp.style.background;
+                selRamp.style.background = reverseGradient(currentBg);
 
-            // Palet ana çubuğunu gerçekten ters çevir.
-            var rampKey = selRamp.getAttribute('data-ramp') || 'black-white';
-            if (rampKey === '__gee__') rampKey = 'black-white';
-            var base = (typeof ramps !== 'undefined' && ramps[rampKey]) ? ramps[rampKey] : selRamp.style.background;
-            selRamp.style.background = rampReversed ? reverseGradient(base) : base;
-
-            // Classified modunda sınıf renklerinin sırasını da ters çevir.
-            if (typeof currentClassificationType !== 'undefined' && currentClassificationType === 'classified') {
-                var rows = Array.prototype.slice.call(document.querySelectorAll('#class-rows-container .classification-row'));
-                var triggers = rows.map(function(row){ return row.querySelector('.class-color-trigger'); }).filter(Boolean);
-                var colors = triggers.map(function(tr){
-                    return tr.getAttribute('data-pending-color') || tr.getAttribute('data-selected-color') || tr.style.background || '#999999';
-                }).reverse();
-                triggers.forEach(function(tr,i){
-                    tr.style.background = colors[i];
-                    tr.setAttribute('data-pending-color', colors[i]);
+                // Palette listesindeki tüm ramp'leri de tersine çevir
+                document.querySelectorAll('#paletteList .color-ramp').forEach(function(el) {
+                    el.style.background = reverseGradient(el.style.background);
                 });
-                if (typeof _flushPendingColors === 'function') _flushPendingColors();
-            }
 
-            // KRİTİK: Ters çevirme yalnızca ÖNİZLEME durumudur.
-            // Kullanıcı 'Lejantı Uygula' demeden aktif raster/analiz katmanına,
-            // GEE tile'ına veya kayıtlı layer state'ine hiçbir değişiklik gönderme.
-            // Böylece ⇄ Reverse/反转 basıldığında harita anında değişmez;
-            // değişiklik ancak Apply Legend ile birlikte uygulanır.
-            // Burada yalnızca editördeki data-pending-color ve rampReversed
-            // değerleri değiştirilir.
-        }
+                // Tersine çevirme yalnızca SEMBOLOJİ önizlemesidir. Burada GEE'ye
+                // yeni istek atılmaz; böylece SylvaGIS yükleme/yanıp sönme ekranı
+                // oluşmaz. Kullanıcı 'Lejantı Uygula' dediğinde renkler veriye uygulanır.
+                if (currentClassificationType === 'classified') {
+                    var rowEls = document.querySelectorAll('#class-rows-container .classification-row');
+                    var triggers = Array.from(rowEls).map(function(row) { return row.querySelector('.class-color-trigger'); });
+                    var colors = triggers.map(function(tr) {
+                        return tr.getAttribute('data-pending-color') || tr.getAttribute('data-selected-color') || '#999999';
+                    });
+                    colors.reverse();
+                    triggers.forEach(function(tr, i) {
+                        if (!tr) return;
+                        tr.style.background = colors[i];
+                        tr.setAttribute('data-pending-color', colors[i]);
+                    });
+                    // Lejant kutusunu da aynı sırayla anında önizle; veri katmanına
+                    // dokunma. 'Lejantı Uygula' sonraki tıklamada GEE'yi yeniler.
+                    try {
+                        var _revClasses = _sylvaReadClassificationRowsForPane((typeof _sylvaActivePaneId==='function'?_sylvaActivePaneId():'map'));
+                        if (_revClasses && _revClasses.length) {
+                            // Sınıf aralıklarının/sırasının kendisi değişmez; yalnızca
+                            // renkler ters sıraya çevrilmiş önizlemeyle lejanta yazılır.
+                            renderDynamicLegend(_revClasses, (typeof _sylvaActivePaneId==='function'?_sylvaActivePaneId():'map'));
+                        }
+                    } catch (_revErr) {}
+                } else {
+                    // Stretched modda da yalnızca lejant önizlemesini ters çevir.
+                    var _revLegendBox = document.getElementById((typeof _sylvaActivePaneId==='function'&&_sylvaActivePaneId()==='map2')?'map2-legend-box':'map-legend-box');
+                    if (_revLegendBox) {
+                        var _revRamp = _revLegendBox.querySelector('.color-ramp');
+                        if (_revRamp) _revRamp.style.background = reverseGradient(_revRamp.style.background || '');
+                    }
+                }
+            });
+        });
 
-        // onclick özelliğini doğrudan bağla; böylece buton DOMContentLoaded
-        // zamanlamasına bağlı kalmaz ve kesin olarak çalışır.
-        (function(){
-            var bind = function(){
-                var btn = document.getElementById('btn-reverse-ramp');
-                if (!btn || btn.getAttribute('data-sylva-reverse-bound') === '1') return;
-                btn.setAttribute('data-sylva-reverse-bound','1');
-                btn.onclick = function(e){
-                    if(e) e.preventDefault();
-                    _sylvaApplyReverseRampNow();
-                    return false;
-                };
-            };
-            if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bind);
-            else bind();
-            setTimeout(bind, 0);
-            setTimeout(bind, 500);
-        })();
-
-        // selectRamp: ters moddaysa seçilen yeni paleti de doğru yönde göster.
+        // selectRamp override: tersine çevriyse yeni seçimi de tersine çevir
         var _origSelectRamp = selectRamp;
         selectRamp = function(name) {
             _origSelectRamp(name);
             if (rampReversed) {
                 var selRamp = document.getElementById('selectedRamp');
-                var base = (typeof ramps !== 'undefined' && ramps[name]) ? ramps[name] : selRamp.style.background;
-                selRamp.style.background = reverseGradient(base);
+                selRamp.style.background = reverseGradient(selRamp.style.background);
             }
         };
 
@@ -52582,6 +52599,46 @@ refresh();
     'use strict';
     function activePane() { return typeof window._sylvaActivePaneId === 'function' ? window._sylvaActivePaneId() : 'map'; }
     function safeName(value) { return String(value || 'Analiz').replace(/[^a-z0-9_-]+/gi, '_').replace(/^_+|_+$/g, '') || 'Analiz'; }
+    // Aspect yön adları: indirme sırasında DOM'un eski dilde kalmasına
+    // güvenme. Seçili UI dili neyse GeoTIFF/RAT/VAT etiketleri de doğrudan
+    // aynı dilden üretilsin. Rakam aralıkları ortak tutulur.
+    window.SYLVA_ASPECT_DIRECTION_LABELS = window.SYLVA_ASPECT_DIRECTION_LABELS || {
+        en:['Flat (-1)','North (0–12.5° / 327.5–360°)','Northeast (12.5–57.5°)','East (57.5–102.5°)','Southeast (102.5–147.5°)','South (147.5–192.5°)','Southwest (192.5–237.5°)','West (237.5–282.5°)','Northwest (282.5–327.5°)'],
+        tr:['Düz (-1)','Kuzey (0–12.5° / 327.5–360°)','Kuzeydoğu (12.5–57.5°)','Doğu (57.5–102.5°)','Güneydoğu (102.5–147.5°)','Güney (147.5–192.5°)','Güneybatı (192.5–237.5°)','Batı (237.5–282.5°)','Kuzeybatı (282.5–327.5°)'],
+        az:['Düz (-1)','Şimal (0–12.5° / 327.5–360°)','Şimal-şərq (12.5–57.5°)','Şərq (57.5–102.5°)','Cənub-şərq (102.5–147.5°)','Cənub (147.5–192.5°)','Cənub-qərb (192.5–237.5°)','Qərb (237.5–282.5°)','Şimal-qərb (282.5–327.5°)'],
+        uz:['Tekis (-1)','Shimol (0–12.5° / 327.5–360°)','Shimoli-sharq (12.5–57.5°)','Sharq (57.5–102.5°)','Janubi-sharq (102.5–147.5°)','Janub (147.5–192.5°)','Janubi-g‘arb (192.5–237.5°)','G‘arb (237.5–282.5°)','Shimoli-g‘arb (282.5–327.5°)'],
+        de:['Flach (-1)','Nord (0–12.5° / 327.5–360°)','Nordost (12.5–57.5°)','Ost (57.5–102.5°)','Südost (102.5–147.5°)','Süd (147.5–192.5°)','Südwest (192.5–237.5°)','West (237.5–282.5°)','Nordwest (282.5–327.5°)'],
+        fr:['Plat (-1)','Nord (0–12.5° / 327.5–360°)','Nord-est (12.5–57.5°)','Est (57.5–102.5°)','Sud-est (102.5–147.5°)','Sud (147.5–192.5°)','Sud-ouest (192.5–237.5°)','Ouest (237.5–282.5°)','Nord-ouest (282.5–327.5°)'],
+        es:['Plano (-1)','Norte (0–12.5° / 327.5–360°)','Noreste (12.5–57.5°)','Este (57.5–102.5°)','Sureste (102.5–147.5°)','Sur (147.5–192.5°)','Suroeste (192.5–237.5°)','Oeste (237.5–282.5°)','Noroeste (282.5–327.5°)'],
+        pt:['Plano (-1)','Norte (0–12.5° / 327.5–360°)','Nordeste (12.5–57.5°)','Leste (57.5–102.5°)','Sudeste (102.5–147.5°)','Sul (147.5–192.5°)','Sudoeste (192.5–237.5°)','Oeste (237.5–282.5°)','Noroeste (282.5–327.5°)'],
+        it:['Piano (-1)','Nord (0–12.5° / 327.5–360°)','Nord-est (12.5–57.5°)','Est (57.5–102.5°)','Sud-est (102.5–147.5°)','Sud (147.5–192.5°)','Sud-ovest (192.5–237.5°)','Ovest (237.5–282.5°)','Nord-ovest (282.5–327.5°)'],
+        pl:['Płaski (-1)','Północ (0–12.5° / 327.5–360°)','Północny wschód (12.5–57.5°)','Wschód (57.5–102.5°)','Południowy wschód (102.5–147.5°)','Południe (147.5–192.5°)','Południowy zachód (192.5–237.5°)','Zachód (237.5–282.5°)','Północny zachód (282.5–327.5°)'],
+        hu:['Sík (-1)','Észak (0–12.5° / 327.5–360°)','Északkelet (12.5–57.5°)','Kelet (57.5–102.5°)','Délkelet (102.5–147.5°)','Dél (147.5–192.5°)','Délnyugat (192.5–237.5°)','Nyugat (237.5–282.5°)','Északnyugat (282.5–327.5°)'],
+        el:['Επίπεδο (-1)','Βορράς (0–12.5° / 327.5–360°)','Βορειοανατολικά (12.5–57.5°)','Ανατολή (57.5–102.5°)','Νοτιοανατολικά (102.5–147.5°)','Νότος (147.5–192.5°)','Νοτιοδυτικά (192.5–237.5°)','Δύση (237.5–282.5°)','Βορειοδυτικά (282.5–327.5°)'],
+        bg:['Равно (-1)','Север (0–12.5° / 327.5–360°)','Североизток (12.5–57.5°)','Изток (57.5–102.5°)','Югоизток (102.5–147.5°)','Юг (147.5–192.5°)','Югозапад (192.5–237.5°)','Запад (237.5–282.5°)','Северозапад (282.5–327.5°)'],
+        ru:['Ровный (-1)','Север (0–12.5° / 327.5–360°)','Северо-восток (12.5–57.5°)','Восток (57.5–102.5°)','Юго-восток (102.5–147.5°)','Юг (147.5–192.5°)','Юго-запад (192.5–237.5°)','Запад (237.5–282.5°)','Северо-запад (282.5–327.5°)'],
+        kk:['Жазық (-1)','Солтүстік (0–12.5° / 327.5–360°)','Солтүстік-шығыс (12.5–57.5°)','Шығыс (57.5–102.5°)','Оңтүстік-шығыс (102.5–147.5°)','Оңтүстік (147.5–192.5°)','Оңтүстік-батыс (192.5–237.5°)','Батыс (237.5–282.5°)','Солтүстік-батыс (282.5–327.5°)'],
+        ky:['Түз (-1)','Түндүк (0–12.5° / 327.5–360°)','Түндүк-чыгыш (12.5–57.5°)','Чыгыш (57.5–102.5°)','Түштүк-чыгыш (102.5–147.5°)','Түштүк (147.5–192.5°)','Түштүк-батыш (192.5–237.5°)','Батыш (237.5–282.5°)','Түндүк-батыш (282.5–327.5°)'],
+        mn:['Тэгш (-1)','Хойд (0–12.5° / 327.5–360°)','Зүүн хойд (12.5–57.5°)','Зүүн (57.5–102.5°)','Зүүн өмнөд (102.5–147.5°)','Өмнөд (147.5–192.5°)','Баруун өмнөд (192.5–237.5°)','Баруун (237.5–282.5°)','Баруун хойд (282.5–327.5°)'],
+        ka:['ბრტყელი (-1)','ჩრდილოეთი (0–12.5° / 327.5–360°)','ჩრდილო-აღმოსავლეთი (12.5–57.5°)','აღმოსავლეთი (57.5–102.5°)','სამხრეთ-აღმოსავლეთი (102.5–147.5°)','სამხრეთი (147.5–192.5°)','სამხრეთ-დასავლეთი (192.5–237.5°)','დასავლეთი (237.5–282.5°)','ჩრდილო-დასავლეთი (282.5–327.5°)'],
+        zh:['平坦 (-1)','北 (0–12.5° / 327.5–360°)','东北 (12.5–57.5°)','东 (57.5–102.5°)','东南 (102.5–147.5°)','南 (147.5–192.5°)','西南 (192.5–237.5°)','西 (237.5–282.5°)','西北 (282.5–327.5°)'],
+        ja:['平坦 (-1)','北 (0–12.5° / 327.5–360°)','北東 (12.5–57.5°)','東 (57.5–102.5°)','南東 (102.5–147.5°)','南 (147.5–192.5°)','南西 (192.5–237.5°)','西 (237.5–282.5°)','北西 (282.5–327.5°)'],
+        ko:['평탄 (-1)','북쪽 (0–12.5° / 327.5–360°)','북동쪽 (12.5–57.5°)','동쪽 (57.5–102.5°)','남동쪽 (102.5–147.5°)','남쪽 (147.5–192.5°)','남서쪽 (192.5–237.5°)','서쪽 (237.5–282.5°)','북서쪽 (282.5–327.5°)'],
+        hi:['समतल (-1)','उत्तर (0–12.5° / 327.5–360°)','उत्तर-पूर्व (12.5–57.5°)','पूर्व (57.5–102.5°)','दक्षिण-पूर्व (102.5–147.5°)','दक्षिण (147.5–192.5°)','दक्षिण-पश्चिम (192.5–237.5°)','पश्चिम (237.5–282.5°)','उत्तर-पश्चिम (282.5–327.5°)'],
+        id:['Datar (-1)','Utara (0–12.5° / 327.5–360°)','Timur laut (12.5–57.5°)','Timur (57.5–102.5°)','Tenggara (102.5–147.5°)','Selatan (147.5–192.5°)','Barat daya (192.5–237.5°)','Barat (237.5–282.5°)','Barat laut (282.5–327.5°)'],
+        th:['ราบ (-1)','เหนือ (0–12.5° / 327.5–360°)','ตะวันออกเฉียงเหนือ (12.5–57.5°)','ตะวันออก (57.5–102.5°)','ตะวันออกเฉียงใต้ (102.5–147.5°)','ใต้ (147.5–192.5°)','ตะวันตกเฉียงใต้ (192.5–237.5°)','ตะวันตก (237.5–282.5°)','ตะวันตกเฉียงเหนือ (282.5–327.5°)'],
+        vi:['Phẳng (-1)','Bắc (0–12.5° / 327.5–360°)','Đông Bắc (12.5–57.5°)','Đông (57.5–102.5°)','Đông Nam (102.5–147.5°)','Nam (147.5–192.5°)','Tây Nam (192.5–237.5°)','Tây (237.5–282.5°)','Tây Bắc (282.5–327.5°)'],
+        bn:['সমতল (-1)','উত্তর (0–12.5° / 327.5–360°)','উত্তর-পূর্ব (12.5–57.5°)','পূর্ব (57.5–102.5°)','দক্ষিণ-পূর্ব (102.5–147.5°)','দক্ষিণ (147.5–192.5°)','দক্ষিণ-পশ্চিম (192.5–237.5°)','পশ্চিম (237.5–282.5°)','উত্তর-পশ্চিম (282.5–327.5°)'],
+        ms:['Rata (-1)','Utara (0–12.5° / 327.5–360°)','Timur laut (12.5–57.5°)','Timur (57.5–102.5°)','Tenggara (102.5–147.5°)','Selatan (147.5–192.5°)','Barat daya (192.5–237.5°)','Barat (237.5–282.5°)','Barat laut (282.5–327.5°)'],
+        ar:['مستوٍ (-1)','الشمال (0–12.5° / 327.5–360°)','الشمال الشرقي (12.5–57.5°)','الشرق (57.5–102.5°)','الجنوب الشرقي (102.5–147.5°)','الجنوب (147.5–192.5°)','الجنوب الغربي (192.5–237.5°)','الغرب (237.5–282.5°)','الشمال الغربي (282.5–327.5°)'],
+        fa:['مسطح (-1)','شمال (0–12.5° / 327.5–360°)','شمال‌شرق (12.5–57.5°)','شرق (57.5–102.5°)','جنوب‌شرق (102.5–147.5°)','جنوب (147.5–192.5°)','جنوب‌غرب (192.5–237.5°)','غرب (237.5–282.5°)','شمال‌غرب (282.5–327.5°)'],
+        ur:['ہموار (-1)','شمال (0–12.5° / 327.5–360°)','شمال مشرق (12.5–57.5°)','مشرق (57.5–102.5°)','جنوب مشرق (102.5–147.5°)','جنوب (147.5–192.5°)','جنوب مغرب (192.5–237.5°)','مغرب (237.5–282.5°)','شمال مغرب (282.5–327.5°)']
+    };
+    function _sylvaAspectExportLabels() {
+        var lang = (typeof _sylvaLang === 'string' && _sylvaLang) ? _sylvaLang : 'en';
+        var a = window.SYLVA_ASPECT_DIRECTION_LABELS[lang] || window.SYLVA_ASPECT_DIRECTION_LABELS.en;
+        return a.map(function(label, i){ return { code:i+1, label:label, color:null }; });
+    }
     function exportVisualFor(pane, key) {
         var _paneStore = window._sylvaEditorStateByPane && window._sylvaEditorStateByPane[pane];
         var _entryPayload = window._sylvaLayerAnalyzePayloadByPane &&
@@ -52720,36 +52777,10 @@ refresh();
         // güncel lejanttan aynen gönderilir. Böylece Korece/Türkçe/diğer dil
         // seçimi hiçbir zaman sabit Türkçe Aspect adlarına düşmez.
         if (String(_exportIndex || '').toUpperCase() === 'TOPO_ASPECT') {
-            // Öncelik: aktif ekrandaki gerçek lejant DOM'u. translateClassLabels()
-            // sınıf elemanlarına data-env-native-class/data-env-native-lang
-            // eklediği için burada seçili 30 dilden hangisi ekranda görünüyorsa
-            // aynısı indirme paketine taşınır.
-            var _aLegendBox = document.getElementById(pane === 'map2' ? 'map2-legend-box' : 'map-legend-box');
-            var _aDefault = [
-                'Düz (-1)', 'Kuzey (0–12.5° / 327.5–360°)', 'Kuzeydoğu (12.5–57.5°)',
-                'Doğu (57.5–102.5°)', 'Güneydoğu (102.5–147.5°)', 'Güney (147.5–192.5°)',
-                'Güneybatı (192.5–237.5°)', 'Batı (237.5–282.5°)', 'Kuzeybatı (282.5–327.5°)'
-            ];
-            var _aCurrent = [];
-            // Öncelik: sınıflandırma editöründeki 9 isim. Dil değiştiğinde
-            // _sylvaRefreshAspectEditorLabels bunları aktif dile çevirir;
-            // böylece indirme Türkçe sabit etikete geri dönmez.
-            var _aEditorNames = Array.prototype.slice.call(document.querySelectorAll('#class-rows-container .classification-row .class-name'));
-            if (_aEditorNames.length === 9) {
-                _aCurrent = _aEditorNames.map(function(el){ return (el.value || el.textContent || '').trim(); });
-            }
-            // Editör hazır değilse canlı lejant DOM'u ikinci önceliktir.
-            if (_aCurrent.length !== 9 || _aCurrent.some(function(x){ return !x; })) {
-                _aCurrent = [];
-                if (_aLegendBox) {
-                    var _aNodes = Array.prototype.slice.call(_aLegendBox.querySelectorAll('[data-env-native-class]'));
-                    _aDefault.forEach(function(orig){
-                        var node = _aNodes.find(function(el){ return el.getAttribute('data-env-native-class') === orig; });
-                        _aCurrent.push(node ? (node.textContent || '').trim() : orig);
-                    });
-                }
-            }
-            if (_aCurrent.length !== 9 || _aCurrent.some(function(x){ return !x; })) _aCurrent = _aDefault.slice();
+            // İndirme etiketi DOM'a değil doğrudan seçili 30 dilin sözlüğüne
+            // bağlanır; böylece ekran 1/2, panel yenileme veya gecikmeli çeviri
+            // olsa bile ArcMap'e Türkçe Aspect adı sızmaz.
+            var _aCurrent = _sylvaAspectExportLabels().map(function(x){ return x.label; });
             var _aBaseColors = ['#bdbdbd','#2ca25f','#66c2a4','#99d8c9','#ccece6','#fdae61','#f46d43','#d73027','#7f0000'];
             if (breaks && breaks.length === 9) {
                 legendLabels = breaks.map(function(b, i){
@@ -53176,10 +53207,8 @@ refresh();
     },30);
   }
   document.addEventListener('click',function(e){
-    // Katman değişiminde yalnızca yeni katmanın kendi editör state'ini yükle.
-    // Sınıflandırma/ters çevir/Lejantı Uygula butonlarında isolateEditor()
-    // çalıştırmak kullanıcı seçimini hemen eski state'e geri döndürüyordu.
     if(e.target&&e.target.closest&&e.target.closest('.sylva-layer-switch-item')) refresh();
+    if(e.target&&e.target.closest&&e.target.closest('#btn-apply-legend,#btn-type-classified,#btn-type-stretched,#btn-reverse-ramp')) refresh();
   });
   document.addEventListener('change',function(e){
     if(e.target&&e.target.classList&&e.target.classList.contains('sylva-layer-switch-visibility')) refresh();
@@ -53458,6 +53487,9 @@ refresh();
     if(!e.target || !e.target.closest) return;
     var item=e.target.closest('#map2-layer-switch-box .sylva-layer-switch-item');
     if(item){ setTimeout(refreshScreen2,40); setTimeout(refreshScreen2,220); }
+    if(e.target.closest('#btn-apply-legend,#btn-type-classified,#btn-type-stretched,#btn-reverse-ramp')){
+      setTimeout(refreshScreen2,80);
+    }
   },true);
 
   // Analiz/indir/çıktı butonları ortak panelde olduğundan, butona basıldığı
@@ -53524,35 +53556,6 @@ refresh();
     if(e.target&&e.target.matches&&e.target.matches('input.sylva-layer-switch-visibility,input[data-analysis]'))setTimeout(apply,120);
   });
   [100,500,1200,2500].forEach(function(ms){setTimeout(apply,ms)});
-})();
-</script>
-
-<script id="sylva-final-classification-button-fix-20260819">
-(function(){
-  'use strict';
-  var PASSIVE={TOPO_ASPECT:true,TOPO_HILLSHADE:true};
-  function activePane(){return typeof window._sylvaActivePaneId==='function'?window._sylvaActivePaneId():'map';}
-  function meta(){var p=activePane();return (window._lastAnalyzeMetaByPane&&window._lastAnalyzeMetaByPane[p])||window._lastAnalyzeMeta||null;}
-  function unlockIfEditable(){
-    var m=meta(), name=String(m&&m.analysisName||'').toUpperCase();
-    var panel=document.getElementById('legend-symbology-panel');
-    if(!panel) return;
-    if(PASSIVE[name]) return;
-    panel.style.opacity='1'; panel.style.pointerEvents='auto'; panel.style.userSelect='auto'; panel.removeAttribute('aria-disabled');
-    panel.querySelectorAll('[data-sylva-hillshade-disabled]').forEach(function(el){el.disabled=false;el.removeAttribute('data-sylva-hillshade-disabled');});
-  }
-  function save(){
-    try{var p=activePane(),top=window._sylvaTopGeeLayerByPane&&window._sylvaTopGeeLayerByPane[p];
-      if(top&&typeof window._sylvaSaveEditorStateForLayer==='function') window._sylvaSaveEditorStateForLayer(p,top);
-    }catch(e){}
-  }
-  document.addEventListener('click',function(e){
-    var target=e.target&&e.target.closest?e.target.closest('#btn-type-classified,#btn-type-stretched,#btn-apply-legend,#btn-reverse-ramp'):null;
-    if(!target) return;
-    setTimeout(function(){unlockIfEditable();save();},80);
-  },true);
-  setTimeout(unlockIfEditable,700);
-  setTimeout(unlockIfEditable,1600);
 })();
 </script>
 </body>
