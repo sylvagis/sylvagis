@@ -2310,6 +2310,7 @@ def _classify_by_breaks(band, valid_mask, breaks):
     n = len(breaks)
     idx = np.zeros(band.shape, dtype=np.uint16 if n >= 255 else np.uint8)
     code_info = {}
+    valid_breaks = []
     for i, b in enumerate(breaks, start=1):
         try:
             lo = float(b.get('min'))
@@ -2318,8 +2319,13 @@ def _classify_by_breaks(band, valid_mask, breaks):
             continue
         if not (np.isfinite(lo) and np.isfinite(hi)):
             continue
-        sel = valid_mask & (band >= lo) & ((band < hi) if i < n else (band <= hi))
-        idx[sel] = i
+        if hi < lo:
+            lo, hi = hi, lo
+        valid_breaks.append((i, lo, hi, b))
+
+    for pos, (i, lo, hi, b) in enumerate(valid_breaks):
+        sel = valid_mask & (band >= lo) & ((band < hi) if pos < len(valid_breaks) - 1 else (band <= hi))
+        idx[sel & (idx == 0)] = i
         hexc = _named_color_to_hex(b.get('color') or 'ffffff')
         try:
             rgb = tuple(int(hexc[k:k + 2], 16) for k in (0, 2, 4))
@@ -2327,6 +2333,19 @@ def _classify_by_breaks(band, valid_mask, breaks):
             rgb = (255, 255, 255)
         label = str(b.get('label') or '').strip() or '{:.3g} – {:.3g}'.format(lo, hi)
         code_info[i] = (label, rgb)
+
+    # Lejantın kapsamadığı gerçek değerleri NoData yapma: en yakın sınıfa bağla.
+    # Bu, sınıf sınırlarının veri aralığını tam kapatmadığı TWI/DEM/indekslerde
+    # sınıflandırılmış rasterin tek renk veya boş görünmesini engeller.
+    if valid_breaks:
+        remaining = valid_mask & (idx == 0)
+        if np.any(remaining):
+            vals = band[remaining]
+            dist = []
+            for _, lo, hi, _ in valid_breaks:
+                dist.append(np.maximum(lo - vals, 0.0) + np.maximum(vals - hi, 0.0))
+            nearest = np.argmin(np.vstack(dist), axis=0)
+            idx[remaining] = np.asarray([valid_breaks[j][0] for j in nearest], dtype=idx.dtype)
 
     idx = np.where(valid_mask, idx, 0)
     return idx.astype(np.uint8), code_info
@@ -2398,9 +2417,13 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
 
     new_profile = profile.copy()
     new_profile.update(dtype='uint8', count=1, nodata=0, compress='lzw')
-    # ArcMap'te isimsiz kutuların ana nedeni olabilen gömülü ColorMap'i
-    # LULC çıktılarında kesin olarak kaldırıyoruz. Renk + sınıf adı yalnızca
-    # gerçek sınıfları içeren .clr / VAT / RAT sidecar'larından gelir.
+    # ArcMap'in TIFF içindeki otomatik palette/class renderer'ının, gerçek
+    # sınıf sayısından bağımsız olarak 16/256 giriş üretip boş kutular
+    # göstermesini engellemek için çıktı TIFF'inde GÖMÜLÜ ColorMap ve NBITS
+    # bilgisi kullanma. Sınıf renkleri + isimleri yalnızca gerçek sınıfları
+    # içeren VAT/RAT/.clr sidecar'larında tutulur. Böylece rasterin kendisi
+    # 1..N sınıf kodlarını taşır; kullanılmayan palette slotu diye bir şey
+    # oluşturulmaz.
     new_profile.pop('photometric', None)
     new_profile.pop('nbits', None)
     new_profile.pop('colormap', None)
@@ -4166,26 +4189,29 @@ def build_classified_image(result, class_breaks):
 
     classified = ee.Image(0)
     for i, cls in enumerate(class_breaks, start=1):
-        mask = result.gte(cls['min']).And(result.lte(cls['max']))
+        lo = float(cls['min'])
+        hi = float(cls['max'])
+        if hi < lo:
+            lo, hi = hi, lo
+        mask = result.gte(lo).And(result.lt(hi)) if i < len(class_breaks) else result.gte(lo).And(result.lte(hi))
         classified = classified.where(mask, i)
 
-    # Sınıf aralıklarının dışında kalan pikseller daha önce 0 kodunda kalıp
-    # şeffaflaşıyordu. Özellikle TWI gibi gerçek aralığı kullanıcı varsayılan
-    # 0–15 aralığını aşabilen analizlerde bu, "lejantı değiştirince veri yok
-    # oldu" görüntüsüne neden oluyordu. Şimdi değerleri silmeden en yakın uç
-    # sınıfa bağla; ham veri/download değerleri yine değişmez.
+    # Aralık dışındaki değerleri en yakın uç sınıfa bağla; boşluklarda iki
+    # komşu sınırın ortasına göre en yakın sınıfı seç.
     first = class_breaks[0]
     last = class_breaks[-1]
-    classified = classified.where(result.lt(first['min']), 1)
+    classified = classified.where(result.lt(float(first['min'])), 1)
+    classified = classified.where(result.gt(float(last['max'])), len(class_breaks))
     for i in range(len(class_breaks) - 1):
         left = class_breaks[i]
         right = class_breaks[i + 1]
-        if right['min'] > left['max']:
-            mid = (float(left['max']) + float(right['min'])) / 2.0
-            gap = result.gt(left['max']).And(result.lt(right['min']))
+        left_max = float(left['max'])
+        right_min = float(right['min'])
+        if right_min > left_max:
+            mid = (left_max + right_min) / 2.0
+            gap = result.gt(left_max).And(result.lt(right_min))
             classified = classified.where(gap.And(result.lte(mid)), i + 1)
             classified = classified.where(gap.And(result.gt(mid)), i + 2)
-    classified = classified.where(result.gt(last['max']), len(class_breaks))
 
     classified = classified.updateMask(result.mask())
 
