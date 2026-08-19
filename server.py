@@ -4709,46 +4709,24 @@ def build_result_image(data, for_export=False):
             vis = {'min': 0, 'max': 150, 'palette': ['black', 'white']}
 
         elif index in ('TOPO_CURVATURE', 'TOPO_PLAN_CURV', 'TOPO_PROFILE_CURV'):
-            # 🛠️ BUG FİX (yoğun beyaz "tuz-biber" beneği — özellikle düz/az
-            # eğimli alanlarda yoğunlaşan gürültü): Laplacian (2. türev)
-            # operatörü YÜKSEK GEÇİRGEN bir filtredir; ham DEM üzerinde
-            # doğrudan uygulandığında HER pikseldeki kuantizasyon
-            # gürültüsünü (SRTM'nin ~1 m dikey çözünürlüğünden kaynaklanan
-            # basamaklanma) orantısızca büyütür. Dik/kıvrımlı arazide
-            # gerçek eğrilik sinyali bu gürültüyü bastırır, ama düz
-            # ovalarda gerçek eğrilik ≈ 0 olduğundan kuantizasyon
-            # gürültüsü BASKIN hale gelir ve germe (stretch) sonrası
-            # rastgele beyaz/siyah benek deseni olarak görünür — az önce
-            # gönderdiğiniz görüntüdeki sorun tam olarak budur.
-            #
-            # ÇÖZÜM: Laplacian'ı ham dem yerine, önce hafif bir odak-
-            # ortalama ile pürüzsüzleştirilmiş DEM üzerinde uyguluyoruz.
-            # 60 m yarıçap (~2 piksel @ 30 m), piksel bazlı kuantizasyon
-            # gürültüsünü büyük ölçüde elerken gerçek yerel eğrilik
-            # özelliklerini (kıvrımlar, sırtlar, vadiler) korur.
-            # 🛠️ BUG FİX (ArcMap'te uzaklaşınca "kare/karo" desenleri): GEE'nin
-            # focalMean() fonksiyonu kernelType parametresi belirtilmezse
-            # VARSAYILAN olarak KARE (square) bir pencere kullanır — bu da
-            # düzleştirme sonucunu gerçek bir daire yerine birbirine bitişik
-            # KARELERDEN oluşan bir mozaiğe dönüştürür. Eğim/eğrilik gibi az
-            # değişen düz alanlarda bu kareler neredeyse aynı değeri taşıdığı
-            # için görünmez kalır, ama AOI dışa aktarılıp ArcMap'te uzak zoom
-            # seviyesinde (birçok piksel tek ekran pikseline düşünce) yan yana
-            # duran bu kare blokların sınırları belirginleşir — kullanıcının
-            # bildirdiği "kare oluyor" sorunu budur. DEM/Eğim gibi focalMean
-            # KULLANMAYAN diğer topografik katmanlarda bu sorun hiç oluşmaz.
-            # ÇÖZÜM: kernelType='circle' ile pencereyi DAİRESEL yapıyoruz —
-            # aynı yarıçapta gürültü/tuz-biber temizleme etkisi korunurken
-            # kare/karo deseni ortadan kalkar; sonuç her ölçekte diğer
-            # katmanlar gibi pürüzsüz görünür.
-            dem_smooth = dem.focalMean(radius=60, kernelType='circle', units='meters').resample('bilinear')
+            # Curvature, ikinci türev olduğu için uzak zoom seviyelerinde normal
+            # DEM piramidiyle ortalanınca değerler 0'a yaklaşır ve raster tek bir
+            # gri/kare yüzey gibi görünür. Tek bir 30 m türev yerine iki ölçekli
+            # curvature yüzeyi üretiyoruz: ince arazi şekilleri + daha geniş ölçekli
+            # sırt/vadi sinyali. Böylece düşük zoomda da veri görünürlüğünü korur,
+            # yakın zoomda ise yerel ayrıntıyı kaybetmeyiz.
             kernel = ee.Kernel.laplacian8(normalize=False)
-            # Tile motoru uzak zoomlarda daha geniş bir piksel örnekleme ölçeği
-            # kullanabildiğinden, türev işleminin kenar maskesinin görüntüyü
-            # tamamen boş bırakmasına izin verme. Bilinear resampling de 30 m
-            # native eğrilik yüzeyinin küçük ölçeklerde daha kararlı görünmesini
-            # sağlar. Gerçek NoData alanı zaten DEM hazırlama aşamasında doldurulmuştur.
-            result = dem_smooth.convolve(kernel).unmask(0).resample('bilinear').rename('value')
+            dem_smooth_fine = dem.focalMean(radius=60, units='meters').resample('bicubic')
+            dem_smooth_broad = dem.focalMean(radius=180, units='meters').resample('bicubic')
+            curv_fine = dem_smooth_fine.convolve(kernel)
+            curv_broad = dem_smooth_broad.convolve(kernel)
+            # 70% yerel + 30% geniş ölçekli bileşim: curvature'ın anlamını
+            # korurken düşük çözünürlükte tamamen düzleşmesini önler.
+            result = (curv_fine.multiply(0.70)
+                      .add(curv_broad.multiply(0.30))
+                      .unmask(0)
+                      .resample('bicubic')
+                      .rename('value'))
             vis = {'min': -30, 'max': 30, 'palette': ['black', 'white']}
 
         # ── Hidrolojik Analizler ──────────────────────────────────
@@ -5016,8 +4994,12 @@ def build_result_image(data, for_export=False):
         # neden olabiliyordu. GEE kendi tile projeksiyonunu native grid üzerinden
         # üretir. GeoTIFF dışa aktarımının sabit grid gereksinimi aşağıdaki ayrı
         # download_geotiff(for_export=True) yolunda korunur.
-        if for_export:
-            display_result = display_result.reproject(crs='EPSG:4326', scale=30)
+        # TOPO dışa aktarımında yapay EPSG:4326/30 m reproject uygulama.
+        # Özellikle Curvature/DEM türevlerinde bu zorunlu reprojection, ArcMap'te
+        # uzak zoomda dikdörtgen/kare görünüme ve piksel ızgarasının bozulmasına
+        # yol açabiliyordu. /api/download-geotiff zaten seçilen CRS + native
+        # 30 m gridini kontrollü biçimde uygular ve true-clip adımıyla AOI'yi
+        # poligon şeklinde korur.
 
         final_display = display_result.clip(roi) if clip_mode == 'clip' else display_result
         return final_display, roi, result, vis, None
