@@ -2750,7 +2750,7 @@ _DEFAULT_ASPECT_BREAKS = [
 # yardımcı sınıflandırıcı. _classify_by_breaks() son sınıf mantığı 0–360
 # tek aralıkta çalıştığından, Aspect için özel olarak iki parçalı Kuzey
 # aralığını tek sınıf kodunda birleştiriyoruz.
-def _classify_default_aspect(band, valid_mask):
+def _classify_default_aspect(band, valid_mask, legend_labels=None):
     import numpy as np
     idx = np.zeros(band.shape, dtype=np.uint8)
     # Düz = -1
@@ -2765,8 +2765,8 @@ def _classify_default_aspect(band, valid_mask):
     for lo, hi, code in direction_ranges:
         idx[valid_mask & (band >= lo) & (band < hi)] = code
     colors = [
-        (217,217,217), (60,141,90), (87,184,148), (142,208,196),
-        (200,225,217), (244,179,95), (238,123,58), (216,58,46), (143,29,20)
+        (217,217,217), (44,162,95), (102,194,164), (153,216,201),
+        (204,236,230), (253,174,97), (244,109,67), (215,48,39), (127,0,0)
     ]
     labels = [
         'Düz (-1)', 'Kuzey (0–12.5° / 327.5–360°)',
@@ -2775,6 +2775,21 @@ def _classify_default_aspect(band, valid_mask):
         'Güneybatı (192.5–237.5°)', 'Batı (237.5–282.5°)',
         'Kuzeybatı (282.5–327.5°)'
     ]
+    # İstemci, analiz ekranında görünen aktif dildeki Aspect lejantını
+    # legendLabels olarak gönderir. Dışa aktarılan rasterde aynı isimleri
+    # kullan; başka analizlerin dil/sınıf kayıtlarına kesinlikle düşme.
+    if isinstance(legend_labels, list) and len(legend_labels) == 9:
+        for i, item in enumerate(legend_labels):
+            if isinstance(item, dict):
+                lbl = str(item.get('label') or '').strip()
+                if lbl:
+                    labels[i] = lbl
+                raw = str(item.get('color') or '').strip().lstrip('#')
+                if len(raw) == 6:
+                    try:
+                        colors[i] = tuple(int(raw[j:j+2], 16) for j in (0,2,4))
+                    except Exception:
+                        pass
     return idx, {i+1: (labels[i], colors[i]) for i in range(9)}
 
 
@@ -4663,6 +4678,8 @@ def build_result_image(data, for_export=False):
 
         elif index == 'TOPO_HILLSHADE':
             result = terrain.select('hillshade').rename('value')
+            # Hillshade is a native grayscale terrain product.  Never allow a
+            # client-selected/previous palette to turn it blue or coloured.
             vis = {'min': 0, 'max': 255, 'palette': ['f2f2f2', '666666']}
 
         elif index == 'TOPO_RELIEF':
@@ -7134,7 +7151,7 @@ def download_geotiff():
                             _valid = __import__('numpy').isfinite(_band)
                             if _src.nodata is not None:
                                 _valid &= ~__import__('numpy').isclose(_band, float(_src.nodata))
-                    _byte, _codes = _classify_default_aspect(_band, _valid)
+                    _byte, _codes = _classify_default_aspect(_band, _valid, legend_labels=requested_legend_labels)
                     sym_files = _build_symbology_files_from_classes(_byte, _profile, _codes, safe_name, embed_colormap=False)
                 except Exception as aspect_err:
                     traceback.print_exc()
@@ -9525,4 +9542,3 @@ if __name__ == '__main__':
     # Proxy'yi kapatıp eski davranışa dönmek isterseniz: SYLVAGIS_TILE_PROXY=0
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
-    
