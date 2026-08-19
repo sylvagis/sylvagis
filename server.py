@@ -293,16 +293,14 @@ _TILE_SESSION_TTL_SECONDS = 3 * 3600   # token'ın geçerlilik süresi
 # map id süresi dolduğunda otomatik yenileme (bkz. _rebuild_tile_session_url)
 # o worker/instance'da atlanır; oturumun kendisi yine 410 VERMEZ.
 _TILE_SESSION_INLINE_PARAMS_LIMIT = 6000
-_TILE_CACHE_MAX_ITEMS     = 3000       # daha geniş sıcak karo önbelleği
-_TILE_FETCH_RETRIES       = 2          # geçici GEE/ağ hatalarında daha dayanıklı retry
-_TILE_FETCH_TIMEOUT       = 8         # saniye; tek hatalı karo tüm isteği uzun süre bloklamasın
-_TILE_HTTP_MAX_CONCURRENT = 8         # GEE'ye eşzamanlı tile baskısını sınırla
+_TILE_CACHE_MAX_ITEMS     = 2000       # bellekte tutulacak azami tile (~40 MB)
+_TILE_FETCH_RETRIES       = 2          # geçici GEE tile hatalarında sınırlı tekrar deneme
+_TILE_FETCH_TIMEOUT       = 10         # saniye; tarayıcı tile kuyruğunu uzun süre bloke etmesin
 _REBUILT_URL_CACHE_TTL_SECONDS = 20 * 60  # yenilenen map id'nin süreç-yerel önbellekte tutulma süresi
 _REBUILT_URL_CACHE_MAX_ITEMS   = 512
 
 _tile_cache = {}
 _tile_cache_order = []
-_tile_http_semaphore = threading.BoundedSemaphore(_TILE_HTTP_MAX_CONCURRENT)
 _tile_lock = threading.RLock()
 # GEE map id süresi dolup _rebuild_tile_session_url ile yenilendiğinde, AYNI
 # worker/instance üzerindeki SONRAKI karo isteklerinin her biri için tekrar
@@ -463,21 +461,6 @@ def _register_tile_session(url_format, params=None, kind='analyze', extra=None):
     return _pack_token(payload)
 
 
-def _register_analysis_session_compact(params, kind='analyze', extra=None, max_chars=250000):
-    """Büyük AOI payload'larını response içine devasa analysisId olarak koyma."""
-    try:
-        raw = json.dumps({'kind': kind, 'extra': dict(extra) if extra else {}, 'params': params},
-                         separators=(',', ':'), ensure_ascii=False, default=str).encode('utf-8')
-        if len(raw) > 2_000_000:
-            return None
-        compressed = zlib.compress(raw, 6)
-        if len(base64.urlsafe_b64encode(compressed)) > max_chars:
-            return None
-    except Exception:
-        return None
-    return _register_analysis_session(params, kind=kind, extra=extra)
-
-
 def _register_analysis_session(params, kind='analyze', extra=None):
     """
     /api/download-geotiff ve /api/vector-download uç noktalarının kullandığı
@@ -617,8 +600,7 @@ def proxy_tile(sid, z, x, y):
         url = (current_url_format
                .replace('{z}', str(z)).replace('{x}', str(x)).replace('{y}', str(y)))
         try:
-            with _tile_http_semaphore:
-                resp = _tile_http.get(url, timeout=_TILE_FETCH_TIMEOUT)
+            resp = _tile_http.get(url, timeout=_TILE_FETCH_TIMEOUT)
         except Exception as err:
             if attempt >= _TILE_FETCH_RETRIES:
                 print('[SylvaGIS] ❌ Tile alınamadı (ağ) z{}/x{}/y{}: {}'.format(z, x, y, err))
@@ -2888,6 +2870,128 @@ def _add_internal_raster_overviews(tif_bytes, resampling='bilinear'):
     except Exception as e:
         print('[SylvaGIS] overview oluşturulamadı; ana TIFF korunuyor: {}'.format(e))
         return tif_bytes
+
+
+def _hex_rgb(value):
+    """Return RGB tuple from #RRGGBB / named CSS-safe hex strings."""
+    import re
+    v = str(value or '').strip().lstrip('#')
+    if re.fullmatch(r'[0-9a-fA-F]{6}', v):
+        return tuple(int(v[i:i+2], 16) for i in (0, 2, 4))
+    return (0, 0, 0)
+
+
+def _interpolated_palette(palette, n=255):
+    """Sample a GEE/HTML palette continuously into n RGB colors."""
+    import numpy as np
+    colors = [_hex_rgb(c) for c in (palette or [])]
+    if len(colors) < 2:
+        colors = [(0, 0, 0), (255, 255, 255)]
+    out = {}
+    for code in range(1, n + 1):
+        t = (code - 1) / float(max(n - 1, 1))
+        pos = t * (len(colors) - 1)
+        i = min(int(pos), len(colors) - 2)
+        f = pos - i
+        a, b = colors[i], colors[i + 1]
+        out[code] = tuple(int(round(a[k] + (b[k] - a[k]) * f)) for k in range(3)) + (255,)
+    return out
+
+
+def _build_stretched_arcmap_export_files(tif_bytes, vis, safe_name, nodata_value=None):
+    """Create an ArcMap-ready styled integer GeoTIFF plus the untouched raw TIFF.
+
+    ArcMap/ArcGIS color maps cannot be embedded on floating-point rasters. To
+    make a stretched environmental/urban result open with the SAME colors as
+    the web map, the primary TIFF is a 1..255 indexed rendering with an
+    embedded 256-entry colormap. The untouched scientific values are preserved
+    verbatim in <name>_raw.tif inside the same ZIP. The primary TIFF stores the
+    original min/max/palette in metadata so the relationship is explicit.
+    """
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from rasterio.enums import Resampling
+
+    with MemoryFile(tif_bytes) as mf:
+        with mf.open() as src:
+            raw = src.read(1).astype(np.float64)
+            profile = src.profile.copy()
+            src_nodata = src.nodata if nodata_value is None else nodata_value
+            tags = src.tags(1)
+
+    valid = np.isfinite(raw)
+    if src_nodata is not None:
+        try:
+            valid &= ~np.isclose(raw, float(src_nodata))
+        except Exception:
+            pass
+    if not np.any(valid):
+        return _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value)
+
+    try:
+        vmin = float(vis.get('min'))
+        vmax = float(vis.get('max'))
+    except Exception:
+        vmin = float(np.nanmin(raw[valid]))
+        vmax = float(np.nanmax(raw[valid]))
+    if not np.isfinite(vmin) or not np.isfinite(vmax) or vmax <= vmin:
+        vmin = float(np.nanmin(raw[valid])); vmax = float(np.nanmax(raw[valid]))
+    if vmax <= vmin:
+        vmax = vmin + 1.0
+
+    codes = np.zeros(raw.shape, dtype=np.uint8)
+    scaled = (np.clip(raw, vmin, vmax) - vmin) / (vmax - vmin)
+    codes[valid] = (1 + np.rint(scaled[valid] * 254.0)).astype(np.uint8)
+
+    profile.update(dtype='uint8', count=1, nodata=0, compress='lzw', tiled=True, BIGTIFF='IF_SAFER')
+    if profile.get('width', 0) >= 256 and profile.get('height', 0) >= 256:
+        profile['blockxsize'] = 256; profile['blockysize'] = 256
+    else:
+        profile['tiled'] = False
+        profile.pop('blockxsize', None); profile.pop('blockysize', None)
+
+    palette = vis.get('palette') if isinstance(vis, dict) else None
+    cmap = {0: (0, 0, 0, 0)}
+    cmap.update(_interpolated_palette(palette, 255))
+
+    with MemoryFile() as out:
+        with out.open(**profile) as dst:
+            dst.write(codes, 1)
+            dst.write_colormap(1, cmap)
+            dst.update_tags(
+                1,
+                SYLVA_RENDERER='stretched',
+                SYLVA_RAW_MIN=repr(vmin),
+                SYLVA_RAW_MAX=repr(vmax),
+                SYLVA_RAW_NODATA='' if src_nodata is None else repr(src_nodata),
+                SYLVA_PALETTE=','.join(str(c).lstrip('#') for c in (palette or [])),
+                SYLVA_NOTE='Primary TIFF is a 1-255 ArcMap colormap rendering; exact scientific values are preserved in *_raw.tif.',
+                **tags,
+            )
+            levels = [2,4,8,16,32,64,128,256,512]
+            levels = [lv for lv in levels if profile.get('width',0)//lv >= 32 and profile.get('height',0)//lv >= 32]
+            if levels:
+                try:
+                    dst.build_overviews(levels, Resampling.nearest)
+                    dst.update_tags(ns='rio_overview', resampling='nearest')
+                except Exception:
+                    pass
+        styled_tif = out.read()
+
+    clr_lines = ['# SylvaGIS stretched colormap; code 1..255 maps linearly from raw min to raw max']
+    for code in range(1, 256):
+        r,g,b,a = cmap[code]
+        clr_lines.append('{} {} {} {}'.format(code, r, g, b))
+    clr = ('\n'.join(clr_lines) + '\n').encode('utf-8')
+
+    # Keep raw TIFF + statistics sidecar alongside the styled primary raster.
+    raw_files = _build_continuous_raster_export_files(tif_bytes, safe_name + '_raw', nodata_value=nodata_value)
+    files = {
+        '{}.tif'.format(safe_name): styled_tif,
+        '{}.clr'.format(safe_name): clr,
+    }
+    files.update(raw_files)
+    return files
 
 
 def _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=None):
@@ -6511,26 +6615,20 @@ def timeseries():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-def _request_json_payload():
-    """application/json ve text/plain gövdelerini aynı şekilde oku."""
-    data = request.get_json(silent=True)
-    if isinstance(data, dict):
-        return data
-    try:
-        raw = request.get_data(cache=True, as_text=True)
-        if raw:
-            parsed = json.loads(raw)
-            return parsed if isinstance(parsed, dict) else {}
-    except Exception:
-        pass
-    return {}
-
-
 @app.route('/api/analyze', methods=['POST'])
 def analyze():
     global _last_analyze_params, _last_analyze_native_crs
     try:
-        data = _request_json_payload()
+        # /api/analyze istemcide text/plain ile gönderildiğinde CORS preflight
+        # (OPTIONS) oluşmaz. Flask request.json yalnızca application/json'da
+        # otomatik parse ettiğinden, text/plain gövdesini burada açıkça çöz.
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            raw_body = request.get_data(cache=True, as_text=True)
+            try:
+                data = json.loads(raw_body) if raw_body else {}
+            except Exception:
+                data = {}
         _last_analyze_params = dict(data) if data else {}
 
         # ── 🛰️ Uydu Görüntüsü Galerisi — hızlı yol ───────────────────
@@ -6598,7 +6696,7 @@ def analyze():
             _extra = {'nativeCrs': download_native_crs} if download_native_crs else {}
             _sid = _register_tile_session(tile_url_direct, params=data, kind='analyze', extra=_extra)
             tile_url = _tile_url_for_client(_sid, tile_url_direct)
-            _analysis_sid = _register_analysis_session_compact(data, kind='analyze', extra=_extra)
+            _analysis_sid = _register_analysis_session(data, kind='analyze', extra=_extra)
 
             return jsonify({
                 'success':  True,
@@ -6708,7 +6806,7 @@ def analyze():
         _extra = {'nativeCrs': native_crs} if native_crs else {}
         _sid = _register_tile_session(tile_url_direct, params=data, kind='analyze', extra=_extra)
         tile_url = _tile_url_for_client(_sid, tile_url_direct)
-        _analysis_sid = _register_analysis_session_compact(data, kind='analyze', extra=_extra)
+        _analysis_sid = _register_analysis_session(data, kind='analyze', extra=_extra)
 
         # ── İstatistik ────────────────────────────────────────────
         # 🛠️ BUG FİX (NoData piksel / büyük AOI istatistik sorunu):
@@ -6727,12 +6825,76 @@ def analyze():
         # 🛠️ EK DÜZELTME: histogram hatası artık TÜM isteği düşürmüyor.
         # Lejant/grafik istatistiğe bağlıdır ama HARİTA KATMANI değildir;
         # istatistik alınamasa bile tile'lar gösterilebilmelidir.
-        # ── İstatistikleri TEK GEE çağrısında al ─────────────────
-        # Histogram + min/max + mean aynı reduceRegion isteğinde hesaplanır;
-        # böylece peş peşe GEE aggregation çağrıları ve /api/analyze beklemesi azalır.
-        stats = {}
+        try:
+            # Sürekli Çevresel/Kentsel rasterlarda frequencyHistogram() ham
+            # float değerlerin neredeyse her birini ayrı anahtar olarak döndürüp
+            # çok büyük JSON üretmesine ve /api/analyze'ın onlarca saniye
+            # beklemesine neden oluyordu. Ekrandaki stretched renk aralığına
+            # göre sabit 64 bin kullan; grafik yine aynı dağılımı gösterir, fakat
+            # yanıt boyutu dramatik biçimde küçülür. Sınıflandırılmış ürünlerde
+            # gerçek sınıf kodlarını korumak için eski histogram yolu kullanılır.
+            _stats_index = str(data.get('index') or '').upper()
+            _use_fixed_hist = (_stats_index in _ENV_URBAN_RASTER_INDICES and
+                               _stats_index not in ('FOREST_LOSS', 'URBAN_GROWTH'))
+            if _use_fixed_hist:
+                _hmin = float(vis.get('min')) if vis.get('min') is not None else None
+                _hmax = float(vis.get('max')) if vis.get('max') is not None else None
+                if _hmin is None or _hmax is None or not (_hmax > _hmin):
+                    _hmin, _hmax = -1.0, 1.0
+                _fixed = _call_with_retry(
+                    lambda: result.reduceRegion(
+                        reducer    = ee.Reducer.fixedHistogram(_hmin, _hmax, 64),
+                        geometry   = roi,
+                        scale      = stats_scale,
+                        maxPixels  = 1e9,
+                        bestEffort = True,
+                    ).get('value').getInfo()
+                )
+                _hist_dict = {}
+                if isinstance(_fixed, list):
+                    for _row in _fixed:
+                        if isinstance(_row, (list, tuple)) and len(_row) >= 3:
+                            _lo, _hi, _count = _row[0], _row[1], _row[2]
+                            try:
+                                _mid = (float(_lo) + float(_hi)) / 2.0
+                                _hist_dict[str(_mid)] = int(_count or 0)
+                            except Exception:
+                                pass
+                stats = {'value': _hist_dict}
+            else:
+                stats = _call_with_retry(
+                    lambda: result.reduceRegion(
+                        reducer    = ee.Reducer.frequencyHistogram(),
+                        geometry   = roi,
+                        scale      = stats_scale,
+                        maxPixels  = 1e9,
+                        bestEffort = True,
+                    ).getInfo()
+                )
+        except Exception as _stats_err:
+            stats = {}
+            print('[SylvaGIS] ⚠️ Histogram hesaplanamadı — katman yine de '
+                  'gösterilecek: {}'.format(_stats_err))
+
         real_minmax = {}
         try:
+            # 🛠️ BUG FİX (performans / peş peşe analiz hatası): daha önce
+            # min/max ve ortalama İKİ AYRI reduceRegion() + getInfo() ağ
+            # çağrısıyla hesaplanıyordu. Tek bir kombine reducer ile bu iki
+            # çağrı TEK bir GEE isteğine indirilir — hem daha hızlı yanıt
+            # verir hem de kullanıcı arka arkaya analiz yaptığında GEE'nin
+            # eşzamanlı/istek-başına limitlerine çarpma ihtimalini azaltır.
+            combined_reducer = ee.Reducer.minMax().combine(
+                reducer2=ee.Reducer.mean(), sharedInputs=True
+            )
+
+            # 🆕 GÜNCELLEME: Eş Yükselti (TOPO_CONTOUR) için 'result' burada
+            # 0/1'lik İKİLİ bir kontur maskesidir — min/max her zaman 0/1
+            # çıkar ve lejant kutusunda kullanıcıya hiçbir anlamlı bilgi
+            # vermez. Bunun yerine, çalışma alanının GERÇEK yükselti
+            # (elevation) min/max değerleri hesaplanır — aynı DEM kaynağı
+            # seçim mantığı (SRTM/ALOS/Copernicus/NASADEM) burada tekrar
+            # uygulanarak.
             _stats_img = result
             if data.get('index') == 'TOPO_CONTOUR':
                 _stats_dem_source = data.get('demSource', 'SRTM')
@@ -6751,28 +6913,22 @@ def analyze():
                     _stats_dem = ee.Image('USGS/SRTMGL1_003').select('elevation')
                 _stats_img = _stats_dem.rename('value')
 
-            combined_reducer = (ee.Reducer.frequencyHistogram()
-                .combine(reducer2=ee.Reducer.minMax(), sharedInputs=True)
-                .combine(reducer2=ee.Reducer.mean(), sharedInputs=True))
-            combined_stats = _call_with_retry(
+            mm = _call_with_retry(
                 lambda: _stats_img.reduceRegion(
-                    reducer=combined_reducer, geometry=roi, scale=stats_scale,
-                    maxPixels=1e9, bestEffort=True, tileScale=4
+                    reducer    = combined_reducer,
+                    geometry   = roi,
+                    scale      = stats_scale,
+                    maxPixels  = 1e9,
+                    bestEffort = True,
                 ).getInfo()
-            ) or {}
-            hist = (combined_stats.get('value_histogram') or combined_stats.get('histogram') or combined_stats.get('value') or {})
-            if isinstance(hist, dict) and 'histogram' in hist and isinstance(hist.get('histogram'), dict):
-                hist = hist.get('histogram')
-            stats = hist if isinstance(hist, dict) else {}
+            )
             real_minmax = {
-                'min': combined_stats.get('value_min'),
-                'max': combined_stats.get('value_max'),
-                'mean': combined_stats.get('value_mean')
+                'min':  mm.get('value_min'),
+                'max':  mm.get('value_max'),
+                'mean': mm.get('value_mean')
             }
-        except Exception as _combined_stats_err:
-            print('[SylvaGIS] ⚠️ Birleşik histogram/min-max istatistiği alınamadı; katman yine de gösterilecek: {}'.format(_combined_stats_err))
-            stats = {}
-            real_minmax = {}
+        except Exception:
+            pass
 
         # NOT: tile_url yukarıda, istatistiklerden ÖNCE üretildi — burada
         # ikinci bir getMapId() çağrısı YOKTUR. (Eskiden bu satırda tekrar
@@ -6789,15 +6945,7 @@ def analyze():
         max_cloud  = int(data.get('maxCloud', 20))
         scenes_list = []
 
-        _analysis_index_for_scenes = data.get('index', 'NDVI')
-        # Çevresel/kentsel raster analizlerinde sahne galerisi /api/analyze
-        # yanıtının parçası değildir; bu üç ayrı aggregate getInfo çağrısı
-        # harita katmanı için gerekli olmadığı halde yanıtı ciddi biçimde
-        # geciktiriyordu. Sahne galerisi gerektiğinde ayrı /api/get-scenes
-        # akışı kullanılabilir.
-        if (not scene_id and
-            _analysis_index_for_scenes not in LULC_FAMILY_INDICES and
-            _analysis_index_for_scenes not in _ENV_URBAN_RASTER_INDICES):
+        if not scene_id and data.get('index', 'NDVI') not in LULC_FAMILY_INDICES:
             try:
                 roi_coords = data.get('roi')
                 roi_geo = make_roi(roi_coords)
@@ -6846,18 +6994,9 @@ def analyze():
                     col2, start_date, end_date, months=months_filter,
                     per_year_limit=10, total_limit=60,
                 )
-                # Üç ayrı aggregate_array().getInfo() yerine tek reduceColumns
-                # çağrısı: /api/analyze başına iki GEE ağ turunu kaldırır.
-                _scene_lists = _call_with_retry(
-                    lambda: limited.reduceColumns(
-                        reducer=ee.Reducer.toList().repeat(3),
-                        selectors=['system:index', 'system:time_start', cloud_prop]
-                    ).getInfo(), retries=1
-                ) or {}
-                _scene_values = _scene_lists.get('list') or [[], [], []]
-                scene_ids = _scene_values[0] if len(_scene_values) > 0 else []
-                timestamps = _scene_values[1] if len(_scene_values) > 1 else []
-                clouds_arr = _scene_values[2] if len(_scene_values) > 2 else []
+                scene_ids  = _call_with_retry(lambda: limited.aggregate_array('system:index').getInfo(), retries=1)
+                timestamps = _call_with_retry(lambda: limited.aggregate_array('system:time_start').getInfo(), retries=1)
+                clouds_arr = _call_with_retry(lambda: limited.aggregate_array(cloud_prop).getInfo(), retries=1)
                 scenes_list = list(zip(scene_ids, timestamps, clouds_arr))
             except Exception:
                 scenes_list = []
@@ -6993,12 +7132,8 @@ def download_geotiff():
         # hiç göndermezse (eski/güncellenmemiş istemci), önceki paylaşılan-
         # global davranış AYNEN korunur — bu değişiklik geriye dönük
         # tamamen uyumludur.
-        analysis_payload = req_data.get('analysisPayload')
         analysis_id = req_data.get('analysisId')
-        if isinstance(analysis_payload, dict) and analysis_payload.get('roi'):
-            data = dict(analysis_payload)
-            session_native_crs = req_data.get('nativeCrs') or _last_analyze_native_crs
-        elif analysis_id:
+        if analysis_id:
             _session = _get_analysis_session(analysis_id)
             if _session is None:
                 return jsonify({
@@ -7390,7 +7525,18 @@ def download_geotiff():
                     print('[SylvaGIS] ⚠️ Sınıflandırılmış semboloji oluşturulamadı: {}'.format(sym_err))
             else:
                 try:
-                    sym_files = _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=nodata_value)
+                    if is_env_urban_raster and data.get('index') != 'BUILDING_FOOTPRINT':
+                        # Çevresel/Kentsel stretched rasterlarda ana TIFF,
+                        # web haritasındaki requested vis palette ile gömülü
+                        # ArcMap colormap taşısın; ham bilimsel değerler aynı
+                        # ZIP içinde *_raw.tif olarak eksiksiz korunsun.
+                        sym_files = _build_stretched_arcmap_export_files(
+                            tif_bytes, vis, safe_name, nodata_value=nodata_value
+                        )
+                    else:
+                        sym_files = _build_continuous_raster_export_files(
+                            tif_bytes, safe_name, nodata_value=nodata_value
+                        )
                 except Exception as sym_err:
                     traceback.print_exc()
                     sym_files = None
@@ -7409,23 +7555,22 @@ def download_geotiff():
                 print('[SylvaGIS] ⚠️ RGB sidecar oluşturulamadı, ham .tif '
                       'olarak devam ediliyor: {}'.format(sym_err))
 
-        # 🛠️ KESİN ZIP KURALI — Çevresel/Kentsel ve diğer raster analizlerde
-        # tek analiz olsa bile ASLA çıplak .tif döndürme. Özellikle sürekli
-        # (bar/stretched) rasterlarda .tif + .aux.xml + .clr birlikte gerekli
-        # olduğundan paket her zaman ZIP olmalıdır.
-        # Bina Çatı Tespiti bu raster uç noktasını kullanmaz; vektör olarak
-        # ayrı uç noktadan indirilir ve bu kural onu etkilemez.
         if sym_files:
-            zip_buf = io.BytesIO()
-            with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-                for fname, fbytes in sym_files.items():
-                    zf.writestr(fname, fbytes)
-            zip_bytes = zip_buf.getvalue()
-            resp = Response(zip_bytes, mimetype='application/zip')
-            resp.headers['Content-Disposition'] = 'attachment; filename="{}.zip"'.format(safe_name)
-            resp.headers['Content-Length'] = str(len(zip_bytes))
-            resp.headers['X-SylvaGIS-Archive'] = 'zip'
-            return resp
+            # Tek analiz için kullanıcı doğrudan TIFF istediğinde renk
+            # tablosu gömülü TIFF'i döndür. Çoklu analizlerde ise sınıf
+            # isimlerini taşıyan RAT/VAT yan dosyaları batch ZIP'e katılır.
+            if req_data.get('flatTiff'):
+                tif_bytes = sym_files.get('{}.tif'.format(safe_name), tif_bytes)
+            else:
+                zip_buf = io.BytesIO()
+                with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+                    for fname, fbytes in sym_files.items():
+                        zf.writestr(fname, fbytes)
+                zip_bytes = zip_buf.getvalue()
+                resp = Response(zip_bytes, mimetype='application/zip')
+                resp.headers['Content-Disposition'] = 'attachment; filename="{}.zip"'.format(safe_name)
+                resp.headers['Content-Length'] = str(len(zip_bytes))
+                return resp
 
         # 🛠️ BUG FİX ("her ne olursa olsun tüm veriler zip olarak sorunsuz
         # insin"): sym_files hiç üretilemediyse (yukarıdaki üç dalın hepsi
@@ -7441,7 +7586,6 @@ def download_geotiff():
         resp = Response(zip_bytes, mimetype='application/zip')
         resp.headers['Content-Disposition'] = 'attachment; filename="{}.zip"'.format(safe_name)
         resp.headers['Content-Length'] = str(len(zip_bytes))
-        resp.headers['X-SylvaGIS-Archive'] = 'zip'
         return resp
 
     except Exception as e:
