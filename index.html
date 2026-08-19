@@ -11700,10 +11700,17 @@ function selectRamp(name) {
                 // bu payload, güncellediği (üstteki) katmanın kendi anahtarına
                 // göre de ayrıca saklanır — bkz. _sylvaBringGeeLayerToFront
                 // içindeki asıl düzeltme notu.
+                var _classTopKey = window._sylvaTopGeeLayerByPane &&
+                    window._sylvaTopGeeLayerByPane[(_pane === 'map2') ? 'map2' : 'map'];
                 if (typeof _sylvaRememberLayerAnalyzePayload === 'function') {
-                    var _classTopKey = window._sylvaTopGeeLayerByPane &&
-                        window._sylvaTopGeeLayerByPane[(_pane === 'map2') ? 'map2' : 'map'];
                     _sylvaRememberLayerAnalyzePayload(_pane, _classTopKey, _classAnalyzePayload);
+                }
+                // Sınıflandırma uygulandığında, önceki analiz katmanı (örn. TWI'nin
+                // eski mavi çıktısı) altta görünmeye devam etmesin. Yalnızca bu
+                // sınıflandırmanın uygulandığı aktif katman görünür kalır. Ekran 2
+                // için de aynı pane bağımsızlığı korunur.
+                if (_classTopKey && typeof _sylvaSyncLayerVisibilityToTop === 'function') {
+                    _sylvaSyncLayerVisibilityToTop(_pane === 'map2' ? 'map2' : 'map', _classTopKey);
                 }
                 _applyGeeLayerClipMode(_clipMode, _pane);
                 _sylvaApplyAutoOpacity(_pane, meta);
@@ -11742,10 +11749,13 @@ function selectRamp(name) {
             if (!legendBox) return;
 
             var titleEl = document.getElementById('classified-title');
-            var _clTitleFallback = { en:'Classified Data', tr:'Sınıflandırılmış Veri', de:'Klassifizierte Daten',
-              fr:'Données classifiées', es:'Datos clasificados', ar:'بيانات مصنفة', fa:'داده‌های طبقه‌بندی‌شده',
-              zh:'分类数据', ja:'分類データ', ko:'분류 데이터', hi:'वर्गीकृत डेटा', id:'Data Terklasifikasi', ru:'Классифицированные данные', th:'ข้อมูลที่จำแนกประเภท', ms:'Data Terklasifikasi', el:'Ταξινομημένα Δεδομένα' };
-            var title = (titleEl && titleEl.value.trim()) ? escapeHtml(titleEl.value.trim()) : (_clTitleFallback[_sylvaLang] || 'Classified Data');
+            var _dynamicAnalysisName = (window._lastAnalyzeMetaByPane && window._lastAnalyzeMetaByPane[_rdlPaneId] && window._lastAnalyzeMetaByPane[_rdlPaneId].analysisName) || (window._lastAnalyzeMeta && window._lastAnalyzeMeta.analysisName) || '';
+            var _dynamicTopo = /^TOPO(?:_|$)/i.test(String(_dynamicAnalysisName || ''));
+            // TOPO için teknik analiz kodu yerine Bilgi Kutusu'ndaki aynı başlık kullanılır.
+            var title = _dynamicTopo
+                ? escapeHtml(_sylvaAnalysisDisplayTitle(_dynamicAnalysisName))
+                : ((titleEl && titleEl.value.trim()) ? escapeHtml(titleEl.value.trim()) : t('classified_data', 'Sınıflandırılmış Veri'));
+
 
             var rowsHtml = '<div style="display:flex;flex-direction:column;gap:2px;margin-top:5px;">' +
                 classes.map(function (c, i) {
@@ -12105,6 +12115,17 @@ function selectRamp(name) {
             return moduleEntries.map(function (en) { return en.meta; });
         }
 
+        // TOPO analizlerinde lejant başlığı, Bilgi Kutusu başlığıyla birebir aynı olsun.
+        // Teknik iç isim (TOPO_ASPECT vb.) kullanıcı arayüzünde asla başlık olarak gösterilmez.
+        function _sylvaAnalysisDisplayTitle(analysisName) {
+            var key = String(analysisName || '').toUpperCase();
+            var infoKey = (typeof _DATASET_INFO_TITLE_KEYS !== 'undefined') ? _DATASET_INFO_TITLE_KEYS[key] : null;
+            if (infoKey && typeof t === 'function') {
+                return String(infoKey.emoji || '') + t(infoKey.key, key);
+            }
+            return key;
+        }
+
         // Lejantı (harita üzerindeki .map-legend kutusu) meta bilgisinden yeniden çizer.
         // (Eski runAnalysis() içindeki lejant üretim mantığının doğrudan devamıdır;
         //  ek olarak: ramp CSS'in YANLIŞLIKLA iki kere "linear-gradient(...)" içine
@@ -12145,9 +12166,12 @@ function selectRamp(name) {
             }
 
              var _nativeLegendTitleKeys = { FOREST_LOSS: 'env_forest_loss', URBAN_GROWTH: 'env_urban_growth' };
-             var _legendTitle = meta.analysisName === 'BUILDING_FOOTPRINT'
-                 ? t('building_roof_detection', 'Building Roof Detection')
-                 : (_nativeLegendTitleKeys[meta.analysisName] ? t(_nativeLegendTitleKeys[meta.analysisName], meta.analysisName) : meta.analysisName);
+             var _isTopoLegend = /^TOPO(?:_|$)/i.test(String(meta.analysisName || ''));
+             var _legendTitle = _isTopoLegend
+                 ? _sylvaAnalysisDisplayTitle(meta.analysisName)
+                 : (meta.analysisName === 'BUILDING_FOOTPRINT'
+                     ? t('building_roof_detection', 'Building Roof Detection')
+                     : (_nativeLegendTitleKeys[meta.analysisName] ? t(_nativeLegendTitleKeys[meta.analysisName], meta.analysisName) : meta.analysisName));
              var html = '<b style="font-size:0.78rem;">' + escapeHtml(_legendTitle) + '</b>';
 
             if (legendType === 'classified') {
@@ -12878,6 +12902,9 @@ function selectRamp(name) {
             if (window._sylvaLayerFriendlyNames && window._sylvaLayerFriendlyNames[analysisName]) {
                 return window._sylvaLayerFriendlyNames[analysisName];
             }
+            if (/^TOPO(?:_|$)/i.test(String(analysisName || ''))) {
+                return _sylvaAnalysisDisplayTitle(analysisName);
+            }
             return _LULC_SWITCH_TITLES[analysisName] || analysisName;
         }
         // 🆕 "Üstte Gösterilecek Katman" kutusu KAPALIYKEN (sadece aktif
@@ -12891,6 +12918,9 @@ function selectRamp(name) {
         function _sylvaLayerBaseName(analysisName) {
             if (window._sylvaLayerBaseNames && window._sylvaLayerBaseNames[analysisName]) {
                 return window._sylvaLayerBaseNames[analysisName];
+            }
+            if (/^TOPO(?:_|$)/i.test(String(analysisName || ''))) {
+                return _sylvaAnalysisDisplayTitle(analysisName);
             }
             return _LULC_SWITCH_TITLES[analysisName] || analysisName;
         }
@@ -52399,7 +52429,7 @@ function hideEmptyLegendDates(){document.querySelectorAll('.real-stats-row').for
 /* Sunucunun kendine ait kategorileri olan katmanların sembolojisi değişmez.
    Editör kapalı görünür, fakat kullanıcı hangi nedenle kapalı olduğunu
    anlayabilsin diye şeffaf bırakılır. */
-function nativeClassified(){var meta=window._lastAnalyzeMeta;return!!(meta&&meta.legendType==='classified'&&meta.classesRaw)}
+function nativeClassified(){var meta=window._lastAnalyzeMeta;var isAspect=!!(meta&&String(meta.analysisName||'').toUpperCase()==='TOPO_ASPECT');return!!(meta&&meta.legendType==='classified'&&meta.classesRaw&&!isAspect)}
 function syncNativeClassEditorState(){var locked=nativeClassified();var group=document.getElementById('classification-type-group');var stretch=document.getElementById('stretched-settings');var classified=document.getElementById('classified-settings');[group,stretch,classified].forEach(function(el){if(!el)return;el.style.opacity=locked?'.42':'';el.style.pointerEvents=locked?'none':'';el.setAttribute('aria-disabled',locked?'true':'false')});document.querySelectorAll('#classification-type-group button,#stretched-settings input,#stretched-settings button,#classified-settings input,#classified-settings button,#classified-settings select').forEach(function(el){if(locked){el.disabled=true;el.setAttribute('data-native-symbol-disabled','1')}else if(el.getAttribute('data-native-symbol-disabled')==='1'){el.disabled=false;el.removeAttribute('data-native-symbol-disabled')}})}
 
 /* Sürekli veride ilk sınıflandırma, genel gri kategorik paletten değil,
@@ -52593,6 +52623,23 @@ refresh();
                 return { code: Number(d.code), label: d.key ? (t(d.key) || d.label) : d.label, color: d.color };
             });
         }
+        // Bakı için de indirilen rasterin sınıf adları, analiz ekranındaki
+        // güncel lejanttan aynen gönderilir. Böylece Korece/Türkçe/diğer dil
+        // seçimi hiçbir zaman sabit Türkçe Aspect adlarına düşmez.
+        if (String(_exportIndex || '').toUpperCase() === 'TOPO_ASPECT' && (!legendLabels || !legendLabels.length)) {
+            if (breaks && breaks.length) {
+                legendLabels = breaks.map(function(b, i){
+                    return { code: i + 1, label: String(b.label || '').trim(), color: '#' + String(b.color || '').replace(/^#/, '') };
+                });
+            } else {
+                var _aspectNames = [
+                    'Düz (-1)', 'Kuzey (0–12.5° / 327.5–360°)', 'Kuzeydoğu (12.5–57.5°)',
+                    'Doğu (57.5–102.5°)', 'Güneydoğu (102.5–147.5°)', 'Güney (147.5–192.5°)',
+                    'Güneybatı (192.5–237.5°)', 'Batı (237.5–282.5°)', 'Kuzeybatı (282.5–327.5°)'
+                ];
+                legendLabels = _aspectNames.map(function(label, i){ return { code:i+1, label:label, color:'' }; });
+            }
+        }
         return { min:min, max:max, palette:colors, mode: (breaks && breaks.length) ? 'classified' : 'bar', breaks: breaks, legendLabels: legendLabels };
     }
     function rasterEntries(pane) {
@@ -52752,6 +52799,118 @@ refresh();
         }).finally(function(){ if(btn){btn.disabled=false;btn.textContent=(typeof t==='function'?t('gtiff_btn_download'):'İndir');} });
     };
 }());
+</script>
+<script id="sylva-special-topo-symbology-fix">
+(function(){
+  'use strict';
+  var lastAspectKey = null;
+  var lastPaneMetaKey = {map:null,map2:null};
+
+  function paneId(){ return (typeof window._sylvaActivePaneId==='function' ? window._sylvaActivePaneId() : 'map'); }
+  function metaForPane(p){
+    var m = window._lastAnalyzeMetaByPane && window._lastAnalyzeMetaByPane[p];
+    if(m) return m;
+    return window._lastAnalyzeMeta || null;
+  }
+  function panel(){ return document.getElementById('legend-symbology-panel'); }
+  function unlock(){
+    var p=panel(); if(!p) return;
+    p.style.opacity='1'; p.style.pointerEvents=''; p.style.userSelect='';
+    p.removeAttribute('aria-disabled');
+    p.querySelectorAll('[data-sylva-hillshade-disabled]').forEach(function(el){
+      el.disabled=false; el.removeAttribute('data-sylva-hillshade-disabled');
+    });
+  }
+  function lockHillshade(){
+    var p=panel(); if(!p) return;
+    p.style.opacity='.35'; p.style.pointerEvents='none'; p.style.userSelect='none';
+    p.setAttribute('aria-disabled','true');
+    p.querySelectorAll('button,input,select').forEach(function(el){
+      el.disabled=true; el.setAttribute('data-sylva-hillshade-disabled','1');
+    });
+  }
+  function forceGrayRamp(){
+    var sr=document.getElementById('selectedRamp');
+    if(sr){
+      sr.style.background='linear-gradient(to right,#f2f2f2,#666666)';
+      sr.setAttribute('data-ramp','black-white');
+    }
+    var palette=document.getElementById('paletteList');
+    if(palette) palette.classList.add('hidden');
+  }
+  function setAspectRows(meta){
+    if(!meta || !meta.classesRaw) return false;
+    var rows;
+    try { rows=JSON.parse(meta.classesRaw); } catch(e){ return false; }
+    if(!Array.isArray(rows) || !rows.length) return false;
+    var sel=document.getElementById('class-count');
+    var root=document.getElementById('class-rows-container');
+    if(!sel || !root) return false;
+    // İlk girişte Aspect her zaman kendi özgün 9 sınıfıyla açılır.
+    sel.value=String(rows.length);
+    if(typeof buildClassRows==='function') buildClassRows(rows.length);
+    var domRows=root.querySelectorAll('.classification-row');
+    rows.forEach(function(c,i){
+      var r=domRows[i]; if(!r) return;
+      var mn=r.querySelector('.class-min'), mx=r.querySelector('.class-max'), nm=r.querySelector('.class-name'), tr=r.querySelector('.class-color-trigger');
+      var min=(c.min!==undefined?c.min:(c.minValue!==undefined?c.minValue:''));
+      var max=(c.max!==undefined?c.max:(c.maxValue!==undefined?c.maxValue:''));
+      if(mn) mn.value=min;
+      if(mx) mx.value=max;
+      if(nm){ nm.value=String(c.label||('Class '+(i+1))); nm.removeAttribute('data-user-edited'); nm.setAttribute('data-auto','1'); }
+      if(tr){ var col=String(c.color||'#999999'); if(col.charAt(0)!=='#') col='#'+col; tr.style.background=col; tr.setAttribute('data-selected-color',col); tr.removeAttribute('data-pending-color'); }
+    });
+    var title=document.getElementById('classified-title');
+    if(title){
+      var p=paneId(), m=metaForPane(p), name=m&&m.analysisName;
+      if(name && typeof _sylvaAnalysisDisplayTitle==='function') title.value=_sylvaAnalysisDisplayTitle(name);
+    }
+    return true;
+  }
+  function aspectSetup(meta,p){
+    unlock();
+    var key=String((meta&&meta.analysisName)||'')+'|'+p;
+    // Aspect'ın paneli sınıflandırılmış ve düzenlenebilir olmalı.
+    if(typeof setClassificationType==='function') setClassificationType('classified');
+    if(lastPaneMetaKey[p]!==key){
+      lastPaneMetaKey[p]=key;
+      setTimeout(function(){
+        setAspectRows(meta);
+        if(typeof translateClassLabels==='function') translateClassLabels();
+      },0);
+    }
+  }
+  function sync(){
+    var p=paneId(), m=metaForPane(p), name=String(m&&m.analysisName||'').toUpperCase();
+    if(name==='TOPO_HILLSHADE'){
+      forceGrayRamp();
+      // Kabartma kendi sunucu paletiyle (açık gri -> koyu gri) gösterilir;
+      // kullanıcı semboloji/ramp/classification değiştiremez.
+      lockHillshade();
+      return;
+    }
+    if(name==='TOPO_ASPECT'){
+      aspectSetup(m,p);
+      return;
+    }
+    // Diğer analizlerde mevcut uygulamanın normal kilit/açma mantığı çalışsın.
+    if(typeof syncNativeClassEditorState==='function') syncNativeClassEditorState();
+  }
+  // Kullanıcı aktif katmanı değiştirince ve analiz sonucu yeniden çizilince çalışır.
+  document.addEventListener('change',function(e){
+    if(e.target && (e.target.matches('.sylva-layer-switch-visibility') || e.target.matches('input[data-analysis]') || e.target.id==='class-count')) setTimeout(sync,30);
+  });
+  document.addEventListener('click',function(e){
+    if(e.target && (e.target.closest('#btn-type-classified') || e.target.closest('#btn-type-stretched') || e.target.closest('#btn-apply-legend'))) setTimeout(sync,30);
+  });
+  var mo=new MutationObserver(function(){ clearTimeout(mo._t); mo._t=setTimeout(sync,40); });
+  mo.observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['style','class']});
+  setTimeout(sync,100);
+  setTimeout(sync,600);
+  setTimeout(sync,1500);
+  window.sylvaSyncSpecialTopoSymbology=sync;
+})();
+
 </script>
 </body>
 
