@@ -7377,22 +7377,22 @@ def download_geotiff():
                 print('[SylvaGIS] ⚠️ RGB sidecar oluşturulamadı, ham .tif '
                       'olarak devam ediliyor: {}'.format(sym_err))
 
+        # 🛠️ KESİN ZIP KURALI — Çevresel/Kentsel ve diğer raster analizlerde
+        # tek analiz olsa bile ASLA çıplak .tif döndürme. Özellikle sürekli
+        # (bar/stretched) rasterlarda .tif + .aux.xml + .clr birlikte gerekli
+        # olduğundan paket her zaman ZIP olmalıdır.
+        # Bina Çatı Tespiti bu raster uç noktasını kullanmaz; vektör olarak
+        # ayrı uç noktadan indirilir ve bu kural onu etkilemez.
         if sym_files:
-            # Tek analiz için kullanıcı doğrudan TIFF istediğinde renk
-            # tablosu gömülü TIFF'i döndür. Çoklu analizlerde ise sınıf
-            # isimlerini taşıyan RAT/VAT yan dosyaları batch ZIP'e katılır.
-            if req_data.get('flatTiff'):
-                tif_bytes = sym_files.get('{}.tif'.format(safe_name), tif_bytes)
-            else:
-                zip_buf = io.BytesIO()
-                with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-                    for fname, fbytes in sym_files.items():
-                        zf.writestr(fname, fbytes)
-                zip_bytes = zip_buf.getvalue()
-                resp = Response(zip_bytes, mimetype='application/zip')
-                resp.headers['Content-Disposition'] = 'attachment; filename="{}.zip"'.format(safe_name)
-                resp.headers['Content-Length'] = str(len(zip_bytes))
-                return resp
+            zip_buf = io.BytesIO()
+            with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+                for fname, fbytes in sym_files.items():
+                    zf.writestr(fname, fbytes)
+            zip_bytes = zip_buf.getvalue()
+            resp = Response(zip_bytes, mimetype='application/zip')
+            resp.headers['Content-Disposition'] = 'attachment; filename="{}.zip"'.format(safe_name)
+            resp.headers['Content-Length'] = str(len(zip_bytes))
+            return resp
 
         # 🛠️ BUG FİX ("her ne olursa olsun tüm veriler zip olarak sorunsuz
         # insin"): sym_files hiç üretilemediyse (yukarıdaki üç dalın hepsi
