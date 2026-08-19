@@ -52460,8 +52460,24 @@ refresh();
     function activePane() { return typeof window._sylvaActivePaneId === 'function' ? window._sylvaActivePaneId() : 'map'; }
     function safeName(value) { return String(value || 'Analiz').replace(/[^a-z0-9_-]+/gi, '_').replace(/^_+|_+$/g, '') || 'Analiz'; }
     function exportVisualFor(pane, key) {
-        var state = window._sylvaEditorStateByPane && window._sylvaEditorStateByPane[pane] && window._sylvaEditorStateByPane[pane][key];
+        var _paneStore = window._sylvaEditorStateByPane && window._sylvaEditorStateByPane[pane];
+        var _entryPayload = window._sylvaLayerAnalyzePayloadByPane &&
+            window._sylvaLayerAnalyzePayloadByPane[pane] && key ?
+            window._sylvaLayerAnalyzePayloadByPane[pane][key] : null;
+        // Her raster katmanının SINIFLANDIRMA DURUMU KENDİNE AİTTİR.
+        // Önceki sürümde state yalnızca key ile aranıyordu; bazı katmanlarda
+        // editör durumu analysisName ile kaydedildiği için bu kayıt bulunamıyor,
+        // ardından aktif ekrandaki DOM sınıfları bütün rasterlere uygulanıyordu.
+        // Bu yüzden örneğin TWI için seçilen tek sınıf, DEM/Aspect/Slope vb.
+        // bütün indirmelere taşınabiliyordu.
+        var state = (_paneStore && _paneStore[key]) ||
+            (_paneStore && _entryPayload && _entryPayload.index && _paneStore[_entryPayload.index]) || null;
         var colors = [], min, max, breaks = null;
+        var _topKey = window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[pane];
+        // DOM yalnızca GERÇEKTEN aktif/üstte olan katmanın editörünü temsil eder.
+        // Toplu indirmede diğer katmanların kendi payload/state kayıtlarına
+        // kesinlikle dokunulmaz.
+        var _domBelongsToThisEntry = (pane === activePane() && key === _topKey);
         // 🛠️ BUG FİX (Faz 15 — "bar olarak indirmiştim, sınıflandırılmış
         // vermiş"): önceden bu fonksiyon yalnızca İLK ve SON sınıfın min/
         // max'ını (ve renklerin düz bir listesini) döndürüyordu — sunucu
@@ -52491,8 +52507,7 @@ refresh();
         // Aktif ekran için güncel DOM'u okuyarak GeoTIFF/VAT/RAT etiketlerinin
         // haritadaki lejantla birebir aynı olmasını sağla. Kullanıcının elle
         // değiştirdiği isimler de DOM'da korunur.
-        var _exportActivePane = activePane();
-        if (pane === _exportActivePane && typeof currentClassificationType !== 'undefined' && currentClassificationType === 'classified') {
+        if (_domBelongsToThisEntry && typeof currentClassificationType !== 'undefined' && currentClassificationType === 'classified') {
             var _domRows = document.querySelectorAll('#class-rows-container .classification-row');
             var _domBreaks = [];
             _domRows.forEach(function(row){
@@ -52513,9 +52528,7 @@ refresh();
         // Katman payload'ı, kullanıcı sınıflandırmayı uyguladıktan sonra
         // güncel classBreaks dizisini de taşır. Editör snapshot'ı herhangi bir
         // nedenle henüz oluşmadıysa bile indirme sınıflandırmayı kaybetmesin.
-        var _exportLayerPayload = window._sylvaLayerAnalyzePayloadByPane &&
-            window._sylvaLayerAnalyzePayloadByPane[pane] && key ?
-            window._sylvaLayerAnalyzePayloadByPane[pane][key] : null;
+        var _exportLayerPayload = _entryPayload;
         if ((!breaks || !breaks.length) && _exportLayerPayload && Array.isArray(_exportLayerPayload.classBreaks)) {
             breaks = _exportLayerPayload.classBreaks.map(function (b) {
                 return {
