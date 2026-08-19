@@ -293,14 +293,16 @@ _TILE_SESSION_TTL_SECONDS = 3 * 3600   # token'ın geçerlilik süresi
 # map id süresi dolduğunda otomatik yenileme (bkz. _rebuild_tile_session_url)
 # o worker/instance'da atlanır; oturumun kendisi yine 410 VERMEZ.
 _TILE_SESSION_INLINE_PARAMS_LIMIT = 6000
-_TILE_CACHE_MAX_ITEMS     = 2000       # bellekte tutulacak azami tile (~40 MB)
-_TILE_FETCH_RETRIES       = 3          # tek bir tile için tekrar deneme sayısı
-_TILE_FETCH_TIMEOUT       = 25         # saniye
+_TILE_CACHE_MAX_ITEMS     = 3000       # daha geniş sıcak karo önbelleği
+_TILE_FETCH_RETRIES       = 2          # geçici GEE/ağ hatalarında daha dayanıklı retry
+_TILE_FETCH_TIMEOUT       = 8         # saniye; tek hatalı karo tüm isteği uzun süre bloklamasın
+_TILE_HTTP_MAX_CONCURRENT = 8         # GEE'ye eşzamanlı tile baskısını sınırla
 _REBUILT_URL_CACHE_TTL_SECONDS = 20 * 60  # yenilenen map id'nin süreç-yerel önbellekte tutulma süresi
 _REBUILT_URL_CACHE_MAX_ITEMS   = 512
 
 _tile_cache = {}
 _tile_cache_order = []
+_tile_http_semaphore = threading.BoundedSemaphore(_TILE_HTTP_MAX_CONCURRENT)
 _tile_lock = threading.RLock()
 # GEE map id süresi dolup _rebuild_tile_session_url ile yenilendiğinde, AYNI
 # worker/instance üzerindeki SONRAKI karo isteklerinin her biri için tekrar
@@ -461,6 +463,21 @@ def _register_tile_session(url_format, params=None, kind='analyze', extra=None):
     return _pack_token(payload)
 
 
+def _register_analysis_session_compact(params, kind='analyze', extra=None, max_chars=250000):
+    """Büyük AOI payload'larını response içine devasa analysisId olarak koyma."""
+    try:
+        raw = json.dumps({'kind': kind, 'extra': dict(extra) if extra else {}, 'params': params},
+                         separators=(',', ':'), ensure_ascii=False, default=str).encode('utf-8')
+        if len(raw) > 2_000_000:
+            return None
+        compressed = zlib.compress(raw, 6)
+        if len(base64.urlsafe_b64encode(compressed)) > max_chars:
+            return None
+    except Exception:
+        return None
+    return _register_analysis_session(params, kind=kind, extra=extra)
+
+
 def _register_analysis_session(params, kind='analyze', extra=None):
     """
     /api/download-geotiff ve /api/vector-download uç noktalarının kullandığı
@@ -600,7 +617,8 @@ def proxy_tile(sid, z, x, y):
         url = (current_url_format
                .replace('{z}', str(z)).replace('{x}', str(x)).replace('{y}', str(y)))
         try:
-            resp = _tile_http.get(url, timeout=_TILE_FETCH_TIMEOUT)
+            with _tile_http_semaphore:
+                resp = _tile_http.get(url, timeout=_TILE_FETCH_TIMEOUT)
         except Exception as err:
             if attempt >= _TILE_FETCH_RETRIES:
                 print('[SylvaGIS] ❌ Tile alınamadı (ağ) z{}/x{}/y{}: {}'.format(z, x, y, err))
@@ -6493,11 +6511,26 @@ def timeseries():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+def _request_json_payload():
+    """application/json ve text/plain gövdelerini aynı şekilde oku."""
+    data = request.get_json(silent=True)
+    if isinstance(data, dict):
+        return data
+    try:
+        raw = request.get_data(cache=True, as_text=True)
+        if raw:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        pass
+    return {}
+
+
 @app.route('/api/analyze', methods=['POST'])
 def analyze():
     global _last_analyze_params, _last_analyze_native_crs
     try:
-        data = request.json
+        data = _request_json_payload()
         _last_analyze_params = dict(data) if data else {}
 
         # ── 🛰️ Uydu Görüntüsü Galerisi — hızlı yol ───────────────────
@@ -6565,7 +6598,7 @@ def analyze():
             _extra = {'nativeCrs': download_native_crs} if download_native_crs else {}
             _sid = _register_tile_session(tile_url_direct, params=data, kind='analyze', extra=_extra)
             tile_url = _tile_url_for_client(_sid, tile_url_direct)
-            _analysis_sid = _register_analysis_session(data, kind='analyze', extra=_extra)
+            _analysis_sid = _register_analysis_session_compact(data, kind='analyze', extra=_extra)
 
             return jsonify({
                 'success':  True,
@@ -6675,7 +6708,7 @@ def analyze():
         _extra = {'nativeCrs': native_crs} if native_crs else {}
         _sid = _register_tile_session(tile_url_direct, params=data, kind='analyze', extra=_extra)
         tile_url = _tile_url_for_client(_sid, tile_url_direct)
-        _analysis_sid = _register_analysis_session(data, kind='analyze', extra=_extra)
+        _analysis_sid = _register_analysis_session_compact(data, kind='analyze', extra=_extra)
 
         # ── İstatistik ────────────────────────────────────────────
         # 🛠️ BUG FİX (NoData piksel / büyük AOI istatistik sorunu):
@@ -6694,40 +6727,12 @@ def analyze():
         # 🛠️ EK DÜZELTME: histogram hatası artık TÜM isteği düşürmüyor.
         # Lejant/grafik istatistiğe bağlıdır ama HARİTA KATMANI değildir;
         # istatistik alınamasa bile tile'lar gösterilebilmelidir.
-        try:
-            stats = _call_with_retry(
-                lambda: result.reduceRegion(
-                    reducer    = ee.Reducer.frequencyHistogram(),
-                    geometry   = roi,
-                    scale      = stats_scale,
-                    maxPixels  = 1e9,
-                    bestEffort = True,
-                ).getInfo()
-            )
-        except Exception as _stats_err:
-            stats = {}
-            print('[SylvaGIS] ⚠️ Histogram hesaplanamadı — katman yine de '
-                  'gösterilecek: {}'.format(_stats_err))
-
+        # ── İstatistikleri TEK GEE çağrısında al ─────────────────
+        # Histogram + min/max + mean aynı reduceRegion isteğinde hesaplanır;
+        # böylece peş peşe GEE aggregation çağrıları ve /api/analyze beklemesi azalır.
+        stats = {}
         real_minmax = {}
         try:
-            # 🛠️ BUG FİX (performans / peş peşe analiz hatası): daha önce
-            # min/max ve ortalama İKİ AYRI reduceRegion() + getInfo() ağ
-            # çağrısıyla hesaplanıyordu. Tek bir kombine reducer ile bu iki
-            # çağrı TEK bir GEE isteğine indirilir — hem daha hızlı yanıt
-            # verir hem de kullanıcı arka arkaya analiz yaptığında GEE'nin
-            # eşzamanlı/istek-başına limitlerine çarpma ihtimalini azaltır.
-            combined_reducer = ee.Reducer.minMax().combine(
-                reducer2=ee.Reducer.mean(), sharedInputs=True
-            )
-
-            # 🆕 GÜNCELLEME: Eş Yükselti (TOPO_CONTOUR) için 'result' burada
-            # 0/1'lik İKİLİ bir kontur maskesidir — min/max her zaman 0/1
-            # çıkar ve lejant kutusunda kullanıcıya hiçbir anlamlı bilgi
-            # vermez. Bunun yerine, çalışma alanının GERÇEK yükselti
-            # (elevation) min/max değerleri hesaplanır — aynı DEM kaynağı
-            # seçim mantığı (SRTM/ALOS/Copernicus/NASADEM) burada tekrar
-            # uygulanarak.
             _stats_img = result
             if data.get('index') == 'TOPO_CONTOUR':
                 _stats_dem_source = data.get('demSource', 'SRTM')
@@ -6746,22 +6751,28 @@ def analyze():
                     _stats_dem = ee.Image('USGS/SRTMGL1_003').select('elevation')
                 _stats_img = _stats_dem.rename('value')
 
-            mm = _call_with_retry(
+            combined_reducer = (ee.Reducer.frequencyHistogram()
+                .combine(reducer2=ee.Reducer.minMax(), sharedInputs=True)
+                .combine(reducer2=ee.Reducer.mean(), sharedInputs=True))
+            combined_stats = _call_with_retry(
                 lambda: _stats_img.reduceRegion(
-                    reducer    = combined_reducer,
-                    geometry   = roi,
-                    scale      = stats_scale,
-                    maxPixels  = 1e9,
-                    bestEffort = True,
+                    reducer=combined_reducer, geometry=roi, scale=stats_scale,
+                    maxPixels=1e9, bestEffort=True, tileScale=4
                 ).getInfo()
-            )
+            ) or {}
+            hist = (combined_stats.get('value_histogram') or combined_stats.get('histogram') or combined_stats.get('value') or {})
+            if isinstance(hist, dict) and 'histogram' in hist and isinstance(hist.get('histogram'), dict):
+                hist = hist.get('histogram')
+            stats = hist if isinstance(hist, dict) else {}
             real_minmax = {
-                'min':  mm.get('value_min'),
-                'max':  mm.get('value_max'),
-                'mean': mm.get('value_mean')
+                'min': combined_stats.get('value_min'),
+                'max': combined_stats.get('value_max'),
+                'mean': combined_stats.get('value_mean')
             }
-        except Exception:
-            pass
+        except Exception as _combined_stats_err:
+            print('[SylvaGIS] ⚠️ Birleşik histogram/min-max istatistiği alınamadı; katman yine de gösterilecek: {}'.format(_combined_stats_err))
+            stats = {}
+            real_minmax = {}
 
         # NOT: tile_url yukarıda, istatistiklerden ÖNCE üretildi — burada
         # ikinci bir getMapId() çağrısı YOKTUR. (Eskiden bu satırda tekrar
@@ -6778,7 +6789,15 @@ def analyze():
         max_cloud  = int(data.get('maxCloud', 20))
         scenes_list = []
 
-        if not scene_id and data.get('index', 'NDVI') not in LULC_FAMILY_INDICES:
+        _analysis_index_for_scenes = data.get('index', 'NDVI')
+        # Çevresel/kentsel raster analizlerinde sahne galerisi /api/analyze
+        # yanıtının parçası değildir; bu üç ayrı aggregate getInfo çağrısı
+        # harita katmanı için gerekli olmadığı halde yanıtı ciddi biçimde
+        # geciktiriyordu. Sahne galerisi gerektiğinde ayrı /api/get-scenes
+        # akışı kullanılabilir.
+        if (not scene_id and
+            _analysis_index_for_scenes not in LULC_FAMILY_INDICES and
+            _analysis_index_for_scenes not in _ENV_URBAN_RASTER_INDICES):
             try:
                 roi_coords = data.get('roi')
                 roi_geo = make_roi(roi_coords)
@@ -6827,9 +6846,18 @@ def analyze():
                     col2, start_date, end_date, months=months_filter,
                     per_year_limit=10, total_limit=60,
                 )
-                scene_ids  = _call_with_retry(lambda: limited.aggregate_array('system:index').getInfo(), retries=1)
-                timestamps = _call_with_retry(lambda: limited.aggregate_array('system:time_start').getInfo(), retries=1)
-                clouds_arr = _call_with_retry(lambda: limited.aggregate_array(cloud_prop).getInfo(), retries=1)
+                # Üç ayrı aggregate_array().getInfo() yerine tek reduceColumns
+                # çağrısı: /api/analyze başına iki GEE ağ turunu kaldırır.
+                _scene_lists = _call_with_retry(
+                    lambda: limited.reduceColumns(
+                        reducer=ee.Reducer.toList().repeat(3),
+                        selectors=['system:index', 'system:time_start', cloud_prop]
+                    ).getInfo(), retries=1
+                ) or {}
+                _scene_values = _scene_lists.get('list') or [[], [], []]
+                scene_ids = _scene_values[0] if len(_scene_values) > 0 else []
+                timestamps = _scene_values[1] if len(_scene_values) > 1 else []
+                clouds_arr = _scene_values[2] if len(_scene_values) > 2 else []
                 scenes_list = list(zip(scene_ids, timestamps, clouds_arr))
             except Exception:
                 scenes_list = []
@@ -6932,12 +6960,6 @@ def download_geotiff():
     try:
         req_data = request.json or {}
 
-        # 🔒 KESİN RASTER PAKET KURALI
-        # Çevresel, kentsel ve topografik rasterlar tek TIFF olarak dönemez.
-        # Eski istemciler 'flatTiff' gönderse bile bu seçenek bilinçli olarak
-        # yok sayılır; aşağıdaki route her başarılı rasterı ZIP olarak döndürür.
-        req_data['flatTiff'] = False
-
         # 🛠️ BUG FİX (AOI dışı NoData/siyah alan / yanlış kırpma sorunu):
         # Frontend, güncel Çalışma Alanı/AOI geometrisini HER indirme
         # isteğinde 'roi' alanıyla birlikte gönderir (bkz. index.html —
@@ -6971,8 +6993,12 @@ def download_geotiff():
         # hiç göndermezse (eski/güncellenmemiş istemci), önceki paylaşılan-
         # global davranış AYNEN korunur — bu değişiklik geriye dönük
         # tamamen uyumludur.
+        analysis_payload = req_data.get('analysisPayload')
         analysis_id = req_data.get('analysisId')
-        if analysis_id:
+        if isinstance(analysis_payload, dict) and analysis_payload.get('roi'):
+            data = dict(analysis_payload)
+            session_native_crs = req_data.get('nativeCrs') or _last_analyze_native_crs
+        elif analysis_id:
             _session = _get_analysis_session(analysis_id)
             if _session is None:
                 return jsonify({
@@ -7397,9 +7423,8 @@ def download_geotiff():
             zip_bytes = zip_buf.getvalue()
             resp = Response(zip_bytes, mimetype='application/zip')
             resp.headers['Content-Disposition'] = 'attachment; filename="{}.zip"'.format(safe_name)
-            resp.headers['Content-Type'] = 'application/zip'
-            resp.headers['X-SylvaGIS-Raster-Package'] = 'zip'
             resp.headers['Content-Length'] = str(len(zip_bytes))
+            resp.headers['X-SylvaGIS-Archive'] = 'zip'
             return resp
 
         # 🛠️ BUG FİX ("her ne olursa olsun tüm veriler zip olarak sorunsuz
@@ -7415,9 +7440,8 @@ def download_geotiff():
         zip_bytes = zip_buf.getvalue()
         resp = Response(zip_bytes, mimetype='application/zip')
         resp.headers['Content-Disposition'] = 'attachment; filename="{}.zip"'.format(safe_name)
-        resp.headers['Content-Type'] = 'application/zip'
-        resp.headers['X-SylvaGIS-Raster-Package'] = 'zip'
         resp.headers['Content-Length'] = str(len(zip_bytes))
+        resp.headers['X-SylvaGIS-Archive'] = 'zip'
         return resp
 
     except Exception as e:
