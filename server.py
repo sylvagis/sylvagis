@@ -4500,8 +4500,17 @@ def build_result_image(data, for_export=False):
         # probability bandlarında kalite korunur.
         recent = (dw_col
             .filterDate(ee.Date(datetime.datetime.utcnow()).advance(-120, 'day'), ee.Date(datetime.datetime.utcnow()))
-            .select('label'))
-        label = recent.mode().rename('value')
+            .select('label')
+            .sort('system:time_start'))
+        # IMPORTANT: Do NOT use temporal mode() here. Dynamic World images are
+        # individually cloud/cloud-shadow masked, so mode() can leave a pixel
+        # dependent on the subset of observations that happened to be valid.
+        # Instead, mosaic the time-sorted label images so that each pixel uses
+        # the LATEST AVAILABLE UNMASKED observation, while older observations
+        # automatically fill clouds/missing pixels. This is especially important
+        # for coastal/sea pixels: Water=0 is a REAL class and must never become
+        # an empty/NoData hole merely because the newest scene is masked there.
+        label = recent.mosaic().rename('value')
         # Preserve all nine classes, including Water=0. clip() constrains the
         # displayed/exported raster to the AOI without changing class codes.
         result = label.clip(roi)
@@ -7218,6 +7227,14 @@ def download_geotiff():
                 requested_legend_labels = requested_vis.get('legendLabels')
         is_true_color_rgb = (lulc_index == 'RGB')
         export_image = final_display
+
+        # DYNAMIC WORLD GÜVENLİ DIŞA AKTARIMI: 0 = Water GERÇEK SINIFTIR.
+        # Byte rasterde 255 yalnızca NoData/AOI dışı için kullanılır; 0..8
+        # sınıf kodları aynen korunur. Bu, ArcMap'in deniz piksellerini
+        # NoData sanıp göstermemesi için özellikle zorunludur.
+        if lulc_index == 'LULC':
+            export_image = final_display.toByte().unmask(255).rename('value')
+            nodata_value = 255
         # 🛠️ BUG FİX (indirilen TÜM rasterlerin RGB olarak inmesi): önceden
         # 'rendered' bayrağı gönderildiğinde (istemci HER indirmede gönderir)
         # LULC dışındaki her analiz de final_display.visualize(**vis) ile 3
