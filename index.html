@@ -26277,7 +26277,7 @@ function _executeGeoTiffDownloadCore() {
     })
     .then(function(r) {
         var ct = r.headers.get('Content-Type') || '';
-        // Sunucu hata durumunda JSON, başarı durumunda binary .tif döner.
+        // Sunucu hata durumunda JSON, başarı durumunda ZIP raster paketi döner.
         // 🛠️ BUG FİX: Aşağıdaki iki durumda da sunucuya GERÇEKTEN ulaşılmış
         // ve bir HTTP yanıtı alınmıştır (bağlantı sorunu YOKTUR) — bu yüzden
         // fırlatılan hataya _sylvaServerReached=true işareti konur. .catch()
@@ -26302,7 +26302,26 @@ function _executeGeoTiffDownloadCore() {
         var cd = r.headers.get('Content-Disposition') || '';
         var m = /filename="?([^"]+)"?/.exec(cd);
         var tifName = m ? m[1] : (filename + '.zip');
-        return r.blob().then(function(blob) { return { blob: blob, tifName: tifName }; });
+        return r.blob().then(function(blob) {
+            // 🔒 Çevresel + Kentsel + Topografik tüm rasterlarda tek başına
+            // TIFF indirmesine izin verme. Sunucu ZIP döndürdüyse aynen kullan;
+            // eski/önbellekli sunucu TIFF döndürürse burada ZIP'e paketle.
+            var _isZip = (ct.indexOf('application/zip') !== -1) ||
+                         (/\.zip$/i.test(tifName)) ||
+                         (blob && blob.type === 'application/zip');
+            if (_isZip) {
+                return { blob: blob, tifName: /\.zip$/i.test(tifName) ? tifName : (String(tifName).replace(/\.[^.]+$/,'') + '.zip') };
+            }
+            if (typeof JSZip === 'undefined') {
+                throw new Error('ZIP paketleme kütüphanesi yüklenemedi; raster çıplak TIFF olarak indirilmeyecek.');
+            }
+            var _zip = new JSZip();
+            var _tifName = String(tifName || filename || 'SylvaGIS_export.tif').replace(/\.zip$/i,'');
+            if (!/\.tif$/i.test(_tifName)) _tifName += '.tif';
+            _zip.file(_tifName, blob);
+            return _zip.generateAsync({type:'blob', compression:'DEFLATE', compressionOptions:{level:6}})
+                .then(function(_zipBlob){ return { blob:_zipBlob, tifName:String(_tifName).replace(/\.tif$/i,'.zip') }; });
+        });
     })
     .then(function(res) {
         var blobUrl = URL.createObjectURL(res.blob);
@@ -53024,7 +53043,29 @@ refresh();
                 var cd = r.headers.get('Content-Disposition') || '';
                 var m = /filename="?([^"; ]+)"?/.exec(cd);
                 var name = m ? m[1] : fallbackName;
-                return r.blob().then(function (blob) { return { blob: blob, name: name }; });
+                return r.blob().then(function (blob) {
+                    // 🔒 KESİN ZIP KURALI: Eski/önbellekteki bir sunucu tek TIFF
+                    // döndürse bile çevresel/kentsel/topografik raster indirmesi
+                    // tarayıcıya çıplak .tif olarak bırakılamaz. Güncel sunucu zaten
+                    // ZIP döndürür; bu istemci tarafı yalnızca geriye dönük güvenlik
+                    // ağıdır. JSZip ile gelen TIFF'i ZIP'e sar ve uzantıyı zorunlu
+                    // olarak .zip yap.
+                    var _isZip = (ct.indexOf('application/zip') !== -1) ||
+                                 (/\.zip$/i.test(name)) ||
+                                 (blob && blob.type === 'application/zip');
+                    if (_isZip || typeof JSZip === 'undefined') {
+                        if (!_isZip && typeof JSZip === 'undefined') {
+                            throw new Error('ZIP paketleme kütüphanesi yüklenemedi; raster çıplak TIFF olarak indirilmeyecek.');
+                        }
+                        return { blob: blob, name: /\.zip$/i.test(name) ? name : (String(name).replace(/\.[^.]+$/,'') + '.zip') };
+                    }
+                    var _zip = new JSZip();
+                    var _tifName = String(name || fallbackName || 'SylvaGIS_export.tif').replace(/\.zip$/i,'');
+                    if (!/\.tif$/i.test(_tifName)) _tifName += '.tif';
+                    _zip.file(_tifName, blob);
+                    return _zip.generateAsync({type:'blob', compression:'DEFLATE', compressionOptions:{level:6}})
+                        .then(function(_zipBlob){ return { blob:_zipBlob, name:String(_tifName).replace(/\.tif$/i,'.zip') }; });
+                });
             });
     }
     function downloadBlob(blob, name) { var a=document.createElement('a'), url=URL.createObjectURL(blob); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(function(){URL.revokeObjectURL(url);}, 60000); }
