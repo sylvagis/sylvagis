@@ -2332,7 +2332,7 @@ def _classify_by_breaks(band, valid_mask, breaks):
     return idx.astype(np.uint8), code_info
 
 
-def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name, embed_colormap=True):
+def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name, embed_colormap=False):
     """Zaten 1..N küçük tam sayı sınıf koduna (0 = NoData) indirgenmiş bir
     banttan (byte_band) ve {kod: (etiket, (r,g,b))} sözlüğünden (code_info)
     ArcMap/QGIS'in RENKLİ + İSİMLENDİRİLMİŞ açacağı bir dosya seti üretir:
@@ -2381,6 +2381,16 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
     from rasterio.io import MemoryFile
     from xml.sax.saxutils import escape as _xml_escape
 
+    # Yalnızca çıktı rasterinde GERÇEKTEN bulunan sınıfları sembolojiye al.
+    # Kullanıcının tanımladığı ama AOI'de hiç bulunmayan sınıflar da lejanta
+    # eklenmez; böylece yalnızca ekranda görülen sınıflar dışa aktarılır.
+    try:
+        import numpy as np
+        _present_codes = set(int(v) for v in np.unique(byte_band) if int(v) > 0)
+        code_info = {int(k): v for k, v in code_info.items() if int(k) in _present_codes}
+    except Exception:
+        code_info = dict(code_info)
+
     real_codes = sorted(code_info.keys())
     max_code = real_codes[-1] if real_codes else 0
     nbits = _choose_nbits(max_code + 1)
@@ -2399,18 +2409,17 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
         with out_memfile.open(**new_profile) as dst:
             dst.write(byte_band, 1)
             # 🛠️ ARCMap BOŞ LEJANT FİXİ:
-            # ESA/MODIS/CORINE gibi 11/17/44 sınıflı LULC rasterlerinde
-            # GeoTIFF ColorMap, NBITS nedeniyle zorunlu olarak 16/32/64
-            # girişlik bir palet üretir. ArcMap bu PALETTE girişlerinin
-            # tamamını legend'a satır olarak koyduğu için gerçek sınıfların
-            # yanında isimsiz boş kutular oluşuyordu (ESA'da 16 giriş = 11
-            # gerçek sınıf + 5 boş/NoData slotu).
+            # Embedded GeoTIFF ColorMap, TIFF'in bit derinliği nedeniyle
+            # 2^N giriş taşır (ör. 9 sınıf için 16 giriş). ArcMap bu padding
+            # girişlerini de lejanta ekleyebildiğinden gerçek sınıfların
+            # yanında isimsiz/boş kutular oluşur.
             #
-            # LULC dışa aktarımlarında artık embedded ColorMap KULLANILMIYOR.
-            # Bunun yerine gerçek sınıfları içeren VAT/RAT + RGB alanları
-            # kullanılıyor. Böylece ArcMap'in Unique Values tematik
-            # sembolojisi yalnızca gerçekten var olan sınıfları listeler;
-            # palette padding'inden gelen boş satırlar oluşmaz.
+            # LULC'nin mevcut davranışı çağıran tarafta açıkça
+            # embed_colormap=True verilirse korunur. Kullanıcı tarafından
+            # sınıflandırılmış TOPO/uydu/çevresel rasterlerde ise varsayılan
+            # False ile embedded ColorMap yazılmaz; gerçek sınıf renkleri ve
+            # isimleri RAT/VAT + .clr sidecar'larında tutulur. Böylece
+            # ColorMap padding'inden gelen boş lejant kutuları oluşmaz.
             if embed_colormap:
                 colormap = {i: (255, 255, 255, 0) for i in range(n_total)}
                 for code in real_codes:
@@ -2953,7 +2962,7 @@ def _build_classified_symbology_zip(tif_bytes, vis, safe_name, breaks=None, n_cl
     if not code_info:
         return None
 
-    return _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name)
+    return _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name, embed_colormap=False)
 
 
 @app.route('/api/ping', methods=['GET'])
@@ -7100,7 +7109,7 @@ def download_geotiff():
                             if _src.nodata is not None:
                                 _valid &= ~__import__('numpy').isclose(_band, float(_src.nodata))
                     _byte, _codes = _classify_default_aspect(_band, _valid)
-                    sym_files = _build_symbology_files_from_classes(_byte, _profile, _codes, safe_name)
+                    sym_files = _build_symbology_files_from_classes(_byte, _profile, _codes, safe_name, embed_colormap=False)
                 except Exception as aspect_err:
                     traceback.print_exc()
                     sym_files = None
@@ -7116,7 +7125,7 @@ def download_geotiff():
                                 if _src.nodata is not None:
                                     _valid &= ~__import__('numpy').isclose(_band, float(_src.nodata))
                         _byte, _codes = _classify_aspect_breaks(_band, _valid, requested_breaks)
-                        sym_files = _build_symbology_files_from_classes(_byte, _profile, _codes, safe_name)
+                        sym_files = _build_symbology_files_from_classes(_byte, _profile, _codes, safe_name, embed_colormap=False)
                     else:
                         sym_files = _build_classified_symbology_zip(
                             tif_bytes, vis, safe_name, breaks=requested_breaks)
