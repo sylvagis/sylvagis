@@ -2465,6 +2465,9 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
                 )
         new_tif_bytes = out_memfile.read()
 
+    # Sınıflandırılmış rasterlarda sınıf kodlarının karışmaması için nearest.
+    new_tif_bytes = _add_internal_raster_overviews(new_tif_bytes, 'nearest')
+
     # ── .clr (klasik GDAL/ESRI renk eşleştirme dosyası) ──────────────
     # Sadece gerçek sınıflar .clr içine yazılır; NoData/boş palette slotu
     # eklenmez.
@@ -2645,6 +2648,7 @@ def _build_rgb_symbology_zip(tif_bytes, safe_name):
         )
     aux_xml = ('<PAMDataset>\n' + ''.join(bands_xml) + '</PAMDataset>\n').encode('utf-8')
 
+    tif_bytes = _add_internal_raster_overviews(tif_bytes, 'bilinear')
     return {
         '{}.tif'.format(safe_name): tif_bytes,
         '{}.tif.aux.xml'.format(safe_name): aux_xml,
@@ -2793,6 +2797,53 @@ def _classify_default_aspect(band, valid_mask, legend_labels=None):
     return idx, {i+1: (labels[i], colors[i]) for i in range(9)}
 
 
+def _add_internal_raster_overviews(tif_bytes, resampling='bilinear'):
+    """ArcMap/QGIS için GeoTIFF içine çok seviyeli dahili piramit ekle.
+
+    Sürekli DEM türevlerinde bilinear; sınıflandırılmış/tematik rasterlarda
+    çağıran taraf nearest kullanır. Ana piksel değerleri değiştirilmez; yalnızca
+    uzak zoomlarda görüntüleme için düşük çözünürlüklü overview seviyeleri eklenir.
+    Böylece ArcMap'in uzaklaşınca boş/kare/tek renk göstermesi engellenir.
+    """
+    from rasterio.io import MemoryFile
+    from rasterio.enums import Resampling
+    try:
+        method = getattr(Resampling, str(resampling), Resampling.bilinear)
+        with MemoryFile(tif_bytes) as mf:
+            with mf.open() as src:
+                if src.width < 64 or src.height < 64:
+                    return tif_bytes
+                profile = src.profile.copy()
+                data = src.read()
+                tags = [src.tags(i) for i in range(1, src.count + 1)]
+                levels = [2, 4, 8, 16, 32, 64]
+                levels = [lv for lv in levels if src.width // lv >= 32 and src.height // lv >= 32]
+                if not levels:
+                    return tif_bytes
+                profile.update(compress='lzw', tiled=True)
+                if profile.get('width', 0) >= 256 and profile.get('height', 0) >= 256:
+                    # GeoTIFF blok boyutları 16'nın katı olmalı; GEE'den gelen
+                    # profilsiz TIFF'lerde blockx/y olmayabildiği için açıkça
+                    # güvenli 256x256 blok kullan.
+                    profile['blockxsize'] = 256
+                    profile['blockysize'] = 256
+                else:
+                    profile['tiled'] = False
+                    profile.pop('blockxsize', None); profile.pop('blockysize', None)
+                with MemoryFile() as out:
+                    with out.open(**profile) as dst:
+                        dst.write(data)
+                        for i, tg in enumerate(tags, 1):
+                            if tg:
+                                dst.update_tags(i, **tg)
+                        dst.build_overviews(levels, method)
+                        dst.update_tags(ns='rio_overview', resampling=str(resampling))
+                    return out.read()
+    except Exception as e:
+        print('[SylvaGIS] overview oluşturulamadı; ana TIFF korunuyor: {}'.format(e))
+        return tif_bytes
+
+
 def _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=None):
     """Sürekli/bar analizlerde HAM sayısal rasterı korur.
 
@@ -2830,7 +2881,10 @@ def _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=Non
     # dahili overviews oluştur. Veri pikselleri yeniden örneklenmez; yalnızca
     # zoom performansı için piramit eklenir.
     profile.update(compress='lzw', tiled=True)
-    if profile.get('width', 0) < 256 or profile.get('height', 0) < 256:
+    if profile.get('width', 0) >= 256 and profile.get('height', 0) >= 256:
+        profile['blockxsize'] = 256
+        profile['blockysize'] = 256
+    else:
         profile['tiled'] = False
         profile.pop('blockxsize', None); profile.pop('blockysize', None)
 
@@ -2863,6 +2917,9 @@ def _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=Non
                 except Exception:
                     pass
         final_tif = out_mem.read()
+
+    # Uzak zoom için sürekli raster piramitleri: ana piksel değerleri değişmez.
+    final_tif = _add_internal_raster_overviews(final_tif, 'bilinear')
 
     # ArcMap/QGIS için gerçek istatistikleri taşıyan PAM sidecar.
     bands_xml = []
@@ -8085,7 +8142,11 @@ def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata
             raw_bytes, aoi_geom_4326, nodata_value, strict=is_categorical
         )
 
-    return _stamp_exact_band_statistics(raw_bytes, nodata_value=nodata_value)
+    raw_bytes = _stamp_exact_band_statistics(raw_bytes, nodata_value=nodata_value)
+    # Ham/continuous/categorical dahil tüm GeoTIFF çıkışlarına dahili
+    # piramit ekle. Categorical rasterlarda nearest ile sınıf kodları korunur.
+    raw_bytes = _add_internal_raster_overviews(raw_bytes, 'nearest' if is_categorical else 'bilinear')
+    return raw_bytes
 
 
 @app.route('/api/download-raw-bands', methods=['POST'])
