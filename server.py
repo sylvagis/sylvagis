@@ -4726,7 +4726,22 @@ def build_result_image(data, for_export=False):
             # 60 m yarıçap (~2 piksel @ 30 m), piksel bazlı kuantizasyon
             # gürültüsünü büyük ölçüde elerken gerçek yerel eğrilik
             # özelliklerini (kıvrımlar, sırtlar, vadiler) korur.
-            dem_smooth = dem.focalMean(radius=60, units='meters').resample('bilinear')
+            # 🛠️ BUG FİX (ArcMap'te uzaklaşınca "kare/karo" desenleri): GEE'nin
+            # focalMean() fonksiyonu kernelType parametresi belirtilmezse
+            # VARSAYILAN olarak KARE (square) bir pencere kullanır — bu da
+            # düzleştirme sonucunu gerçek bir daire yerine birbirine bitişik
+            # KARELERDEN oluşan bir mozaiğe dönüştürür. Eğim/eğrilik gibi az
+            # değişen düz alanlarda bu kareler neredeyse aynı değeri taşıdığı
+            # için görünmez kalır, ama AOI dışa aktarılıp ArcMap'te uzak zoom
+            # seviyesinde (birçok piksel tek ekran pikseline düşünce) yan yana
+            # duran bu kare blokların sınırları belirginleşir — kullanıcının
+            # bildirdiği "kare oluyor" sorunu budur. DEM/Eğim gibi focalMean
+            # KULLANMAYAN diğer topografik katmanlarda bu sorun hiç oluşmaz.
+            # ÇÖZÜM: kernelType='circle' ile pencereyi DAİRESEL yapıyoruz —
+            # aynı yarıçapta gürültü/tuz-biber temizleme etkisi korunurken
+            # kare/karo deseni ortadan kalkar; sonuç her ölçekte diğer
+            # katmanlar gibi pürüzsüz görünür.
+            dem_smooth = dem.focalMean(radius=60, kernelType='circle', units='meters').resample('bilinear')
             kernel = ee.Kernel.laplacian8(normalize=False)
             # Tile motoru uzak zoomlarda daha geniş bir piksel örnekleme ölçeği
             # kullanabildiğinden, türev işleminin kenar maskesinin görüntüyü
