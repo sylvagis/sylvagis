@@ -4400,7 +4400,7 @@ tr.class-highlight-active {
                         // değişiklik yaratmaz, vektör çizgiler tek görünen kalır.
                         fetch(API_BASE + '/api/analyze', {
                             method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
+                            headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
                             body: JSON.stringify(_payload)
                         })
                         .then(function (r) { return r.json(); })
@@ -6670,7 +6670,7 @@ tr.class-highlight-active {
                     // 🛠️ DÜZELTME (Zoom'da Veri Kaybolması): bkz. _sylvaReplaceGeeLayer — maxNativeZoom
                     // artık 16'da tutuluyor, GEE sunucusunun derin zoom'da hesaplanmış
                     // karoları güvenilir üretemediği durumlarda veri kaybolmasın diye.
-                    maxZoom: 24, maxNativeZoom: 16,
+                    maxZoom: 24, maxNativeZoom: 16, updateWhenZooming: false, updateWhenIdle: true, keepBuffer: 4,
                     attribution: srcLayer.options && srcLayer.options.attribution
                 });
                 window._geeLayersByPane.map2[key] = clone;
@@ -7060,7 +7060,7 @@ tr.class-highlight-active {
                     // 🛠️ DÜZELTME (Zoom'da Veri Kaybolması): bkz. _sylvaReplaceGeeLayer — maxNativeZoom
                     // artık 16'da tutuluyor, GEE sunucusunun derin zoom'da hesaplanmış
                     // karoları güvenilir üretemediği durumlarda veri kaybolmasın diye.
-                    maxZoom: 24, maxNativeZoom: 16,
+                    maxZoom: 24, maxNativeZoom: 16, updateWhenZooming: false, updateWhenIdle: true, keepBuffer: 4,
                     attribution: srcLayer && srcLayer.options && srcLayer.options.attribution
                 });
 
@@ -11176,7 +11176,7 @@ function selectRamp(name) {
 
             fetch(API_BASE + '/api/analyze', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
                 body: JSON.stringify(_stretchAnalyzePayload)
             })
             .then(function(r) { return r.json(); })
@@ -11705,7 +11705,7 @@ function selectRamp(name) {
 
             fetch(API_BASE + '/api/analyze', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
                 body: JSON.stringify(_classAnalyzePayload)
             })
             .then(function(r) { return r.json(); })
@@ -15033,7 +15033,7 @@ function selectRamp(name) {
 
                 fetch(API_BASE + '/api/analyze', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
                     body: JSON.stringify(analyzePayload)
                 })
                 .then(function(r) { return r.json(); })
@@ -17599,7 +17599,7 @@ function selectRamp(name) {
 
             fetch(API_BASE + '/api/analyze', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
                 body: JSON.stringify(_specificSceneAnalyzePayload)
             })
             .then(function(r) { return r.json(); })
@@ -18084,7 +18084,7 @@ function selectRamp(name) {
 
             fetch(API_BASE + '/api/analyze', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
                 body: JSON.stringify(_rgbAnalyzePayload)
             })
             .then(function(r) { return r.json(); })
@@ -25596,6 +25596,11 @@ function renderRawDlStatus() {
     }
     status.innerHTML = html;
 }
+function _sylvaResponseContentType(r) {
+    try { return String((r && r.headers && r.headers.get('Content-Type')) || '').toLowerCase(); }
+    catch (e) { return ''; }
+}
+
 function downloadRawBands() {
     var status = document.getElementById('raw-bands-status');
     var btn    = document.getElementById('btn-raw-bands-download');
@@ -25653,8 +25658,8 @@ function downloadRawBands() {
         })
     })
     .then(function(r) {
-        var ct = r.headers.get('Content-Type') || '';
-        if (ct.indexOf('application/zip') !== -1) {
+        var contentType = _sylvaResponseContentType(r);
+        if (contentType.indexOf('application/zip') !== -1) {
             // Başarılı: ZIP dosyası döndü
             var cd = r.headers.get('Content-Disposition') || '';
             var m = /filename="?([^"; ]+)"?/.exec(cd);
@@ -25762,44 +25767,17 @@ function _sylvaDownloadAnalysisIndex() {
 }
 
 function _sylvaSyncActivePaneForDownload(callback) {
+    // İndirme penceresi açılırken /api/analyze'ı tekrar çağırma. Büyük AOI'lerde
+    // bu gereksiz senkronizasyon TXT'de 20+ saniyelik bekleme ve ek tile yarışı
+    // oluşturuyordu. Analiz payload'ı zaten aktif pane'de saklanıyor.
     var _pane = _sylvaDownloadPaneId();
     var _payload = _sylvaDownloadPayload();
-    if (!_payload || typeof API_BASE === 'undefined') {
-        var noOp = Promise.resolve(null);
-        window._sylvaDownloadSyncPromise = noOp;
-        if (typeof callback === 'function') noOp.then(callback);
-        return noOp;
+    if (_payload) {
+        try { window._sylvaDownloadPayloadByPane[_pane] = JSON.parse(JSON.stringify(_payload)); } catch(e) {}
     }
-
-    // Snapshot'ı önce kaydet: kullanıcı indirme penceresi açıkken başka bir ekrana
-    // tıklasa bile bu indirme isteği açıldığı andaki ekranı kullanmaya devam eder.
-    var payloadSnapshot = JSON.parse(JSON.stringify(_payload));
-    window._sylvaDownloadPayloadByPane[_pane] = payloadSnapshot;
-
-    var promise = fetch(API_BASE + '/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payloadSnapshot)
-    })
-    .then(function (r) { return r.json().then(function(data){ return { ok:r.ok, data:data }; }); })
-    .then(function (result) {
-        var data = result && result.data ? result.data : {};
-        if (data && data.analysisId) {
-            window._sylvaDownloadAnalysisIdByPane[_pane] = data.analysisId;
-        }
-        if (data && data.nativeCrs) {
-            window._lastAnalyzeNativeCrs = data.nativeCrs;
-            window._lastAnalyzeNativeCrsByPane = window._lastAnalyzeNativeCrsByPane || { map: null, map2: null };
-            window._lastAnalyzeNativeCrsByPane[_pane] = data.nativeCrs;
-        }
-        return data;
-    })
-    .catch(function () { return null; })
-    .then(function (data) {
-        if (typeof callback === 'function') callback(data);
-        return data;
-    });
+    var promise = Promise.resolve(null);
     window._sylvaDownloadSyncPromise = promise;
+    if (typeof callback === 'function') promise.then(callback);
     return promise;
 }
 
@@ -26269,6 +26247,7 @@ function _executeGeoTiffDownloadCore() {
             clipMode: _dlClipMode,
             // 🆕 Çift ekran: aktif ekranın kendi izole analiz oturumu.
             analysisId: (window._sylvaDownloadAnalysisIdByPane || {})[_gtiffPane] || null,
+            analysisPayload: window._sylvaDownloadPayloadByPane[_gtiffPane] || _sylvaDownloadPayload() || null,
             // roi: sunucu tarafında image.clip(roi) ile AOI dışı alanları
             // kırpmak/NoData yapmak için kullanılır (analiz ve ham bant
             // indirme uç noktalarıyla aynı alan adı ve GeoJSON formatı).
@@ -26276,8 +26255,8 @@ function _executeGeoTiffDownloadCore() {
         })
     })
     .then(function(r) {
-        var ct = r.headers.get('Content-Type') || '';
-        // Sunucu hata durumunda JSON, başarı durumunda ZIP raster paketi döner.
+        var contentType = _sylvaResponseContentType(r);
+        // Sunucu hata durumunda JSON, başarı durumunda ZIP döner.
         // 🛠️ BUG FİX: Aşağıdaki iki durumda da sunucuya GERÇEKTEN ulaşılmış
         // ve bir HTTP yanıtı alınmıştır (bağlantı sorunu YOKTUR) — bu yüzden
         // fırlatılan hataya _sylvaServerReached=true işareti konur. .catch()
@@ -26287,7 +26266,7 @@ function _executeGeoTiffDownloadCore() {
         // gösterir — sunucu zaten yanıt verip düzgün bir hata döndürdüğünde
         // (ör. kapasite/boş veri hatası) artık bu alakasız/kafa karıştırıcı
         // mesaj gösterilmez.
-        if (ct.indexOf('application/json') !== -1) {
+        if (contentType.indexOf('application/json') !== -1) {
             return r.json().then(function(data) {
                 var _jsonErr = new Error((data && data.error) || 'Bilinmeyen hata');
                 _jsonErr._sylvaServerReached = true;
@@ -26302,26 +26281,7 @@ function _executeGeoTiffDownloadCore() {
         var cd = r.headers.get('Content-Disposition') || '';
         var m = /filename="?([^"]+)"?/.exec(cd);
         var tifName = m ? m[1] : (filename + '.zip');
-        return r.blob().then(function(blob) {
-            // 🔒 Çevresel + Kentsel + Topografik tüm rasterlarda tek başına
-            // TIFF indirmesine izin verme. Sunucu ZIP döndürdüyse aynen kullan;
-            // eski/önbellekli sunucu TIFF döndürürse burada ZIP'e paketle.
-            var _isZip = (ct.indexOf('application/zip') !== -1) ||
-                         (/\.zip$/i.test(tifName)) ||
-                         (blob && blob.type === 'application/zip');
-            if (_isZip) {
-                return { blob: blob, tifName: /\.zip$/i.test(tifName) ? tifName : (String(tifName).replace(/\.[^.]+$/,'') + '.zip') };
-            }
-            if (typeof JSZip === 'undefined') {
-                throw new Error('ZIP paketleme kütüphanesi yüklenemedi; raster çıplak TIFF olarak indirilmeyecek.');
-            }
-            var _zip = new JSZip();
-            var _tifName = String(tifName || filename || 'SylvaGIS_export.tif').replace(/\.zip$/i,'');
-            if (!/\.tif$/i.test(_tifName)) _tifName += '.tif';
-            _zip.file(_tifName, blob);
-            return _zip.generateAsync({type:'blob', compression:'DEFLATE', compressionOptions:{level:6}})
-                .then(function(_zipBlob){ return { blob:_zipBlob, tifName:String(_tifName).replace(/\.tif$/i,'.zip') }; });
-        });
+        return r.blob().then(function(blob) { return { blob: blob, tifName: tifName }; });
     })
     .then(function(res) {
         var blobUrl = URL.createObjectURL(res.blob);
@@ -52482,9 +52442,9 @@ document.addEventListener('keydown', function(e) {
      ════════════════════════════════════════════════════════════════ -->
 <script>
 (function () {
-    var _SYLVA_MAX_TILE_RETRIES = 8;      // önceki denemedeki 4'ten çok daha cömert
-    var _SYLVA_RETRY_BASE_MS   = 1000;
-    var _SYLVA_RETRY_CAP_MS    = 8000;    // tek bir denemenin üst gecikme sınırı
+    var _SYLVA_MAX_TILE_RETRIES = 2;      // önceki denemedeki 4'ten çok daha cömert
+    var _SYLVA_RETRY_BASE_MS   = 900;
+    var _SYLVA_RETRY_CAP_MS    = 2500;    // tek bir denemenin üst gecikme sınırı
     var _SYLVA_BLANK_ALPHA_THRESHOLD = 8;   // 0-255 arası; bunun altı "saydam" sayılır
     var _SYLVA_BLANK_SAMPLE_GRID = 6;       // 6x6 = 36 örnek nokta (performans için yeterli)
 
@@ -52551,22 +52511,15 @@ document.addEventListener('keydown', function(e) {
                 _sylvaHandleFailure(e && e.tile);
             });
 
-            // 2) Sessiz/boş (200 OK ama tamamen saydam) karo
+            // 2) 200 OK karo burada BAŞARILI kabul edilir. Daha önce canvas
+            // üzerinden 'tamamen saydam' kontrolü yapılıyordu; bu kontrol
+            // basemap/şeffaf analiz katmanlarında geçerli veriyi yanlışlıkla
+            // hata sayıp retry fırtınasına çevirebiliyordu. STATUS: 0 ve
+            // gereksiz _sylvaRetry isteklerinin önemli bir kısmı bu zincirden
+            // kaynaklanıyordu. Gerçek tileerror zaten yukarıda yakalanıyor.
             this.on('tileload', function (e) {
                 var tile = e && e.tile;
-                if (!tile) return;
-                // Bir sonraki animasyon karesinde kontrol et — görsel henüz
-                // tam decode olmamışsa yanlış pozitif üretmesin.
-                requestAnimationFrame(function () {
-                    if (_sylvaTileLooksBlank(tile)) {
-                        _sylvaHandleFailure(tile);
-                    } else {
-                        // Başarılı içerik geldi — bu kareye ait deneme sayacı sıfırlanır
-                        // ki ileride (ör. pan sonrası) yeniden aynı DOM elemanı hatalı
-                        // içerik alırsa tekrar tam hak kullanabilsin.
-                        tile._sylvaRetryCount = 0;
-                    }
-                });
+                if (tile) tile._sylvaRetryCount = 0;
             });
         });
     });
@@ -53016,7 +52969,7 @@ refresh();
     }
     function responseBlob(url, body) {
         return fetch((window.API_BASE || '') + url, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })
-            .then(function (r) { if (!r.ok || (r.headers.get('Content-Type') || '').indexOf('application/json') >= 0) return r.json().then(function(d){throw new Error((d && d.error) || r.statusText);}); return r.blob(); });
+            .then(function (r) { if (!r.ok || _sylvaResponseContentType(r).indexOf('application/json') >= 0) return r.json().then(function(d){throw new Error((d && d.error) || r.statusText);}); return r.blob(); });
     }
     // 🛠️ BUG FİX (ArcMap "Could not add the specified file(s) — The document
     // type is not supported for drag and drop"): sunucu artık tek katmanlı
@@ -53037,35 +52990,13 @@ refresh();
     function responseBlobNamed(url, body, fallbackName) {
         return fetch((window.API_BASE || '') + url, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })
             .then(function (r) {
-                if (!r.ok || (r.headers.get('Content-Type') || '').indexOf('application/json') >= 0) {
+                if (!r.ok || _sylvaResponseContentType(r).indexOf('application/json') >= 0) {
                     return r.json().then(function(d){throw new Error((d && d.error) || r.statusText);});
                 }
                 var cd = r.headers.get('Content-Disposition') || '';
                 var m = /filename="?([^"; ]+)"?/.exec(cd);
                 var name = m ? m[1] : fallbackName;
-                return r.blob().then(function (blob) {
-                    // 🔒 KESİN ZIP KURALI: Eski/önbellekteki bir sunucu tek TIFF
-                    // döndürse bile çevresel/kentsel/topografik raster indirmesi
-                    // tarayıcıya çıplak .tif olarak bırakılamaz. Güncel sunucu zaten
-                    // ZIP döndürür; bu istemci tarafı yalnızca geriye dönük güvenlik
-                    // ağıdır. JSZip ile gelen TIFF'i ZIP'e sar ve uzantıyı zorunlu
-                    // olarak .zip yap.
-                    var _isZip = (ct.indexOf('application/zip') !== -1) ||
-                                 (/\.zip$/i.test(name)) ||
-                                 (blob && blob.type === 'application/zip');
-                    if (_isZip || typeof JSZip === 'undefined') {
-                        if (!_isZip && typeof JSZip === 'undefined') {
-                            throw new Error('ZIP paketleme kütüphanesi yüklenemedi; raster çıplak TIFF olarak indirilmeyecek.');
-                        }
-                        return { blob: blob, name: /\.zip$/i.test(name) ? name : (String(name).replace(/\.[^.]+$/,'') + '.zip') };
-                    }
-                    var _zip = new JSZip();
-                    var _tifName = String(name || fallbackName || 'SylvaGIS_export.tif').replace(/\.zip$/i,'');
-                    if (!/\.tif$/i.test(_tifName)) _tifName += '.tif';
-                    _zip.file(_tifName, blob);
-                    return _zip.generateAsync({type:'blob', compression:'DEFLATE', compressionOptions:{level:6}})
-                        .then(function(_zipBlob){ return { blob:_zipBlob, name:String(_tifName).replace(/\.tif$/i,'.zip') }; });
-                });
+                return r.blob().then(function (blob) { return { blob: blob, name: name }; });
             });
     }
     function downloadBlob(blob, name) { var a=document.createElement('a'), url=URL.createObjectURL(blob); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(function(){URL.revokeObjectURL(url);}, 60000); }
@@ -53109,52 +53040,38 @@ refresh();
         if (btn) { btn.disabled=true; btn.textContent='⏳ ' + _dlqT('dlq_preparing_btn', 'Hazırlanıyor…'); }
         if (status) { status.style.display='block'; status.style.color='#1e3a8a'; status.textContent='⏳ ' + _dlqT('dlq_preparing_active', 'Aktif ekrandaki raster analizler hazırlanıyor…'); }
         var items=[];
-        entries.reduce(function(chain, entry, n) {
-            return chain.then(function () {
-                if(status) status.textContent='⏳ ' + _dlqFmt(_dlqT('dlq_progress', '{n}/{total} — {name} hazırlanıyor…'), { n: n + 1, total: entries.length, name: entry.index });
-                return requestJson('/api/analyze', entry.payload).then(function (analysis) {
-                    if (!analysis.analysisId) throw new Error(_dlqFmt(_dlqT('dlq_session_error', '{name} için analiz oturumu oluşturulamadı.'), { name: entry.index }));
-                    // 🏷️ Export Convention: SylvaGIS_export_[Analiz_Türü]_[Sensör/Veri]_[Alan_Adı]_[Tarih]
-                    var _ts = sylvaExportTypeAndSourceFromPayload(entry.payload);
-                    // 🆕 Tarih SADECE uydu görüntüsü/uydu indeks analizlerinde
-                    // (NDVI/NDWI vb.) dosya adına eklenir — LULC/TOPO/Çevresel
-                    // analizlerde hiç eklenmez. Eklendiğinde de tüm katmanlar
-                    // için ORTAK/bugünkü bir tarih DEĞİL, o KATMANIN kendi
-                    // analiz isteğinde kullanılan gerçek tarih (endDate/
-                    // startDate) kullanılır — Zaman Serisi/çoklu tarihli
-                    // indirmelerde her dosya kendi doğru tarihini taşır.
-                    var _entryIsDateable = (typeof isSatelliteIndexAnalysis === 'function' && isSatelliteIndexAnalysis(entry.index)) || entry.index === 'RGB';
-                    var _entryDatePart = _entryIsDateable ? ((entry.payload && (entry.payload.endDate || entry.payload.startDate)) || '') : '';
-                    var _entryFilename;
-                    if (_gtiffIsAutoName) {
-                        var _p = ['SylvaGIS_export'];
-                        if (_ts.type) _p.push(sylvaTranslitTR(_ts.type).replace(/[^A-Za-z0-9]+/g, '_'));
-                        if (_ts.source) _p.push(sylvaTranslitTR(_ts.source).replace(/[^A-Za-z0-9]+/g, '_'));
-                        if (_gtiffAreaName) {
-                            var _ac = sylvaTranslitTR(_gtiffAreaName).replace(/\s+/g, '_').replace(/[^A-Za-z0-9_\-]+/g, '');
-                            if (_ac) _p.push(_ac);
-                        }
-                        if (_entryDatePart) _p.push(_entryDatePart);
-                        _entryFilename = safeName(_p.join('_'));
-                    } else {
-                        // Kullanıcı kendi dosya adını yazdı — yine de aynı isim
-                        // altında farklı sensör/analiz türlerinin çakışmasını
-                        // önlemek için tür+kaynak eki eklenir.
-                        var _suffix = _ts.type + (_ts.source ? ('_' + _ts.source) : '');
-                        _entryFilename = safeName(filename + '_' + _suffix);
-                    }
-                    // 🛠️ BUG FİX (bkz. responseBlobNamed() üstündeki not): flatTiff
-                    // artık tek katmanlı indirmede de 'false' gönderilir ki sunucu
-                    // — LULC'de olduğu gibi diğer TÜM analizlerde de — RAT/VAT/.clr
-                    // yan dosyalarını içeren tam paketi (.zip) döndürebilsin; gerçek
-                    // dosya adı/uzantısı aşağıda sunucunun Content-Disposition
-                    // başlığından okunur, artık körü körüne ".tif" eklenmez.
-                    items.push({ analysisId:analysis.analysisId, filename:_entryFilename, scale:scale, crs:crs,
-                        clipMode:entry.payload.clipMode || 'clip', roi:entry.payload.roi || null, rendered:true,
-                        visualization:exportVisualFor(pane, entry.key), flatTiff:false });
-                });
+        entries.forEach(function(entry, n) {
+            if(status) status.textContent='⏳ ' + _dlqFmt(_dlqT('dlq_progress', '{n}/{total} — {name} hazırlanıyor…'), { n: n + 1, total: entries.length, name: entry.index });
+            // Analizi ikinci kez çalıştırma; mevcut payload doğrudan indirme
+            // endpoint'ine gider. Bu, büyük AOI'lerde gereksiz /api/analyze
+            // beklemesini ve devasa analysisId üretimini ortadan kaldırır.
+            var _ts = sylvaExportTypeAndSourceFromPayload(entry.payload);
+            var _entryIsDateable = (typeof isSatelliteIndexAnalysis === 'function' && isSatelliteIndexAnalysis(entry.index)) || entry.index === 'RGB';
+            var _entryDatePart = _entryIsDateable ? ((entry.payload && (entry.payload.endDate || entry.payload.startDate)) || '') : '';
+            var _entryFilename;
+            if (_gtiffIsAutoName) {
+                var _p = ['SylvaGIS_export'];
+                if (_ts.type) _p.push(sylvaTranslitTR(_ts.type).replace(/[^A-Za-z0-9]+/g, '_'));
+                if (_ts.source) _p.push(sylvaTranslitTR(_ts.source).replace(/[^A-Za-z0-9]+/g, '_'));
+                if (_gtiffAreaName) {
+                    var _ac = sylvaTranslitTR(_gtiffAreaName).replace(/\s+/g, '_').replace(/[^A-Za-z0-9_\-]+/g, '');
+                    if (_ac) _p.push(_ac);
+                }
+                if (_entryDatePart) _p.push(_entryDatePart);
+                _entryFilename = safeName(_p.join('_'));
+            } else {
+                var _suffix = _ts.type + (_ts.source ? ('_' + _ts.source) : '');
+                _entryFilename = safeName(filename + '_' + _suffix);
+            }
+            items.push({
+                analysisId: (window._sylvaDownloadAnalysisIdByPane || {})[pane] || null,
+                analysisPayload: entry.payload,
+                filename:_entryFilename, scale:scale, crs:crs,
+                clipMode:entry.payload.clipMode || 'clip', roi:entry.payload.roi || null, rendered:true,
+                visualization:exportVisualFor(pane, entry.key), flatTiff:false
             });
-        }, Promise.resolve()).then(function () {
+        });
+        Promise.resolve().then(function () {
             if (status) status.textContent='⏳ ' + _dlqT('dlq_building_geotiff', 'GeoTIFF dosyası oluşturuluyor…');
             if (items.length === 1) return responseBlobNamed('/api/download-geotiff', items[0], items[0].filename + '.zip');
             var _batchName = _gtiffIsAutoName
@@ -54000,6 +53917,37 @@ var h='<div class="env-info-backdrop topo-landuse-info-backdrop"><section class=
 var old=document.querySelector('.topo-landuse-info-backdrop');if(old)old.remove();document.body.insertAdjacentHTML('beforeend',h);var x=document.querySelector('.topo-landuse-info-backdrop');x.addEventListener('click',function(e){if(e.target===x||e.target.closest('.topo-landuse-info-close'))x.remove()});x.querySelector('.topo-landuse-info-close').focus();}
 window.openInfo=render;
 })();</script></body>
+</script>
+
+<script id="sylva-basemap-tile-stability-20260819">
+(function(){
+  'use strict';
+  function wireLayer(layer){
+    if(!layer || !layer.on) return;
+    try{
+      layer.options=layer.options||{};
+      layer.options.updateWhenZooming=false;
+      layer.options.updateWhenIdle=true;
+      layer.options.keepBuffer=Math.max(3,Number(layer.options.keepBuffer||0));
+      layer.on('tileerror',function(e){
+        var tile=e&&e.tile; if(!tile||tile._sylvaBaseRetry) return;
+        tile._sylvaBaseRetry=0;
+        var src=tile.src;
+        function retry(){
+          if(tile._sylvaBaseRetry>=1) return;
+          tile._sylvaBaseRetry++;
+          var sep=src.indexOf('?')===-1?'?':'&';
+          setTimeout(function(){tile.src=src+sep+'_sylvaBaseRetry='+tile._sylvaBaseRetry+'_'+Date.now();},900);
+        }
+        retry();
+      });
+    }catch(e){}
+  }
+  function scan(){
+    try{Object.keys(window.basemapInstances||{}).forEach(function(k){var l=window.basemapInstances[k]; if(l&&l.eachLayer) l.eachLayer(wireLayer); else wireLayer(l);});}catch(e){}
+  }
+  document.addEventListener('DOMContentLoaded',function(){setTimeout(scan,300);setTimeout(scan,1200);setTimeout(scan,3000);});
+})();
 </script>
 </body>
 </html>
