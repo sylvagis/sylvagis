@@ -12228,7 +12228,7 @@ function selectRamp(name) {
                      html += '</div>';
                  } else if (meta.classesRaw) {
                     try {
-                        var classes = JSON.parse(meta.classesRaw);
+                        var classes = (typeof window.sylvaLocalizedNativeClasses === 'function' && window.sylvaLocalizedNativeClasses(meta.analysisName)) || JSON.parse(meta.classesRaw);
                         html += '<div style="display:flex;flex-direction:column;gap:2px;margin-top:5px;">';
                         classes.forEach(function (cls) {
                             html += '<div style="display:flex;align-items:center;gap:4px;">'
@@ -12967,6 +12967,7 @@ function selectRamp(name) {
         // katmanların bir listesini gösterir; kullanıcı birine tıklayınca
         // o katman öne (en üste) getirilir.
         var _LULC_SWITCH_TITLES = {
+            'LULC':        'Dynamic World V1 — Land Cover',
             'LULC_ESA':    'ESA WorldCover',
             'LULC_MODIS':  'MODIS MCD12Q1',
             'LULC_CORINE': 'CORINE Land Cover'
@@ -25952,6 +25953,26 @@ function sylvaRefreshGeoTiffFilenameIfAuto() {
     if (areaInput) areaInput.addEventListener('input', sylvaRefreshGeoTiffFilenameIfAuto);
 })();
 
+// 🆕 ÇEVRESEL/KENTSEL RASTER DIŞA AKTARIMI — Topografik rasterlerle aynı
+// GeoTIFF hattını kullanır. Bina Çatı Tespiti bilinçli olarak bunun dışındadır
+// çünkü o analiz vektör bina/çatı geometrisi üretir.
+var SYLVA_ENV_URBAN_RASTER_INDICES = [
+    'UHI_LST','UHI_TREND','LST_LULC_CORRELATION','WATER_OCCURRENCE','WATER_CHANGE',
+    'WATER_SEASONALITY','RESERVOIR_VOLUME','WATER_QUALITY_PROXY','VEG_CHANGE',
+    'FOREST_LOSS','BURN_SEVERITY','CANOPY_HEIGHT_BIOMASS','FOREST_HEALTH',
+    'URBAN_GROWTH','IMPERVIOUS_CHANGE','NIGHTLIGHTS_ECONOMIC','DROUGHT_INDEX',
+    'FLOOD_MAPPING','LANDSLIDE_SUSCEPTIBILITY','DROUGHT_RISK_COMPOSITE',
+    'EARTHQUAKE_DAMAGE_PROXY','NO2_TIMESERIES','AEROSOL_OPTICAL_DEPTH',
+    'SO2_CO_ANOMALY','COASTLINE_CHANGE','SST_TREND'
+];
+function sylvaIsEnvUrbanRasterAnalysis(index) {
+    return SYLVA_ENV_URBAN_RASTER_INDICES.indexOf(String(index || '').toUpperCase()) !== -1;
+}
+function sylvaIsTopoLikeRasterAnalysis(index) {
+    var k=String(index||'').toUpperCase();
+    return sylvaIsEnvUrbanRasterAnalysis(k) || /^TOPO(?:_|$)/.test(k);
+}
+
 function openGeoTiffDownloadDialog() {
     // Pencere açılır açılmaz SON TIKLANAN ekranın analiz oturumunu sunucuyla
     // senkronize et. Ekran 2 aktifse Ekran 1'in verisi kesinlikle kullanılmaz.
@@ -26028,8 +26049,8 @@ function openGeoTiffDownloadDialog() {
     // göstermek kafa karıştırıcı olur.
     var _gtMeta = (typeof getSelectedAnalysisMeta === 'function') ? getSelectedAnalysisMeta() : null;
     var _gtDownloadIndex = _sylvaDownloadAnalysisIndex();
-    var _gtIsLulcOrTopo = !!(_gtDownloadIndex && ((typeof isLulcAnalysis === 'function' && isLulcAnalysis(_gtDownloadIndex)) || (typeof isTopoAnalysis === 'function' && isTopoAnalysis(_gtDownloadIndex))))
-        || !!(_gtMeta && (isLulcAnalysis(_gtMeta.analysisName) || isTopoAnalysis(_gtMeta.analysisName)));
+    var _gtIsLulcOrTopo = !!(_gtDownloadIndex && ((typeof isLulcAnalysis === 'function' && isLulcAnalysis(_gtDownloadIndex)) || (typeof isTopoAnalysis === 'function' && isTopoAnalysis(_gtDownloadIndex)) || sylvaIsEnvUrbanRasterAnalysis(_gtDownloadIndex)))
+        || !!(_gtMeta && (isLulcAnalysis(_gtMeta.analysisName) || isTopoAnalysis(_gtMeta.analysisName) || sylvaIsEnvUrbanRasterAnalysis(_gtMeta.analysisName)));
     var scaleWrap = document.getElementById('geotiff-scale-wrap');
     if (scaleWrap) {
         scaleWrap.style.display = _gtIsLulcOrTopo ? 'none' : '';
@@ -42352,6 +42373,50 @@ var SYLVA_TRANSLATIONS = {
   },
 };
 
+// ── Üstte Gösterilecek Katman başlığı: 30 dil ────────────────────────────────
+// Bu metin teknik veri seti adlarından bağımsızdır; yalnızca kutunun başlık/tooltip
+// metnidir. Katman adları (Dynamic World, ESA, MODIS, CORINE) çevrilmez.
+(function () {
+  var layerSwitchTitle30 = {
+    en: 'Layer to Show on Top',
+    uz: 'Yuqorida ko‘rsatiladigan qatlam',
+    el: 'Επίπεδο που εμφανίζεται στην κορυφή',
+    bg: 'Слой, показван отгоре',
+    tr: 'Üstte Gösterilecek Katman',
+    az: 'Yuxarıda göstəriləcək qat',
+    hu: 'Felül megjelenítendő réteg',
+    kk: 'Жоғарыда көрсетілетін қабат',
+    de: 'Oben anzuzeigende Ebene',
+    fr: 'Couche à afficher au-dessus',
+    es: 'Capa que se mostrará arriba',
+    pt: 'Camada a apresentar no topo',
+    ar: 'الطبقة المعروضة في الأعلى',
+    fa: 'لایه‌ای که در بالا نمایش داده می‌شود',
+    zh: '顶部显示的图层',
+    ja: '上に表示するレイヤー',
+    ko: '위에 표시할 레이어',
+    hi: 'ऊपर दिखाई जाने वाली परत',
+    id: 'Lapisan yang ditampilkan di atas',
+    ru: 'Слой, отображаемый сверху',
+    th: 'เลเยอร์ที่แสดงด้านบน',
+    bn: 'উপরে প্রদর্শিত স্তর',
+    vi: 'Lớp hiển thị ở trên cùng',
+    ur: 'اوپر دکھائی جانے والی تہہ',
+    pl: 'Warstwa wyświetlana na górze',
+    ms: 'Lapisan yang dipaparkan di atas',
+    ky: 'Жогору көрсөтүлө турган катмар',
+    mn: 'Дээр харуулах давхарга',
+    ka: 'ზემოთ გამოსატანი ფენა',
+    it: 'Livello da visualizzare in alto'
+  };
+  Object.keys(layerSwitchTitle30).forEach(function (lang) {
+    if (SYLVA_TRANSLATIONS[lang]) {
+      SYLVA_TRANSLATIONS[lang].layer_switch_title = layerSwitchTitle30[lang];
+    }
+  });
+})();
+
+
 // Bina çatı analizi için kullanıcıya görünen metinler — desteklenen 30 dil.
 (function () {
   var buildingRoofLabels = {
@@ -52687,6 +52752,61 @@ refresh();
         var a = window.SYLVA_ASPECT_DIRECTION_LABELS[lang] || window.SYLVA_ASPECT_DIRECTION_LABELS.en;
         return a.map(function(label, i){ return { code:i+1, label:label, color:null }; });
     }
+    // 🆕 Native classified raster sınıfları: çevresel/kentsel modüllerde
+    // HTML'de sınıflandırılmış bir lejant tanımlıysa, kullanıcı Lejantı Uygula
+    // panelini ayrıca açmamış olsa bile indirme Topografik Analizlerdeki gibi
+    // aynı sınıf kodları + renkleri + aktif dildeki sınıf adlarıyla paketlenir.
+    // Bina Çatı Tespiti burada özellikle dışarıda bırakılır.
+    function sylvaLocalizedNativeClasses(index) {
+        var k=String(index||'').toUpperCase();
+        if(k==='BUILDING_FOOTPRINT') return null;
+        var el=document.querySelector('input[name="sylva-module"][data-analysis="'+k+'"]');
+        if(!el || (el.getAttribute('data-legend-type')||'').toLowerCase()!=='classified') return null;
+        var raw=el.getAttribute('data-legend-classes');
+        if(!raw) return null;
+        var rows; try{ rows=JSON.parse(raw); }catch(e){ return null; }
+        if(!Array.isArray(rows)||!rows.length) return null;
+        var lang=(typeof _sylvaLang==='string'&&_sylvaLang)?_sylvaLang:'en';
+        var labels={
+          FOREST_LOSS:{
+            tr:['Orman (Değişmeyen)','Orman Kaybı','Orman Kazanımı'], en:['Unchanged Forest','Forest Loss','Forest Gain'],
+            de:['Unveränderter Wald','Waldverlust','Waldgewinn'], fr:['Forêt inchangée','Perte forestière','Gain forestier'],
+            es:['Bosque sin cambios','Pérdida forestal','Ganancia forestal'], pt:['Floresta inalterada','Perda florestal','Ganho florestal'],
+            it:['Foresta invariata','Perdita forestale','Guadagno forestale'], ru:['Неизменный лес','Потеря леса','Прирост леса'],
+            zh:['未变化森林','森林损失','森林增加'], ja:['変化なしの森林','森林減少','森林増加'], ko:['변화 없는 산림','산림 손실','산림 증가'],
+            ar:['غابة غير متغيرة','فقدان الغابات','اكتساب الغابات'], fa:['جنگل بدون تغییر','کاهش جنگل','افزایش جنگل'],
+            ur:['غیر تبدیل شدہ جنگل','جنگلات کا نقصان','جنگلات میں اضافہ'], hi:['अपरिवर्तित वन','वन हानि','वन वृद्धि'],
+            id:['Hutan Tidak Berubah','Kehilangan Hutan','Pertambahan Hutan'], ms:['Hutan Tidak Berubah','Kehilangan Hutan','Pertambahan Hutan'],
+            pl:['Niezmieniony las','Utrata lasu','Przyrost lasu'], hu:['Változatlan erdő','Erdőveszteség','Erdőgyarapodás'],
+            el:['Αμετάβλητο δάσος','Απώλεια δάσους','Αύξηση δάσους'], bg:['Непроменена гора','Загуба на гора','Прираст на гора'],
+            az:['Dəyişməyən meşə','Meşə itkisi','Meşə artımı'], uz:['O‘zgarmagan o‘rmon','O‘rmon yo‘qolishi','O‘rmon ortishi'],
+            kk:['Өзгермеген орман','Орман жоғалуы','Орман өсімі'], ky:['Өзгөрбөгөн токой','Токой жоголушу','Токой өсүшү'],
+            mn:['Өөрчлөлтгүй ой','Ойн хорогдол','Ойн өсөлт'], ka:['უცვლელი ტყე','ტყის დაკარგვა','ტყის ზრდა'],
+            th:['ป่าที่ไม่เปลี่ยนแปลง','การสูญเสียป่า','การเพิ่มขึ้นของป่า'], vi:['Rừng không đổi','Mất rừng','Tăng rừng'],
+            bn:['অপরিবর্তিত বন','বন ক্ষয়','বন বৃদ্ধি']
+          },
+          URBAN_GROWTH:{
+            tr:['Değişmeyen','Yeni Kentsel Alan'], en:['Unchanged','New Urban Area'],
+            de:['Unverändert','Neue Siedlungsfläche'], fr:['Inchangé','Nouvelle zone urbaine'], es:['Sin cambios','Nueva zona urbana'],
+            pt:['Sem alteração','Nova área urbana'], it:['Invariato','Nuova area urbana'], ru:['Без изменений','Новая городская территория'],
+            zh:['未变化','新增城市区域'], ja:['変化なし','新規都市区域'], ko:['변화 없음','신규 도시 지역'],
+            ar:['دون تغيير','منطقة حضرية جديدة'], fa:['بدون تغییر','منطقه شهری جدید'], ur:['غیر تبدیل شدہ','نیا شہری علاقہ'],
+            hi:['अपरिवर्तित','नया शहरी क्षेत्र'], id:['Tidak Berubah','Area Perkotaan Baru'], ms:['Tidak Berubah','Kawasan Bandar Baharu'],
+            pl:['Bez zmian','Nowy obszar miejski'], hu:['Változatlan','Új városi terület'], el:['Χωρίς αλλαγή','Νέα αστική περιοχή'],
+            bg:['Без промяна','Нова градска зона'], az:['Dəyişməyən','Yeni şəhər ərazisi'], uz:['O‘zgarmagan','Yangi shahar hududi'],
+            kk:['Өзгермеген','Жаңа қалалық аумақ'], ky:['Өзгөрбөгөн','Жаңы шаар аймагы'], mn:['Өөрчлөлтгүй','Шинэ хотын бүс'],
+            ka:['უცვლელი','ახალი ურბანული ტერიტორია'], th:['ไม่เปลี่ยนแปลง','พื้นที่เมืองใหม่'], vi:['Không đổi','Khu vực đô thị mới'],
+            bn:['অপরিবর্তিত','নতুন নগর এলাকা']
+          }
+        };
+        var arr=labels[k]&&labels[k][lang] ? labels[k][lang] : (labels[k]&&labels[k].en);
+        return rows.map(function(c,i){
+          var code=(c.code!==undefined?Number(c.code):i);
+          return {min:code,max:code,color:String(c.color||'#64748b'),label:(arr&&arr[i])||String(c.label||('Class '+(i+1)))};
+        });
+    }
+    window.sylvaLocalizedNativeClasses = sylvaLocalizedNativeClasses;
+
     function exportVisualFor(pane, key) {
         var _paneStore = window._sylvaEditorStateByPane && window._sylvaEditorStateByPane[pane];
         var _entryPayload = window._sylvaLayerAnalyzePayloadByPane &&
@@ -52815,6 +52935,18 @@ refresh();
         if (!isFinite(max) || max === min) max = 1;
         var _exportPayload = window._sylvaLayerAnalyzePayloadByPane && window._sylvaLayerAnalyzePayloadByPane[pane] && window._sylvaLayerAnalyzePayloadByPane[pane][key];
         var _exportIndex = _exportPayload && _exportPayload.index;
+
+        // Native classified çevresel/kentsel raster: kullanıcı ayrıca sınıflandırma
+        // uygulamamış olsa bile ekrandaki yerleşik sınıflar indirilen RAT/VAT/.clr
+        // paketine aynen taşınır. Kullanıcı gerçekten kendi Classified sınıflarını
+        // tanımladıysa yukarıdaki `breaks` önceliğini korur.
+        var _nativeEnvClasses = (!breaks || !breaks.length) ? sylvaLocalizedNativeClasses(_exportIndex) : null;
+        if (_nativeEnvClasses && _nativeEnvClasses.length) {
+            breaks = _nativeEnvClasses;
+            colors = _nativeEnvClasses.map(function(b){return String(b.color).replace(/^#/,'');});
+            min = _nativeEnvClasses[0].min;
+            max = _nativeEnvClasses[_nativeEnvClasses.length-1].max;
+        }
         var legendLabels = null;
         if (_exportIndex && typeof LULC_CLASS_DEFS !== 'undefined' && LULC_CLASS_DEFS[_exportIndex]) {
             legendLabels = LULC_CLASS_DEFS[_exportIndex].map(function(d){
