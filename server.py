@@ -2816,11 +2816,11 @@ def _add_internal_raster_overviews(tif_bytes, resampling='bilinear'):
                 profile = src.profile.copy()
                 data = src.read()
                 tags = [src.tags(i) for i in range(1, src.count + 1)]
-                levels = [2, 4, 8, 16, 32, 64]
+                levels = [2, 4, 8, 16, 32, 64, 128, 256, 512]
                 levels = [lv for lv in levels if src.width // lv >= 32 and src.height // lv >= 32]
                 if not levels:
                     return tif_bytes
-                profile.update(compress='lzw', tiled=True)
+                profile.update(compress='lzw', tiled=True, BIGTIFF='IF_SAFER')
                 if profile.get('width', 0) >= 256 and profile.get('height', 0) >= 256:
                     # GeoTIFF blok boyutları 16'nın katı olmalı; GEE'den gelen
                     # profilsiz TIFF'lerde blockx/y olmayabildiği için açıkça
@@ -2880,7 +2880,7 @@ def _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=Non
     # Büyük/tiling rasterlarda ArcMap'in ilk görüntülemesini hızlandırmak için
     # dahili overviews oluştur. Veri pikselleri yeniden örneklenmez; yalnızca
     # zoom performansı için piramit eklenir.
-    profile.update(compress='lzw', tiled=True)
+    profile.update(compress='lzw', tiled=True, BIGTIFF='IF_SAFER')
     if profile.get('width', 0) >= 256 and profile.get('height', 0) >= 256:
         profile['blockxsize'] = 256
         profile['blockysize'] = 256
@@ -2899,7 +2899,7 @@ def _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=Non
                     STATISTICS_STDDEV=repr(std),
                     STATISTICS_APPROXIMATE='NO')
             # Overview levels yalnızca raster boyutu izin veriyorsa eklenir.
-            levels = [2, 4, 8, 16]
+            levels = [2, 4, 8, 16, 32, 64, 128, 256, 512]
             levels = [lv for lv in levels if profile.get('width', 0) // lv >= 32 and profile.get('height', 0) // lv >= 32]
             if levels:
                 try:
