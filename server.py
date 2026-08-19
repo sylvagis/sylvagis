@@ -6932,6 +6932,12 @@ def download_geotiff():
     try:
         req_data = request.json or {}
 
+        # 🔒 KESİN RASTER PAKET KURALI
+        # Çevresel, kentsel ve topografik rasterlar tek TIFF olarak dönemez.
+        # Eski istemciler 'flatTiff' gönderse bile bu seçenek bilinçli olarak
+        # yok sayılır; aşağıdaki route her başarılı rasterı ZIP olarak döndürür.
+        req_data['flatTiff'] = False
+
         # 🛠️ BUG FİX (AOI dışı NoData/siyah alan / yanlış kırpma sorunu):
         # Frontend, güncel Çalışma Alanı/AOI geometrisini HER indirme
         # isteğinde 'roi' alanıyla birlikte gönderir (bkz. index.html —
@@ -7391,6 +7397,8 @@ def download_geotiff():
             zip_bytes = zip_buf.getvalue()
             resp = Response(zip_bytes, mimetype='application/zip')
             resp.headers['Content-Disposition'] = 'attachment; filename="{}.zip"'.format(safe_name)
+            resp.headers['Content-Type'] = 'application/zip'
+            resp.headers['X-SylvaGIS-Raster-Package'] = 'zip'
             resp.headers['Content-Length'] = str(len(zip_bytes))
             return resp
 
@@ -7407,6 +7415,8 @@ def download_geotiff():
         zip_bytes = zip_buf.getvalue()
         resp = Response(zip_bytes, mimetype='application/zip')
         resp.headers['Content-Disposition'] = 'attachment; filename="{}.zip"'.format(safe_name)
+        resp.headers['Content-Type'] = 'application/zip'
+        resp.headers['X-SylvaGIS-Raster-Package'] = 'zip'
         resp.headers['Content-Length'] = str(len(zip_bytes))
         return resp
 
