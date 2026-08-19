@@ -7378,20 +7378,21 @@ def download_geotiff():
                       'olarak devam ediliyor: {}'.format(sym_err))
 
         if sym_files:
-            # 🔒 KESİN KURAL: GeoTIFF raster indirmesinde kullanıcıya hiçbir
-            # zaman çıplak .tif gönderilmez. Tek analiz olsa bile .tif +
-            # .aux.xml/.vat/.dbf/.clr/.cpg vb. tüm yardımcı dosyalar TEK ZIP
-            # içinde teslim edilir. `flatTiff` artık geriye dönük istemci
-            # uyumluluğu için kabul edilir ancak ZIP davranışını değiştiremez.
-            zip_buf = io.BytesIO()
-            with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-                for fname, fbytes in sym_files.items():
-                    zf.writestr(fname, fbytes)
-            zip_bytes = zip_buf.getvalue()
-            resp = Response(zip_bytes, mimetype='application/zip')
-            resp.headers['Content-Disposition'] = 'attachment; filename="{}.zip"'.format(safe_name)
-            resp.headers['Content-Length'] = str(len(zip_bytes))
-            return resp
+            # Tek analiz için kullanıcı doğrudan TIFF istediğinde renk
+            # tablosu gömülü TIFF'i döndür. Çoklu analizlerde ise sınıf
+            # isimlerini taşıyan RAT/VAT yan dosyaları batch ZIP'e katılır.
+            if req_data.get('flatTiff'):
+                tif_bytes = sym_files.get('{}.tif'.format(safe_name), tif_bytes)
+            else:
+                zip_buf = io.BytesIO()
+                with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+                    for fname, fbytes in sym_files.items():
+                        zf.writestr(fname, fbytes)
+                zip_bytes = zip_buf.getvalue()
+                resp = Response(zip_bytes, mimetype='application/zip')
+                resp.headers['Content-Disposition'] = 'attachment; filename="{}.zip"'.format(safe_name)
+                resp.headers['Content-Length'] = str(len(zip_bytes))
+                return resp
 
         # 🛠️ BUG FİX ("her ne olursa olsun tüm veriler zip olarak sorunsuz
         # insin"): sym_files hiç üretilemediyse (yukarıdaki üç dalın hepsi
