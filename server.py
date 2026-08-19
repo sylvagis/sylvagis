@@ -7685,7 +7685,11 @@ def _ensure_output_crs(tif_bytes, target_crs, nodata_value=None, is_categorical=
                       '(dosya: {}, istenen: {}) — sunucu tarafında yerel '
                       'olarak yeniden projeksiyonlanıyor.'.format(src.crs, target_crs))
 
-                src_nodata = src.nodata if src.nodata is not None else nodata_value
+                # İstekle verilen NoData sentinel'i, özellikle Dynamic World
+                # için kaynak TIFF metadata'sındaki olası 0 NoData etiketinden
+                # önce gelir: 0 = Water gerçek sınıftır ve reprojection sırasında
+                # NoData kabul edilerek kaybedilmemelidir.
+                src_nodata = nodata_value if nodata_value is not None else src.nodata
 
                 # 🛠️ BUG FİX (ArcMap "Could not open the specified file" —
                 # genel güvence katmanı): src_nodata, bandın GERÇEK piksel
@@ -7914,7 +7918,13 @@ def _true_clip_tif_bytes(tif_bytes, aoi_geom_4326, nodata_value, strict=False):
                 geom_dst  = transform_geom('EPSG:4326', dst_crs, aoi_geom_4326, precision=8)
 
                 pre_data = src.read()
-                pre_nodata = src.nodata if src.nodata is not None else nodata_value
+                # Dynamic World'de 0 = Water gerçek sınıftır. GEE/rasterio
+                # bazı indirmelerde kaynak TIFF metadata'sına 0'ı src.nodata
+                # olarak yazabiliyor. İndirme hattı Dynamic World için açıkça
+                # 255'i NoData seçtiğinden, metadata'daki 0'ı NoData kabul
+                # etmek Water sınıfını true-clip sırasında siler. İstekle
+                # verilen sentinel mevcutsa kaynak metadata'sına göre önceliklidir.
+                pre_nodata = nodata_value if nodata_value is not None else src.nodata
                 pre_valid_ratio = _valid_ratio(pre_data, pre_nodata)
 
                 # crop=True: raster kapsamını da AOI'nin bounding box'ına daraltır
