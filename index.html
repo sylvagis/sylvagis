@@ -8772,6 +8772,12 @@ tr.class-highlight-active {
                     if (!geojson || typeof L.geoJSON !== 'function' || typeof setCurrentLayer !== 'function') return;
                     activateMap2();
                     try {
+                        // Arama sonucu çalışma alanı olarak kabul edildiğinde merkez raptiyesi
+                        // artık gösterilmez; yalnızca kabul edilen polygon çalışma alanı kalır.
+                        if (searchMarker && map2) {
+                            try { map2.removeLayer(searchMarker); } catch (_markerRemoveErr) {}
+                            searchMarker = null;
+                        }
                         var layer = L.geoJSON(geojson);
                         setCurrentLayer(layer);
                         if (window.SylvaVAW &&
@@ -10747,7 +10753,7 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
     "red-yellow-green": "linear-gradient(to right,#d73027,#fee08b,#1a9850)",
     "blue-white-red": "linear-gradient(to right,#313695,#ffffff,#a50026)",
     "black-white": "linear-gradient(to right,#000000,#ffffff)",
-    gray: "linear-gradient(to right,#f1f5f9,#64748b,#0f172a)",
+    gray: "linear-gradient(to right,#ffffff,#e5e5e5,#808080)",
 
     brown: "linear-gradient(to right,#f5deb3,#8b5a2b)",
     green: "linear-gradient(to right,#b7e4c7,#1b4332)",
@@ -11517,7 +11523,7 @@ function selectRamp(name) {
                     var max = parseFloat(row.querySelector('.class-max').value);
                     var name = row.querySelector('.class-name').value.trim() || t('class_word') || 'Class';
                     var trigger = row.querySelector('.class-color-trigger');
-                    var color = trigger ? (trigger.getAttribute('data-selected-color') || trigger.style.background || '#999999') : '#999999';
+                    var color = trigger ? (trigger.getAttribute('data-pending-color') || trigger.getAttribute('data-selected-color') || trigger.style.background || '#999999') : '#999999';
                     if (!isNaN(min) && !isNaN(max)) {
                         classes.push({min:Math.min(min,max), max:Math.max(min,max), name:name, color:color});
                     }
@@ -12607,7 +12613,11 @@ function selectRamp(name) {
             // (upscale) gösterir — kullanıcı istediği kadar (maxZoom:24'e kadar)
             // zoom yapsa bile veri ARTIK HİÇBİR ZAMAN sunucu hatası yüzünden
             // kaybolmaz; sadece çok aşırı yakınlaşmada hafif bulanıklaşır.
-            var opts = Object.assign({ opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane', maxZoom: 24, maxNativeZoom: 16 }, options || {});
+            var opts = Object.assign({
+                opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane',
+                minZoom: 0, maxZoom: 24, minNativeZoom: 10, maxNativeZoom: 16,
+                keepBuffer: 8, updateWhenZooming: false, updateWhenIdle: true
+            }, options || {});
             var _rgKey = (paneId === 'map2') ? 'map2' : 'map';
             // 🛠️ BUG FİX: Sınıflandırma/Stretched/Sahne değişimi bu fonksiyonu
             // çağırarak katmanı yeniden boyanmış haliyle değiştiriyordu, ama
@@ -12808,7 +12818,11 @@ function selectRamp(name) {
             // davranış (yeni katman geldiğinde diğerleri gizlenir, "tek
             // seferde tek görünür katman") AYNEN korunur.
             var _hideOthers = (options && options.hideOthers === false) ? false : true;
-            var opts = Object.assign({ opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane', maxZoom: 24, maxNativeZoom: 16 }, options || {});
+            var opts = Object.assign({
+                opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane',
+                minZoom: 0, maxZoom: 24, minNativeZoom: 10, maxNativeZoom: 16,
+                keepBuffer: 8, updateWhenZooming: false, updateWhenIdle: true
+            }, options || {});
             delete opts.hideOthers; // Leaflet tileLayer seçeneği değil, sadece bu fonksiyona özel bayrak
             var store = window._geeLayersByPane[(paneId === 'map2') ? 'map2' : 'map'];
             if (store[layerKey]) { try { targetMap.removeLayer(store[layerKey]); } catch (e) {} delete store[layerKey]; }
@@ -12899,11 +12913,15 @@ function selectRamp(name) {
             'LULC_CORINE': 'CORINE Land Cover'
         };
         function _sylvaLayerFriendlyName(analysisName) {
+            var _nameText = String(analysisName || '');
+            // Topografik katmanlarda teknik TOPO_* kodu hiçbir zaman kullanıcıya
+            // gösterilmez. Stack anahtarındaki ::suffix de başlığa taşınmaz.
+            if (/^TOPO(?:_|$)/i.test(_nameText)) {
+                var _topoBase = _nameText.split('::')[0];
+                return _sylvaAnalysisDisplayTitle(_topoBase);
+            }
             if (window._sylvaLayerFriendlyNames && window._sylvaLayerFriendlyNames[analysisName]) {
                 return window._sylvaLayerFriendlyNames[analysisName];
-            }
-            if (/^TOPO(?:_|$)/i.test(String(analysisName || ''))) {
-                return _sylvaAnalysisDisplayTitle(analysisName);
             }
             return _LULC_SWITCH_TITLES[analysisName] || analysisName;
         }
@@ -12916,11 +12934,12 @@ function selectRamp(name) {
         // ve tarihsiz isim AYRI birer sözlükte (_sylvaLayerFriendlyNames /
         // _sylvaLayerBaseNames) saklanır.
         function _sylvaLayerBaseName(analysisName) {
+            var _nameText = String(analysisName || '');
+            if (/^TOPO(?:_|$)/i.test(_nameText)) {
+                return _sylvaAnalysisDisplayTitle(_nameText.split('::')[0]);
+            }
             if (window._sylvaLayerBaseNames && window._sylvaLayerBaseNames[analysisName]) {
                 return window._sylvaLayerBaseNames[analysisName];
-            }
-            if (/^TOPO(?:_|$)/i.test(String(analysisName || ''))) {
-                return _sylvaAnalysisDisplayTitle(analysisName);
             }
             return _LULC_SWITCH_TITLES[analysisName] || analysisName;
         }
@@ -15064,7 +15083,9 @@ function selectRamp(name) {
                     // etiketi eklenmiş ismi geri döndürür ve üzerine bir tarih etiketi
                     // DAHA eklenir — "NDVI (t1) (t2) (t3)..." şeklinde katlanarak büyürdü.
                     window._sylvaLayerFriendlyNames = window._sylvaLayerFriendlyNames || {};
-                    var _baseLayerLabel = _LULC_SWITCH_TITLES[meta.analysisName] || meta.analysisName;
+                    var _baseLayerLabel = /^TOPO(?:_|$)/i.test(String(meta.analysisName || ''))
+                        ? _sylvaAnalysisDisplayTitle(meta.analysisName)
+                        : (_LULC_SWITCH_TITLES[meta.analysisName] || meta.analysisName);
                     // 🆕 Uydu tabanlı indeks analizlerinde (NDVI/NDWI vb.) tarih
                     // yerine uydu görüntüsü veri seti adı (ör. "Sentinel-2")
                     // gösterilir; diğer analizlerde (LULC/TOPO/Çevresel vb.)
@@ -15903,6 +15924,12 @@ function selectRamp(name) {
             })();
             if (typeof window._sylvaTagContentPane === 'function') window._sylvaTagContentPane(_pane);
             renderAnalysisLegend(meta, false, _pane);
+            // Yerleşik sınıflı analizlerin (özellikle Bakı) lejant sınıf adlarını
+            // aktif dile çevir. Çeviri tamamlandığında exportVisualFor() aynı DOM
+            // etiketlerini okuyarak GeoTIFF/VAT/RAT içine birebir taşır.
+            if (meta.legendType === 'classified' && meta.classesRaw && typeof translateClassLabels === 'function') {
+                try { translateClassLabels(); } catch (_eLegendLang) {}
+            }
             if (data.stats) {
                 updateStatsTable(data.stats, _pane);
                 // 🆕 FAZ 12 — ADIM 5: chartType:'line' taşıyan analizler (ör.
@@ -15960,10 +15987,10 @@ function selectRamp(name) {
             // önce bu değerler yalnızca CSS renk çubuğunu boyamak için
             // kullanılıp hemen atılıyordu — indirme sırasında tekrar
             // erişilebilecek hiçbir yerde tutulmuyordu.
-            if (typeof _thisLayerKey !== 'undefined' && _thisLayerKey) {
+            if (_lk) {
                 window._sylvaLayerVisByPane = window._sylvaLayerVisByPane || { map: {}, map2: {} };
                 window._sylvaLayerVisByPane[_pane] = window._sylvaLayerVisByPane[_pane] || {};
-                window._sylvaLayerVisByPane[_pane][_thisLayerKey] = {
+                window._sylvaLayerVisByPane[_pane][_lk] = {
                     min: (typeof data.visMin === 'number') ? data.visMin : parseFloat(data.visMin),
                     max: (typeof data.visMax === 'number') ? data.visMax : parseFloat(data.visMax),
                     palette: (data.visPalette && Array.isArray(data.visPalette)) ? data.visPalette : null
@@ -16088,8 +16115,35 @@ function selectRamp(name) {
             // hiç "Lejantı Uygula" basmadan başka bir katmana geçse bile, geri
             // döndüğünde panel bu katmanın kendi otomatik hesaplanan değerlerini
             // gösterir — başka bir katmanın ayarlarını değil.
-            if (!skipClassifyRecalc && typeof _sylvaSaveEditorStateForLayer === 'function') {
-                _sylvaSaveEditorStateForLayer(_pane, meta.analysisName);
+            var _isPassiveTopoEditor = String(meta.analysisName || '').toUpperCase() === 'TOPO_ASPECT' ||
+                String(meta.analysisName || '').toUpperCase() === 'TOPO_HILLSHADE';
+            // Bu katman için daha önce kaydedilmiş bir editör durumu yoksa, paneli
+            // ÖNCE temiz bir başlangıç durumuna getir. Aksi halde örneğin DEM 6
+            // sınıflı iken Slope ilk kez açıldığında Slope'a DEM'in 6 sınıfı
+            // taşınıyordu. Kayıt varsa kullanıcıya ait sınıflandırma aynen korunur.
+            if (!skipClassifyRecalc && !_isPassiveTopoEditor) {
+                var _editorPaneKey = (_pane === 'map2') ? 'map2' : 'map';
+                var _editorStore = window._sylvaEditorStateByPane && window._sylvaEditorStateByPane[_editorPaneKey];
+                var _hasOwnEditorState = !!(_editorStore && Object.prototype.hasOwnProperty.call(_editorStore, _lk));
+                if (!_hasOwnEditorState) {
+                    try {
+                        if (typeof setClassificationType === 'function') setClassificationType('stretched');
+                        var _freshCount = document.getElementById('class-count');
+                        if (_freshCount) _freshCount.value = '4';
+                        if (typeof buildClassRows === 'function') buildClassRows(4);
+                        var _freshRamp = document.getElementById('selectedRamp');
+                        var _freshRampKey = (meta && meta.rampKey && ramps && ramps[meta.rampKey]) ? meta.rampKey : 'black-white';
+                        if (_freshRamp) {
+                            _freshRamp.style.background = ramps[_freshRampKey] || ramps['black-white'];
+                            _freshRamp.setAttribute('data-ramp', _freshRampKey);
+                        }
+                    } catch (_freshEditorErr) {}
+                }
+            }
+            if (!skipClassifyRecalc && !_isPassiveTopoEditor && typeof _sylvaSaveEditorStateForLayer === 'function') {
+                // Durum GERÇEK katman anahtarına kaydedilir. Böylece DEM/SLOPE/TWI
+                // gibi katmanlar birbirlerinin sınıflandırmasını miras almaz.
+                _sylvaSaveEditorStateForLayer(_pane, _lk);
             }
             if (meta && String(meta.analysisName || '').toUpperCase() === 'TOPO_ASPECT' &&
                 typeof window._sylvaRefreshAspectEditorLabels === 'function') {
@@ -21301,29 +21355,38 @@ function selectRamp(name) {
                     el.style.background = reverseGradient(el.style.background);
                 });
 
-                // Classified modunda sınıf renklerini ters sırala ve HEMEN uygula.
-                // Böylece ⇄ Reverse yalnızca buton önizlemesi değil, harita + lejant
-                // üzerinde gerçek bir görsel değişiklik yapar. Ham piksel değerleri
-                // değişmez; yalnızca semboloji renk sırası değişir.
+                // Tersine çevirme yalnızca SEMBOLOJİ önizlemesidir. Burada GEE'ye
+                // yeni istek atılmaz; böylece SylvaGIS yükleme/yanıp sönme ekranı
+                // oluşmaz. Kullanıcı 'Lejantı Uygula' dediğinde renkler veriye uygulanır.
                 if (currentClassificationType === 'classified') {
                     var rowEls = document.querySelectorAll('#class-rows-container .classification-row');
-                    var triggers = Array.from(rowEls).map(function(row) {
-                        return row.querySelector('.class-color-trigger');
-                    });
-                    // Bekleyen renk varsa onu, yoksa onaylanmış rengi al
+                    var triggers = Array.from(rowEls).map(function(row) { return row.querySelector('.class-color-trigger'); });
                     var colors = triggers.map(function(tr) {
                         return tr.getAttribute('data-pending-color') || tr.getAttribute('data-selected-color') || '#999999';
                     });
                     colors.reverse();
                     triggers.forEach(function(tr, i) {
-                        // Canlı önizleme — Apply Legend'a kadar data-selected-color değişmez
+                        if (!tr) return;
                         tr.style.background = colors[i];
                         tr.setAttribute('data-pending-color', colors[i]);
                     });
-                    _flushPendingColors();
-                    if (typeof applyClassificationToMap === 'function') applyClassificationToMap();
-                } else if (typeof applyStretchedLegend === 'function') {
-                    applyStretchedLegend();
+                    // Lejant kutusunu da aynı sırayla anında önizle; veri katmanına
+                    // dokunma. 'Lejantı Uygula' sonraki tıklamada GEE'yi yeniler.
+                    try {
+                        var _revClasses = _sylvaReadClassificationRowsForPane((typeof _sylvaActivePaneId==='function'?_sylvaActivePaneId():'map'));
+                        if (_revClasses && _revClasses.length) {
+                            // Sınıf aralıklarının/sırasının kendisi değişmez; yalnızca
+                            // renkler ters sıraya çevrilmiş önizlemeyle lejanta yazılır.
+                            renderDynamicLegend(_revClasses, (typeof _sylvaActivePaneId==='function'?_sylvaActivePaneId():'map'));
+                        }
+                    } catch (_revErr) {}
+                } else {
+                    // Stretched modda da yalnızca lejant önizlemesini ters çevir.
+                    var _revLegendBox = document.getElementById((typeof _sylvaActivePaneId==='function'&&_sylvaActivePaneId()==='map2')?'map2-legend-box':'map-legend-box');
+                    if (_revLegendBox) {
+                        var _revRamp = _revLegendBox.querySelector('.color-ramp');
+                        if (_revRamp) _revRamp.style.background = reverseGradient(_revRamp.style.background || '');
+                    }
                 }
             });
         });
@@ -43009,14 +43072,9 @@ function _sylvaRefreshAspectEditorLabels(lang) {
       rows.forEach(function(el, i){
         if (!el.getAttribute('data-user-edited') && names[i]) el.value = names[i];
       });
-      // Çeviri tamamlandıktan sonra aktif katmanın editör snapshot'ını güncelle;
-      // böylece GeoTIFF/VAT/RAT indirmesi de ekranda görünen Korece (veya diğer
-      // seçili dildeki) Aspect sınıf adlarını aynen taşır.
-      try {
-        var _ap = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
-        var _ak = window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[_ap];
-        if (_ak && typeof _sylvaSaveEditorStateForLayer === 'function') _sylvaSaveEditorStateForLayer(_ap, _ak);
-      } catch(e) {}
+      // Bakı artık ortak sınıflandırma editörüne bağlı değildir. İsimler yalnızca
+      // ekrandaki lejant için çevrilir; indirme de lejant DOM'undan bu metinleri okur.
+
     }).catch(function(){});
   } catch (e) {}
 }
@@ -43153,6 +43211,7 @@ function applySylvaLang(lang) {
     });
   }
   if (typeof window._sylvaRefreshAspectEditorLabels === 'function') window._sylvaRefreshAspectEditorLabels(lang);
+  if (typeof translateClassLabels === 'function') { try { setTimeout(function(){ translateClassLabels(); }, 80); } catch(e) {} }
 
   // 🆕 Dil değişiminden sonra sınıflandırılmış editör snapshot'ını da yenile.
   // Böylece örneğin Korece seçildiğinde ekranda görünen Korece sınıf adları
@@ -43160,7 +43219,9 @@ function applySylvaLang(lang) {
   try {
     var _langPane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
     var _langTop = window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[_langPane];
-    if (_langTop && typeof _sylvaSaveEditorStateForLayer === 'function' && typeof currentClassificationType !== 'undefined' && currentClassificationType === 'classified') {
+    var _langMeta = window._lastAnalyzeMetaByPane && window._lastAnalyzeMetaByPane[_langPane] || window._lastAnalyzeMeta;
+    var _langPassiveTopo = _langMeta && /^(TOPO_ASPECT|TOPO_HILLSHADE)$/i.test(String(_langMeta.analysisName || ''));
+    if (_langTop && !_langPassiveTopo && typeof _sylvaSaveEditorStateForLayer === 'function' && typeof currentClassificationType !== 'undefined' && currentClassificationType === 'classified') {
       setTimeout(function(){ try { _sylvaSaveEditorStateForLayer(_langPane, _langTop); } catch(e){} }, 120);
     }
   } catch(e) {}
@@ -52412,7 +52473,7 @@ refreshInfoButtons(selectedInfoLang());
    üretildiğinde Türkçe/önceki dilde kalmasın diye doğrudan sınıf etiketlerini
    de seçili 30 dile çevirir. Sunucu veya ağ erişimi yoksa özgün etiket korunur. */
 function lang(){return(typeof window._sylvaLang==='string'&&window._sylvaLang)||'en'}
-function nativeMeta(){return window._lastAnalyzeMeta||null}
+function nativeMeta(){var p=(typeof window._sylvaActivePaneId==='function'?window._sylvaActivePaneId():'map');return (window._lastAnalyzeMetaByPane&&window._lastAnalyzeMetaByPane[p])||window._lastAnalyzeMeta||null}
 function translateClassLabels(){var m=nativeMeta(),l=lang();if(!m||m.legendType!=='classified'||!m.classesRaw||l==='tr'||typeof window.sylvaTranslateEnvText!=='function')return;var labels=[];try{labels=JSON.parse(m.classesRaw).map(function(c){return String(c.label||'').trim()}).filter(Boolean)}catch(e){return}if(!labels.length)return;var roots=[document.getElementById('map-legend-box'),document.getElementById('map2-legend-box'),document.getElementById('stats-chart-table'),document.getElementById('map-stats-table'),document.getElementById('map2-stats-table')];roots.forEach(function(root){if(!root)return;Array.prototype.slice.call(root.querySelectorAll('span,td,div')).forEach(function(el){if(el.children.length)return;var shown=el.textContent.trim(),original=el.getAttribute('data-env-native-class')||shown;if(labels.indexOf(original)===-1)return;el.setAttribute('data-env-native-class',original);if(el.getAttribute('data-env-native-lang')===l)return;el.setAttribute('data-env-native-lang',l);window.sylvaTranslateEnvText(original,l).then(function(v){if(v&&el.getAttribute('data-env-native-lang')===l)el.textContent=v}).catch(function(){})});Array.prototype.slice.call(root.querySelectorAll('tbody tr td:first-child')).forEach(function(cell){var node=Array.prototype.slice.call(cell.childNodes).filter(function(n){return n.nodeType===3&&n.nodeValue.trim()})[0];if(!node)return;var original=cell.getAttribute('data-env-native-class')||node.nodeValue.trim();if(labels.indexOf(original)===-1)return;cell.setAttribute('data-env-native-class',original);if(cell.getAttribute('data-env-native-lang')===l)return;cell.setAttribute('data-env-native-lang',l);window.sylvaTranslateEnvText(original,l).then(function(v){if(v&&cell.getAttribute('data-env-native-lang')===l)node.nodeValue=' '+v}).catch(function(){})})})}
 var scheduled=false;function queue(){if(scheduled)return;scheduled=true;setTimeout(function(){scheduled=false;translateClassLabels()},30)}
 new MutationObserver(queue).observe(document.body,{subtree:true,childList:true,characterData:true});
@@ -52439,7 +52500,22 @@ function syncNativeClassEditorState(){var locked=nativeClassified();var group=do
 function readGradientStops(css){var re=/#(?:[0-9a-f]{3}|[0-9a-f]{6})\b|rgba?\([^)]*\)/gi,m,out=[];while((m=re.exec(css||''))){var x=m[0],d=document.createElement('span');d.style.color=x;document.body.appendChild(d);var v=getComputedStyle(d).color;d.remove();var q=v.match(/\d+(?:\.\d+)?/g);if(q)out.push([+q[0],+q[1],+q[2]])}return out}
 function hex(rgb){return '#'+rgb.map(function(v){return Math.max(0,Math.min(255,Math.round(v))).toString(16).padStart(2,'0')}).join('')}
 function gradientColors(count){var ramp=document.getElementById('selectedRamp'),css=ramp?(ramp.style.background||getComputedStyle(ramp).backgroundImage):'',stops=readGradientStops(css);if(!stops.length)return[];return Array.from({length:count},function(_,i){var t=count===1?.5:i/(count-1),p=t*(stops.length-1),a=stops[Math.min(stops.length-2,Math.floor(p))],b=stops[Math.min(stops.length-1,Math.floor(p)+1)],f=p-Math.floor(p);return hex([0,1,2].map(function(k){return a[k]+(b[k]-a[k])*f}))})}
-function paintInitialClassRows(force){if(nativeClassified())return;var root=document.getElementById('class-rows-container'),rows=root?Array.prototype.slice.call(root.querySelectorAll('.classification-row')):[];if(!rows.length)return;var ramp=document.getElementById('selectedRamp'),signature=((window._lastAnalyzeMeta&&window._lastAnalyzeMeta.analysisName)||'')+'|'+(ramp&&ramp.getAttribute('data-ramp')||'')+'|'+(ramp&&ramp.style.background||'')+'|'+rows.length;if(!force&&root.getAttribute('data-sylva-palette-signature')===signature)return;var colors=gradientColors(rows.length);if(!colors.length)return;rows.forEach(function(row,i){var trigger=row.querySelector('.class-color-trigger');if(!trigger)return;trigger.style.background=colors[i];trigger.setAttribute('data-selected-color',colors[i]);trigger.removeAttribute('data-pending-color')});root.setAttribute('data-sylva-palette-signature',signature)}
+function paintInitialClassRows(force){
+if(nativeClassified())return;
+var pane=(typeof window._sylvaActivePaneId==='function'?window._sylvaActivePaneId():'map');
+var topKey=window._sylvaTopGeeLayerByPane&&window._sylvaTopGeeLayerByPane[pane];
+var saved=window._sylvaEditorStateByPane&&window._sylvaEditorStateByPane[pane]&&topKey?window._sylvaEditorStateByPane[pane][topKey]:null;
+// Katmana özel kayıt varsa hiçbir global/palet otomasyonu bu katmanın sınıf
+// sayısını veya renklerini ezemez. Böylece DEM=6 sınıf iken Bakı/TWI'ye geçiş
+// DEM'in 6 sınıfını taşımaz; DEM'e geri dönünce yine kendi 6 sınıfı gelir.
+if(saved&&saved.classificationType==='classified')return;
+var root=document.getElementById('class-rows-container'),rows=root?Array.prototype.slice.call(root.querySelectorAll('.classification-row')):[];
+if(!rows.length)return;
+var ramp=document.getElementById('selectedRamp'),signature=((window._lastAnalyzeMeta&&window._lastAnalyzeMeta.analysisName)||'')+'|'+(ramp&&ramp.getAttribute('data-ramp')||'')+'|'+(ramp&&ramp.style.background||'')+'|'+rows.length;
+if(!force&&root.getAttribute('data-sylva-palette-signature')===signature)return;
+var colors=gradientColors(rows.length);if(!colors.length)return;
+rows.forEach(function(row,i){var trigger=row.querySelector('.class-color-trigger');if(!trigger)return;trigger.style.background=colors[i];trigger.setAttribute('data-selected-color',colors[i]);trigger.removeAttribute('data-pending-color')});
+root.setAttribute('data-sylva-palette-signature',signature)}
 
 /* Analiz geçmişi şimdilik tamamen pasif: indirme kayıtları görünmez ve işlem
    alanı etkileşime kapalıdır. */
@@ -52626,18 +52702,33 @@ refresh();
         // Bakı için de indirilen rasterin sınıf adları, analiz ekranındaki
         // güncel lejanttan aynen gönderilir. Böylece Korece/Türkçe/diğer dil
         // seçimi hiçbir zaman sabit Türkçe Aspect adlarına düşmez.
-        if (String(_exportIndex || '').toUpperCase() === 'TOPO_ASPECT' && (!legendLabels || !legendLabels.length)) {
-            if (breaks && breaks.length) {
+        if (String(_exportIndex || '').toUpperCase() === 'TOPO_ASPECT') {
+            // Öncelik: aktif ekrandaki gerçek lejant DOM'u. translateClassLabels()
+            // sınıf elemanlarına data-env-native-class/data-env-native-lang
+            // eklediği için burada seçili 30 dilden hangisi ekranda görünüyorsa
+            // aynısı indirme paketine taşınır.
+            var _aLegendBox = document.getElementById(pane === 'map2' ? 'map2-legend-box' : 'map-legend-box');
+            var _aDefault = [
+                'Düz (-1)', 'Kuzey (0–12.5° / 327.5–360°)', 'Kuzeydoğu (12.5–57.5°)',
+                'Doğu (57.5–102.5°)', 'Güneydoğu (102.5–147.5°)', 'Güney (147.5–192.5°)',
+                'Güneybatı (192.5–237.5°)', 'Batı (237.5–282.5°)', 'Kuzeybatı (282.5–327.5°)'
+            ];
+            var _aCurrent = [];
+            if (_aLegendBox) {
+                var _aNodes = Array.prototype.slice.call(_aLegendBox.querySelectorAll('[data-env-native-class]'));
+                _aDefault.forEach(function(orig){
+                    var node = _aNodes.find(function(el){ return el.getAttribute('data-env-native-class') === orig; });
+                    _aCurrent.push(node ? (node.textContent || '').trim() : orig);
+                });
+            }
+            if (_aCurrent.length !== 9 || _aCurrent.some(function(x){ return !x; })) _aCurrent = _aDefault.slice();
+            var _aBaseColors = ['#bdbdbd','#2ca25f','#66c2a4','#99d8c9','#ccece6','#fdae61','#f46d43','#d73027','#7f0000'];
+            if (breaks && breaks.length === 9) {
                 legendLabels = breaks.map(function(b, i){
-                    return { code: i + 1, label: String(b.label || '').trim(), color: '#' + String(b.color || '').replace(/^#/, '') };
+                    return { code:i+1, label:_aCurrent[i] || String(b.label || '').trim(), color:'#'+String(b.color || '').replace(/^#/,'') };
                 });
             } else {
-                var _aspectNames = [
-                    'Düz (-1)', 'Kuzey (0–12.5° / 327.5–360°)', 'Kuzeydoğu (12.5–57.5°)',
-                    'Doğu (57.5–102.5°)', 'Güneydoğu (102.5–147.5°)', 'Güney (147.5–192.5°)',
-                    'Güneybatı (192.5–237.5°)', 'Batı (237.5–282.5°)', 'Kuzeybatı (282.5–327.5°)'
-                ];
-                legendLabels = _aspectNames.map(function(label, i){ return { code:i+1, label:label, color:'' }; });
+                legendLabels = _aCurrent.map(function(label, i){ return { code:i+1, label:label, color:_aBaseColors[i] }; });
             }
         }
         return { min:min, max:max, palette:colors, mode: (breaks && breaks.length) ? 'classified' : 'bar', breaks: breaks, legendLabels: legendLabels };
@@ -52800,6 +52891,40 @@ refresh();
     };
 }());
 </script>
+<script id="sylva-layer-editor-state-isolation-fix">
+(function(){
+  'use strict';
+  function activePane(){ return typeof window._sylvaActivePaneId==='function' ? window._sylvaActivePaneId() : 'map'; }
+  function sync(){
+    var p=activePane();
+    var top=window._sylvaTopGeeLayerByPane&&window._sylvaTopGeeLayerByPane[p];
+    var meta=window._lastAnalyzeMetaByPane&&window._lastAnalyzeMetaByPane[p] || window._lastAnalyzeMeta;
+    if(!top || !meta) return;
+    var state=window._sylvaEditorStateByPane&&window._sylvaEditorStateByPane[p]&&window._sylvaEditorStateByPane[p][top];
+    // Bakı/Kabartma kendi sembolojisini yönetir; ortak sınıflandırma editörü kapalıdır.
+    var name=String(meta.analysisName||'').toUpperCase();
+    if(name==='TOPO_ASPECT' || name==='TOPO_HILLSHADE') return;
+    if(state) return;
+    // İlk kez görülen katman: önceki katmanın sınıf sayısını taşımadan temiz bir
+    // stretched başlangıç oluştur. Kullanıcı Classified'a geçtiğinde varsayılan
+    // 4 sınıfla başlar; daha sonra kendi ayarı bu katmana özel saklanır.
+    try{
+      if(typeof setClassificationType==='function') setClassificationType('stretched');
+      var sel=document.getElementById('class-count');
+      if(sel) sel.value='4';
+      if(typeof buildClassRows==='function') buildClassRows(4);
+      var ramp=document.getElementById('selectedRamp');
+      if(ramp && !ramp.getAttribute('data-ramp')){ ramp.setAttribute('data-ramp','black-white'); ramp.style.background=(typeof ramps!=='undefined'&&ramps['black-white'])?ramps['black-white']:'linear-gradient(to right,#000,#fff)'; }
+      if(typeof window._sylvaSaveEditorStateForLayer==='function') window._sylvaSaveEditorStateForLayer(p,top);
+    }catch(e){}
+  }
+  document.addEventListener('click',function(e){ if(e.target&&e.target.closest&&e.target.closest('.sylva-layer-switch-item')) setTimeout(sync,60); });
+  document.addEventListener('change',function(e){ if(e.target&&e.target.classList&&e.target.classList.contains('sylva-layer-switch-visibility')) setTimeout(sync,60); });
+  var mo=new MutationObserver(function(){ clearTimeout(mo._t); mo._t=setTimeout(sync,120); });
+  mo.observe(document.body,{subtree:true,childList:true});
+  setTimeout(sync,400);
+})();
+</script>
 <script id="sylva-special-topo-symbology-fix">
 (function(){
   'use strict';
@@ -52832,7 +52957,7 @@ refresh();
   function forceGrayRamp(){
     var sr=document.getElementById('selectedRamp');
     if(sr){
-      sr.style.background='linear-gradient(to right,#f2f2f2,#666666)';
+      sr.style.background='linear-gradient(to right,#ffffff,#e5e5e5,#808080)';
       sr.setAttribute('data-ramp','black-white');
     }
     var palette=document.getElementById('paletteList');
@@ -52890,21 +53015,29 @@ refresh();
       return;
     }
     if(name==='TOPO_ASPECT'){
-      aspectSetup(m,p);
+      // Bakı artık veri sınıflandırıcısını değiştiren ortak editörü kullanmaz.
+      // Lejantı analiz tarafından belirlenir; Semboloji paneli şeffaf/pasiftir.
+      forceGrayRamp();
+      lockHillshade();
       return;
     }
-    // Diğer analizlerde mevcut uygulamanın normal kilit/açma mantığı çalışsın.
+    // Diğer analizlerde önce özel kilidi kaldır, ardından yerleşik sınıflandırma
+    // durumunu uygula. Aksi halde Bakı/Kabartma'dan çıkınca panel sonsuza kadar
+    // pasif kalabiliyordu.
+    unlock();
     if(typeof syncNativeClassEditorState==='function') syncNativeClassEditorState();
   }
   // Kullanıcı aktif katmanı değiştirince ve analiz sonucu yeniden çizilince çalışır.
   document.addEventListener('change',function(e){
-    if(e.target && (e.target.matches('.sylva-layer-switch-visibility') || e.target.matches('input[data-analysis]') || e.target.id==='class-count')) setTimeout(sync,30);
+    if(e.target && (e.target.matches('.sylva-layer-switch-visibility') || e.target.matches('input[data-analysis]'))) setTimeout(sync,30);
   });
   document.addEventListener('click',function(e){
     if(e.target && (e.target.closest('#btn-type-classified') || e.target.closest('#btn-type-stretched') || e.target.closest('#btn-apply-legend'))) setTimeout(sync,30);
   });
   var mo=new MutationObserver(function(){ clearTimeout(mo._t); mo._t=setTimeout(sync,40); });
-  mo.observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['style','class']});
+  // Stil değişikliklerini gözlemleme; kilit fonksiyonunun kendi style yazımları
+  // gözlemciyi tekrar tekrar tetikleyip görsel titreşim/yanıp sönme oluşturmasın.
+  mo.observe(document.body,{subtree:true,childList:true});
   setTimeout(sync,100);
   setTimeout(sync,600);
   setTimeout(sync,1500);
