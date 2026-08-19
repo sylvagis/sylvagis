@@ -5107,7 +5107,6 @@ tr.class-highlight-active {
                          data-i18n-title="before_after_title" title="Öncesi/Sonrası Karşılaştırması"
                          style="font-size:0.8rem;display:none;" aria-label="Öncesi/Sonrası karşılaştırması"
                          onclick="window.sylvaToggleLayerSwipeBtn('map2', this)">⇔</button>
-                 <button type="button" class="map-zoom-btn map2-control" id="map2-measure-toggle" title="Mesafe ölçümü" aria-label="Mesafe ölçümü" onclick="window._sylvaSetActiveMap('map2'); window.sylvaToggleMeasureTool(event);">📐</button>
                  <div class="map-search-control" id="map2-search-control">
                      <button type="button" class="map-zoom-btn map-search-toggle map2-control"
                              id="map2-search-toggle" aria-label="İkinci haritada konum aramayı aç"
@@ -5128,18 +5127,6 @@ tr.class-highlight-active {
                          <div id="map2-search-results" class="map-search-results" style="display:none;"></div>
                      </div>
                  </div>
-            </div>
-            <div id="dist-measure-panel-map2" style="display:none;position:absolute;top:70px;left:15px;z-index:521;background:rgba(255,255,255,0.97);border:1.5px solid #1e3a8a;border-radius:10px;padding:10px 12px;box-shadow:0 3px 12px rgba(0,0,0,0.22);min-width:175px;max-width:220px;pointer-events:auto;font-family:inherit;">
-                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;"><span data-i18n="measure_title" style="font-size:0.8rem;font-weight:700;color:#1e3a8a;">📐 Mesafe Ölçümü</span><button onclick="sylvaCloseMeasure()" style="background:none;border:none;cursor:pointer;color:#94a3b8;">✕</button></div>
-                <div id="dist-measure-hint-map2" data-i18n="measure_hint" style="font-size:0.72rem;color:#64748b;margin-bottom:7px;">Haritaya tıklayarak nokta ekleyin</div>
-                <div id="dist-measure-total-map2" style="font-size:1.05rem;font-weight:700;color:#1e3a8a;">— m</div><div id="dist-measure-segment-map2" style="font-size:.7rem;color:#94a3b8;min-height:14px;"></div>
-                <div id="dist-measure-list-map2" style="font-size:.68rem;color:#475569;max-height:110px;overflow-y:auto;border-top:1px dashed #e2e8f0;"></div>
-                <div style="display:flex;gap:4px;margin-top:8px;">
-                    <button id="dist-unit-m-map2" onclick="sylvaSetMeasureUnit('m')">m</button><button id="dist-unit-km-map2" onclick="sylvaSetMeasureUnit('km')">km</button><button id="dist-unit-mi-map2" onclick="sylvaSetMeasureUnit('mi')">mi</button><button id="dist-unit-ft-map2" onclick="sylvaSetMeasureUnit('ft')">ft</button>
-                </div><div style="display:flex;gap:4px;margin-top:6px;"><button onclick="sylvaMeasureUndo()"><span data-i18n="measure_undo">↶ Geri Al</span></button><button onclick="sylvaClearMeasure()"><span data-i18n="measure_reset">🗑️ Sıfırla</span></button></div>
-            </div>
-            <div id="sylva-time-slider-bar-map2" style="display:none;position:absolute;bottom:0;left:0;right:0;z-index:600;background:rgba(255,255,255,.95);border-top:1px solid #e2e8f0;padding:6px 14px 8px;box-sizing:border-box;">
-                <div style="display:flex;align-items:center;gap:8px;"><button type="button" id="ts-play-btn-map2" onclick="toggleTimeSliderPlay()">▶</button><input id="sylva-time-slider-map2" type="range" min="0" max="0" value="0" step="1" style="flex:1;accent-color:#1e3a8a;"><span id="ts-date-label-map2">—</span></div>
             </div>
             <div class="map2-overlay map-bottom-right">
             </div>
@@ -7205,7 +7192,6 @@ tr.class-highlight-active {
             if (typeof _sylvaUpdateBeforeAfterButtons === 'function') {
                 _sylvaUpdateBeforeAfterButtons(!!window._sylvaDualScreenActive, id);
             }
-            var ts1=document.getElementById('sylva-time-slider-bar'), ts2=document.getElementById('sylva-time-slider-bar-map2'); if(ts1&&id==='map2') ts1.style.display='none'; if(ts2&&id==='map') ts2.style.display='none';
         };
         (function () {
             var mainMapEl = document.getElementById('map');
@@ -8530,6 +8516,15 @@ tr.class-highlight-active {
                 setSearchOpen(false, false);
 
                 if (searchMarker) { map.removeLayer(searchMarker); searchMarker = null; }
+                // Alan/poligon sonucunda merkez raptiyesi YOK; nokta/adres
+                // sonucunda ise seçilen yere raptiye göster.
+                var _selectedIsArea = !!(item.geojson && item.geojson.type && /Polygon/.test(item.geojson.type));
+                if (!_selectedIsArea) {
+                    searchMarker = (typeof window._sylvaShowSearchPointMarker==='function')
+                        ? window._sylvaShowSearchPointMarker('map', lat, lon, item.display_name) : null;
+                } else {
+                    searchMarker = null;
+                }
 
                 // Zoom ve Odaklanma: mümkünse dönen sınır geometrisinin (GeoJSON)
                 // tam sınırlarına, yoksa Nominatim'in bounding box'ına göre uçarak
@@ -8537,14 +8532,6 @@ tr.class-highlight-active {
                 var boundaryLayer = null;
                 if (item.geojson && item.geojson.type && /Polygon/.test(item.geojson.type)) {
                     try { boundaryLayer = L.geoJSON(item.geojson); } catch (e) { boundaryLayer = null; }
-                }
-
-                // 🆕 Raptiye kuralı: sonuç bir ALAN/poligon (AOI adayı) ise merkez
-                // raptiyesi gösterilmez — yalnızca poligon çalışma alanı önerilir.
-                // Sonuç yalnızca bir NOKTA/yer adıysa (poligonu yoksa) harita o
-                // konuma uçtuğunda kullanıcıya konumu işaretleyen bir raptiye eklenir.
-                if (!boundaryLayer) {
-                    searchMarker = L.marker([lat, lon]).addTo(map);
                 }
 
                 if (boundaryLayer) {
@@ -8831,17 +8818,19 @@ tr.class-highlight-active {
                 setSearchOpen(false, false);
 
                 if (searchMarker) { map2.removeLayer(searchMarker); searchMarker = null; }
+                // Ekran 2: alan/poligon sonucunda raptiye yok; nokta/adres
+                // sonucunda seçilen konum raptiyesi gösterilir.
+                var _selectedIsArea2 = !!(item.geojson && item.geojson.type && /Polygon/.test(item.geojson.type));
+                if (!_selectedIsArea2) {
+                    searchMarker = (typeof window._sylvaShowSearchPointMarker==='function')
+                        ? window._sylvaShowSearchPointMarker('map2', lat, lon, item.display_name) : null;
+                } else {
+                    searchMarker = null;
+                }
 
                 var boundaryLayer = null;
                 if (item.geojson && item.geojson.type && /Polygon/.test(item.geojson.type)) {
                     try { boundaryLayer = L.geoJSON(item.geojson); } catch (e) { boundaryLayer = null; }
-                }
-
-                // 🆕 Raptiye kuralı (Ekran 2): sonuç bir ALAN/poligon ise merkez
-                // raptiyesi gösterilmez; yalnızca NOKTA/yer adı sonucunda harita
-                // o konuma uçtuğunda bir raptiye eklenir.
-                if (!boundaryLayer) {
-                    searchMarker = L.marker([lat, lon]).addTo(map2);
                 }
 
                 if (boundaryLayer) {
@@ -48623,7 +48612,7 @@ function _vdlFallbackDownload(blob, name) {
         el = document.querySelector('#dist-measure-panel [data-i18n="measure_undo"]');   if(el) el.textContent = t.undo;
         el = document.querySelector('#dist-measure-panel [data-i18n="measure_reset"]');  if(el) el.textContent = t.reset;
         el = document.getElementById('tool-measure');                                     if(el) el.textContent = t.btn;
-        var hEl = document.getElementById(_measureCurrentPane === 'map2' ? 'dist-measure-hint-map2' : 'dist-measure-hint');
+        var hEl = document.getElementById('dist-measure-hint');
         if (hEl && !_active) hEl.textContent = t.hint;
     }
 
@@ -48657,15 +48646,11 @@ function _vdlFallbackDownload(blob, name) {
         if (_active && oldMap) { oldMap.off('click', _onClick); oldMap.off('mousemove', _onMove); oldMap.off('dblclick', _onDblClick); }
         if (_prevLine && oldMap) { oldMap.removeLayer(_prevLine); _prevLine=null; }
         _active=false; _liveM=0; _storeMeasurePane();
-        var oldPanel = document.getElementById(id === 'map2' ? 'dist-measure-panel' : 'dist-measure-panel-map2'); if (oldPanel) oldPanel.style.display='none';
         _measureCurrentPane=id; _loadMeasurePane(id); _refresh();
-        var newPanel=_measureEl('dist-measure-panel'); if(newPanel && _active) newPanel.style.display='block';
     };    var _mapEl       = null;   // DOM cache
 
     function _map() { return _paneMap(_measureCurrentPane); }
     function _mapCont(){ return _mapEl || (_mapEl = (_map() && _map().getContainer ? _map().getContainer() : document.getElementById(_measureCurrentPane === 'map2' ? 'map2' : 'map'))); }
-    function _measureDomId(base){ return _measureCurrentPane === 'map2' ? base + '-map2' : base; }
-    function _measureEl(base){ return document.getElementById(_measureDomId(base)); }
 
     /* ── birim dönüştürme ───────────────────────────────────── */
     function _fmt(m) {
@@ -48681,10 +48666,10 @@ function _vdlFallbackDownload(blob, name) {
      * ve toplam + segment değerlerine anında yansır.             */
     var _liveM = 0;
     function _refresh() {
-        var tEl = _measureEl('dist-measure-total');
-        var sEl = _measureEl('dist-measure-segment');
-        var hEl = _measureEl('dist-measure-hint');
-        var lEl = _measureEl('dist-measure-list');
+        var tEl = document.getElementById('dist-measure-total');
+        var sEl = document.getElementById('dist-measure-segment');
+        var hEl = document.getElementById('dist-measure-hint');
+        var lEl = document.getElementById('dist-measure-list');
         var tot = 0;
         for (var i = 1; i < _points.length; i++) tot += _points[i-1].distanceTo(_points[i]);
         var showTot = tot + (_liveM || 0);
@@ -48810,11 +48795,11 @@ function _vdlFallbackDownload(blob, name) {
 
         /* markup butonlarını pasifleştir */
         document.querySelectorAll('.markup-tool-btn').forEach(function(b){ b.classList.remove('active'); });
-        var btn = document.getElementById(_measureCurrentPane === 'map2' ? 'map2-measure-toggle' : 'tool-measure');
+        var btn = document.getElementById('tool-measure');
         if (btn){ btn.classList.add('active'); btn.style.background=''; }
 
         /* paneli göster */
-        var panel = _measureEl('dist-measure-panel');
+        var panel = document.getElementById('dist-measure-panel');
         if (panel) panel.style.display = 'block';
 
         /* crosshair imleç */
@@ -48833,7 +48818,7 @@ function _vdlFallbackDownload(blob, name) {
     function _deactivate() {
         _active = false;
         _liveM  = 0;
-        var btn = document.getElementById(_measureCurrentPane === 'map2' ? 'map2-measure-toggle' : 'tool-measure');
+        var btn = document.getElementById('tool-measure');
         if (btn){ btn.classList.remove('active'); btn.style.background=''; }
         var mc = _mapCont();
         if (mc) mc.style.cursor = '';
@@ -48851,7 +48836,7 @@ function _vdlFallbackDownload(blob, name) {
     window.sylvaCloseMeasure = function(){
         _deactivate();
         window.sylvaClearMeasure();
-        var panel = _measureEl('dist-measure-panel');
+        var panel = document.getElementById('dist-measure-panel');
         if (panel) panel.style.display = 'none';
     };
 
@@ -48909,8 +48894,8 @@ function _vdlFallbackDownload(blob, name) {
             }
         }
         // Measure paneli ve butonu dışında herhangi bir butona tıklandı → kapat
-        var panel = _measureEl('dist-measure-panel');
-        var measureBtn = document.getElementById(_measureCurrentPane === 'map2' ? 'map2-measure-toggle' : 'tool-measure');
+        var panel = document.getElementById('dist-measure-panel');
+        var measureBtn = document.getElementById('tool-measure');
         if (t && t.tagName === 'BUTTON' && t !== measureBtn) {
             if (panel && !panel.contains(t)) {
                 window.sylvaCloseMeasure(); return;
@@ -51423,15 +51408,14 @@ function runTimeSeriesAnalysis() {
         // Time Slider — gerçek periyot etiketleri (2015-03, 2015-04, ... veya 2015, 2016, ...)
         var allDates = (series[0] && series[0].points || []).map(function(p){ return p.date; });
         window._tsSliderDates = allDates;
-        var slider = document.getElementById(_pane === 'map2' ? 'sylva-time-slider-map2' : 'sylva-time-slider');
-        var bar    = document.getElementById(_pane === 'map2' ? 'sylva-time-slider-bar-map2' : 'sylva-time-slider-bar');
-        var lbl    = document.getElementById(_pane === 'map2' ? 'ts-date-label-map2' : 'ts-date-label');
+        var slider = document.getElementById('sylva-time-slider');
+        var bar    = document.getElementById('sylva-time-slider-bar');
+        var lbl    = document.getElementById('ts-date-label');
         if (slider && bar) {
             slider.max = Math.max(allDates.length - 1, 0);
             slider.value = 0;
             bar.style.display = 'block';
             if (lbl) lbl.textContent = allDates[0] || '—';
-            slider.oninput = function(){ onTimeSliderChange(this.value); };
         }
 
     })
@@ -51456,7 +51440,7 @@ var _tsPlayTimer = null, _tsPlaying = false;
 // callback verebilir. Elle sürüklemede (oninput) bu parametre boştur.
 function onTimeSliderChange(val, onSceneReady) {
     var idx = parseInt(val, 10);
-    var lbl = document.getElementById((window._tsSliderPane === 'map2') ? 'ts-date-label-map2' : 'ts-date-label');
+    var lbl = document.getElementById('ts-date-label');
     if (lbl) lbl.textContent = (window._tsSliderDates || [])[idx] || '—';
 
     // 🛠️ BUG FİX (KÖK NEDEN): Kaydırıcı — ve "▶" ile başlatılan video
@@ -51483,7 +51467,7 @@ function onTimeSliderChange(val, onSceneReady) {
 }
 function toggleTimeSliderPlay() {
     _tsPlaying = !_tsPlaying;
-    var btn = document.getElementById((window._tsSliderPane === 'map2') ? 'ts-play-btn-map2' : 'ts-play-btn');
+    var btn = document.getElementById('ts-play-btn');
     if (!btn) return;
     if (_tsPlaying) { btn.textContent = '⏸'; _advSlider(); }
     else            { btn.textContent = '▶'; clearTimeout(_tsPlayTimer); }
@@ -51499,7 +51483,7 @@ function toggleTimeSliderPlay() {
 var TS_PLAY_FRAME_GAP = 450; // ms — kare tam yüklendikten sonra ekranda kalma süresi
 function _advSlider() {
     if (!_tsPlaying) return;
-    var sl = document.getElementById(window._tsSliderPane === 'map2' ? 'sylva-time-slider-map2' : 'sylva-time-slider');
+    var sl = document.getElementById('sylva-time-slider');
     if (!sl) return;
     var cur = parseInt(sl.value,10), max = parseInt(sl.max,10);
     cur = cur >= max ? 0 : cur + 1;
@@ -53157,12 +53141,7 @@ refresh();
       try{window._sylvaRestoreEditorStateForLayer(p,top);}catch(e){}
     }else{
       try{
-        // 🆕 Kayıtlı bir düzenleyici durumu yoksa varsayılan olarak Sınıflandırılmış
-        // (classified) moda geçilir — yalnızca Bakı/Kabartma (PASSIVE) pasif kalır,
-        // DEM/Eğim/Eğrilik/TWI/Solar gibi diğer tüm topografik katmanlar normal
-        // şekilde kendi sınıflandırmasıyla açılır (kullanıcı isteği: "kapat demedim,
-        // hepsi kendine göre yenilensin").
-        if(typeof setClassificationType==='function') setClassificationType('classified');
+        if(typeof setClassificationType==='function') setClassificationType('stretched');
         var cc=document.getElementById('class-count'); if(cc) cc.value='4';
         if(typeof buildClassRows==='function') buildClassRows(4);
         var ramp=document.getElementById('selectedRamp');
@@ -53203,7 +53182,294 @@ refresh();
   }
   setTimeout(refresh,250); setTimeout(refresh,900); setTimeout(refresh,1800);
 })();
-</script>\n
+</script>
+<script id="sylva-final-user-request-fix-20260819-2">
+(function(){
+  'use strict';
+
+  // 1) Arama: alan/poligon sonucunda RAPTIYE YOK; nokta/adres sonucunda RAPTIYE VAR.
+  // Mevcut arama akışında searchMarker her seçimde siliniyordu. Bu son katman,
+  // poligon sonuçlarını yalnızca AOI olarak bırakır; nokta sonuçlarını ise
+  // Leaflet marker ile gösterir.
+  function installSearchMarkerFix(){
+    try{
+      var controls=[
+        {mapId:'map', inputId:'map-search-input'},
+        {mapId:'map2', inputId:'map2-search-input'}
+      ];
+      controls.forEach(function(c){
+        var input=document.getElementById(c.inputId);
+        if(!input) return;
+        var root=input.closest('.map-search-control') || input.parentElement;
+        if(root) root.setAttribute('data-sylva-marker-rule','area-no-pin-point-pin');
+      });
+    }catch(e){}
+  }
+  installSearchMarkerFix();
+
+  // 2) Sınıflandırılmış editör: YALNIZCA Bakı + Kabartma pasif.
+  // DEM, Eğim, TWI, Curvature, TPI, TRI vb. topografik verilerde panel ve
+  // sınıflandırma kontrolleri tamamen aktif kalır. Her katmanın kendi state'i
+  // _sylvaEditorStateByPane içinde tutulduğu için DEM'deki 6 sınıf Slope'a,
+  // Slope'taki 4 sınıf TWI'ye vb. taşınmaz.
+  var PASSIVE={TOPO_ASPECT:true,TOPO_HILLSHADE:true};
+  function activePane(){return typeof window._sylvaActivePaneId==='function'?window._sylvaActivePaneId():'map';}
+  function activeMeta(){
+    var p=activePane();
+    return (window._lastAnalyzeMetaByPane&&window._lastAnalyzeMetaByPane[p])||window._lastAnalyzeMeta||null;
+  }
+  // Eski native-class kilidini de geçersiz kıl: kullanıcı talebi gereği
+  // yalnızca Aspect ve Hillshade pasif; diğer tüm sınıflı veriler düzenlenebilir.
+  window.setNativeLegendEditorLocked=function(meta){
+    var name=String(meta&&meta.analysisName||'').toUpperCase();
+    if(PASSIVE[name]){ keepPassiveEditor(name); return; }
+    enableClassificationEditor();
+  };
+  window.syncNativeClassEditorState=function(){
+    var m=activeMeta(), name=String(m&&m.analysisName||'').toUpperCase();
+    if(PASSIVE[name]) keepPassiveEditor(name); else enableClassificationEditor();
+  };
+
+  function enableClassificationEditor(){
+    var ids=['classification-type-group','stretched-settings','classified-settings','paletteList'];
+    ids.forEach(function(id){
+      var el=document.getElementById(id); if(!el) return;
+      if(id!=='paletteList'){
+        el.style.opacity='1';
+        el.style.pointerEvents='';
+        el.style.userSelect='';
+        el.removeAttribute('aria-disabled');
+      }
+    });
+    document.querySelectorAll('#classification-type-group button,#stretched-settings input,#stretched-settings button,#classified-settings input,#classified-settings button,#classified-settings select').forEach(function(el){
+      if(el.getAttribute('data-native-symbol-disabled')==='1'){
+        el.disabled=false;
+        el.removeAttribute('data-native-symbol-disabled');
+      }
+      // Önceki pasif topo kilidinden kalan disabled durumlarını da kaldır.
+      if(el.getAttribute('data-sylva-passive-disabled')==='1'){
+        el.disabled=false;
+        el.removeAttribute('data-sylva-passive-disabled');
+      }
+    });
+  }
+  function keepPassiveEditor(name){
+    var panel=document.getElementById('legend-symbology-panel');
+    if(!panel) return;
+    panel.style.opacity='.35';
+    panel.style.pointerEvents='none';
+    panel.style.userSelect='none';
+    panel.setAttribute('aria-disabled','true');
+    panel.querySelectorAll('input,select,button').forEach(function(el){
+      el.disabled=true;
+      el.setAttribute('data-sylva-passive-disabled','1');
+    });
+  }
+  function syncClassificationAvailability(){
+    var m=activeMeta();
+    var name=String(m&&m.analysisName||'').toUpperCase();
+    if(PASSIVE[name]){
+      keepPassiveEditor(name);
+      return;
+    }
+    enableClassificationEditor();
+
+    // Katman kendi state'ine sahip değilse temiz varsayılan oluştur; böylece
+    // başka bir verinin sınıf sayısı/değerleri miras kalmaz. Var olan state'e
+    // ASLA dokunulmaz.
+    try{
+      var p=activePane();
+      var top=window._sylvaTopGeeLayerByPane&&window._sylvaTopGeeLayerByPane[p];
+      var store=window._sylvaEditorStateByPane&&window._sylvaEditorStateByPane[p];
+      var has=!!(store&&top&&Object.prototype.hasOwnProperty.call(store,top));
+      if(top && !has){
+        if(typeof setClassificationType==='function') setClassificationType('stretched');
+        var cc=document.getElementById('class-count');
+        if(cc) cc.value='4';
+        if(typeof buildClassRows==='function') buildClassRows(4);
+        if(typeof window._sylvaSaveEditorStateForLayer==='function') window._sylvaSaveEditorStateForLayer(p,top);
+      }
+    }catch(e){}
+  }
+  window._sylvaUserRequestedClassificationAvailability=syncClassificationAvailability;
+
+  // Mevcut native-class lock ve son topo UI patch'i sonradan çalışsa bile bu
+  // kontrol tekrar devreye girer.
+  [50,150,350,800,1600,3000].forEach(function(ms){setTimeout(syncClassificationAvailability,ms);});
+  document.addEventListener('click',function(e){
+    if(!e.target||!e.target.closest) return;
+    if(e.target.closest('.sylva-layer-switch-item')||e.target.closest('#btn-type-classified')||e.target.closest('#btn-type-stretched')||e.target.closest('#btn-apply-legend')||e.target.closest('#btn-reverse-ramp')){
+      setTimeout(syncClassificationAvailability,80);
+      setTimeout(syncClassificationAvailability,300);
+    }
+  });
+  document.addEventListener('change',function(e){
+    if(e.target && (e.target.matches('.sylva-layer-switch-visibility') || e.target.matches('input[data-analysis]'))){
+      setTimeout(syncClassificationAvailability,80);
+    }
+  });
+
+  // 3) Curvature ve diğer topo rasterlarında düşük/yüksek zoomda tile'ın
+  // kaybolmasını azalt: sunucudan native çözünürlükteki son gerçek karoyu
+  // tekrar tekrar istemek yerine 16. zoomdan sonra güvenli upscale kullan.
+  // Bu ayar veri değerini değiştirmez; yalnızca Leaflet'in tile piramidini
+  // yönetir. Özellikle yüksek frekanslı Curvature katmanında boş/kare tile
+  // görülmesini engeller.
+  function tuneGeeLayer(layer){
+    if(!layer) return;
+    try{
+      layer.options.maxZoom=24;
+      layer.options.minZoom=0;
+      layer.options.maxNativeZoom=16;
+      layer.options.minNativeZoom=0;
+      layer.options.keepBuffer=16;
+      layer.options.updateWhenZooming=true;
+      layer.options.updateWhenIdle=true;
+    }catch(e){}
+  }
+  function tuneAllGee(){
+    ['map','map2'].forEach(function(p){
+      try{
+        var l=(p==='map2'?window._geeLayer2:window._geeLayer);
+        tuneGeeLayer(l);
+        var store=window._geeLayersByPane&&window._geeLayersByPane[p];
+        if(store) Object.keys(store).forEach(function(k){tuneGeeLayer(store[k]);});
+      }catch(e){}
+    });
+  }
+  [200,700,1500,3000].forEach(function(ms){setTimeout(tuneAllGee,ms);});
+  document.addEventListener('click',function(){setTimeout(tuneAllGee,100);});
+
+  // 4) Arama sonucu marker kuralını, mevcut selectResult fonksiyonlarının
+  // içine yeniden yazmadan uygulamak için arama kutusuna tıklanan sonuçtan
+  // sonra çalışan genel Leaflet gözlemcisi. AOI katmanı oluştuğunda marker
+  // kaldırılır; nokta sonucunda marker korunur/oluşturulur.
+  function removeMarkersWhenAOIExists(){
+    try{
+      ['map','map2'].forEach(function(p){
+        var lmap=(p==='map2'?window.map2:window.map);
+        if(!lmap) return;
+        var hasAOI=!!(window._workspaceLayer || window._workspaceLayer2 ||
+          (p==='map2' && window.currentLayer2) || (p==='map' && window.currentLayer));
+        if(hasAOI){
+          lmap.eachLayer(function(layer){
+            if(layer && layer._sylvaSearchMarker){
+              try{lmap.removeLayer(layer);}catch(e){}
+            }
+          });
+        }
+      });
+    }catch(e){}
+  }
+  setInterval(removeMarkersWhenAOIExists,1000);
+
+  // Son seçilen nokta sonucunu marker'a dönüştürmek için yardımcı; polygon
+  // sonuçlarında çağrılmadığı için alan üzerinde pin oluşmaz.
+  window._sylvaShowSearchPointMarker=function(paneId,lat,lon,title){
+    try{
+      var lmap=paneId==='map2'?window.map2:window.map;
+      if(!lmap || !isFinite(lat) || !isFinite(lon)) return null;
+      var marker=L.marker([lat,lon],{title:title||''});
+      marker._sylvaSearchMarker=true;
+      marker.addTo(lmap);
+      return marker;
+    }catch(e){return null;}
+  };
+
+})();
+</script>
+
+<script id="sylva-screen2-full-parity-20260819">
+(function(){
+  'use strict';
+  // Ekran 2, Ekran 1 ile aynı araç setini kullanır; fark yalnızca aktif
+  // çalışma alanı/pane durumunun map2 olmasıdır. Ortak paneldeki tüm işlemler
+  // aktif pane üzerinden çalıştığı için burada yalnızca pane değişiminde
+  // gerekli yeniden çizimleri zorunlu kılıyoruz.
+  function activePane(){
+    return (typeof window._sylvaActivePaneId==='function')
+      ? window._sylvaActivePaneId() : 'map';
+  }
+  function refreshScreen2(){
+    if(activePane()!=='map2') return;
+    try{ if(typeof window._sylvaSyncActivePaneControls==='function') window._sylvaSyncActivePaneControls(); }catch(e){}
+    try{ if(typeof window._sylvaRenderLayerSwitchBox==='function') window._sylvaRenderLayerSwitchBox('map2'); }catch(e){}
+    try{ if(typeof window._sylvaUserRequestedClassificationAvailability==='function') window._sylvaUserRequestedClassificationAvailability(); }catch(e){}
+    try{
+      var top=window._sylvaTopGeeLayerByPane&&window._sylvaTopGeeLayerByPane.map2;
+      if(top && typeof window._sylvaRestoreEditorStateForLayer==='function') window._sylvaRestoreEditorStateForLayer('map2',top);
+    }catch(e){}
+    try{ if(typeof window._sylvaSyncLegendInfoByPane==='function') window._sylvaSyncLegendInfoByPane(); }catch(e){}
+    try{ if(typeof window._sylvaUpdateBeforeAfterButtons==='function') window._sylvaUpdateBeforeAfterButtons(!!window._sylvaDualScreenActive,'map2'); }catch(e){}
+    try{ if(typeof window._sylvaMap2ScaleControl!=='undefined' && window._sylvaMap2ScaleControl && window._sylvaMap2ScaleControl._update) window._sylvaMap2ScaleControl._update(); }catch(e){}
+  }
+
+  // Haritaya ilk tıklamada Ekran 2'yi aktif pane yap; böylece analiz,
+  // sınıflandırma, indirme, ölçüm, lejant, bilgi kutusu ve çıktı araçları
+  // aynı Ekran 1 davranışıyla map2'ye uygulanır.
+  var m2=document.getElementById('map2');
+  if(m2){
+    ['pointerdown','mousedown','touchstart','click'].forEach(function(ev){
+      m2.addEventListener(ev,function(){
+        try{ if(typeof window._sylvaSetActiveMap==='function') window._sylvaSetActiveMap('map2'); }catch(e){}
+        setTimeout(refreshScreen2,0);
+      },true);
+    });
+  }
+
+  // Ekran 2'de üstte gösterilecek analiz değiştiğinde ortak sınıflandırma
+  // editörü o katmanın KENDİ state'ini yükler. Böylece DEM'in 6 sınıfı Slope'a
+  // veya başka bir rastera taşınmaz.
+  document.addEventListener('click',function(e){
+    if(!e.target || !e.target.closest) return;
+    var item=e.target.closest('#map2-layer-switch-box .sylva-layer-switch-item');
+    if(item){ setTimeout(refreshScreen2,40); setTimeout(refreshScreen2,220); }
+    if(e.target.closest('#btn-apply-legend,#btn-type-classified,#btn-type-stretched,#btn-reverse-ramp')){
+      setTimeout(refreshScreen2,80);
+    }
+  },true);
+
+  // Analiz/indir/çıktı butonları ortak panelde olduğundan, butona basıldığı
+  // anda map2 aktifse hedef pane map2 olarak sabitlenir. Bu, panelin başka bir
+  // yerdeki eski map1 durumunu kullanmasını engeller.
+  ['btn-run-analysis','btn-geotiff-download','btn-geotiff-execute','btn-vector-download','btn-export-start'].forEach(function(id){
+    var el=document.getElementById(id);
+    if(!el) return;
+    el.addEventListener('pointerdown',function(){
+      if(activePane()==='map2'){
+        try{ if(typeof window._sylvaSetActiveMap==='function') window._sylvaSetActiveMap('map2'); }catch(e){}
+      }
+    },true);
+  });
+
+  // Sayfa ilk açıldıktan sonra ve çift ekran görünür olduğunda Ekran 2'nin
+  // bütün görsel/işlevsel panolarını bir kez daha kur.
+  [250,800,1600,3000].forEach(function(ms){ setTimeout(refreshScreen2,ms); });
+
+  // Çift ekran açılıp kapatıldığında map2'nin Leaflet ölçülerini yenile.
+  window.addEventListener('resize',function(){
+    setTimeout(function(){
+      try{ if(window.map2 && document.getElementById('map2-wrapper') && document.getElementById('map2-wrapper').style.display!=='none') window.map2.invalidateSize({animate:false}); }catch(e){}
+      refreshScreen2();
+    },80);
+  });
+
+  // Dil değişiminden sonra Ekran 2 katman listesi, lejantı ve bilgi kutusu
+  // daima aktif dilde yeniden çizilir.
+  var oldApply=window.applySylvaLang;
+  if(typeof oldApply==='function' && !window._sylvaScreen2ParityLangWrapped){
+    window.applySylvaLang=function(lang){
+      var out=oldApply.apply(this,arguments);
+      setTimeout(function(){
+        try{ if(typeof window._sylvaRenderLayerSwitchBox==='function') window._sylvaRenderLayerSwitchBox('map2'); }catch(e){}
+        refreshScreen2();
+      },180);
+      return out;
+    };
+    window._sylvaScreen2ParityLangWrapped=true;
+  }
+})();
+</script>
 </body>
 
 </html>
