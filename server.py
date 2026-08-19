@@ -4499,7 +4499,7 @@ def build_result_image(data, for_export=False):
         # böylece çalışma alanının tamamı dolu gelir. label bandında sınıf,
         # probability bandlarında kalite korunur.
         recent = (dw_col
-            .filterDate(ee.Date.now().advance(-120, 'day'), ee.Date.now())
+            .filterDate(ee.Date(datetime.datetime.utcnow()).advance(-120, 'day'), ee.Date(datetime.datetime.utcnow()))
             .select('label'))
         label = recent.mode().rename('value')
         # Preserve all nine classes, including Water=0. clip() constrains the
