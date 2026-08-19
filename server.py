@@ -2736,7 +2736,7 @@ def _classify_from_visualized_rgb(raw_band, valid_mask, rgb_bytes):
 # sınırı iki ayrı sınıfta kalmaz.
 _DEFAULT_ASPECT_BREAKS = [
     {'min': -1.0,   'max': -0.5,   'label': 'Düz (-1)', 'color': '#d9d9d9'},
-    {'min': 0.0,    'max': 12.5,   'label': 'Kuzey (0–12.5° / 347.5–360°)', 'color': '#3c8d5a'},
+    {'min': 0.0,    'max': 12.5,   'label': 'Kuzey (0–12.5° / 327.5–360°)', 'color': '#3c8d5a'},
     {'min': 12.5,   'max': 57.5,   'label': 'Kuzeydoğu (12.5–57.5°)', 'color': '#57b894'},
     {'min': 57.5,   'max': 102.5,  'label': 'Doğu (57.5–102.5°)', 'color': '#8ed0c4'},
     {'min': 102.5,  'max': 147.5,  'label': 'Güneydoğu (102.5–147.5°)', 'color': '#c8e1d9'},
@@ -4995,7 +4995,14 @@ def build_result_image(data, for_export=False):
         # tıpkı LULC/ham bant indirmesindeki AYNI ilkeyle, DEM'in kendi
         # doğal ~30 m çözünürlüğünde somut bir piksel ızgarasına açıkça
         # reproject() edilir.
-        display_result = display_result.reproject(crs='EPSG:4326', scale=30)
+        # Canlı harita tile'larında zorunlu EPSG:4326/30 m reproject kullanma.
+        # Bu, özellikle Curvature/DEM/Slope gibi türevlerde uzak zoomda rasterın
+        # dikdörtgen karo olarak görünmesine veya alt zoom seviyelerinde kaybolmasına
+        # neden olabiliyordu. GEE kendi tile projeksiyonunu native grid üzerinden
+        # üretir. GeoTIFF dışa aktarımının sabit grid gereksinimi aşağıdaki ayrı
+        # download_geotiff(for_export=True) yolunda korunur.
+        if for_export:
+            display_result = display_result.reproject(crs='EPSG:4326', scale=30)
 
         final_display = display_result.clip(roi) if clip_mode == 'clip' else display_result
         return final_display, roi, result, vis, None
