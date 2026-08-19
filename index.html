@@ -21379,20 +21379,13 @@ function selectRamp(name) {
                 if (typeof _flushPendingColors === 'function') _flushPendingColors();
             }
 
-            // Değişikliği aktif katmanın state'ine kaydet; Apply Legend sonrasında da korunur.
-            try {
-                var pane = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
-                var top = window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[pane];
-                if (top && typeof window._sylvaSaveEditorStateForLayer === 'function') {
-                    window._sylvaSaveEditorStateForLayer(pane, top);
-                }
-            } catch(e) {}
-
-            // Haritadaki mevcut katmana da anında uygula.
-            try {
-                if (typeof currentClassificationType !== 'undefined' && currentClassificationType === 'classified' && typeof applyClassificationToMap === 'function') applyClassificationToMap();
-                else if (typeof applyStretchedLegend === 'function') applyStretchedLegend();
-            } catch(e) {}
+            // KRİTİK: Ters çevirme yalnızca ÖNİZLEME durumudur.
+            // Kullanıcı 'Lejantı Uygula' demeden aktif raster/analiz katmanına,
+            // GEE tile'ına veya kayıtlı layer state'ine hiçbir değişiklik gönderme.
+            // Böylece ⇄ Reverse/反转 basıldığında harita anında değişmez;
+            // değişiklik ancak Apply Legend ile birlikte uygulanır.
+            // Burada yalnızca editördeki data-pending-color ve rampReversed
+            // değerleri değiştirilir.
         }
 
         // onclick özelliğini doğrudan bağla; böylece buton DOMContentLoaded
@@ -52738,12 +52731,23 @@ refresh();
                 'Güneybatı (192.5–237.5°)', 'Batı (237.5–282.5°)', 'Kuzeybatı (282.5–327.5°)'
             ];
             var _aCurrent = [];
-            if (_aLegendBox) {
-                var _aNodes = Array.prototype.slice.call(_aLegendBox.querySelectorAll('[data-env-native-class]'));
-                _aDefault.forEach(function(orig){
-                    var node = _aNodes.find(function(el){ return el.getAttribute('data-env-native-class') === orig; });
-                    _aCurrent.push(node ? (node.textContent || '').trim() : orig);
-                });
+            // Öncelik: sınıflandırma editöründeki 9 isim. Dil değiştiğinde
+            // _sylvaRefreshAspectEditorLabels bunları aktif dile çevirir;
+            // böylece indirme Türkçe sabit etikete geri dönmez.
+            var _aEditorNames = Array.prototype.slice.call(document.querySelectorAll('#class-rows-container .classification-row .class-name'));
+            if (_aEditorNames.length === 9) {
+                _aCurrent = _aEditorNames.map(function(el){ return (el.value || el.textContent || '').trim(); });
+            }
+            // Editör hazır değilse canlı lejant DOM'u ikinci önceliktir.
+            if (_aCurrent.length !== 9 || _aCurrent.some(function(x){ return !x; })) {
+                _aCurrent = [];
+                if (_aLegendBox) {
+                    var _aNodes = Array.prototype.slice.call(_aLegendBox.querySelectorAll('[data-env-native-class]'));
+                    _aDefault.forEach(function(orig){
+                        var node = _aNodes.find(function(el){ return el.getAttribute('data-env-native-class') === orig; });
+                        _aCurrent.push(node ? (node.textContent || '').trim() : orig);
+                    });
+                }
             }
             if (_aCurrent.length !== 9 || _aCurrent.some(function(x){ return !x; })) _aCurrent = _aDefault.slice();
             var _aBaseColors = ['#bdbdbd','#2ca25f','#66c2a4','#99d8c9','#ccece6','#fdae61','#f46d43','#d73027','#7f0000'];
