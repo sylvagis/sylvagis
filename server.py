@@ -2850,8 +2850,16 @@ def _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=Non
             if levels:
                 try:
                     from rasterio.enums import Resampling
-                    dst.build_overviews(levels, Resampling.nearest)
-                    dst.update_tags(ns='rio_overview', resampling='nearest')
+                    # DEM/Curvature/Slope/TWI gibi sürekli Float rasterlarda
+                    # nearest overview uzaklaşınca blok/kare ve tek renk etkisi
+                    # üretebilir. Sürekli veride bilinear piramit kullan;
+                    # kategorik tam sayı rasterlarda nearest korunsun. Ham
+                    # piksel değerleri değişmez, yalnızca ArcMap/QGIS'in uzak
+                    # zoom önizlemesi daha doğru olur.
+                    _dtype = str(profile.get('dtype', '')).lower()
+                    _overview_resampling = Resampling.bilinear if ('float' in _dtype or 'complex' in _dtype) else Resampling.nearest
+                    dst.build_overviews(levels, _overview_resampling)
+                    dst.update_tags(ns='rio_overview', resampling=_overview_resampling.name)
                 except Exception:
                     pass
         final_tif = out_mem.read()
@@ -4869,6 +4877,20 @@ def build_result_image(data, for_export=False):
         if index in _DYNAMIC_STRETCH_KEYS:
             _dem_scale = 30  # SRTM/ALOS/Copernicus/NASADEM hepsi ~30 m nominal
             vis = _dynamic_stretch_vis(result, roi, _dem_scale, vis)
+            # Curvature ikinci türevdir ve uzak zoom seviyesinde piramit
+            # örneklemesi değerleri 0 çevresine toplar. AOI'deki küçük bir
+            # pozitif/negatif uç değer min/max germe aralığını tek tarafa
+            # kaydırırsa bütün düşük zoom görüntüsü tek bir renge (özellikle
+            # kırmızıya) çöker. Curvature için aralığı 0 etrafında simetrik
+            # tut: gerçek değerler korunur, yalnızca GÖRSEL germe dengelenir.
+            if index in ('TOPO_CURVATURE', 'TOPO_PLAN_CURV', 'TOPO_PROFILE_CURV'):
+                try:
+                    _absmax = max(abs(float(vis.get('min', -30))), abs(float(vis.get('max', 30))))
+                    if _absmax > 0 and _math.isfinite(_absmax):
+                        vis['min'] = -_absmax
+                        vis['max'] = _absmax
+                except Exception:
+                    pass
 
         # ── Görsel mod / dışa aktarım modu ayrımı ──────────────────
         # 🛠️ BUG FİX: Dışa aktarım (for_export=True) ile ekran görüntüsü
