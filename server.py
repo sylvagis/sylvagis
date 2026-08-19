@@ -4494,16 +4494,14 @@ def build_result_image(data, for_export=False):
         dw_col = (ee.ImageCollection('GOOGLE/DYNAMICWORLD/V1')
                   .filterBounds(roi)
                   .sort('system:time_start', False))
-        latest = dw_col.first()
-        # GEE nesnesi istemci tarafında None dönmez; gerçek kapsam kontrolü
-        # hesaplama sırasında yapılır. En son gözlemin gününü alıp aynı günün
-        # AOI ile kesişen tüm görüntülerini mozaiklemek, geniş AOI'lerde tek bir
-        # Sentinel-2 sahnesinin yalnızca bir bölümünü göstermesini önler.
-        latest_day = ee.Date(latest.get('system:time_start'))
-        latest_day_collection = (dw_col
-            .filterDate(latest_day, latest_day.advance(1, 'day'))
-            .sort('system:time_start', False))
-        label = latest_day_collection.mosaic().select('label').rename('value')
+        # Geniş AOI'lerde tek gün/tek Sentinel-2 sahnesi boşluk bırakabilir.
+        # Son 120 günlük Dynamic World gözlemlerini AOI üzerinde birleştiriyoruz;
+        # böylece çalışma alanının tamamı dolu gelir. label bandında sınıf,
+        # probability bandlarında kalite korunur.
+        recent = (dw_col
+            .filterDate(ee.Date(Date.now()).advance(-120, 'day'), ee.Date(Date.now()))
+            .select('label'))
+        label = recent.mode().rename('value')
         # Preserve all nine classes, including Water=0. clip() constrains the
         # displayed/exported raster to the AOI without changing class codes.
         result = label.clip(roi)
