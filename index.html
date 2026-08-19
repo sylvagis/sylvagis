@@ -5288,7 +5288,7 @@ tr.class-highlight-active {
     </select>
 
 </div>
-            <div id="legend-symbology-panel" style="opacity:0.35;pointer-events:none;user-select:none;">
+            <div id="legend-symbology-panel" style="opacity:1;pointer-events:auto;user-select:auto;">
             <h3 data-i18n="legend_sym">Lejant ve Semboloji</h3>
 
 <!-- ===== SINIFLANDIRMA TÜRÜ SEÇİCİ ===== -->
@@ -21335,81 +21335,93 @@ function selectRamp(name) {
         })();
 
         // ============================================================
-        // B. TERSİNE ÇEVİR (REVERSE RAMP)
+        // B. TERSİNE ÇEVİR (REVERSE RAMP) — ROBUST
         // ============================================================
         var rampReversed = false;
 
         function reverseGradient(cssGradient) {
-            // "linear-gradient(to right, c1, c2, ...)" → stops tersine
-            var match = cssGradient.match(/linear-gradient\(to right\s*,\s*(.+)\)$/s);
+            var match = String(cssGradient || '').match(/linear-gradient\(to right\s*,\s*(.+)\)$/s);
             if (!match) return cssGradient;
             var stops = match[1].split(',').map(function(s){ return s.trim(); });
             stops.reverse();
             return 'linear-gradient(to right, ' + stops.join(', ') + ')';
         }
 
-        document.addEventListener('DOMContentLoaded', function() {
-            var btnReverse = document.getElementById('btn-reverse-ramp');
-            if (!btnReverse) return;
-            btnReverse.addEventListener('click', function() {
-                rampReversed = !rampReversed;
-                btnReverse.style.background = rampReversed ? '#dcfce7' : '#f0fdf4';
-                btnReverse.style.borderColor = rampReversed ? '#4ade80' : '#86efac';
-                btnReverse.style.fontWeight = rampReversed ? '800' : '600';
+        function _sylvaApplyReverseRampNow() {
+            var btn = document.getElementById('btn-reverse-ramp');
+            var selRamp = document.getElementById('selectedRamp');
+            if (!selRamp) return;
 
-                // Seçili ramp'i tersine çevir
-                var selRamp = document.getElementById('selectedRamp');
-                var currentBg = selRamp.style.background;
-                selRamp.style.background = reverseGradient(currentBg);
+            rampReversed = !rampReversed;
+            if (btn) {
+                btn.style.background = rampReversed ? '#dcfce7' : '#f0fdf4';
+                btn.style.borderColor = rampReversed ? '#4ade80' : '#86efac';
+                btn.style.fontWeight = rampReversed ? '800' : '600';
+            }
 
-                // Palette listesindeki tüm ramp'leri de tersine çevir
-                document.querySelectorAll('#paletteList .color-ramp').forEach(function(el) {
-                    el.style.background = reverseGradient(el.style.background);
+            // Palet ana çubuğunu gerçekten ters çevir.
+            var rampKey = selRamp.getAttribute('data-ramp') || 'black-white';
+            if (rampKey === '__gee__') rampKey = 'black-white';
+            var base = (typeof ramps !== 'undefined' && ramps[rampKey]) ? ramps[rampKey] : selRamp.style.background;
+            selRamp.style.background = rampReversed ? reverseGradient(base) : base;
+
+            // Classified modunda sınıf renklerinin sırasını da ters çevir.
+            if (typeof currentClassificationType !== 'undefined' && currentClassificationType === 'classified') {
+                var rows = Array.prototype.slice.call(document.querySelectorAll('#class-rows-container .classification-row'));
+                var triggers = rows.map(function(row){ return row.querySelector('.class-color-trigger'); }).filter(Boolean);
+                var colors = triggers.map(function(tr){
+                    return tr.getAttribute('data-pending-color') || tr.getAttribute('data-selected-color') || tr.style.background || '#999999';
+                }).reverse();
+                triggers.forEach(function(tr,i){
+                    tr.style.background = colors[i];
+                    tr.setAttribute('data-pending-color', colors[i]);
                 });
+                if (typeof _flushPendingColors === 'function') _flushPendingColors();
+            }
 
-                // Tersine çevirme yalnızca SEMBOLOJİ önizlemesidir. Burada GEE'ye
-                // yeni istek atılmaz; böylece SylvaGIS yükleme/yanıp sönme ekranı
-                // oluşmaz. Kullanıcı 'Lejantı Uygula' dediğinde renkler veriye uygulanır.
-                if (currentClassificationType === 'classified') {
-                    var rowEls = document.querySelectorAll('#class-rows-container .classification-row');
-                    var triggers = Array.from(rowEls).map(function(row) { return row.querySelector('.class-color-trigger'); });
-                    var colors = triggers.map(function(tr) {
-                        return tr.getAttribute('data-pending-color') || tr.getAttribute('data-selected-color') || '#999999';
-                    });
-                    colors.reverse();
-                    triggers.forEach(function(tr, i) {
-                        if (!tr) return;
-                        tr.style.background = colors[i];
-                        tr.setAttribute('data-pending-color', colors[i]);
-                    });
-                    // Lejant kutusunu da aynı sırayla anında önizle; veri katmanına
-                    // dokunma. 'Lejantı Uygula' sonraki tıklamada GEE'yi yeniler.
-                    try {
-                        var _revClasses = _sylvaReadClassificationRowsForPane((typeof _sylvaActivePaneId==='function'?_sylvaActivePaneId():'map'));
-                        if (_revClasses && _revClasses.length) {
-                            // Sınıf aralıklarının/sırasının kendisi değişmez; yalnızca
-                            // renkler ters sıraya çevrilmiş önizlemeyle lejanta yazılır.
-                            renderDynamicLegend(_revClasses, (typeof _sylvaActivePaneId==='function'?_sylvaActivePaneId():'map'));
-                        }
-                    } catch (_revErr) {}
-                } else {
-                    // Stretched modda da yalnızca lejant önizlemesini ters çevir.
-                    var _revLegendBox = document.getElementById((typeof _sylvaActivePaneId==='function'&&_sylvaActivePaneId()==='map2')?'map2-legend-box':'map-legend-box');
-                    if (_revLegendBox) {
-                        var _revRamp = _revLegendBox.querySelector('.color-ramp');
-                        if (_revRamp) _revRamp.style.background = reverseGradient(_revRamp.style.background || '');
-                    }
+            // Değişikliği aktif katmanın state'ine kaydet; Apply Legend sonrasında da korunur.
+            try {
+                var pane = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
+                var top = window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[pane];
+                if (top && typeof window._sylvaSaveEditorStateForLayer === 'function') {
+                    window._sylvaSaveEditorStateForLayer(pane, top);
                 }
-            });
-        });
+            } catch(e) {}
 
-        // selectRamp override: tersine çevriyse yeni seçimi de tersine çevir
+            // Haritadaki mevcut katmana da anında uygula.
+            try {
+                if (typeof currentClassificationType !== 'undefined' && currentClassificationType === 'classified' && typeof applyClassificationToMap === 'function') applyClassificationToMap();
+                else if (typeof applyStretchedLegend === 'function') applyStretchedLegend();
+            } catch(e) {}
+        }
+
+        // onclick özelliğini doğrudan bağla; böylece buton DOMContentLoaded
+        // zamanlamasına bağlı kalmaz ve kesin olarak çalışır.
+        (function(){
+            var bind = function(){
+                var btn = document.getElementById('btn-reverse-ramp');
+                if (!btn || btn.getAttribute('data-sylva-reverse-bound') === '1') return;
+                btn.setAttribute('data-sylva-reverse-bound','1');
+                btn.onclick = function(e){
+                    if(e) e.preventDefault();
+                    _sylvaApplyReverseRampNow();
+                    return false;
+                };
+            };
+            if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bind);
+            else bind();
+            setTimeout(bind, 0);
+            setTimeout(bind, 500);
+        })();
+
+        // selectRamp: ters moddaysa seçilen yeni paleti de doğru yönde göster.
         var _origSelectRamp = selectRamp;
         selectRamp = function(name) {
             _origSelectRamp(name);
             if (rampReversed) {
                 var selRamp = document.getElementById('selectedRamp');
-                selRamp.style.background = reverseGradient(selRamp.style.background);
+                var base = (typeof ramps !== 'undefined' && ramps[name]) ? ramps[name] : selRamp.style.background;
+                selRamp.style.background = reverseGradient(base);
             }
         };
 
@@ -53160,8 +53172,10 @@ refresh();
     },30);
   }
   document.addEventListener('click',function(e){
+    // Katman değişiminde yalnızca yeni katmanın kendi editör state'ini yükle.
+    // Sınıflandırma/ters çevir/Lejantı Uygula butonlarında isolateEditor()
+    // çalıştırmak kullanıcı seçimini hemen eski state'e geri döndürüyordu.
     if(e.target&&e.target.closest&&e.target.closest('.sylva-layer-switch-item')) refresh();
-    if(e.target&&e.target.closest&&e.target.closest('#btn-apply-legend,#btn-type-classified,#btn-type-stretched,#btn-reverse-ramp')) refresh();
   });
   document.addEventListener('change',function(e){
     if(e.target&&e.target.classList&&e.target.classList.contains('sylva-layer-switch-visibility')) refresh();
@@ -53440,9 +53454,6 @@ refresh();
     if(!e.target || !e.target.closest) return;
     var item=e.target.closest('#map2-layer-switch-box .sylva-layer-switch-item');
     if(item){ setTimeout(refreshScreen2,40); setTimeout(refreshScreen2,220); }
-    if(e.target.closest('#btn-apply-legend,#btn-type-classified,#btn-type-stretched,#btn-reverse-ramp')){
-      setTimeout(refreshScreen2,80);
-    }
   },true);
 
   // Analiz/indir/çıktı butonları ortak panelde olduğundan, butona basıldığı
@@ -53511,153 +53522,33 @@ refresh();
   [100,500,1200,2500].forEach(function(ms){setTimeout(apply,ms)});
 })();
 </script>
-<script id="sylva-screen2-final-parity-20260819">
+
+<script id="sylva-final-classification-button-fix-20260819">
 (function(){
   'use strict';
-  // SADECE EKRAN 2 için son güvence katmanı. Ekran 1'in DOM/state'ine
-  // müdahale etmez; ortak sağ panel aktifken hedef pane olarak yalnızca map2
-  // kullanılır.
   var PASSIVE={TOPO_ASPECT:true,TOPO_HILLSHADE:true};
-  function isMap2(){return typeof window._sylvaActivePaneId==='function' && window._sylvaActivePaneId()==='map2';}
-  function meta2(){return (window._lastAnalyzeMetaByPane&&window._lastAnalyzeMetaByPane.map2)||null;}
-  function top2(){return window._sylvaTopGeeLayerByPane&&window._sylvaTopGeeLayerByPane.map2||null;}
-  function panel(){return document.getElementById('legend-symbology-panel');}
-  function passive(name){
-    var p=panel(); if(!p)return;
-    p.style.opacity='.35'; p.style.pointerEvents='none'; p.style.userSelect='none';
-    p.setAttribute('aria-disabled','true');
-    p.querySelectorAll('input,select,button').forEach(function(el){el.disabled=true;el.setAttribute('data-sylva-screen2-passive','1');});
+  function activePane(){return typeof window._sylvaActivePaneId==='function'?window._sylvaActivePaneId():'map';}
+  function meta(){var p=activePane();return (window._lastAnalyzeMetaByPane&&window._lastAnalyzeMetaByPane[p])||window._lastAnalyzeMeta||null;}
+  function unlockIfEditable(){
+    var m=meta(), name=String(m&&m.analysisName||'').toUpperCase();
+    var panel=document.getElementById('legend-symbology-panel');
+    if(!panel) return;
+    if(PASSIVE[name]) return;
+    panel.style.opacity='1'; panel.style.pointerEvents='auto'; panel.style.userSelect='auto'; panel.removeAttribute('aria-disabled');
+    panel.querySelectorAll('[data-sylva-hillshade-disabled]').forEach(function(el){el.disabled=false;el.removeAttribute('data-sylva-hillshade-disabled');});
   }
-  function enable(){
-    var p=panel(); if(!p)return;
-    p.style.opacity='1'; p.style.pointerEvents=''; p.style.userSelect=''; p.removeAttribute('aria-disabled');
-    p.querySelectorAll('[data-sylva-screen2-passive="1"]').forEach(function(el){el.disabled=false;el.removeAttribute('data-sylva-screen2-passive');});
-    // Önceki pasif kilitlerden kalan disabled durumlarını da yalnızca Ekran 2
-    // aktifken kaldır; Bakı/Kabartma yukarıdaki passive() yolundan geçer.
-    p.querySelectorAll('button,input,select').forEach(function(el){
-      if(el.getAttribute('data-sylva-passive-disabled')==='1'){
-        el.disabled=false;el.removeAttribute('data-sylva-passive-disabled');
-      }
-    });
-  }
-  function cleanEmoji(root){
-    if(!root)return;
-    var re=/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2300}-\u{23FF}]/gu;
-    var w=document.createTreeWalker(root,NodeFilter.SHOW_TEXT),n;
-    while((n=w.nextNode())){var v=n.nodeValue||'',nv=v.replace(re,'').replace(/^\s*[|•·]+\s*/,'');if(nv!==v)n.nodeValue=nv;}
-  }
-  function restoreOrInit2(){
-    if(!isMap2())return;
-    var m=meta2(),name=String(m&&m.analysisName||'').toUpperCase(),top=top2();
-    if(!m||!top)return;
-    if(PASSIVE[name]){
-      // Bakı/Kabartma kendi analiz lejantını korur; panel sadece pasif görünür.
-      passive(name);
-      if(name==='TOPO_HILLSHADE'){
-        var sr=document.getElementById('selectedRamp');
-        if(sr){sr.style.background='linear-gradient(to right,#ffffff,#e5e5e5,#808080)';sr.setAttribute('data-ramp','black-white');}
-        var pl=document.getElementById('paletteList');if(pl)pl.classList.add('hidden');
-      }
-      return;
-    }
-    enable();
-    var store=window._sylvaEditorStateByPane&&window._sylvaEditorStateByPane.map2;
-    var has=!!(store&&Object.prototype.hasOwnProperty.call(store,top));
-    if(has){
-      try{window._sylvaRestoreEditorStateForLayer('map2',top);}catch(e){}
-    }else{
-      // İlk kez görülen Ekran 2 katmanı başka katmanın sınıfını miras almasın.
-      try{
-        if(typeof setClassificationType==='function')setClassificationType('stretched');
-        var cc=document.getElementById('class-count');if(cc)cc.value='4';
-        if(typeof buildClassRows==='function')buildClassRows(4);
-        var sr2=document.getElementById('selectedRamp');
-        var rk=(m.rampKey&&typeof ramps!=='undefined'&&ramps[m.rampKey])?m.rampKey:'black-white';
-        if(sr2&&typeof ramps!=='undefined'){sr2.style.background=ramps[rk]||ramps['black-white'];sr2.setAttribute('data-ramp',rk);}
-        if(typeof window._sylvaSaveEditorStateForLayer==='function')window._sylvaSaveEditorStateForLayer('map2',top);
-      }catch(e){}
-    }
-  }
-  function save2(){
-    if(!isMap2())return;
-    var top=top2();if(top&&typeof window._sylvaSaveEditorStateForLayer==='function'){
-      try{window._sylvaSaveEditorStateForLayer('map2',top);}catch(e){}
-    }
-  }
-  function refresh2(){
-    if(!isMap2())return;
-    setTimeout(function(){
-      try{if(typeof window._sylvaSyncActivePaneControls==='function')window._sylvaSyncActivePaneControls();}catch(e){}
-      try{if(typeof window._sylvaRenderLayerSwitchBox==='function')window._sylvaRenderLayerSwitchBox('map2');}catch(e){}
-      try{restoreOrInit2();}catch(e){}
-      try{cleanEmoji(document.getElementById('map2-layer-switch-box'));cleanEmoji(document.getElementById('map2-info-box'));cleanEmoji(document.getElementById('map2-legend-box'));}catch(e){}
-      try{if(typeof window._sylvaSyncLegendInfoByPane==='function')window._sylvaSyncLegendInfoByPane();}catch(e){}
-    },40);
-  }
-  function tuneMap2Layers(){
-    try{
-      var store=window._geeLayersByPane&&window._geeLayersByPane.map2||{};
-      Object.keys(store).forEach(function(k){
-        var l=store[k];if(!l||!l.options)return;
-        l.options.maxZoom=24;l.options.maxNativeZoom=16;l.options.minNativeZoom=0;l.options.keepBuffer=16;l.options.updateWhenZooming=true;l.options.updateWhenIdle=true;
-      });
-      if(window._geeLayer2&&window._geeLayer2.options){
-        window._geeLayer2.options.maxZoom=24;window._geeLayer2.options.maxNativeZoom=16;window._geeLayer2.options.keepBuffer=16;window._geeLayer2.options.updateWhenZooming=true;window._geeLayer2.options.updateWhenIdle=true;
-      }
+  function save(){
+    try{var p=activePane(),top=window._sylvaTopGeeLayerByPane&&window._sylvaTopGeeLayerByPane[p];
+      if(top&&typeof window._sylvaSaveEditorStateForLayer==='function') window._sylvaSaveEditorStateForLayer(p,top);
     }catch(e){}
   }
-  function removeAreaPins2(){
-    try{
-      if(!window.map2)return;
-      var hasArea=!!(window._workspaceLayer2||window.currentLayer2);
-      if(!hasArea)return;
-      window.map2.eachLayer(function(l){if(l&&l._sylvaSearchMarker){try{window.map2.removeLayer(l);}catch(e){}}});
-    }catch(e){}
-  }
-
-  // Ekran 2 haritası aktif olduğunda bütün ortak araçlar map2'ye bağlanır.
-  var m2=document.getElementById('map2');
-  if(m2){
-    ['pointerdown','mousedown','touchstart','click'].forEach(function(ev){
-      m2.addEventListener(ev,function(){
-        try{if(typeof window._sylvaSetActiveMap==='function')window._sylvaSetActiveMap('map2');}catch(e){}
-        refresh2();
-      },true);
-    });
-  }
-  // Katman değişiminden sonra yalnızca map2'nin kendi sınıflandırması geri gelir.
   document.addEventListener('click',function(e){
-    if(!e.target||!e.target.closest)return;
-    if(e.target.closest('#map2-layer-switch-box .sylva-layer-switch-item')){setTimeout(refresh2,80);setTimeout(refresh2,260);}
-    if(e.target.closest('#btn-type-classified,#btn-type-stretched')){setTimeout(function(){if(isMap2())enable();},20);setTimeout(save2,80);}
-    if(e.target.closest('#btn-apply-legend')){setTimeout(function(){if(isMap2()){enable();save2();}},180);}
-    if(e.target.closest('#btn-reverse-ramp'))setTimeout(save2,100);
+    var target=e.target&&e.target.closest?e.target.closest('#btn-type-classified,#btn-type-stretched,#btn-apply-legend,#btn-reverse-ramp'):null;
+    if(!target) return;
+    setTimeout(function(){unlockIfEditable();save();},80);
   },true);
-  document.addEventListener('change',function(e){
-    if(!isMap2())return;
-    if(e.target.matches&&e.target.matches('#class-count,.class-min,.class-max,.class-name'))setTimeout(save2,80);
-    if(e.target.classList&&e.target.classList.contains('sylva-layer-switch-visibility'))setTimeout(refresh2,100);
-    if(e.target.matches&&e.target.matches('input[data-analysis]'))setTimeout(refresh2,120);
-  },true);
-  // Renk kutusu / dropdown değişimleri de Ekran 2'nin katmanına kaydedilir.
-  document.addEventListener('click',function(e){
-    if(!isMap2())return;
-    if(e.target.closest&&e.target.closest('.class-color-trigger,.color-option,#btn-auto-classify'))setTimeout(save2,120);
-  },true);
-  var oldApply=window.applySylvaLang;
-  if(typeof oldApply==='function'&&!window._sylvaScreen2ParityLangWrapped2){
-    window.applySylvaLang=function(lang){
-      var out=oldApply.apply(this,arguments);
-      setTimeout(function(){
-        try{if(typeof window._sylvaRenderLayerSwitchBox==='function')window._sylvaRenderLayerSwitchBox('map2');}catch(e){}
-        refresh2();
-      },180);
-      return out;
-    };
-    window._sylvaScreen2ParityLangWrapped2=true;
-  }
-  [150,500,1000,2000,3500].forEach(function(ms){setTimeout(function(){tuneMap2Layers();refresh2();removeAreaPins2();},ms);});
-  setInterval(function(){if(isMap2()){tuneMap2Layers();removeAreaPins2();}},1800);
+  setTimeout(unlockIfEditable,700);
+  setTimeout(unlockIfEditable,1600);
 })();
 </script>
 </body>
