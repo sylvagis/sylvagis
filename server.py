@@ -69,6 +69,7 @@ def _sylva_safe_filename(text, allow_dots=True):
 
 # LULC ailesi indeks kodu → gerçek veri kaynağı etiketi (Sensör/Veri segmenti)
 _LULC_SOURCE_LABELS = {
+    'LULC': 'DynamicWorld',
     'LULC_ESA': 'ESA',
     'LULC_MODIS': 'MODIS',
     'LULC_CORINE': 'CORINE',
@@ -1989,7 +1990,7 @@ _last_analyze_native_crs = None
 # veri setleridir; tarih aralığı veya bulutluluk filtresi kullanmazlar ve
 # her zaman AOI sınırlarına göre kesilir (clip).
 LULC_FAMILY_INDICES = (
-    'LULC_ESA', 'LULC_MODIS', 'LULC_CORINE',
+    'LULC', 'LULC_ESA', 'LULC_MODIS', 'LULC_CORINE',
     # TOPO ailesi — DEM tabanlı statik analizler (tarih/bulutluluk filtresi yok)
     'TOPO', 'TOPO_DEM', 'TOPO_SLOPE', 'TOPO_ASPECT', 'TOPO_HILLSHADE',
     'TOPO_RELIEF', 'TOPO_TPI', 'TOPO_TRI', 'TOPO_ROUGHNESS',
@@ -2015,6 +2016,7 @@ LULC_FAMILY_INDICES = (
 #
 # ÇÖZÜM: her veri seti kendi doğal piksel boyutunda istatistiklenir.
 _NATIVE_STATS_SCALE = {
+    'LULC':       10,   # Google Dynamic World V1
     'LULC_ESA':    10,   # ESA WorldCover v200
     'LULC_CORINE': 100,  # CORINE Land Cover 2018
     'LULC_MODIS':  500,  # MODIS MCD12Q1
@@ -2076,6 +2078,17 @@ def _roi_center_lonlat(roi_coords):
 # sidecar (.tif.aux.xml) ve klasik bir .clr renk dosyası üretmek için
 # kullanılır. Bkz. _build_lulc_symbology_zip() ve /api/download-geotiff.
 LULC_CLASS_DEFS = {
+    'LULC': [  # Google Dynamic World V1 — label 0..8
+        {'code': 0, 'label': 'Water',              'color': '#419BDF'},
+        {'code': 1, 'label': 'Trees',              'color': '#397D49'},
+        {'code': 2, 'label': 'Grass',              'color': '#88B053'},
+        {'code': 3, 'label': 'Flooded Vegetation', 'color': '#7A87C6'},
+        {'code': 4, 'label': 'Crops',              'color': '#E49635'},
+        {'code': 5, 'label': 'Shrub & Scrub',      'color': '#DFC35A'},
+        {'code': 6, 'label': 'Built Area',          'color': '#C4281B'},
+        {'code': 7, 'label': 'Bare Ground',         'color': '#A59B8F'},
+        {'code': 8, 'label': 'Snow & Ice',          'color': '#B39FE1'},
+    ],
     'LULC_ESA': [  # ESA WorldCover v200 — sunucuda 1..11'e yeniden kodlanmış sıra
         {'code': 1,  'label': 'Ağaç Örtüsü / Orman',          'color': '#006400'},
         {'code': 2,  'label': 'Çalılık',                      'color': '#ffbb22'},
@@ -4462,20 +4475,40 @@ def build_result_image(data, for_export=False):
     # ve tarih filtresi bloğunu tamamen atlarlar.
 
     if index == 'LULC':
-        # 🗑️ KALDIRILDI (Faz 21) — Google Dynamic World V1 ("🛰️ Dynamic World V1
-        # (Current / 10 m)") kullanıcı isteği üzerine Arazi Kullanımı
-        # ailesinden TAMAMEN kaldırıldı: sürekli ekrana gelmeme ("boş
-        # koleksiyon" GEE çökmesi, bkz. Faz 20) ve indirme hatalarına yol
-        # açıyordu. İstemcideki (index.html) seçim kutusu da kaldırıldığı
-        # için normal kullanımda buraya HİÇ ulaşılmaz; bu, yalnızca eski
-        # önbelleğe alınmış bir istemci/bookmarklenmiş bir istek yine de
-        # 'LULC' gönderirse çökme yerine anlaşılır bir hata döndürmek
-        # için bırakılan bir güvenlik ağıdır.
-        raise Exception(
-            'Dynamic World V1 veri seti kaldırıldı. Lütfen Arazi Kullanımı '
-            'panelinden ESA WorldCover, MODIS MCD12Q1 veya CORINE Land Cover '
-            'seçeneklerinden birini kullanın.'
-        )
+        # 🛰️ Google Dynamic World V1 — Current / 10 m.
+        # Dynamic World is observation-based rather than an annual static map.
+        # Use the latest available Sentinel-2-derived observation intersecting
+        # the AOI. The label band is already 0..8 and MUST NOT selfMask(),
+        # because class 0 is a valid Water class.
+        dw_palette = [
+            '419BDF',  # 0 Water
+            '397D49',  # 1 Trees
+            '88B053',  # 2 Grass
+            '7A87C6',  # 3 Flooded Vegetation
+            'E49635',  # 4 Crops
+            'DFC35A',  # 5 Shrub & Scrub
+            'C4281B',  # 6 Built Area
+            'A59B8F',  # 7 Bare Ground
+            'B39FE1',  # 8 Snow & Ice
+        ]
+        dw_col = (ee.ImageCollection('GOOGLE/DYNAMICWORLD/V1')
+                  .filterBounds(roi)
+                  .sort('system:time_start', False))
+        latest = dw_col.first()
+        # GEE nesnesi istemci tarafında None dönmez; gerçek kapsam kontrolü
+        # hesaplama sırasında yapılır. En son gözlemin gününü alıp aynı günün
+        # AOI ile kesişen tüm görüntülerini mozaiklemek, geniş AOI'lerde tek bir
+        # Sentinel-2 sahnesinin yalnızca bir bölümünü göstermesini önler.
+        latest_day = ee.Date(latest.get('system:time_start'))
+        latest_day_collection = (dw_col
+            .filterDate(latest_day, latest_day.advance(1, 'day'))
+            .sort('system:time_start', False))
+        label = latest_day_collection.mosaic().select('label').rename('value')
+        # Preserve all nine classes, including Water=0. clip() constrains the
+        # displayed/exported raster to the AOI without changing class codes.
+        result = label.clip(roi)
+        vis = {'min': 0, 'max': 8, 'palette': dw_palette}
+        return result, roi, result, vis, None
 
     if index == 'LULC_ESA':
         # 🏘️ Arazi Kullanımı — ESA WorldCover v200 (10 m global, 11 sınıf).
@@ -7109,6 +7142,9 @@ def download_geotiff():
         is_lulc_categorical = lulc_index in LULC_CLASS_DEFS
 
         nodata_value = -9999 if is_clip else None
+        if is_clip and lulc_index == 'LULC':
+            # Dynamic World label 0 = Water; 0 cannot be used as NoData.
+            nodata_value = 255
         # 🛠️ BUG FİX (ArcMap "Could not open the specified file" — Arazi
         # Kullanımı/LULC indirmelerinde: LULC, LULC_ESA, LULC_MODIS,
         # LULC_CORINE): Byte-Sentinel-2-gerçek-renk düzeltmesiyle (hemen
@@ -7128,12 +7164,14 @@ def download_geotiff():
         # _build_lulc_symbology_zip() de kendi ürettiği Byte çıktısında
         # zaten bağımsız olarak 0'ı NoData kabul ediyor; artık ikisi TUTARLI.
         if (_is_byte_rgb_export or is_lulc_categorical) and nodata_value is not None:
-            # bkz. yukarıdaki iki BUG FİX notu — Byte (0-255) aralığı
-            # -9999'u temsil edemez; 0 kullanılır (RGB'de gerçek 3 bantlı
-            # yansımada üç kanalın da AYNI ANDA tam 0 olması pratikte
-            # ihmal edilebilir; LULC'de 0 zaten hiçbir zaman geçerli bir
-            # sınıf kodu olamaz).
-            nodata_value = 0
+            # Byte çıktılarda 0 genel NoData sentinel'idir; ancak Dynamic World
+            # için 0 GERÇEK bir sınıftır (Water). Bu nedenle Dynamic World'de
+            # 255 NoData olarak korunur ve _build_lulc_symbology_zip() sınıfları
+            # 1..9 aralığına kaydırarak güvenli bir ArcMap/QGIS sembolojisi üretir.
+            if lulc_index == 'LULC':
+                nodata_value = 255
+            else:
+                nodata_value = 0
 
         # 🔒 true-clip güvencesi: GEE'nin clip()/unmask() zincirinin ötesinde,
         # AOI'nin GERÇEK poligon şeklini (EPSG:4326) de gönderiyoruz ki
