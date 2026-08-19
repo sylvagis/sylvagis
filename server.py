@@ -2015,6 +2015,21 @@ LULC_FAMILY_INDICES = (
 # 429 almasına doğrudan katkıda bulunur (bkz. TILE PROXY açıklaması).
 #
 # ÇÖZÜM: her veri seti kendi doğal piksel boyutunda istatistiklenir.
+# Çevresel/Kentsel raster analizleri: Bina Çatı Tespiti HARİÇ tümü,
+# Topografik Analizlerdeki GeoTIFF dışa aktarım hattını kullanır.
+# Bu liste ölçek/CRS/NoData/sınıflandırma gibi ortak indirme kararlarında
+# merkezi bir kaynak olarak kullanılır.
+_ENV_URBAN_RASTER_INDICES = {
+    'UHI_LST', 'UHI_TREND', 'LST_LULC_CORRELATION',
+    'WATER_OCCURRENCE', 'WATER_CHANGE', 'WATER_SEASONALITY',
+    'RESERVOIR_VOLUME', 'WATER_QUALITY_PROXY', 'VEG_CHANGE',
+    'FOREST_LOSS', 'BURN_SEVERITY', 'CANOPY_HEIGHT_BIOMASS', 'FOREST_HEALTH',
+    'URBAN_GROWTH', 'IMPERVIOUS_CHANGE', 'NIGHTLIGHTS_ECONOMIC', 'DROUGHT_INDEX',
+    'FLOOD_MAPPING', 'LANDSLIDE_SUSCEPTIBILITY', 'DROUGHT_RISK_COMPOSITE',
+    'EARTHQUAKE_DAMAGE_PROXY', 'NO2_TIMESERIES', 'AEROSOL_OPTICAL_DEPTH',
+    'SO2_CO_ANOMALY', 'COASTLINE_CHANGE', 'SST_TREND'
+}
+
 _NATIVE_STATS_SCALE = {
     'LULC':       10,   # Google Dynamic World V1
     'LULC_ESA':    10,   # ESA WorldCover v200
@@ -6996,11 +7011,21 @@ def download_geotiff():
         # .nominalScale()) kullanması gibi.
         _dl_index_for_scale = data.get('index')
         if _dl_index_for_scale in _NATIVE_STATS_SCALE:
+            # LULC ve kaba çözünürlüklü çevresel veri setleri için gerçek
+            # native çözünürlük korunur; bu, Topografik indirmedeki sabit
+            # raster-grid yaklaşımının çevresel karşılığıdır.
             scale = _NATIVE_STATS_SCALE[_dl_index_for_scale]
         elif isinstance(_dl_index_for_scale, str) and _dl_index_for_scale.startswith('TOPO'):
             # SRTM/ALOS/Copernicus/NASADEM hepsi ~30 m nominal — bkz.
             # build_result_image() içindeki "_dem_scale = 30" ile TUTARLI.
             scale = 30
+        elif _dl_index_for_scale in _ENV_URBAN_RASTER_INDICES:
+            # Topografik Analizlerle AYNI indirme yolu: kullanıcıdan gelen
+            # Sentinel/Landsat ölçeğini kullanma; analiz görüntüsünün kendi
+            # native/analiz ölçeğinde raster üret. _NATIVE_STATS_SCALE'de
+            # özel tanımı olmayan çevresel analizler mevcut genel 30 m
+            # varsayılanını korur.
+            scale = _stats_scale_for(_dl_index_for_scale, 30)
 
         # 🌐 İstemci bir CRS göndermezse (ör. eski/farklı bir istemci veya
         # doğrudan API çağrısı), sabit "EPSG:4326" yerine son analizin
@@ -7204,6 +7229,12 @@ def download_geotiff():
         # DEM vb.) o min/max/palette aşağıdaki sınıflandırma adımında
         # kullanılır — böylece indirilen dosyanın rengi haritadaki renk
         # çubuğuyla eşleşir.
+        # Çevresel/Kentsel rasterlar (BUILDING_FOOTPRINT hariç) Topografik
+        # rasterlerle aynı ham tek-bant + sınıflandırma/RAT/VAT dışa aktarım
+        # hattındadır. Bu bayrak yalnızca gerçek RGB uydu görüntüsünü istisna
+        # eder; çevresel/kentsel bir indeks hiçbir zaman RGB'ye dönüştürülmez.
+        is_env_urban_raster = lulc_index in _ENV_URBAN_RASTER_INDICES
+
         requested_vis = req_data.get('visualization')
         requested_breaks = None
         requested_legend_labels = None
@@ -7225,7 +7256,7 @@ def download_geotiff():
                 requested_breaks = requested_vis['breaks']
             if isinstance(requested_vis.get('legendLabels'), list):
                 requested_legend_labels = requested_vis.get('legendLabels')
-        is_true_color_rgb = (lulc_index == 'RGB')
+        is_true_color_rgb = (lulc_index == 'RGB') and not is_env_urban_raster
         export_image = final_display
 
         # DYNAMIC WORLD GÜVENLİ DIŞA AKTARIMI: 0 = Water GERÇEK SINIFTIR.
