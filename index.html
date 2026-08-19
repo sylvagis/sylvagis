@@ -53231,6 +53231,16 @@ refresh();
   };
 
   function enableClassificationEditor(){
+    // Bu panel yalnızca Bakı/Kabartma için pasif olmalıdır. Önceki sürümde
+    // panelin kendisi inline olarak pointer-events:none kaldığı için
+    // sınıflandırma butonuna basınca kullanıcıya kapandı gibi görünüyordu.
+    var panel=document.getElementById('legend-symbology-panel');
+    if(panel){
+      panel.style.opacity='1';
+      panel.style.pointerEvents='';
+      panel.style.userSelect='';
+      panel.removeAttribute('aria-disabled');
+    }
     var ids=['classification-type-group','stretched-settings','classified-settings','paletteList'];
     ids.forEach(function(id){
       var el=document.getElementById(id); if(!el) return;
@@ -53298,7 +53308,13 @@ refresh();
   [50,150,350,800,1600,3000].forEach(function(ms){setTimeout(syncClassificationAvailability,ms);});
   document.addEventListener('click',function(e){
     if(!e.target||!e.target.closest) return;
-    if(e.target.closest('.sylva-layer-switch-item')||e.target.closest('#btn-type-classified')||e.target.closest('#btn-type-stretched')||e.target.closest('#btn-apply-legend')||e.target.closest('#btn-reverse-ramp')){
+    // ÖNEMLİ: Sınıflandırılmış/Stretched veya Lejantı Uygula tıklamasından
+    // sonra editörü yeniden başlatıp varsayılan 4 sınıfa döndürme. Bu eski
+    // davranış, kullanıcı 'Sınıflandırılmış' butonuna bastığı anda modu tekrar
+    // stretched yaparak panelin kapanmış gibi görünmesine neden oluyordu.
+    // Editör state'i yalnızca gerçekten başka bir katmana geçildiğinde
+    // başlatılır; kullanıcı seçimini Apply ile kendisi kaydeder.
+    if(e.target.closest('.sylva-layer-switch-item')){
       setTimeout(syncClassificationAvailability,80);
       setTimeout(syncClassificationAvailability,300);
     }
@@ -53468,6 +53484,180 @@ refresh();
     };
     window._sylvaScreen2ParityLangWrapped=true;
   }
+})();
+</script>
+<script id="sylva-final-classification-open-fix-20260819">
+(function(){
+  'use strict';
+  var PASSIVE={TOPO_ASPECT:true,TOPO_HILLSHADE:true};
+  function pane(){return typeof window._sylvaActivePaneId==='function'?window._sylvaActivePaneId():'map';}
+  function meta(){var p=pane();return (window._lastAnalyzeMetaByPane&&window._lastAnalyzeMetaByPane[p])||window._lastAnalyzeMeta||null;}
+  function apply(){
+    var m=meta(), name=String(m&&m.analysisName||'').toUpperCase();
+    var panel=document.getElementById('legend-symbology-panel');
+    if(!panel)return;
+    if(PASSIVE[name])return;
+    panel.style.opacity='1';panel.style.pointerEvents='';panel.style.userSelect='';panel.removeAttribute('aria-disabled');
+    panel.querySelectorAll('[data-sylva-passive-disabled="1"]').forEach(function(el){el.disabled=false;el.removeAttribute('data-sylva-passive-disabled')});
+  }
+  // Katman değişimi/analiz sonucu geldiğinde aç; sınıflandırma butonuna basıldığında
+  // asla yeniden stretched'e dönme.
+  document.addEventListener('click',function(e){
+    if(e.target&&e.target.closest&&e.target.closest('.sylva-layer-switch-item'))setTimeout(apply,120);
+  });
+  document.addEventListener('change',function(e){
+    if(e.target&&e.target.matches&&e.target.matches('input.sylva-layer-switch-visibility,input[data-analysis]'))setTimeout(apply,120);
+  });
+  [100,500,1200,2500].forEach(function(ms){setTimeout(apply,ms)});
+})();
+</script>
+<script id="sylva-screen2-final-parity-20260819">
+(function(){
+  'use strict';
+  // SADECE EKRAN 2 için son güvence katmanı. Ekran 1'in DOM/state'ine
+  // müdahale etmez; ortak sağ panel aktifken hedef pane olarak yalnızca map2
+  // kullanılır.
+  var PASSIVE={TOPO_ASPECT:true,TOPO_HILLSHADE:true};
+  function isMap2(){return typeof window._sylvaActivePaneId==='function' && window._sylvaActivePaneId()==='map2';}
+  function meta2(){return (window._lastAnalyzeMetaByPane&&window._lastAnalyzeMetaByPane.map2)||null;}
+  function top2(){return window._sylvaTopGeeLayerByPane&&window._sylvaTopGeeLayerByPane.map2||null;}
+  function panel(){return document.getElementById('legend-symbology-panel');}
+  function passive(name){
+    var p=panel(); if(!p)return;
+    p.style.opacity='.35'; p.style.pointerEvents='none'; p.style.userSelect='none';
+    p.setAttribute('aria-disabled','true');
+    p.querySelectorAll('input,select,button').forEach(function(el){el.disabled=true;el.setAttribute('data-sylva-screen2-passive','1');});
+  }
+  function enable(){
+    var p=panel(); if(!p)return;
+    p.style.opacity='1'; p.style.pointerEvents=''; p.style.userSelect=''; p.removeAttribute('aria-disabled');
+    p.querySelectorAll('[data-sylva-screen2-passive="1"]').forEach(function(el){el.disabled=false;el.removeAttribute('data-sylva-screen2-passive');});
+    // Önceki pasif kilitlerden kalan disabled durumlarını da yalnızca Ekran 2
+    // aktifken kaldır; Bakı/Kabartma yukarıdaki passive() yolundan geçer.
+    p.querySelectorAll('button,input,select').forEach(function(el){
+      if(el.getAttribute('data-sylva-passive-disabled')==='1'){
+        el.disabled=false;el.removeAttribute('data-sylva-passive-disabled');
+      }
+    });
+  }
+  function cleanEmoji(root){
+    if(!root)return;
+    var re=/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2300}-\u{23FF}]/gu;
+    var w=document.createTreeWalker(root,NodeFilter.SHOW_TEXT),n;
+    while((n=w.nextNode())){var v=n.nodeValue||'',nv=v.replace(re,'').replace(/^\s*[|•·]+\s*/,'');if(nv!==v)n.nodeValue=nv;}
+  }
+  function restoreOrInit2(){
+    if(!isMap2())return;
+    var m=meta2(),name=String(m&&m.analysisName||'').toUpperCase(),top=top2();
+    if(!m||!top)return;
+    if(PASSIVE[name]){
+      // Bakı/Kabartma kendi analiz lejantını korur; panel sadece pasif görünür.
+      passive(name);
+      if(name==='TOPO_HILLSHADE'){
+        var sr=document.getElementById('selectedRamp');
+        if(sr){sr.style.background='linear-gradient(to right,#ffffff,#e5e5e5,#808080)';sr.setAttribute('data-ramp','black-white');}
+        var pl=document.getElementById('paletteList');if(pl)pl.classList.add('hidden');
+      }
+      return;
+    }
+    enable();
+    var store=window._sylvaEditorStateByPane&&window._sylvaEditorStateByPane.map2;
+    var has=!!(store&&Object.prototype.hasOwnProperty.call(store,top));
+    if(has){
+      try{window._sylvaRestoreEditorStateForLayer('map2',top);}catch(e){}
+    }else{
+      // İlk kez görülen Ekran 2 katmanı başka katmanın sınıfını miras almasın.
+      try{
+        if(typeof setClassificationType==='function')setClassificationType('stretched');
+        var cc=document.getElementById('class-count');if(cc)cc.value='4';
+        if(typeof buildClassRows==='function')buildClassRows(4);
+        var sr2=document.getElementById('selectedRamp');
+        var rk=(m.rampKey&&typeof ramps!=='undefined'&&ramps[m.rampKey])?m.rampKey:'black-white';
+        if(sr2&&typeof ramps!=='undefined'){sr2.style.background=ramps[rk]||ramps['black-white'];sr2.setAttribute('data-ramp',rk);}
+        if(typeof window._sylvaSaveEditorStateForLayer==='function')window._sylvaSaveEditorStateForLayer('map2',top);
+      }catch(e){}
+    }
+  }
+  function save2(){
+    if(!isMap2())return;
+    var top=top2();if(top&&typeof window._sylvaSaveEditorStateForLayer==='function'){
+      try{window._sylvaSaveEditorStateForLayer('map2',top);}catch(e){}
+    }
+  }
+  function refresh2(){
+    if(!isMap2())return;
+    setTimeout(function(){
+      try{if(typeof window._sylvaSyncActivePaneControls==='function')window._sylvaSyncActivePaneControls();}catch(e){}
+      try{if(typeof window._sylvaRenderLayerSwitchBox==='function')window._sylvaRenderLayerSwitchBox('map2');}catch(e){}
+      try{restoreOrInit2();}catch(e){}
+      try{cleanEmoji(document.getElementById('map2-layer-switch-box'));cleanEmoji(document.getElementById('map2-info-box'));cleanEmoji(document.getElementById('map2-legend-box'));}catch(e){}
+      try{if(typeof window._sylvaSyncLegendInfoByPane==='function')window._sylvaSyncLegendInfoByPane();}catch(e){}
+    },40);
+  }
+  function tuneMap2Layers(){
+    try{
+      var store=window._geeLayersByPane&&window._geeLayersByPane.map2||{};
+      Object.keys(store).forEach(function(k){
+        var l=store[k];if(!l||!l.options)return;
+        l.options.maxZoom=24;l.options.maxNativeZoom=16;l.options.minNativeZoom=0;l.options.keepBuffer=16;l.options.updateWhenZooming=true;l.options.updateWhenIdle=true;
+      });
+      if(window._geeLayer2&&window._geeLayer2.options){
+        window._geeLayer2.options.maxZoom=24;window._geeLayer2.options.maxNativeZoom=16;window._geeLayer2.options.keepBuffer=16;window._geeLayer2.options.updateWhenZooming=true;window._geeLayer2.options.updateWhenIdle=true;
+      }
+    }catch(e){}
+  }
+  function removeAreaPins2(){
+    try{
+      if(!window.map2)return;
+      var hasArea=!!(window._workspaceLayer2||window.currentLayer2);
+      if(!hasArea)return;
+      window.map2.eachLayer(function(l){if(l&&l._sylvaSearchMarker){try{window.map2.removeLayer(l);}catch(e){}}});
+    }catch(e){}
+  }
+
+  // Ekran 2 haritası aktif olduğunda bütün ortak araçlar map2'ye bağlanır.
+  var m2=document.getElementById('map2');
+  if(m2){
+    ['pointerdown','mousedown','touchstart','click'].forEach(function(ev){
+      m2.addEventListener(ev,function(){
+        try{if(typeof window._sylvaSetActiveMap==='function')window._sylvaSetActiveMap('map2');}catch(e){}
+        refresh2();
+      },true);
+    });
+  }
+  // Katman değişiminden sonra yalnızca map2'nin kendi sınıflandırması geri gelir.
+  document.addEventListener('click',function(e){
+    if(!e.target||!e.target.closest)return;
+    if(e.target.closest('#map2-layer-switch-box .sylva-layer-switch-item')){setTimeout(refresh2,80);setTimeout(refresh2,260);}
+    if(e.target.closest('#btn-type-classified,#btn-type-stretched')){setTimeout(function(){if(isMap2())enable();},20);setTimeout(save2,80);}
+    if(e.target.closest('#btn-apply-legend')){setTimeout(function(){if(isMap2()){enable();save2();}},180);}
+    if(e.target.closest('#btn-reverse-ramp'))setTimeout(save2,100);
+  },true);
+  document.addEventListener('change',function(e){
+    if(!isMap2())return;
+    if(e.target.matches&&e.target.matches('#class-count,.class-min,.class-max,.class-name'))setTimeout(save2,80);
+    if(e.target.classList&&e.target.classList.contains('sylva-layer-switch-visibility'))setTimeout(refresh2,100);
+    if(e.target.matches&&e.target.matches('input[data-analysis]'))setTimeout(refresh2,120);
+  },true);
+  // Renk kutusu / dropdown değişimleri de Ekran 2'nin katmanına kaydedilir.
+  document.addEventListener('click',function(e){
+    if(!isMap2())return;
+    if(e.target.closest&&e.target.closest('.class-color-trigger,.color-option,#btn-auto-classify'))setTimeout(save2,120);
+  },true);
+  var oldApply=window.applySylvaLang;
+  if(typeof oldApply==='function'&&!window._sylvaScreen2ParityLangWrapped2){
+    window.applySylvaLang=function(lang){
+      var out=oldApply.apply(this,arguments);
+      setTimeout(function(){
+        try{if(typeof window._sylvaRenderLayerSwitchBox==='function')window._sylvaRenderLayerSwitchBox('map2');}catch(e){}
+        refresh2();
+      },180);
+      return out;
+    };
+    window._sylvaScreen2ParityLangWrapped2=true;
+  }
+  [150,500,1000,2000,3500].forEach(function(ms){setTimeout(function(){tuneMap2Layers();refresh2();removeAreaPins2();},ms);});
+  setInterval(function(){if(isMap2()){tuneMap2Layers();removeAreaPins2();}},1800);
 })();
 </script>
 </body>
