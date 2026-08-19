@@ -8530,10 +8530,6 @@ tr.class-highlight-active {
                 setSearchOpen(false, false);
 
                 if (searchMarker) { map.removeLayer(searchMarker); searchMarker = null; }
-                // Çalışma alanı poligon olarak kabul edildiğinde merkez raptiyesi
-                // kullanıcı arayüzünde gösterilmez. Arama sonucu yalnızca AOI/
-                // poligon ve harita görünümünü günceller.
-                searchMarker = null;
 
                 // Zoom ve Odaklanma: mümkünse dönen sınır geometrisinin (GeoJSON)
                 // tam sınırlarına, yoksa Nominatim'in bounding box'ına göre uçarak
@@ -8541,6 +8537,14 @@ tr.class-highlight-active {
                 var boundaryLayer = null;
                 if (item.geojson && item.geojson.type && /Polygon/.test(item.geojson.type)) {
                     try { boundaryLayer = L.geoJSON(item.geojson); } catch (e) { boundaryLayer = null; }
+                }
+
+                // 🆕 Raptiye kuralı: sonuç bir ALAN/poligon (AOI adayı) ise merkez
+                // raptiyesi gösterilmez — yalnızca poligon çalışma alanı önerilir.
+                // Sonuç yalnızca bir NOKTA/yer adıysa (poligonu yoksa) harita o
+                // konuma uçtuğunda kullanıcıya konumu işaretleyen bir raptiye eklenir.
+                if (!boundaryLayer) {
+                    searchMarker = L.marker([lat, lon]).addTo(map);
                 }
 
                 if (boundaryLayer) {
@@ -8827,13 +8831,17 @@ tr.class-highlight-active {
                 setSearchOpen(false, false);
 
                 if (searchMarker) { map2.removeLayer(searchMarker); searchMarker = null; }
-                // Ekran 2'de de çalışma alanı kabul edildikten sonra merkez
-                // raptiyesi yok; yalnızca AOI poligonu gösterilir.
-                searchMarker = null;
 
                 var boundaryLayer = null;
                 if (item.geojson && item.geojson.type && /Polygon/.test(item.geojson.type)) {
                     try { boundaryLayer = L.geoJSON(item.geojson); } catch (e) { boundaryLayer = null; }
+                }
+
+                // 🆕 Raptiye kuralı (Ekran 2): sonuç bir ALAN/poligon ise merkez
+                // raptiyesi gösterilmez; yalnızca NOKTA/yer adı sonucunda harita
+                // o konuma uçtuğunda bir raptiye eklenir.
+                if (!boundaryLayer) {
+                    searchMarker = L.marker([lat, lon]).addTo(map2);
                 }
 
                 if (boundaryLayer) {
@@ -53149,7 +53157,12 @@ refresh();
       try{window._sylvaRestoreEditorStateForLayer(p,top);}catch(e){}
     }else{
       try{
-        if(typeof setClassificationType==='function') setClassificationType('stretched');
+        // 🆕 Kayıtlı bir düzenleyici durumu yoksa varsayılan olarak Sınıflandırılmış
+        // (classified) moda geçilir — yalnızca Bakı/Kabartma (PASSIVE) pasif kalır,
+        // DEM/Eğim/Eğrilik/TWI/Solar gibi diğer tüm topografik katmanlar normal
+        // şekilde kendi sınıflandırmasıyla açılır (kullanıcı isteği: "kapat demedim,
+        // hepsi kendine göre yenilensin").
+        if(typeof setClassificationType==='function') setClassificationType('classified');
         var cc=document.getElementById('class-count'); if(cc) cc.value='4';
         if(typeof buildClassRows==='function') buildClassRows(4);
         var ramp=document.getElementById('selectedRamp');
