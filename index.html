@@ -5107,6 +5107,7 @@ tr.class-highlight-active {
                          data-i18n-title="before_after_title" title="Öncesi/Sonrası Karşılaştırması"
                          style="font-size:0.8rem;display:none;" aria-label="Öncesi/Sonrası karşılaştırması"
                          onclick="window.sylvaToggleLayerSwipeBtn('map2', this)">⇔</button>
+                 <button type="button" class="map-zoom-btn map2-control" id="map2-measure-toggle" title="Mesafe ölçümü" aria-label="Mesafe ölçümü" onclick="window._sylvaSetActiveMap('map2'); window.sylvaToggleMeasureTool(event);">📐</button>
                  <div class="map-search-control" id="map2-search-control">
                      <button type="button" class="map-zoom-btn map-search-toggle map2-control"
                              id="map2-search-toggle" aria-label="İkinci haritada konum aramayı aç"
@@ -5127,6 +5128,18 @@ tr.class-highlight-active {
                          <div id="map2-search-results" class="map-search-results" style="display:none;"></div>
                      </div>
                  </div>
+            </div>
+            <div id="dist-measure-panel-map2" style="display:none;position:absolute;top:70px;left:15px;z-index:521;background:rgba(255,255,255,0.97);border:1.5px solid #1e3a8a;border-radius:10px;padding:10px 12px;box-shadow:0 3px 12px rgba(0,0,0,0.22);min-width:175px;max-width:220px;pointer-events:auto;font-family:inherit;">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;"><span data-i18n="measure_title" style="font-size:0.8rem;font-weight:700;color:#1e3a8a;">📐 Mesafe Ölçümü</span><button onclick="sylvaCloseMeasure()" style="background:none;border:none;cursor:pointer;color:#94a3b8;">✕</button></div>
+                <div id="dist-measure-hint-map2" data-i18n="measure_hint" style="font-size:0.72rem;color:#64748b;margin-bottom:7px;">Haritaya tıklayarak nokta ekleyin</div>
+                <div id="dist-measure-total-map2" style="font-size:1.05rem;font-weight:700;color:#1e3a8a;">— m</div><div id="dist-measure-segment-map2" style="font-size:.7rem;color:#94a3b8;min-height:14px;"></div>
+                <div id="dist-measure-list-map2" style="font-size:.68rem;color:#475569;max-height:110px;overflow-y:auto;border-top:1px dashed #e2e8f0;"></div>
+                <div style="display:flex;gap:4px;margin-top:8px;">
+                    <button id="dist-unit-m-map2" onclick="sylvaSetMeasureUnit('m')">m</button><button id="dist-unit-km-map2" onclick="sylvaSetMeasureUnit('km')">km</button><button id="dist-unit-mi-map2" onclick="sylvaSetMeasureUnit('mi')">mi</button><button id="dist-unit-ft-map2" onclick="sylvaSetMeasureUnit('ft')">ft</button>
+                </div><div style="display:flex;gap:4px;margin-top:6px;"><button onclick="sylvaMeasureUndo()"><span data-i18n="measure_undo">↶ Geri Al</span></button><button onclick="sylvaClearMeasure()"><span data-i18n="measure_reset">🗑️ Sıfırla</span></button></div>
+            </div>
+            <div id="sylva-time-slider-bar-map2" style="display:none;position:absolute;bottom:0;left:0;right:0;z-index:600;background:rgba(255,255,255,.95);border-top:1px solid #e2e8f0;padding:6px 14px 8px;box-sizing:border-box;">
+                <div style="display:flex;align-items:center;gap:8px;"><button type="button" id="ts-play-btn-map2" onclick="toggleTimeSliderPlay()">▶</button><input id="sylva-time-slider-map2" type="range" min="0" max="0" value="0" step="1" style="flex:1;accent-color:#1e3a8a;"><span id="ts-date-label-map2">—</span></div>
             </div>
             <div class="map2-overlay map-bottom-right">
             </div>
@@ -7192,6 +7205,7 @@ tr.class-highlight-active {
             if (typeof _sylvaUpdateBeforeAfterButtons === 'function') {
                 _sylvaUpdateBeforeAfterButtons(!!window._sylvaDualScreenActive, id);
             }
+            var ts1=document.getElementById('sylva-time-slider-bar'), ts2=document.getElementById('sylva-time-slider-bar-map2'); if(ts1&&id==='map2') ts1.style.display='none'; if(ts2&&id==='map') ts2.style.display='none';
         };
         (function () {
             var mainMapEl = document.getElementById('map');
@@ -8516,10 +8530,10 @@ tr.class-highlight-active {
                 setSearchOpen(false, false);
 
                 if (searchMarker) { map.removeLayer(searchMarker); searchMarker = null; }
-                searchMarker = L.marker([lat, lon]).addTo(map);
-                if (typeof searchMarker.bindPopup === 'function') {
-                    searchMarker.bindPopup(item.display_name);
-                }
+                // Çalışma alanı poligon olarak kabul edildiğinde merkez raptiyesi
+                // kullanıcı arayüzünde gösterilmez. Arama sonucu yalnızca AOI/
+                // poligon ve harita görünümünü günceller.
+                searchMarker = null;
 
                 // Zoom ve Odaklanma: mümkünse dönen sınır geometrisinin (GeoJSON)
                 // tam sınırlarına, yoksa Nominatim'in bounding box'ına göre uçarak
@@ -8813,10 +8827,9 @@ tr.class-highlight-active {
                 setSearchOpen(false, false);
 
                 if (searchMarker) { map2.removeLayer(searchMarker); searchMarker = null; }
-                searchMarker = L.marker([lat, lon]).addTo(map2);
-                if (typeof searchMarker.bindPopup === 'function') {
-                    searchMarker.bindPopup(item.display_name);
-                }
+                // Ekran 2'de de çalışma alanı kabul edildikten sonra merkez
+                // raptiyesi yok; yalnızca AOI poligonu gösterilir.
+                searchMarker = null;
 
                 var boundaryLayer = null;
                 if (item.geojson && item.geojson.type && /Polygon/.test(item.geojson.type)) {
@@ -12127,7 +12140,9 @@ function selectRamp(name) {
             var key = String(analysisName || '').toUpperCase();
             var infoKey = (typeof _DATASET_INFO_TITLE_KEYS !== 'undefined') ? _DATASET_INFO_TITLE_KEYS[key] : null;
             if (infoKey && typeof t === 'function') {
-                return String(infoKey.emoji || '') + t(infoKey.key, key);
+                // Topografik analizlerde teknik TOPO_* adı ve emoji gösterme;
+                // tek kaynak olarak aktif dildeki analiz başlığını kullan.
+                return t(infoKey.key, key);
             }
             return key;
         }
@@ -12615,8 +12630,8 @@ function selectRamp(name) {
             // kaybolmaz; sadece çok aşırı yakınlaşmada hafif bulanıklaşır.
             var opts = Object.assign({
                 opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane',
-                minZoom: 0, maxZoom: 24, minNativeZoom: 10, maxNativeZoom: 16,
-                keepBuffer: 8, updateWhenZooming: false, updateWhenIdle: true
+                minZoom: 0, maxZoom: 24, minNativeZoom: 0, maxNativeZoom: 20,
+                keepBuffer: 12, updateWhenZooming: true, updateWhenIdle: true
             }, options || {});
             var _rgKey = (paneId === 'map2') ? 'map2' : 'map';
             // 🛠️ BUG FİX: Sınıflandırma/Stretched/Sahne değişimi bu fonksiyonu
@@ -12820,8 +12835,8 @@ function selectRamp(name) {
             var _hideOthers = (options && options.hideOthers === false) ? false : true;
             var opts = Object.assign({
                 opacity: 1, zIndex: 10, crossOrigin: true, pane: 'geeAnalysisPane',
-                minZoom: 0, maxZoom: 24, minNativeZoom: 10, maxNativeZoom: 16,
-                keepBuffer: 8, updateWhenZooming: false, updateWhenIdle: true
+                minZoom: 0, maxZoom: 24, minNativeZoom: 0, maxNativeZoom: 20,
+                keepBuffer: 12, updateWhenZooming: true, updateWhenIdle: true
             }, options || {});
             delete opts.hideOthers; // Leaflet tileLayer seçeneği değil, sadece bu fonksiyona özel bayrak
             var store = window._geeLayersByPane[(paneId === 'map2') ? 'map2' : 'map'];
@@ -48600,7 +48615,7 @@ function _vdlFallbackDownload(blob, name) {
         el = document.querySelector('#dist-measure-panel [data-i18n="measure_undo"]');   if(el) el.textContent = t.undo;
         el = document.querySelector('#dist-measure-panel [data-i18n="measure_reset"]');  if(el) el.textContent = t.reset;
         el = document.getElementById('tool-measure');                                     if(el) el.textContent = t.btn;
-        var hEl = document.getElementById('dist-measure-hint');
+        var hEl = document.getElementById(_measureCurrentPane === 'map2' ? 'dist-measure-hint-map2' : 'dist-measure-hint');
         if (hEl && !_active) hEl.textContent = t.hint;
     }
 
@@ -48634,11 +48649,15 @@ function _vdlFallbackDownload(blob, name) {
         if (_active && oldMap) { oldMap.off('click', _onClick); oldMap.off('mousemove', _onMove); oldMap.off('dblclick', _onDblClick); }
         if (_prevLine && oldMap) { oldMap.removeLayer(_prevLine); _prevLine=null; }
         _active=false; _liveM=0; _storeMeasurePane();
+        var oldPanel = document.getElementById(id === 'map2' ? 'dist-measure-panel' : 'dist-measure-panel-map2'); if (oldPanel) oldPanel.style.display='none';
         _measureCurrentPane=id; _loadMeasurePane(id); _refresh();
+        var newPanel=_measureEl('dist-measure-panel'); if(newPanel && _active) newPanel.style.display='block';
     };    var _mapEl       = null;   // DOM cache
 
     function _map() { return _paneMap(_measureCurrentPane); }
     function _mapCont(){ return _mapEl || (_mapEl = (_map() && _map().getContainer ? _map().getContainer() : document.getElementById(_measureCurrentPane === 'map2' ? 'map2' : 'map'))); }
+    function _measureDomId(base){ return _measureCurrentPane === 'map2' ? base + '-map2' : base; }
+    function _measureEl(base){ return document.getElementById(_measureDomId(base)); }
 
     /* ── birim dönüştürme ───────────────────────────────────── */
     function _fmt(m) {
@@ -48654,10 +48673,10 @@ function _vdlFallbackDownload(blob, name) {
      * ve toplam + segment değerlerine anında yansır.             */
     var _liveM = 0;
     function _refresh() {
-        var tEl = document.getElementById('dist-measure-total');
-        var sEl = document.getElementById('dist-measure-segment');
-        var hEl = document.getElementById('dist-measure-hint');
-        var lEl = document.getElementById('dist-measure-list');
+        var tEl = _measureEl('dist-measure-total');
+        var sEl = _measureEl('dist-measure-segment');
+        var hEl = _measureEl('dist-measure-hint');
+        var lEl = _measureEl('dist-measure-list');
         var tot = 0;
         for (var i = 1; i < _points.length; i++) tot += _points[i-1].distanceTo(_points[i]);
         var showTot = tot + (_liveM || 0);
@@ -48783,11 +48802,11 @@ function _vdlFallbackDownload(blob, name) {
 
         /* markup butonlarını pasifleştir */
         document.querySelectorAll('.markup-tool-btn').forEach(function(b){ b.classList.remove('active'); });
-        var btn = document.getElementById('tool-measure');
+        var btn = document.getElementById(_measureCurrentPane === 'map2' ? 'map2-measure-toggle' : 'tool-measure');
         if (btn){ btn.classList.add('active'); btn.style.background=''; }
 
         /* paneli göster */
-        var panel = document.getElementById('dist-measure-panel');
+        var panel = _measureEl('dist-measure-panel');
         if (panel) panel.style.display = 'block';
 
         /* crosshair imleç */
@@ -48806,7 +48825,7 @@ function _vdlFallbackDownload(blob, name) {
     function _deactivate() {
         _active = false;
         _liveM  = 0;
-        var btn = document.getElementById('tool-measure');
+        var btn = document.getElementById(_measureCurrentPane === 'map2' ? 'map2-measure-toggle' : 'tool-measure');
         if (btn){ btn.classList.remove('active'); btn.style.background=''; }
         var mc = _mapCont();
         if (mc) mc.style.cursor = '';
@@ -48824,7 +48843,7 @@ function _vdlFallbackDownload(blob, name) {
     window.sylvaCloseMeasure = function(){
         _deactivate();
         window.sylvaClearMeasure();
-        var panel = document.getElementById('dist-measure-panel');
+        var panel = _measureEl('dist-measure-panel');
         if (panel) panel.style.display = 'none';
     };
 
@@ -48882,8 +48901,8 @@ function _vdlFallbackDownload(blob, name) {
             }
         }
         // Measure paneli ve butonu dışında herhangi bir butona tıklandı → kapat
-        var panel = document.getElementById('dist-measure-panel');
-        var measureBtn = document.getElementById('tool-measure');
+        var panel = _measureEl('dist-measure-panel');
+        var measureBtn = document.getElementById(_measureCurrentPane === 'map2' ? 'map2-measure-toggle' : 'tool-measure');
         if (t && t.tagName === 'BUTTON' && t !== measureBtn) {
             if (panel && !panel.contains(t)) {
                 window.sylvaCloseMeasure(); return;
@@ -51396,14 +51415,15 @@ function runTimeSeriesAnalysis() {
         // Time Slider — gerçek periyot etiketleri (2015-03, 2015-04, ... veya 2015, 2016, ...)
         var allDates = (series[0] && series[0].points || []).map(function(p){ return p.date; });
         window._tsSliderDates = allDates;
-        var slider = document.getElementById('sylva-time-slider');
-        var bar    = document.getElementById('sylva-time-slider-bar');
-        var lbl    = document.getElementById('ts-date-label');
+        var slider = document.getElementById(_pane === 'map2' ? 'sylva-time-slider-map2' : 'sylva-time-slider');
+        var bar    = document.getElementById(_pane === 'map2' ? 'sylva-time-slider-bar-map2' : 'sylva-time-slider-bar');
+        var lbl    = document.getElementById(_pane === 'map2' ? 'ts-date-label-map2' : 'ts-date-label');
         if (slider && bar) {
             slider.max = Math.max(allDates.length - 1, 0);
             slider.value = 0;
             bar.style.display = 'block';
             if (lbl) lbl.textContent = allDates[0] || '—';
+            slider.oninput = function(){ onTimeSliderChange(this.value); };
         }
 
     })
@@ -51428,7 +51448,7 @@ var _tsPlayTimer = null, _tsPlaying = false;
 // callback verebilir. Elle sürüklemede (oninput) bu parametre boştur.
 function onTimeSliderChange(val, onSceneReady) {
     var idx = parseInt(val, 10);
-    var lbl = document.getElementById('ts-date-label');
+    var lbl = document.getElementById((window._tsSliderPane === 'map2') ? 'ts-date-label-map2' : 'ts-date-label');
     if (lbl) lbl.textContent = (window._tsSliderDates || [])[idx] || '—';
 
     // 🛠️ BUG FİX (KÖK NEDEN): Kaydırıcı — ve "▶" ile başlatılan video
@@ -51455,7 +51475,7 @@ function onTimeSliderChange(val, onSceneReady) {
 }
 function toggleTimeSliderPlay() {
     _tsPlaying = !_tsPlaying;
-    var btn = document.getElementById('ts-play-btn');
+    var btn = document.getElementById((window._tsSliderPane === 'map2') ? 'ts-play-btn-map2' : 'ts-play-btn');
     if (!btn) return;
     if (_tsPlaying) { btn.textContent = '⏸'; _advSlider(); }
     else            { btn.textContent = '▶'; clearTimeout(_tsPlayTimer); }
@@ -51471,7 +51491,7 @@ function toggleTimeSliderPlay() {
 var TS_PLAY_FRAME_GAP = 450; // ms — kare tam yüklendikten sonra ekranda kalma süresi
 function _advSlider() {
     if (!_tsPlaying) return;
-    var sl = document.getElementById('sylva-time-slider');
+    var sl = document.getElementById(window._tsSliderPane === 'map2' ? 'sylva-time-slider-map2' : 'sylva-time-slider');
     if (!sl) return;
     var cur = parseInt(sl.value,10), max = parseInt(sl.max,10);
     cur = cur >= max ? 0 : cur + 1;
@@ -53045,6 +53065,132 @@ refresh();
 })();
 
 </script>
+\n<script id="sylva-final-topo-ui-and-state-fix-20260819">
+(function(){
+  'use strict';
+  var TOPO=/^TOPO(?:_|$)/i;
+  var PASSIVE={TOPO_ASPECT:true,TOPO_HILLSHADE:true};
+
+  function pane(){return typeof window._sylvaActivePaneId==='function'?window._sylvaActivePaneId():'map';}
+  function metaFor(p){
+    return (window._lastAnalyzeMetaByPane&&window._lastAnalyzeMetaByPane[p])||window._lastAnalyzeMeta||null;
+  }
+  function cleanEmojiText(root){
+    if(!root) return;
+    var re=/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2300}-\u{23FF}]/gu;
+    var walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
+    var n; while((n=walker.nextNode())){
+      var v=n.nodeValue||'';
+      var nv=v.replace(re,'').replace(/^[\\s|•·]+/,'').trimStart();
+      if(nv!==v)n.nodeValue=nv;
+    }
+  }
+  function cleanTopoChrome(p){
+    var m=metaFor(p), name=String(m&&m.analysisName||'').toUpperCase();
+    if(!TOPO.test(name)) return;
+    var ids=[p==='map2'?'map2-info-box':'map-info-box',p==='map2'?'map2-legend-box':'map-legend-box',p==='map2'?'map2-layer-switch-box':'map-layer-switch-box'];
+    ids.forEach(function(id){cleanEmojiText(document.getElementById(id));});
+  }
+
+  // Aspect: keep the panel visibly passive, but always show its own 9 classes.
+  function setupAspect(){
+    var p=pane(),m=metaFor(p);
+    if(!m||String(m.analysisName||'').toUpperCase()!=='TOPO_ASPECT') return;
+    var panel=document.getElementById('legend-symbology-panel');
+    if(!panel) return;
+    try{
+      if(typeof setClassificationType==='function') setClassificationType('classified');
+      var raw=m.classesRaw?JSON.parse(m.classesRaw):null;
+      if(Array.isArray(raw)&&raw.length===9&&typeof buildClassRows==='function') {
+        buildClassRows(9);
+        var domRows=document.querySelectorAll('#class-rows-container .classification-row');
+        raw.forEach(function(c,i){
+          var row=domRows[i]; if(!row) return;
+          var mn=row.querySelector('.class-min'),mx=row.querySelector('.class-max'),nm=row.querySelector('.class-name'),tr=row.querySelector('.class-color-trigger');
+          if(mn) mn.value=c.min!==undefined?c.min:'';
+          if(mx) mx.value=c.max!==undefined?c.max:'';
+          if(nm){nm.value=String(c.label||'');nm.setAttribute('data-auto','1');nm.removeAttribute('data-user-edited');}
+          if(tr){var col=String(c.color||'#999999');if(col.charAt(0)!=='#')col='#'+col;tr.style.background=col;tr.setAttribute('data-selected-color',col);}
+        });
+      }
+      // Whole symbology board remains passive/transparent; values are read-only.
+      panel.style.opacity='.35'; panel.style.pointerEvents='none'; panel.style.userSelect='none';
+      panel.setAttribute('aria-disabled','true');
+      panel.querySelectorAll('input,select,button').forEach(function(el){el.disabled=true;});
+      if(typeof window._sylvaRefreshAspectEditorLabels==='function') window._sylvaRefreshAspectEditorLabels(typeof _sylvaLang!=='undefined'?_sylvaLang:'en');
+    }catch(e){}
+  }
+
+  // Hillshade: passive grayscale only. Ensure the old blue ramp can never re-enter.
+  function setupHillshade(){
+    var p=pane(),m=metaFor(p);
+    if(!m||String(m.analysisName||'').toUpperCase()!=='TOPO_HILLSHADE') return;
+    var panel=document.getElementById('legend-symbology-panel');
+    if(panel){
+      panel.style.opacity='.35'; panel.style.pointerEvents='none'; panel.style.userSelect='none';
+      panel.setAttribute('aria-disabled','true');
+      panel.querySelectorAll('input,select,button').forEach(function(el){el.disabled=true;});
+    }
+    var ramp=document.getElementById('selectedRamp');
+    if(ramp){ramp.style.background='linear-gradient(to right,#ffffff,#e5e5e5,#808080)';ramp.setAttribute('data-ramp','black-white');}
+    var pal=document.getElementById('paletteList'); if(pal) pal.classList.add('hidden');
+  }
+
+  // On entering any non-passive layer, restore ONLY that layer's saved editor state.
+  // If it has no state yet, reset to a clean default instead of inheriting the previous layer.
+  function isolateEditor(){
+    var p=pane(), top=window._sylvaTopGeeLayerByPane&&window._sylvaTopGeeLayerByPane[p], m=metaFor(p);
+    if(!top||!m) return;
+    var name=String(m.analysisName||'').toUpperCase();
+    if(PASSIVE[name]){ if(name==='TOPO_ASPECT') setupAspect(); else setupHillshade(); cleanTopoChrome(p); return; }
+    var store=window._sylvaEditorStateByPane&&window._sylvaEditorStateByPane[p];
+    var has=!!(store&&Object.prototype.hasOwnProperty.call(store,top));
+    if(has){
+      try{window._sylvaRestoreEditorStateForLayer(p,top);}catch(e){}
+    }else{
+      try{
+        if(typeof setClassificationType==='function') setClassificationType('stretched');
+        var cc=document.getElementById('class-count'); if(cc) cc.value='4';
+        if(typeof buildClassRows==='function') buildClassRows(4);
+        var ramp=document.getElementById('selectedRamp');
+        var key=(m.rampKey&&typeof ramps!=='undefined'&&ramps[m.rampKey])?m.rampKey:'black-white';
+        if(ramp&&typeof ramps!=='undefined'){ramp.style.background=ramps[key]||ramps['black-white'];ramp.setAttribute('data-ramp',key);}
+        if(typeof window._sylvaSaveEditorStateForLayer==='function') window._sylvaSaveEditorStateForLayer(p,top);
+      }catch(e){}
+    }
+    cleanTopoChrome(p);
+  }
+
+  function refresh(){
+    setTimeout(function(){
+      try{isolateEditor();}catch(e){}
+      try{cleanTopoChrome(pane());}catch(e){}
+    },30);
+  }
+  document.addEventListener('click',function(e){
+    if(e.target&&e.target.closest&&e.target.closest('.sylva-layer-switch-item')) refresh();
+    if(e.target&&e.target.closest&&e.target.closest('#btn-apply-legend,#btn-type-classified,#btn-type-stretched,#btn-reverse-ramp')) refresh();
+  });
+  document.addEventListener('change',function(e){
+    if(e.target&&e.target.classList&&e.target.classList.contains('sylva-layer-switch-visibility')) refresh();
+  });
+  // Dil değişince üst katman seçicisi, lejant ve bilgi kutusu aktif dilde yeniden çizilsin.
+  // MutationObserver kullanılmaz; aksi halde layer-switch innerHTML güncellemeleri
+  // kendi gözlemcisini tetikleyip gereksiz yeniden çizim döngüsü oluşturabilirdi.
+  var _oldApplySylvaLang = window.applySylvaLang;
+  if(typeof _oldApplySylvaLang === 'function' && !window._sylvaTopoLangWrapped){
+    window.applySylvaLang = function(lang){
+      var out=_oldApplySylvaLang.apply(this,arguments);
+      setTimeout(function(){
+        try{var p=pane(); if(typeof window._sylvaRenderLayerSwitchBox==='function') window._sylvaRenderLayerSwitchBox(p); cleanTopoChrome(p); isolateEditor();}catch(e){}
+      },120);
+      return out;
+    };
+    window._sylvaTopoLangWrapped=true;
+  }
+  setTimeout(refresh,250); setTimeout(refresh,900); setTimeout(refresh,1800);
+})();
+</script>\n
 </body>
 
 </html>
