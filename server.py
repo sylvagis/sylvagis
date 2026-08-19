@@ -294,8 +294,8 @@ _TILE_SESSION_TTL_SECONDS = 3 * 3600   # token'ın geçerlilik süresi
 # o worker/instance'da atlanır; oturumun kendisi yine 410 VERMEZ.
 _TILE_SESSION_INLINE_PARAMS_LIMIT = 6000
 _TILE_CACHE_MAX_ITEMS     = 2000       # bellekte tutulacak azami tile (~40 MB)
-_TILE_FETCH_RETRIES       = 2          # geçici GEE tile hatalarında sınırlı tekrar deneme
-_TILE_FETCH_TIMEOUT       = 10         # saniye; tarayıcı tile kuyruğunu uzun süre bloke etmesin
+_TILE_FETCH_RETRIES       = 3          # tek bir tile için tekrar deneme sayısı
+_TILE_FETCH_TIMEOUT       = 25         # saniye
 _REBUILT_URL_CACHE_TTL_SECONDS = 20 * 60  # yenilenen map id'nin süreç-yerel önbellekte tutulma süresi
 _REBUILT_URL_CACHE_MAX_ITEMS   = 512
 
@@ -2870,128 +2870,6 @@ def _add_internal_raster_overviews(tif_bytes, resampling='bilinear'):
     except Exception as e:
         print('[SylvaGIS] overview oluşturulamadı; ana TIFF korunuyor: {}'.format(e))
         return tif_bytes
-
-
-def _hex_rgb(value):
-    """Return RGB tuple from #RRGGBB / named CSS-safe hex strings."""
-    import re
-    v = str(value or '').strip().lstrip('#')
-    if re.fullmatch(r'[0-9a-fA-F]{6}', v):
-        return tuple(int(v[i:i+2], 16) for i in (0, 2, 4))
-    return (0, 0, 0)
-
-
-def _interpolated_palette(palette, n=255):
-    """Sample a GEE/HTML palette continuously into n RGB colors."""
-    import numpy as np
-    colors = [_hex_rgb(c) for c in (palette or [])]
-    if len(colors) < 2:
-        colors = [(0, 0, 0), (255, 255, 255)]
-    out = {}
-    for code in range(1, n + 1):
-        t = (code - 1) / float(max(n - 1, 1))
-        pos = t * (len(colors) - 1)
-        i = min(int(pos), len(colors) - 2)
-        f = pos - i
-        a, b = colors[i], colors[i + 1]
-        out[code] = tuple(int(round(a[k] + (b[k] - a[k]) * f)) for k in range(3)) + (255,)
-    return out
-
-
-def _build_stretched_arcmap_export_files(tif_bytes, vis, safe_name, nodata_value=None):
-    """Create an ArcMap-ready styled integer GeoTIFF plus the untouched raw TIFF.
-
-    ArcMap/ArcGIS color maps cannot be embedded on floating-point rasters. To
-    make a stretched environmental/urban result open with the SAME colors as
-    the web map, the primary TIFF is a 1..255 indexed rendering with an
-    embedded 256-entry colormap. The untouched scientific values are preserved
-    verbatim in <name>_raw.tif inside the same ZIP. The primary TIFF stores the
-    original min/max/palette in metadata so the relationship is explicit.
-    """
-    import numpy as np
-    from rasterio.io import MemoryFile
-    from rasterio.enums import Resampling
-
-    with MemoryFile(tif_bytes) as mf:
-        with mf.open() as src:
-            raw = src.read(1).astype(np.float64)
-            profile = src.profile.copy()
-            src_nodata = src.nodata if nodata_value is None else nodata_value
-            tags = src.tags(1)
-
-    valid = np.isfinite(raw)
-    if src_nodata is not None:
-        try:
-            valid &= ~np.isclose(raw, float(src_nodata))
-        except Exception:
-            pass
-    if not np.any(valid):
-        return _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value)
-
-    try:
-        vmin = float(vis.get('min'))
-        vmax = float(vis.get('max'))
-    except Exception:
-        vmin = float(np.nanmin(raw[valid]))
-        vmax = float(np.nanmax(raw[valid]))
-    if not np.isfinite(vmin) or not np.isfinite(vmax) or vmax <= vmin:
-        vmin = float(np.nanmin(raw[valid])); vmax = float(np.nanmax(raw[valid]))
-    if vmax <= vmin:
-        vmax = vmin + 1.0
-
-    codes = np.zeros(raw.shape, dtype=np.uint8)
-    scaled = (np.clip(raw, vmin, vmax) - vmin) / (vmax - vmin)
-    codes[valid] = (1 + np.rint(scaled[valid] * 254.0)).astype(np.uint8)
-
-    profile.update(dtype='uint8', count=1, nodata=0, compress='lzw', tiled=True, BIGTIFF='IF_SAFER')
-    if profile.get('width', 0) >= 256 and profile.get('height', 0) >= 256:
-        profile['blockxsize'] = 256; profile['blockysize'] = 256
-    else:
-        profile['tiled'] = False
-        profile.pop('blockxsize', None); profile.pop('blockysize', None)
-
-    palette = vis.get('palette') if isinstance(vis, dict) else None
-    cmap = {0: (0, 0, 0, 0)}
-    cmap.update(_interpolated_palette(palette, 255))
-
-    with MemoryFile() as out:
-        with out.open(**profile) as dst:
-            dst.write(codes, 1)
-            dst.write_colormap(1, cmap)
-            dst.update_tags(
-                1,
-                SYLVA_RENDERER='stretched',
-                SYLVA_RAW_MIN=repr(vmin),
-                SYLVA_RAW_MAX=repr(vmax),
-                SYLVA_RAW_NODATA='' if src_nodata is None else repr(src_nodata),
-                SYLVA_PALETTE=','.join(str(c).lstrip('#') for c in (palette or [])),
-                SYLVA_NOTE='Primary TIFF is a 1-255 ArcMap colormap rendering; exact scientific values are preserved in *_raw.tif.',
-                **tags,
-            )
-            levels = [2,4,8,16,32,64,128,256,512]
-            levels = [lv for lv in levels if profile.get('width',0)//lv >= 32 and profile.get('height',0)//lv >= 32]
-            if levels:
-                try:
-                    dst.build_overviews(levels, Resampling.nearest)
-                    dst.update_tags(ns='rio_overview', resampling='nearest')
-                except Exception:
-                    pass
-        styled_tif = out.read()
-
-    clr_lines = ['# SylvaGIS stretched colormap; code 1..255 maps linearly from raw min to raw max']
-    for code in range(1, 256):
-        r,g,b,a = cmap[code]
-        clr_lines.append('{} {} {} {}'.format(code, r, g, b))
-    clr = ('\n'.join(clr_lines) + '\n').encode('utf-8')
-
-    # Keep raw TIFF + statistics sidecar alongside the styled primary raster.
-    raw_files = _build_continuous_raster_export_files(tif_bytes, safe_name + '_raw', nodata_value=nodata_value)
-    files = {
-        '{}.tif'.format(safe_name): styled_tif,
-        '{}.clr'.format(safe_name): clr,
-    }
-    files.update(raw_files)
-    return files
 
 
 def _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=None):
@@ -6619,16 +6497,7 @@ def timeseries():
 def analyze():
     global _last_analyze_params, _last_analyze_native_crs
     try:
-        # /api/analyze istemcide text/plain ile gönderildiğinde CORS preflight
-        # (OPTIONS) oluşmaz. Flask request.json yalnızca application/json'da
-        # otomatik parse ettiğinden, text/plain gövdesini burada açıkça çöz.
-        data = request.get_json(silent=True)
-        if not isinstance(data, dict):
-            raw_body = request.get_data(cache=True, as_text=True)
-            try:
-                data = json.loads(raw_body) if raw_body else {}
-            except Exception:
-                data = {}
+        data = request.json
         _last_analyze_params = dict(data) if data else {}
 
         # ── 🛰️ Uydu Görüntüsü Galerisi — hızlı yol ───────────────────
@@ -6826,51 +6695,15 @@ def analyze():
         # Lejant/grafik istatistiğe bağlıdır ama HARİTA KATMANI değildir;
         # istatistik alınamasa bile tile'lar gösterilebilmelidir.
         try:
-            # Sürekli Çevresel/Kentsel rasterlarda frequencyHistogram() ham
-            # float değerlerin neredeyse her birini ayrı anahtar olarak döndürüp
-            # çok büyük JSON üretmesine ve /api/analyze'ın onlarca saniye
-            # beklemesine neden oluyordu. Ekrandaki stretched renk aralığına
-            # göre sabit 64 bin kullan; grafik yine aynı dağılımı gösterir, fakat
-            # yanıt boyutu dramatik biçimde küçülür. Sınıflandırılmış ürünlerde
-            # gerçek sınıf kodlarını korumak için eski histogram yolu kullanılır.
-            _stats_index = str(data.get('index') or '').upper()
-            _use_fixed_hist = (_stats_index in _ENV_URBAN_RASTER_INDICES and
-                               _stats_index not in ('FOREST_LOSS', 'URBAN_GROWTH'))
-            if _use_fixed_hist:
-                _hmin = float(vis.get('min')) if vis.get('min') is not None else None
-                _hmax = float(vis.get('max')) if vis.get('max') is not None else None
-                if _hmin is None or _hmax is None or not (_hmax > _hmin):
-                    _hmin, _hmax = -1.0, 1.0
-                _fixed = _call_with_retry(
-                    lambda: result.reduceRegion(
-                        reducer    = ee.Reducer.fixedHistogram(_hmin, _hmax, 64),
-                        geometry   = roi,
-                        scale      = stats_scale,
-                        maxPixels  = 1e9,
-                        bestEffort = True,
-                    ).get('value').getInfo()
-                )
-                _hist_dict = {}
-                if isinstance(_fixed, list):
-                    for _row in _fixed:
-                        if isinstance(_row, (list, tuple)) and len(_row) >= 3:
-                            _lo, _hi, _count = _row[0], _row[1], _row[2]
-                            try:
-                                _mid = (float(_lo) + float(_hi)) / 2.0
-                                _hist_dict[str(_mid)] = int(_count or 0)
-                            except Exception:
-                                pass
-                stats = {'value': _hist_dict}
-            else:
-                stats = _call_with_retry(
-                    lambda: result.reduceRegion(
-                        reducer    = ee.Reducer.frequencyHistogram(),
-                        geometry   = roi,
-                        scale      = stats_scale,
-                        maxPixels  = 1e9,
-                        bestEffort = True,
-                    ).getInfo()
-                )
+            stats = _call_with_retry(
+                lambda: result.reduceRegion(
+                    reducer    = ee.Reducer.frequencyHistogram(),
+                    geometry   = roi,
+                    scale      = stats_scale,
+                    maxPixels  = 1e9,
+                    bestEffort = True,
+                ).getInfo()
+            )
         except Exception as _stats_err:
             stats = {}
             print('[SylvaGIS] ⚠️ Histogram hesaplanamadı — katman yine de '
@@ -7525,18 +7358,7 @@ def download_geotiff():
                     print('[SylvaGIS] ⚠️ Sınıflandırılmış semboloji oluşturulamadı: {}'.format(sym_err))
             else:
                 try:
-                    if is_env_urban_raster and data.get('index') != 'BUILDING_FOOTPRINT':
-                        # Çevresel/Kentsel stretched rasterlarda ana TIFF,
-                        # web haritasındaki requested vis palette ile gömülü
-                        # ArcMap colormap taşısın; ham bilimsel değerler aynı
-                        # ZIP içinde *_raw.tif olarak eksiksiz korunsun.
-                        sym_files = _build_stretched_arcmap_export_files(
-                            tif_bytes, vis, safe_name, nodata_value=nodata_value
-                        )
-                    else:
-                        sym_files = _build_continuous_raster_export_files(
-                            tif_bytes, safe_name, nodata_value=nodata_value
-                        )
+                    sym_files = _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=nodata_value)
                 except Exception as sym_err:
                     traceback.print_exc()
                     sym_files = None
@@ -7556,10 +7378,13 @@ def download_geotiff():
                       'olarak devam ediliyor: {}'.format(sym_err))
 
         if sym_files:
-            # Tek analiz için kullanıcı doğrudan TIFF istediğinde renk
-            # tablosu gömülü TIFF'i döndür. Çoklu analizlerde ise sınıf
-            # isimlerini taşıyan RAT/VAT yan dosyaları batch ZIP'e katılır.
-            if req_data.get('flatTiff'):
+            # Çevresel/Kentsel rasterların tamamı (Bina/Çatı Tespiti hariç)
+            # HER ZAMAN ZIP olarak teslim edilir. Eski/legacy istemcilerin
+            # flatTiff=true göndermesi artık bu kuralı delmez. Bina/Çatı
+            # rasterı bu endpointte rasterEntries kuyruğuna alınmadığı için
+            # burada ayrıca çıplak TIFF yolu açılmaz.
+            allow_flat_tiff = (str(data.get('index') or '').upper() == 'BUILDING_FOOTPRINT') and bool(req_data.get('flatTiff'))
+            if allow_flat_tiff:
                 tif_bytes = sym_files.get('{}.tif'.format(safe_name), tif_bytes)
             else:
                 zip_buf = io.BytesIO()
