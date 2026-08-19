@@ -4726,9 +4726,14 @@ def build_result_image(data, for_export=False):
             # 60 m yarıçap (~2 piksel @ 30 m), piksel bazlı kuantizasyon
             # gürültüsünü büyük ölçüde elerken gerçek yerel eğrilik
             # özelliklerini (kıvrımlar, sırtlar, vadiler) korur.
-            dem_smooth = dem.focalMean(radius=60, units='meters')
+            dem_smooth = dem.focalMean(radius=60, units='meters').resample('bilinear')
             kernel = ee.Kernel.laplacian8(normalize=False)
-            result = dem_smooth.convolve(kernel).rename('value')
+            # Tile motoru uzak zoomlarda daha geniş bir piksel örnekleme ölçeği
+            # kullanabildiğinden, türev işleminin kenar maskesinin görüntüyü
+            # tamamen boş bırakmasına izin verme. Bilinear resampling de 30 m
+            # native eğrilik yüzeyinin küçük ölçeklerde daha kararlı görünmesini
+            # sağlar. Gerçek NoData alanı zaten DEM hazırlama aşamasında doldurulmuştur.
+            result = dem_smooth.convolve(kernel).unmask(0).resample('bilinear').rename('value')
             vis = {'min': -30, 'max': 30, 'palette': ['black', 'white']}
 
         # ── Hidrolojik Analizler ──────────────────────────────────
@@ -4886,6 +4891,14 @@ def build_result_image(data, for_export=False):
         # ve palette/min/max TAMAMEN atlanır. Piksel değerleri değişmez.
         # for_export=False (harita önizleme) → önceki davranış aynen korunur.
         custom_palette = data.get('palette')
+        # Hillshade özel katmandır: harita/semboloji panelinden gelen önceki
+        # renk paleti (ör. lacivert/blue-ocean) KESİNLİKLE bu veriye uygulanmaz.
+        # Kabartma yalnızca beyaz-gri tonlarında kalır.
+        if index == 'TOPO_HILLSHADE':
+            custom_palette = None
+            custom_min = None
+            custom_max = None
+            vis = {'min': 0, 'max': 255, 'palette': ['ffffff', 'e5e5e5', '808080']}
         # Kontur rengi, diğer analizlerdeki sürekli renk paletinden farklıdır:
         # yalnızca maskenin değeri 1 olan eş yükselti çizgilerine uygulanır.
         # Ayrı alan adı kullanılması, genel semboloji paletinin kontur
