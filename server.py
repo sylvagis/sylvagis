@@ -137,7 +137,7 @@ def _gee_http_get_with_backoff(url, timeout=180, attempts=7, label='GEE'):
             time.sleep(delay)
     raise last if isinstance(last, Exception) else RuntimeError('GEE HTTP 429')
 
-print('SylvaGIS server.py yüklendi — versiyon: classified-raster-colormap-v21-2026-08-20')
+print('SylvaGIS server.py yüklendi — versiyon: classified-raster-colormap-v23-rgb-stretch-fast-2026-08-20')
 
 
 # ════════════════════════════════════════════════════════════════
@@ -2750,51 +2750,62 @@ def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name, legend_labels=No
 
 
 def _build_rgb_symbology_zip(tif_bytes, safe_name):
-    """🛰️ Gerçek Uydu Görüntüsü (doğal renk RGB kompoziti) indirmeleri için.
-    Bu FİZİKSEL olarak 3 bantlı bir görüntüdür — LULC/sınıflandırılmış
-    analizlerin aksine RAT/Colormap uygulanamaz (renk zaten Red/Green/Blue
-    bantlarının kendisinde). Ama kullanıcı, diğer TÜM indirmelerin artık
-    yanında sidecar dosyası taşıdığını, RGB indirmelerinde ise ZIP'te
-    SADECE .tif bulunduğunu bildirdi. Tutarlılık için ve ArcMap/QGIS'in her
-    bandın istatistiğini PAM sidecar'ından da (gömülü STATISTICS_* etiketine
-    ek olarak) okuyabilmesi için minimal bir .tif.aux.xml üretilip .tif ile
-    birlikte paketlenir."""
-    import numpy as np
-    from rasterio.io import MemoryFile
+    """🛰️ Gerçek renkli RGB GeoTIFF için hafif sidecar paketi.
 
-    with MemoryFile(tif_bytes) as memfile:
-        with memfile.open() as src:
-            count = src.count
-            src_nodata = src.nodata
-            stats = []
-            for b in range(1, count + 1):
-                arr = src.read(b).astype(np.float64)
-                if src_nodata is not None:
-                    valid = arr[~np.isclose(arr, float(src_nodata))]
-                else:
-                    valid = arr.ravel()
-                valid = valid[np.isfinite(valid)]
-                if valid.size:
-                    stats.append((float(valid.min()), float(valid.max()),
-                                   float(valid.mean()), float(valid.std())))
-                else:
-                    stats.append((0.0, 0.0, 0.0, 0.0))
+    RGB görüntünün rengi piksel bantlarının kendisindedir; sınıflandırma/RAT
+    gerekmez. v23'te burada tekrar tüm rasterı tarayıp istatistik ve overview
+    üretmiyoruz. Bu özellikle zaman serisinde her sahnede tekrarlandığında
+    indirmeyi gereksiz yere uzatıyordu. RGB export 0..255 Byte stretch ile
+    üretilir. ArcMap'in doğal renkli görüntüyü doğrudan tanıması için Red /
+    Green / Blue ColorInterp ve hafif 0..255 metadata'sı yazılır.
+    """
+    import rasterio
+    from rasterio.io import MemoryFile
+    from rasterio.enums import ColorInterp
+
+    count = 3
+    try:
+        with MemoryFile(tif_bytes) as memfile:
+            with memfile.open() as src:
+                profile = src.profile.copy()
+                count = src.count
+                data = src.read()
+                tags = [src.tags(i) for i in range(1, count + 1)]
+                if count >= 3:
+                    profile['photometric'] = 'RGB'
+                with MemoryFile() as out_mem:
+                    with out_mem.open(**profile) as dst:
+                        dst.write(data)
+                        if count >= 3:
+                            dst.colorinterp = (ColorInterp.red, ColorInterp.green, ColorInterp.blue) + tuple(
+                                ColorInterp.undefined for _ in range(max(0, count - 3))
+                            )
+                        for i, tg in enumerate(tags, 1):
+                            if tg:
+                                dst.update_tags(i, **tg)
+                        for b in range(1, count + 1):
+                            dst.update_tags(
+                                b,
+                                STATISTICS_MINIMUM='0.0',
+                                STATISTICS_MAXIMUM='255.0',
+                                STATISTICS_APPROXIMATE='YES',
+                            )
+                    tif_bytes = out_mem.read()
+    except Exception as err:
+        print('[SylvaGIS] RGB color interpretation hazırlığı başarısız; ham TIFF korunuyor: {}'.format(err))
 
     bands_xml = []
-    for i, (bmin, bmax, bmean, bstd) in enumerate(stats, start=1):
+    for i in range(1, count + 1):
         bands_xml.append(
             '  <PAMRasterBand band="{0}">\n'
             '    <Metadata>\n'
-            '      <MDI key="STATISTICS_MINIMUM">{1!r}</MDI>\n'
-            '      <MDI key="STATISTICS_MAXIMUM">{2!r}</MDI>\n'
-            '      <MDI key="STATISTICS_MEAN">{3!r}</MDI>\n'
-            '      <MDI key="STATISTICS_STDDEV">{4!r}</MDI>\n'
+            '      <MDI key="STATISTICS_MINIMUM">0.0</MDI>\n'
+            '      <MDI key="STATISTICS_MAXIMUM">255.0</MDI>\n'
+            '      <MDI key="STATISTICS_APPROXIMATE">YES</MDI>\n'
             '    </Metadata>\n'
-            '  </PAMRasterBand>\n'.format(i, bmin, bmax, bmean, bstd)
+            '  </PAMRasterBand>\n'.format(i)
         )
     aux_xml = ('<PAMDataset>\n' + ''.join(bands_xml) + '</PAMDataset>\n').encode('utf-8')
-
-    tif_bytes = _add_internal_raster_overviews(tif_bytes, 'bilinear')
     return {
         '{}.tif'.format(safe_name): tif_bytes,
         '{}.tif.aux.xml'.format(safe_name): aux_xml,
@@ -6909,57 +6920,66 @@ def analyze():
         tile_url = _tile_url_for_client(_sid, tile_url_direct)
         _analysis_sid = _register_analysis_session(data, kind='analyze', extra=_extra)
 
-        # ── İstatistik ────────────────────────────────────────────
-        # 🛠️ BUG FİX (NoData piksel / büyük AOI istatistik sorunu):
-        # bestEffort=True eklendi. Olmadan: AOI büyük olduğunda veya bazı
-        # piksellerde veri olmadığında (örn. eğim indirildiğinde bazı kareler
-        # boş çıkıyordu) maxPixels limiti aşılınca GEE hata fırlatır ve stats
-        # tamamen None döner. bestEffort=True ile GEE, gerekirse çözünürlüğü
-        # otomatik düşürür ama hesabı DAIMA tamamlar. NoData (maskeli) pikseller
-        # GEE'nin reduceRegion'unda zaten otomatik olarak dışlanır; yani
-        # istatistikler her zaman yalnızca geçerli/dolu piksellerden hesaplanır.
-        #
-        # 🛠️ EK DÜZELTME: scale artık sabit 30 değil, veri setinin doğal
-        # piksel boyutu (bkz. _stats_scale_for). CORINE için 100 m — bu tek
-        # değişiklik histogramın işlediği piksel sayısını ~11 kat düşürür.
-        #
-        # 🛠️ EK DÜZELTME: histogram hatası artık TÜM isteği düşürmüyor.
-        # Lejant/grafik istatistiğe bağlıdır ama HARİTA KATMANI değildir;
-        # istatistik alınamasa bile tile'lar gösterilebilmelidir.
+        # ⚡ HIZLI ANALİZ: İstatistik/histogram hesapları artık ilk /api/analyze
+        # yanıtını BLOKE ETMEZ. Harita tile'ı ve analysisId hemen döner;
+        # istemci tile'ı aldıktan sonra /api/analyze-stats çağrısını arka planda
+        # başlatır. Böylece NDVI/NDWI/BSI gibi analizler uzun getInfo/reduceRegion
+        # işlemleri yüzünden ekrana geç düşmez.
+        stats = {}
+        real_minmax = {}
+
+        return jsonify({
+            'success':   True,
+            'tileUrl':   tile_url,
+            # Proxy'ye ulaşılamazsa istemcinin geri düşebileceği ham GEE adresi.
+            'tileUrlDirect': tile_url_direct,
+            # İndirme/vektörleştirme uç noktalarının, kullanıcılar arasında
+            # paylaşılan sunucu belleği yerine BU analizi kesin olarak
+            # yeniden bulabilmesi için (bkz. _get_analysis_session ve
+            # _last_analyze_params tanımının üstündeki "BİLİNEN SINIRLAMA" notu).
+            'analysisId': _analysis_sid,
+            'stats':     stats,
+            'realStats': real_minmax,
+            'index':     data.get('index', 'NDVI'),
+            'visMin':    vis.get('min'),
+            'visMax':    vis.get('max'),
+            'visPalette': vis.get('palette', []),
+            'nativeCrs': native_crs
+        })
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/analyze-stats', methods=['POST'])
+def analyze_stats():
+    """Arka planda analiz istatistiklerini hesaplar.
+
+    /api/analyze bilinçli olarak yalnızca GEE tile/session bilgisini hızlıca
+    döndürür. Histogram ve min/max gibi reduceRegion/getInfo işlemleri burada
+    ayrı bir istek olarak çalışır; böylece ağır istatistik hesabı haritanın
+    ilk rasterının görünmesini bloke etmez.
+    """
+    try:
+        data = request.json or {}
+        final_display, roi, result, vis, _crs_probe = build_result_image(data)
+        stats_scale = _stats_scale_for(data.get('index', 'NDVI'))
+        stats = {}
         try:
             stats = _call_with_retry(
                 lambda: result.reduceRegion(
-                    reducer    = ee.Reducer.frequencyHistogram(),
-                    geometry   = roi,
-                    scale      = stats_scale,
-                    maxPixels  = 1e9,
-                    bestEffort = True,
+                    reducer=ee.Reducer.frequencyHistogram(),
+                    geometry=roi,
+                    scale=stats_scale,
+                    maxPixels=1e9,
+                    bestEffort=True,
                 ).getInfo()
-            )
+            ) or {}
         except Exception as _stats_err:
-            stats = {}
-            print('[SylvaGIS] ⚠️ Histogram hesaplanamadı — katman yine de '
-                  'gösterilecek: {}'.format(_stats_err))
+            print('[SylvaGIS] ⚠️ Arka plan histogramı hesaplanamadı: {}'.format(_stats_err))
 
         real_minmax = {}
         try:
-            # 🛠️ BUG FİX (performans / peş peşe analiz hatası): daha önce
-            # min/max ve ortalama İKİ AYRI reduceRegion() + getInfo() ağ
-            # çağrısıyla hesaplanıyordu. Tek bir kombine reducer ile bu iki
-            # çağrı TEK bir GEE isteğine indirilir — hem daha hızlı yanıt
-            # verir hem de kullanıcı arka arkaya analiz yaptığında GEE'nin
-            # eşzamanlı/istek-başına limitlerine çarpma ihtimalini azaltır.
-            combined_reducer = ee.Reducer.minMax().combine(
-                reducer2=ee.Reducer.mean(), sharedInputs=True
-            )
-
-            # 🆕 GÜNCELLEME: Eş Yükselti (TOPO_CONTOUR) için 'result' burada
-            # 0/1'lik İKİLİ bir kontur maskesidir — min/max her zaman 0/1
-            # çıkar ve lejant kutusunda kullanıcıya hiçbir anlamlı bilgi
-            # vermez. Bunun yerine, çalışma alanının GERÇEK yükselti
-            # (elevation) min/max değerleri hesaplanır — aynı DEM kaynağı
-            # seçim mantığı (SRTM/ALOS/Copernicus/NASADEM) burada tekrar
-            # uygulanarak.
             _stats_img = result
             if data.get('index') == 'TOPO_CONTOUR':
                 _stats_dem_source = data.get('demSource', 'SRTM')
@@ -6978,116 +6998,36 @@ def analyze():
                     _stats_dem = ee.Image('USGS/SRTMGL1_003').select('elevation')
                 _stats_img = _stats_dem.rename('value')
 
+            combined_reducer = ee.Reducer.minMax().combine(
+                reducer2=ee.Reducer.mean(), sharedInputs=True
+            )
             mm = _call_with_retry(
                 lambda: _stats_img.reduceRegion(
-                    reducer    = combined_reducer,
-                    geometry   = roi,
-                    scale      = stats_scale,
-                    maxPixels  = 1e9,
-                    bestEffort = True,
+                    reducer=combined_reducer,
+                    geometry=roi,
+                    scale=stats_scale,
+                    maxPixels=1e9,
+                    bestEffort=True,
                 ).getInfo()
-            )
+            ) or {}
             real_minmax = {
-                'min':  mm.get('value_min'),
-                'max':  mm.get('value_max'),
+                'min': mm.get('value_min'),
+                'max': mm.get('value_max'),
                 'mean': mm.get('value_mean')
             }
-        except Exception:
-            pass
-
-        # NOT: tile_url yukarıda, istatistiklerden ÖNCE üretildi — burada
-        # ikinci bir getMapId() çağrısı YOKTUR. (Eskiden bu satırda tekrar
-        # üretiliyordu; bu hem gereksiz bir GEE isteğiydi hem de tile'ların
-        # kotanın en dolu olduğu anda oluşturulmasına yol açıyordu.)
-
-        # ── Zaman serisi galerisi ────────────────────────────────
-        # LULC ailesi statik/tek-katmanlı veri setleridir; zaman serisi
-        # galerisi kavramı bunlara uygulanamaz — bu sorguyu tamamen atlarız.
-        satellite  = data.get('satellite', 's2-l2a')
-        start_date = data.get('startDate')
-        end_date   = data.get('endDate')
-        scene_id   = data.get('sceneId')
-        max_cloud  = int(data.get('maxCloud', 20))
-        scenes_list = []
-
-        if not scene_id and data.get('index', 'NDVI') not in LULC_FAMILY_INDICES:
-            try:
-                roi_coords = data.get('roi')
-                roi_geo = make_roi(roi_coords)
-                if satellite == 's2-l2a':
-                    col2 = (ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
-                            .filterBounds(roi_geo)
-                            .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', max_cloud)))
-                elif satellite == 's2-l1c':
-                    col2 = (ee.ImageCollection('COPERNICUS/S2_HARMONIZED')
-                            .filterBounds(roi_geo)
-                            .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', max_cloud)))
-                elif satellite == 'l89-l2':
-                    col2 = (ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
-                            .filterBounds(roi_geo)
-                            .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
-                elif satellite == 'l89-l1':
-                    col2 = (ee.ImageCollection('LANDSAT/LC08/C02/T1_TOA')
-                            .filterBounds(roi_geo)
-                            .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
-                elif satellite == 'l7-l2':
-                    col2 = (ee.ImageCollection('LANDSAT/LE07/C02/T1_L2')
-                            .filterBounds(roi_geo)
-                            .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
-                elif satellite == 'l7-l1':
-                    col2 = (ee.ImageCollection('LANDSAT/LE07/C02/T1_TOA')
-                            .filterBounds(roi_geo)
-                            .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
-                elif satellite in ('l45-l2',):
-                    col2 = (ee.ImageCollection('LANDSAT/LT05/C02/T1_L2')
-                            .filterBounds(roi_geo)
-                            .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
-                elif satellite == 'l45-l1':
-                    col2 = (ee.ImageCollection('LANDSAT/LT05/C02/T1_TOA')
-                            .filterBounds(roi_geo)
-                            .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
-                elif satellite == 'mss-l1':
-                    col2 = (ee.ImageCollection('LANDSAT/LM05/C02/T1')
-                            .filterBounds(roi_geo))
-                else:
-                    col2 = (ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
-                            .filterBounds(roi_geo)
-                            .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', max_cloud)))
-                cloud_prop = 'CLOUDY_PIXEL_PERCENTAGE' if satellite.startswith('s2') else 'CLOUD_COVER'
-                months_filter = _parse_months_param(data)
-                limited    = _collect_scenes_across_years(
-                    col2, start_date, end_date, months=months_filter,
-                    per_year_limit=10, total_limit=60,
-                )
-                scene_ids  = _call_with_retry(lambda: limited.aggregate_array('system:index').getInfo(), retries=1)
-                timestamps = _call_with_retry(lambda: limited.aggregate_array('system:time_start').getInfo(), retries=1)
-                clouds_arr = _call_with_retry(lambda: limited.aggregate_array(cloud_prop).getInfo(), retries=1)
-                scenes_list = list(zip(scene_ids, timestamps, clouds_arr))
-            except Exception:
-                scenes_list = []
+        except Exception as _mm_err:
+            print('[SylvaGIS] ⚠️ Arka plan min/max istatistiği hesaplanamadı: {}'.format(_mm_err))
 
         return jsonify({
-            'success':   True,
-            'tileUrl':   tile_url,
-            # Proxy'ye ulaşılamazsa istemcinin geri düşebileceği ham GEE adresi.
-            'tileUrlDirect': tile_url_direct,
-            # İndirme/vektörleştirme uç noktalarının, kullanıcılar arasında
-            # paylaşılan sunucu belleği yerine BU analizi kesin olarak
-            # yeniden bulabilmesi için (bkz. _get_analysis_session ve
-            # _last_analyze_params tanımının üstündeki "BİLİNEN SINIRLAMA" notu).
-            'analysisId': _analysis_sid,
-            'stats':     stats,
+            'success': True,
+            'stats': stats,
             'realStats': real_minmax,
-            'scenes':    scenes_list,
-            'index':     data.get('index', 'NDVI'),
-            'visMin':    vis.get('min'),
-            'visMax':    vis.get('max'),
-            'visPalette': vis.get('palette', []),
-            'nativeCrs': native_crs
+            'visMin': vis.get('min'),
+            'visMax': vis.get('max')
         })
-
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/highlight-class', methods=['POST'])
@@ -7399,9 +7339,18 @@ def download_geotiff():
         # — tıpkı LULC semboloji paketinin (_build_lulc_symbology_zip) kendi
         # Byte çıktısı için zaten 0'ı NoData olarak kullanması gibi.
         _is_byte_rgb_export = False
-        if data.get('index') == 'RGB' and data.get('satellite') in ('s2-l1c', 's2-l2a'):
-            v_min = vis.get('min', 0)
-            v_max = vis.get('max', 0.3)
+        # 🛠️ BUG FİX v23 — Landsat RGB indirmesi haritadakinden daha koyu
+        # geliyordu. Sentinel-2 için yapılan görüntüleme germe (stretch)
+        # yalnızca S2'ye uygulanıyor, Landsat C2 L2 ise ham yansıma değerleriyle
+        # dışa aktarılıyordu. Harita ise her iki sensörde de kendi visMin/
+        # visMax aralığını kullanıyordu. Artık gerçek renkli tüm uydu
+        # sensörlerinde AYNI dataset'e ait visMin/visMax germe uygulanır.
+        _rgb_ds_for_export = SATELLITE_DATASETS.get(data.get('satellite')) if data.get('index') == 'RGB' else None
+        if data.get('index') == 'RGB' and _rgb_ds_for_export and _rgb_ds_for_export.get('trueColor', False):
+            v_min = vis.get('min', _rgb_ds_for_export.get('visMin', 0))
+            v_max = vis.get('max', _rgb_ds_for_export.get('visMax', 0.3))
+            if v_max <= v_min:
+                v_max = v_min + 0.3
             final_display = (
                 final_display
                 .unitScale(v_min, v_max)
@@ -7625,7 +7574,8 @@ def download_geotiff():
             export_image, export_region, scale, crs, safe_name,
             nodata_value=nodata_value, aoi_geom_4326=aoi_geom_4326,
             fallback_region_geom=roi.bounds(maxError=100),
-            is_categorical=is_lulc_categorical
+            is_categorical=is_lulc_categorical,
+            fast_rgb=bool(_is_byte_rgb_export and is_true_color_rgb)
         )
 
         sym_files = None
@@ -8523,7 +8473,7 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
 
 def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata_value=None,
                                   aoi_geom_4326=None, fallback_region_geom=None,
-                                  is_categorical=False):
+                                  is_categorical=False, fast_rgb=False):
     """
     _download_band_geotiff_bytes_impl() için ince bir sarmalayıcı (wrapper).
     Tek istek / bounded-fallback / karo-mozaik yollarının HANGİSİ
@@ -8559,6 +8509,14 @@ def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata
             raw_bytes, aoi_geom_4326, nodata_value, strict=is_categorical
         )
 
+    if fast_rgb:
+        # 🛠️ PERF FIX v23 — RGB zaman serisinde her sahne için tüm rasterı
+        # Python/rasterio ile tekrar taramak ve overview piramitleri üretmek
+        # gereksizdi. Bu yerel işlemler 4-5 sahneli indirmede ilk öğenin
+        # uzun süre '1/4 hazırlanıyor' durumunda kalmasına neden olabiliyordu.
+        # RGB zaten 0..255 Byte'a gerilmiş olarak üretilir; renk/istatistik
+        # metadata'sı hafif _build_rgb_symbology_zip() adımında hazırlanır.
+        return raw_bytes
     raw_bytes = _stamp_exact_band_statistics(raw_bytes, nodata_value=nodata_value)
     # Ham/continuous/categorical dahil tüm GeoTIFF çıkışlarına dahili
     # piramit ekle. Categorical rasterlarda nearest ile sınıf kodları korunur.
