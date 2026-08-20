@@ -299,6 +299,16 @@ _TILE_FETCH_TIMEOUT       = 25         # saniye
 _REBUILT_URL_CACHE_TTL_SECONDS = 20 * 60  # yenilenen map id'nin süreç-yerel önbellekte tutulma süresi
 _REBUILT_URL_CACHE_MAX_ITEMS   = 512
 
+# 🎨 HIZLI SEMBOLOJİ ÖNBELLEĞİ — NDVI/NDWI ve benzeri uydu analizlerinde
+# kullanıcı yalnızca Lejantı Uygula (renk/min-max/sınıf) yaptığında analizin
+# kendisini (median/mean/collection filtreleri) baştan hesaplamaya gerek yok.
+# Ham analiz görüntüsü bir kez oluşturulduktan sonra, sonraki görsel güncellemeler
+# aynı ee.Image üzerinde yalnızca yeni visualization + getMapId üretir.
+_ANALYSIS_VIS_CACHE_MAX_ITEMS = 128
+_analysis_vis_cache = {}
+_analysis_vis_cache_order = []
+_analysis_vis_cache_lock = threading.RLock()
+
 _tile_cache = {}
 _tile_cache_order = []
 _tile_lock = threading.RLock()
@@ -6493,6 +6503,62 @@ def timeseries():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+def _visual_cache_key(data):
+    """Görsel ayarlar dışındaki analiz parametrelerinden kararlı cache anahtarı üretir."""
+    try:
+        d = dict(data or {})
+        for k in ('palette', 'min', 'max', 'classBreaks', 'visualization',
+                  'fastVisualOnly', 'contourLineColor'):
+            d.pop(k, None)
+        return hashlib.sha256(json.dumps(d, sort_keys=True, default=str, separators=(',', ':')).encode('utf-8')).hexdigest()
+    except Exception:
+        return None
+
+
+def _visual_cache_get(key):
+    if not key:
+        return None
+    with _analysis_vis_cache_lock:
+        entry = _analysis_vis_cache.get(key)
+        if entry is None:
+            return None
+        return entry
+
+
+def _visual_cache_put(key, entry):
+    if not key or entry is None:
+        return
+    with _analysis_vis_cache_lock:
+        if key in _analysis_vis_cache:
+            try: _analysis_vis_cache_order.remove(key)
+            except ValueError: pass
+        _analysis_vis_cache[key] = entry
+        _analysis_vis_cache_order.append(key)
+        while len(_analysis_vis_cache_order) > _ANALYSIS_VIS_CACHE_MAX_ITEMS:
+            old = _analysis_vis_cache_order.pop(0)
+            _analysis_vis_cache.pop(old, None)
+
+
+def _fast_visual_analysis_supported(index):
+    name = str(index or '').upper()
+    if name in ('RGB', 'SAR') or name.startswith('LULC') or name.startswith('TOPO'):
+        return False
+    # Çevresel/kentsel modüllerin bazıları çift dönem veya bağımsız veri
+    # kaynakları kullandığından hızlı cache yolu dışında tutulur.
+    if name in _ENV_URBAN_RASTER_INDICES or name in {
+        'UHI_LST','UHI_TREND','LST_LULC_CORRELATION','WATER_OCCURRENCE',
+        'WATER_CHANGE','WATER_SEASONALITY','RESERVOIR_VOLUME','WATER_QUALITY_PROXY',
+        'VEG_CHANGE','FOREST_LOSS','BURN_SEVERITY','CANOPY_HEIGHT_BIOMASS',
+        'FOREST_HEALTH','URBAN_GROWTH','IMPERVIOUS_CHANGE','NIGHTLIGHTS_ECONOMIC',
+        'DROUGHT_INDEX','FLOOD_MAPPING','LANDSLIDE_SUSCEPTIBILITY',
+        'DROUGHT_RISK_COMPOSITE','EARTHQUAKE_DAMAGE_PROXY','NO2_TIMESERIES',
+        'AEROSOL_OPTICAL_DEPTH','SO2_CO_ANOMALY','COASTLINE_CHANGE','SST_TREND'
+    }:
+        return False
+    return True
+
+
+
 @app.route('/api/analyze', methods=['POST'])
 def analyze():
     global _last_analyze_params, _last_analyze_native_crs
@@ -6581,6 +6647,50 @@ def analyze():
                 'visMin':   vis.get('min'),
                 'visMax':   vis.get('max'),
             })
+
+        # ⚡ HIZLI GÖRSEL GÜNCELLEME: Lejant/sınıflandırma değiştiğinde NDVI/NDWI
+        # gibi uydu indekslerini yeniden median/mean + histogram + sahne listesi
+        # ile hesaplama. İlk analizde cache'e alınan ham ee.Image kullanılır.
+        _fast_key = _visual_cache_key(data)
+        _fast_entry = _visual_cache_get(_fast_key) if data.get('fastVisualOnly') else None
+        if _fast_entry is not None and _fast_visual_analysis_supported(data.get('index')):
+            try:
+                _fast_result = _fast_entry['result']
+                _fast_roi = _fast_entry['roi']
+                _fast_base_vis = dict(_fast_entry.get('vis') or {})
+                _fast_display = _fast_result
+                _fast_breaks = data.get('classBreaks')
+                if isinstance(_fast_breaks, list) and _fast_breaks:
+                    _classified_img, _classified_vis = build_classified_image(_fast_result, _fast_breaks)
+                    if _classified_img is not None:
+                        _fast_display = _classified_img
+                        _fast_base_vis = _classified_vis
+                else:
+                    _fast_palette = data.get('palette')
+                    if isinstance(_fast_palette, list) and _fast_palette:
+                        _fast_base_vis['palette'] = [str(c).lstrip('#') for c in _fast_palette]
+                    if data.get('min') is not None:
+                        _fast_base_vis['min'] = float(data.get('min'))
+                    if data.get('max') is not None:
+                        _fast_base_vis['max'] = float(data.get('max'))
+                _fast_clip = data.get('clipMode', 'clip')
+                _fast_final = _fast_display.clip(_fast_roi) if _fast_clip == 'clip' else _fast_display
+                _fast_map = _call_with_retry(lambda: _fast_final.getMapId(_fast_base_vis))
+                _fast_direct = _fast_map['tile_fetcher'].url_format
+                _fast_extra = {'nativeCrs': _fast_entry.get('nativeCrs')} if _fast_entry.get('nativeCrs') else {}
+                _fast_sid = _register_tile_session(_fast_direct, params=data, kind='analyze', extra=_fast_extra)
+                _fast_tile = _tile_url_for_client(_fast_sid, _fast_direct)
+                _fast_analysis_sid = _register_analysis_session(data, kind='analyze', extra=_fast_extra)
+                return jsonify({
+                    'success': True, 'tileUrl': _fast_tile, 'tileUrlDirect': _fast_direct,
+                    'analysisId': _fast_analysis_sid, 'stats': _fast_entry.get('stats') or {},
+                    'realStats': _fast_entry.get('realStats') or {}, 'scenes': _fast_entry.get('scenes') or [],
+                    'index': data.get('index', 'NDVI'), 'visMin': _fast_base_vis.get('min'),
+                    'visMax': _fast_base_vis.get('max'), 'visPalette': _fast_base_vis.get('palette', []),
+                    'nativeCrs': _fast_entry.get('nativeCrs')
+                })
+            except Exception as _fast_err:
+                print('[SylvaGIS] ⚡ Fast visual cache fallback: {}'.format(_fast_err))
 
         final_display, roi, result, vis, crs_probe_img = build_result_image(data)
 
@@ -6834,6 +6944,16 @@ def analyze():
             except Exception:
                 scenes_list = []
 
+        # ⚡ İlk tam analizden sonra ham analiz görüntüsünü cache'e koy.
+        # Sonraki yalnızca görsel değişiklikleri build_result_image() zincirini
+        # tekrar çalıştırmadan aynı ee.Image üzerinden üretilebilir.
+        if _fast_visual_analysis_supported(data.get('index')) and _fast_key:
+            _visual_cache_put(_fast_key, {
+                'result': result, 'roi': roi, 'vis': dict(vis or {}),
+                'nativeCrs': native_crs, 'stats': stats,
+                'realStats': real_minmax, 'scenes': scenes_list
+            })
+
         return jsonify({
             'success':   True,
             'tileUrl':   tile_url,
@@ -6966,7 +7086,14 @@ def download_geotiff():
         # global davranış AYNEN korunur — bu değişiklik geriye dönük
         # tamamen uyumludur.
         analysis_id = req_data.get('analysisId')
-        if analysis_id:
+        _direct_payload = req_data.get('analysisPayload')
+        if isinstance(_direct_payload, dict) and _direct_payload.get('roi'):
+            # Batch indirmelerde analysisId oluşturmak için önce ağır /api/analyze
+            # çağrısı yapmaya gerek yoktur. İstemcinin zaten tuttuğu üretim
+            # payload'ı doğrudan export hattına veriyoruz.
+            data = dict(_direct_payload)
+            session_native_crs = req_data.get('nativeCrs') or data.get('nativeCrs') or _last_analyze_native_crs
+        elif analysis_id:
             _session = _get_analysis_session(analysis_id)
             if _session is None:
                 return jsonify({
@@ -9529,6 +9656,7 @@ def download_geotiff_batch():
     """Bir aktif ekrandaki birden fazla rasteri tek ZIP içinde döndürür."""
     req_data = request.json or {}
     items = req_data.get('items') or []
+    requested_zip_filename = req_data.get('zipFilename') or ''
     # Tek bir raster da aynı paketleme hattından geçer. Böylece LULC/TOPO
     # analizlerinde kullanılan TIFF + RAT/VAT/.clr sidecar mantığı, gerçek
     # RGB uydu görüntülerinde de .tif + .tif.aux.xml olarak korunur ve
@@ -9574,6 +9702,19 @@ def download_geotiff_batch():
         prepared_items.append((pos, base, item))
 
     def _fetch_one(pos, base, item):
+        # İstemci artık her raster için önce ayrı bir /api/analyze HTTP
+        # isteğini beklemiyor. Payload doğrudan batch'e gelir; eksik
+        # analysisId varsa sunucu burada kendi izole analiz oturumunu oluşturur.
+        # Böylece kullanıcı İndir'e bastığı anda TEK batch isteği başlar ve
+        # tarayıcıda N adet seri ağ turu beklenmez.
+        item = dict(item)
+        # ⚡ HIZLI İNDİRME: batch isteği için ayrıca /api/analyze çalıştırma.
+        # İndirilecek rasterin üretim payload'ı zaten istemciden geliyor;
+        # download_geotiff bunu doğrudan kullanabilir. Böylece İndir'e basınca
+        # ikinci bir ağır analiz turu yapılmaz.
+        if not item.get('analysisId') and isinstance(item.get('payload'), dict):
+            item['analysisPayload'] = dict(item.get('payload') or {})
+
         last_err = None
         for attempt in range(3):
             try:
@@ -9691,8 +9832,18 @@ def download_geotiff_batch():
                     'Başarısız katman(lar)ı tekrar indirmeyi deneyebilirsiniz.'
                 )
         result = zip_buf.getvalue()
+        # İstemci gerçek sahne tarihlerini ZIP adına taşıyorsa aynen kullan;
+        # aksi halde eski sabit isim davranışına geri dön. İndirme günü burada
+        # hiçbir zaman otomatik tarih olarak eklenmez.
+        _requested_zip_base = str(requested_zip_filename or '').strip()
+        if _requested_zip_base.lower().endswith('.zip'):
+            _requested_zip_base = _requested_zip_base[:-4]
+        _zip_base = _sylva_safe_filename(_requested_zip_base, allow_dots=False).strip('._')
+        if not _zip_base:
+            _zip_base = 'SylvaGIS_raster_analizleri'
+        _zip_base += '.zip'
         response = Response(result, mimetype='application/zip')
-        response.headers['Content-Disposition'] = 'attachment; filename="SylvaGIS_raster_analizleri.zip"'
+        response.headers['Content-Disposition'] = 'attachment; filename="{}"'.format(_zip_base)
         response.headers['Content-Length'] = str(len(result))
         return response
     except Exception as exc:
