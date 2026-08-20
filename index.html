@@ -3361,7 +3361,72 @@ tr.class-highlight-active {
             overflow-y: visible !important;
         }
     </style>
-</head>
+\n<style id="sylva-final-ui-parity-fix-20260820">
+/* ================================================================
+   FINAL UI/PARITY FIX — 20.08.2026
+   1) Raster download button keeps its blue visual state after touch/click.
+   2) Dual-screen mobile/tablet layout never leaves the old 40/64/102 px
+      padding bands between/below the map panes. The fixed toolbar/footer
+      are accounted for by the main container, not by an extra blank strip.
+   3) Map 2 uses the same responsive height rules as Map 1.
+   ================================================================ */
+#output-tools-section #btn-geotiff-download,
+#output-tools-section #btn-geotiff-download:hover,
+#output-tools-section #btn-geotiff-download:active,
+#output-tools-section #btn-geotiff-download:focus,
+#output-tools-section #btn-geotiff-download.active {
+    background-color: #152d6e !important;
+    border-color: #152d6e !important;
+    color: #ffffff !important;
+    box-shadow: none !important;
+    transform: none !important;
+}
+
+/* Dokunmatik tarayıcılarda :active durumu ikinci dokunuşa kadar
+   yapışabildiği için çıktı butonları için gri active stili uygulanmasın. */
+#output-tools-section .btn-tool:active {
+    background-color: inherit;
+}
+
+@media (max-width: 900px) {
+    /* Çift ekranda harita alanının altındaki eski tek-ekran paylarını
+       (40px footer + 64/102px ruler-map-row tahminleri) kaldır.
+       Böylece iki harita gerçek kullanılabilir yüksekliği paylaşır. */
+    body.sylva-dual-screen-on .main-container {
+        padding-bottom: 0 !important;
+        box-sizing: border-box !important;
+    }
+    body.sylva-dual-screen-on #map-panes-row {
+        padding-bottom: 0 !important;
+        margin-bottom: 0 !important;
+        min-height: 0 !important;
+        box-sizing: border-box !important;
+    }
+    body.sylva-dual-screen-on #ruler-container .ruler-map-row,
+    body.sylva-dual-screen-on #map2-ruler-container .map2-ruler-map-row {
+        padding-bottom: 0 !important;
+        margin-bottom: 0 !important;
+        min-height: 0 !important;
+        box-sizing: border-box !important;
+    }
+    body.sylva-dual-screen-on #ruler-container,
+    body.sylva-dual-screen-on #map2-wrapper,
+    body.sylva-dual-screen-on #map2-ruler-container {
+        min-height: 0 !important;
+    }
+}
+
+@media (max-width: 640px) {
+    body.sylva-dual-screen-on #map-panes-row {
+        height: 100% !important;
+    }
+    body.sylva-dual-screen-on #ruler-container,
+    body.sylva-dual-screen-on #map2-wrapper {
+        flex: 1 1 50% !important;
+        min-height: 0 !important;
+    }
+}
+</style>\n</head>
 <body>
     <a href="#map" class="sylva-skip-link" data-i18n="skip_to_map">Haritaya geç</a>
     <!-- ANALİZ YÜKLEME OVERLAY -->
@@ -11165,7 +11230,11 @@ function selectRamp(name) {
                 demSource: _demSource,
                 palette:   palette,
                 min:       minVal,
-                max:       maxVal
+                max:       maxVal,
+                // ⚡ Yalnızca görsel ayar değişti: sunucu mevcut ham analiz
+                // görüntüsünü cache'den kullanıp median/istatistik/sahne
+                // sorgularını tekrar çalıştırmaz.
+                fastVisualOnly: true
             };
             // 🛠️ BUG FİX (Görsel 5/8 - İndirme, ekranda görünenle uyuşmuyordu):
             // bkz. loadRgbScene() içindeki aynı düzeltme notu. "Lejantı Uygula"
@@ -11694,7 +11763,10 @@ function selectRamp(name) {
                 palette:     palette,
                 min:         overallMin,
                 max:         overallMax,
-                classBreaks: classBreaks
+                classBreaks: classBreaks,
+                // ⚡ Ham analiz zaten çalıştı; yalnızca sınıflandırma görselini
+                // değiştiriyoruz. Sunucu aynı ee.Image cache'ini kullanır.
+                fastVisualOnly: true
             };
             // 🛠️ BUG FİX (Görsel 5/8 - İndirme, ekranda görünenle uyuşmuyordu):
             // bkz. loadRgbScene() içindeki aynı düzeltme notu. Sınıflandırma
@@ -13054,7 +13126,12 @@ function selectRamp(name) {
                     min: minEl ? minEl.value : '',
                     max: maxEl ? maxEl.value : '',
                     name: nameEl ? nameEl.value : '',
-                    color: trigger ? (trigger.getAttribute('data-selected-color') || '#999999') : '#999999'
+                    color: trigger ? (trigger.getAttribute('data-selected-color') || '#999999') : '#999999',
+                    // Dil değişiminde kullanıcı tarafından yazılmış sınıf adının
+                    // otomatik çeviri/varsayılan etiket üreticisi tarafından
+                    // ezilmemesi için DOM işaretlerini de sakla.
+                    userEdited: !!(nameEl && nameEl.getAttribute('data-user-edited') === '1'),
+                    auto: !!(nameEl && nameEl.getAttribute('data-auto'))
                 });
             });
             return state;
@@ -13111,7 +13188,19 @@ function selectRamp(name) {
                 var trigger = row.querySelector('.class-color-trigger');
                 if (minEl) minEl.value = saved.min;
                 if (maxEl) maxEl.value = saved.max;
-                if (nameEl) nameEl.value = saved.name;
+                if (nameEl) {
+                    nameEl.value = saved.name;
+                    if (saved.userEdited) {
+                        nameEl.setAttribute('data-user-edited', '1');
+                        nameEl.removeAttribute('data-auto');
+                    } else if (saved.auto) {
+                        nameEl.setAttribute('data-auto', '1');
+                        nameEl.removeAttribute('data-user-edited');
+                    } else {
+                        nameEl.removeAttribute('data-user-edited');
+                        nameEl.removeAttribute('data-auto');
+                    }
+                }
                 if (trigger && saved.color) {
                     trigger.style.background = saved.color;
                     trigger.setAttribute('data-selected-color', saved.color);
@@ -17464,6 +17553,7 @@ function selectRamp(name) {
                 var div = document.createElement('div');
                 div.className = 'gallery-item' + (idx === 0 ? ' active' : '');
                 div.setAttribute('data-scene-id', sceneId);
+                if (scene[1]) div.setAttribute('data-scene-timestamp', String(scene[1]));
                 div.innerHTML = '<div class="gallery-img">' + emoji + '</div>'
                               + '<div class="gallery-info">' + dateLabel + '<br>☁ %' + cloud + '</div>';
                 div.addEventListener('click', function() {
@@ -17521,6 +17611,7 @@ function selectRamp(name) {
                     var div = document.createElement('div');
                     div.className = 'gallery-item' + (idx === 0 ? ' active' : '');
                     div.setAttribute('data-scene-id', sceneId);
+                    if (scene[1]) div.setAttribute('data-scene-timestamp', String(scene[1]));
                     div.innerHTML = '<div class="gallery-img">' + emojiG + '</div>'
                                   + '<div class="gallery-info">' + dateLabel + '<br>☁ %' + cloud + '</div>';
                     div.addEventListener('click', function() {
@@ -17992,6 +18083,7 @@ function selectRamp(name) {
                 var div = document.createElement('div');
                 div.className = 'gallery-item' + (scene.sceneId === _gState.activeSceneId ? ' active' : '');
                 div.setAttribute('data-scene-id', scene.sceneId);
+                if (scene.timestamp) div.setAttribute('data-scene-timestamp', String(scene.timestamp));
                 div.setAttribute('data-dataset-key', dk);
                 div.title = (ds ? ds.datasetName : '') + '\n' + dateLabel + '\nScene ID: ' + scene.sceneId;
                 div.innerHTML = '<div class="gallery-img">' + thumbHtml + '</div>'
@@ -18061,6 +18153,9 @@ function selectRamp(name) {
 
             showSylvaLoading();
 
+            var _rgbSelectedScene = (_gState.scenes || []).find(function(sc){ return String(sc.sceneId) === String(sceneId); });
+            var _rgbSceneDate = (_rgbSelectedScene && _rgbSelectedScene.timestamp)
+                ? new Date(Number(_rgbSelectedScene.timestamp)).toISOString().slice(0,10) : '';
             var _rgbAnalyzePayload = {
                 roi:       _roi,
                 clipMode:  _rgbClipMode,
@@ -18069,7 +18164,10 @@ function selectRamp(name) {
                 satellite: meta.datasetKey,
                 index:     'RGB',
                 maxCloud:  cloudSliderEl ? parseInt(cloudSliderEl.value, 10) : 100,
-                sceneId:   sceneId
+                sceneId:   sceneId,
+                // Görüntünün gerçek çekim tarihi; dosya adında bu tarih
+                // kullanılacak, indirme günü kesinlikle kullanılmayacak.
+                sceneDate: _rgbSceneDate
             };
             // 🛠️ BUG FİX (Görsel 8 - GeoTIFF indirirken "Seçilen sahne
             // bulunamadı"): _sylvaSyncActivePaneForDownload() (indirme
@@ -24104,7 +24202,19 @@ function selectRamp(name) {
                     leftPanel.querySelectorAll('details').forEach(function(det) {
                         analizWrap.appendChild(det);
                     });
-                    // "Analizi Çalıştır" butonunu da anlamsal olarak buraya taşı
+
+                    // "Önceki Analizin Üzerine Ekle" seçeneği masaüstünde
+                    // Analizi Çalıştır butonunun hemen üstündedir. Mobil/tablet
+                    // çekmecesinde de aynı anlamsal konumu korumalıdır. Önceki
+                    // sürümde yalnızca <details> ve çalıştır butonu taşındığı
+                    // için bu checkbox Veri sekmesinde, Bulutluluk alanının
+                    // altında kalıyordu. Gerçek DOM elemanını taşıyoruz; böylece
+                    // aynı id, event listener ve state korunur.
+                    var stackToggle = leftPanel.querySelector('#stack-analysis-toggle-wrap');
+                    if (stackToggle) analizWrap.appendChild(stackToggle);
+
+                    // "Analizi Çalıştır" butonunu anlamsal olarak hemen
+                    // önceki analiz toggle'ının altına taşı.
                     var runBtn = leftPanel.querySelector('#btn-run-analysis');
                     if (runBtn) analizWrap.appendChild(runBtn);
                     analizEl.appendChild(analizWrap);
@@ -25981,9 +26091,11 @@ function sylvaIsTopoLikeRasterAnalysis(index) {
 }
 
 function openGeoTiffDownloadDialog() {
-    // Pencere açılır açılmaz SON TIKLANAN ekranın analiz oturumunu sunucuyla
-    // senkronize et. Ekran 2 aktifse Ekran 1'in verisi kesinlikle kullanılmaz.
-    _sylvaSyncActivePaneForDownload();
+    // GeoTIFF indirmesi artık payload'ı doğrudan batch endpoint'ine gönderir;
+    // pencere açılırken ekstra /api/analyze senkronizasyonu YAPILMAZ. Bu,
+    // kullanıcı İndir'e bastığında indirme isteğinin gereksiz bir ağ turu
+    // beklemeden hemen başlamasını sağlar. Çift ekran izolasyonu payload
+    // içinde korunur ve sunucu batch oturumu kendi içinde oluşturur.
     var modal = document.getElementById('geotiff-download-modal');
     var status = document.getElementById('geotiff-status');
     var btn = document.getElementById('btn-geotiff-execute');
@@ -43286,6 +43398,28 @@ function _sylvaRefreshAspectEditorLabels(lang) {
 window._sylvaRefreshAspectEditorLabels = _sylvaRefreshAspectEditorLabels;
 
 function applySylvaLang(lang) {
+  // 🛡️ LEJANT/SINIFLANDIRMA KORUMA: Dil değişimi yalnızca UI metinlerini
+  // değiştirmeli; kullanıcının aktif analiz için elle oluşturduğu sınıfları,
+  // renkleri, Min/Max değerlerini ve seçili rampayı ASLA yeniden başlatmamalı.
+  // Dil değişimi sırasında bazı alt modüller editorü yeniden kurabildiği için
+  // tam editor durumunu en başta snapshot alıyoruz ve fonksiyonun sonunda aynen
+  // geri yüklüyoruz.
+  var _langEditorSnapshot = null;
+  try {
+    var _langPane0 = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+    var _langTop0 = window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[_langPane0];
+    if (_langTop0 && typeof _sylvaCaptureEditorState === 'function') {
+      _langEditorSnapshot = { pane: _langPane0, layerKey: _langTop0, state: _sylvaCaptureEditorState() };
+      // Tüm gecikmeli dil/katman yenileme callback'lerinin aynı kullanıcı
+      // snapshot'ını görmesini sağla. Böylece 30 dilli UI eklentilerinden biri
+      // editorü yeniden kurduğunda yeni varsayılan değerleri kaydedemez.
+      window._sylvaEditorStateByPane = window._sylvaEditorStateByPane || { map:{}, map2:{} };
+      var _langStoreKey0 = (_langPane0 === 'map2') ? 'map2' : 'map';
+      window._sylvaEditorStateByPane[_langStoreKey0] = window._sylvaEditorStateByPane[_langStoreKey0] || {};
+      window._sylvaEditorStateByPane[_langStoreKey0][_langTop0] = _langEditorSnapshot.state;
+    }
+  } catch (e) {}
+
   if (!SYLVA_TRANSLATIONS[lang]) lang = 'en';
   _sylvaLang = lang;
   sylvaSaveLang(lang);
@@ -43418,16 +43552,20 @@ function applySylvaLang(lang) {
   if (typeof window._sylvaRefreshAspectEditorLabels === 'function') window._sylvaRefreshAspectEditorLabels(lang);
   if (typeof translateClassLabels === 'function') { try { setTimeout(function(){ translateClassLabels(); }, 80); } catch(e) {} }
 
-  // 🆕 Dil değişiminden sonra sınıflandırılmış editör snapshot'ını da yenile.
-  // Böylece örneğin Korece seçildiğinde ekranda görünen Korece sınıf adları
-  // indirme sırasında eski Türkçe snapshot tarafından ezilmez.
+  // 🛡️ Dil değişimi sonrası snapshot'ı GÜNCELLEMEK yerine, dil değişiminden
+  // hemen önce aldığımız kullanıcı editörünü geri yükle. Böylece Türkçe
+  // sınıflandırma + renkler + aralıklar İngilizce/Almanca vb. seçildiğinde
+  // varsayılan sınıflara dönmez. Teknik UI metinleri çevrilir; kullanıcı
+  // sınıf adları aynen korunur.
   try {
-    var _langPane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
-    var _langTop = window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[_langPane];
-    var _langMeta = window._lastAnalyzeMetaByPane && window._lastAnalyzeMetaByPane[_langPane] || window._lastAnalyzeMeta;
-    var _langPassiveTopo = _langMeta && /^(TOPO_ASPECT|TOPO_HILLSHADE)$/i.test(String(_langMeta.analysisName || ''));
-    if (_langTop && !_langPassiveTopo && typeof _sylvaSaveEditorStateForLayer === 'function' && typeof currentClassificationType !== 'undefined' && currentClassificationType === 'classified') {
-      setTimeout(function(){ try { _sylvaSaveEditorStateForLayer(_langPane, _langTop); } catch(e){} }, 120);
+    if (_langEditorSnapshot && typeof _sylvaRestoreEditorStateForLayer === 'function') {
+      _sylvaRestoreEditorStateForLayer(_langEditorSnapshot.pane, _langEditorSnapshot.layerKey);
+      // Restore sonrası panelin seçili mod/ramp görünümünü bir sonraki paint
+      // döngüsünde de sabitle; başka bir dil eklentisinin gecikmeli callback'i
+      // editorü yeniden kurarsa tekrar kullanıcı snapshot'ı kazanır.
+      setTimeout(function(){
+        try { _sylvaRestoreEditorStateForLayer(_langEditorSnapshot.pane, _langEditorSnapshot.layerKey); } catch(e) {}
+      }, 0);
     }
   } catch(e) {}
 
@@ -51598,6 +51736,10 @@ function runTimeSeriesAnalysis() {
             // sahne ID listesi ve ait olduğu ekran globalde saklanır — bkz.
             // onTimeSliderChange().
             window._tsSliderSceneIds = data.gallery.map(function(g) { return g.sceneId; });
+            // Her zaman serisi sahnesinin GEE system:time_start değeri ayrıca
+            // saklanır; indirme sırasında dönem etiketi yerine görüntünün
+            // GERÇEK çekim tarihi dosya adına yazılır.
+            window._tsSliderSceneTimestamps = data.gallery.map(function(g) { return g.timestamp || null; });
             window._tsSliderPane = _pane;
         }
 
@@ -51627,6 +51769,7 @@ function runTimeSeriesAnalysis() {
 /* ── 5. Time Slider ─────────────────────────────────────────────────────── */
 window._tsSliderDates = [];
 window._tsSliderSceneIds = [];
+window._tsSliderSceneTimestamps = [];
 window._tsSliderPane = null;
 window._tsLastIndices = [];
 var _tsPlayTimer = null, _tsPlaying = false;
@@ -53088,6 +53231,26 @@ refresh();
     }
     function rasterEntries(pane) {
         var result = [], seen = {};
+        // Aktif galerideki seçili sahnenin GEE system:time_start değerini
+        // bulur. Dosya adı için tarih aralığı/indirme tarihi DEĞİL, gerçekten
+        // görüntünün çekildiği tarih kullanılır.
+        function activeSceneDate(p, datasetKey) {
+            try {
+                var g = (typeof _sylvaGalleryEl === 'function') ? _sylvaGalleryEl(p) : null;
+                if (!g) return '';
+                var active = datasetKey
+                    ? g.querySelector('.gallery-item.active[data-scene-id][data-dataset-key="' + datasetKey.replace(/"/g, '\\"') + '"]')
+                    : g.querySelector('.gallery-item.active[data-scene-id]');
+                if (!active && datasetKey) active = g.querySelector('.gallery-item.active[data-scene-id]');
+                if (!active) return '';
+                var ts = active.getAttribute('data-scene-timestamp');
+                if (!ts) return '';
+                var d = new Date(Number(ts));
+                if (isNaN(d.getTime())) d = new Date(ts);
+                return isNaN(d.getTime()) ? '' : d.toISOString().slice(0,10);
+            } catch (e) { return ''; }
+        }
+        var _activeSceneDate = activeSceneDate(pane, '');
         var byLayer = window._sylvaLayerAnalyzePayloadByPane && window._sylvaLayerAnalyzePayloadByPane[pane] || {};
         var store = window._geeLayersByPane && window._geeLayersByPane[pane] || {};
         Object.keys(store).forEach(function (key) {
@@ -53097,7 +53260,7 @@ refresh();
             var fingerprint = JSON.stringify(payload);
             if (seen[fingerprint]) return;
             seen[fingerprint] = true;
-            result.push({ key:key, payload:payload, index:index });
+            result.push({ key:key, payload:payload, index:index, sceneDate: payload.sceneDate || activeSceneDate(pane, payload.satellite || '') || _activeSceneDate });
         });
 
         // Bazı akışlarda (özellikle ilk RGB sahnesi veya zaman serisinin ilk
@@ -53108,7 +53271,7 @@ refresh();
         if (!result.length) {
             var fallback = window._lastAnalyzePayloadByPane && window._lastAnalyzePayloadByPane[pane];
             if (fallback && fallback.index && !/^(TOPO_CONTOUR|BUILDING_FOOTPRINT)$/i.test(fallback.index)) {
-                result.push({key:'active', payload:fallback, index:fallback.index});
+                result.push({key:'active', payload:fallback, index:fallback.index, sceneDate: fallback.sceneDate || activeSceneDate(pane, fallback.satellite || '') || _activeSceneDate});
             }
         }
 
@@ -53159,6 +53322,15 @@ refresh();
                             index: idx,
                             tsSceneNo: sceneNo + 1,
                             tsDate: (window._tsSliderDates || [])[sceneNo] || '',
+                            // Gerçek GEE çekim tarihi; dönem etiketi yalnızca
+                            // yedek olarak tutulur.
+                            sceneDate: (function(){
+                                var ts = (window._tsSliderSceneTimestamps || [])[sceneNo];
+                                if (!ts) return '';
+                                var d = new Date(Number(ts));
+                                if (isNaN(d.getTime())) d = new Date(ts);
+                                return isNaN(d.getTime()) ? '' : d.toISOString().slice(0,10);
+                            })(),
                             tsSeries: true
                         });
                     });
@@ -53228,7 +53400,6 @@ refresh();
         // gerçek tarihini (entry.payload.endDate/startDate) kullanır; bu
         // sadece toplu ZIP'in genel adı için (varsa) mevcut tarih aralığı
         // bitişini tutar, yoksa boş kalır (asla "bugün"e düşülmez).
-        var _gtiffDateEnd = (document.getElementById('date-end') || {}).value || '';
         var scale=parseInt((document.getElementById('geotiff-scale') || {}).value,10) || 30;
         var crs=typeof getSelectedCrs === 'function' ? getSelectedCrs() : 'EPSG:4326';
         // 🌐 ÇOK DİLLİ İNDİRME KUYRUĞU MESAJLARI: bu durum metinleri önceden
@@ -53247,70 +53418,79 @@ refresh();
         if (btn) { btn.disabled=true; btn.textContent='⏳ ' + _dlqT('dlq_preparing_btn', 'Hazırlanıyor…'); }
         if (status) { status.style.display='block'; status.style.color='#1e3a8a'; status.textContent='⏳ ' + _dlqT('dlq_preparing_active', 'Aktif ekrandaki raster analizler hazırlanıyor…'); }
         var items=[];
-        entries.reduce(function(chain, entry, n) {
-            return chain.then(function () {
-                if(status) status.textContent='⏳ ' + _dlqFmt(_dlqT('dlq_progress', '{n}/{total} — {name} hazırlanıyor…'), { n: n + 1, total: entries.length, name: entry.index });
-                return requestJson('/api/analyze', entry.payload).then(function (analysis) {
-                    if (!analysis.analysisId) throw new Error(_dlqFmt(_dlqT('dlq_session_error', '{name} için analiz oturumu oluşturulamadı.'), { name: entry.index }));
-                    // 🏷️ Export Convention: SylvaGIS_export_[Analiz_Türü]_[Sensör/Veri]_[Alan_Adı]_[Tarih]
-                    var _ts = sylvaExportTypeAndSourceFromPayload(entry.payload);
-                    // 🆕 Tarih SADECE uydu görüntüsü/uydu indeks analizlerinde
-                    // (NDVI/NDWI vb.) dosya adına eklenir — LULC/TOPO/Çevresel
-                    // analizlerde hiç eklenmez. Eklendiğinde de tüm katmanlar
-                    // için ORTAK/bugünkü bir tarih DEĞİL, o KATMANIN kendi
-                    // analiz isteğinde kullanılan gerçek tarih (endDate/
-                    // startDate) kullanılır — Zaman Serisi/çoklu tarihli
-                    // indirmelerde her dosya kendi doğru tarihini taşır.
-                    var _entryIsDateable = (typeof isSatelliteIndexAnalysis === 'function' && isSatelliteIndexAnalysis(entry.index)) || entry.index === 'RGB';
-                    var _entryDatePart = _entryIsDateable
-                        ? (entry.tsDate || ((entry.payload && (entry.payload.endDate || entry.payload.startDate)) || ''))
-                        : '';
-                    var _entryFilename;
-                    if (_gtiffIsAutoName) {
-                        var _p = ['SylvaGIS_export'];
-                        if (_ts.type) _p.push(sylvaTranslitTR(_ts.type).replace(/[^A-Za-z0-9]+/g, '_'));
-                        if (_ts.source) _p.push(sylvaTranslitTR(_ts.source).replace(/[^A-Za-z0-9]+/g, '_'));
-                        if (_gtiffAreaName) {
-                            var _ac = sylvaTranslitTR(_gtiffAreaName).replace(/\s+/g, '_').replace(/[^A-Za-z0-9_\-]+/g, '');
-                            if (_ac) _p.push(_ac);
-                        }
-                        if (_entryDatePart) _p.push(_entryDatePart);
-                        _entryFilename = safeName(_p.join('_'));
-                    } else {
-                        // Kullanıcı kendi dosya adını yazdı — yine de aynı isim
-                        // altında farklı sensör/analiz türlerinin çakışmasını
-                        // önlemek için tür+kaynak eki eklenir.
-                        var _suffix = _ts.type + (_ts.source ? ('_' + _ts.source) : '');
-                        _entryFilename = safeName(filename + '_' + _suffix);
-                    }
-                    // 🛠️ BUG FİX (bkz. responseBlobNamed() üstündeki not): flatTiff
-                    // artık tek katmanlı indirmede de 'false' gönderilir ki sunucu
-                    // — LULC'de olduğu gibi diğer TÜM analizlerde de — RAT/VAT/.clr
-                    // yan dosyalarını içeren tam paketi (.zip) döndürebilsin; gerçek
-                    // dosya adı/uzantısı aşağıda sunucunun Content-Disposition
-                    // başlığından okunur, artık körü körüne ".tif" eklenmez.
-                    items.push({ analysisId:analysis.analysisId, filename:_entryFilename, scale:scale, crs:crs,
-                        clipMode:entry.payload.clipMode || 'clip', roi:entry.payload.roi || null, rendered:true,
-                        visualization:exportVisualFor(pane, entry.key), flatTiff:false });
-                });
+        entries.forEach(function(entry, n) {
+            var _ts = sylvaExportTypeAndSourceFromPayload(entry.payload);
+            // SADECE uydu görüntüsü/uydu indekslerinde gerçek sahne tarihi
+            // kullanılır. Zaman serisinde sceneDate doğrudan GEE sahnesinin
+            // system:time_start değerinden gelir; normal galeride de aktif
+            // kartın aynı timestamp'i kullanılır.
+            var _entryIsDateable = (typeof isSatelliteIndexAnalysis === 'function' && isSatelliteIndexAnalysis(entry.index)) || entry.index === 'RGB';
+            var _entryDatePart = _entryIsDateable
+                ? (entry.sceneDate || entry.tsDate || '')
+                : '';
+            // Eski/manuel akışlar için gerçek tarih payload'da zaten varsa
+            // yalnızca son çare olarak onu kullan; ASLA indirme gününü kullanma.
+            if (!_entryDatePart && _entryIsDateable) {
+                _entryDatePart = (entry.payload && (entry.payload.sceneDate || entry.payload.acquisitionDate)) || '';
+                if (_entryDatePart) _entryDatePart = String(_entryDatePart).slice(0,10);
+            }
+            var _entryFilename;
+            if (_gtiffIsAutoName) {
+                var _p = ['SylvaGIS_export'];
+                if (_ts.type) _p.push(sylvaTranslitTR(_ts.type).replace(/[^A-Za-z0-9]+/g, '_'));
+                if (_ts.source) _p.push(sylvaTranslitTR(_ts.source).replace(/[^A-Za-z0-9]+/g, '_'));
+                if (_gtiffAreaName) {
+                    var _ac = sylvaTranslitTR(_gtiffAreaName).replace(/\s+/g, '_').replace(/[^A-Za-z0-9_\-]+/g, '');
+                    if (_ac) _p.push(_ac);
+                }
+                if (_entryDatePart) _p.push(_entryDatePart);
+                _entryFilename = safeName(_p.join('_'));
+            } else {
+                var _suffix = _ts.type + (_ts.source ? ('_' + _ts.source) : '');
+                if (_entryDatePart) _suffix += '_' + _entryDatePart;
+                _entryFilename = safeName(filename + '_' + _suffix);
+            }
+            items.push({
+                // Yeni batch akışı: ağır /api/analyze çağrısını tarayıcıda
+                // tek tek beklemek yerine payload doğrudan sunucuya gider.
+                // Böylece kullanıcı İndir'e bastığı anda TEK indirme isteği
+                // başlar; sunucu analiz oturumlarını kendi içinde hazırlar.
+                analysisId: null,
+                payload: entry.payload,
+                filename: _entryFilename,
+                scale:scale, crs:crs,
+                clipMode:entry.payload.clipMode || 'clip', roi:entry.payload.roi || null, rendered:true,
+                visualization:exportVisualFor(pane, entry.key), flatTiff:false
             });
-        }, Promise.resolve()).then(function () {
-            if (status) status.textContent='⏳ ' + _dlqT('dlq_building_geotiff', 'GeoTIFF dosyası oluşturuluyor…');
-            // Çevresel/Kentsel/Topografik/LULC rasterlarda TEK analiz olsa bile
-            // doğrudan /api/download-geotiff çağırma. Bu endpoint geçmişte
-            // flatTiff=true/legacy istemci nedeniyle çıplak TIFF döndürebiliyordu.
-            // Tek öğeyi de batch ZIP endpoint'ine göndererek ZIP zorunluluğunu
-            // istemci tarafında garanti ediyoruz. Bina/çatı tespiti rasterEntries()
-            // tarafından zaten bu kuyruğa alınmaz.
-            var _batchName = _gtiffIsAutoName
-                ? safeName('SylvaGIS_export_raster_analizleri' + (_gtiffDateEnd ? ('_' + _gtiffDateEnd) : ''))
-                : safeName(filename) + '_raster_analizleri';
-            return responseBlob('/api/download-geotiff-batch', {items:items}).then(function(b){ return {blob:b,name:_batchName + '.zip'}; });
-        }).then(function (out) {
-            downloadBlob(out.blob, out.name);
-            if(status) { status.style.color='#166534'; status.textContent='✓ ' + _dlqT('dlq_ready', 'İndirme hazırlandı.'); }
-            if(typeof sylvaAddAnalysisHistoryEntry === 'function') sylvaAddAnalysisHistoryEntry('GeoTIFF', '🗺️', out.name);
-        }).catch(function(err) {
+        });
+        if (status) status.textContent='⏳ ' + _dlqT('dlq_building_geotiff', 'GeoTIFF dosyası oluşturuluyor…');
+        // ZIP adı da görüntünün GERÇEK çekim tarihini izler. Tek tarih varsa
+        // doğrudan o tarih kullanılır; zaman serisi/çoklu sahnede ilk-son tarih
+        // aralığı kullanılır. İndirme günü hiçbir zaman fallback değildir.
+        var _zipDates = items.map(function(it){ return String(it.filename || '').match(/(20\d{2}-\d{2}-\d{2})(?:$|_)/); })
+            .filter(Boolean).map(function(m){ return m[1]; });
+        var _zipUniqueDates = [];
+        _zipDates.forEach(function(d){ if (_zipUniqueDates.indexOf(d) === -1) _zipUniqueDates.push(d); });
+        _zipUniqueDates.sort();
+        var _zipDatePart = _zipUniqueDates.length === 1 ? _zipUniqueDates[0] :
+            (_zipUniqueDates.length > 1 ? (_zipUniqueDates[0] + '_to_' + _zipUniqueDates[_zipUniqueDates.length - 1]) : '');
+        var _batchName;
+        if (_gtiffIsAutoName) {
+            var _zipBase = ['SylvaGIS_export'];
+            var _zipTs = sylvaExportTypeAndSourceFromPayload(entries[0].payload || {});
+            if (_zipTs.type) _zipBase.push(sylvaTranslitTR(_zipTs.type).replace(/[^A-Za-z0-9]+/g, '_'));
+            if (_zipTs.source) _zipBase.push(sylvaTranslitTR(_zipTs.source).replace(/[^A-Za-z0-9]+/g, '_'));
+            if (_gtiffAreaName) {
+                var _zipAc = sylvaTranslitTR(_gtiffAreaName).replace(/\s+/g, '_').replace(/[^A-Za-z0-9_\-]+/g, '');
+                if (_zipAc) _zipBase.push(_zipAc);
+            }
+            if (_zipDatePart) _zipBase.push(_zipDatePart);
+            _batchName = safeName(_zipBase.join('_'));
+        } else {
+            _batchName = safeName(filename) + '_raster_analizleri' + (_zipDatePart ? ('_' + _zipDatePart) : '');
+        }
+        return responseBlob('/api/download-geotiff-batch', {items:items, zipFilename:_batchName + '.zip'}).then(function(b){ return {blob:b,name:_batchName + '.zip'}; })
+        .catch(function(err) {
             if(status) { status.style.color='#991b1b'; status.textContent='❌ ' + ((err && err.message) || _dlqT('dlq_prepare_failed', 'İndirme hazırlanamadı.')); }
         }).finally(function(){ if(btn){btn.disabled=false;btn.textContent=(typeof t==='function'?t('gtiff_btn_download'):'İndir');} });
     };
@@ -54172,7 +54352,119 @@ var h='<div class="env-info-backdrop topo-landuse-info-backdrop"><section class=
 '<div class="info-key">'+esc(l[0])+'</div><div class="info-val">'+esc(vals[0].replace('{title}',T))+'</div>'+ '<div class="info-key">'+esc(l[1])+'</div><div class="info-val">'+esc(src)+'</div>'+ '<div class="info-key">'+esc(l[2])+'</div><div class="info-val">'+esc(date)+'</div>'+ '<div class="info-key">'+esc(l[3])+'</div><div class="info-val">'+esc(res)+'</div>'+ '<div class="info-key">'+esc(l[4])+'</div><div class="info-val">'+esc(acc)+'</div></div>'+ '<h3>'+esc(l[5])+'</h3><p>'+esc(vals[5].replace('{title}',T))+'</p><h3>'+esc(l[6])+'</h3><p>'+esc(vals[6].replace('{title}',T))+'</p><h3>'+esc(l[7])+'</h3><p>'+esc(vals[7].replace('{title}',T))+'</p></section></div>';
 var old=document.querySelector('.topo-landuse-info-backdrop');if(old)old.remove();document.body.insertAdjacentHTML('beforeend',h);var x=document.querySelector('.topo-landuse-info-backdrop');x.addEventListener('click',function(e){if(e.target===x||e.target.closest('.topo-landuse-info-close'))x.remove()});x.querySelector('.topo-landuse-info-close').focus();}
 window.openInfo=render;
-})();</script></body>
+})();</script>\n<script id="sylva-final-screen2-parity-and-language-guard-20260820">
+(function(){
+  'use strict';
+
+  /* ------------------------------------------------------------------
+     Ekran 2 parity bus
+     Ortak panel kullanıldığı için özelliklerin aktif haritaya bağlanması
+     yeterli değildir: bazı eski callback'ler gecikmeli olarak Ekran 1'i
+     tekrar seçebiliyordu. Bu katman Ekran 2 aktifken analiz/indirme/
+     lejant/galeri state'inin map2 sözlüklerinden okunmasını zorunlu kılar.
+     ------------------------------------------------------------------ */
+  function pane(){
+    return (typeof window._sylvaActivePaneId==='function')
+      ? window._sylvaActivePaneId() : 'map';
+  }
+  function mapFor(p){
+    return p==='map2' ? window.map2 : window.map;
+  }
+  function refreshMap2(){
+    if(pane()!=='map2') return;
+    var m=mapFor('map2');
+    try{ if(m && m.invalidateSize) m.invalidateSize({animate:false,pan:false}); }catch(e){}
+    try{ if(typeof window._sylvaRenderLayerSwitchBox==='function') window._sylvaRenderLayerSwitchBox('map2'); }catch(e){}
+    try{ if(typeof window._sylvaSyncLegendInfoByPane==='function') window._sylvaSyncLegendInfoByPane(); }catch(e){}
+    try{
+      var top=window._sylvaTopGeeLayerByPane&&window._sylvaTopGeeLayerByPane.map2;
+      if(top && typeof window._sylvaRestoreEditorStateForLayer==='function')
+        window._sylvaRestoreEditorStateForLayer('map2',top);
+    }catch(e){}
+  }
+
+  // Ekran 2'ye tıklama/odaklanma sonrası aktif pane'i kesinleştir.
+  var m2=document.getElementById('map2');
+  if(m2){
+    ['pointerdown','touchstart','mousedown'].forEach(function(ev){
+      m2.addEventListener(ev,function(){
+        try{ if(typeof window._sylvaSetActiveMap==='function') window._sylvaSetActiveMap('map2'); }catch(e){}
+      },true);
+    });
+  }
+
+  // Ortak çıktı/analiz butonlarında map2 aktifse hedef pane'i kaybetme.
+  ['btn-run-analysis','btn-geotiff-download','btn-geotiff-execute',
+   'btn-vector-download','btn-export-start','btn-raw-bands-download'].forEach(function(id){
+    var el=document.getElementById(id);
+    if(!el) return;
+    el.addEventListener('pointerdown',function(){
+      if(pane()==='map2'){
+        try{ if(typeof window._sylvaSetActiveMap==='function') window._sylvaSetActiveMap('map2'); }catch(e){}
+      }
+    },true);
+  });
+
+  /* ------------------------------------------------------------------
+     Dil değişiminde kullanıcı lejantını koru.
+     applySylvaLang içinde zaten snapshot/restore vardır; burada ikinci bir
+     güvenlik katmanı bulunur. Bazı gecikmeli çeviri callback'leri (özellikle
+     class-name üreticileri) applySylvaLang tamamlandıktan sonra DOM'u yeniden
+     yazabildiği için snapshot birkaç paint turu boyunca yeniden uygulanır.
+     ------------------------------------------------------------------ */
+  function capture(){
+    var p=pane();
+    var top=window._sylvaTopGeeLayerByPane&&window._sylvaTopGeeLayerByPane[p];
+    if(!top || typeof window._sylvaCaptureEditorState!=='function') return null;
+    try{
+      var st=window._sylvaCaptureEditorState();
+      // Yalnızca gerçekten kullanıcı sınıflandırması yapılmışsa koruma
+      // bayrağını aç. Varsayılan yeni analizler dil ile normal çevrilebilir.
+      var custom=!!(st && (st.classificationType==='classified' ||
+                    st.classRows.some(function(r){return !!r.userEdited;}) ||
+                    st.rampReversed || st.rampDataAttr && st.rampDataAttr!=='black-white'));
+      return {pane:p,layerKey:top,state:st,custom:custom};
+    }catch(e){ return null; }
+  }
+
+  function restore(s){
+    if(!s || !s.custom) return;
+    try{
+      window._sylvaEditorStateByPane=window._sylvaEditorStateByPane||{map:{},map2:{}};
+      var k=s.pane==='map2'?'map2':'map';
+      window._sylvaEditorStateByPane[k]=window._sylvaEditorStateByPane[k]||{};
+      window._sylvaEditorStateByPane[k][s.layerKey]=s.state;
+      if(typeof window._sylvaRestoreEditorStateForLayer==='function')
+        window._sylvaRestoreEditorStateForLayer(s.pane,s.layerKey);
+    }catch(e){}
+  }
+
+  var oldLang=window.applySylvaLang;
+  if(typeof oldLang==='function' && !window._sylvaFinalLangGuard20260820){
+    window.applySylvaLang=function(lang){
+      var snap=capture();
+      var out=oldLang.apply(this,arguments);
+      if(snap && snap.custom){
+        [0,60,160,320,700].forEach(function(ms){ setTimeout(function(){ restore(snap); },ms); });
+      }
+      // Ekran 2 görünümünü de son çeviri callback'lerinden sonra yeniden çiz.
+      [80,240,520].forEach(function(ms){ setTimeout(refreshMap2,ms); });
+      return out;
+    };
+    window._sylvaFinalLangGuard20260820=true;
+  }
+
+  // Çift ekran aç/kapa ve pencere boyutu değişimlerinde ikinci harita Leaflet
+  // ölçüsünü tazele. Bu da Ekran 1'de yapılan son performans/indirme
+  // güncellemelerinin Ekran 2'de görünür kalmasını sağlar.
+  window.addEventListener('resize',function(){
+    setTimeout(function(){
+      if(document.body.classList.contains('sylva-dual-screen-on')) refreshMap2();
+    },80);
+  });
+  [120,500,1200,2200].forEach(function(ms){ setTimeout(refreshMap2,ms); });
+})();
+</script>\n</body>
 </script>
 <!-- SATELLITE DATASETS + ANALYSES DETAILED INFORMATION (EN master, 30-language translation) -->
 <style id="satellite-info-css">
