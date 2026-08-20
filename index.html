@@ -6174,10 +6174,16 @@ tr.class-highlight-active {
                    var dataVal = document.getElementById('layer-opacity-val');
                    if (dataSlider) dataSlider.value = String(1 - state.dataOpacity);
                    if (dataVal) dataVal.textContent = '%' + Math.round((1 - state.dataOpacity) * 100);
+            // 🆕 GÜNCELLEME 3 — Çalışma Alanı kontrolü analiz çalıştırılmasına
+            // bağımlı değildir. AOI/Çalışma Alanı katmanı mevcut olduğu andan
+            // itibaren kullanıcı tarafından her zaman açılıp kapatılabilir.
+            // Önceki sürüm `analysisActive` false olduğunda kutuyu pasifleştiriyordu;
+            // bu da uydu görüntüsü seçimi/galeri aşamasında Çalışma Alanı'nın gri
+            // görünmesine neden oluyordu. Ekran 1 ve Ekran 2 için aynı mantık.
             if (wsCb) {
-                wsCb.disabled = !workspaceLayer || !state.analysisActive;
-                wsCb.checked = !!workspaceLayer && state.analysisActive && state.workspaceVisible !== false;
-                if (wsWrap) wsWrap.style.opacity = (workspaceLayer && state.analysisActive) ? '1' : '0.4';
+                wsCb.disabled = !workspaceLayer;
+                wsCb.checked = !!workspaceLayer && state.workspaceVisible !== false;
+                if (wsWrap) wsWrap.style.opacity = workspaceLayer ? '1' : '0.4';
             }
             // Sınır rengi artık aç/kapa onay kutusuyla değil, doğrudan
             // yanındaki çerçeveli renk karesiyle değiştirilir.
@@ -10481,6 +10487,44 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
             // 0 veya 2+ → kilitli) ve bu sayı hem kutucuk işaretlenince HEM DE işareti
             // kaldırılınca değişebilir (ör. 2 seçiliyken biri kaldırılırsa 1'e düşer ve
             // analizler yeniden açılmalı).
+            // 🆕 GÜNCELLEME 3 — Uydu veri setleri GERÇEK çoklu seçimdir.
+            // Bazı tarayıcı/DOM durumlarında aynı `name` değerini taşıyan eski
+            // uydu input'ları radio benzeri davranabiliyordu. Kullanıcının daha
+            // önce kullandığı davranış kesin olarak korunur: Sentinel-2 + Landsat
+            // (ve diğer veri setleri) aynı anda işaretli kalabilir. Tıklamadan hemen
+            // önceki seçim kümesi saklanır; tıklama sonrası tarayıcı başka kutuyu
+            // kendiliğinden kaldırmışsa seçimler geri yüklenir. Bir kutunun tiki
+            // kullanıcı tarafından gerçekten kaldırıldıysa yalnızca o kutu kaldırılır.
+            (function () {
+                var _rgbSelectionBeforeClick = null;
+                function _captureRgbSelectionBeforeClick() {
+                    _rgbSelectionBeforeClick = Array.prototype.map.call(
+                        document.querySelectorAll('.uydu-veriseti-checkbox:checked'),
+                        function (el) { return el.value; }
+                    );
+                }
+                document.querySelectorAll('.uydu-veriseti-checkbox').forEach(function (cb) {
+                    cb.addEventListener('pointerdown', _captureRgbSelectionBeforeClick, true);
+                    cb.addEventListener('mousedown', _captureRgbSelectionBeforeClick, true);
+                    cb.addEventListener('touchstart', _captureRgbSelectionBeforeClick, true);
+                    cb.addEventListener('change', function () {
+                        if (!_rgbSelectionBeforeClick) return;
+                        // Kullanıcı kutuyu AÇTIYSA, tıklama öncesindeki diğer tüm
+                        // seçimleri geri getir; böylece çoklu seçim garanti edilir.
+                        if (cb.checked) {
+                            _rgbSelectionBeforeClick.forEach(function (value) {
+                                var other = Array.prototype.find.call(
+                                    document.querySelectorAll('.uydu-veriseti-checkbox'),
+                                    function (el) { return el.value === value; }
+                                );
+                                if (other) other.checked = true;
+                            });
+                        }
+                        _rgbSelectionBeforeClick = null;
+                    }, true);
+                });
+            })();
+
             document.querySelectorAll('.uydu-veriseti-checkbox').forEach(function (r) {
                 r.addEventListener('change', function () {
                     if (r.checked) {
@@ -53149,24 +53193,48 @@ document.addEventListener('keydown', function(e) {
         return _sylvaProbeCanvas;
     }
 
-    function _sylvaRetryTile(tile, attempt) {
-        var baseSrc = tile._sylvaBaseSrc;
-        if (!baseSrc) {
-            baseSrc = tile.src.replace(/([?&])_sylvaRetry=[^&]*/, '').replace(/[?&]$/, '');
+    // Leaflet, tileerror sonrasında tile.src değerini errorTileUrl'ye
+    // (bu projede 1x1 data:image/gif...) çevirebilir. Retry kodu tile.src'yi
+    // o anda tekrar okursa bir sonraki denemede gerçek /api/tiles URL'si yerine
+    // data: URL'sini kullanır ve tarayıcı ERR_INVALID_URL üretir. Bu yüzden
+    // gerçek kaynak URL'sini tile ilk yüklenirken ayrı bir alanda saklıyoruz.
+    function _sylvaExtractTileBaseSrc(src) {
+        if (!src || /^data:/i.test(src)) return '';
+        return src.replace(/([?&])_sylvaRetry=[^&]*/g, '').replace(/[?&]$/, '');
+    }
+
+    function _sylvaRememberTileBaseSrc(tile, src) {
+        if (!tile) return;
+        var baseSrc = _sylvaExtractTileBaseSrc(src);
+        if (!baseSrc) return;
+        // Aynı tile DOM elemanı retry sırasında tekrar kullanılır. URL aynıysa
+        // deneme sayacını koru; gerçekten yeni bir koordinat/URL geldiyse sıfırla.
+        if (tile._sylvaBaseSrc !== baseSrc) {
             tile._sylvaBaseSrc = baseSrc;
+            tile._sylvaRetryCount = 0;
         }
+    }
+
+    function _sylvaRetryTile(tile, attempt) {
+        if (!tile) return;
+        var baseSrc = tile._sylvaBaseSrc;
+        if (!baseSrc) return;
         var delay = Math.min(_SYLVA_RETRY_CAP_MS, _SYLVA_RETRY_BASE_MS * Math.pow(1.6, attempt - 1));
         setTimeout(function () {
             var sep = baseSrc.indexOf('?') === -1 ? '?' : '&';
             // Aynı src'yi doğrudan tekrar atamak bazı tarayıcılarda isteği
             // yenilemeyebilir; benzersiz bir sorgu parametresi GERÇEK bir
-            // yeni ağ isteği zorlar.
+            // yeni ağ isteği zorlar. Burada mutlaka saklanan gerçek URL kullanılır.
             tile.src = baseSrc + sep + '_sylvaRetry=' + attempt + '_' + Date.now();
         }, delay);
     }
 
     function _sylvaHandleFailure(tile) {
-        if (!tile || !tile.src) return;
+        if (!tile) return;
+        // tile.src data:image/gif'e dönüşmüş olsa bile saklanan baseSrc üzerinden
+        // retry yapılabilsin. Böylece Leaflet'in errorTileUrl davranışı retry'ı bozmaz.
+        _sylvaRememberTileBaseSrc(tile, tile.src);
+        if (!tile._sylvaBaseSrc) return;
         var attempt = (tile._sylvaRetryCount || 0) + 1;
         if (attempt > _SYLVA_MAX_TILE_RETRIES) return; // çok nadir, kalıcı sunucu hatası — sessizce bırak
         tile._sylvaRetryCount = attempt;
@@ -53196,6 +53264,13 @@ document.addEventListener('keydown', function(e) {
         if (typeof L === 'undefined' || !L.TileLayer) return;
         L.TileLayer.addInitHook(function () {
             if (!this.options || this.options.pane !== 'geeAnalysisPane') return;
+
+            // 0) İstek başlamadan önce gerçek URL'yi kaydet. Leaflet hata
+            // sonrasında tile.src'yi errorTileUrl/data:image'e çevirebilir.
+            this.on('tileloadstart', function (e) {
+                var tile = e && e.tile;
+                if (tile) _sylvaRememberTileBaseSrc(tile, tile.src);
+            });
 
             // 1) Açık HTTP/ağ hatası
             this.on('tileerror', function (e) {
