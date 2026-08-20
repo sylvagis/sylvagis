@@ -5688,7 +5688,7 @@ tr.class-highlight-active {
                 <div id="stats-chart-table"></div>
 
                 <!-- İndirme butonları — analiz çalıştıktan sonra tabloyu/grafiği dışa aktarır -->
-                <div style="margin-top:8px; display:flex; gap:5px; flex-wrap:wrap;">
+                <div id="chart-download-buttons-row" style="margin-top:8px; display:flex; gap:5px; flex-wrap:wrap;">
                     <button type="button" onclick="openChartDownloadDialog()" class="btn-tool" style="flex:1; font-size:0.78rem;" data-i18n="btn_image">🖼️ Görsel</button>
                     <button type="button" onclick="downloadCSV()" class="btn-tool" style="flex:1; font-size:0.78rem;" data-i18n="btn_csv">📥 CSV İndir</button>
                     <button type="button" onclick="downloadPDF()" class="btn-tool" style="flex:1; font-size:0.78rem;" data-i18n="btn_pdf">📄 PDF İndir</button>
@@ -13869,6 +13869,23 @@ function selectRamp(name) {
                             // sıfırlanıp yeniden hesaplanmaz.
                             if (typeof _sylvaBringGeeLayerToFront === 'function') {
                                 _sylvaBringGeeLayerToFront(vPaneId, vLayerKey);
+                                // 🛠️ PERFORMANS DÜZELTİSİ (katman geçişleri "biraz yavaş"
+                                // hissettiriyordu): Bu checkbox aynı zamanda ayrı bir
+                                // 'change' dinleyicisi (bkz. aşağıdaki
+                                // sylva-layer-switch-visibility 'change' handler'ı)
+                                // tarafından da dinleniyor — bir checkbox işaretlendiğinde
+                                // tarayıcı hem 'click' hem 'change' olayını ateşler, ve
+                                // her ikisi de (bu blok ve o handler) AYNI ağır
+                                // _sylvaBringGeeLayerToFront() çağrısını (lejant/grafik/
+                                // galeri HTML'lerini komple yeniden çizen kod) ÇİFT
+                                // ÇALIŞTIRIYORDU — görünürde tek bir tıklama iki kat işe
+                                // ve gözle görülür bir gecikmeye yol açıyordu. Burada
+                                // set edilen bayrak, o 'change' handler'ının aynı
+                                // checkbox için hemen ardından gelen tekrar çağrısını
+                                // atlamasını sağlar; tüm diğer davranış (görünürlük,
+                                // lejant, galeri güncellemesi) TAMAMEN AYNI kalır —
+                                // yalnızca AYNI işin iki kez yapılması önlenir.
+                                e.target._sylvaSkipNextChangeBringToFront = true;
                             }
                         } else {
                             if (vTargetMap.hasLayer(vLayer)) vTargetMap.removeLayer(vLayer);
@@ -17342,8 +17359,53 @@ function selectRamp(name) {
                 window._sylvaLegendInfoByPane[paneId].infoHTML = box.innerHTML;
                 window._sylvaLegendInfoByPane[paneId].infoDisplay = box.style.display;
             }
-            if (key === 'LULC') _sylvaTranslateDynamicWorldInfoCard(paneId);
+            if (key === 'LULC') {
+                _sylvaTranslateDynamicWorldInfoCard(paneId);
+            } else {
+                // 🛠️ BUG FİX (Çevresel ve Kentsel Analizler bilgi kutusunda
+                // başlıklar seçilen dilde geliyordu ama AÇIKLAMA/kaynak/
+                // çözünürlük satırları her zaman TÜRKÇE kalıyordu — bkz.
+                // "2 dil karışık" bildirimi): bu kartların satır DEĞERLERİ
+                // (_DATASET_INFO içindeki ib_desc/ib_source/ib_resolution vb.)
+                // LULC_ESA/MODIS/CORINE'in aksine gerçek 30-dilli t() anahtarı
+                // OLARAK değil, doğrudan HAM Türkçe metin olarak yazılmıştı;
+                // t(r[1]) bu durumda anahtarı bulamayıp metni OLDUĞU GİBİ (her
+                // zaman Türkçe) geri döndürüyordu — başlık ayrı bir mekanizmayla
+                // (i18n anahtarlı) doğru çevrildiği için "başlık doğru dilde,
+                // açıklama Türkçe" karışıklığı ortaya çıkıyordu. ÇÖZÜM: Arazi
+                // Kullanımı'ndaki Dynamic World kartıyla BİREBİR AYNI, uygulamada
+                // zaten var olan Google Translate altyapısı burada da (artık
+                // TÜM diğer analizler için) kullanılıyor — satırlar ilk anda
+                // (t()'nin ürettiği, çoğu zaman Türkçe) haliyle gösterilir,
+                // arka planda seçili dile çevrilip hazır olduğunda YERİNDE
+                // güncellenir. Çeviri kaynak dili otomatik tespit edilir (bkz.
+                // _sylvaGoogleTranslateText'teki "sl=auto" düzeltmesi) — bu
+                // sayede kaynağı Türkçe olan bu kartlar, hedef dil İngilizce
+                // olsa bile artık doğru şekilde çevriliyor.
+                _sylvaTranslateDatasetInfoRows(box, paneId);
+            }
         }
+
+        function _sylvaTranslateDatasetInfoRows(box, paneId) {
+            if (!box || typeof window._sylvaGoogleTranslateText !== 'function') return;
+            var target = (typeof window._sylvaLang === 'string' && window._sylvaLang) || 'tr';
+            var cells = box.querySelectorAll('table td:nth-child(2)');
+            cells.forEach(function (cell) {
+                var orig = cell.textContent;
+                // Boş veya HTML/işaretleme içeren hücrelere dokunma (güvenlik/yapı).
+                if (!orig || !orig.trim() || /[<>]/.test(orig)) return;
+                window._sylvaGoogleTranslateText(orig, target).then(function (translated) {
+                    if (translated && typeof translated === 'string' && translated.trim() &&
+                        translated !== orig && document.body.contains(cell) && cell.textContent === orig) {
+                        cell.textContent = translated;
+                        if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[paneId]) {
+                            window._sylvaLegendInfoByPane[paneId].infoHTML = box.innerHTML;
+                        }
+                    }
+                }).catch(function () { /* sessizce orijinal metin ekranda kalır */ });
+            });
+        }
+        window._sylvaTranslateDatasetInfoRows = _sylvaTranslateDatasetInfoRows;
 
         // Dynamic World bilgi kutusu: kaynak metin İngilizce tutulur; seçilen dilde
         // Google Translate ile anında/önbellekli olarak gösterilir. Lejant sınıf adları
@@ -18179,7 +18241,7 @@ function selectRamp(name) {
             return datasetKeys[datasetKeys.length - 1];
         }
 
-        function renderRgbGalleryCards(paneId) {
+        function renderRgbGalleryCards(paneId, forceDatasetKey) {
             paneId = (paneId === 'map2') ? 'map2' : 'map';
             var galleryEl = _sylvaGalleryEl(paneId);
             if (!galleryEl) return;
@@ -18188,7 +18250,23 @@ function selectRamp(name) {
             galleryEl.innerHTML = '';
             galleryEl.style.display = 'flex';
 
-            var dk = _sylvaActiveGalleryDatasetKey(paneId);
+            // 🛠️ BUG FİX (Zaman Serisi galerisi seçilen yıl/ay yerine EN SON
+            // görüntülenen/aktif uydu veri setinin GÜNCEL sahnelerini
+            // gösteriyordu): forceDatasetKey verilmediğinde bu fonksiyon
+            // hangi veri setinin galerisini göstereceğine "en üstteki
+            // katman"a (_sylvaActiveGalleryDatasetKey) bakarak TAHMİNLE karar
+            // veriyordu. Zaman Serisi akışında (_renderRgbTimeSeriesGallery)
+            // sunucudan GERÇEK 2020/2021/2022/2023 gibi tarihli sahneler
+            // doğru veri setine (satellite) yazılmış olsa bile, "üstteki
+            // katman" henüz (asenkron /api/analyze tamamlanmadığı için) eski/
+            // farklı bir veri setini gösteriyor olabiliyordu — bu durumda
+            // galeri YANLIŞ veri setinin (genelde "bugüne yakın" son
+            // görüntülenen) sahnelerini kullanıcıya gösteriyordu; kullanıcı
+            // seçtiği 2020-2023 aralığı yerine güncel/yakın tarihli kartlar
+            // görüyordu. ÇÖZÜM: çağıran taraf artık HANGİ veri setinin
+            // gösterileceğini KESİN olarak (forceDatasetKey) belirtebiliyor;
+            // Zaman Serisi bunu her zaman kullanır — tahmine asla gerek kalmaz.
+            var dk = forceDatasetKey || _sylvaActiveGalleryDatasetKey(paneId);
             var _gState = dk ? paneStates[dk] : null;
             if (!_gState || !_gState.scenes || !_gState.scenes.length) return;
             var ds = _gState.dataset;
@@ -25589,7 +25667,22 @@ function fetchRawBandsCatalog(datasetKey) {
     .then(function(r) { return r.json(); })
     .then(function(data) {
         if (!data.success) {
-            if (container) container.innerHTML = '<div style="font-size:0.72rem;color:#991b1b;">❌ ' + escapeHtml(data.error || 'Bant kataloğu alınamadı.') + '</div>';
+            // 🛠️ BUG FİX: bkz. sylvaAlert içindeki AYNI başlıklı not — bu ham
+            // sunucu/GEE hata metni de artık arka planda seçili dile çevrilip
+            // hazır olduğunda yerinde güncellenir.
+            if (container) {
+                var _rbRawMsg = data.error || 'Bant kataloğu alınamadı.';
+                container.innerHTML = '<div style="font-size:0.72rem;color:#991b1b;" class="sylva-rb-err-msg">❌ ' + escapeHtml(_rbRawMsg) + '</div>';
+                (function () {
+                    var _msgEl = container.querySelector('.sylva-rb-err-msg');
+                    if (!_msgEl) return;
+                    _sylvaLocalizeDynamicMessage(_rbRawMsg, function (translated) {
+                        if (document.body.contains(_msgEl) && _msgEl.textContent === '❌ ' + _rbRawMsg) {
+                            _msgEl.textContent = '❌ ' + translated;
+                        }
+                    });
+                })();
+            }
             return;
         }
         _rawBandsState.groups  = data.groups || [];
@@ -25598,7 +25691,20 @@ function fetchRawBandsCatalog(datasetKey) {
         renderRawBandsGroups();
     })
     .catch(function(err) {
-        if (container) container.innerHTML = '<div style="font-size:0.72rem;color:#991b1b;">❌ Sunucuya bağlanılamadı: ' + escapeHtml(err.message) + '</div>';
+        if (container) {
+            var _rbRawMsg2 = err.message || '';
+            container.innerHTML = '<div style="font-size:0.72rem;color:#991b1b;" class="sylva-rb-err-msg2">❌ Sunucuya bağlanılamadı: ' + escapeHtml(_rbRawMsg2) + '</div>';
+            (function () {
+                var _msgEl2 = container.querySelector('.sylva-rb-err-msg2');
+                if (!_msgEl2 || !_rbRawMsg2) return;
+                _sylvaLocalizeDynamicMessage(_rbRawMsg2, function (translated) {
+                    var _expected = '❌ Sunucuya bağlanılamadı: ' + _rbRawMsg2;
+                    if (document.body.contains(_msgEl2) && _msgEl2.textContent === _expected) {
+                        _msgEl2.textContent = '❌ Sunucuya bağlanılamadı: ' + translated;
+                    }
+                });
+            })();
+        }
     });
 }
 
@@ -25934,7 +26040,23 @@ function downloadRawBands() {
             status.style.color = '#991b1b';
             status.style.background = '#fee2e2';
             status.style.border = '1px solid #fca5a5';
-            status.innerHTML = '❌ Hata: ' + escapeHtml(err.message);
+            // 🛠️ BUG FİX: bkz. GeoTIFF indirme hatasındaki AYNI başlıklı not —
+            // "Hata:" öneki artık t('gtiff_err_prefix') üzerinden aktif dile
+            // göre gelir (önceden sabit Türkçe idi), ve sunucudan/GEE'den
+            // gelen ham hata metni ilk anda orijinal haliyle gösterilip arka
+            // planda seçili dile çevrilir — hazır olduğunda yerinde güncellenir.
+            var _rawDlErrMsg = (err && err.message) || '';
+            status.innerHTML = '❌ ' + (typeof t === 'function' ? t('gtiff_err_prefix', 'Hata: ') : 'Hata: ') +
+                '<span class="sylva-rawdl-err-msg">' + escapeHtml(_rawDlErrMsg) + '</span>';
+            (function () {
+                var _msgEl = status.querySelector('.sylva-rawdl-err-msg');
+                if (!_msgEl) return;
+                _sylvaLocalizeDynamicMessage(_rawDlErrMsg, function (translated) {
+                    if (document.body.contains(_msgEl) && _msgEl.textContent === _rawDlErrMsg) {
+                        _msgEl.textContent = translated;
+                    }
+                });
+            })();
         }
     });
 }
@@ -26605,10 +26727,27 @@ function _executeGeoTiffDownloadCore() {
         // hatası) gösteriliyor. Sunucu zaten çalışıp geçerli bir hata mesajı
         // döndürdüğünde (ör. "alan çok büyük" veya boş veri hatası) bu satır
         // artık eklenmiyor — önceden her hata türünde koşulsuz gösteriliyordu.
-        status.innerHTML = '❌ ' + t('gtiff_err_prefix') + ((err && err.message) || t('gtiff_err_unknown')) +
+        var _gtiffErrRawMsg = (err && err.message) || t('gtiff_err_unknown');
+        status.innerHTML = '❌ ' + t('gtiff_err_prefix') + '<span class="sylva-gtiff-err-msg">' + escapeHtml(_gtiffErrRawMsg) + '</span>' +
             ((err && err._sylvaServerReached)
                 ? ''
                 : ('<br><span style="font-size:0.78rem;color:#64748b;">' + t('gtiff_err_server') + '</span>'));
+        // 🛠️ BUG FİX (Arayüz Japonca/İspanyolca/vb. iken indirme hatası —
+        // ör. "Image.visualize: Cannot provide a palette..." — hep İNGİLİZCE
+        // sabit geliyordu): bu ham/dinamik GEE hata metni, sunucudan geldiği
+        // gibi ANINDA gösterilir (kullanıcı beklemez), ardından arka planda
+        // seçili dile çevrilip hazır olduğunda — pencere hâlâ açık ve aynı
+        // hata mesajı gösteriliyorsa — yerinde güncellenir. Bkz.
+        // _sylvaLocalizeDynamicMessage tanımındaki asıl not.
+        (function () {
+            var _msgEl = status.querySelector('.sylva-gtiff-err-msg');
+            if (!_msgEl) return;
+            _sylvaLocalizeDynamicMessage(_gtiffErrRawMsg, function (translated) {
+                if (document.body.contains(_msgEl) && _msgEl.textContent === _gtiffErrRawMsg) {
+                    _msgEl.textContent = translated;
+                }
+            });
+        })();
         if (btn) { btn.disabled = false; btn.textContent = t('gtiff_btn_download'); }
         // Hata durumunda animasyonu durdur, kullanıcı kilitlenmesin — ancak
         // pencere açık kalır ki kullanıcı hata mesajını görüp tekrar deneyebilsin.
@@ -26718,6 +26857,45 @@ function cancelGeoTiffDownload() {
         };
         var _SYLVA_MODAL_ICONS = { warning:'⚠️', error:'❌', success:'✅', info:'ℹ️' };
 
+        // 🛠️ BUG FİX (Hata/uyarı mesajları arayüz Japonca/İspanyolca/vb. iken
+        // hep İNGİLİZCE sabit geliyordu — bkz. "Image.visualize: Cannot
+        // provide a palette..." örneği): Bu tür mesajların BÜYÜK KISMI,
+        // uygulamanın kendi önceden tanımladığı metinler DEĞİL — doğrudan
+        // Google Earth Engine sunucusundan gelen HAM/DİNAMİK İngilizce
+        // istisna metinleridir (ör. "Image.visualize: Cannot provide a
+        // palette when visualizing more than one band."). Bunlar sonsuz
+        // çeşitlilikte olabileceğinden 30 dil için önceden sabit bir çeviri
+        // tablosunda TUTULAMAZ (statik t()/SYLVA_TRANSLATIONS sistemi burada
+        // yetersiz kalır). Bunun yerine, uygulamada ZATEN var olan ve Konu/
+        // Arazi Kullanımı Bilgi Kartları için kullanılan aynı dinamik çeviri
+        // altyapısı (_sylvaGoogleTranslateText — Google Translate) burada da
+        // kullanılır: mesaj ÖNCE (gecikme olmadan) orijinal/İngilizce haliyle
+        // gösterilir, ardından arka planda seçili dile çevrilip HAZIR
+        // olduğunda ekrandaki metin YERİNDE güncellenir (kullanıcı beklemez,
+        // ekran asla boş/gecikmeli açılmaz). Çeviri başarısız olursa (ağ
+        // hatası vb.) sessizce orijinal metin ekranda kalmaya devam eder —
+        // hiçbir zaman hata/uyarı GÖSTERİLMEMESİ gibi bir riske yol açmaz.
+        // Mesaj HTML işaretleme (ör. "<a href=...>") içeriyorsa çeviri
+        // ATLANIR — ham HTML'in çeviri servisine gönderilip yapısının
+        // bozulmasını önlemek için (bu durumda mesaj İngilizce/orijinal
+        // dilinde kalır, en azından güvenli).
+        function _sylvaLocalizeDynamicMessage(text, onReady) {
+            try {
+                if (!text || typeof text !== 'string') return;
+                if (/[<>]/.test(text)) return; // HTML içeriyorsa dokunma (güvenlik/yapı bozulmasın)
+                var lang = (typeof getLang === 'function') ? getLang()
+                    : ((typeof _sylvaLang !== 'undefined' && _sylvaLang) || 'en');
+                if (!lang || lang === 'en') return; // İngilizce zaten orijinal dil
+                if (typeof window._sylvaGoogleTranslateText !== 'function') return;
+                window._sylvaGoogleTranslateText(text, lang).then(function (translated) {
+                    if (translated && typeof translated === 'string' && translated.trim() && translated !== text) {
+                        onReady(translated);
+                    }
+                }).catch(function () { /* sessizce orijinal metin ekranda kalır */ });
+            } catch (eLocMsg) { /* çeviri denemesi hiçbir zaman ana akışı bozmamalı */ }
+        }
+        window._sylvaLocalizeDynamicMessage = _sylvaLocalizeDynamicMessage;
+
         function sylvaAlert(msg, type) {
             type = type || 'warning';
             var overlay = document.getElementById('sylva-modal-overlay');
@@ -26732,6 +26910,19 @@ function cancelGeoTiffDownload() {
             icon.textContent = _SYLVA_MODAL_ICONS[type] || '⚠️';
             titleEl.textContent = (_SYLVA_MODAL_TITLES[type] || _SYLVA_MODAL_TITLES.warning)[lang] || (_SYLVA_MODAL_TITLES[type] || _SYLVA_MODAL_TITLES.warning)['en'];
             bodyEl.textContent = msg || '';  // textContent avoids XSS from err.message
+            // 🛠️ BUG FİX: bkz. yukarıdaki _sylvaLocalizeDynamicMessage notu —
+            // mesaj (ör. sunucudan/GEE'den gelen ham İngilizce hata metni)
+            // arka planda seçili dile çevrilip HAZIR olduğunda, kullanıcı
+            // hâlâ AYNI mesajı görüyorsa (modal kapatılmadı/başka bir mesajla
+            // değiştirilmedi) yerinde güncellenir.
+            (function () {
+                var _origMsg = msg || '';
+                _sylvaLocalizeDynamicMessage(_origMsg, function (translated) {
+                    if (overlay.classList.contains('open') && bodyEl.textContent === _origMsg) {
+                        bodyEl.textContent = translated;
+                    }
+                });
+            })();
             okBtn.textContent = (typeof t === 'function' ? t('btn_ok') : null) || _SYLVA_OK_LABELS[lang] || 'OK';
             overlay.classList.add('open');
             setTimeout(function() { okBtn.focus(); }, 60);
@@ -26777,6 +26968,20 @@ function cancelGeoTiffDownload() {
               + '<button class="sylva-toast-close" title="Kapat" aria-label="Bildirimi kapat">&times;</button>';
 
             container.appendChild(toast);
+
+            // 🛠️ BUG FİX: bkz. sylvaAlert içindeki AYNI başlıklı not — bu
+            // toast'ın mesajı da (ör. sunucudan gelen ham İngilizce hata
+            // metni) arka planda seçili dile çevrilip hazır olduğunda,
+            // toast hâlâ DOM'daysa ve mesajı DEĞİŞMEDİYSE yerinde güncellenir.
+            (function () {
+                var _origToastMsg = msg || '';
+                _sylvaLocalizeDynamicMessage(_origToastMsg, function (translated) {
+                    var _msgEl = toast.querySelector('.sylva-toast-msg');
+                    if (_msgEl && document.body.contains(toast) && _msgEl.textContent === _origToastMsg) {
+                        _msgEl.textContent = translated;
+                    }
+                });
+            })();
 
             // Animasyon — bir frame sonra class ekle
             requestAnimationFrame(function() {
@@ -51725,7 +51930,16 @@ function _renderRgbTimeSeriesGallery(gallery, paneId, satellite) {
     state.sortKey = 'date';
     state.sortAsc = true;
     state.activeSceneId = state.scenes[0] ? state.scenes[0].sceneId : null;
-    renderRgbGalleryCards(paneId);
+    // 🛠️ BUG FİX: "üstteki katman" işaretini burada, senkron olarak, açıkça
+    // BU zaman serisinin veri setine sabitliyoruz — aksi halde henüz
+    // tamamlanmamış önceki bir /api/analyze isteği ("üstteki katman" asenkron
+    // olarak SONRA güncellenir) yüzünden renderRgbGalleryCards() aşağıda
+    // yanlış/eski bir veri setinin galerisini seçebilirdi. Ayrıca
+    // renderRgbGalleryCards()'a hangi veri setinin gösterileceği artık
+    // TAHMİN ettirilmeden doğrudan (satellite) veriliyor.
+    window._sylvaTopGeeLayerByPane = window._sylvaTopGeeLayerByPane || { map: null, map2: null };
+    window._sylvaTopGeeLayerByPane[paneId] = 'RGB::' + satellite;
+    renderRgbGalleryCards(paneId, satellite);
     var first = state.scenes[0];
     if (first) loadRgbScene(first.sceneId, meta, dsInfo, paneId, true, false, satellite, label, false);
 }
@@ -51902,13 +52116,62 @@ function runTimeSeriesAnalysis() {
         });
         data.gallery = _safeGallery;
 
-        var CMAP = { NDVI:'#22c55e', NDWI:'#1e3a8a', NBR:'#f97316', LST:'#ef4444', EVI:'#84cc16', SAVI:'#a3e635', BSI:'#fb923c', SMI:'#38bdf8' };
-        var series = (data.series || []).map(function(s) {
-            return { index: s.index, color: CMAP[s.index] || '#6366f1', points: s.points || [] };
-        });
-
-        window._setTsLineData({ series: series });
-        window.setChartType('line');
+        // 🛠️ BUG FİX (Uydu Görüntüsü zaman serisinde anlamsız/boş grafik):
+        // RGB/uydu görüntüsü modunda series[].points[].value sadece o
+        // periyodun sahne BULUTLULUK YÜZDESİDİR (bkz. yukarıdaki /api/timeseries
+        // 'satellite-image' dalı) — gerçek bir ölçüm/indeks değeri DEĞİLDİR.
+        // Önceden bu "bulutluluk" serisi de her zaman Çizgi Grafik olarak
+        // çizilip kullanıcıya sanki anlamlı bir zaman trendiymiş gibi
+        // gösteriliyordu (şeffaf/boş görünse bile grafik alanı hep vardı).
+        // Kullanıcı bunun uydu görüntüsü için hiç istenmediğini bildirdi:
+        // artık RGB/uydu görüntüsü modunda grafik ÇİZİLMİYOR — yalnızca NDVI/
+        // NDWI vb. gerçek indeks Zaman Serisi analizlerinde çizgi grafik
+        // gösterilir. Galeri (gerçek sahneler) her iki modda da aynı şekilde
+        // çalışmaya devam eder.
+        if (_tsRgbMode) {
+            window._setTsLineData(null);
+            var _tsLineBtn = document.getElementById('btn-chart-line');
+            if (_tsLineBtn) { _tsLineBtn.classList.remove('active'); _tsLineBtn.classList.add('disabled-chart'); _tsLineBtn.disabled = true; }
+            // 🛠️ BUG FİX (grafik alanı tamamen boş/beyaz görünüyordu, hiçbir
+            // şey seçilemiyordu): önceki sürüm yalnızca içine bir mesaj
+            // yazıyordu ama kutunun kendi görünür "pasif kutu" stilini
+            // (chart-placeholder — kesikli çerçeve + açık gri arka plan,
+            // uygulamanın diğer pasif/boş panellerinde kullanılan AYNI stil)
+            // YENİDEN uygulamıyordu. Bu sınıf daha önceki bir Çizgi Grafik
+            // çiziminde (_renderLineChart içinde wrap.className='') temizlenmiş
+            // olabiliyordu; bu durumda mesaj metni çerçevesiz/arka plansız,
+            // sade beyaz zemin üzerinde neredeyse görünmez kalıyordu —
+            // kullanıcının bildirdiği "beyaz görünüyor, hiçbir şey belli
+            // olmuyor" TAM OLARAK budur. ÇÖZÜM: kutunun sınıfı burada açıkça
+            // 'chart-placeholder'a sıfırlanıyor (uygulamanın standart pasif
+            // panel görünümü — kesikli çerçeve, açık gri arka plan) ve metin
+            // rengi de o stille TUTARLI/okunaklı hale getirildi. Grafik indirme
+            // butonları (Görsel/CSV/PDF) da bu modda anlamlı olmadığından aynı
+            // "pasif ama görünür" görünümle devre dışı bırakılıyor.
+            var _tsChartSvg = document.getElementById('stats-chart-svg-wrap');
+            if (_tsChartSvg) {
+                _tsChartSvg.className = 'chart-placeholder';
+                _tsChartSvg.style.flexDirection = 'column';
+                _tsChartSvg.style.padding = '10px';
+                _tsChartSvg.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;height:80px;color:#64748b;font-size:0.78rem;text-align:center;padding:0 12px;">' +
+                    '<span style="font-size:1.3rem;">🛰️</span>' +
+                    '<span>' + (typeof t === 'function' ? t('ts_rgb_no_chart', 'Satellite imagery has no numeric values to chart — browse the real scenes in the gallery below.') : 'Satellite imagery has no numeric values to chart — browse the real scenes in the gallery below.') + '</span>' +
+                    '</div>';
+            }
+            var _tsChartDlRow = document.getElementById('chart-download-buttons-row');
+            if (_tsChartDlRow) { _tsChartDlRow.style.opacity = '0.45'; _tsChartDlRow.style.pointerEvents = 'none'; }
+        } else {
+            var CMAP = { NDVI:'#22c55e', NDWI:'#1e3a8a', NBR:'#f97316', LST:'#ef4444', EVI:'#84cc16', SAVI:'#a3e635', BSI:'#fb923c', SMI:'#38bdf8' };
+            var series = (data.series || []).map(function(s) {
+                return { index: s.index, color: CMAP[s.index] || '#6366f1', points: s.points || [] };
+            });
+            var _tsLineBtn2 = document.getElementById('btn-chart-line');
+            if (_tsLineBtn2) { _tsLineBtn2.classList.remove('disabled-chart'); _tsLineBtn2.disabled = false; }
+            var _tsChartDlRow2 = document.getElementById('chart-download-buttons-row');
+            if (_tsChartDlRow2) { _tsChartDlRow2.style.opacity = ''; _tsChartDlRow2.style.pointerEvents = ''; }
+            window._setTsLineData({ series: series });
+            window.setChartType('line');
+        }
 
         // Sağ paneli aç
         var sr = document.getElementById('sidebar-right');
@@ -53095,6 +53358,19 @@ refresh();
         var input = event.target;
         if (!input || !input.classList || !input.classList.contains('sylva-layer-switch-visibility')) return;
         if (!input.checked || typeof window._sylvaBringGeeLayerToFront !== 'function') return;
+        // 🛠️ PERFORMANS DÜZELTİSİ: bkz. yukarıdaki (sylva-layer-switch-visibility
+        // click handler'ındaki) AYNI başlıklı not — bu checkbox işaretlendiğinde
+        // tıklama (click) olayı zaten _sylvaBringGeeLayerToFront()'u çalıştırmış
+        // ve bu bayrağı set etmiş olabilir. Öyleyse burada AYNI ağır işi (lejant/
+        // grafik/galeri yeniden çizimi) TEKRAR çalıştırmadan atlanır — tek bir
+        // tıklama artık yalnızca BİR KEZ işlenir, bu da katmanlar arası geçişi
+        // gözle görülür şekilde hızlandırır. Bayrak set edilmemişse (ör. checkbox
+        // programatik olarak veya yalnızca klavyeyle değiştirildiyse, click hiç
+        // tetiklenmediyse) davranış eskisiyle birebir aynı kalır — güvenli yedek.
+        if (input._sylvaSkipNextChangeBringToFront) {
+            input._sylvaSkipNextChangeBringToFront = false;
+            return;
+        }
         var paneId = input.getAttribute('data-pane') || 'map';
         var layerKey = input.getAttribute('data-layer-key');
         if (!layerKey) return;
@@ -53852,7 +54128,23 @@ refresh();
             a.href=url; a.download=_batchName+'.zip'; document.body.appendChild(a); a.click(); a.remove();
             setTimeout(function(){URL.revokeObjectURL(url);},60000);
         }).catch(function(err) {
-            if(status) { status.style.color='#991b1b'; status.textContent='❌ ' + ((err && err.message) || _dlqT('dlq_prepare_failed', 'İndirme hazırlanamadı.')); }
+            if(status) {
+                status.style.color='#991b1b';
+                var _dlqRawErrMsg = (err && err.message) || '';
+                status.textContent = '❌ ' + (_dlqRawErrMsg || _dlqT('dlq_prepare_failed', 'İndirme hazırlanamadı.'));
+                // 🛠️ BUG FİX: bkz. GeoTIFF indirme hatasındaki AYNI başlıklı not —
+                // sunucudan gelen ham hata metni arka planda seçili dile
+                // çevrilip hazır olduğunda, kutu hâlâ aynı mesajı gösteriyorsa
+                // yerinde güncellenir.
+                if (_dlqRawErrMsg && typeof _sylvaLocalizeDynamicMessage === 'function') {
+                    var _origDlqText = status.textContent;
+                    _sylvaLocalizeDynamicMessage(_dlqRawErrMsg, function (translated) {
+                        if (document.body.contains(status) && status.textContent === _origDlqText) {
+                            status.textContent = '❌ ' + translated;
+                        }
+                    });
+                }
+            }
         }).finally(function(){ if(btn){btn.disabled=false;btn.textContent=(typeof t==='function'?t('gtiff_btn_download'):'İndir');} });
     };
 }());
@@ -54565,10 +54857,25 @@ function getDemSource(){var r=document.querySelector('input[name="dem-source"]:c
 function section(k,label,value){return '<h3>'+label+'</h3><p>'+value+'</p>'}
 
 function _sylvaGoogleTranslateText(text,target){
- if(!text||target==='en') return Promise.resolve(text);
+ if(!text) return Promise.resolve(text);
  var lm={zh:'zh-CN',pt:'pt',tr:'tr',de:'de',fr:'fr',es:'es',it:'it',ru:'ru',ar:'ar',fa:'fa',ja:'ja',ko:'ko',hi:'hi',id:'id',az:'az',kk:'kk',uz:'uz',ky:'ky',pl:'pl',el:'el',bg:'bg',hu:'hu',th:'th',vi:'vi',bn:'bn',ur:'ur',ms:'ms',mn:'mn',ka:'ka'};
  var tl=lm[target]||target;
- var url='https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl='+encodeURIComponent(tl)+'&dt=t&q='+encodeURIComponent(text);
+ // 🛠️ BUG FİX (Çevresel/Kentsel Analizler bilgi kutusunda başlık seçilen
+ // dilde ama AÇIKLAMA hep Türkçe kalıyordu — bkz. _sylvaTranslateDatasetInfoRows):
+ // bu fonksiyon eskiden HER ZAMAN kaynak dilin İngilizce olduğunu varsayıyordu
+ // (sabit "sl=en") ve target==='en' iken çeviriyi TAMAMEN atlıyordu ("kaynak
+ // zaten İngilizce" varsayımıyla). Ancak bazı bilgi kartlarının (ör.
+ // Çevresel/Kentsel Analizler) kaynak metni aslında TÜRKÇE'dir — "sl=en" ile
+ // Türkçe metin yanlış kaynak dilde gönderiliyor, target==='en' kısayolu ise
+ // Türkçe→İngilizce çevrisinin hiç YAPILMAMASINA yol açıyordu (İngilizce
+ // arayüz kullanıcıları da aynı sorunu yaşıyordu). ÇÖZÜM: kaynak dil artık
+ // "sl=auto" ile Google'a OTOMATİK tespit ettiriliyor (İngilizce kaynaklı
+ // kartlar için önceki davranışla birebir aynı sonucu verir) ve target==='en'
+ // kısayolu kaldırıldı — böylece Türkçe kaynaklı kartlar İngilizce dahil
+ // HER hedef dile doğru şekilde çevrilebiliyor. Zaten İngilizce olan
+ // kaynak metinler için target==='en' durumunda Google auto-detect+
+ // en→en çevirisi metni değişmeden geri döndürür (davranış değişmez).
+ var url='https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl='+encodeURIComponent(tl)+'&dt=t&q='+encodeURIComponent(text);
  return fetch(url,{credentials:'omit'}).then(function(r){if(!r.ok)throw new Error('translate '+r.status);return r.json()}).then(function(d){if(!Array.isArray(d)||!Array.isArray(d[0]))throw new Error('translate response');return d[0].map(function(x){return x&&x[0]||''}).join('')});
 }
 function _sylvaTranslateInfoCard(root,source,target){
