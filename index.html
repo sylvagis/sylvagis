@@ -1008,8 +1008,17 @@ tr.class-highlight-active {
         .map-bottom-left { position: absolute; bottom: 15px; left: 15px; display: flex; flex-direction: column; gap: 10px; z-index: 500; pointer-events: none; }
         /* DÜZELTİLDİ: padding/min-width sabit px değerleri; box-sizing eklendi →
            html2canvas ve @media print çıktısında lejant boşluğu/kayması önlenir. */
-        .map-legend { background: #ffffff; padding: 4px 6px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); font-size: 0.74rem; pointer-events: auto; min-width: 0; width: fit-content; box-sizing: border-box; max-height: 200px; overflow-y: auto; }
-        .map-legend.detached { min-width: 0; min-height: 36px; overflow: auto; position: relative; box-sizing: border-box; }
+        .map-legend { background: #ffffff; padding: 5px 7px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); font-size: 0.74rem; pointer-events: auto; min-width: 0; width: max-content; max-width: min(560px, calc(100% - 20px)); box-sizing: border-box; max-height: none; overflow: visible; overflow-wrap: anywhere; }
+        /* Lejantta sınıf sayısı arttığında artık dikey kaydırma çubuğu yok.
+           Kutu içerik kadar büyür; uzun sınıf adları satır içine kırılabilir. */
+        .map-legend.detached { min-width: 0; min-height: 36px; overflow: visible; position: relative; box-sizing: border-box; }
+        .map-legend .sylva-legend-rows { width: max-content; max-width: 100%; }
+        .map-legend .sylva-legend-row { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+        .map-legend.sylva-legend-many .sylva-legend-rows { display: grid !important; grid-template-columns: repeat(2, minmax(180px, 1fr)); column-gap: 12px; row-gap: 2px !important; width: min(100%, 540px); }
+        @media (max-width: 720px) {
+            .map-legend.sylva-legend-many .sylva-legend-rows { grid-template-columns: 1fr; width: 100%; }
+            .map-legend { max-width: calc(100vw - 30px); }
+        }
          /* Eş yükselti çizgisi örneği: referans görseldeki gibi çizgi,
             kendi çerçevesinin içinde yatay ve dikey olarak ortalanır. */
          .sylva-contour-color-input {
@@ -11876,11 +11885,11 @@ function selectRamp(name) {
                 : ((titleEl && titleEl.value.trim()) ? escapeHtml(titleEl.value.trim()) : t('classified_data', 'Sınıflandırılmış Veri'));
 
 
-            var rowsHtml = '<div style="display:flex;flex-direction:column;gap:2px;margin-top:5px;">' +
+            var rowsHtml = '<div class="sylva-legend-rows" style="display:flex;flex-direction:column;gap:2px;margin-top:5px;">' +
                 classes.map(function (c, i) {
                     var isActive = (window._classHighlightIndexByPane[_rdlPaneId] === i);
                     return (
-                        '<div class="class-highlight-target' + (isActive ? ' class-highlight-active' : '') + '" data-class-idx="' + i + '" style="display:flex; align-items:center; gap:5px; cursor:pointer;" title="' + t('highlight_class_hint', 'Haritada vurgulamak için tıklayın') + '">' +
+                        '<div class="class-highlight-target sylva-legend-row' + (isActive ? ' class-highlight-active' : '') + '" data-class-idx="' + i + '" style="display:flex; align-items:center; gap:5px; cursor:pointer;" title="' + t('highlight_class_hint', 'Haritada vurgulamak için tıklayın') + '">' +
                             '<span style="width:12px; height:12px; border-radius:2px; background:' + c.color +
                                 '; border:1px solid #cbd5e1; flex-shrink:0; display:inline-block;"></span>' +
                             '<span style="font-size:0.7rem;">' + escapeHtml(c.name) + ' (' + c.min + ' - ' + c.max + ')</span>' +
@@ -17237,15 +17246,15 @@ function selectRamp(name) {
             };
             var title = _lulcTitles[meta.analysisName] || _lulcBase;
 
-            var rowsHtml = presentDefs.map(function (d, i) {
+            var rowsHtml = '<div class="sylva-legend-rows" style="display:flex;flex-direction:column;gap:2px;margin-top:3px;">' + presentDefs.map(function (d, i) {
                 var label = (d.key ? (t(d.key) || d.label) : d.label);
                 var isActive = (window._classHighlightIndexByPane[paneId] === i);
-                return '<div class="class-highlight-target' + (isActive ? ' class-highlight-active' : '') + '" data-class-idx="' + i + '" style="display:flex;align-items:center;gap:5px;margin-top:3px;cursor:pointer;" title="' + t('highlight_class_hint', 'Haritada vurgulamak için tıklayın') + '">' +
+                return '<div class="class-highlight-target sylva-legend-row' + (isActive ? ' class-highlight-active' : '') + '" data-class-idx="' + i + '" style="display:flex;align-items:center;gap:5px;margin-top:3px;cursor:pointer;" title="' + t('highlight_class_hint', 'Haritada vurgulamak için tıklayın') + '">' +
                     '<span style="width:12px;height:12px;border-radius:2px;background:' + d.color +
                         ';border:1px solid #cbd5e1;flex-shrink:0;display:inline-block;"></span>' +
                     '<span style="font-size:0.7rem;">' + escapeHtml(label) + '</span>' +
                     '</div>';
-            }).join('');
+            }).join('') + '</div>';
 
             _setLegendHTML(legendBox, '<b style="font-size:0.78rem;">' + escapeHtml(title) + '</b>' + rowsHtml);
             var lgToggle = document.getElementById('toggle-legend');
@@ -51743,11 +51752,31 @@ function runTimeSeriesAnalysis() {
     var sy = parseInt((document.getElementById('ts-start-year')||{}).value, 10);
     var ey = parseInt((document.getElementById('ts-end-year')||{}).value, 10);
     if (!sy || !ey) { alert(t('ts_alert_year')); return; }
-    if (sy >= ey)   { alert(t('ts_alert_year_order')); return; }
+    if (sy > ey)   { alert(t('ts_alert_year_order')); return; }
 
     // Bulutluluk
     var cloudPct = parseInt((document.getElementById('ts-cloud-pct')||{}).value, 10);
     if (isNaN(cloudPct)) cloudPct = 30;
+
+    // 🛠️ ZAMAN SERİSİ DURUMU — Önceki zaman serisinin galerisi, sahneleri ve
+    // indirme kuyruğu yeni istek başarısız/boş döndüğünde ekranda kalmamalı.
+    // Özellikle 2020–2023 seçilip sonuç bulunamadığında eski 2026 galerisi
+    // görünüyordu; kullanıcı yeni seçimin uygulanmadığını sanıyordu.
+    var _clearTsGalleryNow = function(){
+        window._tsSliderSceneIds = [];
+        window._tsSliderSceneTimestamps = [];
+        window._tsSliderDates = [];
+        window._tsGalleryScenes = [];
+        window._tsSliderPane = null;
+        window._tsSliderSatellite = null;
+        window._tsLastIndices = [];
+        window._tsIsRgbMode = false;
+        var _activePane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+        try {
+            var _g = (typeof _sylvaGalleryEl === 'function') ? _sylvaGalleryEl(_activePane) : null;
+            if (_g) { _g.innerHTML = ''; _g.style.display = 'none'; }
+        } catch(e) {}
+    };
 
     // Seçili kaynak: NDVI/NDWI gibi analiz veya TAM 1 gerçek RGB uydu görüntüsü.
     var _tsRgbMode = (typeof _tsIsSatelliteImageMode === 'function') && _tsIsSatelliteImageMode();
@@ -51760,16 +51789,26 @@ function runTimeSeriesAnalysis() {
         checkedBoxes.forEach(function(cb){ idxs.push(cb.getAttribute('data-analysis')); });
         if (!idxs.length) { alert(t('ts_alert_index')); return; }
     }
+    // Yeni isteğe başlamadan ÖNCE eski galeri/indirme kuyruğunu temizle.
+    // Böylece 2026 gibi önceki bir sonucun kartları, 2020–2023 isteği boş
+    // dönse bile ekranda kalamaz.
+    _clearTsGalleryNow();
+
     // Zaman Serisi indirmesinde her gerçek dönem + her seçili indeks ayrı
     // raster olarak paketlenebilsin diye son seçimi indirme kuyruğuna aktar.
     window._tsLastIndices = idxs.slice();
     window._tsIsRgbMode = !!_tsRgbMode;
+    window._tsRequested = {
+        startYear: sy, endYear: ey, period: pe, months: (window.sylvaTsSelectedMonths || []).slice(),
+        maxCloud: cloudPct, satellite: satellite
+    };
 
     // AOI (o an aktif ekranın çizilmiş Çalışma Alanı geometrisi) + uydu
     var _pane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
     var _aoiForPane = (_pane === 'map2') ? currentLayer2 : currentLayer;
     var _roi = (typeof _extractROIGeometry === 'function' && _aoiForPane) ? _extractROIGeometry(_aoiForPane) : null;
     if (!_roi) { alert(t('ts_alert_year') /* AOI çizilmemiş — yıl uyarısıyla aynı stil */); return; }
+    if (window._tsRequested) window._tsRequested.roi = _roi;
     var sensorRadio = document.querySelector('.uydu-sensor-radio:checked');
     var visibleRgb = document.querySelector('.uydu-goruntu-radio:checked');
     // RGB zaman serisinde kaynak mutlaka görünür olarak seçilen TEK uydu
@@ -51834,6 +51873,7 @@ function runTimeSeriesAnalysis() {
         if (_tsLoadingOverlay) _tsLoadingOverlay.classList.remove('active');
 
         if (!data.success) {
+            _clearTsGalleryNow();
             var errMsg = data.error || 'Zaman serisi hesaplanamadı.';
             if (typeof showAnalysisToast === 'function') showAnalysisToast(errMsg, 'error');
             else alert(errMsg);
@@ -51844,6 +51884,23 @@ function runTimeSeriesAnalysis() {
         if (typeof window._sylvaSetLanguageLocked === 'function') {
             window._sylvaSetLanguageLocked(true);
         }
+
+        // 🛡️ İSTEMCİ TARİH FİLTRESİ — Sunucuya rağmen eski bir galerinin
+        // sahnesi yanıt içine karışırsa bile 2020–2023 isteğine 2026 sahnesi
+        // gösterme. Bu ikinci katman hem RGB hem NDVI/NDWI/EVI vb. için aynıdır.
+        var _reqStart = sy, _reqEnd = ey;
+        var _reqMonths = (window.sylvaTsSelectedMonths || []).map(function(m){ return parseInt(m,10); }).filter(function(m){return m>=1&&m<=12;});
+        var _safeGallery = (data.gallery || []).filter(function(g){
+            if (!g || !g.timestamp) return false;
+            var d = new Date(Number(g.timestamp));
+            if (isNaN(d.getTime())) d = new Date(g.timestamp);
+            if (isNaN(d.getTime())) return false;
+            var y = d.getUTCFullYear(), m = d.getUTCMonth()+1;
+            if (y < _reqStart || y > _reqEnd) return false;
+            if (_reqMonths.length && _reqMonths.indexOf(m) === -1) return false;
+            return true;
+        });
+        data.gallery = _safeGallery;
 
         var CMAP = { NDVI:'#22c55e', NDWI:'#1e3a8a', NBR:'#f97316', LST:'#ef4444', EVI:'#84cc16', SAVI:'#a3e635', BSI:'#fb923c', SMI:'#38bdf8' };
         var series = (data.series || []).map(function(s) {
@@ -51862,6 +51919,13 @@ function runTimeSeriesAnalysis() {
 
         // 🖼️ Uydu görüntü galerisi — bu zaman serisindeki her periyodun (ay/yıl)
         // GEE'den seçilen GERÇEK (en az bulutlu) sahnesiyle doldurulur.
+        // Yeni sonuç boşsa eski galeri kesinlikle geri bırakılmaz.
+        if (!data.gallery || !data.gallery.length) {
+            _clearTsGalleryNow();
+            if (typeof showAnalysisToast === 'function') {
+                showAnalysisToast(t('ts_no_data', 'Seçtiğiniz tarih/ay/bulutluluk koşullarında veri bulunamadı.'), 'info');
+            }
+        }
         // renderGalleryFromScenes zaten [sceneId, timestamp_ms, cloud_pct]
         // formatını bekliyor — normal NDVI/NDWI galerisiyle aynı mekanizma.
         if (data.gallery && data.gallery.length) {
@@ -53147,7 +53211,26 @@ refresh();
     }
     window.sylvaLocalizedNativeClasses = sylvaLocalizedNativeClasses;
 
-    function exportVisualFor(pane, key, sceneIdOverride) {
+    function exportVisualFor(pane, key, sceneIdOverride, payloadOverride) {
+        // 🛰️ RGB İNDİRME GÜVENCESİ: Gerçek uydu görüntüsü üç bantlıdır.
+        // Önceki katmanın/analizin palette bilgisinin RGB dışa aktarımına
+        // sızması GEE .visualize() çağrısında "Cannot provide a palette
+        // when visualizing more than one band" hatasına yol açıyordu.
+        // RGB için yalnızca bands + min/max gönderilir; hiçbir palette,
+        // classBreaks veya sınıflandırma RGB görüntüsüne uygulanmaz.
+        var _rgbPayloadForExport = payloadOverride || (window._sylvaLayerAnalyzePayloadByPane &&
+            window._sylvaLayerAnalyzePayloadByPane[pane] && key ?
+            window._sylvaLayerAnalyzePayloadByPane[pane][key] : null);
+        if (_rgbPayloadForExport && String(_rgbPayloadForExport.index || '').toUpperCase() === 'RGB') {
+            var _rgbVisStore = window._sylvaLayerVisByPane &&
+                window._sylvaLayerVisByPane[pane] &&
+                window._sylvaLayerVisByPane[pane][key];
+            var _rgbMin = _rgbVisStore && isFinite(Number(_rgbVisStore.min)) ? Number(_rgbVisStore.min) : 0;
+            var _rgbMax = _rgbVisStore && isFinite(Number(_rgbVisStore.max)) ? Number(_rgbVisStore.max) : 0.3;
+            // Zaman serisi RGB kayıtlarında katman state'i olmayabilir;
+            // güvenli doğal renk aralığı yine palette'siz üç bantlı görselleştirmedir.
+            return { bands:['red','green','blue'], min:_rgbMin, max:_rgbMax, mode:'rgb' };
+        }
         // 🛡️ KALICI SINIFLANDIRMA DIŞA AKTARIMI: Dil değişimi, editör DOM'unu
         // yeniden çizse bile bu katmanın UYGULANMIŞ sınıflandırması bağımsız
         // bir per-layer export state'te tutulur. Böylece geri dönülen eski
@@ -53392,7 +53475,46 @@ refresh();
         // yalnızca ekrandaki ilk kare değil, serideki gerçek dönemler ZIP'e girer.
         var tsPane = window._tsSliderPane;
         var tsScenes = window._tsSliderSceneIds || [];
-        if (tsPane === pane && tsScenes.length) {
+        if (tsPane === pane && tsScenes.length && window._tsIsRgbMode) {
+            // 🛰️ RGB zaman serisi için eski/aktif analiz katmanlarını ASLA
+            // temel alma. Uydu görüntüsü zaman serisi kendi başına bir
+            // indirme kuyruğudur ve her kartın gerçek sceneId/timestamp'i
+            // doğrudan GEE RGB dışa aktarımına gönderilmelidir.
+            var _tsReq = window._tsRequested || {};
+            var _rgbEntries = [];
+            tsScenes.forEach(function(sceneId, sceneNo){
+                if (!sceneId) return;
+                var _tsStamp = (window._tsSliderSceneTimestamps || [])[sceneNo];
+                var _d = _tsStamp ? new Date(Number(_tsStamp)) : null;
+                if (!_d || isNaN(_d.getTime())) _d = _tsStamp ? new Date(_tsStamp) : null;
+                var _date = (_d && !isNaN(_d.getTime())) ? _d.toISOString().slice(0,10) : '';
+                var _end = '';
+                if (_date) {
+                    var _next = new Date(_d.getTime() + 24*3600*1000);
+                    _end = _next.toISOString().slice(0,10);
+                }
+                var _rgbPayload = {
+                    roi: _tsReq.roi || null,
+                    clipMode: 'clip',
+                    satellite: _tsReq.satellite || window._tsSliderSatellite || 's2-l2a',
+                    index: 'RGB',
+                    sceneId: sceneId,
+                    maxCloud: isFinite(Number(_tsReq.maxCloud)) ? Number(_tsReq.maxCloud) : 100,
+                    startDate: _date || '',
+                    endDate: _end || '',
+                    months: _tsReq.months || []
+                };
+                _rgbEntries.push({
+                    key: 'ts-rgb-' + sceneNo,
+                    payload: _rgbPayload,
+                    index: 'RGB',
+                    sceneDate: _date,
+                    tsDate: (_tsReq.period === 'yearly' ? String(_tsReq.startYear || '') : ''),
+                    tsSeries: true
+                });
+            });
+            if (_rgbEntries.length) result = _rgbEntries;
+        } else if (tsPane === pane && tsScenes.length) {
             var tsIndices = window._tsLastIndices && window._tsLastIndices.length
                 ? window._tsLastIndices.slice()
                 : [];
@@ -53435,7 +53557,18 @@ refresh();
                             delete p.classBreaks;
                             delete p.classificationType;
                         }
-                        if (isFinite(tsStartYear) && isFinite(tsEndYear) && tsStartYear < tsEndYear) {
+                        var _sceneTsForPayload = (window._tsSliderSceneTimestamps || [])[sceneNo];
+                        var _sceneDateForPayload = '';
+                        if (_sceneTsForPayload) {
+                            var _sd = new Date(Number(_sceneTsForPayload));
+                            if (isNaN(_sd.getTime())) _sd = new Date(_sceneTsForPayload);
+                            if (!isNaN(_sd.getTime())) _sceneDateForPayload = _sd.toISOString().slice(0,10);
+                        }
+                        if (_sceneDateForPayload) {
+                            var _ed = new Date(new Date(_sceneDateForPayload + 'T00:00:00Z').getTime() + 24*3600*1000);
+                            p.startDate = _sceneDateForPayload;
+                            p.endDate = _ed.toISOString().slice(0,10);
+                        } else if (isFinite(tsStartYear) && isFinite(tsEndYear)) {
                             p.startDate = String(tsStartYear) + '-01-01';
                             p.endDate = String(tsEndYear + 1) + '-01-01';
                         }
@@ -53584,7 +53717,7 @@ refresh();
                 filename: _entryFilename,
                 scale:scale, crs:crs,
                 clipMode:entry.payload.clipMode || 'clip', roi:entry.payload.roi || null, rendered:true,
-                visualization:exportVisualFor(pane, entry.key, entry.payload && entry.payload.sceneId ? entry.payload.sceneId : null), flatTiff:false,
+                visualization:exportVisualFor(pane, entry.key, entry.payload && entry.payload.sceneId ? entry.payload.sceneId : null, entry.payload), flatTiff:false,
                 // RGB uydu görüntüsünde indirme, harita önizlemesini yeniden
                 // üretmek için ±5 günlük komşu-sahne mozaiği kurmak zorunda
                 // kalmaz; seçilen gerçek sahne doğrudan dışa aktarılır.
@@ -55113,6 +55246,156 @@ function open(ds,b,res){var d=info(ds,b,res),old=document.querySelector('.raw-ba
 document.addEventListener('click',function(e){var b=e.target&&e.target.closest&&e.target.closest('.raw-band-info-btn');if(!b)return;e.preventDefault();e.stopPropagation();var ds=b.getAttribute('data-dataset'),band=b.getAttribute('data-band'),res='';var label=b.closest('label');if(label){var cb=label.querySelector('.raw-band-checkbox');if(cb)res=cb.getAttribute('data-resolution')||''}open(ds,band,res)});
 var oldApply=window.applySylvaLang;if(typeof oldApply==='function'&&!oldApply.__rawBandInfoWrapped){window.applySylvaLang=function(){var r=oldApply.apply(this,arguments);setTimeout(function(){document.querySelectorAll('.raw-band-info-btn').forEach(function(b){if(uiLang()!=='en')tr('Detailed information about this band',uiLang()).then(function(v){b.title=v;b.setAttribute('aria-label',v)})});var x=document.querySelector('.raw-band-info-backdrop');if(x)x.remove()},0);return r};window.applySylvaLang.__rawBandInfoWrapped=true}
 document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=document.querySelector('.raw-band-info-backdrop');if(x)x.remove()}});window._sylvaOpenRawBandInfo=open;
+})();
+</script>
+
+
+<script id="sylva-legend-passive-and-autosize-fix-20260820">
+(function(){
+  'use strict';
+
+  function activePane(){
+    return (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
+  }
+  function isRgbTop(pane){
+    var top = window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[pane];
+    return !!(top && String(top).indexOf('RGB::') === 0);
+  }
+  function setPassive(el, passive){
+    if(!el) return;
+    el.style.opacity = passive ? '.35' : '1';
+    el.style.pointerEvents = passive ? 'none' : '';
+    el.style.userSelect = passive ? 'none' : '';
+    if(passive) el.setAttribute('aria-disabled','true');
+    else el.removeAttribute('aria-disabled');
+    el.querySelectorAll('input,select,button').forEach(function(control){
+      if(passive){
+        control.disabled = true;
+        control.setAttribute('data-sylva-rgb-passive','1');
+      } else if(control.getAttribute('data-sylva-rgb-passive') === '1'){
+        control.disabled = false;
+        control.removeAttribute('data-sylva-rgb-passive');
+      }
+    });
+  }
+  function syncPassivePanels(){
+    var p = activePane();
+    var rgb = isRgbTop(p);
+    // Ham uydu görüntüsünde hem grafik hem de Lejant/Semboloji panosu pasif/şeffaf.
+    // Analiz katmanına geçildiğinde iki panel de tam görünür ve etkileşimli olur.
+    setPassive(document.getElementById('legend-symbology-panel'), rgb);
+    var chartSection = document.getElementById('data-charts-section');
+    if(chartSection) setPassive(chartSection, rgb);
+    var legend = document.getElementById(p === 'map2' ? 'map2-legend-box' : 'map-legend-box');
+    if(legend){
+      legend.style.opacity = rgb ? '.35' : '1';
+      legend.style.pointerEvents = rgb ? 'none' : '';
+      legend.style.userSelect = rgb ? 'none' : '';
+      if(rgb) legend.setAttribute('aria-disabled','true'); else legend.removeAttribute('aria-disabled');
+    }
+  }
+  function autoSizeLegend(box){
+    if(!box) return;
+    box.style.maxHeight = 'none';
+    box.style.overflowY = 'visible';
+    box.style.overflowX = 'visible';
+    var rows = box.querySelector('.sylva-legend-rows');
+    if(rows){
+      var count = rows.querySelectorAll('.sylva-legend-row').length;
+      box.classList.toggle('sylva-legend-many', count >= 9);
+      if(count < 9){ rows.style.width = 'max-content'; }
+    } else {
+      box.classList.remove('sylva-legend-many');
+    }
+  }
+  function refresh(){
+    ['map-legend-box','map2-legend-box'].forEach(function(id){ autoSizeLegend(document.getElementById(id)); });
+    syncPassivePanels();
+  }
+
+  document.addEventListener('click', function(e){
+    if(e.target && e.target.closest && e.target.closest('.sylva-layer-switch-item')){
+      setTimeout(refresh,40); setTimeout(refresh,180); setTimeout(refresh,500);
+    }
+  });
+  document.addEventListener('change', function(e){
+    if(!e.target) return;
+    if(e.target.matches && (e.target.matches('.sylva-layer-switch-visibility') || e.target.matches('.uydu-goruntu-radio') || e.target.matches('.uydu-analiz-checkbox') || e.target.matches('input[data-analysis]'))){
+      setTimeout(refresh,50); setTimeout(refresh,250);
+    }
+  });
+  var mo = new MutationObserver(function(){
+    clearTimeout(mo._t);
+    mo._t = setTimeout(refresh,60);
+  });
+  mo.observe(document.body,{subtree:true,childList:true});
+  [100,500,1200,2200].forEach(function(ms){setTimeout(refresh,ms);});
+  window.sylvaSyncLegendPassiveAndAutosize = refresh;
+})();
+</script>
+
+<style id="sylva-passive-panel-soft-style-20260820">
+/* Pasif paneller: Proje Yöneticisi kutusuyla aynı yumuşak/şeffaf görünüm.
+   İçerik beyaz bir blok gibi görünmez; panel arka planı hafif saydam tutulur. */
+#legend-symbology-panel.sylva-passive-soft,
+#data-charts-section.sylva-passive-soft {
+  background: rgba(248, 250, 252, 0.45) !important;
+  border: 1px solid rgba(226, 232, 240, 0.65) !important;
+  border-radius: 8px !important;
+  box-sizing: border-box !important;
+  opacity: 0.45 !important;
+}
+#legend-symbology-panel.sylva-passive-soft > *,
+#data-charts-section.sylva-passive-soft > * {
+  background: transparent !important;
+}
+#legend-symbology-panel.sylva-passive-soft .sylva-sec-hdr,
+#data-charts-section.sylva-passive-soft .sylva-sec-hdr,
+#legend-symbology-panel.sylva-passive-soft .sylva-sec-body,
+#data-charts-section.sylva-passive-soft .sylva-sec-body,
+#data-charts-section.sylva-passive-soft #stats-chart-container,
+#data-charts-section.sylva-passive-soft #stats-chart-svg-wrap {
+  background: transparent !important;
+}
+</style>
+<script id="sylva-passive-panel-soft-fix-20260820">
+(function(){
+  'use strict';
+  function sync(){
+    var p = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
+    var top = window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[p];
+    var passive = !!(top && String(top).indexOf('RGB::') === 0);
+    ['legend-symbology-panel','data-charts-section'].forEach(function(id){
+      var el=document.getElementById(id);
+      if(!el) return;
+      el.classList.toggle('sylva-passive-soft', passive);
+      if(passive){
+        el.style.background='rgba(248,250,252,0.45)';
+        el.style.border='1px solid rgba(226,232,240,0.65)';
+        el.style.borderRadius='8px';
+        el.style.opacity='.45';
+      }else{
+        el.style.background='';
+        el.style.border='';
+        el.style.borderRadius='';
+        el.style.opacity='1';
+      }
+    });
+  }
+  document.addEventListener('click',function(e){
+    if(e.target && e.target.closest && e.target.closest('.sylva-layer-switch-item')){
+      setTimeout(sync,50); setTimeout(sync,250); setTimeout(sync,700);
+    }
+  });
+  document.addEventListener('change',function(e){
+    if(e.target && e.target.matches && (e.target.matches('.uydu-goruntu-radio') || e.target.matches('.uydu-analiz-checkbox') || e.target.matches('input[data-analysis]'))){
+      setTimeout(sync,50); setTimeout(sync,250);
+    }
+  });
+  var mo=new MutationObserver(function(){clearTimeout(mo._t);mo._t=setTimeout(sync,80);});
+  mo.observe(document.body,{subtree:true,childList:true});
+  [100,500,1200,2200].forEach(function(ms){setTimeout(sync,ms);});
+  window.sylvaSyncPassivePanelSoft=sync;
 })();
 </script>
 
