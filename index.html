@@ -2829,7 +2829,6 @@ tr.class-highlight-active {
         #btn-chart-pie.disabled-chart { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
         #btn-before-after.active, #btn-before-after-map2.active { background:#1e3a8a !important; color:#fff !important; border-color:#1e3a8a !important; }
         #before-after-divider { touch-action: none; }
-        #sylva-time-slider-bar { box-shadow: 0 -2px 8px rgba(30,58,138,0.08); }
 
         /* ── 3B Uçuş Tam Ekran Modu ────────────────────────────────────── */
         body.sylva-3d-mode .sidebar-left,
@@ -4070,14 +4069,6 @@ tr.class-highlight-active {
                         <label class="option-item"><input type="checkbox" name="uydu-goruntu-sensor" class="uydu-veriseti-checkbox" value="global-datasets" data-label="Global Datasets (Dynamic World / SRTM)" data-sensor="Dynamic World / SRTM"> Dynamic World / SRTM</label>
                     </div>
 
-                    <div class="option-list" style="margin-top:10px; border-top:1px solid #e2e8f0; padding-top:8px;">
-                        <div class="sensor-group-label" data-i18n="gallery_sort">🗂️ Galeri Sıralaması</div>
-                        <div style="display:flex; gap:6px;">
-                            <button type="button" id="btn-gallery-sort-date" class="btn-tool" style="flex:1; font-size:0.72rem; padding:5px 4px;" title="Tarihe göre sırala" data-i18n="btn_sort_date">📅 Tarih</button>
-                            <button type="button" id="btn-gallery-sort-cloud" class="btn-tool" style="flex:1; font-size:0.72rem; padding:5px 4px;" title="Bulutluluk oranına göre sırala" data-i18n="btn_sort_cloud">☁️ Bulut</button>
-                        </div>
-                    </div>
-
                     <!-- 🔒 Eski tekil-seçim (radio) sensör listesi artık kullanıcıya
                          GÖSTERİLMİYOR (display:none) — yalnızca yukarıdaki çoklu-seçime
                          açık .uydu-veriseti-checkbox kutucuklarıyla PROGRAMATİK olarak
@@ -4963,28 +4954,6 @@ tr.class-highlight-active {
             </div>
 
         </div>
-
-                <!-- ══ Time Slider ═══ -->
-                <div id="sylva-time-slider-bar"
-                     style="display:none;position:absolute;bottom:0;left:0;right:0;z-index:600;
-                            background:rgba(255,255,255,0.95);border-top:1px solid #e2e8f0;
-                            padding:6px 14px 8px;box-sizing:border-box;
-                            backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);">
-                    <div style="display:flex;align-items:center;gap:8px;">
-                        <button type="button" id="ts-play-btn" onclick="toggleTimeSliderPlay()"
-                                style="width:28px;height:28px;border:1px solid #1e3a8a;
-                                       background:#1e3a8a;color:#fff;border-radius:6px;
-                                       cursor:pointer;font-size:0.9rem;display:flex;
-                                       align-items:center;justify-content:center;flex-shrink:0;">▶</button>
-                        <input type="range" id="sylva-time-slider" min="0" max="10" value="0" step="1"
-                               aria-label="Zaman ekseni" data-i18n-aria-label="time_slider_lbl"
-                               style="flex:1;accent-color:#1e3a8a;cursor:pointer;"
-                               oninput="onTimeSliderChange(this.value)">
-                        <div id="ts-date-label"
-                             style="font-size:0.72rem;font-weight:700;color:#1e3a8a;
-                                    white-space:nowrap;min-width:66px;text-align:right;">—</div>
-                    </div>
-                </div>
 
                 <!-- ══ 3B Uçuş Katmanı ═══ -->
                 <div id="sylva-3d-overlay">
@@ -16435,20 +16404,40 @@ function selectRamp(name) {
                 var _editorPaneKey = (_pane === 'map2') ? 'map2' : 'map';
                 var _editorStore = window._sylvaEditorStateByPane && window._sylvaEditorStateByPane[_editorPaneKey];
                 var _hasOwnEditorState = !!(_editorStore && Object.prototype.hasOwnProperty.call(_editorStore, _lk));
-                if (!_hasOwnEditorState) {
-                    try {
-                        if (typeof setClassificationType === 'function') setClassificationType('stretched');
-                        var _freshCount = document.getElementById('class-count');
-                        if (_freshCount) _freshCount.value = '4';
-                        if (typeof buildClassRows === 'function') buildClassRows(4);
-                        var _freshRamp = document.getElementById('selectedRamp');
-                        var _freshRampKey = (meta && meta.rampKey && ramps && ramps[meta.rampKey]) ? meta.rampKey : 'black-white';
-                        if (_freshRamp) {
-                            _freshRamp.style.background = ramps[_freshRampKey] || ramps['black-white'];
-                            _freshRamp.setAttribute('data-ramp', _freshRampKey);
+                var _freshNativeClassified = !!(meta && meta.legendType === 'classified' && meta.classesRaw);
+            if (_freshNativeClassified) {
+                try {
+                    // Native/kategorik analizlerde (LULC, WorldCover, MODIS,
+                    // CORINE ve classesRaw taşıyan diğer sınıflandırılmış
+                    // sonuçlar) editörün önceki analizden kalan STRETCHED
+                    // durumuna dönmesine izin verme. Bu analizler doğrudan
+                    // CLASSIFIED modunda açılmalı ve gerçek histogram grafiği
+                    // analiz tamamlandığı anda görünmelidir.
+                    if (typeof setClassificationType === 'function') setClassificationType('classified');
+                    var _freshStats = (meta && meta._lastStats) ? meta._lastStats : null;
+                    if (_freshStats) {
+                        if (typeof isLulcAnalysis === 'function' && isLulcAnalysis(meta.analysisName) &&
+                            typeof renderLulcLegendAndChart === 'function') {
+                            renderLulcLegendAndChart(meta, _freshStats, _pane);
+                        } else if (typeof renderChart === 'function') {
+                            renderChart(_freshStats, meta, _pane);
                         }
-                    } catch (_freshEditorErr) {}
-                }
+                    }
+                } catch (_freshNativeEditorErr) {}
+            } else if (!_hasOwnEditorState) {
+                try {
+                    if (typeof setClassificationType === 'function') setClassificationType('stretched');
+                    var _freshCount = document.getElementById('class-count');
+                    if (_freshCount) _freshCount.value = '4';
+                    if (typeof buildClassRows === 'function') buildClassRows(4);
+                    var _freshRamp = document.getElementById('selectedRamp');
+                    var _freshRampKey = (meta && meta.rampKey && ramps && ramps[meta.rampKey]) ? meta.rampKey : 'black-white';
+                    if (_freshRamp) {
+                        _freshRamp.style.background = ramps[_freshRampKey] || ramps['black-white'];
+                        _freshRamp.setAttribute('data-ramp', _freshRampKey);
+                    }
+                } catch (_freshEditorErr) {}
+            }
             }
             if (!skipClassifyRecalc && !_isPassiveTopoEditor && typeof _sylvaSaveEditorStateForLayer === 'function') {
                 // Durum GERÇEK katman anahtarına kaydedilir. Böylece DEM/SLOPE/TWI
@@ -17692,7 +17681,6 @@ function selectRamp(name) {
                 div.addEventListener('click', function() {
                     galleryEl.querySelectorAll('.gallery-item').forEach(function(i) { i.classList.remove('active'); });
                     div.classList.add('active');
-                    galleryEl.insertBefore(div, galleryEl.firstChild);
                     if (scene[1]) {
                         _currentLegendDate = new Date(scene[1]).toISOString().slice(0, 10);
                         _syncLegendDate();
@@ -17750,8 +17738,7 @@ function selectRamp(name) {
                     div.addEventListener('click', function() {
                         galleryEl.querySelectorAll('.gallery-item').forEach(function(i) { i.classList.remove('active'); });
                         div.classList.add('active');
-                        galleryEl.insertBefore(div, galleryEl.firstChild);
-                        if (scene[1]) {
+                            if (scene[1]) {
                             _currentLegendDate = new Date(scene[1]).toISOString().slice(0, 10);
                             _syncLegendDate();
                         }
@@ -17986,7 +17973,7 @@ function selectRamp(name) {
             var paneStates = window._rgbGalleryStates[paneId];
             if (!datasetKey) return paneStates; // datasetKey verilmezse tüm pane'in haritasını döndür
             if (!paneStates[datasetKey]) {
-                paneStates[datasetKey] = { scenes: [], dataset: null, meta: null, sortKey: 'date', sortAsc: false, activeSceneId: null };
+                paneStates[datasetKey] = { scenes: [], dataset: null, meta: null, sortKey: 'date', sortAsc: true, activeSceneId: null };
             }
             return paneStates[datasetKey];
         }
@@ -18087,7 +18074,7 @@ function selectRamp(name) {
                 _gState.dataset = data.dataset;
                 _gState.meta    = meta;
                 _gState.sortKey = 'date';
-                _gState.sortAsc = false; // en güncel önce
+                _gState.sortAsc = true; // her zaman eskiden yeniye
                 // 🛠️ BUG FİX (Görüntü yüklenemedi: isStackMode is not defined):
                 // loadRgbScene() içinde isStackMode kullanılıyor ama fonksiyon
                 // bu parametreyi hiç almıyordu. Artık fetchRgbGallery'nin kendi
@@ -18144,13 +18131,12 @@ function selectRamp(name) {
         function _sortedRgbScenes(paneId, datasetKey) {
             var _gState = _rgbGalleryStateFor(paneId, datasetKey);
             var scenes = _gState.scenes.slice();
-            var key = _gState.sortKey;
-            var asc = _gState.sortAsc;
+            // Galeri HER ZAMAN eskiden yeniye: tarih sıralaması sabittir.
             scenes.sort(function(a, b) {
-                var av = key === 'cloud' ? (typeof a.cloud === 'number' ? a.cloud : Infinity) : (a.timestamp || 0);
-                var bv = key === 'cloud' ? (typeof b.cloud === 'number' ? b.cloud : Infinity) : (b.timestamp || 0);
-                return asc ? (av - bv) : (bv - av);
+                return (a.timestamp || 0) - (b.timestamp || 0);
             });
+            _gState.sortKey = 'date';
+            _gState.sortAsc = true;
             return scenes;
         }
 
@@ -18230,28 +18216,6 @@ function selectRamp(name) {
                 galleryEl.appendChild(div);
             });
         }
-
-        // Sıralama düğmelerini bağlar (Tarih / Bulutluluk) — aktif ekrandaki
-        // TÜM uydu görüntüsü veri setlerini aynı anda sıralar.
-        (function () {
-            var btnDate  = document.getElementById('btn-gallery-sort-date');
-            var btnCloud = document.getElementById('btn-gallery-sort-cloud');
-            function resort(key) {
-                var paneId = _sylvaActivePaneId();
-                var paneStates = _rgbGalleryStateFor(paneId);
-                var keys = Object.keys(paneStates);
-                var hasScenes = keys.some(function (dk) { return paneStates[dk].scenes.length; });
-                if (!hasScenes) return;
-                keys.forEach(function (dk) {
-                    var _gState = paneStates[dk];
-                    if (_gState.sortKey === key) { _gState.sortAsc = !_gState.sortAsc; }
-                    else { _gState.sortKey = key; _gState.sortAsc = true; }
-                });
-                renderRgbGalleryCards(paneId);
-            }
-            if (btnDate)  btnDate.addEventListener('click', function () { resort('date'); });
-            if (btnCloud) btnCloud.addEventListener('click', function () { resort('cloud'); });
-        })();
 
         // Seçilen sahneyi (index='RGB') sunucudan/GEE'den çeker, haritaya
         // gerçek renk katmanı olarak ekler, önceki katmanı kaldırır, haritayı
@@ -27011,8 +26975,6 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Satellite Data and Analyses',
     sec_land_use: '🏘️ Land Use',
     sec_topo: '🏔️ Topographic Analyses',
-    gallery_sort: '🗂️ Gallery Sort',
-    btn_sort_date: '📅 Date', btn_sort_cloud: '☁️ Cloud',
     avail_analyses: 'Available Analyses', sensor_hint: '(select a sensor first)',
     lc2l2_label: 'Landsat Collection 2 Level-2 (Surface Reflectance / Thermal)',
     lc2l1_label: 'Landsat Collection 2 Level-1 (TOA Reflectance)',
@@ -27548,8 +27510,6 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: "🌍 Sun’iy yo‘ldosh ma’lumotlari va tahlillar",
     sec_land_use: '🏘️ Yer resurslaridan foydalanish',
     sec_topo: '🏔️ Topografik tahlillar',
-    gallery_sort: '🗂️ Galereya tartibi',
-    btn_sort_date: '📅 Sana', btn_sort_cloud: '☁️ Bulut',
     avail_analyses: 'Mavjud tahlillar', sensor_hint: '(avval sensorni tanlang)',
     lc2l2_label: 'Landsat Collection 2 Level-2 (Sirt qaytishi / Termal)',
     lc2l1_label: 'Landsat Collection 2 Level-1 (TOA qaytishi)',
@@ -28066,8 +28026,6 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Δορυφορικά δεδομένα και αναλύσεις',
     sec_land_use: '🏘️ Χρήση Γης',
     sec_topo: '🏔️ Τοπογραφικές Αναλύσεις',
-    gallery_sort: '🗂️ Ταξινόμηση Συλλογής',
-    btn_sort_date: '📅 Ημερομηνία', btn_sort_cloud: '☁️ Νεφοκάλυψη',
     avail_analyses: 'Διαθέσιμες Αναλύσεις', sensor_hint: '(επιλέξτε πρώτα έναν αισθητήρα)',
     lc2l2_label: 'Landsat Collection 2 Level-2 (Ανακλαστικότητα Επιφάνειας / Θερμικό)',
     lc2l1_label: 'Landsat Collection 2 Level-1 (Ανακλαστικότητα TOA)',
@@ -28590,8 +28548,6 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Сателитни данни и анализи',
     sec_land_use: '🏘️ Земно покритие',
     sec_topo: '🏔️ Топографски анализи',
-    gallery_sort: '🗂️ Сортиране на галерията',
-    btn_sort_date: '📅 Дата', btn_sort_cloud: '☁️ Облачност',
     avail_analyses: 'Налични анализи', sensor_hint: '(първо изберете сензор)',
     lc2l2_label: 'Landsat Collection 2 Level-2 (отражение на повърхността / термален)',
     lc2l1_label: 'Landsat Collection 2 Level-1 (отражение TOA)',
@@ -29114,8 +29070,6 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Uydu Verileri ve Analizler',
     sec_land_use: '🏘️ Arazi Kullanımı',
     sec_topo: '🏔️ Topografik Analizler',
-    gallery_sort: '🗂️ Galeri Sıralaması',
-    btn_sort_date: '📅 Tarih', btn_sort_cloud: '☁️ Bulut',
     avail_analyses: 'Kullanılabilir Analizler', sensor_hint: '(önce bir sensör seçin)',
     lc2l2_label: 'Landsat Collection 2 Level-2 (Yüzey Yansıma / Termal)',
     lc2l1_label: 'Landsat Collection 2 Level-1 (Tepe Yansıma)',
@@ -29644,8 +29598,6 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Peyk Məlumatları və Təhlillər',
     sec_land_use: '🏘️ Torpaqdan İstifadə',
     sec_topo: '🏔️ Topoqrafik Təhlillər',
-    gallery_sort: '🗂️ Qalereya Sıralaması',
-    btn_sort_date: '📅 Tarix', btn_sort_cloud: '☁️ Bulud',
     avail_analyses: 'Mövcud Təhlillər', sensor_hint: '(əvvəlcə bir sensor seçin)',
     lc2l2_label: 'Landsat Collection 2 Level-2 (Səth Əksi / Termal)',
     lc2l1_label: 'Landsat Collection 2 Level-1 (Zirvə Əksi)',
@@ -30164,8 +30116,6 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Műholdas adatok és elemzések',
     sec_land_use: '🏘️ Területhasználat',
     sec_topo: '🏔️ Topográfiai Elemzések',
-    gallery_sort: '🗂️ Galéria Rendezése',
-    btn_sort_date: '📅 Dátum', btn_sort_cloud: '☁️ Felhő',
     avail_analyses: 'Elérhető Elemzések', sensor_hint: '(előbb válasszon szenzort)',
     lc2l2_label: 'Landsat Collection 2 Level-2 (Felszíni reflektancia / Termikus)',
     lc2l1_label: 'Landsat Collection 2 Level-1 (Csúcs reflektancia)',
@@ -30683,8 +30633,6 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Жерсерік деректері және талдаулар',
     sec_land_use: '🏘️ Жер пайдалану',
     sec_topo: '🏔️ Топографиялық талдаулар',
-    gallery_sort: '🗂️ Галерея сұрыптауы',
-    btn_sort_date: '📅 Күн', btn_sort_cloud: '☁️ Бұлт',
     avail_analyses: 'Қол жетімді талдаулар', sensor_hint: '(алдымен сенсорды таңдаңыз)',
     lc2l2_label: 'Landsat Collection 2 Level-2 (Беткі шағылысу / Жылулық)',
     lc2l1_label: 'Landsat Collection 2 Level-1 (ТОА шағылысуы)',
@@ -31186,8 +31134,6 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Satellitendaten und Analysen',
     sec_land_use: '🏘️ Landnutzung',
     sec_topo: '🏔️ Topografische Analysen',
-    gallery_sort: '🗂️ Galeriesortierung',
-    btn_sort_date: '📅 Datum', btn_sort_cloud: '☁️ Wolken',
     avail_analyses: 'Verfügbare Analysen', sensor_hint: '(zuerst Sensor wählen)',
     lc2l2_label: 'Landsat Collection 2 Level-2 (Oberflächenreflektanz / Thermal)',
     lc2l1_label: 'Landsat Collection 2 Level-1 (TOA-Reflektanz)',
@@ -31711,8 +31657,6 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Données et analyses satellitaires',
     sec_land_use: '🏘️ Occupation du sol',
     sec_topo: '🏔️ Analyses topographiques',
-    gallery_sort: '🗂️ Tri galerie',
-    btn_sort_date: '📅 Date', btn_sort_cloud: '☁️ Nuages',
     avail_analyses: 'Analyses disponibles', sensor_hint: '(choisir un capteur d\'abord)',
     lc2l2_label: 'Landsat Collection 2 Level-2 (Réflectance surface / Thermique)',
     lc2l1_label: 'Landsat Collection 2 Level-1 (Réflectance TOA)',
@@ -32236,8 +32180,6 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Datos y análisis satelitales',
     sec_land_use: '🏘️ Uso del suelo',
     sec_topo: '🏔️ Análisis topográficos',
-    gallery_sort: '🗂️ Ordenar galería',
-    btn_sort_date: '📅 Fecha', btn_sort_cloud: '☁️ Nube',
     avail_analyses: 'Análisis disponibles', sensor_hint: '(primero elige un sensor)',
     lc2l2_label: 'Landsat Collection 2 Level-2 (Reflectancia superficial / Térmica)',
     lc2l1_label: 'Landsat Collection 2 Level-1 (Reflectancia TOA)',
@@ -32761,8 +32703,6 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Dados e análises de satélite',
     sec_land_use: '🏘️ Uso do solo',
     sec_topo: '🏔️ Análises topográficas',
-    gallery_sort: '🗂️ Ordenar galeria',
-    btn_sort_date: '📅 Data', btn_sort_cloud: '☁️ Nuvem',
     avail_analyses: 'Análises disponíveis', sensor_hint: '(escolha primeiro um sensor)',
     lc2l2_label: 'Landsat Collection 2 Level-2 (Refletância de superfície / Térmico)',
     lc2l1_label: 'Landsat Collection 2 Level-1 (Refletância TOA)',
@@ -33286,8 +33226,6 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 بيانات وتحليلات الأقمار الصناعية',
     sec_land_use: '🏘️ استخدام الأراضي',
     sec_topo: '🏔️ التحليلات الطبوغرافية',
-    gallery_sort: '🗂️ ترتيب المعرض',
-    btn_sort_date: '📅 التاريخ', btn_sort_cloud: '☁️ السحب',
     avail_analyses: 'التحليلات المتاحة', sensor_hint: '(اختر مستشعراً أولاً)',
     lc2l2_label: 'Landsat Collection 2 Level-2 (الانعكاس السطحي / الحراري)',
     lc2l1_label: 'Landsat Collection 2 Level-1 (انعكاس TOA)',
@@ -33811,8 +33749,6 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 داده‌ها و تحلیل‌های ماهواره‌ای',
     sec_land_use: '🏘️ کاربری اراضی',
     sec_topo: '🏔️ تحلیل‌های توپوگرافی',
-    gallery_sort: '🗂️ مرتب‌سازی گالری',
-    btn_sort_date: '📅 تاریخ', btn_sort_cloud: '☁️ ابر',
     avail_analyses: 'تحلیل‌های موجود', sensor_hint: '(ابتدا سنسور انتخاب کنید)',
     lc2l2_label: 'Landsat Collection 2 Level-2 (بازتاب سطحی / حرارتی)',
     lc2l1_label: 'Landsat Collection 2 Level-1 (بازتاب TOA)',
@@ -34336,8 +34272,6 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 卫星数据与分析',
     sec_land_use: '🏘️ 土地利用',
     sec_topo: '🏔️ 地形分析',
-    gallery_sort: '🗂️ 图库排序',
-    btn_sort_date: '📅 日期', btn_sort_cloud: '☁️ 云量',
     avail_analyses: '可用分析', sensor_hint: '（请先选择传感器）',
     lc2l2_label: 'Landsat Collection 2 Level-2 (地表反射率 / 热红外)',
     lc2l1_label: 'Landsat Collection 2 Level-1 (TOA反射率)',
@@ -34861,8 +34795,6 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 衛星データと分析',
     sec_land_use: '🏘️ 土地利用',
     sec_topo: '🏔️ 地形解析',
-    gallery_sort: '🗂️ ギャラリー並べ替え',
-    btn_sort_date: '📅 日付', btn_sort_cloud: '☁️ 雲量',
     avail_analyses: '利用可能な解析', sensor_hint: '（まずセンサーを選択）',
     lc2l2_label: 'Landsat Collection 2 Level-2 (地表反射率 / 熱赤外)',
     lc2l1_label: 'Landsat Collection 2 Level-1 (TOA反射率)',
@@ -35386,8 +35318,6 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 위성 데이터 및 분석',
     sec_land_use: '🏘️ 토지 이용',
     sec_topo: '🏔️ 지형 분석',
-    gallery_sort: '🗂️ 갤러리 정렬',
-    btn_sort_date: '📅 날짜', btn_sort_cloud: '☁️ 구름',
     avail_analyses: '사용 가능한 분석', sensor_hint: '(먼저 센서를 선택하세요)',
     lc2l2_label: 'Landsat Collection 2 Level-2 (지표 반사도 / 열적외)',
     lc2l1_label: 'Landsat Collection 2 Level-1 (TOA 반사도)',
@@ -35911,8 +35841,6 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 उपग्रह डेटा और विश्लेषण',
     sec_land_use: '🏘️ भूमि उपयोग',
     sec_topo: '🏔️ स्थलाकृतिक विश्लेषण',
-    gallery_sort: '🗂️ गैलरी क्रम',
-    btn_sort_date: '📅 तिथि', btn_sort_cloud: '☁️ बादल',
     avail_analyses: 'उपलब्ध विश्लेषण', sensor_hint: '(पहले सेंसर चुनें)',
     lc2l2_label: 'Landsat Collection 2 Level-2 (भू-सतह परावर्तन / ताप)',
     lc2l1_label: 'Landsat Collection 2 Level-1 (TOA परावर्तन)',
@@ -36436,8 +36364,6 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Data dan Analisis Satelit',
     sec_land_use: '🏘️ Penggunaan Lahan',
     sec_topo: '🏔️ Analisis Topografi',
-    gallery_sort: '🗂️ Urutan Galeri',
-    btn_sort_date: '📅 Tanggal', btn_sort_cloud: '☁️ Awan',
     avail_analyses: 'Analisis Tersedia', sensor_hint: '(pilih sensor terlebih dahulu)',
     lc2l2_label: 'Landsat Collection 2 Level-2 (Reflektansi Permukaan / Termal)',
     lc2l1_label: 'Landsat Collection 2 Level-1 (Reflektansi TOA)',
@@ -36977,8 +36903,6 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Спутниковые данные и анализы',
     sec_land_use: '🏘️ Землепользование',
     sec_topo: '🏔️ Топографические анализы',
-    gallery_sort: '🗂️ Сортировка галереи',
-    btn_sort_date: '📅 Дата', btn_sort_cloud: '☁️ Облачность',
     avail_analyses: 'Доступные анализы', sensor_hint: '(сначала выберите датчик)',
     lc2l2_label: 'Landsat Collection 2 Level-2 (отражение поверхности / тепловой)',
     lc2l1_label: 'Landsat Collection 2 Level-1 (отражение TOA)',
@@ -37500,8 +37424,6 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 ข้อมูลและการวิเคราะห์ดาวเทียม',
     sec_land_use: '🏘️ การใช้ที่ดิน',
     sec_topo: '🏔️ การวิเคราะห์ภูมิประเทศ',
-    gallery_sort: '🗂️ เรียงลำดับแกลเลอรี',
-    btn_sort_date: '📅 วันที่', btn_sort_cloud: '☁️ เมฆ',
     avail_analyses: 'การวิเคราะห์ที่มีอยู่', sensor_hint: '(เลือกเซ็นเซอร์ก่อน)',
     lc2l2_label: 'Landsat Collection 2 Level-2 (ค่าสะท้อนพื้นผิว / ความร้อน)',
     lc2l1_label: 'Landsat Collection 2 Level-1 (TOA Reflectance)',
@@ -38019,8 +37941,6 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 স্যাটেলাইট ডেটা ও বিশ্লেষণ',
     sec_land_use: '🏘️ ভূমি ব্যবহার',
     sec_topo: '🏔️ ভূসংস্থানিক বিশ্লেষণ',
-    gallery_sort: '🗂️ গ্যালারি সাজানো',
-    btn_sort_date: '📅 তারিখ', btn_sort_cloud: '☁️ মেঘ',
     avail_analyses: 'উপলব্ধ বিশ্লেষণ', sensor_hint: '(প্রথমে একটি সেন্সর নির্বাচন করুন)',
     lc2l2_label: 'Landsat Collection 2 Level-2 (পৃষ্ঠ প্রতিফলন / তাপ)',
     lc2l1_label: 'Landsat Collection 2 Level-1 (TOA প্রতিফলন)',
@@ -38527,8 +38447,6 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Dữ liệu và phân tích vệ tinh',
     sec_land_use: '🏘️ Sử dụng đất',
     sec_topo: '🏔️ Phân tích địa hình',
-    gallery_sort: '🗂️ Sắp xếp thư viện',
-    btn_sort_date: '📅 Ngày', btn_sort_cloud: '☁️ Mây',
     avail_analyses: 'Phân tích khả dụng', sensor_hint: '(vui lòng chọn cảm biến trước)',
     lc2l2_label: 'Landsat Collection 2 Level-2 (Phản xạ bề mặt / Nhiệt)',
     lc2l1_label: 'Landsat Collection 2 Level-1 (Phản xạ TOA)',
@@ -39070,8 +38988,6 @@ var SYLVA_TRANSLATIONS = {
     sec_land_use: '🏘️ زمین کا استعمال',
     desc_land_use: 'Google Earth Engine کی موجودہ زمینی احاطہ درجہ بندی — NDVI/NDWI کی طرح آپ کے AOI پر براہ راست کام کرتی ہے۔',
     sec_topo: '🏔️ ٹوپوگرافک تجزیہ',
-    gallery_sort: '🗂️ گیلری ترتیب',
-    btn_sort_date: '📅 تاریخ', btn_sort_cloud: '☁️ بادل',
     avail_analyses: 'دستیاب تجزیے', sensor_hint: '(پہلے سینسر منتخب کریں)',
     lc2l2_label: 'Landsat Collection 2 Level-2 (سطحی عکاسی / حرارتی)',
     lc2l1_label: 'Landsat Collection 2 Level-1 (TOA عکاسی)',
@@ -39598,8 +39514,6 @@ var SYLVA_TRANSLATIONS = {
     sec_land_use: '🏘️ Użytkowanie gruntów',
     desc_land_use: 'Aktualne klasyfikacje pokrycia terenu z Google Earth Engine — działa bezpośrednio na obszarze AOI jak NDVI/NDWI.',
     sec_topo: '🏔️ Analizy topograficzne',
-    gallery_sort: '🗂️ Sortowanie galerii',
-    btn_sort_date: '📅 Data', btn_sort_cloud: '☁️ Zachmurzenie',
     avail_analyses: 'Dostępne analizy', sensor_hint: '(najpierw wybierz sensor)',
     lc2l2_label: 'Landsat Collection 2 Level-2 (Odbicie powierzchniowe / Termiczne)',
     lc2l1_label: 'Landsat Collection 2 Level-1 (Odbicie TOA)',
@@ -40114,8 +40028,6 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Data dan Analisis Satelit',
     sec_land_use: '🏘️ Penggunaan Tanah',
     sec_topo: '🏔️ Analisis Topografi',
-    gallery_sort: '🗂️ Susunan Galeri',
-    btn_sort_date: '📅 Tarikh', btn_sort_cloud: '☁️ Awan',
     avail_analyses: 'Analisis Tersedia', sensor_hint: '(pilih sensor dahulu)',
     lc2l2_label: 'Landsat Collection 2 Level-2 (Pantulan Permukaan / Terma)',
     lc2l1_label: 'Landsat Collection 2 Level-1 (Pantulan TOA)',
@@ -40637,8 +40549,6 @@ var SYLVA_TRANSLATIONS = {
       sec_satellite_analysis: '🌍 Спутник маалыматтары жана талдоолор',
       sec_land_use: '🏘️ Жер пайдалануу',
       sec_topo: '🏔️ Топографиялык талдоолор',
-      gallery_sort: '🗂️ Галерея иреттөөсү',
-      btn_sort_date: '📅 Күн', btn_sort_cloud: '☁️ Булут',
       avail_analyses: 'Жеткиликтүү талдоолор', sensor_hint: '(адегенде сенсорду тандаңыз)',
       lc2l2_label: 'Landsat Collection 2 Level-2 (Беттик чагылдыруу / Жылуулук)',
       lc2l1_label: 'Landsat Collection 2 Level-1 (TOA чагылдыруусу)',
@@ -41132,8 +41042,6 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Хиймэл дагуулын өгөгдөл ба шинжилгээ',
     sec_land_use: '🏘️ Газрын ашиглалт',
     sec_topo: '🏔️ Топографийн шинжилгээ',
-    gallery_sort: '🗂️ Галерей эрэмбэлэх',
-    btn_sort_date: '📅 Огноо', btn_sort_cloud: '☁️ Үүл',
     avail_analyses: 'Боломжит шинжилгээнүүд', sensor_hint: '(эхлээд мэдрэгч сонгоно уу)',
     lc2l2_label: 'Landsat Collection 2 Level-2 (Surface Reflectance / Thermal)',
     lc2l1_label: 'Landsat Collection 2 Level-1 (TOA Reflectance)',
@@ -41617,8 +41525,6 @@ var SYLVA_TRANSLATIONS = {
       sec_satellite_analysis: '🌍 სატელიტური მონაცემები და ანალიზი',
       sec_land_use: '🏘️ მიწათსარგებლობა',
       sec_topo: '🏔️ ტოპოგრაფიული ანალიზი',
-      gallery_sort: '🗂️ გალერეის დახარისხება',
-      btn_sort_date: '📅 თარიღი', btn_sort_cloud: '☁️ ღრუბელი',
       avail_analyses: 'ხელმისაწვდომი ანალიზი', sensor_hint: '(ჯერ აირჩიეთ სენსორი)',
       lc2l2_label: 'Landsat Collection 2 Level-2 (ზედაპირის ასახვა / სითბო)',
       lc2l1_label: 'Landsat Collection 2 Level-1 (TOA ასახვა)',
@@ -42119,8 +42025,6 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Dati e analisi satellitari',
     sec_land_use: '🏘️ Uso del Suolo',
     sec_topo: '🏔️ Analisi Topografiche',
-    gallery_sort: '🗂️ Ordinamento Galleria',
-    btn_sort_date: '📅 Data', btn_sort_cloud: '☁️ Nuvole',
     avail_analyses: 'Analisi Disponibili', sensor_hint: '(seleziona prima un sensore)',
     lc2l2_label: 'Landsat Collection 2 Level-2 (Surface Reflectance / Thermal)',
     lc2l1_label: 'Landsat Collection 2 Level-1 (TOA Reflectance)',
@@ -51978,25 +51882,19 @@ function runTimeSeriesAnalysis() {
                 loadSpecificScene(scenesArr[0][0], _pane, { silent: true });
             }
 
+            // Zaman serisi sahneleri artık alt zaman kaydırıcısına değil, doğrudan
+            // galeriye bağlıdır. İndirme kuyruğu için gerçek sahne kimlikleri/tarihleri
+            // yine saklanır.
             window._tsSliderSceneIds = data.gallery.map(function(g) { return g.sceneId; });
             window._tsSliderSceneTimestamps = data.gallery.map(function(g) { return g.timestamp || null; });
             window._tsSliderPane = _pane;
             window._tsSliderSatellite = satellite;
             window._tsSliderIsRgb = !!_tsRgbMode;
+            window._tsGalleryScenes = data.gallery.map(function(g) {
+                return {sceneId:g.sceneId, timestamp:g.timestamp || null, cloud:g.cloud, label:g.label || ''};
+            });
         }
 
-        // Time Slider — gerçek periyot etiketleri (2015-03, 2015-04, ... veya 2015, 2016, ...)
-        var allDates = (series[0] && series[0].points || []).map(function(p){ return p.date; });
-        window._tsSliderDates = allDates;
-        var slider = document.getElementById('sylva-time-slider');
-        var bar    = document.getElementById('sylva-time-slider-bar');
-        var lbl    = document.getElementById('ts-date-label');
-        if (slider && bar) {
-            slider.max = Math.max(allDates.length - 1, 0);
-            slider.value = 0;
-            bar.style.display = 'block';
-            if (lbl) lbl.textContent = allDates[0] || '—';
-        }
 
     })
     .catch(function(err) {
@@ -52008,82 +51906,17 @@ function runTimeSeriesAnalysis() {
     });
 }
 
-/* ── 5. Time Slider ─────────────────────────────────────────────────────── */
+/* ── 5. Zaman Serisi sahne durumu ─────────────────────────────────────── */
 window._tsSliderDates = [];
 window._tsSliderSceneIds = [];
 window._tsSliderSceneTimestamps = [];
 window._tsSliderPane = null;
 window._tsLastIndices = [];
-var _tsPlayTimer = null, _tsPlaying = false;
-
-// 🎬 opts / cb: kaydırıcı bir kareye geçtiğinde, o karenin verisi+lejantı
-// TAM olarak ekrana yansıdığında (ne önce ne sonra) haber almak isteyen
-// çağıranlar (oynatma döngüsü, video kaydı) ikinci parametre olarak bir
-// callback verebilir. Elle sürüklemede (oninput) bu parametre boştur.
-function onTimeSliderChange(val, onSceneReady) {
-    var idx = parseInt(val, 10);
-    var lbl = document.getElementById('ts-date-label');
-    if (lbl) lbl.textContent = (window._tsSliderDates || [])[idx] || '—';
-
-    // 🛠️ BUG FİX (KÖK NEDEN): Kaydırıcı — ve "▶" ile başlatılan video
-    // oynatma — eskiden SADECE üstteki tarih etiketini güncelliyordu;
-    // haritadaki veri/lejant hiç değişmiyordu ("video kısmında ekranda
-    // veri olmadan devam ediyor" hatası). Artık kaydırıcının gösterdiği
-    // periyoda ait GERÇEK sahne haritaya ve lejanta yüklenir.
-    var sceneIds = window._tsSliderSceneIds || [];
-    var sceneId  = sceneIds[idx];
-    if (!sceneId) { if (typeof onSceneReady === 'function') onSceneReady(); return; }
-    var pane = window._tsSliderPane || ((typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map');
-    // 🎬 Oynatma sırasında (_tsPlaying) yükleme ekranı sessize alınır —
-    // her karede yanıp sönen "SylvaGIS" overlay'i akıcı video hissini
-    // bozuyordu. Elle sürüklemede overlay eskisi gibi görünür.
-    if (window._tsSliderIsRgb) {
-        var _rgbDk = window._tsSliderSatellite || window._tsRgbDatasetKey;
-        var _rgbMeta = window._tsRgbMeta || { datasetKey: _rgbDk, datasetLabel: _rgbDk, datasetName: _rgbDk, analysisName: 'RGB' };
-        var _rgbDsInfo = { key: _rgbDk, datasetKey: _rgbDk, datasetName: _rgbMeta.datasetLabel || _rgbDk, label: _rgbMeta.datasetLabel || _rgbDk };
-        loadRgbScene(sceneId, _rgbMeta, _rgbDsInfo, pane, false, false, _rgbDk, _rgbMeta.datasetLabel || _rgbDk, false);
-        if (typeof onSceneReady === 'function') setTimeout(onSceneReady, _tsPlaying ? 300 : 0);
-    } else {
-        loadSpecificScene(sceneId, pane, { silent: _tsPlaying, onDone: onSceneReady });
-    }
-
-    // Galeri kartındaki "active" vurgusunu kaydırıcı ile senkron tut
-    var galleryEl = (typeof _sylvaGalleryEl === 'function') ? _sylvaGalleryEl(pane) : null;
-    if (galleryEl) {
-        galleryEl.querySelectorAll('.gallery-item').forEach(function(i) {
-            i.classList.toggle('active', i.getAttribute('data-scene-id') === String(sceneId));
-        });
-    }
-}
-function toggleTimeSliderPlay() {
-    _tsPlaying = !_tsPlaying;
-    var btn = document.getElementById('ts-play-btn');
-    if (!btn) return;
-    if (_tsPlaying) { btn.textContent = '⏸'; _advSlider(); }
-    else            { btn.textContent = '▶'; clearTimeout(_tsPlayTimer); }
-}
-// 🛠️ BUG FİX: Eskiden her kare SABİT 800ms'de bir ilerliyordu — sunucudan
-// yeni sahne/lejant o süre içinde tam gelmezse (ör. yavaş bağlantı) video
-// bir sonraki kareye veri/lejant tam oturmadan atlıyor, aksine hızlı
-// bağlantıda ise gereksiz yere bekleyip "takılıyor" gibi görünüyordu.
-// Artık bir sonraki kareye SADECE mevcut karenin verisi+lejantı ekrana
-// tam yansıdıktan (tile 'load' olayından) SONRA, kısa ve sabit bir
-// "izleme" süresi (TS_PLAY_FRAME_GAP) eklenerek geçilir — böylece video
-// hem asla veri eksik kare göstermez hem de akıcı/tutarlı bir tempoda akar.
-var TS_PLAY_FRAME_GAP = 450; // ms — kare tam yüklendikten sonra ekranda kalma süresi
-function _advSlider() {
-    if (!_tsPlaying) return;
-    var sl = document.getElementById('sylva-time-slider');
-    if (!sl) return;
-    var cur = parseInt(sl.value,10), max = parseInt(sl.max,10);
-    cur = cur >= max ? 0 : cur + 1;
-    sl.value = cur;
-    onTimeSliderChange(cur, function() {
-        if (!_tsPlaying) return; // bu sırada durdurulmuş olabilir
-        _tsPlayTimer = setTimeout(_advSlider, TS_PLAY_FRAME_GAP);
-    });
-}
-
+window._tsSliderIsRgb = false;
+// Eski çağrılar için güvenli no-op: zaman kaydırıcısı/oynatma arayüzü artık
+// kullanılmaz; sahne geçişi doğrudan galeri kartından yapılır.
+function onTimeSliderChange() {}
+function toggleTimeSliderPlay() {}
 /* ── 6. Before/After Swipe ──────────────────────────────────────────────── */
 var _baActive = false;
 function toggleBeforeAfterSwipe() {
@@ -53314,7 +53147,7 @@ refresh();
     }
     window.sylvaLocalizedNativeClasses = sylvaLocalizedNativeClasses;
 
-    function exportVisualFor(pane, key) {
+    function exportVisualFor(pane, key, sceneIdOverride) {
         // 🛡️ KALICI SINIFLANDIRMA DIŞA AKTARIMI: Dil değişimi, editör DOM'unu
         // yeniden çizse bile bu katmanın UYGULANMIŞ sınıflandırması bağımsız
         // bir per-layer export state'te tutulur. Böylece geri dönülen eski
@@ -53322,6 +53155,13 @@ refresh();
         var _persistentExportSymbology = window._sylvaLayerExportSymbologyByPane &&
             window._sylvaLayerExportSymbologyByPane[pane] && key ?
             window._sylvaLayerExportSymbologyByPane[pane][key] : null;
+        // Zaman serisinde sınıflandırma SAHNEYE özeldir. Örneğin yalnızca
+        // 2022 sahnesi sınıflandırıldıysa 2020/2021/2023... ham sürekli değer
+        // olarak dışa aktarılır; 2022 ise kendi lejant/rengini korur.
+        if (sceneIdOverride && _persistentExportSymbology) {
+            var _sceneSym = _persistentExportSymbology.byScene && _persistentExportSymbology.byScene[String(sceneIdOverride)];
+            _persistentExportSymbology = _sceneSym ? _sceneSym : null;
+        }
         var _paneStore = window._sylvaEditorStateByPane && window._sylvaEditorStateByPane[pane];
         var _entryPayload = window._sylvaLayerAnalyzePayloadByPane &&
             window._sylvaLayerAnalyzePayloadByPane[pane] && key ?
@@ -53350,7 +53190,9 @@ refresh();
         // DOM yalnızca GERÇEKTEN aktif/üstte olan katmanın editörünü temsil eder.
         // Toplu indirmede diğer katmanların kendi payload/state kayıtlarına
         // kesinlikle dokunulmaz.
-        var _domBelongsToThisEntry = (pane === activePane() && key === _topKey);
+        var _currentSceneForPane = (typeof window._sylvaSceneIdGet === 'function') ? window._sylvaSceneIdGet(pane) : null;
+        var _domBelongsToThisEntry = (pane === activePane() && key === _topKey &&
+            (!sceneIdOverride || String(_currentSceneForPane || '') === String(sceneIdOverride)));
         // 🛠️ BUG FİX (Faz 15 — "bar olarak indirmiştim, sınıflandırılmış
         // vermiş"): önceden bu fonksiyon yalnızca İLK ve SON sınıfın min/
         // max'ını (ve renklerin düz bir listesini) döndürüyordu — sunucu
@@ -53402,7 +53244,7 @@ refresh();
         // güncel classBreaks dizisini de taşır. Editör snapshot'ı herhangi bir
         // nedenle henüz oluşmadıysa bile indirme sınıflandırmayı kaybetmesin.
         var _exportLayerPayload = _entryPayload;
-        if ((!breaks || !breaks.length) && _exportLayerPayload && Array.isArray(_exportLayerPayload.classBreaks)) {
+        if (!sceneIdOverride && (!breaks || !breaks.length) && _exportLayerPayload && Array.isArray(_exportLayerPayload.classBreaks)) {
             breaks = _exportLayerPayload.classBreaks.map(function (b) {
                 return {
                     min: parseFloat(b.min),
@@ -53572,13 +53414,27 @@ refresh();
             tsBaseEntries.forEach(function (entry) {
                 var indices = tsIndices.length ? tsIndices.slice() : [entry.index];
                 indices.forEach(function (idx) {
-                    if (!idx || /^(TOPO_CONTOUR|BUILDING_FOOTPRINT|RGB)$/i.test(idx)) return;
+                    if (!idx || /^(TOPO_CONTOUR|BUILDING_FOOTPRINT)$/i.test(idx)) return;
                     tsScenes.forEach(function (sceneId, sceneNo) {
                         if (!sceneId) return;
                         var p = Object.assign({}, entry.payload, {
                             index: idx,
                             sceneId: sceneId
                         });
+                        // Her zaman sahneye özgü sınıflandırmayı taşı.
+                        // Bu kayıt yoksa classBreaks'i temizle; böylece önceki
+                        // 2022 sınıflandırması diğer yıllara bulaşmaz.
+                        var _symStore = window._sylvaLayerExportSymbologyByPane &&
+                            window._sylvaLayerExportSymbologyByPane[pane] &&
+                            window._sylvaLayerExportSymbologyByPane[pane][entry.key];
+                        var _sceneSym = _symStore && _symStore.byScene && _symStore.byScene[String(sceneId)];
+                        if (_sceneSym && Array.isArray(_sceneSym.breaks) && _sceneSym.breaks.length) {
+                            p.classBreaks = _sceneSym.breaks.map(function(b){ return {min:b.min,max:b.max,color:b.color,label:b.label}; });
+                            p.classificationType = 'classified';
+                        } else {
+                            delete p.classBreaks;
+                            delete p.classificationType;
+                        }
                         if (isFinite(tsStartYear) && isFinite(tsEndYear) && tsStartYear < tsEndYear) {
                             p.startDate = String(tsStartYear) + '-01-01';
                             p.endDate = String(tsEndYear + 1) + '-01-01';
@@ -53728,7 +53584,7 @@ refresh();
                 filename: _entryFilename,
                 scale:scale, crs:crs,
                 clipMode:entry.payload.clipMode || 'clip', roi:entry.payload.roi || null, rendered:true,
-                visualization:exportVisualFor(pane, entry.key), flatTiff:false,
+                visualization:exportVisualFor(pane, entry.key, entry.payload && entry.payload.sceneId ? entry.payload.sceneId : null), flatTiff:false,
                 // RGB uydu görüntüsünde indirme, harita önizlemesini yeniden
                 // üretmek için ±5 günlük komşu-sahne mozaiği kurmak zorunda
                 // kalmaz; seçilen gerçek sahne doğrudan dışa aktarılır.
@@ -54876,7 +54732,13 @@ window.openInfo=render;
       return {min:Number(c.min),max:Number(c.max),label:String(c.name||c.label||''),color:String(c.color||'#999999')};
     }).filter(function(c){return isFinite(c.min)&&isFinite(c.max)&&c.color;});
     if(!clean.length) return;
-    window._sylvaLayerExportSymbologyByPane[p][key]={breaks:clean};
+    var _sceneId = (typeof window._sylvaSceneIdGet === 'function') ? window._sylvaSceneIdGet(p) : null;
+    var _sceneState = window._sylvaLayerExportSymbologyByPane[p][key] || {};
+    _sceneState.breaks = clean;
+    _sceneState.sceneId = _sceneId || null;
+    _sceneState.byScene = _sceneState.byScene || {};
+    if (_sceneId) _sceneState.byScene[String(_sceneId)] = {breaks: clean.map(function(c){return {min:c.min,max:c.max,label:c.label,color:c.color};})};
+    window._sylvaLayerExportSymbologyByPane[p][key]=_sceneState;
     // Aynı kalıcı bilgi katman payload'ına da yazılır; exportVisualFor dışında
     // çalışan eski/harici indirme akışları da sınıflandırmayı kaybetmez.
     var ps=window._sylvaLayerAnalyzePayloadByPane&&window._sylvaLayerAnalyzePayloadByPane[p];
@@ -54978,6 +54840,133 @@ window.openInfo=render;
   },800);
 })();
 </script>
+
+<script id="sylva-rgb-passive-chart-legend-fix-20260820">
+(function(){
+  'use strict';
+
+  // Ham uydu görüntüsü (RGB) üst katmandaysa, önceki analizden kalan
+  // grafik/lejant ekranda aktif görünmemeli. Bunlar yalnızca görsel olarak
+  // pasifleşir; analiz katmanına geçildiğinde mevcut katmana ait içerik
+  // yeniden etkinleştirilir.
+  function activePane(){
+    return (typeof window._sylvaActivePaneId === 'function')
+      ? window._sylvaActivePaneId() : 'map';
+  }
+
+  function isRgbTop(pane){
+    pane = pane || activePane();
+    var top = window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[pane];
+    return !!(top && String(top).indexOf('RGB::') === 0);
+  }
+
+  function clearChart(){
+    window._sylvaChartDataByPane = window._sylvaChartDataByPane || {map:null,map2:null};
+    var p = activePane();
+    window._sylvaChartDataByPane[p] = null;
+    if (window._sylvaChartSnapshotByPane && window._sylvaChartSnapshotByPane[p]) {
+      // RGB ekranda iken eski analizin grafiğini tekrar geri yükleme.
+      // Analiz katmanına dönüldüğünde o katmanın kendi snapshot'ı yeniden kullanılır.
+    }
+    var wrap = document.getElementById('stats-chart-svg-wrap');
+    var table = document.getElementById('stats-chart-table');
+    if (wrap && wrap.getAttribute('data-sylva-rgb-cleared') !== '1') {
+      wrap.setAttribute('data-sylva-rgb-cleared','1');
+      wrap.className = 'chart-placeholder';
+      wrap.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:80px;color:#94a3b8;font-size:0.78rem;text-align:center;padding:0 12px;">' +
+        'Uydu görüntüsünde grafik yoktur.' + '</div>';
+    }
+    if (table && table.getAttribute('data-sylva-rgb-cleared') !== '1') {
+      table.setAttribute('data-sylva-rgb-cleared','1');
+      table.innerHTML = '';
+    }
+  }
+
+  function setChartPassive(passive){
+    var section = document.getElementById('data-charts-section');
+    var body = document.getElementById('data-charts-body');
+    var container = document.getElementById('stats-chart-container');
+    var controls = document.querySelectorAll('#data-charts-section button');
+    [section, body, container].forEach(function(el){
+      if (!el) return;
+      el.style.opacity = passive ? '.35' : '1';
+      el.style.pointerEvents = passive ? 'none' : '';
+      el.style.userSelect = passive ? 'none' : '';
+      if (passive) el.setAttribute('aria-disabled','true');
+      else el.removeAttribute('aria-disabled');
+    });
+    controls.forEach(function(btn){
+      if (passive) {
+        btn.disabled = true;
+        btn.setAttribute('data-sylva-rgb-passive','1');
+      } else if (btn.getAttribute('data-sylva-rgb-passive') === '1') {
+        btn.disabled = false;
+        btn.removeAttribute('data-sylva-rgb-passive');
+      }
+    });
+  }
+
+  function setLegendPassive(pane, passive){
+    var id = pane === 'map2' ? 'map2-legend-box' : 'map-legend-box';
+    var legend = document.getElementById(id);
+    if (!legend) return;
+    legend.style.opacity = passive ? '.35' : '1';
+    legend.style.pointerEvents = passive ? 'none' : '';
+    legend.style.userSelect = passive ? 'none' : '';
+    if (passive) legend.setAttribute('aria-disabled','true');
+    else legend.removeAttribute('aria-disabled');
+  }
+
+  function sync(){
+    var p = activePane();
+    var rgb = isRgbTop(p);
+    if (rgb) {
+      clearChart();
+      setChartPassive(true);
+      setLegendPassive(p, true);
+    } else {
+      var wrap = document.getElementById('stats-chart-svg-wrap');
+      var table = document.getElementById('stats-chart-table');
+      if (wrap) wrap.removeAttribute('data-sylva-rgb-cleared');
+      if (table) table.removeAttribute('data-sylva-rgb-cleared');
+      setChartPassive(false);
+      setLegendPassive(p, false);
+    }
+  }
+
+  // Katman kutusundan RGB/analiz değişimi.
+  document.addEventListener('click', function(e){
+    if (e.target && e.target.closest && e.target.closest('.sylva-layer-switch-item')) {
+      setTimeout(sync, 40);
+      setTimeout(sync, 180);
+      setTimeout(sync, 500);
+    }
+  });
+  document.addEventListener('change', function(e){
+    if (!e.target) return;
+    if (e.target.matches && (
+      e.target.matches('.sylva-layer-switch-visibility') ||
+      e.target.matches('.uydu-goruntu-radio') ||
+      e.target.matches('.uydu-analiz-checkbox') ||
+      e.target.matches('input[data-analysis]')
+    )) {
+      setTimeout(sync, 50);
+      setTimeout(sync, 250);
+    }
+  });
+
+  // Analiz sonucu/layer switch yeniden çizildiğinde de durumu düzelt.
+  var mo = new MutationObserver(function(){
+    clearTimeout(mo._t);
+    mo._t = setTimeout(sync, 80);
+  });
+  mo.observe(document.body, {subtree:true, childList:true});
+
+  [100, 500, 1200, 2200].forEach(function(ms){ setTimeout(sync, ms); });
+  window.sylvaSyncRgbPassiveChartLegend = sync;
+})();
+</script>
+
 </body>
 </script>
 <!-- SATELLITE DATASETS + ANALYSES DETAILED INFORMATION (EN master, 30-language translation) -->
