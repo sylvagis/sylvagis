@@ -622,7 +622,7 @@ tr.class-highlight-active {
 }
         * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
         html, body { width: 100%; max-width: 100%; }
-        body { display: flex; flex-direction: column; height: 100vh; background-color: #f4f6f9; color: #333; overflow: hidden; }
+        body { display: flex; flex-direction: column; height: 100vh; margin: 0 !important; padding: 0 !important; background-color: #f4f6f9; color: #333; overflow: hidden; }
 
         /* ===========================================================
            ♿ ERİŞİLEBİLİRLİK (Accessibility) — Klavye ile Gezinme
@@ -4175,7 +4175,9 @@ tr.class-highlight-active {
                     <!-- ══ 📈 Zaman Serisi ve Değişim Analizi — Alt Bölüm ═══ -->
                     <!-- 🆕 Erişim kademeleri:
                          1) Hiçbir zaman serisi uyumlu analiz (NDVI vb. — LULC/TOPO/SAR hariç)
-                            seçili değilken: #ts-period-wrap tamamen pasif, ipucu metni görünür.
+                            veya tam 1 gerçek uydu görüntüsü seçili değilken: #ts-period-wrap tamamen pasif.
+                         1b) Tam 1 uydu görüntüsü seçilirse RGB uydu zaman serisi açılır; 2+ görüntü
+                            seçilirse tekrar pasif olur.
                          2) Uygun bir analiz seçilince: Periyot (Aylık/Yıllık) butonları aktif
                             olur, ipucu metni gizlenir; ancak Tarih Aralığı/Bulutluluk Oranı
                             (#ts-datecloud-wrap) hâlâ pasiftir.
@@ -4211,13 +4213,13 @@ tr.class-highlight-active {
                                 <div style="flex:1;">
                                     <div style="font-size:0.67rem;color:#64748b;margin-bottom:2px;" data-i18n="ts_start_year">Start Year</div>
                                     <input type="number" id="ts-start-year" class="ts-year-input"
-                                           min="1972" max="2025" placeholder="e.g. 2018" data-i18n-placeholder="ts_eg_start">
+                                           min="1972" max="2026" placeholder="e.g. 2018" data-i18n-placeholder="ts_eg_start">
                                 </div>
                                 <div style="padding-bottom:7px;color:#94a3b8;font-weight:700;">–</div>
                                 <div style="flex:1;">
                                     <div style="font-size:0.67rem;color:#64748b;margin-bottom:2px;" data-i18n="ts_end_year">End Year</div>
                                     <input type="number" id="ts-end-year" class="ts-year-input"
-                                           min="1972" max="2025" placeholder="e.g. 2024" data-i18n-placeholder="ts_eg_end">
+                                           min="1972" max="2026" placeholder="e.g. 2024" data-i18n-placeholder="ts_eg_end">
                                 </div>
                             </div>
 
@@ -6740,6 +6742,19 @@ tr.class-highlight-active {
                     attribution: srcLayer.options && srcLayer.options.attribution
                 });
                 window._geeLayersByPane.map2[key] = clone;
+
+                // Ekran 1'deki katman etiketlerini (özellikle tarih/tarih aralığı)
+                // Ekran 2'ye de birebir aktar. Aksi halde map2 katman kutusu
+                // yalnızca ham dataset/analysis adını gösteriyor ve Ekran 1 ile
+                // aynı sahnenin tarih bilgisini kaybediyordu.
+                window._sylvaLayerFriendlyNames = window._sylvaLayerFriendlyNames || {};
+                window._sylvaLayerBaseNames = window._sylvaLayerBaseNames || {};
+                if (window._sylvaLayerFriendlyNames[key] !== undefined) {
+                    window._sylvaLayerFriendlyNames[key] = window._sylvaLayerFriendlyNames[key];
+                }
+                if (window._sylvaLayerBaseNames[key] !== undefined) {
+                    window._sylvaLayerBaseNames[key] = window._sylvaLayerBaseNames[key];
+                }
 
                 var srcVisible = !(window._sylvaLayerVisibleByPane.map && window._sylvaLayerVisibleByPane.map[key] === false);
                 window._sylvaLayerVisibleByPane.map2[key] = srcVisible;
@@ -9975,12 +9990,26 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
         // ===========================================================
         var _TS_INELIGIBLE_KEYS = ['LULC', 'TOPO', 'SAR', 'BUILDING_FOOTPRINT'];
         function _tsEligibleAnalysisSelected() {
-            var boxes = document.querySelectorAll('.uydu-analiz-checkbox:checked');
-            for (var i = 0; i < boxes.length; i++) {
-                var key = boxes[i].getAttribute('data-analysis') || '';
+            // Uydu görüntüsü modu: TAM OLARAK 1 gerçek RGB uydu veri seti
+            // seçiliyken Time Series paneli de aktif olur. 2+ seçimde pasiftir;
+            // çünkü tek bir zaman serisi için hangi sensörün kullanılacağı belirsizdir.
+            var _rgbBoxes = document.querySelectorAll('.uydu-goruntu-radio:checked');
+            var _analysisBoxes = document.querySelectorAll('.uydu-analiz-checkbox:checked');
+            if (_rgbBoxes.length === 1 && _analysisBoxes.length === 0) return true;
+            if (_rgbBoxes.length > 1) return false;
+
+            // Mevcut NDVI/NDWI vb. davranışı aynen koru.
+            for (var i = 0; i < _analysisBoxes.length; i++) {
+                var key = _analysisBoxes[i].getAttribute('data-analysis') || '';
                 if (_TS_INELIGIBLE_KEYS.indexOf(key) === -1) return true;
             }
             return false;
+        }
+
+        function _tsIsSatelliteImageMode() {
+            var _rgbBoxes = document.querySelectorAll('.uydu-goruntu-radio:checked');
+            var _analysisBoxes = document.querySelectorAll('.uydu-analiz-checkbox:checked');
+            return _rgbBoxes.length === 1 && _analysisBoxes.length === 0;
         }
 
         // Periyot (Aylık/Yıllık) butonlarından biri seçili mi?
@@ -9995,17 +10024,41 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
         // pasif duruma döndürür (seçili periyot ve üstteki tarih/bulut pasifliği dahil).
         function _updateTsSubsectionAvailability() {
             var eligible = _tsEligibleAnalysisSelected();
+            var rgbMode = (typeof _tsIsSatelliteImageMode === 'function') && _tsIsSatelliteImageMode();
+            var rgbCount = document.querySelectorAll('.uydu-goruntu-radio:checked').length;
+            var analysisCount = document.querySelectorAll('.uydu-analiz-checkbox:checked').length;
             var hint       = document.getElementById('ts-select-hint');
             var periodWrap = document.getElementById('ts-period-wrap');
-            if (hint) hint.style.display = eligible ? 'none' : '';
+            var subsection = document.getElementById('ts-subsection');
+            var desc       = document.querySelector('#ts-subsection .ts-desc');
+
+            if (subsection) {
+                subsection.classList.toggle('sylva-ts-satellite-mode', !!rgbMode);
+                subsection.setAttribute('data-ts-mode', rgbMode ? 'satellite-image' : (eligible ? 'analysis' : 'none'));
+            }
+            if (desc && typeof t === 'function') {
+                desc.textContent = rgbMode
+                    ? (t('ts_rgb_desc', 'Select Monthly or Yearly, enter the year range, choose optional months and cloud cover, then run the analysis to load real satellite scenes for those periods.'))
+                    : (t('ts_desc', '(Calculates the monthly or annual change of the selected index within a date range and displays it as a line chart.)'));
+            }
+            if (hint) {
+                if (rgbCount > 1) {
+                    hint.textContent = (typeof t === 'function') ? t('ts_rgb_multi_hint', 'Select only 1 satellite image dataset to enable Time Series & Change Analysis.') : 'Select only 1 satellite image dataset to enable Time Series & Change Analysis.';
+                    hint.style.display = '';
+                } else if (rgbMode) {
+                    hint.textContent = '';
+                    hint.style.display = 'none';
+                } else {
+                    hint.style.display = eligible ? 'none' : '';
+                }
+            }
             if (periodWrap) {
                 periodWrap.classList.toggle('sylva-ts-passive', !eligible);
                 var pBtns = periodWrap.querySelectorAll('.ts-period-btn');
                 pBtns.forEach(function (b) { b.disabled = !eligible; });
             }
             if (!eligible) {
-                // Uygun analiz seçimi kalkınca: periyot seçimini ve buna bağlı
-                // aktif/pasif durumları da sıfırla (bkz. toggleTsPeriod).
+                // Uygun seçim kalkınca periyot ve özel tarih/bulut alanlarını sıfırla.
                 var btnM = document.getElementById('ts-btn-monthly');
                 var btnY = document.getElementById('ts-btn-yearly');
                 if (btnM) btnM.classList.remove('active');
@@ -13388,30 +13441,33 @@ function selectRamp(name) {
             // DİĞER tüm katmanlar "görünür değil" işaretlenip haritadan
             // kaldırılır — _sylvaAddGeeLayer()'daki "yeni katman eklenince
             // diğerlerini gizle" mantığıyla birebir tutarlı.
+            // 🆕 Çoklu görünürlük modu: Katman kutusundaki bir katmana geçmek
+            // artık diğer katmanların tikini kapatmaz. Yeni bir analiz ilk kez
+            // eklenirken _sylvaAddGeeLayer() varsayılan olarak yalnızca onu
+            // görünür bırakır; kullanıcı kutudan istediği diğer katmanları
+            // sonradan tek tek işaretleyerek aynı anda gösterebilir.
+            // Böylece Uydu, Arazi Kullanımı, Topografik ve Çevresel analizlerin
+            // tamamı aynı katman geçiş mantığını kullanır.
             (function () {
                 window._sylvaLayerVisibleByPane = window._sylvaLayerVisibleByPane || { map: {}, map2: {} };
                 window._sylvaLayerVisibleByPane[key] = window._sylvaLayerVisibleByPane[key] || {};
                 var _bftTargetMap = (typeof _sylvaTargetMap === 'function') ? _sylvaTargetMap(paneId) : null;
-                Object.keys(store).forEach(function (k) {
-                    var _bftLayer = store[k];
-                    if (k === layerKey) {
-                        window._sylvaLayerVisibleByPane[key][k] = true;
-                        if (_bftLayer && _bftTargetMap) {
-                            try { if (!_bftTargetMap.hasLayer(_bftLayer)) _bftLayer.addTo(_bftTargetMap); } catch (e) {}
-                        }
-                    } else {
-                        window._sylvaLayerVisibleByPane[key][k] = false;
-                        if (_bftLayer && _bftTargetMap) {
-                            try { if (_bftTargetMap.hasLayer(_bftLayer)) _bftTargetMap.removeLayer(_bftLayer); } catch (e) {}
-                        }
-                        var _bftCvStore = window._sylvaContourVectorByPane && window._sylvaContourVectorByPane[key];
-                        var _bftCvLayer = _bftCvStore && _bftCvStore[k];
-                        if (_bftCvLayer && _bftTargetMap) {
-                            try { if (_bftTargetMap.hasLayer(_bftCvLayer)) _bftTargetMap.removeLayer(_bftCvLayer); } catch (e) {}
-                        }
-                    }
-                });
+                // Sadece seçilen katmanı görünür hale getir; diğerlerinin
+                // mevcut görünürlük durumlarına DOKUNMA.
+                window._sylvaLayerVisibleByPane[key][layerKey] = true;
+                var _bftLayer = store[layerKey];
+                if (_bftLayer && _bftTargetMap) {
+                    try { if (!_bftTargetMap.hasLayer(_bftLayer)) _bftLayer.addTo(_bftTargetMap); } catch (e) {}
+                }
+                // Varsa kontur vektör eşleniğini de aynı şekilde aç.
+                var _bftCvStore = window._sylvaContourVectorByPane && window._sylvaContourVectorByPane[key];
+                var _bftCvLayer = _bftCvStore && _bftCvStore[layerKey];
+                if (_bftCvLayer && _bftTargetMap) {
+                    try { if (!_bftTargetMap.hasLayer(_bftCvLayer)) _bftCvLayer.addTo(_bftTargetMap); } catch (e) {}
+                }
             })();
+
+
 
             // 🛠️ BUG FİX: "Veri Şeffaflığı" slider'ı her zaman EN SON EKLENEN
             // katmanı (_geeLayer / _geeLayer2) hedefliyordu; katman listesinden
@@ -13735,7 +13791,7 @@ function selectRamp(name) {
             if (!box) return;
             var store = (window._geeLayersByPane && window._geeLayersByPane[key]) ? window._geeLayersByPane[key] : {};
             var keys = Object.keys(store);
-            if (keys.length < 2) {
+            if (keys.length < 1) {
                 box.style.display = 'none';
                 box.innerHTML = '';
                 return;
@@ -13746,11 +13802,15 @@ function selectRamp(name) {
             var expanded = !!window._sylvaLayerSwitchExpanded[key];
 
             var titleText = escapeHtml(t('layer_switch_title', 'Üstte Gösterilecek Katman'));
+            // Ekran 1 ve Ekran 2 aynı katman etiketini kullanmalı. Özellikle
+            // uydu görüntülerinde gerçek çekim/tarih aralığı header'da da
+            // görünür; map2'de yalnızca dataset adı kalmamalıdır.
+            var topLabel = _sylvaLayerFriendlyName(topKey) || _sylvaLayerBaseName(topKey);
             var html = '<div class="sylva-layer-switch-header" data-pane="' + escapeHtml(paneId) +
                 '" title="' + titleText + '" style="cursor:pointer;display:flex;align-items:center;' +
                 'justify-content:space-between;gap:6px;">' +
-                '<b style="font-size:0.7rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px;">' +
-                escapeHtml(_sylvaLayerBaseName(topKey)) + '</b>' +
+                '<b style="font-size:0.7rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px;">' +
+                escapeHtml(topLabel) + '</b>' +
                 '<span class="sylva-layer-switch-toggle" style="font-size:0.6rem;color:#1e3a8a;flex-shrink:0;">' +
                 (expanded ? '▲' : '▼') + '</span></div>';
 
@@ -14352,16 +14412,67 @@ function selectRamp(name) {
 
                 container.addEventListener('mousedown', onDown);
                 container.addEventListener('touchstart', onDown, { passive: true });
+                // Pointer olayları özellikle Ekran 2'de kalem/dokunmatik ve
+                // bazı Chromium çift-ekran düzenlerinde mouse olaylarının
+                // kaçırılmasını önler. Aynı oturum mouse/touch ile iki kez
+                // başlatılmasın diye onDown zaten dragging bayrağıyla korunur.
+                container.addEventListener('pointerdown', onDown);
                 document.addEventListener('mousemove', onMove);
                 document.addEventListener('touchmove', onMove, { passive: false });
+                document.addEventListener('pointermove', onMove);
                 document.addEventListener('mouseup', onUp);
                 document.addEventListener('touchend', onUp);
+                document.addEventListener('pointerup', onUp);
+                document.addEventListener('pointercancel', onUp);
             }
+
+            // 🆕 Ekran 2 sıyırıcı güçlendirmesi. Bazı çift-ekran düzenlerinde
+            // map2'nin Leaflet pane'i ilk anda görünür boyut almadan önce
+            // oluşturulabiliyor. Bu durumda DOM'dan hedef konteyner bulunamazsa
+            // doğrudan map2'nin kayıtlı katman konteyneri kullanılır. Böylece
+            // Ekran 1 ile aynı Swipe davranışı garanti edilir.
+            function _sylvaSwipeEnsurePaneReady(paneId) {
+                var lmap = (paneId === 'map2') ? map2 : map;
+                if (!lmap) return;
+                try {
+                    if (!lmap.getPane('geeAnalysisPane')) {
+                        lmap.createPane('geeAnalysisPane');
+                        lmap.getPane('geeAnalysisPane').style.zIndex = 450;
+                        lmap.getPane('geeAnalysisPane').style.pointerEvents = 'none';
+                    }
+                } catch(e) {}
+                try { lmap.invalidateSize({animate:false,pan:false}); } catch(e) {}
+            }
+
+            // DOM hedefi yoksa kayıtlı görünür GEE katmanlarının konteynerini
+            // yedek hedef olarak döndür. Özellikle map2 flex panelden yeni
+            // görünür olduğunda bu yol kullanılır.
+            var _oldSwipeTargetEls = _sylvaSwipeTargetEls;
+            _sylvaSwipeTargetEls = function(paneId) {
+                var els = _oldSwipeTargetEls(paneId) || [];
+                if (els.length) return els;
+                var key = (paneId === 'map2') ? 'map2' : 'map';
+                var store = window._geeLayersByPane && window._geeLayersByPane[key];
+                var vis = window._sylvaLayerVisibleByPane && window._sylvaLayerVisibleByPane[key];
+                var topKey = window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[key];
+                var candidates = [];
+                if (topKey && store && store[topKey] && (!vis || vis[topKey] !== false)) candidates.push(store[topKey]);
+                if (!candidates.length && store) {
+                    Object.keys(store).forEach(function(k){
+                        if (!vis || vis[k] !== false) candidates.push(store[k]);
+                    });
+                }
+                candidates.forEach(function(layer){
+                    try { if (layer && typeof layer.getContainer === 'function') { var el=layer.getContainer(); if(el && els.indexOf(el)<0) els.push(el); } } catch(e) {}
+                });
+                return els;
+            };
 
             window.sylvaToggleLayerSwipeBtn = function (paneId, btn) {
                 paneId = (paneId === 'map2') ? 'map2' : 'map';
                 var s = SWIPE[paneId];
                 s.active = !s.active;
+                if (s.active) _sylvaSwipeEnsurePaneReady(paneId);
                 _sylvaBindSwipeDrag(paneId);
                 var button = btn || document.getElementById(paneId === 'map2' ? 'btn-before-after-map2' : 'btn-before-after');
                 if (button) button.classList.toggle('active', s.active);
@@ -27352,6 +27463,8 @@ var SYLVA_TRANSLATIONS = {
     ts_title: '📈 Time Series & Change Analysis',
     ts_select_hint: '(select an analysis first)',
     ts_desc: '(Calculates the monthly or annual change of the selected index within a date range and displays it as a line chart.)',
+     ts_rgb_desc: 'Select Monthly or Yearly, enter the year range, choose optional months and cloud cover, then run the analysis to load real satellite scenes for those periods.',
+     ts_rgb_multi_hint: 'Select only 1 satellite image dataset to enable Time Series & Change Analysis.',
     ts_period: '🗓️ Period',
     ts_monthly: 'Monthly',
     ts_yearly: 'Yearly',
@@ -51449,13 +51562,12 @@ function toggleTsPeriod(type) {
     // ekstra güvenlik olarak burada da kontrol edilir.
     if (btnM.disabled || btnY.disabled) return;
 
-    // 🆕 Zaman serisi analizi yalnızca TEK bir analiz seçiliyken çalışabilir
-    // (normal analizlerde birden fazla seçim serbesttir, ama zaman serisi
-    // için zorunlu olarak yalnızca 1 analiz seçili olmalı). Birden fazla
-    // (veya hiç) analiz seçiliyken Aylık/Yıllık butonuna basılırsa, periyot
-    // hiç aktifleşmez ve ekranın ortasında bilgilendirici bir uyarı gösterilir.
+    // Uydu görüntüsü zaman serisinde tam 1 RGB veri seti yeterlidir.
+    // Uydu analizi (NDVI/NDWI vb.) tarafındaki eski "yalnızca 1 analiz"
+    // kuralı aynen korunur.
+    var _tsRgbMode = (typeof _tsIsSatelliteImageMode === 'function') && _tsIsSatelliteImageMode();
     var _tsCheckedCount = document.querySelectorAll('.uydu-analiz-checkbox:checked').length;
-    if (_tsCheckedCount !== 1) {
+    if (!_tsRgbMode && _tsCheckedCount !== 1) {
         if (typeof sylvaAlert === 'function') {
             sylvaAlert(t('ts_alert_only_one', 'You must select only 1 analysis to run the time series analysis.'), 'info');
         }
@@ -51592,6 +51704,31 @@ function _renderLineChart(data) {
     wrap.innerHTML='<svg viewBox="0 0 '+W+' '+H+'" width="100%" height="180" style="display:block;">'+grid+xLbls+svg+leg+'</svg>' + statsHtml;
 }
 
+/* ── 🛰️ RGB Uydu Görüntüsü Zaman Serisi Galerisi ────────────────────────
+   Zaman serisi NDVI/NDWI galerisinden ayrı tutulur; çünkü RGB sahneleri
+   loadSpecificScene() değil loadRgbScene() ile açılmalıdır. Böylece tek bir
+   Sentinel/Landsat veri seti seçilip aylık/yıllık zaman serisi çalıştırıldığında
+   gerçek sahneler normal Uydu Görüntüsü galerisiyle aynı davranışta açılır. */
+function _renderRgbTimeSeriesGallery(gallery, paneId, satellite) {
+    paneId = (paneId === 'map2') ? 'map2' : 'map';
+    var galleryEl = (typeof _sylvaGalleryEl === 'function') ? _sylvaGalleryEl(paneId) : null;
+    if (!galleryEl || !gallery || !gallery.length) return;
+    var visible = document.querySelector('.uydu-goruntu-radio:checked');
+    var label = visible ? (visible.getAttribute('data-label') || visible.value) : satellite;
+    var meta = { datasetKey: satellite, datasetLabel: label, datasetName: label, analysisName: 'RGB' };
+    var dsInfo = { key: satellite, datasetKey: satellite, datasetName: label, label: label };
+    var state = _rgbGalleryStateFor(paneId, satellite);
+    state.scenes = gallery.map(function(g){ return { sceneId:g.sceneId, timestamp:g.timestamp, cloud:g.cloud, label:g.label || '' }; });
+    state.dataset = dsInfo;
+    state.meta = meta;
+    state.sortKey = 'date';
+    state.sortAsc = true;
+    state.activeSceneId = state.scenes[0] ? state.scenes[0].sceneId : null;
+    renderRgbGalleryCards(paneId);
+    var first = state.scenes[0];
+    if (first) loadRgbScene(first.sceneId, meta, dsInfo, paneId, true, false, satellite, label, false);
+}
+
 /* ── 4. Zaman Serisi Analizi — GERÇEK GEE verisi ──────────────────────────
    🛠️ Eskiden bu fonksiyon Math.random() ile SAHTE veri üretiyordu, hiçbir
    sunucu/GEE çağrısı yapmıyordu. Artık seçilen AOI + tarih aralığı + periyot
@@ -51620,14 +51757,21 @@ function runTimeSeriesAnalysis() {
     var cloudPct = parseInt((document.getElementById('ts-cloud-pct')||{}).value, 10);
     if (isNaN(cloudPct)) cloudPct = 30;
 
-    // Seçili indeks (Kullanılabilir Analizler'den)
+    // Seçili kaynak: NDVI/NDWI gibi analiz veya TAM 1 gerçek RGB uydu görüntüsü.
+    var _tsRgbMode = (typeof _tsIsSatelliteImageMode === 'function') && _tsIsSatelliteImageMode();
     var checkedBoxes = document.querySelectorAll('.uydu-analiz-checkbox:checked');
     var idxs = [];
-    checkedBoxes.forEach(function(cb){ idxs.push(cb.getAttribute('data-analysis')); });
-    if (!idxs.length) { alert(t('ts_alert_index')); return; }
+    if (_tsRgbMode) {
+        // Server bu özel indeksi görünür gerçek uydu sahneleri üretmek için kullanır.
+        idxs = ['RGB'];
+    } else {
+        checkedBoxes.forEach(function(cb){ idxs.push(cb.getAttribute('data-analysis')); });
+        if (!idxs.length) { alert(t('ts_alert_index')); return; }
+    }
     // Zaman Serisi indirmesinde her gerçek dönem + her seçili indeks ayrı
     // raster olarak paketlenebilsin diye son seçimi indirme kuyruğuna aktar.
     window._tsLastIndices = idxs.slice();
+    window._tsIsRgbMode = !!_tsRgbMode;
 
     // AOI (o an aktif ekranın çizilmiş Çalışma Alanı geometrisi) + uydu
     var _pane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
@@ -51635,7 +51779,17 @@ function runTimeSeriesAnalysis() {
     var _roi = (typeof _extractROIGeometry === 'function' && _aoiForPane) ? _extractROIGeometry(_aoiForPane) : null;
     if (!_roi) { alert(t('ts_alert_year') /* AOI çizilmemiş — yıl uyarısıyla aynı stil */); return; }
     var sensorRadio = document.querySelector('.uydu-sensor-radio:checked');
-    var satellite = sensorRadio ? sensorRadio.value : 's2-l2a';
+    var visibleRgb = document.querySelector('.uydu-goruntu-radio:checked');
+    // RGB zaman serisinde kaynak mutlaka görünür olarak seçilen TEK uydu
+    // görüntüsü kutusundan alınır; gizli analiz sensörü yalnızca indeks
+    // analizleri için yedek kaynaktır.
+    var satellite = _tsRgbMode
+        ? (visibleRgb ? visibleRgb.value : 's2-l2a')
+        : (sensorRadio ? sensorRadio.value : 's2-l2a');
+    if (_tsRgbMode && document.querySelectorAll('.uydu-goruntu-radio:checked').length !== 1) {
+        alert(typeof t === 'function' ? t('ts_rgb_multi_hint', 'Select only 1 satellite image dataset to enable Time Series & Change Analysis.') : 'Select only 1 satellite image dataset to enable Time Series & Change Analysis.');
+        return;
+    }
 
     // 🆕 Ayrı bir "Zaman Serisini Çalıştır" butonu YOK — bu özellik genel
     // "🚀 Analizi Çalıştır" butonuna entegre edildi (bkz. runAnalysis()
@@ -51669,6 +51823,7 @@ function runTimeSeriesAnalysis() {
             endYear:   ey,
             maxCloud:  cloudPct,
             indices:   idxs,
+            mode:       _tsRgbMode ? 'satellite-image' : 'analysis',
             // 🛠️ BUG FİX: "Zaman Serisi ve Değişim Analizi" bölümündeki Ay
             // Seçici (sylvaTsSelectedMonths — bkz. ts-month-select-panel)
             // eskiden bu istek gövdesine HİÇ eklenmiyordu; kullanıcı örn.
@@ -51717,29 +51872,24 @@ function runTimeSeriesAnalysis() {
                 return [g.sceneId, g.timestamp, g.cloud];
             });
             var _meta = (typeof getSelectedAnalysisMeta === 'function') ? getSelectedAnalysisMeta() : null;
-            renderGalleryFromScenes(scenesArr, _pane, _meta);
 
-            // 🛠️ BUG FİX (KÖK NEDEN): Zaman Serisi tamamlandığında galeri ve
-            // çizgi grafik doluyor ama haritaya/lejanta HİÇBİR sahne hiç
-            // yüklenmiyordu — "ekrana veri ve lejant gelmiyor" hatasının
-            // birebir nedeni buydu. Artık galerideki ilk (varsayılan olarak
-            // "active" işaretli) periyodun GERÇEK sahnesi otomatik olarak
-            // haritaya ve lejanta yüklenir.
-            // 🎬 silent:true — galeri/grafik zaten dolduğu ve kullanıcı Zaman
-            // Serisi ekranına yeni geçtiği için, ilk kareyi ayrıca yanıp sönen
-            // "SylvaGIS" yükleme uyarısıyla göstermeye gerek yok; sessizce yüklenir.
-            loadSpecificScene(scenesArr[0][0], _pane, { silent: true });
+            if (_tsRgbMode) {
+                // RGB zaman serisi gerçek uydu sahnesidir; normal analiz galerisi
+                // olan renderGalleryFromScenes/loadSpecificScene yerine RGB galerisi
+                // kullanılmalıdır. Aksi halde meta olmadığı için sahne yüklenemez.
+                window._tsRgbDatasetKey = satellite;
+                window._tsRgbMeta = { datasetKey: satellite, datasetLabel: (document.querySelector('.uydu-goruntu-radio:checked') || {}).getAttribute ? (document.querySelector('.uydu-goruntu-radio:checked').getAttribute('data-label') || satellite) : satellite, datasetName: satellite, analysisName: 'RGB' };
+                _renderRgbTimeSeriesGallery(data.gallery, _pane, satellite);
+            } else {
+                renderGalleryFromScenes(scenesArr, _pane, _meta);
+                loadSpecificScene(scenesArr[0][0], _pane, { silent: true });
+            }
 
-            // 🛠️ BUG FİX: Zaman kaydırıcısının (video oynatma dahil) hangi
-            // periyotta hangi GERÇEK sahnenin gösterileceğini bilmesi için
-            // sahne ID listesi ve ait olduğu ekran globalde saklanır — bkz.
-            // onTimeSliderChange().
             window._tsSliderSceneIds = data.gallery.map(function(g) { return g.sceneId; });
-            // Her zaman serisi sahnesinin GEE system:time_start değeri ayrıca
-            // saklanır; indirme sırasında dönem etiketi yerine görüntünün
-            // GERÇEK çekim tarihi dosya adına yazılır.
             window._tsSliderSceneTimestamps = data.gallery.map(function(g) { return g.timestamp || null; });
             window._tsSliderPane = _pane;
+            window._tsSliderSatellite = satellite;
+            window._tsSliderIsRgb = !!_tsRgbMode;
         }
 
         // Time Slider — gerçek periyot etiketleri (2015-03, 2015-04, ... veya 2015, 2016, ...)
@@ -51794,7 +51944,15 @@ function onTimeSliderChange(val, onSceneReady) {
     // 🎬 Oynatma sırasında (_tsPlaying) yükleme ekranı sessize alınır —
     // her karede yanıp sönen "SylvaGIS" overlay'i akıcı video hissini
     // bozuyordu. Elle sürüklemede overlay eskisi gibi görünür.
-    loadSpecificScene(sceneId, pane, { silent: _tsPlaying, onDone: onSceneReady });
+    if (window._tsSliderIsRgb) {
+        var _rgbDk = window._tsSliderSatellite || window._tsRgbDatasetKey;
+        var _rgbMeta = window._tsRgbMeta || { datasetKey: _rgbDk, datasetLabel: _rgbDk, datasetName: _rgbDk, analysisName: 'RGB' };
+        var _rgbDsInfo = { key: _rgbDk, datasetKey: _rgbDk, datasetName: _rgbMeta.datasetLabel || _rgbDk, label: _rgbMeta.datasetLabel || _rgbDk };
+        loadRgbScene(sceneId, _rgbMeta, _rgbDsInfo, pane, false, false, _rgbDk, _rgbMeta.datasetLabel || _rgbDk, false);
+        if (typeof onSceneReady === 'function') setTimeout(onSceneReady, _tsPlaying ? 300 : 0);
+    } else {
+        loadSpecificScene(sceneId, pane, { silent: _tsPlaying, onDone: onSceneReady });
+    }
 
     // Galeri kartındaki "active" vurgusunu kaydırıcı ile senkron tut
     var galleryEl = (typeof _sylvaGalleryEl === 'function') ? _sylvaGalleryEl(pane) : null;
@@ -54006,6 +54164,27 @@ refresh();
   function refreshScreen2(){
     if(activePane()!=='map2') return;
     try{ if(typeof window._sylvaSyncActivePaneControls==='function') window._sylvaSyncActivePaneControls(); }catch(e){}
+    // Ekran 2'de senkronize edilen katmanların Ekran 1'deki tarihli
+    // kullanıcı etiketlerini koru. RGB ve analiz katmanlarında özellikle
+    // scene/date bilgisinin kaybolmasını önler.
+    try{
+      window._sylvaLayerFriendlyNames = window._sylvaLayerFriendlyNames || {};
+      window._sylvaLayerBaseNames = window._sylvaLayerBaseNames || {};
+      var _m2store = window._geeLayersByPane && window._geeLayersByPane.map2;
+      var _m1store = window._geeLayersByPane && window._geeLayersByPane.map;
+      if(_m2store && _m1store){
+        Object.keys(_m2store).forEach(function(k){
+          if(window._sylvaLayerFriendlyNames[k] == null && _m1store[k]){
+            var _m1friendly = window._sylvaLayerFriendlyNames[k];
+            if(_m1friendly != null) window._sylvaLayerFriendlyNames[k] = _m1friendly;
+          }
+          if(window._sylvaLayerBaseNames[k] == null && _m1store[k]){
+            var _m1base = window._sylvaLayerBaseNames[k];
+            if(_m1base != null) window._sylvaLayerBaseNames[k] = _m1base;
+          }
+        });
+      }
+    }catch(e){}
     try{ if(typeof window._sylvaRenderLayerSwitchBox==='function') window._sylvaRenderLayerSwitchBox('map2'); }catch(e){}
     try{ if(typeof window._sylvaUserRequestedClassificationAvailability==='function') window._sylvaUserRequestedClassificationAvailability(); }catch(e){}
     try{
