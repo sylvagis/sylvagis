@@ -6832,10 +6832,57 @@ def analyze():
         except Exception:
             pass
 
-        # NOT: tile_url yukarıda, istatistiklerden ÖNCE üretildi — burada
-        # ikinci bir getMapId() çağrısı YOKTUR. (Eskiden bu satırda tekrar
-        # üretiliyordu; bu hem gereksiz bir GEE isteğiydi hem de tile'ların
-        # kotanın en dolu olduğu anda oluşturulmasına yol açıyordu.)
+        # 🛠️ BUG FİX (Çevresel ve Kentsel Analizler ekranda "bembeyaz"/soluk
+        # görünüyordu, lejanttaki renklendirmeye uymuyordu):
+        #
+        # KÖK NEDEN: Bu 27 analizin (_ENV_URBAN_RASTER_INDICES) her biri,
+        # yukarıdaki tile_url'i üretirken SABİT/tahmini bir min-max aralığıyla
+        # (ör. UHI_LST için -10..+10°C) renklendiriliyordu — bu, o analiz
+        # türü için TEORİK olarak mümkün en geniş aralıktı. Ancak seçilen
+        # AOI'nin GERÇEK veri aralığı çoğu zaman bundan çok daha DAR (ör.
+        # -1.19..+3.35) çıkıyor; bu durumda gerçek piksellerin TAMAMI, geniş
+        # sabit aralığın yalnızca ortasındaki dar bir bandına (genelde
+        # paletin BEYAZ/nötr orta rengine) sıkışıyor ve harita neredeyse
+        # tamamen beyaz/soluk görünüyordu — oysa lejant kutusu (yukarıdaki
+        # applyRealStatsToLegendUI, GERÇEK min/max'ı gösterir) ve indirilen
+        # ham GeoTIFF'e ArcMap'te elle uygulanan gerçek-aralık renklendirme
+        # doğru/canlı sonucu veriyordu. Yani ekran ile lejant/indirme
+        # arasındaki uyumsuzluk, İKİ FARKLI min-max aralığının aynı anda
+        # kullanılmasından kaynaklanıyordu.
+        #
+        # ÇÖZÜM: İstatistikler (gerçek min/max) hesaplandıktan SONRA, yalnızca
+        # bu 27 çevresel/kentsel analiz için, harita katmanı GERÇEK min/max
+        # ile TEK SEFERLİK yeniden üretilir (aynı palet, yalnızca aralık
+        # güncellenir) — böylece ekrandaki renkler artık lejanttaki ve
+        # ArcMap'teki gerçek-aralık renklendirmeyle BİREBİR uyuşur. LULC/
+        # TOPO/SAR ailesi ve RGB (yukarıda zaten ayrı ele alınıyor) bu
+        # yeniden üretimin DIŞINDA tutulur — onlarda min/max birer SINIF
+        # KODU/sabit eşiktir, gerçek veri aralığına göre esnetilirse sınıf-
+        # renk eşleşmesi bozulur (LULC'de zaten ayrı bir sınıf-renk tablosu
+        # mantığı var). Aralık geçersiz/dejenere ise (min/max yok ya da
+        # min==max, örn. AOI'nin tamamı tek bir değerdeyse) sessizce eski
+        # sabit aralığa geri dönülür — harita hiçbir zaman bu adım yüzünden
+        # bozulmaz/kaybolmaz.
+        try:
+            _env_index = data.get('index')
+            _real_mn = real_minmax.get('min')
+            _real_mx = real_minmax.get('max')
+            if (_env_index in _ENV_URBAN_RASTER_INDICES
+                    and isinstance(_real_mn, (int, float))
+                    and isinstance(_real_mx, (int, float))
+                    and _real_mx > _real_mn):
+                _stretched_vis = dict(vis)
+                _stretched_vis['min'] = _real_mn
+                _stretched_vis['max'] = _real_mx
+                _new_map_id = _call_with_retry(lambda: final_display.getMapId(_stretched_vis), retries=1)
+                _new_tile_url_direct = _new_map_id['tile_fetcher'].url_format
+                _sid = _register_tile_session(_new_tile_url_direct, params=data, kind='analyze', extra=_extra)
+                tile_url = _tile_url_for_client(_sid, _new_tile_url_direct)
+                tile_url_direct = _new_tile_url_direct
+                vis = _stretched_vis
+        except Exception as _restretch_err:
+            print('[SylvaGIS] ⚠️ Gerçek-aralık yeniden renklendirme başarısız '
+                  '(orijinal sabit aralık korunuyor): {}'.format(_restretch_err))
 
         # ── Zaman serisi galerisi ────────────────────────────────
         # LULC ailesi statik/tek-katmanlı veri setleridir; zaman serisi
@@ -7335,7 +7382,27 @@ def download_geotiff():
             # için 0 GERÇEK bir sınıftır (Water). Bu nedenle Dynamic World'de
             # 255 NoData olarak korunur ve _build_lulc_symbology_zip() sınıfları
             # 1..9 aralığına kaydırarak güvenli bir ArcMap/QGIS sembolojisi üretir.
-            if lulc_index == 'LULC':
+            #
+            # 🛠️ BUG FİX (Sentinel-2/Landsat gerçek renk indirmeleri ArcMap'te
+            # TAMAMEN SİYAH açılıyordu): Aynı 0-çakışması sorunu, Dynamic
+            # World'e ek olarak gerçek renkli (true-color) RGB Byte
+            # indirmelerinde de vardı ve fark edilmemişti. unitScale(min,max)
+            # ile 0-255'e gerilen gerçek doğal renk kompozitlerinde koyu/
+            # gölgeli/su gibi DÜŞÜK yansımalı pikseller sıkça TAM OLARAK 0'a
+            # yuvarlanır — bunlar GERÇEK, geçerli görüntü verisidir. Ancak
+            # NoData sentinel'i de 0 olunca hem GEE'nin unmask(0) adımı hem de
+            # yerel true-clip (_true_clip_tif_bytes) bu GERÇEK koyu pikselleri
+            # "AOI dışı/geçersiz" ile ayırt edemiyor; AOI'nin önemli bir kısmı
+            # (bazen tamamı, ör. su/orman gölgesi ağırlıklı bir alan) NoData
+            # sanılıp maskeleniyor/siyaha boyanıyordu — ArcMap'te dosya
+            # başarıyla açılıyor ama görüntü baştan sona siyah görünüyordu.
+            # ÇÖZÜM: Dynamic World'deki AYNI teknik — gerçek renkli RGB Byte
+            # indirmelerinde de NoData sentinel'i 255'e (tam beyaz/doygun —
+            # 0-0.3 yansıma aralığına gerilmiş doğal renkte pratikte hiç
+            # oluşmaz) çekildi. Piksel değerleri DEĞİŞMEDİ; yalnızca "bu
+            # değer NoData'dır" etiketi artık gerçek görüntü verisiyle asla
+            # çakışmayan bir değere taşındı.
+            if lulc_index == 'LULC' or _is_byte_rgb_export:
                 nodata_value = 255
             else:
                 nodata_value = 0
@@ -7447,8 +7514,11 @@ def download_geotiff():
                 export_image = final_display.visualize(**vis)
                 # RGB görselleştirme Byte olduğundan NoData da Byte aralığında
                 # kalmalıdır; aksi ArcMap bazı TIFF'leri açmayı reddeder.
+                # 🛠️ BUG FİX: bkz. yukarıdaki _is_byte_rgb_export dalındaki AYNI
+                # başlıklı not — 0, gerçek koyu/gölgeli pikselleri de temsil
+                # edebildiğinden burada da 255 kullanılır (0 yerine).
                 if nodata_value is not None:
-                    nodata_value = 0
+                    nodata_value = 255
             except Exception as visual_err:
                 print('[SylvaGIS] Görsel GeoTIFF üretilemedi; ham bant indiriliyor: {}'.format(visual_err))
 
@@ -8100,9 +8170,36 @@ def _true_clip_tif_bytes(tif_bytes, aoi_geom_4326, nodata_value, strict=False):
                 # crop=True: raster kapsamını da AOI'nin bounding box'ına daraltır
                 # (gereksiz kenar boşluğu kalmaz). nodata: poligon dışındaki TÜM
                 # pikseller — kaynak veri ne olursa olsun — bu değere sabitlenir.
+                #
+                # 🛠️ BUG FİX (Dynamic World'de "Su" sınıfı indirilen dosyada HİÇ
+                # yokken ekranda/grafiği vardı — 9 sınıf yerine 8 sınıf): kök
+                # neden all_touched=False idi. Bu ayarla rasterio bir pikseli
+                # yalnızca TAM MERKEZİ AOI poligonunun içine düşüyorsa "içeride"
+                # sayıyordu. Su gibi AOI sınırına YAKIN/dar/ince biçimde dağılmış
+                # bir sınıf (ör. bir göl kıyısı, AOI sınırı tam da o kıyı
+                # boyunca çizildiğinde) neredeyse TAMAMEN sınıra bitişik
+                # piksellerden oluşabilir — bu piksellerin çoğunun MERKEZİ
+                # poligonun az dışında kalabilir, all_touched=False bunların
+                # HEPSİNİ NoData'ya çevirip sınıfı tamamen "kaybettirir". Halbuki
+                # GEE'nin kendi ekran/haritada kullandığı clip() ve grafik/
+                # histogram hesaplaması (reduceRegion) bu kadar katı/piksel-
+                # merkezli değildir; bu yüzden ekranda ve grafikte su görünmeye
+                # devam ediyordu — yalnızca burada, yerel "true-clip" güvence
+                # katmanında kayboluyordu. ÇÖZÜM: all_touched=True — bir piksel,
+                # MERKEZİ değil, AOI poligonuyla HERHANGİ BİR şekilde kesişiyorsa
+                # (dokunuyorsa) "içeride" sayılır. Bu, AOI sınırına yakın ince
+                # sınıfların (su, dar bir şerit vb.) kaybolmasını önler; AOI
+                # dışı pikseller yine de NoData olarak kalmaya devam eder —
+                # yalnızca sınır pikselleri artık daha kapsayıcı (ekranla
+                # tutarlı) değerlendirilir. Bu değişiklik TÜM LULC ailesini
+                # (ve true-clip kullanan diğer tüm indirmeleri) aynı şekilde
+                # ve tutarlı biçimde etkiler — yalnızca Dynamic World'e özel
+                # bir dal EKLENMEDİ, çünkü sorun aslında ailenin TÜMÜNÜN
+                # paylaştığı ortak kırpma adımındaydı (su yalnızca AOI sınırına
+                # en sık bitişik sınıf olduğu için EN ÇOK etkilenen sınıftı).
                 out_image, out_transform = rio_mask(
                     src, [geom_dst], crop=True, nodata=nodata_value,
-                    all_touched=False, filled=True
+                    all_touched=True, filled=True
                 )
 
                 post_valid_ratio = _valid_ratio(out_image, nodata_value)
