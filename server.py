@@ -709,7 +709,7 @@ def proxy_tile(sid, z, x, y):
         except Exception as err:
             if attempt >= _TILE_FETCH_RETRIES:
                 print('[SylvaGIS] ❌ Tile alınamadı (ağ) z{}/x{}/y{}: {}'.format(z, x, y, err))
-                return Response(status=503)
+                return Response(status=503, headers={'Retry-After': '2', 'Cache-Control': 'no-store', 'X-SylvaGIS-Tile': 'retryable-error'})
             time.sleep(delay)
             delay *= 2
             continue
@@ -742,9 +742,9 @@ def proxy_tile(sid, z, x, y):
             continue
 
         print('[SylvaGIS] ❌ Tile hatası z{}/x{}/y{} → HTTP {}'.format(z, x, y, resp.status_code))
-        return Response(status=503)
+        return Response(status=503, headers={'Retry-After': '2', 'Cache-Control': 'no-store', 'X-SylvaGIS-Tile': 'retryable-error'})
 
-    return Response(status=503)
+    return Response(status=503, headers={'Retry-After': '2', 'Cache-Control': 'no-store', 'X-SylvaGIS-Tile': 'retryable-error'})
 
 
 # ════════════════════════════════════════════════════════════════
@@ -6440,14 +6440,18 @@ def _rgb_scene_metadata(data, roi, image, ds):
                 meta['cloudCover'] = info[ds['cloudProp']]
     except Exception:
         pass
+    # ⚡ GÜNCELLEME 3 — RGB ilk görüntü açılışını hızlandır: CRS için ayrıca
+    # Earth Engine projection().getInfo() ve nominalScale().getInfo() çağrıları
+    # yapmak yerine AOI merkezinden güvenli UTM dilimini hesapla. Uydu veri
+    # setlerinin çözünürlüğü zaten dataset tanımında bulunuyor. Böylece her RGB
+    # görüntüsünde iki ek GEE round-trip'i kaldırılmış olur. Haritadaki gerçek
+    # piksel çözünürlüğü değişmez; yalnızca Görüntü Bilgileri panelindeki CRS
+    # tespiti daha hızlı bir deterministik yoldan yapılır.
     try:
-        proj = ee.Image(image).select(ds['rgbBands'][0]).projection()
-        meta['crs'] = proj.crs().getInfo()
-        nominal = proj.nominalScale().getInfo()
-        if nominal:
-            meta['resolution'] = round(float(nominal), 2)
+        _lon, _lat = _roi_center_lonlat(data.get('roi'))
+        meta['crs'] = _utm_epsg_from_lonlat(_lon, _lat)
     except Exception:
-        pass
+        meta['crs'] = None
     return meta
 
 
@@ -8738,28 +8742,39 @@ def rgb_scenes():
 
         col = build_rgb_collection(ds, roi, max_cloud)
         # Thumbnail üretimi pahalı olduğundan yıl başına makul bir sınır
-        # (8) ve toplamda 40 sahne ile sınırlıyoruz — ama artık SADECE
+        # (4) ve toplamda 20 sahne ile sınırlıyoruz — ama artık SADECE
         # aralığın ilk yılından değil, aralıktaki HER yıldan (ve varsa
         # seçilen aylardan) adil şekilde örnekliyoruz.
         limited = _collect_scenes_across_years(
             col, start_date, end_date, months=months,
-            per_year_limit=5, total_limit=20,
+            per_year_limit=4, total_limit=20,
         )
 
-        scene_ids  = limited.aggregate_array('system:index').getInfo()
-        timestamps = limited.aggregate_array('system:time_start').getInfo()
-        clouds = []
-        if ds.get('cloudProp'):
-            try:
-                clouds = limited.aggregate_array(ds['cloudProp']).getInfo()
-            except Exception:
-                clouds = [None] * len(scene_ids)
-        else:
-            clouds = [None] * len(scene_ids)
-
+        # ⚡ GÜNCELLEME 3 — Sahne listesini üç ayrı aggregate_array().getInfo()
+        # çağrısıyla istemek yerine tek bir Earth Engine round-trip'inde al.
+        # Özellikle Sentinel + Landsat birlikte seçildiğinde bu, galeri
+        # başlangıcındaki gereksiz beklemeyi azaltır.
+        _cloud_prop = ds.get('cloudProp')
         img_list = limited.toList(limited.size())
+        _scene_count = limited.size()
+        _scene_indexes = ee.List.sequence(0, ee.Number(_scene_count).subtract(1))
+        def _scene_meta_dict(idx):
+            img = ee.Image(img_list.get(idx))
+            d = ee.Dictionary({
+                'sceneId': img.get('system:index'),
+                'timestamp': img.get('system:time_start'),
+            })
+            if _cloud_prop:
+                d = d.set('cloud', img.get(_cloud_prop))
+            return d
+        scene_meta = _scene_indexes.map(_scene_meta_dict).getInfo() or []
+
         scenes = []
-        for i, sid in enumerate(scene_ids):
+        for i, _sm in enumerate(scene_meta):
+            _sm = _sm or {}
+            sid = _sm.get('sceneId')
+            if not sid:
+                continue
             thumb_url = None
             # ⚡ PERF FIX: Galeri kartlarının tarih/bulut/Scene ID bilgisi için
             # thumbnail gerekli değildir. Eski sürüm 20-40 sahnenin tamamı için
@@ -8767,7 +8782,7 @@ def rgb_scenes():
             # gereksiz yere bekletiyordu. İlk 10 sahneye küçük önizleme üret; diğer
             # kartlar frontend'deki uydu simgesini kullanır. Kullanıcı bir karta
             # tıkladığında gerçek sahne zaten /api/analyze üzerinden yüklenir.
-            if i < 10:
+            if i < 2:
                 try:
                     img = ee.Image(img_list.get(i)).select(ds['rgbBands'])
                     if ds.get('scaleFactor', 1) != 1 or ds.get('offset', 0) != 0:
@@ -8785,8 +8800,8 @@ def rgb_scenes():
 
             scenes.append({
                 'sceneId':      sid,
-                'timestamp':    timestamps[i] if i < len(timestamps) else None,
-                'cloud':        clouds[i] if i < len(clouds) else None,
+                'timestamp':    _sm.get('timestamp'),
+                'cloud':        _sm.get('cloud'),
                 'thumbnailUrl': thumb_url,
             })
 
@@ -8820,10 +8835,10 @@ def rgb_scenes():
 
         _thumb_urls = [s['thumbnailUrl'] for s in scenes]
         if any(_thumb_urls):
-            # İlk 24 kartın tamamını göstermek yerine thumbnail üretimini sınırlı paralel
-            # tutuyoruz. Tarih/bulut bilgileri tüm kartlarda kalır; görseli olmayan
+            # İlk 2 kart için thumbnail üretimini sınırlı paralel tutuyoruz;
+            # geri kalan kartlar metadata ile anında listelenir. Tarih/bulut bilgileri tüm kartlarda kalır; görseli olmayan
             # kartlarda frontend zaten uydu simgesine düşer.
-            with ThreadPoolExecutor(max_workers=4) as _thumb_pool:
+            with ThreadPoolExecutor(max_workers=2) as _thumb_pool:
                 _data_uris = list(_thumb_pool.map(_fetch_thumb_data_uri, _thumb_urls))
             for _i, _s in enumerate(scenes):
                 _s['thumbnailUrl'] = _data_uris[_i]
