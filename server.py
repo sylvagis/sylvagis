@@ -9529,8 +9529,12 @@ def download_geotiff_batch():
     """Bir aktif ekrandaki birden fazla rasteri tek ZIP içinde döndürür."""
     req_data = request.json or {}
     items = req_data.get('items') or []
-    if not isinstance(items, list) or len(items) < 2:
-        return jsonify({'success': False, 'error': 'ZIP için en az iki raster analiz gerekir.'}), 400
+    # Tek bir raster da aynı paketleme hattından geçer. Böylece LULC/TOPO
+    # analizlerinde kullanılan TIFF + RAT/VAT/.clr sidecar mantığı, gerçek
+    # RGB uydu görüntülerinde de .tif + .tif.aux.xml olarak korunur ve
+    # kullanıcı 1, 2 veya daha fazla raster seçtiğinde davranış değişmez.
+    if not isinstance(items, list) or len(items) < 1:
+        return jsonify({'success': False, 'error': 'ZIP için indirilebilir en az bir raster analiz gerekir.'}), 400
     if len(items) > 25:
         return jsonify({'success': False, 'error': 'Tek ZIP içinde en fazla 25 analiz indirilebilir.'}), 400
     # 🛠️ BUG FİX (Faz 18 — "toplu indirmede hata verdi, zip inmedi"):
