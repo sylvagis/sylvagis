@@ -18,6 +18,7 @@ import zipfile
 import tempfile
 import datetime
 import traceback
+from contextlib import contextmanager
 import urllib.parse
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -33,7 +34,110 @@ CORS(app)
 # bir kısmının hiç oluşmamasına yol açabiliyor. Raster indirme tek kuyruğa
 # alınır; bu veri doğruluğunu değiştirmez, yalnızca indirme güvenilirliğini artırır.
 _GEE_EXPORT_LOCK = threading.Lock()
-print('SylvaGIS server.py yüklendi — versiyon: topo-export-v4-raw-continuous-aspect9-429-safe-2026-08-18')
+# GEE Restricted Mode'da yalnızca aynı Python sürecindeki değil, farklı
+# gunicorn worker'larındaki istekler de aynı proje kotasını paylaşır.
+# Bu nedenle süreçler arası bir dosya kilidiyle GEE ağ çağrılarını da
+# tek sıraya alıyoruz. Böylece harita tile'ları ile GeoTIFF dışa aktarımları
+# aynı anda GEE'yi boğup HTTP 429 üretmez.
+try:
+    import fcntl as _gee_fcntl
+except Exception:
+    _gee_fcntl = None
+_GEE_QUOTA_LOCK = threading.Lock()
+_GEE_QUOTA_LOCK_FILE = os.environ.get('SYLVAGIS_GEE_QUOTA_LOCK_FILE', '/tmp/sylvagis_gee_quota.lock')
+
+@contextmanager
+def _gee_quota_guard():
+    """GEE ağ çağrılarını süreçler arasında da tekilleştirir."""
+    with _GEE_QUOTA_LOCK:
+        fh = None
+        try:
+            if _gee_fcntl is not None:
+                fh = open(_GEE_QUOTA_LOCK_FILE, 'a+')
+                _gee_fcntl.flock(fh.fileno(), _gee_fcntl.LOCK_EX)
+            yield
+        finally:
+            if fh is not None:
+                try:
+                    _gee_fcntl.flock(fh.fileno(), _gee_fcntl.LOCK_UN)
+                finally:
+                    fh.close()
+
+
+# GeoTIFF dışa aktarımlarında Restricted Mode 429 için ayrı, daha sabırlı bir
+# geri çekilme katmanı. Özellikle kullanıcı haritada Lejantı Uygula dediğinde
+# tile istekleri kısa süreliğine artabildiğinden getDownloadURL() çağrısı 429
+# alabilir. Bu yardımcı, URL üretimini de (yalnızca URL'yi indiren requests.get
+# kısmını değil) tek kuyruğa alır ve daha uzun süre tekrar dener.
+_GEE_EXPORT_COOLDOWN_SECONDS = float(os.environ.get('SYLVAGIS_GEE_EXPORT_COOLDOWN', '3.0'))
+_GEE_EXPORT_LAST_CALL = 0.0
+_GEE_EXPORT_COOLDOWN_LOCK = threading.Lock()
+
+def _gee_get_download_url_with_backoff(fn, label='GeoTIFF URL', attempts=9):
+    """GEE getDownloadURL çağrısını Restricted Mode 429'a dayanıklı çalıştır.
+
+    Önemli: GEE 429'u getDownloadURL aşamasında dönerse önceki sürümde
+    yalnızca 3 kısa deneme yapılıyordu. Sınıflandırma sonrası tile trafiği
+    devam ederken bu çoğu zaman yetmiyordu. Burada istekler süreçler arasında
+    da sıralanır, küçük bir soğuma aralığı uygulanır ve 9 denemeye kadar
+    kademeli olarak daha uzun beklenir.
+    """
+    global _GEE_EXPORT_LAST_CALL
+    last = None
+    delays = (5.0, 8.0, 12.0, 18.0, 25.0, 35.0, 45.0, 60.0)
+    for attempt in range(attempts):
+        with _gee_quota_guard():
+            with _GEE_EXPORT_COOLDOWN_LOCK:
+                now = time.time()
+                wait = _GEE_EXPORT_COOLDOWN_SECONDS - (now - _GEE_EXPORT_LAST_CALL)
+                if wait > 0:
+                    time.sleep(wait)
+                _GEE_EXPORT_LAST_CALL = time.time()
+            try:
+                return fn()
+            except Exception as exc:
+                last = exc
+        msg = str(exc).lower()
+        is_429 = any(marker in msg for marker in (
+            '429', 'too many requests', 'resource_exhausted',
+            'exceeded earth engine concurrency limit', 'concurrency limit',
+        ))
+        if not is_429 or attempt >= attempts - 1:
+            raise
+        delay = delays[min(attempt, len(delays) - 1)]
+        print('[SylvaGIS] ⚠️ {} HTTP 429 — {:.1f} sn beklenip tekrar denenecek (deneme {}/{})'.format(
+            label, delay, attempt + 1, attempts))
+        time.sleep(delay)
+    raise last if isinstance(last, Exception) else RuntimeError('GEE HTTP 429')
+
+def _gee_http_get_with_backoff(url, timeout=180, attempts=7, label='GEE'):
+    """İmzalı GEE indirme URL'sini Restricted Mode 429'a dayanıklı al."""
+    last = None
+    for attempt in range(attempts):
+        with _gee_quota_guard():
+            try:
+                resp = requests.get(url, timeout=timeout)
+            except Exception as exc:
+                last = exc
+                resp = None
+        if resp is not None and resp.status_code != 429:
+            return resp
+        if resp is not None:
+            last = RuntimeError('HTTP 429: ' + ((resp.text or '')[:500]))
+            retry_after = resp.headers.get('Retry-After')
+            try:
+                delay = max(3.0, float(retry_after)) if retry_after else 4.0 * (2 ** attempt)
+            except Exception:
+                delay = 4.0 * (2 ** attempt)
+            delay = min(delay, 45.0)
+        else:
+            delay = min(4.0 * (2 ** attempt), 45.0)
+        if attempt < attempts - 1:
+            print('[SylvaGIS] ⚠️ {} HTTP 429/geçici ağ limiti — {:.1f} sn beklenip tekrar denenecek (deneme {}/{})'.format(label, delay, attempt + 1, attempts))
+            time.sleep(delay)
+    raise last if isinstance(last, Exception) else RuntimeError('GEE HTTP 429')
+
+print('SylvaGIS server.py yüklendi — versiyon: classified-raster-colormap-v21-2026-08-20')
 
 
 # ════════════════════════════════════════════════════════════════
@@ -600,7 +704,8 @@ def proxy_tile(sid, z, x, y):
         url = (current_url_format
                .replace('{z}', str(z)).replace('{x}', str(x)).replace('{y}', str(y)))
         try:
-            resp = _tile_http.get(url, timeout=_TILE_FETCH_TIMEOUT)
+            with _gee_quota_guard():
+                resp = _tile_http.get(url, timeout=_TILE_FETCH_TIMEOUT)
         except Exception as err:
             if attempt >= _TILE_FETCH_RETRIES:
                 print('[SylvaGIS] ❌ Tile alınamadı (ağ) z{}/x{}/y{}: {}'.format(z, x, y, err))
@@ -2428,6 +2533,10 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
     from rasterio.io import MemoryFile
     from xml.sax.saxutils import escape as _xml_escape
 
+    # Aspect gibi yönsel tematik rasterlerde embed_colormap=True ise ArcMap/QGIS
+    # otomatik olarak gömülü renk tablosunu kullanır. Dil etiketleri RAT/VAT/.clr
+    # tarafında korunur; ColorMap ise yalnızca kod->RGB eşleşmesini taşır.
+
     # Yalnızca çıktı rasterinde GERÇEKTEN bulunan sınıfları sembolojiye al.
     # Kullanıcının tanımladığı ama AOI'de hiç bulunmayan sınıflar da lejanta
     # eklenmez; böylece yalnızca ekranda görülen sınıflar dışa aktarılır.
@@ -2453,8 +2562,17 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
     # 1..N sınıf kodlarını taşır; kullanılmayan palette slotu diye bir şey
     # oluşturulmaz.
     new_profile.pop('photometric', None)
-    new_profile.pop('nbits', None)
     new_profile.pop('colormap', None)
+    # Gömülü ColorMap kullanılıyorsa gerçek sınıf sayısına uygun en küçük
+    # desteklenen TIFF bit derinliğini KORU. Önceki v21 kodu `nbits` alanını
+    # burada koşulsuz siliyordu; bu durumda rasterio/GDAL Byte olarak 256
+    # ColorMap slotu üretir ve ArcMap'te kullanılmayan/boş sınıflar görünür.
+    # embed_colormap=False için ise nbits'i kaldırmak güvenlidir; bu yol RAT/VAT
+    # + .clr sidecar'larına dayanır ve palette padding üretmez.
+    if embed_colormap:
+        new_profile['nbits'] = nbits
+    else:
+        new_profile.pop('nbits', None)
 
     with MemoryFile() as out_memfile:
         with out_memfile.open(**new_profile) as dst:
@@ -3006,7 +3124,7 @@ def _classify_aspect_breaks(band, valid_mask, breaks):
     return idx.astype(np.uint8), code_info
 
 
-def _build_classified_symbology_zip(tif_bytes, vis, safe_name, breaks=None, n_classes=255, rgb_bytes=None):
+def _build_classified_symbology_zip(tif_bytes, vis, safe_name, breaks=None, n_classes=255, rgb_bytes=None, embed_colormap=True, already_classified=False):
     """LULC dışındaki (sürekli/continuous) TÜM analizler için — NDVI, NDWI,
     diğer uydu indeksleri, DEM/Eğim/diğer Topografik Analizler, Çevresel ve
     Kentsel Analizler vb. — LULC ile AYNI RAT-tabanlı sınıflandırılmış/renkli
@@ -3063,12 +3181,34 @@ def _build_classified_symbology_zip(tif_bytes, vis, safe_name, breaks=None, n_cl
 
     byte_band, code_info = None, None
 
-    if breaks and isinstance(breaks, list) and len(breaks) >= 1:
+    if already_classified and breaks and isinstance(breaks, list) and len(breaks) >= 1:
+        # build_result_image(..., for_export=True) sınıflandırmayı GEE tarafında
+        # zaten 1..N sınıf ID'sine çevirdiyse burada ham sayısal değerlere tekrar
+        # min/max uygulama. İkinci kez sınıflandırmak, örneğin 1..4 sınıf kodlarını
+        # -0.55..0.458 aralıklarıyla karşılaştırıp tek sınıfa yığabilirdi.
+        # Bunun yerine ekrandaki sınıf ID'lerini aynen koru ve yalnızca sınıf
+        # adı/renk sözlüğünü oluştur.
+        byte_band = np.where(valid, np.rint(band), 0).astype(np.uint8)
+        code_info = {}
+        for i, b in enumerate(sorted(breaks, key=lambda x: float(x.get('min', 0))), start=1):
+            label = str(b.get('label') or b.get('name') or '').strip()
+            if not label:
+                label = '{:.3g} – {:.3g}'.format(float(b.get('min', 0)), float(b.get('max', 0)))
+            hexc = _named_color_to_hex(b.get('color') or 'ffffff')
+            try:
+                rgb = tuple(int(hexc[k:k + 2], 16) for k in (0, 2, 4))
+            except Exception:
+                rgb = (255, 255, 255)
+            code_info[i] = (label, rgb)
+        # Güvenlik: GEE sınıf rasterında bulunmayan sınıfları sidecar'a ekleme.
+        present = set(int(v) for v in np.unique(byte_band) if int(v) > 0)
+        code_info = {k: v for k, v in code_info.items() if k in present}
+    elif breaks and isinstance(breaks, list) and len(breaks) >= 1:
         byte_band, code_info = _classify_by_breaks(band, valid, breaks)
         if not code_info:
             breaks = None  # geçersiz/boş breaks — aşağıdaki moda düş
 
-    if not breaks:
+    if not breaks and not already_classified:
         # 🛠️ BUG FİX (Faz 16 — bkz. _classify_from_visualized_rgb() docstring'i):
         # önce, haritadaki tile'ları üreten AYNI final_display.visualize(**vis)
         # çağrısının GERÇEK piksel renklerini kullanmayı dene (varsa) — bu,
@@ -3093,7 +3233,10 @@ def _build_classified_symbology_zip(tif_bytes, vis, safe_name, breaks=None, n_cl
     if not code_info:
         return None
 
-    return _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name, embed_colormap=False)
+    # Classified rasterlarda embedded ColorMap özellikle önemlidir: ArcMap
+    # sürükle-bırakta RAT/VAT'ı her zaman otomatik renderer olarak kullanmaz.
+    # Gömülü palet, piksel sınıf kodlarını ekrandaki renklerle doğrudan eşler.
+    return _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name, embed_colormap=embed_colormap)
 
 
 @app.route('/api/ping', methods=['GET'])
@@ -4449,7 +4592,12 @@ def build_result_image(data, for_export=False):
     max_cloud  = int(data.get('maxCloud', 20))
     scene_id   = data.get('sceneId')
     class_breaks = data.get('classBreaks')
-    if for_export:
+    # GeoTIFF dışa aktarımında sınıflandırma yalnızca istemci açıkça
+    # Classified olarak işaretlediyse korunur. Böylece kullanıcı Lejantı
+    # Uygula ile yaptığı sınıflandırmayı dosyaya da aynı sınıf ID'leriyle
+    # aktarabilir; bar/stretched indirmeler ise ham sürekli raster olarak
+    # kalır.
+    if for_export and not data.get('_exportPreserveClassification'):
         class_breaks = None
 
     # Çevresel/Kentsel modüller çalışma alanı temellidir. Kullanıcı başka
@@ -6399,6 +6547,31 @@ def _sylva_least_cloud_scene(roi, satellite, start_date, end_date, max_cloud, mo
         return None
 
 
+def _sylva_scene_thumbnail_data_uri(roi, satellite, scene_id):
+    """Zaman serisi galerisi için gerçek RGB küçük önizlemesini sunucu
+    tarafında üretir. Böylece tarayıcı yalnızca data: URI alır ve normal
+    uydu görüntüsü galerisiyle aynı fotoğraf önizlemesi kullanılır."""
+    try:
+        ds = SATELLITE_DATASETS.get(satellite)
+        if not ds or not scene_id:
+            return None
+        col = build_rgb_collection(ds, roi, 100)
+        img = col.filter(ee.Filter.eq('system:index', scene_id)).first().select(ds['rgbBands'])
+        if ds.get('scaleFactor', 1) != 1 or ds.get('offset', 0) != 0:
+            img = img.multiply(ds['scaleFactor']).add(ds.get('offset', 0))
+        url = img.getThumbURL({
+            'region': roi, 'dimensions': 128, 'format': 'png',
+            'bands': ds['rgbBands'], 'min': ds['visMin'], 'max': ds['visMax']
+        })
+        with _gee_quota_guard():
+                resp = _tile_http.get(url, timeout=_TILE_FETCH_TIMEOUT)
+        if resp.status_code == 200 and resp.content:
+            return 'data:image/png;base64,' + base64.b64encode(resp.content).decode('ascii')
+    except Exception:
+        pass
+    return None
+
+
 @app.route('/api/timeseries', methods=['POST'])
 def timeseries():
     try:
@@ -6479,6 +6652,19 @@ def timeseries():
                     rgb_points.append({'date': label, 'value': cloud_val})
                 else:
                     rgb_points.append({'date': label, 'value': None})
+
+            # Gerçek fotoğraf küçük görselleri: normal RGB galerisindekiyle aynı
+            # sunucu tarafı Base64/CORS-safe mekanizma. Paralel çekilir ki yıllık
+            # veya aylık zaman serisinde seri bekleme oluşmasın.
+            if gallery:
+                def _thumb_job(scene):
+                    scene['thumbnailUrl'] = _sylva_scene_thumbnail_data_uri(roi, satellite, scene.get('sceneId'))
+                    return scene
+                try:
+                    with ThreadPoolExecutor(max_workers=min(8, len(gallery))) as _ts_thumb_pool:
+                        gallery = list(_ts_thumb_pool.map(_thumb_job, gallery))
+                except Exception:
+                    pass
 
             return jsonify({
                 'success': True,
@@ -7115,6 +7301,27 @@ def download_geotiff():
         if fresh_roi:
             data['roi'] = fresh_roi
 
+        # 🆕 v21 — SINIFLANDIRMA DURUMUNU DIŞA AKTARIMDAN ÖNCE BELİRLE
+        # build_result_image(data, for_export=True) çağrısı sınıflandırmayı
+        # yalnızca kullanıcı gerçekten Classified seçmişse korumalıdır.
+        # Bu bilgi requested_vis içinden daha aşağıda okunmadan önce payload'a
+        # işlenir; böylece GEE'de üretilen export rasterı ekrandaki sınıf
+        # ID'leriyle aynı olur. Bar/stretched modunda hiçbir sınıflandırma
+        # uygulanmaz.
+        _pre_requested_vis = req_data.get('visualization')
+        if (
+            isinstance(_pre_requested_vis, dict)
+            and _pre_requested_vis.get('mode') == 'classified'
+            and isinstance(_pre_requested_vis.get('breaks'), list)
+            and len(_pre_requested_vis.get('breaks')) > 0
+            and data.get('index') != 'RGB'
+        ):
+            data['_exportPreserveClassification'] = True
+            # Payload'da classBreaks yoksa bile export görselindeki gerçek
+            # sınıfları backend'e taşı.
+            if not data.get('classBreaks'):
+                data['classBreaks'] = _pre_requested_vis.get('breaks')
+
         # 🛠️ BUG FİX — HIZLI RGB DIŞA AKTARIMI
         # Gerçek uydu görüntüsü (RGB) için seçilmiş GEE sahnesini doğrudan
         # dışa aktar. Harita önizlemesinde kullanılan aynı-gün komşu sahne
@@ -7353,6 +7560,25 @@ def download_geotiff():
                 requested_breaks = requested_vis['breaks']
             if isinstance(requested_vis.get('legendLabels'), list):
                 requested_legend_labels = requested_vis.get('legendLabels')
+
+        # 🛠️ BUG FİX (v15 — karışık Sentinel-2 + Landsat RGB ZIP indirmesi):
+        # RGB uydu görüntüsü fiziksel olarak 3 bantlıdır. GEE Image.visualize()
+        # palette parametresini yalnızca TEK bantlı görüntülerde kabul eder;
+        # batch payload'ında önceki analizden kalan `palette` alanı taşınırsa
+        # Sentinel-2/Landsat RGB için `Image.visualize: Cannot provide a
+        # palette when visualizing more than one band.` hatası oluşuyordu.
+        # Özellikle farklı sensörlerin aynı ZIP içinde seçildiği durumda bu
+        # eski görselleştirme state'i yeni RGB payload'ına sızabiliyordu.
+        # RGB'de renkler zaten `bands: [red, green, blue]` ile tanımlıdır;
+        # bu nedenle palette ve tek-bant sınıflandırma parametreleri RGB
+        # dışa aktarımında KESİNLİKLE kullanılmaz. Min/Max ise RGB germe
+        # aralığı olarak korunur.
+        if lulc_index == 'RGB':
+            vis.pop('palette', None)
+            vis.pop('colorPalette', None)
+            vis.pop('classBreaks', None)
+            requested_breaks = None
+
         is_true_color_rgb = (lulc_index == 'RGB') and not is_env_urban_raster
         export_image = final_display
 
@@ -7429,7 +7655,13 @@ def download_geotiff():
                             if _src.nodata is not None:
                                 _valid &= ~__import__('numpy').isclose(_band, float(_src.nodata))
                     _byte, _codes = _classify_default_aspect(_band, _valid, legend_labels=requested_legend_labels)
-                    sym_files = _build_symbology_files_from_classes(_byte, _profile, _codes, safe_name, embed_colormap=False)
+                    # Bakı (Aspect) ArcMap/QGIS'e doğrudan doğru renklerle açılmalı.
+                    # Diğer tematik rasterlerde RAT/.clr yedekleri korunurken,
+                    # Aspect'te gömülü ColorMap otomatik renderer'ın ekran
+                    # renklerini doğrudan tanımasını sağlar. 9 sınıf için 4-bit
+                    # palet kullanılır; renkler aşağıdaki _classify_default_aspect
+                    # renkleriyle birebir aynıdır.
+                    sym_files = _build_symbology_files_from_classes(_byte, _profile, _codes, safe_name, embed_colormap=True)
                 except Exception as aspect_err:
                     traceback.print_exc()
                     sym_files = None
@@ -7445,10 +7677,11 @@ def download_geotiff():
                                 if _src.nodata is not None:
                                     _valid &= ~__import__('numpy').isclose(_band, float(_src.nodata))
                         _byte, _codes = _classify_aspect_breaks(_band, _valid, requested_breaks)
-                        sym_files = _build_symbology_files_from_classes(_byte, _profile, _codes, safe_name, embed_colormap=False)
+                        sym_files = _build_symbology_files_from_classes(_byte, _profile, _codes, safe_name, embed_colormap=True)
                     else:
                         sym_files = _build_classified_symbology_zip(
-                            tif_bytes, vis, safe_name, breaks=requested_breaks)
+                            tif_bytes, vis, safe_name, breaks=requested_breaks, embed_colormap=True,
+                            already_classified=bool(data.get('_exportPreserveClassification')))
                 except Exception as sym_err:
                     traceback.print_exc()
                     sym_files = None
@@ -8151,8 +8384,8 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
         # DEĞİŞMEDEN kalmaya devam ediyor — o zaten yalnızca GERÇEKTEN
         # gerektiğinde (boyut sınırı aşıldığında) devreye giriyor.
 
-        url = _call_with_retry(lambda: img.getDownloadURL(params))
-        r = _call_with_retry(lambda: requests.get(url, timeout=180), retries=2)
+        url = _gee_get_download_url_with_backoff(lambda: img.getDownloadURL(params), label='GeoTIFF URL')
+        r = _gee_http_get_with_backoff(url, timeout=180, attempts=7, label='GeoTIFF')
         if not r.ok:
             # GEE bazen boyut/limit hatalarını HTTP gövdesinde (200 dışı
             # durum koduyla) döner; ayrıştırılabilmesi için mesaja dahil et.
@@ -8177,8 +8410,8 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
             ):
                 fb_params = dict(params)
                 fb_params['region'] = fallback_region_geom
-                fb_url = _call_with_retry(lambda: img.getDownloadURL(fb_params))
-                fb_r = _call_with_retry(lambda: requests.get(fb_url, timeout=180), retries=2)
+                fb_url = _gee_get_download_url_with_backoff(lambda: img.getDownloadURL(fb_params), label='GeoTIFF fallback URL')
+                fb_r = _gee_http_get_with_backoff(fb_url, timeout=180, attempts=7, label='GeoTIFF fallback')
                 if not fb_r.ok:
                     body_snippet = (fb_r.text or '')[:500]
                     raise Exception(
@@ -8232,8 +8465,8 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
                 if nodata_value is not None:
                     tile_params['formatOptions'] = {'noData': nodata_value}
 
-                tile_url = _call_with_retry(lambda: img.getDownloadURL(tile_params))
-                tr = _call_with_retry(lambda: requests.get(tile_url, timeout=180), retries=2)
+                tile_url = _gee_get_download_url_with_backoff(lambda: img.getDownloadURL(tile_params), label='GeoTIFF karo URL')
+                tr = _gee_http_get_with_backoff(tile_url, timeout=180, attempts=7, label='GeoTIFF karo')
                 if not tr.ok:
                     body_snippet = (tr.text or '')[:500]
                     _tile_err_msg = 'GEE karo indirme isteği başarısız (karo {}, HTTP {}): {}'.format(
@@ -8649,7 +8882,8 @@ def rgb_scenes():
             if not url:
                 return None
             try:
-                resp = _tile_http.get(url, timeout=_TILE_FETCH_TIMEOUT)
+                with _gee_quota_guard():
+                    resp = _tile_http.get(url, timeout=_TILE_FETCH_TIMEOUT)
                 if resp.status_code == 200 and resp.content:
                     b64 = base64.b64encode(resp.content).decode('ascii')
                     return 'data:image/png;base64,' + b64
