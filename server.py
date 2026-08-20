@@ -7186,7 +7186,44 @@ def download_geotiff():
         # değerlere göre üretilir. for_export=True, build_result_image()
         # içindeki classBreaks/build_classified_image() adımını komple
         # atlatır — bkz. build_result_image() docstring'i.
-        final_display, roi, result, vis, _unused_crs_probe = build_result_image(data, for_export=True)
+        # ⚡ HIZLI RGB DIŞA AKTARIMI — Uydu Görüntüsü indirmesinde gereksiz
+        # ±5 günlük komşu-sahne mozaiği + komşu sayısı getInfo() çağrısını
+        # çalıştırma. Haritada zaten seçilmiş gerçek sceneId payload içinde
+        # bulunuyor; indirme için doğrudan o sahneyi kullanmak hem aynı
+        # görüntüyü korur hem de ilk tıklamada beklemeyi ciddi biçimde azaltır.
+        # Harita önizlemesindeki boşluk-doldurma mozaiği yalnızca görsel
+        # önizlemede kalır; indirme gerçek seçili sahnenin verisini verir.
+        if data.get('index') == 'RGB' and req_data.get('fastRgbExport'):
+            _rgb_ds = SATELLITE_DATASETS.get(data.get('satellite'))
+            if not _rgb_ds:
+                raise ValueError('Bilinmeyen uydu görüntüsü veri seti: ' + str(data.get('satellite')))
+            _rgb_col = build_rgb_collection(_rgb_ds, roi, int(data.get('maxCloud', 100)))
+            _rgb_scene_id = data.get('sceneId')
+            if _rgb_scene_id:
+                _rgb_image = _require_nonempty_image(
+                    _rgb_col.filter(ee.Filter.eq('system:index', _rgb_scene_id)).first(),
+                    'Seçilen uydu sahnesi bulunamadı. Lütfen görüntüyü galeriden tekrar seçin.'
+                )
+            else:
+                _rgb_dated = _rgb_col.filterDate(data.get('startDate'), data.get('endDate'))
+                _rgb_months = _parse_months_param(data)
+                _rgb_month_filter = _calendar_month_filter(_rgb_months)
+                if _rgb_month_filter is not None:
+                    _rgb_dated = _rgb_dated.filter(_rgb_month_filter)
+                _rgb_image = _require_nonempty_image(
+                    _rgb_dated.sort('system:time_start', False).first(),
+                    'Seçilen kriterlere uygun uydu görüntüsü bulunamadı.'
+                )
+            _rgb_disp = _rgb_image.select(_rgb_ds['rgbBands'])
+            if _rgb_ds.get('scaleFactor', 1) != 1 or _rgb_ds.get('offset', 0) != 0:
+                _rgb_disp = _rgb_disp.multiply(_rgb_ds['scaleFactor']).add(_rgb_ds.get('offset', 0))
+            _rgb_disp = _rgb_disp.rename(['red', 'green', 'blue'])
+            result = _rgb_disp
+            vis = {'bands': ['red', 'green', 'blue'], 'min': _rgb_ds['visMin'], 'max': _rgb_ds['visMax']}
+            final_display = _rgb_disp.clip(roi) if data.get('clipMode', 'clip') == 'clip' else _rgb_disp
+            print('[SylvaGIS] ⚡ Fast RGB export: selected scene exported directly (sceneId={})'.format(_rgb_scene_id or 'latest'))
+        else:
+            final_display, roi, result, vis, _unused_crs_probe = build_result_image(data, for_export=True)
 
         # ── 🌈 Sentinel-2 doğal renk parlaklık düzeltmesi ────────────
         # SORUN: Sentinel-2 RGB (B4-B3-B2) GeoTIFF'leri şu ana kadar ham
