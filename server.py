@@ -296,13 +296,6 @@ _TILE_SESSION_INLINE_PARAMS_LIMIT = 6000
 _TILE_CACHE_MAX_ITEMS     = 2000       # bellekte tutulacak azami tile (~40 MB)
 _TILE_FETCH_RETRIES       = 3          # tek bir tile için tekrar deneme sayısı
 _TILE_FETCH_TIMEOUT       = 25         # saniye
-# GEE geçici 5xx hatası son retry sonrasında da sürerse tarayıcıya HTTP 503
-# döndürmek yerine 1x1 saydam bir PNG verilir. Böylece Leaflet konsolu
-# 'Failed to load resource: 503' ile doldurmaz; eksik karo görünmez kalır ve
-# sonraki harita/zoom yenilemesinde yeniden istenir.
-_SYLVA_EMPTY_TILE_PNG = __import__('base64').b64decode(
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
-)
 _REBUILT_URL_CACHE_TTL_SECONDS = 20 * 60  # yenilenen map id'nin süreç-yerel önbellekte tutulma süresi
 _REBUILT_URL_CACHE_MAX_ITEMS   = 512
 
@@ -610,11 +603,8 @@ def proxy_tile(sid, z, x, y):
             resp = _tile_http.get(url, timeout=_TILE_FETCH_TIMEOUT)
         except Exception as err:
             if attempt >= _TILE_FETCH_RETRIES:
-                print('[SylvaGIS] ⚠️ Tile alınamadı (ağ) z{}/x{}/y{}: {} — saydam yedek karo döndürülüyor.'.format(z, x, y, err))
-                return Response(_SYLVA_EMPTY_TILE_PNG, mimetype='image/png', headers={
-                    'Cache-Control': 'no-store, max-age=0',
-                    'X-SylvaGIS-Tile': 'transparent-fallback',
-                })
+                print('[SylvaGIS] ❌ Tile alınamadı (ağ) z{}/x{}/y{}: {}'.format(z, x, y, err))
+                return Response(status=503)
             time.sleep(delay)
             delay *= 2
             continue
@@ -646,16 +636,10 @@ def proxy_tile(sid, z, x, y):
             delay *= 2
             continue
 
-        print('[SylvaGIS] ⚠️ Tile hatası z{}/x{}/y{} → HTTP {} — saydam yedek karo döndürülüyor.'.format(z, x, y, resp.status_code))
-        return Response(_SYLVA_EMPTY_TILE_PNG, mimetype='image/png', headers={
-            'Cache-Control': 'no-store, max-age=0',
-            'X-SylvaGIS-Tile': 'transparent-fallback',
-        })
+        print('[SylvaGIS] ❌ Tile hatası z{}/x{}/y{} → HTTP {}'.format(z, x, y, resp.status_code))
+        return Response(status=503)
 
-    return Response(_SYLVA_EMPTY_TILE_PNG, mimetype='image/png', headers={
-        'Cache-Control': 'no-store, max-age=0',
-        'X-SylvaGIS-Tile': 'transparent-fallback',
-    })
+    return Response(status=503)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -7370,15 +7354,6 @@ def download_geotiff():
             if isinstance(requested_vis.get('legendLabels'), list):
                 requested_legend_labels = requested_vis.get('legendLabels')
         is_true_color_rgb = (lulc_index == 'RGB') and not is_env_urban_raster
-        # GEE Image.visualize() palette yalnızca TEK bantlı görüntülerde geçerlidir.
-        # RGB uydu görüntüsü 3 bantlıdır (red/green/blue); istemciden önceki bir
-        # NDVI/NDWI sınıflandırmasının palette'i taşınırsa Landsat/Sentinel RGB
-        # indirmesinde 'Cannot provide a palette when visualizing more than one band'
-        # hatası oluşuyordu. RGB'de palette'i kesin olarak yok say; bands/min/max
-        # build_result_image() tarafından tanımlanan gerçek RGB görselleştirmesinde
-        # kalır. Bu, uydu görüntüsünün kendi renklerini değiştirmez.
-        if is_true_color_rgb:
-            vis.pop('palette', None)
         export_image = final_display
 
         # DYNAMIC WORLD GÜVENLİ DIŞA AKTARIMI: 0 = Water GERÇEK SINIFTIR.
