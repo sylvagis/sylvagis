@@ -15263,6 +15263,19 @@ function selectRamp(name) {
                     // Eski sunucu sürümleriyle geriye dönük uyumluluk.
                     analyzePayload.palette = [analyzePayload.contourLineColor];
                 }
+                // RGB doğal renk görüntüsü 3 bantlıdır; önceki NDVI/NDWI/EVI
+                // sınıflandırmasından kalan palette bilgisini GEE'ye taşımayın.
+                // Bu, Image.visualize: 'Cannot provide a palette when visualizing
+                // more than one band' hatasını hem ilk yüklemede hem yeniden
+                // yüklenen/dil değiştirilmiş katmanlarda kesin olarak önler.
+                if (analyzePayload.index === 'RGB') {
+                    delete analyzePayload.palette;
+                    delete analyzePayload.classBreaks;
+                    if (analyzePayload.visualization && typeof analyzePayload.visualization === 'object') {
+                        delete analyzePayload.visualization.palette;
+                        delete analyzePayload.visualization.breaks;
+                    }
+                }
                 window._lastAnalyzePayloadByPane[_pane] = analyzePayload;
                 // 🛠️ BUG FİX (İndirilen dosya ekranda görünenle uyuşmuyordu):
                 // bu payload, ÜRETTİĞİ katmanın kendi anahtarına (_thisLayerKey)
@@ -26015,6 +26028,14 @@ function _sylvaSyncActivePaneForDownload(callback) {
     // Snapshot'ı önce kaydet: kullanıcı indirme penceresi açıkken başka bir ekrana
     // tıklasa bile bu indirme isteği açıldığı andaki ekranı kullanmaya devam eder.
     var payloadSnapshot = JSON.parse(JSON.stringify(_payload));
+    if (payloadSnapshot && payloadSnapshot.index === 'RGB') {
+        delete payloadSnapshot.palette;
+        delete payloadSnapshot.classBreaks;
+        if (payloadSnapshot.visualization && typeof payloadSnapshot.visualization === 'object') {
+            delete payloadSnapshot.visualization.palette;
+            delete payloadSnapshot.visualization.breaks;
+        }
+    }
     window._sylvaDownloadPayloadByPane[_pane] = payloadSnapshot;
 
     var promise = fetch(API_BASE + '/api/analyze', {
