@@ -299,16 +299,6 @@ _TILE_FETCH_TIMEOUT       = 25         # saniye
 _REBUILT_URL_CACHE_TTL_SECONDS = 20 * 60  # yenilenen map id'nin süreç-yerel önbellekte tutulma süresi
 _REBUILT_URL_CACHE_MAX_ITEMS   = 512
 
-# 🎨 HIZLI SEMBOLOJİ ÖNBELLEĞİ — NDVI/NDWI ve benzeri uydu analizlerinde
-# kullanıcı yalnızca Lejantı Uygula (renk/min-max/sınıf) yaptığında analizin
-# kendisini (median/mean/collection filtreleri) baştan hesaplamaya gerek yok.
-# Ham analiz görüntüsü bir kez oluşturulduktan sonra, sonraki görsel güncellemeler
-# aynı ee.Image üzerinde yalnızca yeni visualization + getMapId üretir.
-_ANALYSIS_VIS_CACHE_MAX_ITEMS = 128
-_analysis_vis_cache = {}
-_analysis_vis_cache_order = []
-_analysis_vis_cache_lock = threading.RLock()
-
 _tile_cache = {}
 _tile_cache_order = []
 _tile_lock = threading.RLock()
@@ -6442,6 +6432,15 @@ def timeseries():
             return jsonify({'success': False, 'error': 'Bitiş yılı başlangıç yılından büyük olmalı.'}), 400
 
         ranges = _sylva_period_ranges(start_year, end_year, period)
+        # RGB uydu görüntüsü zaman serisinde Aylık seçilip belirli aylar
+        # işaretlendiyse yalnızca o ayların dönemlerini üret. Böylece örneğin
+        # 2019-2024 + Haziran seçimi, boş Ocak/Şubat/... dönemleri oluşturmaz;
+        # galeri ve zaman çizelgesi yalnızca kullanıcının istediği ayları getirir.
+        if str(data.get('mode') or '').strip().lower() == 'satellite-image' and period == 'monthly' and months:
+            ranges = [r for r in ranges if int(r[1][5:7]) in months]
+            if not ranges:
+                return jsonify({'success': False, 'error': 'Seçilen aylar ve tarih aralığı için geçerli bir zaman serisi dönemi bulunamadı.'}), 400
+
         # Güvenlik sınırı: çok uzun aralık + aylık periyot GEE'ye çok
         # sayıda ardışık istek anlamına gelir (timeout/limit riski).
         MAX_PERIODS = 240
@@ -6452,6 +6451,43 @@ def timeseries():
             }), 400
 
         roi = make_roi(data.get('roi'))
+
+        # 🛰️ Uydu Görüntüsü Time Series modu: kullanıcı tam 1 RGB veri seti
+        # seçtiğinde her ay/yıl dönemi için gerçek ve en az bulutlu sahneyi
+        # döndür. Bu modda NDVI gibi piksel ortalaması hesaplamak anlamsızdır;
+        # grafik serisi sahnenin bulutluluk yüzdesini gösterir, asıl çıktı
+        # galerideki GERÇEK uydu görüntüleridir.
+        if str(data.get('mode') or '').strip().lower() == 'satellite-image' or indices == ['RGB']:
+            if len(indices) != 1 or indices[0] != 'RGB':
+                return jsonify({'success': False, 'error': 'Uydu görüntüsü zaman serisi için tek bir RGB veri seti seçilmelidir.'}), 400
+            ds = SATELLITE_DATASETS.get(satellite)
+            if not ds:
+                return jsonify({'success': False, 'error': 'Bilinmeyen uydu görüntüsü veri seti.'}), 400
+
+            rgb_points = []
+            gallery = []
+            for label, sdate, edate in ranges:
+                scene = _sylva_least_cloud_scene(roi, satellite, sdate, edate, max_cloud, months=months)
+                if scene:
+                    scene['label'] = label
+                    gallery.append(scene)
+                    cloud_val = scene.get('cloud')
+                    try:
+                        cloud_val = round(float(cloud_val), 2) if cloud_val is not None else None
+                    except Exception:
+                        cloud_val = None
+                    rgb_points.append({'date': label, 'value': cloud_val})
+                else:
+                    rgb_points.append({'date': label, 'value': None})
+
+            return jsonify({
+                'success': True,
+                'period': period,
+                'satellite': satellite,
+                'mode': 'satellite-image',
+                'series': [{'index': 'RGB', 'points': rgb_points}],
+                'gallery': gallery,
+            })
 
         series = []
         for idx in indices:
@@ -6501,62 +6537,6 @@ def timeseries():
     except Exception as e:
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
-
-
-def _visual_cache_key(data):
-    """Görsel ayarlar dışındaki analiz parametrelerinden kararlı cache anahtarı üretir."""
-    try:
-        d = dict(data or {})
-        for k in ('palette', 'min', 'max', 'classBreaks', 'visualization',
-                  'fastVisualOnly', 'contourLineColor'):
-            d.pop(k, None)
-        return hashlib.sha256(json.dumps(d, sort_keys=True, default=str, separators=(',', ':')).encode('utf-8')).hexdigest()
-    except Exception:
-        return None
-
-
-def _visual_cache_get(key):
-    if not key:
-        return None
-    with _analysis_vis_cache_lock:
-        entry = _analysis_vis_cache.get(key)
-        if entry is None:
-            return None
-        return entry
-
-
-def _visual_cache_put(key, entry):
-    if not key or entry is None:
-        return
-    with _analysis_vis_cache_lock:
-        if key in _analysis_vis_cache:
-            try: _analysis_vis_cache_order.remove(key)
-            except ValueError: pass
-        _analysis_vis_cache[key] = entry
-        _analysis_vis_cache_order.append(key)
-        while len(_analysis_vis_cache_order) > _ANALYSIS_VIS_CACHE_MAX_ITEMS:
-            old = _analysis_vis_cache_order.pop(0)
-            _analysis_vis_cache.pop(old, None)
-
-
-def _fast_visual_analysis_supported(index):
-    name = str(index or '').upper()
-    if name in ('RGB', 'SAR') or name.startswith('LULC') or name.startswith('TOPO'):
-        return False
-    # Çevresel/kentsel modüllerin bazıları çift dönem veya bağımsız veri
-    # kaynakları kullandığından hızlı cache yolu dışında tutulur.
-    if name in _ENV_URBAN_RASTER_INDICES or name in {
-        'UHI_LST','UHI_TREND','LST_LULC_CORRELATION','WATER_OCCURRENCE',
-        'WATER_CHANGE','WATER_SEASONALITY','RESERVOIR_VOLUME','WATER_QUALITY_PROXY',
-        'VEG_CHANGE','FOREST_LOSS','BURN_SEVERITY','CANOPY_HEIGHT_BIOMASS',
-        'FOREST_HEALTH','URBAN_GROWTH','IMPERVIOUS_CHANGE','NIGHTLIGHTS_ECONOMIC',
-        'DROUGHT_INDEX','FLOOD_MAPPING','LANDSLIDE_SUSCEPTIBILITY',
-        'DROUGHT_RISK_COMPOSITE','EARTHQUAKE_DAMAGE_PROXY','NO2_TIMESERIES',
-        'AEROSOL_OPTICAL_DEPTH','SO2_CO_ANOMALY','COASTLINE_CHANGE','SST_TREND'
-    }:
-        return False
-    return True
-
 
 
 @app.route('/api/analyze', methods=['POST'])
@@ -6647,50 +6627,6 @@ def analyze():
                 'visMin':   vis.get('min'),
                 'visMax':   vis.get('max'),
             })
-
-        # ⚡ HIZLI GÖRSEL GÜNCELLEME: Lejant/sınıflandırma değiştiğinde NDVI/NDWI
-        # gibi uydu indekslerini yeniden median/mean + histogram + sahne listesi
-        # ile hesaplama. İlk analizde cache'e alınan ham ee.Image kullanılır.
-        _fast_key = _visual_cache_key(data)
-        _fast_entry = _visual_cache_get(_fast_key) if data.get('fastVisualOnly') else None
-        if _fast_entry is not None and _fast_visual_analysis_supported(data.get('index')):
-            try:
-                _fast_result = _fast_entry['result']
-                _fast_roi = _fast_entry['roi']
-                _fast_base_vis = dict(_fast_entry.get('vis') or {})
-                _fast_display = _fast_result
-                _fast_breaks = data.get('classBreaks')
-                if isinstance(_fast_breaks, list) and _fast_breaks:
-                    _classified_img, _classified_vis = build_classified_image(_fast_result, _fast_breaks)
-                    if _classified_img is not None:
-                        _fast_display = _classified_img
-                        _fast_base_vis = _classified_vis
-                else:
-                    _fast_palette = data.get('palette')
-                    if isinstance(_fast_palette, list) and _fast_palette:
-                        _fast_base_vis['palette'] = [str(c).lstrip('#') for c in _fast_palette]
-                    if data.get('min') is not None:
-                        _fast_base_vis['min'] = float(data.get('min'))
-                    if data.get('max') is not None:
-                        _fast_base_vis['max'] = float(data.get('max'))
-                _fast_clip = data.get('clipMode', 'clip')
-                _fast_final = _fast_display.clip(_fast_roi) if _fast_clip == 'clip' else _fast_display
-                _fast_map = _call_with_retry(lambda: _fast_final.getMapId(_fast_base_vis))
-                _fast_direct = _fast_map['tile_fetcher'].url_format
-                _fast_extra = {'nativeCrs': _fast_entry.get('nativeCrs')} if _fast_entry.get('nativeCrs') else {}
-                _fast_sid = _register_tile_session(_fast_direct, params=data, kind='analyze', extra=_fast_extra)
-                _fast_tile = _tile_url_for_client(_fast_sid, _fast_direct)
-                _fast_analysis_sid = _register_analysis_session(data, kind='analyze', extra=_fast_extra)
-                return jsonify({
-                    'success': True, 'tileUrl': _fast_tile, 'tileUrlDirect': _fast_direct,
-                    'analysisId': _fast_analysis_sid, 'stats': _fast_entry.get('stats') or {},
-                    'realStats': _fast_entry.get('realStats') or {}, 'scenes': _fast_entry.get('scenes') or [],
-                    'index': data.get('index', 'NDVI'), 'visMin': _fast_base_vis.get('min'),
-                    'visMax': _fast_base_vis.get('max'), 'visPalette': _fast_base_vis.get('palette', []),
-                    'nativeCrs': _fast_entry.get('nativeCrs')
-                })
-            except Exception as _fast_err:
-                print('[SylvaGIS] ⚡ Fast visual cache fallback: {}'.format(_fast_err))
 
         final_display, roi, result, vis, crs_probe_img = build_result_image(data)
 
@@ -6944,16 +6880,6 @@ def analyze():
             except Exception:
                 scenes_list = []
 
-        # ⚡ İlk tam analizden sonra ham analiz görüntüsünü cache'e koy.
-        # Sonraki yalnızca görsel değişiklikleri build_result_image() zincirini
-        # tekrar çalıştırmadan aynı ee.Image üzerinden üretilebilir.
-        if _fast_visual_analysis_supported(data.get('index')) and _fast_key:
-            _visual_cache_put(_fast_key, {
-                'result': result, 'roi': roi, 'vis': dict(vis or {}),
-                'nativeCrs': native_crs, 'stats': stats,
-                'realStats': real_minmax, 'scenes': scenes_list
-            })
-
         return jsonify({
             'success':   True,
             'tileUrl':   tile_url,
@@ -7052,6 +6978,19 @@ def download_geotiff():
     try:
         req_data = request.json or {}
 
+        # 🛠️ BUG FİX — TOPLU İNDİRMEDE PAYLOAD KAYBINI ÖNLE
+        # /api/download-geotiff-batch istemciden her rasterın güncel payload'ını
+        # `payload` alanında gönderir. Eski kod burada bu payload'ı yok sayıp
+        # _last_analyze_params adlı global son-analiz state'ine dönüyordu.
+        # Bu durum özellikle aynı anda Landsat + Sentinel RGB katmanlarında
+        # yanlış/eskimiş analiz state'i seçilmesine ve bazı sürümlerde
+        # "local variable 'roi' referenced before assignment" hatasına yol
+        # açıyordu. Toplu indirme artık ÖNCE gönderilen payload'ı kullanır;
+        # yalnızca eski istemcilerde payload yoksa analysis session/global
+        # geri dönüşü uygulanır.
+        _request_payload = req_data.get('payload')
+        _has_request_payload = isinstance(_request_payload, dict) and bool(_request_payload.get('index'))
+
         # 🛠️ BUG FİX (AOI dışı NoData/siyah alan / yanlış kırpma sorunu):
         # Frontend, güncel Çalışma Alanı/AOI geometrisini HER indirme
         # isteğinde 'roi' alanıyla birlikte gönderir (bkz. index.html —
@@ -7086,13 +7025,10 @@ def download_geotiff():
         # global davranış AYNEN korunur — bu değişiklik geriye dönük
         # tamamen uyumludur.
         analysis_id = req_data.get('analysisId')
-        _direct_payload = req_data.get('analysisPayload')
-        if isinstance(_direct_payload, dict) and _direct_payload.get('roi'):
-            # Batch indirmelerde analysisId oluşturmak için önce ağır /api/analyze
-            # çağrısı yapmaya gerek yoktur. İstemcinin zaten tuttuğu üretim
-            # payload'ı doğrudan export hattına veriyoruz.
-            data = dict(_direct_payload)
-            session_native_crs = req_data.get('nativeCrs') or data.get('nativeCrs') or _last_analyze_native_crs
+        if _has_request_payload:
+            # Batch download'ın gönderdiği payload en güncel/izole kaynaktır.
+            data = dict(_request_payload)
+            session_native_crs = data.get('nativeCrs') or req_data.get('crs') or None
         elif analysis_id:
             _session = _get_analysis_session(analysis_id)
             if _session is None:
@@ -7179,50 +7115,47 @@ def download_geotiff():
         if fresh_roi:
             data['roi'] = fresh_roi
 
-        # 🛠️ BUG FİX (istenen davranış): "Lejantı Uygula" ile sınıflandırma
-        # yapılmış olsa bile — NDVI, DEM, Eğim (Slope) vb. hiçbir analizde —
-        # indirilen GeoTIFF ASLA sınıf ID'lerine (1,2,3...) göre değil, her
-        # zaman haritadaki renk çubuğunun (color bar) dayandığı HAM/sürekli
-        # değerlere göre üretilir. for_export=True, build_result_image()
-        # içindeki classBreaks/build_classified_image() adımını komple
-        # atlatır — bkz. build_result_image() docstring'i.
-        # ⚡ HIZLI RGB DIŞA AKTARIMI — Uydu Görüntüsü indirmesinde gereksiz
-        # ±5 günlük komşu-sahne mozaiği + komşu sayısı getInfo() çağrısını
-        # çalıştırma. Haritada zaten seçilmiş gerçek sceneId payload içinde
-        # bulunuyor; indirme için doğrudan o sahneyi kullanmak hem aynı
-        # görüntüyü korur hem de ilk tıklamada beklemeyi ciddi biçimde azaltır.
-        # Harita önizlemesindeki boşluk-doldurma mozaiği yalnızca görsel
-        # önizlemede kalır; indirme gerçek seçili sahnenin verisini verir.
-        if data.get('index') == 'RGB' and req_data.get('fastRgbExport'):
-            _rgb_ds = SATELLITE_DATASETS.get(data.get('satellite'))
+        # 🛠️ BUG FİX — HIZLI RGB DIŞA AKTARIMI
+        # Gerçek uydu görüntüsü (RGB) için seçilmiş GEE sahnesini doğrudan
+        # dışa aktar. Harita önizlemesinde kullanılan aynı-gün komşu sahne
+        # mozaikleme/yeniden analiz zinciri indirme için gereksizdir. Ayrıca
+        # batch payload'ı doğrudan kullanıldığı için RGB indirme sırasında
+        # eski global ROI/analiz state'ine başvurulmaz.
+        _fast_rgb = bool(req_data.get('fastRgbExport')) and data.get('index') == 'RGB'
+        if _fast_rgb:
+            roi = make_roi(data.get('roi'))
+            _rgb_satellite = data.get('satellite', 's2-l2a')
+            _rgb_ds = SATELLITE_DATASETS.get(_rgb_satellite)
             if not _rgb_ds:
-                raise ValueError('Bilinmeyen uydu görüntüsü veri seti: ' + str(data.get('satellite')))
-            _rgb_col = build_rgb_collection(_rgb_ds, roi, int(data.get('maxCloud', 100)))
+                raise ValueError('Bilinmeyen uydu görüntüsü veri seti: ' + str(_rgb_satellite))
+            _rgb_col = build_rgb_collection(_rgb_ds, roi, int(data.get('maxCloud', 20)))
             _rgb_scene_id = data.get('sceneId')
             if _rgb_scene_id:
-                _rgb_image = _require_nonempty_image(
-                    _rgb_col.filter(ee.Filter.eq('system:index', _rgb_scene_id)).first(),
-                    'Seçilen uydu sahnesi bulunamadı. Lütfen görüntüyü galeriden tekrar seçin.'
-                )
+                _rgb_img = _rgb_col.filter(ee.Filter.eq('system:index', _rgb_scene_id)).first()
+                _rgb_img = _require_nonempty_image(_rgb_img, 'Seçilen uydu sahnesi bulunamadı.')
             else:
-                _rgb_dated = _rgb_col.filterDate(data.get('startDate'), data.get('endDate'))
-                _rgb_months = _parse_months_param(data)
-                _rgb_month_filter = _calendar_month_filter(_rgb_months)
-                if _rgb_month_filter is not None:
-                    _rgb_dated = _rgb_dated.filter(_rgb_month_filter)
-                _rgb_image = _require_nonempty_image(
-                    _rgb_dated.sort('system:time_start', False).first(),
-                    'Seçilen kriterlere uygun uydu görüntüsü bulunamadı.'
+                _rgb_col2 = _rgb_col.filterDate(data.get('startDate'), data.get('endDate'))
+                _rgb_img = _require_nonempty_image(
+                    _rgb_col2.sort('system:time_start', False).first(),
+                    'Seçilen tarih/bulutluluk kriterlerine uygun uydu görüntüsü bulunamadı.'
                 )
-            _rgb_disp = _rgb_image.select(_rgb_ds['rgbBands'])
+            _rgb_disp = _rgb_img.select(_rgb_ds['rgbBands'])
             if _rgb_ds.get('scaleFactor', 1) != 1 or _rgb_ds.get('offset', 0) != 0:
                 _rgb_disp = _rgb_disp.multiply(_rgb_ds['scaleFactor']).add(_rgb_ds.get('offset', 0))
             _rgb_disp = _rgb_disp.rename(['red', 'green', 'blue'])
             result = _rgb_disp
             vis = {'bands': ['red', 'green', 'blue'], 'min': _rgb_ds['visMin'], 'max': _rgb_ds['visMax']}
-            final_display = _rgb_disp.clip(roi) if data.get('clipMode', 'clip') == 'clip' else _rgb_disp
-            print('[SylvaGIS] ⚡ Fast RGB export: selected scene exported directly (sceneId={})'.format(_rgb_scene_id or 'latest'))
+            clip_mode = data.get('clipMode', 'clip')
+            final_display = _rgb_disp.clip(roi) if clip_mode == 'clip' else _rgb_disp
+            _unused_crs_probe = _rgb_img
         else:
+            # 🛠️ BUG FİX (istenen davranış): "Lejantı Uygula" ile sınıflandırma
+            # yapılmış olsa bile — NDVI, DEM, Eğim (Slope) vb. hiçbir analizde —
+            # indirilen GeoTIFF ASLA sınıf ID'lerine (1,2,3...) göre değil, her
+            # zaman haritadaki renk çubuğunun (color bar) dayandığı HAM/sürekli
+            # değerlere göre üretilir. for_export=True, build_result_image()
+            # içindeki classBreaks/build_classified_image() adımını komple
+            # atlatır.
             final_display, roi, result, vis, _unused_crs_probe = build_result_image(data, for_export=True)
 
         # ── 🌈 Sentinel-2 doğal renk parlaklık düzeltmesi ────────────
@@ -9693,13 +9626,8 @@ def download_geotiff_batch():
     """Bir aktif ekrandaki birden fazla rasteri tek ZIP içinde döndürür."""
     req_data = request.json or {}
     items = req_data.get('items') or []
-    requested_zip_filename = req_data.get('zipFilename') or ''
-    # Tek bir raster da aynı paketleme hattından geçer. Böylece LULC/TOPO
-    # analizlerinde kullanılan TIFF + RAT/VAT/.clr sidecar mantığı, gerçek
-    # RGB uydu görüntülerinde de .tif + .tif.aux.xml olarak korunur ve
-    # kullanıcı 1, 2 veya daha fazla raster seçtiğinde davranış değişmez.
     if not isinstance(items, list) or len(items) < 1:
-        return jsonify({'success': False, 'error': 'ZIP için indirilebilir en az bir raster analiz gerekir.'}), 400
+        return jsonify({'success': False, 'error': 'İndirilecek en az bir raster analiz seçilmelidir.'}), 400
     if len(items) > 25:
         return jsonify({'success': False, 'error': 'Tek ZIP içinde en fazla 25 analiz indirilebilir.'}), 400
     # 🛠️ BUG FİX (Faz 18 — "toplu indirmede hata verdi, zip inmedi"):
@@ -9739,19 +9667,6 @@ def download_geotiff_batch():
         prepared_items.append((pos, base, item))
 
     def _fetch_one(pos, base, item):
-        # İstemci artık her raster için önce ayrı bir /api/analyze HTTP
-        # isteğini beklemiyor. Payload doğrudan batch'e gelir; eksik
-        # analysisId varsa sunucu burada kendi izole analiz oturumunu oluşturur.
-        # Böylece kullanıcı İndir'e bastığı anda TEK batch isteği başlar ve
-        # tarayıcıda N adet seri ağ turu beklenmez.
-        item = dict(item)
-        # ⚡ HIZLI İNDİRME: batch isteği için ayrıca /api/analyze çalıştırma.
-        # İndirilecek rasterin üretim payload'ı zaten istemciden geliyor;
-        # download_geotiff bunu doğrudan kullanabilir. Böylece İndir'e basınca
-        # ikinci bir ağır analiz turu yapılmaz.
-        if not item.get('analysisId') and isinstance(item.get('payload'), dict):
-            item['analysisPayload'] = dict(item.get('payload') or {})
-
         last_err = None
         for attempt in range(3):
             try:
@@ -9869,18 +9784,11 @@ def download_geotiff_batch():
                     'Başarısız katman(lar)ı tekrar indirmeyi deneyebilirsiniz.'
                 )
         result = zip_buf.getvalue()
-        # İstemci gerçek sahne tarihlerini ZIP adına taşıyorsa aynen kullan;
-        # aksi halde eski sabit isim davranışına geri dön. İndirme günü burada
-        # hiçbir zaman otomatik tarih olarak eklenmez.
-        _requested_zip_base = str(requested_zip_filename or '').strip()
-        if _requested_zip_base.lower().endswith('.zip'):
-            _requested_zip_base = _requested_zip_base[:-4]
-        _zip_base = _sylva_safe_filename(_requested_zip_base, allow_dots=False).strip('._')
-        if not _zip_base:
-            _zip_base = 'SylvaGIS_raster_analizleri'
-        _zip_base += '.zip'
         response = Response(result, mimetype='application/zip')
-        response.headers['Content-Disposition'] = 'attachment; filename="{}"'.format(_zip_base)
+        _zip_filename = re.sub(r'[^A-Za-z0-9_.-]+', '_', str(req_data.get('zipFilename') or 'SylvaGIS_raster_analizleri.zip')).strip('._') or 'SylvaGIS_raster_analizleri.zip'
+        if not _zip_filename.lower().endswith('.zip'):
+            _zip_filename += '.zip'
+        response.headers['Content-Disposition'] = 'attachment; filename="{}"'.format(_zip_filename)
         response.headers['Content-Length'] = str(len(result))
         return response
     except Exception as exc:
