@@ -137,7 +137,7 @@ def _gee_http_get_with_backoff(url, timeout=180, attempts=7, label='GEE'):
             time.sleep(delay)
     raise last if isinstance(last, Exception) else RuntimeError('GEE HTTP 429')
 
-print('SylvaGIS server.py yüklendi — versiyon: classified-raster-colormap-v23-rgb-stretch-fast-2026-08-20')
+print('SylvaGIS server.py yüklendi — versiyon: rgb-switch-sync-gapfill-perf-v24-2026-08-20')
 
 
 # ════════════════════════════════════════════════════════════════
@@ -3744,7 +3744,7 @@ def build_rgb_collection(ds, roi, max_cloud):
 # ETRAFINDA ±_SCENE_GAP_FILL_DAY_WINDOW gün olacak şekilde genişletildi;
 # aynı gün içinde komşu sahne varsa öncelik yine ona (en yakın tarihe)
 # verilir, yoksa pencere içindeki en yakın tarihli sahne kullanılır.
-_SCENE_GAP_FILL_DAY_WINDOW = 5  # gün — hem yönde (önce/sonra) arama genişliği
+_SCENE_GAP_FILL_DAY_WINDOW = 16  # gün — komşu Landsat/Sentinel sahneleriyle AOI boşluklarını doldurma penceresi
 def _fill_scene_gaps_with_same_day_mosaic(col, selected_image, scene_id, roi,
                                            day_window=_SCENE_GAP_FILL_DAY_WINDOW):
     # 🛠️ BUG FİX (Element.get: Parameter 'object' is required and may not be
@@ -3776,33 +3776,10 @@ def _fill_scene_gaps_with_same_day_mosaic(col, selected_image, scene_id, roi,
                 .subtract(selected_image.get('system:time_start')).abs()
         )).sort('sylva_day_distance', False)  # en uzak önce → en yakın en son (mosaic'te en üstte)
 
-        # 🛠️ MADDE 4 — SESSİZ BAŞARISIZLIĞI LOGLAMA: Eskiden bu fonksiyon
-        # komşu sahne bulunamasa bile hiçbir iz bırakmadan orijinal tek
-        # sahneye "sessizce" geri dönüyordu — sunucu loglarında bunu görmek
-        # imkânsızdı. Artık kaç komşu sahne bulunduğu (varsa) loglanıyor.
-        # NOT: nearby_others.size().getInfo() ekstra bir GEE ağ çağrısı
-        # gerektirir — bu SADECE loglama amaçlı, sonucu etkilemez; bu
-        # yüzden kendi try/except'i içinde, ana akışı ASLA bloklamayacak
-        # ya da bozmayacak şekilde izole edilmiştir.
-        try:
-            _neighbor_count = _call_with_retry(
-                lambda: nearby_others.size().getInfo(), retries=1
-            )
-            if _neighbor_count > 0:
-                print('[SylvaGIS] ✅ Boşluk doldurma: scene_id={} için {} gün penceresinde '
-                      '{} komşu sahne bulundu ve mozaiklendi.'.format(
-                          scene_id, day_window, _neighbor_count))
-            else:
-                print('[SylvaGIS] ⚠️ Boşluk doldurma: scene_id={} için ±{} gün penceresinde '
-                      'HİÇ komşu sahne bulunamadı — AOI bu sahne dışında boş kalabilir. '
-                      'Pencereyi genişletmek (_SCENE_GAP_FILL_DAY_WINDOW) gerekebilir.'.format(
-                          scene_id, day_window))
-        except Exception as _log_err:
-            # Loglama başarısız olsa bile (ör. geçici ağ hatası) asıl
-            # mozaikleme işlemi ETKİLENMEMELİ — sadece durumu bildiriyoruz.
-            print('[SylvaGIS] ℹ️ Boşluk doldurma komşu-sahne sayısı loglanamadı '
-                  '(işlem yine de devam ediyor): {}'.format(_log_err))
-
+        # ⚡ PERF FIX: yalnızca loglama için yapılan nearby_others.size().getInfo()
+        # çağrısı kaldırıldı. Bu ek GEE round-trip'i analiz başlangıcını
+        # gereksiz yere bekletiyordu. Mozaik doğrudan kurulur; komşu sahne
+        # bulunmazsa seçilen sahne tek başına kalır.
         merged = nearby_others.merge(ee.ImageCollection([selected_image]))
         return merged.mosaic()
     except Exception as e:
@@ -6430,9 +6407,12 @@ def build_result_image(data, for_export=False):
 
 
 def _rgb_scene_metadata(data, roi, image, ds):
-    """Seçilen sahne için Görüntü Bilgileri / dinamik lejant panelinde
-    gösterilecek metadata sözlüğünü üretir. Gerçek CRS/çözünürlük GEE'den
-    sorgulanır; başarısız olursa veri seti kaydındaki varsayılana düşer."""
+    """Seçilen RGB sahnesi için hızlı Görüntü Bilgileri metadata'sı üretir.
+
+    Eski sürümde image.select(...).getInfo() ile büyük bir bant sözlüğü çekiliyordu.
+    Artık yalnızca gereken birkaç property tek bir getInfo() çağrısıyla alınır;
+    projeksiyon için ayrıca yalnızca CRS/nominal ölçek sorgulanır.
+    """
     meta = {
         'datasetKey':   data.get('satellite'),
         'datasetName':  ds.get('datasetName', ds.get('label')),
@@ -6445,34 +6425,29 @@ def _rgb_scene_metadata(data, roi, image, ds):
         'cloudCover':   None,
     }
     try:
-        info = image.select(ds['rgbBands'][0]).getInfo()
-        meta['imageId'] = info.get('id') or info.get('properties', {}).get('system:index')
+        props = ['system:index', 'system:time_start']
+        if ds.get('cloudProp'):
+            props.append(ds['cloudProp'])
+        info = ee.Image(image).toDictionary(props).getInfo() or {}
+        meta['imageId'] = info.get('system:index')
+        ts = info.get('system:time_start')
+        if ts:
+            meta['acquisitionDate'] = datetime.datetime.utcfromtimestamp(float(ts) / 1000.0).strftime('%Y-%m-%d %H:%M UTC')
+        if ds.get('cloudProp') and info.get(ds['cloudProp']) is not None:
+            try:
+                meta['cloudCover'] = float(info[ds['cloudProp']])
+            except Exception:
+                meta['cloudCover'] = info[ds['cloudProp']]
     except Exception:
         pass
     try:
-        proj = image.select(ds['rgbBands'][0]).projection()
+        proj = ee.Image(image).select(ds['rgbBands'][0]).projection()
         meta['crs'] = proj.crs().getInfo()
         nominal = proj.nominalScale().getInfo()
         if nominal:
-            meta['resolution'] = round(nominal, 2)
+            meta['resolution'] = round(float(nominal), 2)
     except Exception:
         pass
-    try:
-        ts = image.get('system:time_start').getInfo()
-        if ts:
-            meta['acquisitionDate'] = datetime.datetime.utcfromtimestamp(ts / 1000.0).strftime('%Y-%m-%d %H:%M UTC')
-    except Exception:
-        pass
-    if ds.get('cloudProp'):
-        try:
-            meta['cloudCover'] = image.get(ds['cloudProp']).getInfo()
-        except Exception:
-            pass
-    if not meta['imageId']:
-        try:
-            meta['imageId'] = image.get('system:index').getInfo()
-        except Exception:
-            pass
     return meta
 
 
@@ -8768,7 +8743,7 @@ def rgb_scenes():
         # seçilen aylardan) adil şekilde örnekliyoruz.
         limited = _collect_scenes_across_years(
             col, start_date, end_date, months=months,
-            per_year_limit=8, total_limit=40,
+            per_year_limit=5, total_limit=20,
         )
 
         scene_ids  = limited.aggregate_array('system:index').getInfo()
@@ -8786,20 +8761,27 @@ def rgb_scenes():
         scenes = []
         for i, sid in enumerate(scene_ids):
             thumb_url = None
-            try:
-                img = ee.Image(img_list.get(i)).select(ds['rgbBands'])
-                if ds.get('scaleFactor', 1) != 1 or ds.get('offset', 0) != 0:
-                    img = img.multiply(ds['scaleFactor']).add(ds.get('offset', 0))
-                thumb_url = img.getThumbURL({
-                    'region': roi,
-                    'dimensions': 128,
-                    'format': 'png',
-                    'bands': ds['rgbBands'],
-                    'min': ds['visMin'],
-                    'max': ds['visMax'],
-                })
-            except Exception:
-                thumb_url = None
+            # ⚡ PERF FIX: Galeri kartlarının tarih/bulut/Scene ID bilgisi için
+            # thumbnail gerekli değildir. Eski sürüm 20-40 sahnenin tamamı için
+            # GEE getThumbURL + HTTP indirmesi yaparak Analizi Çalıştır ekranını
+            # gereksiz yere bekletiyordu. İlk 10 sahneye küçük önizleme üret; diğer
+            # kartlar frontend'deki uydu simgesini kullanır. Kullanıcı bir karta
+            # tıkladığında gerçek sahne zaten /api/analyze üzerinden yüklenir.
+            if i < 10:
+                try:
+                    img = ee.Image(img_list.get(i)).select(ds['rgbBands'])
+                    if ds.get('scaleFactor', 1) != 1 or ds.get('offset', 0) != 0:
+                        img = img.multiply(ds['scaleFactor']).add(ds.get('offset', 0))
+                    thumb_url = img.getThumbURL({
+                        'region': roi,
+                        'dimensions': 112,
+                        'format': 'png',
+                        'bands': ds['rgbBands'],
+                        'min': ds['visMin'],
+                        'max': ds['visMax'],
+                    })
+                except Exception:
+                    thumb_url = None
 
             scenes.append({
                 'sceneId':      sid,
@@ -8828,8 +8810,7 @@ def rgb_scenes():
             if not url:
                 return None
             try:
-                with _gee_quota_guard():
-                    resp = _tile_http.get(url, timeout=_TILE_FETCH_TIMEOUT)
+                resp = _tile_http.get(url, timeout=_TILE_FETCH_TIMEOUT)
                 if resp.status_code == 200 and resp.content:
                     b64 = base64.b64encode(resp.content).decode('ascii')
                     return 'data:image/png;base64,' + b64
@@ -8839,7 +8820,10 @@ def rgb_scenes():
 
         _thumb_urls = [s['thumbnailUrl'] for s in scenes]
         if any(_thumb_urls):
-            with ThreadPoolExecutor(max_workers=8) as _thumb_pool:
+            # İlk 24 kartın tamamını göstermek yerine thumbnail üretimini sınırlı paralel
+            # tutuyoruz. Tarih/bulut bilgileri tüm kartlarda kalır; görseli olmayan
+            # kartlarda frontend zaten uydu simgesine düşer.
+            with ThreadPoolExecutor(max_workers=4) as _thumb_pool:
                 _data_uris = list(_thumb_pool.map(_fetch_thumb_data_uri, _thumb_urls))
             for _i, _s in enumerate(scenes):
                 _s['thumbnailUrl'] = _data_uris[_i]
