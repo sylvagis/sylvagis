@@ -540,6 +540,11 @@ def _rebuild_tile_session_url(session):
         return None
     params = _sanitize_rgb_payload(params)
     final_display, roi, result, vis, _probe = build_result_image(params)
+    if params.get('index') == 'RGB':
+        # RGB'de build_result_image'dan gelen görselleştirmeyi dahi kullanma;
+        # yalnızca 3 bant + min/max gönder. Eski bir oturumda palette kalmış
+        # olsa bile GEE'ye ulaşması böylece fiziksel olarak imkansızdır.
+        vis = _rgb_vis_only(params.get('satellite'))
     if session.get('kind') == 'highlight':
         extra = session.get('extra') or {}
         class_min = extra.get('classMin')
@@ -4463,6 +4468,24 @@ def _sanitize_rgb_payload(data):
     return clean
 
 
+def _rgb_vis_only(satellite):
+    """RGB için GEE'ye gönderilebilecek TEK güvenli görselleştirme sözlüğü.
+
+    RGB görüntüler 3 bantlıdır; palette/classBreaks/min/max dışında herhangi
+    bir tek-bant semboloji bilgisinin bu sözlüğe sızmasına izin verilmez.
+    Earth Engine Image.visualize/getMapId çağrılarında yalnızca bands+min+max
+    kullanılır.
+    """
+    ds = SATELLITE_DATASETS.get(satellite) or {}
+    bands = ds.get('rgbBands') or ['red', 'green', 'blue']
+    # build_result_image() RGB dalı bu bantları red/green/blue diye yeniden adlandırır.
+    return {
+        'bands': ['red', 'green', 'blue'],
+        'min': ds.get('visMin', 0),
+        'max': ds.get('visMax', 0.3),
+    }
+
+
 def build_result_image(data, for_export=False):
     """
     Ortak analiz görüntüsü oluşturma mantığı.
@@ -6624,6 +6647,9 @@ def analyze():
                 image = _rgb_meta_dated.sort('system:time_start', False).first()
 
             final_display, roi, result, vis, _unused_crs_probe = build_result_image(data)
+            # RGB görselleştirmesini sıfırdan ve yalnızca bands/min/max ile kur.
+            # Önceki analizlerden gelen hiçbir palette/legend alanı GEE'ye gitmez.
+            vis = _rgb_vis_only(data.get('satellite'))
             map_id = _call_with_retry(lambda: final_display.getMapId(vis))
             tile_url_direct = map_id['tile_fetcher'].url_format
 
@@ -7419,7 +7445,11 @@ def download_geotiff():
         # build_result_image() tarafından tanımlanan gerçek RGB görselleştirmesinde
         # kalır. Bu, uydu görüntüsünün kendi renklerini değiştirmez.
         if is_true_color_rgb:
-            vis.pop('palette', None)
+            # RGB'de vis sözlüğünü temizlemek yetmez; daha sonra eklenen herhangi
+            # bir requested_vis/palette'in sızmasını önlemek için sözlüğü tamamen
+            # yeniden kur. Bu endpointte Image.visualize() yalnızca bands/min/max
+            # ile çalışabilir.
+            vis = _rgb_vis_only(data.get('satellite'))
         export_image = final_display
 
         # DYNAMIC WORLD GÜVENLİ DIŞA AKTARIMI: 0 = Water GERÇEK SINIFTIR.
