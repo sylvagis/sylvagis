@@ -6390,9 +6390,24 @@ def _sylva_least_cloud_scene(roi, satellite, start_date, end_date, max_cloud, mo
         )
         if not props or 'system:index' not in props:
             return None
+        # Savunmacı tarih doğrulaması: GEE koleksiyon filtresi doğru olsa bile
+        # dönen sahnenin zaman damgası İSTENEN periyodun dışında ise bu sahneyi
+        # kesinlikle istemciye göndermiyoruz. Böylece önceki/başka bir galeriden
+        # 2026 gibi bir görüntünün 2020–2023 zaman serisine sızması mümkün değil.
+        _ts = props.get('system:time_start')
+        try:
+            _dt = datetime.datetime.utcfromtimestamp(float(_ts) / 1000.0)
+            _req_start = datetime.datetime.strptime(str(start_date)[:10], '%Y-%m-%d')
+            _req_end = datetime.datetime.strptime(str(end_date)[:10], '%Y-%m-%d')
+            if not (_req_start <= _dt < _req_end):
+                return None
+            if months and _dt.month not in set(int(m) for m in months):
+                return None
+        except Exception:
+            return None
         return {
             'sceneId':   props.get('system:index'),
-            'timestamp': props.get('system:time_start'),
+            'timestamp': _ts,
             'cloud':     props.get(cloud_prop) if cloud_prop else None,
         }
     except Exception:
@@ -6485,6 +6500,10 @@ def timeseries():
                 'period': period,
                 'satellite': satellite,
                 'mode': 'satellite-image',
+                'startYear': start_year,
+                'endYear': end_year,
+                'months': months or [],
+                'maxCloud': max_cloud,
                 'series': [{'index': 'RGB', 'points': rgb_points}],
                 'gallery': gallery,
             })
@@ -6530,6 +6549,10 @@ def timeseries():
             'success':  True,
             'period':   period,
             'satellite': satellite,
+            'startYear': start_year,
+            'endYear': end_year,
+            'months': months or [],
+            'maxCloud': max_cloud,
             'series':   series,
             'gallery':  gallery,
         })
@@ -7336,9 +7359,22 @@ def download_geotiff():
         requested_breaks = None
         requested_legend_labels = None
         if isinstance(requested_vis, dict):
-            for _vis_key in ('min', 'max', 'palette'):
-                if requested_vis.get(_vis_key) not in (None, '', []):
-                    vis[_vis_key] = requested_vis[_vis_key]
+            # 🛰️ RGB GÜVENLİĞİ: RGB üç bantlı bir görüntüdür ve GEE .visualize()
+            # palette ile çok bantlı görüntüyü birlikte kabul etmez. Önceki
+            # analizden kalan palette/classification bilgisi istemci payload'ına
+            # sızsa bile gerçek RGB indirmesine uygulanmasına izin verme.
+            _is_rgb_request = str(lulc_index or '').upper() == 'RGB'
+            if _is_rgb_request:
+                if requested_vis.get('min') not in (None, ''):
+                    vis['min'] = float(requested_vis.get('min'))
+                if requested_vis.get('max') not in (None, ''):
+                    vis['max'] = float(requested_vis.get('max'))
+                vis['bands'] = ['red', 'green', 'blue']
+                vis.pop('palette', None)
+            else:
+                for _vis_key in ('min', 'max', 'palette'):
+                    if requested_vis.get(_vis_key) not in (None, '', []):
+                        vis[_vis_key] = requested_vis[_vis_key]
             # 🛠️ BUG FİX (Faz 15 — "bar olarak indirmiştim, sınıflandırılmış
             # vermiş"): istemci artık, kullanıcı ekranda "Lejantı Uygula"
             # panelinde KENDİ sınıflarını tanımladıysa (mode:'classified')
@@ -7387,6 +7423,11 @@ def download_geotiff():
         # final_display (zaten doğru renklerde) OLDUĞU GİBİ kullanılır.
         if req_data.get('rendered') and is_true_color_rgb and not _is_byte_rgb_export:
             try:
+                # Son savunma: RGB üç bantlıysa palette hiçbir koşulda geçmez.
+                if is_true_color_rgb:
+                    vis = dict(vis or {})
+                    vis.pop('palette', None)
+                    vis['bands'] = ['red', 'green', 'blue']
                 export_image = final_display.visualize(**vis)
                 # RGB görselleştirme Byte olduğundan NoData da Byte aralığında
                 # kalmalıdır; aksi ArcMap bazı TIFF'leri açmayı reddeder.
