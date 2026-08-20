@@ -6867,7 +6867,33 @@ def analyze():
             _env_index = data.get('index')
             _real_mn = real_minmax.get('min')
             _real_mx = real_minmax.get('max')
+            # 🛠️ SORUN 13 KÖK NEDEN DÜZELTMESİ ("Lejantı Uygula" ile yapılan
+            # özel sınıflandırma haritaya hiç yansımıyordu, veri hep ilk
+            # baştaki (sürekli/gerili) renklendirmeyi koruyordu):
+            #
+            # KÖK NEDEN: Yukarıdaki SORUN 6 düzeltmesi (bembeyaz harita
+            # sorunu), bu 27 çevresel/kentsel analiz için HER ZAMAN — kullanıcı
+            # "Lejantı Uygula" ile kendi sınıflandırmasını (classBreaks)
+            # göndermiş olsa bile — vis sözlüğünü gerçek min/max ile yeniden
+            # gerip final_display.getMapId() çağrısını TEKRAR yapıyordu. Ama
+            # classBreaks gönderildiğinde final_display zaten
+            # build_classified_image()'ın ürettiği KESIKLI/sınıflandırılmış
+            # görüntüydü (piksel değerleri 1,2,3... sınıf ID'leri, vis.min/max
+            # sınıf sayısı aralığı) — SORUN 6'nın mantığı bunun üzerine
+            # sürekli/ondalıklı GERÇEK veri min-max'ını (ör. -1.11..0.342)
+            # zorla uyguluyordu. Sonuç: kullanıcının az önce doğru şekilde
+            # üretilen sınıflandırılmış karosu, hemen ardından YANLIŞ bir
+            # ikinci karo ile SESSİZCE eziliyor, ekranda hep "ilk baştaki"
+            # (sürekli/gerili) renklendirme kalıyordu.
+            #
+            # ÇÖZÜM: classBreaks aktifse (kullanıcı özel sınıflandırma
+            # uyguladıysa) bu yeniden gerdirme adımı TAMAMEN atlanır —
+            # build_classified_image()'ın ürettiği tile_url/vis olduğu gibi
+            # korunur. Yeniden gerdirme yalnızca classBreaks YOKKEN (sürekli/
+            # gerili görünüm modunda) önceki gibi çalışmaya devam eder.
+            _class_breaks_active = data.get('classBreaks')
             if (_env_index in _ENV_URBAN_RASTER_INDICES
+                    and not _class_breaks_active
                     and isinstance(_real_mn, (int, float))
                     and isinstance(_real_mx, (int, float))
                     and _real_mx > _real_mn):
