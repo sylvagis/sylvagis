@@ -3361,7 +3361,7 @@ tr.class-highlight-active {
             overflow-y: visible !important;
         }
     </style>
-\n<style id="sylva-final-ui-parity-fix-20260820">
+<style id="sylva-final-ui-parity-fix-20260820">
 /* ================================================================
    FINAL UI/PARITY FIX — 20.08.2026
    1) Raster download button keeps its blue visual state after touch/click.
@@ -3426,7 +3426,8 @@ tr.class-highlight-active {
         min-height: 0 !important;
     }
 }
-</style>\n</head>
+</style>
+</head>
 <body>
     <a href="#map" class="sylva-skip-link" data-i18n="skip_to_map">Haritaya geç</a>
     <!-- ANALİZ YÜKLEME OVERLAY -->
@@ -26509,12 +26510,10 @@ function _executeGeoTiffDownloadCore() {
 
 
 function executeGeoTiffDownload() {
-    if (window._sylvaDownloadSyncPromise) {
-        var p = window._sylvaDownloadSyncPromise;
-        window._sylvaDownloadSyncPromise = null;
-        p.then(function(){ _executeGeoTiffDownloadCore(); });
-        return;
-    }
+    // Batch export artık katman payload'ını doğrudan sunucuya gönderiyor.
+    // Bu nedenle İndir düğmesi ikinci bir /api/analyze senkronizasyonunu
+    // beklemeden İLK TIKLAMADA indirme isteğini başlatır.
+    window._sylvaDownloadSyncPromise = null;
     _executeGeoTiffDownloadCore();
 }
 
@@ -53460,7 +53459,11 @@ refresh();
                 filename: _entryFilename,
                 scale:scale, crs:crs,
                 clipMode:entry.payload.clipMode || 'clip', roi:entry.payload.roi || null, rendered:true,
-                visualization:exportVisualFor(pane, entry.key), flatTiff:false
+                visualization:exportVisualFor(pane, entry.key), flatTiff:false,
+                // RGB uydu görüntüsünde indirme, harita önizlemesini yeniden
+                // üretmek için ±5 günlük komşu-sahne mozaiği kurmak zorunda
+                // kalmaz; seçilen gerçek sahne doğrudan dışa aktarılır.
+                fastRgbExport: entry.index === 'RGB'
             });
         });
         if (status) status.textContent='⏳ ' + _dlqT('dlq_building_geotiff', 'GeoTIFF dosyası oluşturuluyor…');
