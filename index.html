@@ -26018,6 +26018,16 @@ function _sylvaDownloadAnalysisIndex() {
 function _sylvaSyncActivePaneForDownload(callback) {
     var _pane = _sylvaDownloadPaneId();
     var _payload = _sylvaDownloadPayload();
+    // Aktif üst katman gerçek RGB uydu görüntüsüyse, pane'in son analizinden
+    // (ör. NDVI/EVI) palette taşıma. RGB katmanın kendi payload'ını kullan.
+    try {
+        var _topKey = (window._sylvaTopGeeLayerByPane || {})[_pane];
+        if (_topKey && String(_topKey).indexOf('RGB::') === 0 &&
+            window._sylvaLayerAnalyzePayloads && window._sylvaLayerAnalyzePayloads[_pane] &&
+            window._sylvaLayerAnalyzePayloads[_pane][_topKey]) {
+            _payload = window._sylvaLayerAnalyzePayloads[_pane][_topKey];
+        }
+    } catch (e) {}
     if (!_payload || typeof API_BASE === 'undefined') {
         var noOp = Promise.resolve(null);
         window._sylvaDownloadSyncPromise = noOp;
@@ -26029,12 +26039,15 @@ function _sylvaSyncActivePaneForDownload(callback) {
     // tıklasa bile bu indirme isteği açıldığı andaki ekranı kullanmaya devam eder.
     var payloadSnapshot = JSON.parse(JSON.stringify(_payload));
     if (payloadSnapshot && payloadSnapshot.index === 'RGB') {
+        // RGB payload'ında tek-bant semboloji bilgisi bırakma. Özellikle dil
+        // değişimi/analiz geçişinden sonra eski NDVI/NDWI palette'i burada
+        // sızarsa GEE Image.visualize 3 bant + palette hatası üretir.
         delete payloadSnapshot.palette;
         delete payloadSnapshot.classBreaks;
-        if (payloadSnapshot.visualization && typeof payloadSnapshot.visualization === 'object') {
-            delete payloadSnapshot.visualization.palette;
-            delete payloadSnapshot.visualization.breaks;
-        }
+        delete payloadSnapshot.min;
+        delete payloadSnapshot.max;
+        delete payloadSnapshot.legendLabels;
+        delete payloadSnapshot.visualization;
     }
     window._sylvaDownloadPayloadByPane[_pane] = payloadSnapshot;
 
