@@ -7198,39 +7198,15 @@ def download_geotiff():
         if fresh_roi:
             data['roi'] = fresh_roi
 
-        # 🛠️ BUG FİX — HIZLI RGB DIŞA AKTARIMI
-        # Gerçek uydu görüntüsü (RGB) için seçilmiş GEE sahnesini doğrudan
-        # dışa aktar. Harita önizlemesinde kullanılan aynı-gün komşu sahne
-        # mozaikleme/yeniden analiz zinciri indirme için gereksizdir. Ayrıca
-        # batch payload'ı doğrudan kullanıldığı için RGB indirme sırasında
-        # eski global ROI/analiz state'ine başvurulmaz.
-        _fast_rgb = bool(req_data.get('fastRgbExport')) and data.get('index') == 'RGB'
-        if _fast_rgb:
-            roi = make_roi(data.get('roi'))
-            _rgb_satellite = data.get('satellite', 's2-l2a')
-            _rgb_ds = SATELLITE_DATASETS.get(_rgb_satellite)
-            if not _rgb_ds:
-                raise ValueError('Bilinmeyen uydu görüntüsü veri seti: ' + str(_rgb_satellite))
-            _rgb_col = build_rgb_collection(_rgb_ds, roi, int(data.get('maxCloud', 20)))
-            _rgb_scene_id = data.get('sceneId')
-            if _rgb_scene_id:
-                _rgb_img = _rgb_col.filter(ee.Filter.eq('system:index', _rgb_scene_id)).first()
-                _rgb_img = _require_nonempty_image(_rgb_img, 'Seçilen uydu sahnesi bulunamadı.')
-            else:
-                _rgb_col2 = _rgb_col.filterDate(data.get('startDate'), data.get('endDate'))
-                _rgb_img = _require_nonempty_image(
-                    _rgb_col2.sort('system:time_start', False).first(),
-                    'Seçilen tarih/bulutluluk kriterlerine uygun uydu görüntüsü bulunamadı.'
-                )
-            _rgb_disp = _rgb_img.select(_rgb_ds['rgbBands'])
-            if _rgb_ds.get('scaleFactor', 1) != 1 or _rgb_ds.get('offset', 0) != 0:
-                _rgb_disp = _rgb_disp.multiply(_rgb_ds['scaleFactor']).add(_rgb_ds.get('offset', 0))
-            _rgb_disp = _rgb_disp.rename(['red', 'green', 'blue'])
-            result = _rgb_disp
-            vis = {'bands': ['red', 'green', 'blue'], 'min': _rgb_ds['visMin'], 'max': _rgb_ds['visMax']}
-            clip_mode = data.get('clipMode', 'clip')
-            final_display = _rgb_disp.clip(roi) if clip_mode == 'clip' else _rgb_disp
-            _unused_crs_probe = _rgb_img
+        # 🛠️ RGB DIŞA AKTARIMI — EKRANLA AYNI SAHNE/ROI ZİNCİRİ
+        # Önceki 'fastRgbExport' yolu seçilen sceneId'yi doğrudan tek sahneden
+        # indiriyordu. Harita önizlemesi ise build_result_image() içinde
+        # seçilen sahne + aynı gün komşu sahne boşluk doldurma mantığını
+        # kullanabiliyordu. Bu iki yol farklı sonuç üretebildi. Artık RGB
+        # indirmesi de doğrudan aynı build_result_image() zincirini kullanır;
+        # böylece seçilen sahne, AOI/clip ve görüntü kapsamı ekrandakiyle aynıdır.
+        if data.get('index') == 'RGB':
+            final_display, roi, result, vis, _unused_crs_probe = build_result_image(data, for_export=True)
         else:
             # 🛠️ BUG FİX (istenen davranış): "Lejantı Uygula" ile sınıflandırma
             # yapılmış olsa bile — NDVI, DEM, Eğim (Slope) vb. hiçbir analizde —
@@ -7241,50 +7217,27 @@ def download_geotiff():
             # atlatır.
             final_display, roi, result, vis, _unused_crs_probe = build_result_image(data, for_export=True)
 
-        # ── 🌈 Sentinel-2 doğal renk parlaklık düzeltmesi ────────────
-        # SORUN: Sentinel-2 RGB (B4-B3-B2) GeoTIFF'leri şu ana kadar ham
-        # (germe uygulanmamış) yansıma değerleriyle (float, ~0.0-0.3
-        # aralığında) dışa aktarılıyordu. Bu değerler haritadaki önizlemede
-        # yalnızca CLIENT tarafında (tile/vis min-max) doğru gösteriliyordu;
-        # dosyanın kendisi hâlâ "karanlık" ham reflectance içeriyordu. ArcMap
-        # gibi CBS yazılımları bu ham float veriyi haritadaki gibi otomatik
-        # germemediği için görüntü olması gerekenden çok koyu görünüyordu.
-        # ÇÖZÜM: Yalnızca Sentinel-2 gerçek renk (RGB) indirmelerinde — hem
-        # Clip hem de Tüm Veri modunda — haritada kullanılan aynı visMin/
-        # visMax germe aralığı piksel değerlerine doğrudan uygulanır ve
-        # sonuç 0-255 (Byte) aralığına dönüştürülür. Böylece indirilen
-        # GeoTIFF, haritada görülen doğal renk görünümüyle eşleşir ve
-        # ArcMap'te ek bir parlaklık/kontrast ayarı gerekmez.
-        # Landsat ve diğer tüm veri setleri/indeksler ETKİLENMEZ; onlar
-        # hâlâ önceki (ham) davranışlarıyla dışa aktarılır.
-        # 🛠️ BUG FİX (ArcMap "Could not open the specified file" — Sentinel-2
-        # gerçek renk indirmelerinde): aşağıdaki .toByte() dönüşümü görüntüyü
-        # Byte (0-255) aralığına daraltır. Ancak bu fonksiyonun ilerisinde
-        # TÜM indeksler için ORTAK/sabit NoData sentinel değeri -9999'dur —
-        # bu değer Byte'ın (uint8) temsil edebileceği [0, 255] aralığının
-        # TAMAMEN dışındadır. _download_band_geotiff_bytes_impl() bu Byte
-        # görüntüyü .unmask(-9999) ile maskelediğinde ve/veya formatOptions.
-        # noData=-9999 etiketlediğinde, GEE'nin ürettiği dosyanın piksel tipi
-        # (Byte) ile NoData etiketi (-9999) birbiriyle TUTARSIZ hale gelir.
-        # rasterio/GDAL bu tutarsızlığı (haklı olarak) reddediyor — bkz.
-        # _ensure_output_crs()'teki "Given nodata value, -9999, is beyond
-        # the valid range of its data type, uint8" hatası — ve daha katı
-        # olan ArcMap'in dosyayı hiç açamamasıyla BİREBİR eşleşen bir
-        # belirti üretiyor. ÇÖZÜM: bu Byte'a daraltılmış dışa aktarım için
-        # NoData sentinel'i de Byte aralığına UYGUN bir değere (0) çekilir
-        # — tıpkı LULC semboloji paketinin (_build_lulc_symbology_zip) kendi
-        # Byte çıktısı için zaten 0'ı NoData olarak kullanması gibi.
+        # ── 🛰️ GERÇEK RGB GeoTIFF: Ekrandaki görüntünün BİREBİR aynısı ──
+        # Uydu görüntüsü (RGB) indirmesinde ham reflectance/DN değerini
+        # doğrudan TIFF'e yazmak ArcMap'te görüntünün siyah/koyu görünmesine
+        # yol açıyordu. Web haritasında ise aynı görüntü, tile üretiminde
+        # Image.visualize(bands=['red','green','blue'], min, max) ile
+        # geriliyor. Bu nedenle dışa aktarımda da AYNI GEE visualize() çağrısını
+        # kullanıyoruz. Böylece Sentinel-2 ve Landsat dahil bütün RGB
+        # sensörlerinde piksel renkleri, parlaklık ve kontrast analiz ekranıyla
+        # aynı olur; 3 bantlı RGB Byte raster üretilir ve palette hiçbir zaman
+        # gönderilmez.
+        #
+        # ÖNEMLİ: unitScale()/toByte() ile ikinci bir germe YAPILMIYOR.
+        # visualize() zaten min/max'a göre 0..255 RGB üretir. İkinci kez
+        # ölçeklemek görüntüyü siyaha veya tek renge sıkıştırabilir.
         _is_byte_rgb_export = False
-        if data.get('index') == 'RGB' and data.get('satellite') in ('s2-l1c', 's2-l2a'):
-            v_min = vis.get('min', 0)
-            v_max = vis.get('max', 0.3)
-            final_display = (
-                final_display
-                .unitScale(v_min, v_max)
-                .multiply(255)
-                .clamp(0, 255)
-                .toByte()
-            )
+        if data.get('index') == 'RGB':
+            # RGB'de vis sözlüğü _rgb_vis_only()/build_result_image() tarafından
+            # yalnızca bands+min+max olarak oluşturulur. Bu çağrı, harita
+            # tile'larını üreten görselleştirmenin aynısıdır.
+            vis = _rgb_vis_only(data.get('satellite'))
+            final_display = final_display.visualize(**vis)
             _is_byte_rgb_export = True
 
         # Full modunda ROI ile kesmeden tüm görüntüyü indir;
