@@ -53624,7 +53624,16 @@ refresh();
                 fastRgbExport: entry.index === 'RGB'
             });
         });
-        if (status) status.textContent='⏳ ' + _dlqT('dlq_building_geotiff', 'GeoTIFF dosyası oluşturuluyor…');
+        // 🛠️ BUG FIX — İndirme ilerlemesinin kaybolması ve ZIP'in hiç gelmemesi:
+        // Önceki sürüm tüm öğeleri tek bir uzun /api/download-geotiff-batch
+        // isteğinin içine koyuyordu. GEE/Cloud Run bu isteğin tamamını bitirene
+        // kadar tarayıcıya hiçbir ara durum gönderemediği için kullanıcı yalnızca
+        // "GeoTIFF dosyası oluşturuluyor…" mesajını görüyordu; uzun işlemlerde
+        // istek zaman aşımına uğrarsa ZIP hiç ulaşmıyordu. Yeni akışta her raster
+        // kendi /api/download-geotiff isteğiyle sırayla alınır, her öğenin gerçek
+        // durumu ekranda gösterilir ve dönen ZIP'ler tarayıcıda TEK bir ZIP'te
+        // birleştirilir. Böylece 1/1, 1/5, 2/5… ilerlemesi geri gelir ve tek bir
+        // uzun batch HTTP isteğine bağımlılık ortadan kalkar.
         // ZIP adı da görüntünün GERÇEK çekim tarihini izler. Tek tarih varsa
         // doğrudan o tarih kullanılır; zaman serisi/çoklu sahnede ilk-son tarih
         // aralığı kullanılır. İndirme günü hiçbir zaman fallback değildir.
@@ -53650,8 +53659,99 @@ refresh();
         } else {
             _batchName = safeName(filename) + '_raster_analizleri' + (_zipDatePart ? ('_' + _zipDatePart) : '');
         }
-        return responseBlob('/api/download-geotiff-batch', {items:items, zipFilename:_batchName + '.zip'}).then(function(b){ return {blob:b,name:_batchName + '.zip'}; })
-        .catch(function(err) {
+        // ─────────────────────────────────────────────────────────────
+        // GÜVENİLİR ZIP İNDİRME: Her öğeyi ayrı HTTP isteğiyle al, sonra
+        // tarayıcıda tek ZIP oluştur. Sunucu tarafındaki /api/download-geotiff
+        // zaten her rasterı gerekli .tif + .aux.xml / RAT / VAT / .clr dosyaları
+        // ile birlikte ZIP olarak döndürür. Bu ZIP'leri JSZip ile açıp tek arşive
+        // koyuyoruz. Böylece büyük çoklu indirmelerde Cloud Run tek-request
+        // timeout'u bütün indirmeyi çöpe atamaz.
+        function _directGeoTiffItem(item, n, total) {
+            var label = item.filename || ('Raster ' + n);
+            if (status) {
+                status.style.color='#1e3a8a';
+                status.textContent='⏳ ' + _dlqFmt(_dlqT('dlq_progress', '{n}/{total} — {name} hazırlanıyor…'), {n:n,total:total,name:label});
+            }
+            var body = {
+                analysisId: item.analysisId || null,
+                payload: item.payload,
+                filename: item.filename,
+                scale: item.scale,
+                crs: item.crs,
+                clipMode: item.clipMode,
+                roi: item.roi,
+                rendered: item.rendered,
+                visualization: item.visualization,
+                flatTiff: false,
+                fastRgbExport: !!item.fastRgbExport
+            };
+            return responseBlob('/api/download-geotiff', body).then(function(blob){
+                if (!blob || !blob.size) throw new Error(label + ': sunucu boş dosya döndürdü.');
+                if (status) status.textContent='✓ ' + _dlqFmt(_dlqT('dlq_progress', '{n}/{total} — {name} hazırlanıyor…'), {n:n,total:total,name:label}).replace('hazırlanıyor…','hazır.');
+                return blob;
+            });
+        }
+
+        var _masterZip = (typeof JSZip !== 'undefined') ? new JSZip() : null;
+        var _usedZipNames = {};
+        function _uniqueZipName(name) {
+            name = String(name || 'dosya').replace(/^\/+/, '');
+            var base=name, ext='';
+            var dot=name.lastIndexOf('.');
+            if(dot>0){ base=name.slice(0,dot); ext=name.slice(dot); }
+            var candidate=name, i=2;
+            while(_usedZipNames[candidate.toLowerCase()]) candidate=base+'_'+(i++)+ext;
+            _usedZipNames[candidate.toLowerCase()]=true;
+            return candidate;
+        }
+        function _addReturnedZipToMaster(blob, item) {
+            if (!_masterZip) return Promise.reject(new Error('JSZip kütüphanesi yüklenemedi.'));
+            var u8Promise = blob.arrayBuffer ? blob.arrayBuffer() : new Response(blob).arrayBuffer();
+            return u8Promise.then(function(buf){
+                var sig = new Uint8Array(buf,0,Math.min(4,buf.byteLength));
+                var isZip = sig.length >= 2 && sig[0]===80 && sig[1]===75;
+                if(!isZip){
+                    _masterZip.file(_uniqueZipName((item.filename||'SylvaGIS_export')+'.tif'), buf);
+                    return;
+                }
+                return JSZip.loadAsync(buf).then(function(inner){
+                    var files=[];
+                    inner.forEach(function(path, file){ if(!file.dir) files.push({path:path,file:file}); });
+                    return Promise.all(files.map(function(entry){
+                        return entry.file.async('arraybuffer').then(function(data){
+                            _masterZip.file(_uniqueZipName(entry.path), data);
+                        });
+                    }));
+                });
+            });
+        }
+
+        var _downloadPromise;
+        if (_masterZip) {
+            _downloadPromise = Promise.resolve().then(function(){
+                var chain = Promise.resolve();
+                items.forEach(function(item, idx){
+                    chain = chain.then(function(){
+                        return _directGeoTiffItem(item, idx+1, items.length).then(function(blob){
+                            return _addReturnedZipToMaster(blob, item);
+                        });
+                    });
+                });
+                return chain.then(function(){
+                    if (status) status.textContent='⏳ ' + _dlqT('dlq_building_geotiff', 'ZIP dosyası hazırlanıyor…');
+                    return _masterZip.generateAsync({type:'blob', compression:'DEFLATE', compressionOptions:{level:6}});
+                });
+            });
+        } else {
+            // JSZip CDN yüklenmediyse güvenli geri dönüş: eski sunucu batch yolu.
+            _downloadPromise = responseBlob('/api/download-geotiff-batch', {items:items, zipFilename:_batchName + '.zip'});
+        }
+        return _downloadPromise.then(function(b){
+            if(status){ status.style.color='#065f46'; status.textContent='✓ ' + _dlqT('dlq_ready', 'İndirme hazırlandı.'); }
+            var url=URL.createObjectURL(b), a=document.createElement('a');
+            a.href=url; a.download=_batchName+'.zip'; document.body.appendChild(a); a.click(); a.remove();
+            setTimeout(function(){URL.revokeObjectURL(url);},60000);
+        }).catch(function(err) {
             if(status) { status.style.color='#991b1b'; status.textContent='❌ ' + ((err && err.message) || _dlqT('dlq_prepare_failed', 'İndirme hazırlanamadı.')); }
         }).finally(function(){ if(btn){btn.disabled=false;btn.textContent=(typeof t==='function'?t('gtiff_btn_download'):'İndir');} });
     };
@@ -53811,7 +53911,8 @@ refresh();
 })();
 
 </script>
-\n<script id="sylva-final-topo-ui-and-state-fix-20260819">
+
+<script id="sylva-final-topo-ui-and-state-fix-20260819">
 (function(){
   'use strict';
   var TOPO=/^TOPO(?:_|$)/i;
@@ -54534,7 +54635,8 @@ var h='<div class="env-info-backdrop topo-landuse-info-backdrop"><section class=
 '<div class="info-key">'+esc(l[0])+'</div><div class="info-val">'+esc(vals[0].replace('{title}',T))+'</div>'+ '<div class="info-key">'+esc(l[1])+'</div><div class="info-val">'+esc(src)+'</div>'+ '<div class="info-key">'+esc(l[2])+'</div><div class="info-val">'+esc(date)+'</div>'+ '<div class="info-key">'+esc(l[3])+'</div><div class="info-val">'+esc(res)+'</div>'+ '<div class="info-key">'+esc(l[4])+'</div><div class="info-val">'+esc(acc)+'</div></div>'+ '<h3>'+esc(l[5])+'</h3><p>'+esc(vals[5].replace('{title}',T))+'</p><h3>'+esc(l[6])+'</h3><p>'+esc(vals[6].replace('{title}',T))+'</p><h3>'+esc(l[7])+'</h3><p>'+esc(vals[7].replace('{title}',T))+'</p></section></div>';
 var old=document.querySelector('.topo-landuse-info-backdrop');if(old)old.remove();document.body.insertAdjacentHTML('beforeend',h);var x=document.querySelector('.topo-landuse-info-backdrop');x.addEventListener('click',function(e){if(e.target===x||e.target.closest('.topo-landuse-info-close'))x.remove()});x.querySelector('.topo-landuse-info-close').focus();}
 window.openInfo=render;
-})();</script>\n<script id="sylva-final-screen2-parity-and-language-guard-20260820">
+})();</script>
+<script id="sylva-final-screen2-parity-and-language-guard-20260820">
 (function(){
   'use strict';
 
