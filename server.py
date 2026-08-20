@@ -7156,6 +7156,11 @@ def download_geotiff():
             if _rgb_scene_id:
                 _rgb_img = _rgb_col.filter(ee.Filter.eq('system:index', _rgb_scene_id)).first()
                 _rgb_img = _require_nonempty_image(_rgb_img, 'Seçilen uydu sahnesi bulunamadı.')
+                # Ekrandaki harita ile indirme aynı sahne mantığını kullanmalı.
+                # Seçilen sahne AOI'nin birden fazla tile/path-row parçasına
+                # denk geliyorsa, haritanın kullandığı aynı boşluk-doldurma
+                # mozaiğini indirime de uygula.
+                _rgb_img = _fill_scene_gaps_with_same_day_mosaic(_rgb_col, _rgb_img, _rgb_scene_id, roi)
             else:
                 _rgb_col2 = _rgb_col.filterDate(data.get('startDate'), data.get('endDate'))
                 _rgb_img = _require_nonempty_image(
@@ -7189,14 +7194,14 @@ def download_geotiff():
         # dosyanın kendisi hâlâ "karanlık" ham reflectance içeriyordu. ArcMap
         # gibi CBS yazılımları bu ham float veriyi haritadaki gibi otomatik
         # germemediği için görüntü olması gerekenden çok koyu görünüyordu.
-        # ÇÖZÜM: Yalnızca Sentinel-2 gerçek renk (RGB) indirmelerinde — hem
+        # ÇÖZÜM: Yalnızca gerçek renkli uydu görüntüsü (RGB) indirmelerinde — hem
         # Clip hem de Tüm Veri modunda — haritada kullanılan aynı visMin/
         # visMax germe aralığı piksel değerlerine doğrudan uygulanır ve
         # sonuç 0-255 (Byte) aralığına dönüştürülür. Böylece indirilen
         # GeoTIFF, haritada görülen doğal renk görünümüyle eşleşir ve
         # ArcMap'te ek bir parlaklık/kontrast ayarı gerekmez.
-        # Landsat ve diğer tüm veri setleri/indeksler ETKİLENMEZ; onlar
-        # hâlâ önceki (ham) davranışlarıyla dışa aktarılır.
+        # Gerçek renkli Landsat görüntüleri de ekranla aynı germe işleminden geçer;
+        # analiz rasterleri ve diğer veri setleri etkilenmez.
         # 🛠️ BUG FİX (ArcMap "Could not open the specified file" — Sentinel-2
         # gerçek renk indirmelerinde): aşağıdaki .toByte() dönüşümü görüntüyü
         # Byte (0-255) aralığına daraltır. Ancak bu fonksiyonun ilerisinde
@@ -7215,9 +7220,19 @@ def download_geotiff():
         # — tıpkı LULC semboloji paketinin (_build_lulc_symbology_zip) kendi
         # Byte çıktısı için zaten 0'ı NoData olarak kullanması gibi.
         _is_byte_rgb_export = False
-        if data.get('index') == 'RGB' and data.get('satellite') in ('s2-l1c', 's2-l2a'):
-            v_min = vis.get('min', 0)
-            v_max = vis.get('max', 0.3)
+        # 🛰️ TÜM gerçek renkli uydu görüntülerinde aynı ekran germe işlemi
+        # uygulanır. Önceki sürüm yalnızca Sentinel-2'yi Byte'a çeviriyordu;
+        # Landsat RGB ham float yansıma olarak iniyor ve ArcMap bazı sahneleri
+        # siyah/koyu dikdörtgen olarak gösteriyordu. Ekrandaki min/max neyse
+        # aynısı 0–255'e dönüştürülür. MSS gibi gerçek mavi bandı olmayan
+        # kompozitler bu dalın dışında bırakılır.
+        _rgb_ds_for_export = SATELLITE_DATASETS.get(data.get('satellite')) if data.get('index') == 'RGB' else None
+        _is_true_color_rgb_dataset = bool(_rgb_ds_for_export and _rgb_ds_for_export.get('trueColor'))
+        if data.get('index') == 'RGB' and _is_true_color_rgb_dataset:
+            v_min = float(vis.get('min', _rgb_ds_for_export.get('visMin', 0)))
+            v_max = float(vis.get('max', _rgb_ds_for_export.get('visMax', 0.3)))
+            if v_max <= v_min:
+                v_max = v_min + 0.3
             final_display = (
                 final_display
                 .unitScale(v_min, v_max)
@@ -7389,7 +7404,8 @@ def download_geotiff():
                 requested_breaks = requested_vis['breaks']
             if isinstance(requested_vis.get('legendLabels'), list):
                 requested_legend_labels = requested_vis.get('legendLabels')
-        is_true_color_rgb = (lulc_index == 'RGB') and not is_env_urban_raster
+        _rgb_ds_for_export = SATELLITE_DATASETS.get(data.get('satellite')) if lulc_index == 'RGB' else None
+        is_true_color_rgb = (lulc_index == 'RGB') and bool(_rgb_ds_for_export and _rgb_ds_for_export.get('trueColor')) and not is_env_urban_raster
         export_image = final_display
 
         # DYNAMIC WORLD GÜVENLİ DIŞA AKTARIMI: 0 = Water GERÇEK SINIFTIR.
@@ -7442,6 +7458,29 @@ def download_geotiff():
             fallback_region_geom=roi.bounds(maxError=100),
             is_categorical=is_lulc_categorical
         )
+
+        # 🛰️ ArcMap/QGIS RGB tanıma güvencesi: GEE'den gelen 3 bantlı
+        # GeoTIFF'i gerçek RGB color interpretation/photometric metadata ile
+        # yeniden yaz. Piksel değerleri değiştirilmez; yalnızca CBS yazılımına
+        # Band1=Red, Band2=Green, Band3=Blue olduğunu açıkça bildirir.
+        if is_true_color_rgb:
+            try:
+                import rasterio as _rio_rgb
+                from rasterio.io import MemoryFile as _MF_rgb
+                from rasterio.enums import ColorInterp as _CI_rgb
+                with _MF_rgb(tif_bytes) as _mf_rgb:
+                    with _mf_rgb.open() as _src_rgb:
+                        if _src_rgb.count == 3:
+                            _prof_rgb = _src_rgb.profile.copy()
+                            _data_rgb = _src_rgb.read()
+                            _prof_rgb['photometric'] = 'RGB'
+                            with _MF_rgb() as _out_rgb_mf:
+                                with _out_rgb_mf.open(**_prof_rgb) as _dst_rgb:
+                                    _dst_rgb.write(_data_rgb)
+                                    _dst_rgb.colorinterp = (_CI_rgb.red, _CI_rgb.green, _CI_rgb.blue)
+                                tif_bytes = _out_rgb_mf.read()
+            except Exception as _rgb_meta_err:
+                print('[SylvaGIS] RGB GeoTIFF metadata düzenlenemedi; piksel verisi korunarak devam ediliyor:', _rgb_meta_err)
 
         sym_files = None
         if lulc_index in LULC_CLASS_DEFS:
