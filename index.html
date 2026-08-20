@@ -14589,6 +14589,13 @@ function selectRamp(name) {
                 return;
             }
 
+            // Zaman Serisi dışındaki yeni bir analiz başlatıldığında eski
+            // zaman serisi sahne kuyruğunu temizle; aksi halde daha sonra yapılan
+            // normal raster indirmesi eski dönemleri tekrar ZIP'e ekleyebilirdi.
+            window._tsSliderSceneIds = [];
+            window._tsSliderPane = null;
+            window._tsLastIndices = [];
+
             // 🆕 Zaman Serisi dışındaki HER analiz türü (indeks/modül veya Uydu
             // Görüntüsü Galerisi) "🚀 Analizi Çalıştır" ile başlatıldığında Çizgi
             // Grafik butonu pasifleştirilir — çizgi grafik yalnızca Zaman Serisi
@@ -51481,6 +51488,9 @@ function runTimeSeriesAnalysis() {
     var idxs = [];
     checkedBoxes.forEach(function(cb){ idxs.push(cb.getAttribute('data-analysis')); });
     if (!idxs.length) { alert(t('ts_alert_index')); return; }
+    // Zaman Serisi indirmesinde her gerçek dönem + her seçili indeks ayrı
+    // raster olarak paketlenebilsin diye son seçimi indirme kuyruğuna aktar.
+    window._tsLastIndices = idxs.slice();
 
     // AOI (o an aktif ekranın çizilmiş Çalışma Alanı geometrisi) + uydu
     var _pane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
@@ -51618,6 +51628,7 @@ function runTimeSeriesAnalysis() {
 window._tsSliderDates = [];
 window._tsSliderSceneIds = [];
 window._tsSliderPane = null;
+window._tsLastIndices = [];
 var _tsPlayTimer = null, _tsPlaying = false;
 
 // 🎬 opts / cb: kaydırıcı bir kareye geçtiğinde, o karenin verisi+lejantı
@@ -53088,9 +53099,72 @@ refresh();
             seen[fingerprint] = true;
             result.push({ key:key, payload:payload, index:index });
         });
+
+        // Bazı akışlarda (özellikle ilk RGB sahnesi veya zaman serisinin ilk
+        // karesi yüklenirken) katman sözlüğü ile indirme payload'ı arasında çok
+        // kısa bir senkronizasyon aralığı olabilir. Aktif payload'ı da bağımsız
+        // bir raster olarak kabul et; böylece tek raster için ZIP isteği boş
+        // listeye düşüp eski "en az iki raster" hatasını üretemez.
         if (!result.length) {
             var fallback = window._lastAnalyzePayloadByPane && window._lastAnalyzePayloadByPane[pane];
-            if (fallback && fallback.index && !/^(TOPO_CONTOUR|BUILDING_FOOTPRINT)$/i.test(fallback.index)) result.push({key:'active',payload:fallback,index:fallback.index});
+            if (fallback && fallback.index && !/^(TOPO_CONTOUR|BUILDING_FOOTPRINT)$/i.test(fallback.index)) {
+                result.push({key:'active', payload:fallback, index:fallback.index});
+            }
+        }
+
+        // 📈 Zaman Serisi: grafikte bulunan gerçek sahnelerin her biri ayrı
+        // raster olarak indirilebilir. Aynı analiz katmanının payload'ı temel
+        // alınır; yalnızca sceneId ve zaman serisinin tarih aralığı değiştirilir.
+        // Böylece kullanıcı "Zaman Serisi" sonucunu açıp İndir dediğinde
+        // yalnızca ekrandaki ilk kare değil, serideki gerçek dönemler ZIP'e girer.
+        var tsPane = window._tsSliderPane;
+        var tsScenes = window._tsSliderSceneIds || [];
+        if (tsPane === pane && tsScenes.length) {
+            var tsIndices = window._tsLastIndices && window._tsLastIndices.length
+                ? window._tsLastIndices.slice()
+                : [];
+            var tsStartYear = parseInt((document.getElementById('ts-start-year') || {}).value, 10);
+            var tsEndYear = parseInt((document.getElementById('ts-end-year') || {}).value, 10);
+            var tsCloud = parseInt((document.getElementById('ts-cloud-pct') || {}).value, 10);
+            // Yalnızca zaman serisinde kullanılan analiz katmanını genişlet;
+            // aynı ekranda daha önce açık kalmış DEM/LULC/RGB gibi bağımsız
+            // katmanları yanlışlıkla her döneme çoğaltma.
+            var tsBaseEntries = result.filter(function(entry) {
+                return !tsIndices.length || tsIndices.indexOf(entry.index) !== -1;
+            });
+            if (!tsBaseEntries.length) {
+                var _tsTopKey = window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[pane];
+                var _tsTop = result.filter(function(entry){ return entry.key === _tsTopKey; });
+                tsBaseEntries = _tsTop.length ? _tsTop : result.slice(0, 1);
+            }
+            var expanded = [];
+            tsBaseEntries.forEach(function (entry) {
+                var indices = tsIndices.length ? tsIndices.slice() : [entry.index];
+                indices.forEach(function (idx) {
+                    if (!idx || /^(TOPO_CONTOUR|BUILDING_FOOTPRINT|RGB)$/i.test(idx)) return;
+                    tsScenes.forEach(function (sceneId, sceneNo) {
+                        if (!sceneId) return;
+                        var p = Object.assign({}, entry.payload, {
+                            index: idx,
+                            sceneId: sceneId
+                        });
+                        if (isFinite(tsStartYear) && isFinite(tsEndYear) && tsStartYear < tsEndYear) {
+                            p.startDate = String(tsStartYear) + '-01-01';
+                            p.endDate = String(tsEndYear + 1) + '-01-01';
+                        }
+                        if (isFinite(tsCloud)) p.maxCloud = tsCloud;
+                        expanded.push({
+                            key: entry.key,
+                            payload: p,
+                            index: idx,
+                            tsSceneNo: sceneNo + 1,
+                            tsDate: (window._tsSliderDates || [])[sceneNo] || '',
+                            tsSeries: true
+                        });
+                    });
+                });
+            });
+            if (expanded.length) result = expanded;
         }
         return result;
     }
@@ -53132,8 +53206,10 @@ refresh();
     }
     function downloadBlob(blob, name) { var a=document.createElement('a'), url=URL.createObjectURL(blob); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(function(){URL.revokeObjectURL(url);}, 60000); }
 
-    // Eski tek-katman indirme fonksiyonunun yerine geçer. Aktif ekranın tüm
-    // raster katmanlarını bulur; 1 katman TIFF, 2+ katman tek ZIP üretir.
+    // Aktif ekranın raster katmanlarını bulur ve HER ZAMAN tek bir ZIP üretir.
+    // 1 raster da, 2+ raster da aynı sunucu paketleme hattından geçer; böylece
+    // her TIFF'in yanında gerekli RAT/VAT/.clr veya RGB .aux.xml sidecar'ları
+    // korunur. Zaman Serisi varsa gerçek dönem sahneleri de bu kuyruğa eklenir.
     window.executeGeoTiffDownload = function () {
         var pane = activePane(), entries = rasterEntries(pane);
         var status=document.getElementById('geotiff-status'), btn=document.getElementById('btn-geotiff-execute');
@@ -53186,7 +53262,9 @@ refresh();
                     // startDate) kullanılır — Zaman Serisi/çoklu tarihli
                     // indirmelerde her dosya kendi doğru tarihini taşır.
                     var _entryIsDateable = (typeof isSatelliteIndexAnalysis === 'function' && isSatelliteIndexAnalysis(entry.index)) || entry.index === 'RGB';
-                    var _entryDatePart = _entryIsDateable ? ((entry.payload && (entry.payload.endDate || entry.payload.startDate)) || '') : '';
+                    var _entryDatePart = _entryIsDateable
+                        ? (entry.tsDate || ((entry.payload && (entry.payload.endDate || entry.payload.startDate)) || ''))
+                        : '';
                     var _entryFilename;
                     if (_gtiffIsAutoName) {
                         var _p = ['SylvaGIS_export'];
