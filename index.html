@@ -14820,6 +14820,40 @@ function selectRamp(name) {
             return false;
         }
 
+        // ⚡ GEE İSTEK KUYRUĞU — Birden fazla NDVI/NDWI/BSI vb. aynı anda
+        // seçildiğinde tarayıcının 4-5 /api/analyze isteğini aynı anda
+        // Earth Engine'e bindirmesi Restricted Mode / 429 riskini artırıyordu.
+        // En fazla 2 analiz isteği aynı anda çalışır; ilk analiz hemen başlar,
+        // diğerleri sırayla devam eder. Böylece ilk raster hızlı görünürken
+        // toplu seçim de güvenilir biçimde tamamlanır.
+        window._sylvaAnalysisRequestQueue = window._sylvaAnalysisRequestQueue || (function () {
+            var active = 0, pending = [], MAX = 2;
+            function pump() {
+                while (active < MAX && pending.length) {
+                    var job = pending.shift();
+                    active++;
+                    var p;
+                    try { p = job.fn(); } catch (e) { p = Promise.reject(e); }
+                    Promise.resolve(p).then(function (value) {
+                        job.resolve(value);
+                    }, function (err) {
+                        job.reject(err);
+                    }).then(function () {
+                        active--;
+                        pump();
+                    });
+                }
+            }
+            return {
+                enqueue: function (fn) {
+                    return new Promise(function (resolve, reject) {
+                        pending.push({ fn: fn, resolve: resolve, reject: reject });
+                        pump();
+                    });
+                }
+            };
+        })();
+
         function runAnalysis() {
             // 🛠️ BUG FİX (KÖK NEDEN): "📈 Zaman Serisi ve Değişim Analizi" bölümünde
             // bir periyot (Aylık/Yıllık) seçiliyken, kullanıcı ts-start-year/
@@ -15289,10 +15323,12 @@ function selectRamp(name) {
                 }
                 var _runGen = _analysisGeneration;
 
-                fetch(API_BASE + '/api/analyze', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(analyzePayload)
+                window._sylvaAnalysisRequestQueue.enqueue(function () {
+                    return fetch(API_BASE + '/api/analyze', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(analyzePayload)
+                    });
                 })
                 .then(function(r) { return r.json(); })
                 .then(function(data) {
@@ -15331,7 +15367,15 @@ function selectRamp(name) {
                     // (bkz. sylva-layer-switch-visibility tıklama işleyicisi)
                     // ek olarak görünür yapabilir — bu manuel işlem bu
                     // otomatik gizlemeden ETKİLENMEZ/geri alınmaz.
-                    _sylvaAddGeeLayer(_pane, _thisLayerKey, data.tileUrl, { opacity: _isVectorContour ? 0 : 1, hideOthers: !_stackMode });
+                    // Birden fazla uydu analizi aynı çalıştırmada seçildiyse hepsi
+                    // gerçek GEE katmanı olarak yüklenir. Katman kutusundaki tikler
+                    // böylece birbirinden bağımsız açılıp kapanabilir. Tek analizde
+                    // eski tek-katman davranışı korunur; stack modu da aynen korunur.
+                    var _keepMultipleAnalysisLayers = metaList.length > 1;
+                    _sylvaAddGeeLayer(_pane, _thisLayerKey, data.tileUrl, {
+                        opacity: _isVectorContour ? 0 : 1,
+                        hideOthers: (!_stackMode && !_keepMultipleAnalysisLayers)
+                    });
                     if (_isVectorContour && typeof _sylvaLoadContourVectorLayer === 'function') {
                         _sylvaLoadContourVectorLayer(_pane, _thisLayerKey, analyzePayload);
                     }
@@ -15478,6 +15522,34 @@ function selectRamp(name) {
                     // değiştirildiğinde Lejant ve Uydu Görüntü Galerisi de o
                     // analize göre otomatik güncellenir; sabit kalmaz.
                     _sylvaRenderIndexAnalysisResult(meta, data, _pane, false, _thisLayerKey, _isTopForPane);
+
+                    // ⚡ ARKA PLAN İSTATİSTİKLERİ: Ağır histogram/min-max işlemleri
+                    // ilk tile yanıtını artık bloklamaz. Tile ve temel lejant hemen
+                    // görünür; istatistikler ayrı kuyruktan geldiğinde mevcut
+                    // lejant/grafik değerleri sessizce güncellenir.
+                    window._sylvaAnalysisRequestQueue.enqueue(function () {
+                        return fetch(API_BASE + '/api/analyze-stats', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(analyzePayload)
+                        });
+                    }).then(function(r) { return r.json(); }).then(function(statData) {
+                        if (_analysisGeneration !== _runGen || !statData || !statData.success) return;
+                        data.stats = statData.stats || {};
+                        data.realStats = statData.realStats || {};
+                        var _stateStore = window._sylvaIndexAnalysisStates = window._sylvaIndexAnalysisStates || {map:{},map2:{}};
+                        _stateStore[_pane] = _stateStore[_pane] || {};
+                        _stateStore[_pane][_thisLayerKey] = { meta: meta, data: data };
+                        if (_isTopForPane) {
+                            if (data.stats && typeof updateStatsTable === 'function') updateStatsTable(data.stats, _pane);
+                            if (data.stats && typeof appendRealStatsToLegend === 'function') appendRealStatsToLegend(data.stats, _pane);
+                            if (isLulcAnalysis(meta.analysisName) && typeof renderLulcLegendAndChart === 'function') {
+                                renderLulcLegendAndChart(meta, data.stats, _pane);
+                            }
+                        }
+                    }).catch(function(err) {
+                        console.warn('[SylvaGIS] Arka plan analiz istatistikleri alınamadı:', err);
+                    });
 
                     // 🛠️ KÖK NEDEN DÜZELTMESİ: Karşı ekrana yansıtma (mirror)
                     // eskiden BURADAN ÖNCE, yani lejant/galeri/bilgi kutusu bu
@@ -16358,6 +16430,14 @@ function selectRamp(name) {
                     }
                 }
             }
+            // ⚡ HIZLI GALERİ: Tile hazır olduğu anda analiz haritada görünür.
+            // Ağır sahne listesi artık /api/analyze yanıtını bekletmediği için
+            // burada bağımsız ve arka planda başlatılır.
+            if (_mIdx === 0 && !meta.isRgbGallery && !isLulcAnalysis(meta.analysisName) &&
+                !isTopoAnalysis(meta.analysisName) && !isBuildingFootprintAnalysis(meta.analysisName)) {
+                _sylvaLoadAnalysisGalleryAsync(_pane, meta, analyzePayload, _runGen);
+            }
+
             // 🛠️ DÜZELTME: Statik veri setleri (ESA WorldCover, LULC, TOPO, SAR)
             // sadece Bilgi Kutusu kartını kullanır — Galeri'yi (bir önceki
             // analizden kalmış olabilecek sahne kartlarıyla birlikte) kapatır.
@@ -17672,6 +17752,60 @@ function selectRamp(name) {
                 wsStroke.checked = true;
                 wsStroke.dispatchEvent(new Event('change'));
             }
+        }
+
+        // ⚡ HIZLI UYDU ANALİZİ GALERİSİ
+        // /api/analyze artık sahne listesini beklemeden tile URL'sini döndürür.
+        // Bu yardımcı, analiz katmanı ekrana geldikten sonra sahne listesini
+        // bağımsız olarak çeker; böylece ağır aggregate_array/getInfo işlemleri
+        // harita katmanının görünmesini engellemez. Aynı çalıştırmada birden fazla
+        // indeks seçilmişse galeri yalnızca bir kez doldurulur.
+        function _sylvaLoadAnalysisGalleryAsync(paneId, meta, payload, runGeneration) {
+            paneId = (paneId === 'map2') ? 'map2' : 'map';
+            if (!meta || !payload || !payload.roi) return;
+            window._sylvaAnalysisGalleryGenByPane = window._sylvaAnalysisGalleryGenByPane || { map: 0, map2: 0 };
+            var key = paneId;
+            if (window._sylvaAnalysisGalleryGenByPane[key] === runGeneration) return;
+            window._sylvaAnalysisGalleryGenByPane[key] = runGeneration;
+
+            var galleryEl = _sylvaGalleryEl(paneId);
+            if (galleryEl) {
+                galleryEl.innerHTML = '<div style="padding:6px 10px;font-size:0.75rem;color:#94a3b8;">⏳ Sahneler arka planda yükleniyor…</div>';
+                galleryEl.style.display = 'flex';
+                galleryEl.style.opacity = '0.65';
+                galleryEl.style.pointerEvents = 'none';
+            }
+
+            if (!_sylvaCheckSatelliteDateFloor(payload.satellite, payload.startDate)) {
+                if (galleryEl) { galleryEl.innerHTML = ''; galleryEl.style.display = 'none'; }
+                return;
+            }
+
+            fetch(API_BASE + '/api/get-scenes', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    roi: payload.roi,
+                    startDate: payload.startDate,
+                    endDate: payload.endDate,
+                    satellite: payload.satellite || 's2-l2a',
+                    cloudCover: payload.maxCloud == null ? 20 : payload.maxCloud,
+                    months: payload.months || []
+                })
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (window._sylvaAnalysisGalleryGenByPane[key] !== runGeneration) return;
+                if (!data.success || !data.scenes || !data.scenes.length) {
+                    if (galleryEl) { galleryEl.innerHTML = ''; galleryEl.style.display = 'none'; }
+                    return;
+                }
+                renderGalleryFromScenes(data.scenes, paneId, meta);
+            })
+            .catch(function(err) {
+                console.warn('[SylvaGIS] Analiz galerisi arka plan yüklemesi başarısız:', err);
+                if (galleryEl) { galleryEl.innerHTML = ''; galleryEl.style.display = 'none'; }
+            });
         }
 
         function renderGalleryFromScenes(scenes, paneId, explicitMeta) {
