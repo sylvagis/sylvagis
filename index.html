@@ -10490,6 +10490,27 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
                         _setGalleryPanelRestricted(false);
                     }
                     _sylvaSyncVerisetiSelectionToAnalysisGate();
+
+                    // 🛠️ GÜNCELLEME 1 — Veri seti kutusu tek başına seçildiğinde
+                    // daha önce çalıştırılmış RGB katmanı varsa yeniden analiz
+                    // çalıştırmaya gerek kalmadan hemen öne alınır. Böylece
+                    // Sentinel-2 seçildiğinde Landsat görüntüsü ekranda kalmaz;
+                    // lejant + galeri + ham bant paneli de aynı katmana geçer.
+                    try {
+                        var _selectedRgbBoxesNow = document.querySelectorAll('.uydu-veriseti-checkbox:checked');
+                        if (_selectedRgbBoxesNow.length === 1 &&
+                            typeof _sylvaBringGeeLayerToFront === 'function') {
+                            var _selectedRgbKeyNow = _selectedRgbBoxesNow[0].value;
+                            var _selectedRgbPaneNow = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+                            var _selectedRgbLayerKeyNow = 'RGB::' + _selectedRgbKeyNow;
+                            var _selectedRgbStoreNow = window._geeLayersByPane && window._geeLayersByPane[_selectedRgbPaneNow];
+                            if (_selectedRgbStoreNow && _selectedRgbStoreNow[_selectedRgbLayerKeyNow]) {
+                                _sylvaBringGeeLayerToFront(_selectedRgbPaneNow, _selectedRgbLayerKeyNow);
+                            }
+                        }
+                    } catch (_rgbSwitchErr) {
+                        console.warn('[SylvaGIS] RGB veri seti otomatik geçişi başarısız:', _rgbSwitchErr);
+                    }
                     _updateDateCloudControlsVisibility();
                 });
             });
@@ -13420,6 +13441,41 @@ function selectRamp(name) {
             var key = (paneId === 'map2') ? 'map2' : 'map';
             var store = window._geeLayersByPane[key];
             if (!store || !store[layerKey]) return;
+
+            // 🛠️ GÜNCELLEME 1 — RGB katman geçişinde HARİTA VERİSİ de değişsin.
+            // Önceki sürümde birden fazla Sentinel-2 + Landsat RGB katmanı
+            // yüklüyken kutudan Sentinel-2 seçildiğinde z-index/lejant/galeri
+            // güncelleniyor, fakat eski Landsat rasterı da haritada görünür
+            // kalabiliyordu. Özellikle koyu/örtüşen RGB katmanlarda kullanıcı
+            // hâlâ Landsat görüntüsünü görüyordu. RGB'de "Üstte Gösterilecek
+            // Katman" seçimi artık gerçek bir tek-katman geçişidir: seçilen
+            // RGB katmanı görünür bırakılır, diğer RGB katmanları haritadan
+            // kaldırılır ve görünürlük durumları false yapılır. Diğer analiz
+            // türleri ve stack davranışı bundan etkilenmez.
+            if (String(layerKey).indexOf('RGB::') === 0) {
+                window._sylvaLayerVisibleByPane = window._sylvaLayerVisibleByPane || { map: {}, map2: {} };
+                window._sylvaLayerVisibleByPane[key] = window._sylvaLayerVisibleByPane[key] || {};
+                var _rgbTargetMapOnSwitch = _sylvaTargetMap(paneId);
+                Object.keys(store).forEach(function (_rgbOtherKey) {
+                    if (_rgbOtherKey === layerKey || String(_rgbOtherKey).indexOf('RGB::') !== 0) return;
+                    window._sylvaLayerVisibleByPane[key][_rgbOtherKey] = false;
+                    var _rgbOtherLayer = store[_rgbOtherKey];
+                    if (_rgbOtherLayer && _rgbTargetMapOnSwitch) {
+                        try { if (_rgbTargetMapOnSwitch.hasLayer(_rgbOtherLayer)) _rgbTargetMapOnSwitch.removeLayer(_rgbOtherLayer); } catch (_rgbHideErr) {}
+                    }
+                });
+                window._sylvaLayerVisibleByPane[key][layerKey] = true;
+                // Manuel geçiş, devam eden eski/asenkron RGB yanıtlarının
+                // seçimi geri çevirmesini engeller.
+                window._sylvaRgbTopSeqByPane = window._sylvaRgbTopSeqByPane || { map: -1, map2: -1 };
+                window._sylvaRgbTopSeqByPane[key] = Number.MAX_SAFE_INTEGER;
+                try {
+                    if (_rgbTargetMapOnSwitch && ! _rgbTargetMapOnSwitch.hasLayer(store[layerKey])) {
+                        store[layerKey].addTo(_rgbTargetMapOnSwitch);
+                    }
+                } catch (_rgbShowErr) {}
+            }
+
             // Katman değişmeden önce, o an panelde görünen (eski üstteki katmana
             // ait) düzenleme durumunu kaybetmeden kaydet.
             (function () {
@@ -14230,6 +14286,11 @@ function selectRamp(name) {
                     var hl = window._classHighlightLayerByPane && window._classHighlightLayerByPane[key];
                     pushLayer(hl);
                 } catch (e) {}
+                // 🛰️ RGB uydu karşılaştırması: Üstteki Sentinel/Landsat katmanı
+                // hedef olarak kesilir; aynı pane'de görünür bırakılmış diğer
+                // RGB katmanı altta kaldığı için kesilen bölgede otomatik olarak
+                // görünür. Bu, Arazi Kullanımı/stack analizindeki karşılaştırma
+                // mantığıyla aynıdır ve hem map hem map2 için geçerlidir.
                 // 🚫 window._geeLayersByPane deposundaki DİĞER katmanlara
                 // (varsa daha alttaki başka veri setleri) BİLEREK dokunulmuyor
                 // — kırpılan bölgede onlar dokunulmadan tam görünsün diye.
@@ -18536,7 +18597,18 @@ function selectRamp(name) {
                 // açık gelir. Kullanıcı kutudaki DİĞER kutucukları kendi
                 // eliyle işaretleyerek istediği kadar görüntüyü ek olarak
                 // görünür yapabilir (bkz. sylva-layer-switch-visibility).
-                _sylvaAddGeeLayer(paneId, _layerKey, data.tileUrl, { opacity: 1, hideOthers: !isStackMode });
+                // 🛰️ Çoklu uydu görüntüsü desteği: Sentinel-2 + Landsat gibi
+                // aynı çalıştırmada birden fazla RGB veri seti seçilmişse,
+                // kullanıcı ayrıca "Önceki Analizin Üzerine Ekle" işaretlemese bile
+                // iki görüntü de AYNI ANDA katman deposunda ve haritada tutulur.
+                // Böylece Katman Sıyırıcı, üstteki görüntünün bir bölümünü kesip
+                // alttaki uydu görüntüsünü gösterebilir (Arazi Kullanımı/çoklu
+                // analizlerdeki stack mantığıyla aynı davranış).
+                var _keepMultipleRgbLayers = (typeof metaList !== 'undefined' && metaList.length > 1);
+                _sylvaAddGeeLayer(paneId, _layerKey, data.tileUrl, {
+                    opacity: 1,
+                    hideOthers: !(isStackMode || _keepMultipleRgbLayers)
+                });
                 // 🛠️ BUG FİX (İndirilen dosya ekranda görünenle uyuşmuyordu):
                 // bu payload, ÜRETTİĞİ katmanın kendi anahtarına (_layerKey)
                 // göre de ayrıca saklanır — bkz. _sylvaBringGeeLayerToFront
@@ -18589,6 +18661,29 @@ function selectRamp(name) {
                 // güncellenir; aksi halde sadece kendi veri setinin hafızasında
                 // (_gState) saklanır ve kullanıcı o katmana geri döndüğünde gösterilir.
                 var _isTopForPane = (window._sylvaTopGeeLayerByPane[paneId] === _layerKey);
+
+                // 🛠️ Çoklu RGB yarış durumu: İki uydu isteği farklı sırada
+                // tamamlanabilir. "Üstte" olan veri seti, ağ yanıtının geliş
+                // sırasına değil kullanıcının seçim sırasına (_seq) göre
+                // belirlenir. Bu yüzden z-index de aynı kurala göre açıkça
+                // ayarlanır. Böylece Ekran 1 ve Ekran 2'de Katman Sıyırıcı,
+                // gerçekten üstteki uydu görüntüsünü keser ve alttaki görüntüyü
+                // doğru şekilde ortaya çıkarır.
+                if (_keepMultipleRgbLayers) {
+                    (function () {
+                        var _zKeyRgb = (paneId === 'map2') ? 'map2' : 'map';
+                        var _zStoreRgb = window._geeLayersByPane && window._geeLayersByPane[_zKeyRgb];
+                        if (!_zStoreRgb) return;
+                        var _topRgbKey = window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[_zKeyRgb];
+                        Object.keys(_zStoreRgb).forEach(function (k) {
+                            try {
+                                if (typeof _zStoreRgb[k].setZIndex === 'function') {
+                                    _zStoreRgb[k].setZIndex(k === _topRgbKey ? 20 : 10);
+                                }
+                            } catch (eRgbZ) {}
+                        });
+                    })();
+                }
                 if (typeof _sylvaRenderLayerSwitchBox === 'function') _sylvaRenderLayerSwitchBox(paneId);
                 _applyGeeLayerClipMode(_rgbClipMode, paneId);
                 // 🎚️ Gerçek renk (RGB) görüntüsü — tam opaklık en okunaklı sonucu verir
