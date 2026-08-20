@@ -296,13 +296,6 @@ _TILE_SESSION_INLINE_PARAMS_LIMIT = 6000
 _TILE_CACHE_MAX_ITEMS     = 2000       # bellekte tutulacak azami tile (~40 MB)
 _TILE_FETCH_RETRIES       = 3          # tek bir tile için tekrar deneme sayısı
 _TILE_FETCH_TIMEOUT       = 25         # saniye
-# GEE geçici 5xx hatası son retry sonrasında da sürerse tarayıcıya HTTP 503
-# döndürmek yerine 1x1 saydam bir PNG verilir. Böylece Leaflet konsolu
-# 'Failed to load resource: 503' ile doldurmaz; eksik karo görünmez kalır ve
-# sonraki harita/zoom yenilemesinde yeniden istenir.
-_SYLVA_EMPTY_TILE_PNG = __import__('base64').b64decode(
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
-)
 _REBUILT_URL_CACHE_TTL_SECONDS = 20 * 60  # yenilenen map id'nin süreç-yerel önbellekte tutulma süresi
 _REBUILT_URL_CACHE_MAX_ITEMS   = 512
 
@@ -538,13 +531,7 @@ def _rebuild_tile_session_url(session):
     params = session.get('params')
     if not params:
         return None
-    params = _sanitize_rgb_payload(params)
     final_display, roi, result, vis, _probe = build_result_image(params)
-    if params.get('index') == 'RGB':
-        # RGB'de build_result_image'dan gelen görselleştirmeyi dahi kullanma;
-        # yalnızca 3 bant + min/max gönder. Eski bir oturumda palette kalmış
-        # olsa bile GEE'ye ulaşması böylece fiziksel olarak imkansızdır.
-        vis = _rgb_vis_only(params.get('satellite'))
     if session.get('kind') == 'highlight':
         extra = session.get('extra') or {}
         class_min = extra.get('classMin')
@@ -616,11 +603,8 @@ def proxy_tile(sid, z, x, y):
             resp = _tile_http.get(url, timeout=_TILE_FETCH_TIMEOUT)
         except Exception as err:
             if attempt >= _TILE_FETCH_RETRIES:
-                print('[SylvaGIS] ⚠️ Tile alınamadı (ağ) z{}/x{}/y{}: {} — saydam yedek karo döndürülüyor.'.format(z, x, y, err))
-                return Response(_SYLVA_EMPTY_TILE_PNG, mimetype='image/png', headers={
-                    'Cache-Control': 'no-store, max-age=0',
-                    'X-SylvaGIS-Tile': 'transparent-fallback',
-                })
+                print('[SylvaGIS] ❌ Tile alınamadı (ağ) z{}/x{}/y{}: {}'.format(z, x, y, err))
+                return Response(status=503)
             time.sleep(delay)
             delay *= 2
             continue
@@ -652,16 +636,10 @@ def proxy_tile(sid, z, x, y):
             delay *= 2
             continue
 
-        print('[SylvaGIS] ⚠️ Tile hatası z{}/x{}/y{} → HTTP {} — saydam yedek karo döndürülüyor.'.format(z, x, y, resp.status_code))
-        return Response(_SYLVA_EMPTY_TILE_PNG, mimetype='image/png', headers={
-            'Cache-Control': 'no-store, max-age=0',
-            'X-SylvaGIS-Tile': 'transparent-fallback',
-        })
+        print('[SylvaGIS] ❌ Tile hatası z{}/x{}/y{} → HTTP {}'.format(z, x, y, resp.status_code))
+        return Response(status=503)
 
-    return Response(_SYLVA_EMPTY_TILE_PNG, mimetype='image/png', headers={
-        'Cache-Control': 'no-store, max-age=0',
-        'X-SylvaGIS-Tile': 'transparent-fallback',
-    })
+    return Response(status=503)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -4445,47 +4423,6 @@ def _require_nonempty_image(image, empty_message):
     return image
 
 
-def _sanitize_rgb_payload(data):
-    """RGB uydu görüntülerinde tek bant analizlerinden kalan palette bilgisini
-    GEE visualize/getMapId zincirine taşımayı kesin olarak engeller.
-
-    RGB görüntüleri üç bantlıdır; Earth Engine Image.visualize() bu görüntülerde
-    palette kabul etmez. Eski NDVI/NDWI/EVI sınıflandırmasının payload içinde
-    kalması, özellikle dil/katman değişiminden sonra RGB harita veya indirme
-    oturumunun yeniden kurulmasında 400/500 hatasına yol açabiliyordu.
-    """
-    if not isinstance(data, dict) or data.get('index') != 'RGB':
-        return data
-    clean = dict(data)
-    clean.pop('palette', None)
-    clean.pop('classBreaks', None)
-    vis = clean.get('visualization')
-    if isinstance(vis, dict):
-        vis_clean = dict(vis)
-        vis_clean.pop('palette', None)
-        vis_clean.pop('breaks', None)
-        clean['visualization'] = vis_clean
-    return clean
-
-
-def _rgb_vis_only(satellite):
-    """RGB için GEE'ye gönderilebilecek TEK güvenli görselleştirme sözlüğü.
-
-    RGB görüntüler 3 bantlıdır; palette/classBreaks/min/max dışında herhangi
-    bir tek-bant semboloji bilgisinin bu sözlüğe sızmasına izin verilmez.
-    Earth Engine Image.visualize/getMapId çağrılarında yalnızca bands+min+max
-    kullanılır.
-    """
-    ds = SATELLITE_DATASETS.get(satellite) or {}
-    bands = ds.get('rgbBands') or ['red', 'green', 'blue']
-    # build_result_image() RGB dalı bu bantları red/green/blue diye yeniden adlandırır.
-    return {
-        'bands': ['red', 'green', 'blue'],
-        'min': ds.get('visMin', 0),
-        'max': ds.get('visMax', 0.3),
-    }
-
-
 def build_result_image(data, for_export=False):
     """
     Ortak analiz görüntüsü oluşturma mantığı.
@@ -4503,10 +4440,6 @@ def build_result_image(data, for_export=False):
     vis sözlüğünü değiştirir) o dal for_export'tan etkilenmeden aynen
     çalışmaya devam eder.
     """
-    # RGB için palette/classification bilgisini fonksiyonun tamamında kes.
-    # Böylece gelecekte eklenen herhangi bir getMapId/visualize yolu da
-    # tek bant palette'ini üç bantlı RGB görüntüsüne uygulayamaz.
-    data = _sanitize_rgb_payload(data)
     roi_coords = data.get('roi')
     clip_mode  = data.get('clipMode', 'clip')
     satellite  = data.get('satellite', 's2-l2a')
@@ -6610,11 +6543,8 @@ def timeseries():
 def analyze():
     global _last_analyze_params, _last_analyze_native_crs
     try:
-        data = request.json or {}
-        # RGB payload'ında önceki indekslerin palette/classification bilgisini
-        # saklama; GEE Image.visualize() RGB'de palette kabul etmez.
-        data = _sanitize_rgb_payload(data)
-        _last_analyze_params = dict(data)
+        data = request.json
+        _last_analyze_params = dict(data) if data else {}
 
         # ── 🛰️ Uydu Görüntüsü Galerisi — hızlı yol ───────────────────
         # RGB (gerçek renk) önizlemesi için piksel histogramı/istatistik
@@ -6647,9 +6577,6 @@ def analyze():
                 image = _rgb_meta_dated.sort('system:time_start', False).first()
 
             final_display, roi, result, vis, _unused_crs_probe = build_result_image(data)
-            # RGB görselleştirmesini sıfırdan ve yalnızca bands/min/max ile kur.
-            # Önceki analizlerden gelen hiçbir palette/legend alanı GEE'ye gitmez.
-            vis = _rgb_vis_only(data.get('satellite'))
             map_id = _call_with_retry(lambda: final_display.getMapId(vis))
             tile_url_direct = map_id['tile_fetcher'].url_format
 
@@ -7119,16 +7046,6 @@ def download_geotiff():
             data = dict(_last_analyze_params)
             session_native_crs = _last_analyze_native_crs
 
-        # İndirme oturumu eski bir indeksin palette'ini taşısa bile RGB
-        # görüntüsünde bu bilgi kesinlikle kullanılmaz.
-        data = _sanitize_rgb_payload(data)
-        if data.get('index') == 'RGB' and isinstance(req_data.get('visualization'), dict):
-            _clean_req_vis = dict(req_data.get('visualization') or {})
-            _clean_req_vis.pop('palette', None)
-            _clean_req_vis.pop('breaks', None)
-            req_data = dict(req_data)
-            req_data['visualization'] = _clean_req_vis
-
         filename = (req_data.get('filename') or 'SylvaGIS_export').strip() or 'SylvaGIS_export'
         scale    = int(req_data.get('scale', 30))
 
@@ -7198,15 +7115,39 @@ def download_geotiff():
         if fresh_roi:
             data['roi'] = fresh_roi
 
-        # 🛠️ RGB DIŞA AKTARIMI — EKRANLA AYNI SAHNE/ROI ZİNCİRİ
-        # Önceki 'fastRgbExport' yolu seçilen sceneId'yi doğrudan tek sahneden
-        # indiriyordu. Harita önizlemesi ise build_result_image() içinde
-        # seçilen sahne + aynı gün komşu sahne boşluk doldurma mantığını
-        # kullanabiliyordu. Bu iki yol farklı sonuç üretebildi. Artık RGB
-        # indirmesi de doğrudan aynı build_result_image() zincirini kullanır;
-        # böylece seçilen sahne, AOI/clip ve görüntü kapsamı ekrandakiyle aynıdır.
-        if data.get('index') == 'RGB':
-            final_display, roi, result, vis, _unused_crs_probe = build_result_image(data, for_export=True)
+        # 🛠️ BUG FİX — HIZLI RGB DIŞA AKTARIMI
+        # Gerçek uydu görüntüsü (RGB) için seçilmiş GEE sahnesini doğrudan
+        # dışa aktar. Harita önizlemesinde kullanılan aynı-gün komşu sahne
+        # mozaikleme/yeniden analiz zinciri indirme için gereksizdir. Ayrıca
+        # batch payload'ı doğrudan kullanıldığı için RGB indirme sırasında
+        # eski global ROI/analiz state'ine başvurulmaz.
+        _fast_rgb = bool(req_data.get('fastRgbExport')) and data.get('index') == 'RGB'
+        if _fast_rgb:
+            roi = make_roi(data.get('roi'))
+            _rgb_satellite = data.get('satellite', 's2-l2a')
+            _rgb_ds = SATELLITE_DATASETS.get(_rgb_satellite)
+            if not _rgb_ds:
+                raise ValueError('Bilinmeyen uydu görüntüsü veri seti: ' + str(_rgb_satellite))
+            _rgb_col = build_rgb_collection(_rgb_ds, roi, int(data.get('maxCloud', 20)))
+            _rgb_scene_id = data.get('sceneId')
+            if _rgb_scene_id:
+                _rgb_img = _rgb_col.filter(ee.Filter.eq('system:index', _rgb_scene_id)).first()
+                _rgb_img = _require_nonempty_image(_rgb_img, 'Seçilen uydu sahnesi bulunamadı.')
+            else:
+                _rgb_col2 = _rgb_col.filterDate(data.get('startDate'), data.get('endDate'))
+                _rgb_img = _require_nonempty_image(
+                    _rgb_col2.sort('system:time_start', False).first(),
+                    'Seçilen tarih/bulutluluk kriterlerine uygun uydu görüntüsü bulunamadı.'
+                )
+            _rgb_disp = _rgb_img.select(_rgb_ds['rgbBands'])
+            if _rgb_ds.get('scaleFactor', 1) != 1 or _rgb_ds.get('offset', 0) != 0:
+                _rgb_disp = _rgb_disp.multiply(_rgb_ds['scaleFactor']).add(_rgb_ds.get('offset', 0))
+            _rgb_disp = _rgb_disp.rename(['red', 'green', 'blue'])
+            result = _rgb_disp
+            vis = {'bands': ['red', 'green', 'blue'], 'min': _rgb_ds['visMin'], 'max': _rgb_ds['visMax']}
+            clip_mode = data.get('clipMode', 'clip')
+            final_display = _rgb_disp.clip(roi) if clip_mode == 'clip' else _rgb_disp
+            _unused_crs_probe = _rgb_img
         else:
             # 🛠️ BUG FİX (istenen davranış): "Lejantı Uygula" ile sınıflandırma
             # yapılmış olsa bile — NDVI, DEM, Eğim (Slope) vb. hiçbir analizde —
@@ -7217,27 +7158,50 @@ def download_geotiff():
             # atlatır.
             final_display, roi, result, vis, _unused_crs_probe = build_result_image(data, for_export=True)
 
-        # ── 🛰️ GERÇEK RGB GeoTIFF: Ekrandaki görüntünün BİREBİR aynısı ──
-        # Uydu görüntüsü (RGB) indirmesinde ham reflectance/DN değerini
-        # doğrudan TIFF'e yazmak ArcMap'te görüntünün siyah/koyu görünmesine
-        # yol açıyordu. Web haritasında ise aynı görüntü, tile üretiminde
-        # Image.visualize(bands=['red','green','blue'], min, max) ile
-        # geriliyor. Bu nedenle dışa aktarımda da AYNI GEE visualize() çağrısını
-        # kullanıyoruz. Böylece Sentinel-2 ve Landsat dahil bütün RGB
-        # sensörlerinde piksel renkleri, parlaklık ve kontrast analiz ekranıyla
-        # aynı olur; 3 bantlı RGB Byte raster üretilir ve palette hiçbir zaman
-        # gönderilmez.
-        #
-        # ÖNEMLİ: unitScale()/toByte() ile ikinci bir germe YAPILMIYOR.
-        # visualize() zaten min/max'a göre 0..255 RGB üretir. İkinci kez
-        # ölçeklemek görüntüyü siyaha veya tek renge sıkıştırabilir.
+        # ── 🌈 Sentinel-2 doğal renk parlaklık düzeltmesi ────────────
+        # SORUN: Sentinel-2 RGB (B4-B3-B2) GeoTIFF'leri şu ana kadar ham
+        # (germe uygulanmamış) yansıma değerleriyle (float, ~0.0-0.3
+        # aralığında) dışa aktarılıyordu. Bu değerler haritadaki önizlemede
+        # yalnızca CLIENT tarafında (tile/vis min-max) doğru gösteriliyordu;
+        # dosyanın kendisi hâlâ "karanlık" ham reflectance içeriyordu. ArcMap
+        # gibi CBS yazılımları bu ham float veriyi haritadaki gibi otomatik
+        # germemediği için görüntü olması gerekenden çok koyu görünüyordu.
+        # ÇÖZÜM: Yalnızca Sentinel-2 gerçek renk (RGB) indirmelerinde — hem
+        # Clip hem de Tüm Veri modunda — haritada kullanılan aynı visMin/
+        # visMax germe aralığı piksel değerlerine doğrudan uygulanır ve
+        # sonuç 0-255 (Byte) aralığına dönüştürülür. Böylece indirilen
+        # GeoTIFF, haritada görülen doğal renk görünümüyle eşleşir ve
+        # ArcMap'te ek bir parlaklık/kontrast ayarı gerekmez.
+        # Landsat ve diğer tüm veri setleri/indeksler ETKİLENMEZ; onlar
+        # hâlâ önceki (ham) davranışlarıyla dışa aktarılır.
+        # 🛠️ BUG FİX (ArcMap "Could not open the specified file" — Sentinel-2
+        # gerçek renk indirmelerinde): aşağıdaki .toByte() dönüşümü görüntüyü
+        # Byte (0-255) aralığına daraltır. Ancak bu fonksiyonun ilerisinde
+        # TÜM indeksler için ORTAK/sabit NoData sentinel değeri -9999'dur —
+        # bu değer Byte'ın (uint8) temsil edebileceği [0, 255] aralığının
+        # TAMAMEN dışındadır. _download_band_geotiff_bytes_impl() bu Byte
+        # görüntüyü .unmask(-9999) ile maskelediğinde ve/veya formatOptions.
+        # noData=-9999 etiketlediğinde, GEE'nin ürettiği dosyanın piksel tipi
+        # (Byte) ile NoData etiketi (-9999) birbiriyle TUTARSIZ hale gelir.
+        # rasterio/GDAL bu tutarsızlığı (haklı olarak) reddediyor — bkz.
+        # _ensure_output_crs()'teki "Given nodata value, -9999, is beyond
+        # the valid range of its data type, uint8" hatası — ve daha katı
+        # olan ArcMap'in dosyayı hiç açamamasıyla BİREBİR eşleşen bir
+        # belirti üretiyor. ÇÖZÜM: bu Byte'a daraltılmış dışa aktarım için
+        # NoData sentinel'i de Byte aralığına UYGUN bir değere (0) çekilir
+        # — tıpkı LULC semboloji paketinin (_build_lulc_symbology_zip) kendi
+        # Byte çıktısı için zaten 0'ı NoData olarak kullanması gibi.
         _is_byte_rgb_export = False
-        if data.get('index') == 'RGB':
-            # RGB'de vis sözlüğü _rgb_vis_only()/build_result_image() tarafından
-            # yalnızca bands+min+max olarak oluşturulur. Bu çağrı, harita
-            # tile'larını üreten görselleştirmenin aynısıdır.
-            vis = _rgb_vis_only(data.get('satellite'))
-            final_display = final_display.visualize(**vis)
+        if data.get('index') == 'RGB' and data.get('satellite') in ('s2-l1c', 's2-l2a'):
+            v_min = vis.get('min', 0)
+            v_max = vis.get('max', 0.3)
+            final_display = (
+                final_display
+                .unitScale(v_min, v_max)
+                .multiply(255)
+                .clamp(0, 255)
+                .toByte()
+            )
             _is_byte_rgb_export = True
 
         # Full modunda ROI ile kesmeden tüm görüntüyü indir;
@@ -7390,19 +7354,6 @@ def download_geotiff():
             if isinstance(requested_vis.get('legendLabels'), list):
                 requested_legend_labels = requested_vis.get('legendLabels')
         is_true_color_rgb = (lulc_index == 'RGB') and not is_env_urban_raster
-        # GEE Image.visualize() palette yalnızca TEK bantlı görüntülerde geçerlidir.
-        # RGB uydu görüntüsü 3 bantlıdır (red/green/blue); istemciden önceki bir
-        # NDVI/NDWI sınıflandırmasının palette'i taşınırsa Landsat/Sentinel RGB
-        # indirmesinde 'Cannot provide a palette when visualizing more than one band'
-        # hatası oluşuyordu. RGB'de palette'i kesin olarak yok say; bands/min/max
-        # build_result_image() tarafından tanımlanan gerçek RGB görselleştirmesinde
-        # kalır. Bu, uydu görüntüsünün kendi renklerini değiştirmez.
-        if is_true_color_rgb:
-            # RGB'de vis sözlüğünü temizlemek yetmez; daha sonra eklenen herhangi
-            # bir requested_vis/palette'in sızmasını önlemek için sözlüğü tamamen
-            # yeniden kur. Bu endpointte Image.visualize() yalnızca bands/min/max
-            # ile çalışabilir.
-            vis = _rgb_vis_only(data.get('satellite'))
         export_image = final_display
 
         # DYNAMIC WORLD GÜVENLİ DIŞA AKTARIMI: 0 = Water GERÇEK SINIFTIR.
