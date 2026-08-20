@@ -3618,6 +3618,10 @@ tr.class-highlight-active {
                 }
                 .lang-opt:hover { background: #f1f5f9; }
                 .lang-opt.active { background: #eff6ff; font-weight: 700; }
+                .lang-opt[aria-disabled="true"] { opacity: .45; cursor: not-allowed; }
+                #lang-toggle-btn.sylva-language-locked, #mqb-lang-toggle.sylva-language-locked, #mnc-lang-btn.sylva-language-locked {
+                    opacity: .55 !important; cursor: not-allowed !important; filter: grayscale(.25);
+                }
             </style>
             <!-- ── SylvaGIS Auth Area ── -->
             <div id="sylva-auth-area">
@@ -10574,6 +10578,7 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
 
             toggleBtn.addEventListener('click', function(e) {
                 e.stopPropagation();
+                if (typeof window._sylvaIsLanguageLocked === 'function' && window._sylvaIsLanguageLocked()) return;
                 var open = menu.style.display !== 'none';
                 menu.style.display = open ? 'none' : 'block';
             });
@@ -10602,6 +10607,7 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
 
             menu.addEventListener('click', function(e) {
                 e.stopPropagation();
+                if (typeof window._sylvaIsLanguageLocked === 'function' && window._sylvaIsLanguageLocked()) return;
                 var opt = e.target.closest('.lang-opt');
                 if (!opt) return;
                 currentFlag.textContent = opt.getAttribute('data-flag');
@@ -10648,6 +10654,7 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
             var mqbMenuEl = document.getElementById('mqb-lang-menu');
             if (mqbMenuEl) {
                 mqbMenuEl.addEventListener('click', function(e) {
+                    if (typeof window._sylvaIsLanguageLocked === 'function' && window._sylvaIsLanguageLocked()) return;
                     var opt = e.target.closest('.lang-opt');
                     if (!opt) return;
                     var val   = opt.getAttribute('data-val');
@@ -15260,6 +15267,14 @@ function selectRamp(name) {
                     }
                     if (data.nativeCrs) { window._lastAnalyzeNativeCrs = data.nativeCrs; window._lastAnalyzeNativeCrsByPane[_pane] = data.nativeCrs; }
 
+                    // Analiz sonucu doğrulandı ve haritaya uygulanmaya hazır. Bu
+                    // noktadan sonra dil seçimini oturum/sayfa ömrü boyunca kilitle;
+                    // böylece analiz verisi ekrandayken kullanıcı dili değiştirip
+                    // sonuç state'ini istemeden yeniden kuramaz.
+                    if (typeof window._sylvaSetLanguageLocked === 'function') {
+                        window._sylvaSetLanguageLocked(true);
+                    }
+
                     // 🆕 Eş Yükselti (TOPO_CONTOUR): eski raster/basamaklı karo
                     // GÖRÜNMEZ (opacity 0) eklenir — "Katman Geçiş" kutusu,
                     // mirror/dual-screen ve lejant/istatistik altyapısı hiç
@@ -15989,6 +16004,12 @@ function selectRamp(name) {
                     return;
                 }
 
+                // Bina analizi de gerçek sonuçlarını haritaya uygulamadan hemen
+                // önce başarıyla doğrulandı; dil kilidi diğer analizlerle aynı
+                // yaşam döngüsünü izlesin.
+                if (typeof window._sylvaSetLanguageLocked === 'function') {
+                    window._sylvaSetLanguageLocked(true);
+                }
                 _sylvaRenderBuildingFootprints(data, paneId);
                 _sylvaRenderBuildingInfo(data, paneId);
                 if (_buildingState) _buildingState.active = true;
@@ -18316,6 +18337,12 @@ function selectRamp(name) {
                 if (data.nativeCrs || (data.meta && data.meta.crs)) {
                     window._lastAnalyzeNativeCrs = data.nativeCrs || data.meta.crs;
                     window._lastAnalyzeNativeCrsByPane[paneId] = window._lastAnalyzeNativeCrs;
+                }
+
+                // Gerçek RGB sahnesi başarıyla döndü; kullanıcı dili artık
+                // analiz sonucu ekranda kaldığı sürece değiştirilemez.
+                if (typeof window._sylvaSetLanguageLocked === 'function') {
+                    window._sylvaSetLanguageLocked(true);
                 }
 
                 // 🛠️ DÜZELTME: Önceki katman artık SİLİNMİYOR — her uydu görüntüsü
@@ -43399,6 +43426,58 @@ function sylvaGetSavedLang() {
   }
 }
 
+// ── Analysis sonrası dil seçimini geçici olarak kilitleme ────────────────
+// Başlangıçta dil seçimi aktiftir. Başarılı bir analiz sonucu haritaya
+// ulaştığında kullanıcı dili değiştiremez. Bu kilit localStorage'a yazılmaz;
+// dolayısıyla sayfa yenilenince/kapanıp açılınca tekrar aktif olur. Kullanıcı
+// profili değiştiğinde de yeniden aktif edilir.
+window._sylvaLanguageLockedAfterAnalysis = false;
+
+// Analiz sonrası dil seçimi KİLİTLENMEZ. Sadece dil seçenekleri menüden
+// geçici olarak gizlenir. Sayfa yenilendiğinde veya kullanıcı değiştiğinde
+// seçenekler yeniden görünür.
+window._sylvaSetLanguageLocked = function(locked) {
+  var isHidden = !!locked;
+  window._sylvaLanguageLockedAfterAnalysis = isHidden;
+
+  // Dil butonları her zaman aktif kalır; kullanıcı arayüzünde "kilitli"
+  // görünüm oluşturulmaz.
+  var buttonIds = ['lang-toggle-btn', 'mqb-lang-toggle', 'mnc-lang-btn'];
+  buttonIds.forEach(function(id) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    if (el.tagName && el.tagName.toLowerCase() === 'button') el.disabled = false;
+    el.setAttribute('aria-disabled', 'false');
+    el.classList.remove('sylva-language-locked');
+    el.removeAttribute('title');
+  });
+
+  // Menü açıksa analiz sonrası kapat. Menü tekrar açıldığında yalnızca
+  // mevcut dil görünür; diğer diller seçenek olarak listelenmez.
+  document.querySelectorAll('.lang-opt').forEach(function(opt) {
+    var isActive = opt.classList.contains('active');
+    opt.style.display = isHidden && !isActive ? 'none' : '';
+    opt.style.pointerEvents = '';
+    opt.removeAttribute('aria-disabled');
+  });
+
+  if (isHidden) {
+    ['lang-menu', 'mqb-lang-menu'].forEach(function(id) {
+      var menu = document.getElementById(id);
+      if (menu) menu.style.display = 'none';
+    });
+  }
+};
+
+window._sylvaIsLanguageLocked = function() {
+  return !!window._sylvaLanguageLockedAfterAnalysis;
+};
+
+// Kullanıcı oturumu değiştiğinde dil seçenekleri yeniden görünür.
+window._sylvaResetLanguageLockForUserChange = function() {
+  window._sylvaSetLanguageLocked(false);
+};
+
 // Get translation string
 function t(key, fallback) {
   var T = SYLVA_TRANSLATIONS[_sylvaLang] || SYLVA_TRANSLATIONS['en'];
@@ -46916,6 +46995,11 @@ document.addEventListener('DOMContentLoaded',function(){
     function applyUser(user) {
         sylvaStopBlink();
         currentUser = user;
+        // Kullanıcı oturumu değiştiğinde dil kilidi sıfırlanır. Sayfa yeniden
+        // açıldığında da başlangıç değeri zaten false'tur.
+        if (typeof window._sylvaResetLanguageLockForUserChange === 'function') {
+            window._sylvaResetLanguageLockForUserChange();
+        }
         var loginBtn = document.getElementById('nav-login-btn');
         var userDisp = document.getElementById('sylva-user-display');
         if (loginBtn) loginBtn.style.display = 'none';
@@ -46975,6 +47059,10 @@ document.addEventListener('DOMContentLoaded',function(){
     window.sylvaLogout = function () {
         currentUser = null;
         clearSession();
+        // Yeni kullanıcı girişinde dil seçimi tekrar aktif olmalı.
+        if (typeof window._sylvaResetLanguageLockForUserChange === 'function') {
+            window._sylvaResetLanguageLockForUserChange();
+        }
         var loginBtn = document.getElementById('nav-login-btn');
         var userDisp = document.getElementById('sylva-user-display');
         var menu     = document.getElementById('sylva-user-menu');
@@ -51846,6 +51934,11 @@ function runTimeSeriesAnalysis() {
             if (typeof showAnalysisToast === 'function') showAnalysisToast(errMsg, 'error');
             else alert(errMsg);
             return;
+        }
+
+        // Zaman serisi sonucu başarıyla geldiğinde de aynı dil kilidi uygulanır.
+        if (typeof window._sylvaSetLanguageLocked === 'function') {
+            window._sylvaSetLanguageLocked(true);
         }
 
         var CMAP = { NDVI:'#22c55e', NDWI:'#1e3a8a', NBR:'#f97316', LST:'#ef4444', EVI:'#84cc16', SAVI:'#a3e635', BSI:'#fb923c', SMI:'#38bdf8' };
