@@ -7158,17 +7158,41 @@ def download_geotiff():
             # atlatır.
             final_display, roi, result, vis, _unused_crs_probe = build_result_image(data, for_export=True)
 
-        # ── 🌈 RGB uydu görüntüsü dışa aktarımı ─────────────────────
-        # Sentinel-2 ve Landsat RGB görüntüleri üç bantlıdır (red/green/blue).
-        # Çok bantlı bir görüntüye palette ile visualize() uygulanması GEE'de
-        # "Image.visualize: Cannot provide a palette when visualizing more
-        # than one band." hatasına yol açar. RGB dışa aktarımında visualize()
-        # kullanmak yerine haritadaki visMin/visMax aralığı doğrudan piksele
-        # uygulanır ve 0-255 Byte GeoTIFF indirilir. Böylece Sentinel-2 ve
-        # Landsat görüntülerinin ikisi de raster olarak aynı güvenli yoldan iner.
-        # Byte çıktıda ortak NoData sentinel'i 0'dır.
+        # ── 🌈 Sentinel-2 doğal renk parlaklık düzeltmesi ────────────
+        # SORUN: Sentinel-2 RGB (B4-B3-B2) GeoTIFF'leri şu ana kadar ham
+        # (germe uygulanmamış) yansıma değerleriyle (float, ~0.0-0.3
+        # aralığında) dışa aktarılıyordu. Bu değerler haritadaki önizlemede
+        # yalnızca CLIENT tarafında (tile/vis min-max) doğru gösteriliyordu;
+        # dosyanın kendisi hâlâ "karanlık" ham reflectance içeriyordu. ArcMap
+        # gibi CBS yazılımları bu ham float veriyi haritadaki gibi otomatik
+        # germemediği için görüntü olması gerekenden çok koyu görünüyordu.
+        # ÇÖZÜM: Yalnızca Sentinel-2 gerçek renk (RGB) indirmelerinde — hem
+        # Clip hem de Tüm Veri modunda — haritada kullanılan aynı visMin/
+        # visMax germe aralığı piksel değerlerine doğrudan uygulanır ve
+        # sonuç 0-255 (Byte) aralığına dönüştürülür. Böylece indirilen
+        # GeoTIFF, haritada görülen doğal renk görünümüyle eşleşir ve
+        # ArcMap'te ek bir parlaklık/kontrast ayarı gerekmez.
+        # Landsat ve diğer tüm veri setleri/indeksler ETKİLENMEZ; onlar
+        # hâlâ önceki (ham) davranışlarıyla dışa aktarılır.
+        # 🛠️ BUG FİX (ArcMap "Could not open the specified file" — Sentinel-2
+        # gerçek renk indirmelerinde): aşağıdaki .toByte() dönüşümü görüntüyü
+        # Byte (0-255) aralığına daraltır. Ancak bu fonksiyonun ilerisinde
+        # TÜM indeksler için ORTAK/sabit NoData sentinel değeri -9999'dur —
+        # bu değer Byte'ın (uint8) temsil edebileceği [0, 255] aralığının
+        # TAMAMEN dışındadır. _download_band_geotiff_bytes_impl() bu Byte
+        # görüntüyü .unmask(-9999) ile maskelediğinde ve/veya formatOptions.
+        # noData=-9999 etiketlediğinde, GEE'nin ürettiği dosyanın piksel tipi
+        # (Byte) ile NoData etiketi (-9999) birbiriyle TUTARSIZ hale gelir.
+        # rasterio/GDAL bu tutarsızlığı (haklı olarak) reddediyor — bkz.
+        # _ensure_output_crs()'teki "Given nodata value, -9999, is beyond
+        # the valid range of its data type, uint8" hatası — ve daha katı
+        # olan ArcMap'in dosyayı hiç açamamasıyla BİREBİR eşleşen bir
+        # belirti üretiyor. ÇÖZÜM: bu Byte'a daraltılmış dışa aktarım için
+        # NoData sentinel'i de Byte aralığına UYGUN bir değere (0) çekilir
+        # — tıpkı LULC semboloji paketinin (_build_lulc_symbology_zip) kendi
+        # Byte çıktısı için zaten 0'ı NoData olarak kullanması gibi.
         _is_byte_rgb_export = False
-        if data.get('index') == 'RGB':
+        if data.get('index') == 'RGB' and data.get('satellite') in ('s2-l1c', 's2-l2a'):
             v_min = vis.get('min', 0)
             v_max = vis.get('max', 0.3)
             final_display = (
@@ -7347,10 +7371,29 @@ def download_geotiff():
         # analizlerde ham/sürekli tek bant korunur ve aşağıda
         # _build_classified_symbology_zip() ile ayrık renklendirilir.
         #
-        # RGB dışa aktarımında final_display yukarıda zaten Byte'a çevrildi;
-        # çok bantlı görüntüde palette kullanan visualize() çağrısı yapılmaz.
-        if _is_byte_rgb_export and nodata_value is not None:
-            nodata_value = 0
+        # 🛠️ BUG FİX (Faz 16 — "1 KB'lık bozuk uydu görüntüsü indirmeleri,
+        # ArcMap'te açılmıyor"): Sentinel-2 gerçek renk indirmelerinde
+        # final_display, BİRAZ YUKARIDA (_is_byte_rgb_export bloğunda) ZATEN
+        # unitScale(v_min,v_max)+toByte() ile 0-255 Byte'a dönüştürülmüştü.
+        # Bu satır önceden KOŞULSUZ olarak final_display.visualize(**vis)'i
+        # BİR KEZ DAHA (vis={min:0,max:0.3 gibi ham yansıma aralığı}
+        # ile) uyguluyordu — yani ZATEN 0-255 olan bir görüntüyü SANKİ HÂLÂ
+        # 0-0.3 aralığındaymış gibi tekrar gerip 0-255'e sıkıştırıyordu. Bu
+        # çifte-germe, neredeyse TÜM pikselleri 255'e (veya tek bir değere)
+        # kilitleyip aşırı derecede sıkışan (LZW ile ~1 KB'a inen), pratikte
+        # boş/bozuk bir görüntü üretiyordu — kullanıcının bildirdiği "1 KB,
+        # ArcMap'te açılmıyor" BİREBİR budur. ÇÖZÜM: _is_byte_rgb_export
+        # zaten Byte'a çevirmişse .visualize() BİR DAHA çağrılmaz;
+        # final_display (zaten doğru renklerde) OLDUĞU GİBİ kullanılır.
+        if req_data.get('rendered') and is_true_color_rgb and not _is_byte_rgb_export:
+            try:
+                export_image = final_display.visualize(**vis)
+                # RGB görselleştirme Byte olduğundan NoData da Byte aralığında
+                # kalmalıdır; aksi ArcMap bazı TIFF'leri açmayı reddeder.
+                if nodata_value is not None:
+                    nodata_value = 0
+            except Exception as visual_err:
+                print('[SylvaGIS] Görsel GeoTIFF üretilemedi; ham bant indiriliyor: {}'.format(visual_err))
 
         tif_bytes = _download_band_geotiff_bytes(
             export_image, export_region, scale, crs, safe_name,
