@@ -55263,15 +55263,21 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
   }
   function setPassive(el, passive){
     if(!el) return;
-    el.style.opacity = passive ? '.35' : '1';
+    // Uydu görüntüsü aktifken Semboloji/Lejant panosu görüntü olarak soluk,
+    // ancak düzeni bozulmadan pasif kalır. Opacity yalnızca bu panoya uygulanır;
+    // harita üzerindeki gerçek analiz lejantına uygulanmaz.
+    el.classList.toggle('sylva-satellite-passive', !!passive);
+    el.style.opacity = passive ? '.35' : '';
     el.style.pointerEvents = passive ? 'none' : '';
     el.style.userSelect = passive ? 'none' : '';
     if(passive) el.setAttribute('aria-disabled','true');
     else el.removeAttribute('aria-disabled');
     el.querySelectorAll('input,select,button').forEach(function(control){
       if(passive){
+        // Daha önce başka bir modül tarafından disabled edilmiş kontrolü ezmemek
+        // için kendi işaretimizi koyuyoruz.
+        if(!control.disabled) control.setAttribute('data-sylva-rgb-passive','1');
         control.disabled = true;
-        control.setAttribute('data-sylva-rgb-passive','1');
       } else if(control.getAttribute('data-sylva-rgb-passive') === '1'){
         control.disabled = false;
         control.removeAttribute('data-sylva-rgb-passive');
@@ -55335,27 +55341,33 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
 </script>
 
 <style id="sylva-passive-panel-soft-style-20260820">
-/* Pasif paneller: Proje Yöneticisi kutusuyla aynı yumuşak/şeffaf görünüm.
-   İçerik beyaz bir blok gibi görünmez; panel arka planı hafif saydam tutulur. */
-#legend-symbology-panel.sylva-passive-soft,
+/* 🛰️ Uydu görüntüsü aktifken SADECE grafikler pasif görünür.
+   Grafik/panel zemini Proje Yöneticisi kutusundaki gibi hafif saydamdır;
+   opacity panelin tamamına uygulanmaz. Böylece sütun/pasta/çizgi butonları
+   ve diğer kontroller beyaza gömülmez, okunaklı kalır.
+   ⚠️ Analiz lejantı/sembolojisi bu stile DAHİL DEĞİLDİR; normal görünür. */
 #data-charts-section.sylva-passive-soft {
   background: rgba(248, 250, 252, 0.45) !important;
   border: 1px solid rgba(226, 232, 240, 0.65) !important;
   border-radius: 8px !important;
   box-sizing: border-box !important;
-  opacity: 0.45 !important;
 }
-#legend-symbology-panel.sylva-passive-soft > *,
-#data-charts-section.sylva-passive-soft > * {
-  background: transparent !important;
-}
-#legend-symbology-panel.sylva-passive-soft .sylva-sec-hdr,
 #data-charts-section.sylva-passive-soft .sylva-sec-hdr,
-#legend-symbology-panel.sylva-passive-soft .sylva-sec-body,
-#data-charts-section.sylva-passive-soft .sylva-sec-body,
-#data-charts-section.sylva-passive-soft #stats-chart-container,
-#data-charts-section.sylva-passive-soft #stats-chart-svg-wrap {
+#data-charts-section.sylva-passive-soft .sylva-sec-body {
   background: transparent !important;
+}
+
+/* Uydu görüntüsü aktifken Lejant ve Semboloji panosu da ekran görüntüsündeki
+   gibi soluk/şeffaf ve pasiftir. Analiz lejantının kendisi etkilenmez. */
+#legend-symbology-panel.sylva-satellite-passive {
+  opacity: .35 !important;
+  pointer-events: none !important;
+  user-select: none !important;
+}
+#legend-symbology-panel.sylva-satellite-passive input,
+#legend-symbology-panel.sylva-satellite-passive select,
+#legend-symbology-panel.sylva-satellite-passive button {
+  cursor: default !important;
 }
 </style>
 <script id="sylva-passive-panel-soft-fix-20260820">
@@ -55365,22 +55377,30 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
     var p = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
     var top = window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[p];
     var passive = !!(top && String(top).indexOf('RGB::') === 0);
-    ['legend-symbology-panel','data-charts-section'].forEach(function(id){
-      var el=document.getElementById(id);
-      if(!el) return;
-      el.classList.toggle('sylva-passive-soft', passive);
-      if(passive){
-        el.style.background='rgba(248,250,252,0.45)';
-        el.style.border='1px solid rgba(226,232,240,0.65)';
-        el.style.borderRadius='8px';
-        el.style.opacity='.45';
-      }else{
-        el.style.background='';
-        el.style.border='';
-        el.style.borderRadius='';
-        el.style.opacity='1';
-      }
-    });
+    var el=document.getElementById('data-charts-section');
+    if(!el) return;
+    el.classList.toggle('sylva-passive-soft', passive);
+    if(passive){
+      el.style.background='rgba(248,250,252,0.45)';
+      el.style.border='1px solid rgba(226,232,240,0.65)';
+      el.style.borderRadius='8px';
+      el.style.opacity='';
+    }else{
+      el.style.background='';
+      el.style.border='';
+      el.style.borderRadius='';
+      el.style.opacity='';
+    }
+    /* Analiz lejantı/semboloji paneli hiçbir zaman pasif-beyaz/şeffaf moda
+       zorlanmaz. Önceki sürümden kalmış inline stilleri de temizle. */
+    var legend=document.getElementById('legend-symbology-panel');
+    if(legend){
+      legend.classList.remove('sylva-passive-soft');
+      legend.style.opacity='';
+      legend.style.background='';
+      legend.style.border='';
+      legend.style.borderRadius='';
+    }
   }
   document.addEventListener('click',function(e){
     if(e.target && e.target.closest && e.target.closest('.sylva-layer-switch-item')){
@@ -55396,6 +55416,31 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
   mo.observe(document.body,{subtree:true,childList:true});
   [100,500,1200,2200].forEach(function(ms){setTimeout(sync,ms);});
   window.sylvaSyncPassivePanelSoft=sync;
+  // Bazı analiz/katman güncellemeleri panelin inline stilini geç yükleyebilir.
+  // Uydu görüntüsü seçildiğinde pasif durumun sonradan bozulmaması için birkaç
+  // kısa senkronizasyon daha yapılır. Analiz seçilince isRgbTop false olduğundan
+  // panel normal haline geri döner.
+  [80, 350, 900, 1800].forEach(function(ms){ setTimeout(sync, ms); });
+})();
+</script>
+
+<script id="sylva-remove-literal-newline-footer-artifact-20260820">
+(function(){
+  'use strict';
+  function clean(){
+    try{
+      var walker=document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      var nodes=[];
+      while(walker.nextNode()){
+        var n=walker.currentNode;
+        if(String(n.nodeValue||'').trim()==='\\n') nodes.push(n);
+      }
+      nodes.forEach(function(n){ if(n.parentNode) n.parentNode.removeChild(n); });
+    }catch(e){}
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',clean,{once:true}); else clean();
+  var mo=new MutationObserver(function(){ clean(); });
+  mo.observe(document.body,{subtree:true,childList:true});
 })();
 </script>
 
