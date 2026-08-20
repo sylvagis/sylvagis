@@ -12295,25 +12295,13 @@ function selectRamp(name) {
                 }
             }
 
-             // 🛠️ SORUN 13 KÖK NEDEN DÜZELTMESİ (Lejant başlığı, seçim kutusu/
-             // Bilgi Kutusu başlığıyla UYUŞMUYORDU — ör. "都市ヒートアイランド
-             // 強度 (UHI Intensity)" yerine ham teknik kod "UHI_LST" yazıyordu):
-             // Bu başlık daha önce yalnızca TOPO_* öneki taşıyan analizler ile
-             // FOREST_LOSS/URBAN_GROWTH için 30 dilli _DATASET_INFO_TITLE_KEYS
-             // tablosundan çevriliyordu; diğer 25 çevresel/kentsel analiz (UHI_LST,
-             // UHI_TREND, WATER_OCCURRENCE, DROUGHT_INDEX, vb.) bu tabloda ZATEN
-             // kayıtlı olmasına rağmen (Bilgi Kutusu başlığı bu yüzden zaten doğru
-             // geliyordu) lejant başlığı bu tabloyu hiç sorgulamıyor, doğrudan ham
-             // meta.analysisName'i yazıyordu. Artık _DATASET_INFO_TITLE_KEYS'te
-             // kaydı olan HERHANGİ bir analiz (TOPO_* + tüm çevresel/kentsel
-             // analizler) aynı, zaten kanıtlanmış _sylvaAnalysisDisplayTitle()
-             // üzerinden çevriliyor — Bina Çatı Tespiti (BUILDING_FOOTPRINT) hariç,
-             // o zaten kendi özel çevirisini kullanmaya devam ediyor.
-             var _legendTitleInfo = (typeof _DATASET_INFO_TITLE_KEYS !== 'undefined')
-                 ? _DATASET_INFO_TITLE_KEYS[String(meta.analysisName || '').toUpperCase()] : null;
-             var _legendTitle = (meta.analysisName === 'BUILDING_FOOTPRINT')
-                 ? t('building_roof_detection', 'Building Roof Detection')
-                 : (_legendTitleInfo ? _sylvaAnalysisDisplayTitle(meta.analysisName) : meta.analysisName);
+             var _nativeLegendTitleKeys = { FOREST_LOSS: 'env_forest_loss', URBAN_GROWTH: 'env_urban_growth' };
+             var _isTopoLegend = /^TOPO(?:_|$)/i.test(String(meta.analysisName || ''));
+             var _legendTitle = _isTopoLegend
+                 ? _sylvaAnalysisDisplayTitle(meta.analysisName)
+                 : (meta.analysisName === 'BUILDING_FOOTPRINT'
+                     ? t('building_roof_detection', 'Building Roof Detection')
+                     : (_nativeLegendTitleKeys[meta.analysisName] ? t(_nativeLegendTitleKeys[meta.analysisName], meta.analysisName) : meta.analysisName));
              var html = '<b style="font-size:0.78rem;">' + escapeHtml(_legendTitle) + '</b>';
 
             if (legendType === 'classified') {
@@ -18036,170 +18024,6 @@ function selectRamp(name) {
         }
 
         // ════════════════════════════════════════════════════════════
-        // 🆕 SORUN 15 — ZAMAN SERİSİ (İNDEKS) SAHNELERİ ARTIK GALERİ
-        // KARTLARI DEĞİL, "Üstte Gösterilecek Katman" KUTUSUNUN AYRI
-        // BİRER GİRDİSİ OLARAK YÜKLENİR.
-        // ────────────────────────────────────────────────────────────
-        // Kullanıcı isteği: zaman serisinde galeriden sahne değiştirmek,
-        // o sahneye daha önce uygulanmış özel sınıflandırma/renklendirmeyi
-        // sıfırlıyordu (bkz. loadSpecificScene — tek/paylaşılan bir
-        // "üstteki katman" hafızasını her seferinde ÜZERİNE YAZIYORDU).
-        // Diğer analizlerde (aynı anda birden fazla analiz işaretlenip
-        // çalıştırıldığında — "Katman Sıyırıcı"/stack modu) HER katman
-        // KENDİ ayrı anahtarıyla (layerKey) saklanıyor ve bu anahtara
-        // özel sınıflandırma/lejant/grafik durumu ASLA başka bir katmanla
-        // karışmıyor (bkz. _sylvaRenderIndexAnalysisResult, _sylvaAddGeeLayer,
-        // _sylvaBringGeeLayerToFront, _sylvaRestoreEditorStateForLayer).
-        // Bu fonksiyon AYNI (zaten kanıtlanmış) mekanizmayı zaman serisinin
-        // her tarihi için TEKRAR KULLANIR — her tarih "ANALİZ_ADI::TS::sahneId"
-        // biçiminde kendine özel bir katman anahtarı alır; böylece bir
-        // tarihte yapılan sınıflandırma/renklendirme, başka bir tarihe
-        // geçilip geri dönüldüğünde ASLA kaybolmaz/sıfırlanmaz.
-        function _sylvaLoadIndexSceneAsLayer(sceneId, meta, paneId, layerKey, friendlyLabel, baseLabel, isTop, onDone) {
-            var _pane = (paneId === 'map2') ? 'map2' : 'map';
-            var _aoiForPane = (_pane === 'map2') ? currentLayer2 : currentLayer;
-            if (!meta || !_aoiForPane) { if (onDone) onDone(); return; }
-
-            var startInput    = document.getElementById('date-start');
-            var endInput      = document.getElementById('date-end');
-            var sensorRadio   = document.querySelector('.uydu-sensor-radio:checked');
-            var viewModeEl    = document.getElementById('viewMode');
-            var cloudSliderEl = document.getElementById('cloud-slider');
-            var _roi = _extractROIGeometry(_aoiForPane);
-            if (!_roi) { if (onDone) onDone(); return; }
-            var _sceneClipMode = viewModeEl ? viewModeEl.value : 'clip';
-
-            var _payload = {
-                roi:       _roi,
-                clipMode:  _sceneClipMode,
-                startDate: startInput ? startInput.value : '',
-                endDate:   endInput   ? endInput.value   : '',
-                satellite: sensorRadio ? sensorRadio.value : 's2-l2a',
-                index:     meta.analysisName,
-                maxCloud:  cloudSliderEl ? parseInt(cloudSliderEl.value, 10) : 20,
-                sceneId:   sceneId,
-                palette:   (function() {
-                    var rEl = document.getElementById('selectedRamp');
-                    var rKey = rEl ? (rEl.getAttribute('data-ramp') || 'black-white') : 'black-white';
-                    if (rKey === '__gee__') return ['black', 'white'];
-                    return sampleRampColors(rKey, 6);
-                })()
-            };
-
-            fetch(API_BASE + '/api/analyze', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(_payload)
-            })
-            .then(function(r) { return r.json(); })
-            .then(function(data) {
-                if (!data.success) { if (onDone) onDone(); return; }
-                if (data.nativeCrs) { window._lastAnalyzeNativeCrs = data.nativeCrs; window._lastAnalyzeNativeCrsByPane[_pane] = data.nativeCrs; }
-
-                var activeRampEl = document.getElementById('selectedRamp');
-                var currentRampKey = (activeRampEl && activeRampEl.getAttribute('data-ramp')) || meta.rampKey;
-                var metaForScene = Object.assign({}, meta, { rampKey: currentRampKey });
-
-                window._sylvaLayerFriendlyNames = window._sylvaLayerFriendlyNames || {};
-                window._sylvaLayerFriendlyNames[layerKey] = friendlyLabel;
-                window._sylvaLayerBaseNames = window._sylvaLayerBaseNames || {};
-                window._sylvaLayerBaseNames[layerKey] = baseLabel;
-
-                // hideOthers:false — bu katman diğer (zaten eklenmiş ya da
-                // sonra eklenecek) tarih katmanlarını haritadan kaldırmaz;
-                // görünürlük yalnızca window._sylvaLayerVisibleByPane ile
-                // (çağıran fonksiyon tarafından, henüz eklenmeden önce) kontrol edilir.
-                _sylvaAddGeeLayer(_pane, layerKey, data.tileUrl, { opacity: 1, hideOthers: false });
-                if (typeof _sylvaRememberLayerAnalyzePayload === 'function') {
-                    _sylvaRememberLayerAnalyzePayload(_pane, layerKey, _payload);
-                }
-                window._lastAnalyzePayloadByPane = window._lastAnalyzePayloadByPane || { map: null, map2: null };
-                window._sylvaTopGeeLayerByPane = window._sylvaTopGeeLayerByPane || { map: null, map2: null };
-                if (isTop) {
-                    window._lastAnalyzePayloadByPane[_pane] = _payload;
-                    window._sylvaTopGeeLayerByPane[_pane] = layerKey;
-                    (function () {
-                        var _zStore = window._geeLayersByPane && window._geeLayersByPane[_pane];
-                        if (!_zStore) return;
-                        Object.keys(_zStore).forEach(function (k) {
-                            try { if (typeof _zStore[k].setZIndex === 'function') _zStore[k].setZIndex(k === layerKey ? 20 : 10); } catch (e) {}
-                        });
-                    })();
-                }
-
-                _applyGeeLayerClipMode(_sceneClipMode, _pane);
-                _sylvaApplyAutoOpacity(_pane, meta);
-
-                // isTop=false ise bu çağrı YALNIZCA meta+data'yı bu katmanın
-                // kendi hafızasına (window._sylvaIndexAnalysisStates) kaydeder,
-                // haritada/ekranda hiçbir şeyi DEĞİŞTİRMEZ — kullanıcı daha
-                // sonra "Üstte Gösterilecek Katman" kutusundan bu tarihin
-                // kutucuğunu işaretlediğinde (_sylvaBringGeeLayerToFront)
-                // otomatik olarak GERÇEK sınıflandırma/lejant/grafik durumuyla
-                // ekrana getirilir (bkz. o fonksiyondaki aynı mekanizma).
-                _sylvaRenderIndexAnalysisResult(metaForScene, data, _pane, false, layerKey, isTop);
-                if (typeof _sylvaRenderLayerSwitchBox === 'function') _sylvaRenderLayerSwitchBox(_pane);
-
-                if (onDone) onDone();
-            })
-            .catch(function(err) {
-                if (onDone) onDone();
-            });
-        }
-
-        // Zaman serisindeki TÜM tarihleri (sunucudan gelen sahne listesini)
-        // sırayla (aynı anda değil — GEE'ye tek seferde çok istek gitmesin
-        // diye) "Üstte Gösterilecek Katman" kutusuna EKLER. Kullanıcı isteği:
-        // "normal diğer analizlerde çalıştığı gibi hepsi gelsin ama sadece en
-        // eski tarih ilk açılsın daha sonra kutudan diğer görüntülerin tikini
-        // kutusunun işaretini açabilsin" — bu yüzden yalnızca en eski (ilk)
-        // tarih başlangıçta görünür/aktif; diğerleri kutuya eklenir ama
-        // görünürlüğü kapalı (tik boş) gelir.
-        function _sylvaEagerLoadIndexTimeSeriesAsLayers(scenesArr, paneId, meta) {
-            var _pane = (paneId === 'map2') ? 'map2' : 'map';
-            if (!scenesArr || !scenesArr.length || !meta) return;
-
-            // Zaman serisinde artık on-map galeri kartları YOK — sahneler
-            // arasında geçiş "Üstte Gösterilecek Katman" kutusundan yapılır.
-            if (typeof _sylvaClearGalleryBox === 'function') {
-                _sylvaClearGalleryBox(_pane);
-            } else {
-                var _galleryEl = (typeof _sylvaGalleryEl === 'function') ? _sylvaGalleryEl(_pane) : null;
-                if (_galleryEl) { _galleryEl.innerHTML = ''; _galleryEl.style.display = 'none'; }
-            }
-
-            var _sorted = scenesArr.slice().sort(function (a, b) { return (a[1] || 0) - (b[1] || 0); });
-            var _baseLabel = (typeof _sylvaLayerFriendlyName === 'function') ? _sylvaLayerFriendlyName(meta.analysisName) : meta.analysisName;
-
-            var chain = Promise.resolve();
-            _sorted.forEach(function (scene, idx) {
-                var sceneId = scene[0];
-                var isTop = (idx === 0);
-                var layerKey = meta.analysisName + '::TS::' + sceneId;
-                var dateLabel = scene[1] ? new Date(scene[1]).toLocaleDateString('tr-TR') : '';
-                var friendlyLabel = _baseLabel + (dateLabel ? (' (' + dateLabel + ')') : '');
-                if (!isTop) {
-                    window._sylvaLayerVisibleByPane = window._sylvaLayerVisibleByPane || { map: {}, map2: {} };
-                    window._sylvaLayerVisibleByPane[_pane] = window._sylvaLayerVisibleByPane[_pane] || {};
-                    window._sylvaLayerVisibleByPane[_pane][layerKey] = false;
-                }
-                chain = chain.then(function () {
-                    return new Promise(function (resolve) {
-                        _sylvaLoadIndexSceneAsLayer(sceneId, meta, _pane, layerKey, friendlyLabel, _baseLabel, isTop, function () {
-                            // Sahne render'ı sırasında (örn. renderGalleryFromScenes)
-                            // galeri kutusu yeniden AÇILMIŞ olabilir — zaman
-                            // serisinde galeri kesinlikle görünmemeli, her adımdan
-                            // sonra tekrar kapatılır.
-                            if (typeof _sylvaClearGalleryBox === 'function') _sylvaClearGalleryBox(_pane);
-                            resolve();
-                        });
-                    });
-                });
-            });
-        }
-        window._sylvaEagerLoadIndexTimeSeriesAsLayers = _sylvaEagerLoadIndexTimeSeriesAsLayers;
-
-        // ════════════════════════════════════════════════════════════
         // 🛰️ UYDU GÖRÜNTÜSÜ GALERİSİ — gerçek GEE sahneleri + thumbnail
         // ════════════════════════════════════════════════════════════
         // 🖥️ EŞİTLEME: Galeri durumu artık ekran başına (map / map2) ayrı ayrı
@@ -18467,15 +18291,7 @@ function selectRamp(name) {
                 div.setAttribute('data-scene-id', scene.sceneId);
                 if (scene.timestamp) div.setAttribute('data-scene-timestamp', String(scene.timestamp));
                 div.setAttribute('data-dataset-key', dk);
-                // 🛠️ SORUN 12 KÖK NEDEN DÜZELTMESİ: Bu araç ipucu (fareyle
-                // gezinme kutucuğu) veri seti adını (ds.datasetName) doğrudan,
-                // HİÇ ÇEVİRMEDEN yazıyordu — "Yüzey Yansıması" ham Türkçe
-                // olarak sabit kalıyordu. Aynı veri seti adı, lejant kutusunda
-                // (renderRgbLegend) zaten var olan translateDatasetName() ile
-                // uluslararası GIS/RS standardına uygun şekilde HER ZAMAN
-                // İngilizce'ye ("Surface Reflectance") çevriliyordu — burada da
-                // aynı, kanıtlanmış fonksiyon kullanılarak tutarlılık sağlandı.
-                div.title = (ds ? translateDatasetName(ds.datasetName) : '') + '\n' + dateLabel + '\nScene ID: ' + scene.sceneId;
+                div.title = (ds ? ds.datasetName : '') + '\n' + dateLabel + '\nScene ID: ' + scene.sceneId;
                 div.innerHTML = '<div class="gallery-img">' + thumbHtml + '</div>'
                               + '<div class="gallery-info">' + dateLabel + '<br>' + cloudLabel + '</div>';
                 div.addEventListener('click', function() {
@@ -18493,7 +18309,7 @@ function selectRamp(name) {
         // AOI'ye odaklar ve dinamik bilgi kutusu/lejantı + Görüntü Bilgileri
         // panelini günceller. paneId verilmezse aktif ekran kullanılır — bu
         // sayede aynı akış Ekran 1 ve Ekran 2'de birebir aynı şekilde çalışır.
-        function loadRgbScene(sceneId, meta, dsInfo, paneId, _isInitialRun, _mirrorThisRun, stackKey, friendlyLabel, isStackMode, onDone) {
+        function loadRgbScene(sceneId, meta, dsInfo, paneId, _isInitialRun, _mirrorThisRun, stackKey, friendlyLabel, isStackMode) {
             // 🛠️ BUG FİX (Görüntü yüklenemedi: isStackMode is not defined):
             // bu parametre önceden hiç tanımlı değildi, fonksiyon gövdesinde
             // (aşağıda) doğrudan global/serbest bir değişken gibi kullanılıyordu.
@@ -18568,7 +18384,7 @@ function selectRamp(name) {
                 // paneli başka bir yerde kilitli kalmışsa bu hata sırasında da
                 // asla açılmıyordu; artık her ihtimale karşı burada da açıkça
                 // kilidi kaldırıyoruz (bkz. _sylvaUnlockGalleryUI tanımı).
-                if (!data.success) { hideSylvaLoading(); if (typeof _sylvaUnlockGalleryUI === 'function') _sylvaUnlockGalleryUI(paneId); showNoDataModal(_TOAST_NO_DATA_MSG, meta.datasetLabel || meta.datasetKey || '', data.error); if (onDone) onDone(); return; }
+                if (!data.success) { hideSylvaLoading(); if (typeof _sylvaUnlockGalleryUI === 'function') _sylvaUnlockGalleryUI(paneId); showNoDataModal(_TOAST_NO_DATA_MSG, meta.datasetLabel || meta.datasetKey || '', data.error); return; }
                 if (data.nativeCrs || (data.meta && data.meta.crs)) {
                     window._lastAnalyzeNativeCrs = data.nativeCrs || data.meta.crs;
                     window._lastAnalyzeNativeCrsByPane[paneId] = window._lastAnalyzeNativeCrs;
@@ -18717,9 +18533,8 @@ function selectRamp(name) {
                     window._sylvaMirrorDataLayer({ force: true, srcId: paneId, layerKey: _layerKey, tileUrl: data.tileUrl, isTop: _isTopForPane });
                 }
                 _ensureDefaultVisibility();
-                if (onDone) onDone();
             })
-            .catch(function(err) { hideSylvaLoading(); showAnalysisToast('Görüntü yüklenemedi: ' + err.message, 'error'); if (onDone) onDone(); });
+            .catch(function(err) { hideSylvaLoading(); showAnalysisToast('Görüntü yüklenemedi: ' + err.message, 'error'); });
         }
 
         // Dinamik bilgi kutusu / lejant: sınıflandırılmış bir lejant yerine,
@@ -19105,6 +18920,8 @@ function selectRamp(name) {
                 });
             }
             var rowH = 18, headerH = 24, footerPad = 10;
+            var tableH = rowLines.length > 0 ? (headerH + rowLines.length * rowH + footerPad) : 0;
+            var totalH = svgH + tableH;
 
             // SVG grafiğinin iç içeriğini al
             var serializer = new XMLSerializer();
@@ -19125,7 +18942,6 @@ function selectRamp(name) {
             // aralarında sabit bir güvenlik boşluğu bırakılır — bu sayede hiçbir
             // analizde/genişlikte veri iç içe geçmez.
             var tableSvg = '';
-            var tableH = 0;
             if (rowLines.length > 0) {
                 var measureCanvas = document.createElement('canvas');
                 var mctx = measureCanvas.getContext('2d');
@@ -19153,8 +18969,8 @@ function selectRamp(name) {
                 var nameColLeft   = 22;
                 var nameColMaxW   = Math.max(30, pctColRight - maxPctW - colGap - nameColLeft);
 
-                // Sınıf adını piksel genişliğine göre kırp — SADECE tek bir
-                // kelime tek başına sütuna sığmadığında son çare olarak kullanılır.
+                // Sınıf adını piksel genişliğine göre kırp (karakter sayısına göre
+                // değil) — böylece uzun isimler de bir sonraki sütuna asla taşmaz.
                 function truncateToWidth(text, maxW) {
                     if (mctx.measureText(text).width <= maxW) return text;
                     var truncated = text;
@@ -19164,68 +18980,22 @@ function selectRamp(name) {
                     return truncated + '…';
                 }
 
-                // 🛠️ SORUN 14 KÖK NEDEN DÜZELTMESİ (Görsel/PNG/JPEG indirmesinde
-                // sınıf isimleri "Kuze…", "Doğu…" gibi yarıda kesiliyordu):
-                // Bu fonksiyon eskiden sığmayan sınıf isimlerini HER ZAMAN tek
-                // satıra sığdırmak için "…" ile kırpıyordu (truncateToWidth) —
-                // bu, "Kuzeydoğu (12.5–57.5°)" gibi normal uzunluktaki isimleri
-                // bile yarıda kesiyordu. Artık sığmayan isimler önce kelime
-                // sınırından İKİ SATIRA bölünüyor (satır sütuna taşmaz, isim
-                // TAM okunur); yalnızca tek bir kelime BAŞLI BAŞINA sütuna
-                // sığmıyorsa (çok nadir/aşırı durum) son çare olarak "…" ile
-                // kırpılır — eski davranış SADECE bu son çare durumunda korunur.
-                function wrapNameToLines(text, maxW) {
-                    if (mctx.measureText(text).width <= maxW) return [text];
-                    var words = text.split(' ');
-                    if (words.length < 2) return [truncateToWidth(text, maxW)];
-                    var line1 = '';
-                    var splitIdx = -1;
-                    for (var wi = 0; wi < words.length; wi++) {
-                        var candidate = line1 ? (line1 + ' ' + words[wi]) : words[wi];
-                        if (mctx.measureText(candidate).width <= maxW) {
-                            line1 = candidate;
-                        } else {
-                            if (!line1) { line1 = words[wi]; wi++; } // ilk kelime bile sığmıyorsa yine de yerleştir
-                            splitIdx = wi;
-                            break;
-                        }
-                    }
-                    if (splitIdx === -1) return [line1]; // tüm kelimeler ilk satıra sığdı (normalde buraya düşülmez)
-                    var line2 = words.slice(splitIdx).join(' ');
-                    if (mctx.measureText(line2).width > maxW) line2 = truncateToWidth(line2, maxW);
-                    return [line1, line2];
-                }
-
-                var lineGap = 12; // satırlar arası (ikinci satır varsa)
-                var rowsWrapped = rowLines.map(function(row) {
-                    var lines = wrapNameToLines(row.name, nameColMaxW);
-                    return { lines: lines, height: (lines.length > 1 ? rowH + lineGap : rowH) };
-                });
-                tableH = headerH + rowsWrapped.reduce(function(s, r) { return s + r.height; }, 0) + footerPad;
-
                 var sepY = svgH + 4;
                 tableSvg += '<line x1="0" y1="' + sepY + '" x2="' + svgW + '" y2="' + sepY + '" stroke="#e2e8f0" stroke-width="1"/>';
                 var hdrY = svgH + 16;
                 tableSvg += '<text x="' + nameColLeft + '" y="' + hdrY + '" font-size="9" fill="#64748b" font-family="Arial,sans-serif">' + t('col_class_name','Sınıf Adı') + '</text>';
                 tableSvg += '<text x="' + pctColRight + '" y="' + hdrY + '" font-size="9" fill="#64748b" font-family="Arial,sans-serif" text-anchor="end">' + hdrPctLabel + '</text>';
                 tableSvg += '<text x="' + haColRight + '" y="' + hdrY + '" font-size="9" fill="#64748b" font-family="Arial,sans-serif" text-anchor="end">' + hdrHaLabel + '</text>';
-                var cursorY = hdrY; // önceki satır(lar)ın alt sınırı
                 rowLines.forEach(function(row, i) {
-                    var wrapped = rowsWrapped[i];
-                    var y = cursorY + rowH; // bu satırın (ilk satırının) metin taban çizgisi
-                    cursorY += wrapped.height;
+                    var y = svgH + 16 + (i + 1) * rowH;
                     var swatchY = y - 9;
                     tableSvg += '<rect x="6" y="' + swatchY + '" width="10" height="10" rx="2" fill="' + row.color + '"/>';
-                    var esc = function(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
-                    tableSvg += '<text x="' + nameColLeft + '" y="' + y + '" font-size="9" fill="#334155" font-family="Arial,sans-serif">' + esc(wrapped.lines[0]) + '</text>';
-                    if (wrapped.lines.length > 1) {
-                        tableSvg += '<text x="' + nameColLeft + '" y="' + (y + lineGap) + '" font-size="9" fill="#334155" font-family="Arial,sans-serif">' + esc(wrapped.lines[1]) + '</text>';
-                    }
+                    var nm = truncateToWidth(row.name, nameColMaxW);
+                    tableSvg += '<text x="' + nameColLeft + '" y="' + y + '" font-size="9" fill="#334155" font-family="Arial,sans-serif">' + nm.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</text>';
                     tableSvg += '<text x="' + pctColRight + '" y="' + y + '" font-size="9" fill="#334155" font-family="Arial,sans-serif" text-anchor="end">' + rowsMeta[i].pctStr + '</text>';
                     tableSvg += '<text x="' + haColRight + '" y="' + y + '" font-size="9" fill="#334155" font-family="Arial,sans-serif" text-anchor="end">' + rowsMeta[i].haStr + '</text>';
                 });
             }
-            var totalH = svgH + tableH;
 
             // ── SylvaGIS logosu için ayrılmış, içerikten tamamen izole alt bant ──
             // Grafik/tablo/lejant içeriği hiçbir zaman bu banda taşmaz; bant
@@ -52145,71 +51915,33 @@ function _renderLineChart(data) {
    loadSpecificScene() değil loadRgbScene() ile açılmalıdır. Böylece tek bir
    Sentinel/Landsat veri seti seçilip aylık/yıllık zaman serisi çalıştırıldığında
    gerçek sahneler normal Uydu Görüntüsü galerisiyle aynı davranışta açılır. */
-// 🆕 SORUN 15: Uydu görüntüsü (RGB) zaman serisinde de artık galeri kartları
-// yerine "Üstte Gösterilecek Katman" kutusu kullanılır — index-analiz
-// eşleniği olan _sylvaEagerLoadIndexTimeSeriesAsLayers ile BİREBİR aynı
-// mantık: her tarih kendi katman anahtarıyla (RGB::<uydu>::TS::<sahneId>)
-// ayrı bir katman olarak eklenir, yalnızca en eski tarih başlangıçta
-// görünür/aktiftir; kullanıcı diğer tarihleri kutudan tek tek açabilir.
-// Bu sayede her tarihin galeri geçişlerinde kaybolmayan KENDİ lejant/Ham
-// Bant durumu olur (bkz. loadRgbScene → _sylvaAddGeeLayer/_sylvaRememberLayerAnalyzePayload
-// ve _sylvaBringGeeLayerToFront içindeki RGB:: dalı).
 function _renderRgbTimeSeriesGallery(gallery, paneId, satellite) {
     paneId = (paneId === 'map2') ? 'map2' : 'map';
-    if (!gallery || !gallery.length) return;
+    var galleryEl = (typeof _sylvaGalleryEl === 'function') ? _sylvaGalleryEl(paneId) : null;
+    if (!galleryEl || !gallery || !gallery.length) return;
     var visible = document.querySelector('.uydu-goruntu-radio:checked');
     var label = visible ? (visible.getAttribute('data-label') || visible.value) : satellite;
     var meta = { datasetKey: satellite, datasetLabel: label, datasetName: label, analysisName: 'RGB' };
     var dsInfo = { key: satellite, datasetKey: satellite, datasetName: label, label: label };
-
-    var galleryEl = (typeof _sylvaGalleryEl === 'function') ? _sylvaGalleryEl(paneId) : null;
-    if (galleryEl) { galleryEl.innerHTML = ''; galleryEl.style.display = 'none'; }
-
-    // "Üstteki katman" sıra hafızası bu zaman serisi için sıfırlanır — aksi
-    // halde önceki bir analizden kalan sıra numarası, en eski tarihin doğru
-    // şekilde üste (aktif) gelmesini engelleyebilir (bkz. loadRgbScene
-    // içindeki _sylvaRgbTopSeqByPane karşılaştırması).
-    window._sylvaRgbTopSeqByPane = window._sylvaRgbTopSeqByPane || { map: -1, map2: -1 };
-    window._sylvaRgbTopSeqByPane[paneId] = -1;
-
-    var sorted = gallery.slice().sort(function (a, b) { return (a.timestamp || 0) - (b.timestamp || 0); });
-    var chain = Promise.resolve();
-    sorted.forEach(function (scene, idx) {
-        var isTop = (idx === 0);
-        var _tsStackKey = satellite + '::TS::' + scene.sceneId;
-        var _layerKey = 'RGB::' + _tsStackKey;
-        var dateLabel = scene.timestamp ? new Date(scene.timestamp).toLocaleDateString('tr-TR') : '';
-        var friendlyLabel = (label || satellite) + (dateLabel ? (' (' + dateLabel + ')') : '');
-        if (!isTop) {
-            window._sylvaLayerVisibleByPane = window._sylvaLayerVisibleByPane || { map: {}, map2: {} };
-            window._sylvaLayerVisibleByPane[paneId] = window._sylvaLayerVisibleByPane[paneId] || {};
-            window._sylvaLayerVisibleByPane[paneId][_layerKey] = false;
-        }
-        // Bu tarihin galeri durumu (_rgbGalleryStateFor) kendi anahtarı
-        // altında saklanır — katman kutusundan bu tarihe geri dönüldüğünde
-        // (_sylvaBringGeeLayerToFront) Ham Bant paneli/lejant sorunsuz çalışır.
-        var _gState = _rgbGalleryStateFor(paneId, _tsStackKey);
-        _gState.scenes = [{ sceneId: scene.sceneId, timestamp: scene.timestamp, cloud: scene.cloud, label: scene.label || '' }];
-        _gState.dataset = dsInfo;
-        _gState.meta = meta;
-        _gState.sortKey = 'date';
-        _gState.sortAsc = true;
-        _gState.activeSceneId = scene.sceneId;
-        var sceneMeta = Object.assign({}, meta, { _seq: isTop ? 1 : 0 });
-        chain = chain.then(function () {
-            return new Promise(function (resolve) {
-                loadRgbScene(scene.sceneId, sceneMeta, dsInfo, paneId, isTop, false, _tsStackKey, friendlyLabel, true, function () {
-                    // loadRgbScene üstteki katman için galeriyi yeniden
-                    // çizebilir (renderRgbGalleryCards) — zaman serisinde
-                    // galeri kesinlikle görünmemeli, her adımdan sonra
-                    // tekrar kapatılır.
-                    var _ge = (typeof _sylvaGalleryEl === 'function') ? _sylvaGalleryEl(paneId) : null;
-                    if (_ge) { _ge.innerHTML = ''; _ge.style.display = 'none'; }
-                    resolve();
-                });
-            });
-        });
-    });
+    var state = _rgbGalleryStateFor(paneId, satellite);
+    state.scenes = gallery.map(function(g){ return { sceneId:g.sceneId, timestamp:g.timestamp, cloud:g.cloud, label:g.label || '' }; });
+    state.dataset = dsInfo;
+    state.meta = meta;
+    state.sortKey = 'date';
+    state.sortAsc = true;
+    state.activeSceneId = state.scenes[0] ? state.scenes[0].sceneId : null;
+    // 🛠️ BUG FİX: "üstteki katman" işaretini burada, senkron olarak, açıkça
+    // BU zaman serisinin veri setine sabitliyoruz — aksi halde henüz
+    // tamamlanmamış önceki bir /api/analyze isteği ("üstteki katman" asenkron
+    // olarak SONRA güncellenir) yüzünden renderRgbGalleryCards() aşağıda
+    // yanlış/eski bir veri setinin galerisini seçebilirdi. Ayrıca
+    // renderRgbGalleryCards()'a hangi veri setinin gösterileceği artık
+    // TAHMİN ettirilmeden doğrudan (satellite) veriliyor.
+    window._sylvaTopGeeLayerByPane = window._sylvaTopGeeLayerByPane || { map: null, map2: null };
+    window._sylvaTopGeeLayerByPane[paneId] = 'RGB::' + satellite;
+    renderRgbGalleryCards(paneId, satellite);
+    var first = state.scenes[0];
+    if (first) loadRgbScene(first.sceneId, meta, dsInfo, paneId, true, false, satellite, label, false);
 }
 
 /* ── 4. Zaman Serisi Analizi — GERÇEK GEE verisi ──────────────────────────
@@ -52473,12 +52205,8 @@ function runTimeSeriesAnalysis() {
                 window._tsRgbMeta = { datasetKey: satellite, datasetLabel: (document.querySelector('.uydu-goruntu-radio:checked') || {}).getAttribute ? (document.querySelector('.uydu-goruntu-radio:checked').getAttribute('data-label') || satellite) : satellite, datasetName: satellite, analysisName: 'RGB' };
                 _renderRgbTimeSeriesGallery(data.gallery, _pane, satellite);
             } else {
-                // 🆕 SORUN 15: galeri kartları yerine her tarih "Üstte
-                // Gösterilecek Katman" kutusuna ayrı bir katman olarak eklenir
-                // (bkz. _sylvaEagerLoadIndexTimeSeriesAsLayers tanımı) —
-                // böylece bir tarihte yapılan sınıflandırma/renklendirme,
-                // başka bir tarihe geçilip geri dönüldüğünde kaybolmaz.
-                _sylvaEagerLoadIndexTimeSeriesAsLayers(scenesArr, _pane, _meta);
+                renderGalleryFromScenes(scenesArr, _pane, _meta);
+                loadSpecificScene(scenesArr[0][0], _pane, { silent: true });
             }
 
             // Zaman serisi sahneleri artık alt zaman kaydırıcısına değil, doğrudan
@@ -53551,17 +53279,7 @@ function refreshVisibleInfoBoxes(lang){['map-info-box','map2-info-box'].forEach(
 /* Sınıflandırılmış analizler, histogramı 7 sayısal aralığa bölmez. Sunulan
    sınıf tanımlarını (sıra = sınıf kodu) kullanır; böylece grafik/tabloda
    gerçek sınıf adı ve aynı lejant rengi yer alır. */
-function renderClassifiedChart(stats,meta,paneId){var hist=(stats&&stats.value)||null;if(!hist||!meta||!meta.classesRaw)return false;var raw;try{raw=JSON.parse(meta.classesRaw)}catch(e){return false}if(!Array.isArray(raw)||!raw.length)return false;var counts={};Object.keys(hist).forEach(function(k){var n=Number(k);if(!isNaN(n))counts[n]=(counts[n]||0)+Number(hist[k]||0)});
-// 🛠️ SORUN 13 KÖK NEDEN DÜZELTMESİ: Veri Grafiği (pasta/sütun) paneli bu
-// sınıf isimlerini eskiden doğrudan ham JSON'daki (meta.classesRaw) "label"
-// alanından, HİÇ ÇEVİRMEDEN alıyordu — bu yüzden sayfa Japonca iken bile
-// "Orman (Değişmeyen)" gibi ham Türkçe kalıyordu. Harita üzerindeki lejant
-// kutusu ise AYNI sınıflar için zaten kanıtlanmış sylvaLocalizedNativeClasses()
-// fonksiyonuyla doğru dilde geliyordu. Artık grafik de MÜMKÜNSE (fonksiyon
-// varsa ve o analiz için bir çeviri tanımlıysa) aynı kaynağı kullanıyor;
-// bulunamazsa eskisi gibi ham isme geri düşülüyor — davranış hiç bozulmuyor.
-var _localizedForChart = (typeof window.sylvaLocalizedNativeClasses === 'function') ? window.sylvaLocalizedNativeClasses(meta.analysisName) : null;
-var classes=raw.map(function(c,i){var code=(c.code!==undefined?Number(c.code):(c.value!==undefined?Number(c.value):i));var _locName=(_localizedForChart&&_localizedForChart[i]&&_localizedForChart[i].label)?_localizedForChart[i].label:null;return{min:code,max:code,name:_locName||c.label||('Class '+(i+1)),color:c.color||'#64748b'}});var total=Object.keys(counts).reduce(function(s,k){return s+counts[k]},0)||1;var percentages=classes.map(function(c){return((counts[c.min]||0)/total)*100});var pane=(paneId==='map2'||paneId==='map')?paneId:((typeof _sylvaActivePaneId==='function')?_sylvaActivePaneId():'map');var layer=pane==='map2'?window.currentLayer2:window.currentLayer;var areaHa=null;try{if(layer)areaHa=turf.area(layer.toGeoJSON())/10000}catch(e){}var data={classes:classes,percentages:percentages,areaHa:areaHa};if(typeof window.renderStatsChart==='function')window.renderStatsChart(data,pane);return true}
+function renderClassifiedChart(stats,meta,paneId){var hist=(stats&&stats.value)||null;if(!hist||!meta||!meta.classesRaw)return false;var raw;try{raw=JSON.parse(meta.classesRaw)}catch(e){return false}if(!Array.isArray(raw)||!raw.length)return false;var counts={};Object.keys(hist).forEach(function(k){var n=Number(k);if(!isNaN(n))counts[n]=(counts[n]||0)+Number(hist[k]||0)});var classes=raw.map(function(c,i){var code=(c.code!==undefined?Number(c.code):(c.value!==undefined?Number(c.value):i));return{min:code,max:code,name:c.label||('Class '+(i+1)),color:c.color||'#64748b'}});var total=Object.keys(counts).reduce(function(s,k){return s+counts[k]},0)||1;var percentages=classes.map(function(c){return((counts[c.min]||0)/total)*100});var pane=(paneId==='map2'||paneId==='map')?paneId:((typeof _sylvaActivePaneId==='function')?_sylvaActivePaneId():'map');var layer=pane==='map2'?window.currentLayer2:window.currentLayer;var areaHa=null;try{if(layer)areaHa=turf.area(layer.toGeoJSON())/10000}catch(e){}var data={classes:classes,percentages:percentages,areaHa:areaHa};if(typeof window.renderStatsChart==='function')window.renderStatsChart(data,pane);return true}
 var oldRenderChart=window.renderChart;if(typeof oldRenderChart==='function'){window.renderChart=function(stats,meta,paneId){var lulc=['LULC','LULC_ESA','LULC_MODIS','LULC_CORINE'];if(meta&&lulc.indexOf(meta.analysisName)===-1&&meta.legendType==='classified'&&meta.classesRaw&&renderClassifiedChart(stats,meta,paneId))return;return oldRenderChart.apply(this,arguments)}}
 /* Bilgi kartını üreten mevcut işlevden sonra çeviri uygulanır; böylece
    Source/Resolution/Description ve içerik aynı anda çevrilir. */
