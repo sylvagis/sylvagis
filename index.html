@@ -11483,6 +11483,21 @@ function selectRamp(name) {
             }
         }
 
+        // 🌐 Otomatik sınıf adları dil değişiminde de güncellenir;
+        // kullanıcı tarafından elle yazılmış sınıf adlarına dokunulmaz.
+        window.translateClassLabels = function () {
+            try {
+                var root = document.getElementById('class-rows-container');
+                if (!root) return;
+                var classWord = (typeof t === 'function' ? t('class_word', 'Class') : 'Class');
+                root.querySelectorAll('.classification-row .class-name[data-auto]').forEach(function (el, i) {
+                    if (el.getAttribute('data-user-edited') === '1') return;
+                    el.value = classWord + ' ' + (i + 1);
+                });
+            } catch (e) {}
+        };
+        var translateClassLabels = window.translateClassLabels;
+
         // Sayfa ilk açıldığında, açılır menüde seçili olan değere göre satırları kur
         buildClassRows(parseInt(classCountSelect.value, 10) || 1);
 
@@ -13199,14 +13214,49 @@ function selectRamp(name) {
             if (paneId !== (typeof _sylvaActivePaneId === 'function' ? _sylvaActivePaneId() : 'map')) return;
             var key = (paneId === 'map2') ? 'map2' : 'map';
             window._sylvaEditorStateByPane[key] = window._sylvaEditorStateByPane[key] || {};
-            window._sylvaEditorStateByPane[key][layerKey] = _sylvaCaptureEditorState();
+            var _capturedState = _sylvaCaptureEditorState();
+            window._sylvaEditorStateByPane[key][layerKey] = _capturedState;
+            // 🆕 ZAMAN SERİSİ SAHNE-BAZLI SINIFLANDIRMA:
+            // Bir zaman serisinde yalnızca ekranda seçili olan (ör. 2022 Haziran)
+            // sahne sınıflandırılmış olabilir. Bu sınıflandırmayı aynı analizdeki
+            // diğer yıllara/aylara taşımamak için editör durumunu sceneId ile de
+            // ayrı sakla. Böylece toplu indirmede her sahne kendi durumunu kullanır.
+            try {
+                var _tsPaneNow = window._tsSliderPane;
+                var _tsSceneNow = _sylvaSceneIdGet(paneId);
+                var _tsSceneListNow = window._tsSliderSceneIds || [];
+                if (_tsPaneNow === key && _tsSceneNow && _tsSceneListNow.indexOf(_tsSceneNow) !== -1) {
+                    window._sylvaEditorStateByPane[key][layerKey + '::scene::' + String(_tsSceneNow)] = JSON.parse(JSON.stringify(_capturedState));
+                }
+            } catch (_tsSaveErr) {}
         }
         window._sylvaSaveEditorStateForLayer = _sylvaSaveEditorStateForLayer;
 
         function _sylvaRestoreEditorStateForLayer(paneId, layerKey) {
             if (paneId !== (typeof _sylvaActivePaneId === 'function' ? _sylvaActivePaneId() : 'map')) return;
             var key = (paneId === 'map2') ? 'map2' : 'map';
-            var state = window._sylvaEditorStateByPane[key] && window._sylvaEditorStateByPane[key][layerKey];
+            var _storeForRestore = window._sylvaEditorStateByPane[key] || {};
+            var _currentSceneForRestore = _sylvaSceneIdGet(paneId);
+            var _isTimeSeriesSceneForRestore = window._tsSliderPane === key && _currentSceneForRestore &&
+                (window._tsSliderSceneIds || []).indexOf(_currentSceneForRestore) !== -1;
+            var _sceneStateForRestore = _isTimeSeriesSceneForRestore
+                ? _storeForRestore[layerKey + '::scene::' + String(_currentSceneForRestore)]
+                : null;
+            var state = _sceneStateForRestore || _storeForRestore[layerKey];
+            // Zaman serisinde bu sahne için henüz kullanıcı sınıflandırması yoksa
+            // başka bir sahnenin sınıflandırmasını miras alma. Yeni sahne her zaman
+            // kendi gerçek değerleriyle stretched/bar olarak başlasın.
+            if (_isTimeSeriesSceneForRestore && !_sceneStateForRestore) {
+                var _baseTsState = _storeForRestore[layerKey];
+                if (_baseTsState) {
+                    state = JSON.parse(JSON.stringify(_baseTsState));
+                    state.classificationType = 'stretched';
+                    state.classRows = [];
+                    state.classCount = '1';
+                } else {
+                    state = { classificationType:'stretched', classRows:[], classCount:'1', rampBackground:null, rampDataAttr:null, rampReversed:false, classifiedTitleVal:'', stretchedMin:'', stretchedMax:'', stretchedTitleVal:'', stretchedUserEdited:false };
+                }
+            }
             if (!state) return;
 
             if (typeof setClassificationType === 'function') setClassificationType(state.classificationType);
@@ -18189,8 +18239,8 @@ function selectRamp(name) {
                 // tarih/bulutluluk metniyle kalıyordu. Artık yükleme
                 // başarısız olursa img gizlenip yerine 🛰️ simgesi ekleniyor.
                 var thumbHtml = scene.thumbnailUrl
-                    ? '<img src="' + scene.thumbnailUrl + '" alt="' + escapeHtml(dateLabel) + '" style="width:100%;height:100%;object-fit:cover;" onerror="this.onerror=null;this.style.display=\'none\';this.insertAdjacentHTML(\'afterend\',\'🛰️\');">'
-                    : '🛰️';
+                    ? '<img src="' + scene.thumbnailUrl + '" alt="' + escapeHtml(dateLabel) + '" style="width:100%;height:100%;object-fit:cover;" onerror="this.onerror=null;this.style.display=\'none\';">'
+                    : '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#dbeafe,#f8fafc);color:#64748b;font-size:0.7rem;">' + escapeHtml(dateLabel) + '</div>';
 
                 var div = document.createElement('div');
                 div.className = 'gallery-item' + (scene.sceneId === _gState.activeSceneId ? ' active' : '');
@@ -19072,6 +19122,15 @@ function selectRamp(name) {
              // (NDVI vb.) davranışı DEĞİŞMEDİ — onlar hâlâ yalnızca
              // "Sınıflandırılmış" mod açıkken grafik gösterir.
              var _hasOwnChartType = !!(meta && meta.chartType);
+             // Çevresel/kentsel grafikler yalnızca Sınıflandırılmış modda gösterilir.
+             if (_hasOwnChartType && (!meta || meta.legendType !== 'classified')) {
+                 var _cw = document.getElementById('stats-chart-svg-wrap');
+                 var _ct = document.getElementById('stats-chart-table');
+                 if (_cw) _cw.innerHTML = '';
+                 if (_ct) _ct.innerHTML = '';
+                 lastChartData = null;
+                 return;
+             }
              if (!_hasOwnChartType && typeof currentClassificationType !== 'undefined' && currentClassificationType !== 'classified') return;
             var hist = (stats && stats.value) ? stats.value : null;
             if (!hist) return;
@@ -19540,7 +19599,21 @@ function selectRamp(name) {
             }
         };
 
+        function _sylvaLocalizedChartData(data) {
+            if (!data || !Array.isArray(data.classes)) return data;
+            var cw = (typeof t === 'function' ? t('class_word', 'Class') : 'Class');
+            var out = Object.assign({}, data);
+            out.classes = data.classes.map(function(c, i){
+                var cc = Object.assign({}, c);
+                var name = String(cc.name || '');
+                if (/^(Class|Sınıf|Класс|Klasse|Classe|Clase|Klas|Клас)\s+\d+$/i.test(name)) cc.name = cw + ' ' + (i + 1);
+                return cc;
+            });
+            return out;
+        }
+
         function buildStatsTableHTML(data) {
+            data = _sylvaLocalizedChartData(data);
             var unit = _sylvaStatsAreaUnit;
             var unitLabel = _sylvaAreaUnitLabel(unit);
             var decimals = _sylvaAreaUnitDecimals(unit);
@@ -19580,6 +19653,7 @@ function selectRamp(name) {
         };
 
         function renderStatsChart(data, paneId) {
+            data = _sylvaLocalizedChartData(data);
             lastChartData = data;
             var wrap = document.getElementById('stats-chart-svg-wrap');
             var tableWrap = document.getElementById('stats-chart-table');
@@ -43880,6 +43954,27 @@ function applySylvaLang(lang) {
     window._sylvaLangChanging = false;
   }
 
+  // 🌐 Dil değişiminde grafik ve tablo yüzeyi boş kalmasın. Son katmanın
+  // gerçek snapshot'ı yeniden çizilir; otomatik sınıf adları aktif dile göre
+  // güncellenir, kullanıcı etiketleri korunur.
+  (function(){
+    function restoreChartSurface(){
+      try {
+        var pane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+        var key = pane === 'map2' ? 'map2' : 'map';
+        var top = window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[key];
+        var snap = window._sylvaChartSnapshotByPane && window._sylvaChartSnapshotByPane[key] && top && window._sylvaChartSnapshotByPane[key][top];
+        if (!snap && window._sylvaChartDataByPane) snap = window._sylvaChartDataByPane[key];
+        if (!snap && typeof lastChartData !== 'undefined') snap = lastChartData;
+        if (snap && typeof renderStatsChart === 'function') renderStatsChart(snap, pane);
+        if (typeof translateClassLabels === 'function') translateClassLabels();
+      } catch(e) {}
+    }
+    setTimeout(restoreChartSurface, 0);
+    setTimeout(restoreChartSurface, 120);
+    setTimeout(restoreChartSurface, 400);
+  })();
+
   // AOI name input: update placeholder + auto-generated value per language
   var _aoiInp = document.getElementById('raw-bands-aoi-name');
   if (_aoiInp) {
@@ -51718,7 +51813,7 @@ function _renderRgbTimeSeriesGallery(gallery, paneId, satellite) {
     var meta = { datasetKey: satellite, datasetLabel: label, datasetName: label, analysisName: 'RGB' };
     var dsInfo = { key: satellite, datasetKey: satellite, datasetName: label, label: label };
     var state = _rgbGalleryStateFor(paneId, satellite);
-    state.scenes = gallery.map(function(g){ return { sceneId:g.sceneId, timestamp:g.timestamp, cloud:g.cloud, label:g.label || '' }; });
+    state.scenes = gallery.map(function(g){ return { sceneId:g.sceneId, timestamp:g.timestamp, cloud:g.cloud, label:g.label || '', thumbnailUrl:g.thumbnailUrl || null }; });
     state.dataset = dsInfo;
     state.meta = meta;
     state.sortKey = 'date';
@@ -51874,6 +51969,13 @@ function runTimeSeriesAnalysis() {
             var _meta = (typeof getSelectedAnalysisMeta === 'function') ? getSelectedAnalysisMeta() : null;
 
             if (_tsRgbMode) {
+                // RGB zaman serisinde grafikler ve alttaki oynatma sayacı/kaydırıcısı
+                // tamamen kapalıdır; gerçek sahneler üst galeriden seçilir.
+                var _rgbChartSection = document.getElementById('data-charts-section');
+                if (_rgbChartSection) _rgbChartSection.style.display = 'none';
+                var _rgbTsBar = document.getElementById('sylva-time-slider-bar');
+                if (_rgbTsBar) _rgbTsBar.style.display = 'none';
+                [_tsBarBtn,_tsPieBtn,document.getElementById('btn-chart-line')].forEach(function(b){ if(b){ b.classList.add('disabled-chart'); b.disabled=true; b.classList.remove('active'); }});
                 // RGB zaman serisi gerçek uydu sahnesidir; normal analiz galerisi
                 // olan renderGalleryFromScenes/loadSpecificScene yerine RGB galerisi
                 // kullanılmalıdır. Aksi halde meta olmadığı için sahne yüklenemez.
@@ -51881,6 +51983,18 @@ function runTimeSeriesAnalysis() {
                 window._tsRgbMeta = { datasetKey: satellite, datasetLabel: (document.querySelector('.uydu-goruntu-radio:checked') || {}).getAttribute ? (document.querySelector('.uydu-goruntu-radio:checked').getAttribute('data-label') || satellite) : satellite, datasetName: satellite, analysisName: 'RGB' };
                 _renderRgbTimeSeriesGallery(data.gallery, _pane, satellite);
             } else {
+                var _analysisChartSection = document.getElementById('data-charts-section');
+                if (_analysisChartSection) _analysisChartSection.style.display = '';
+                var _analysisTsBar = document.getElementById('sylva-time-slider-bar');
+                if (_analysisTsBar) _analysisTsBar.style.display = 'block';
+                [_tsBarBtn,_tsPieBtn,document.getElementById('btn-chart-line')].forEach(function(b){ if(b){ b.classList.remove('disabled-chart'); b.disabled=false; }});
+                var _idxForRamp = String((series[0] && series[0].index) || '').toUpperCase();
+                var _tsRampMap = {NDVI:'red-yellow-green', NDWI:'blue-ocean', EVI:'green', SAVI:'green', BSI:'brown', NBR:'heat', LST:'heat', SMI:'blue-ocean'};
+                var _tsRampKey = _tsRampMap[_idxForRamp];
+                if (_tsRampKey) {
+                    var _srTs = document.getElementById('selectedRamp');
+                    if (_srTs) { _srTs.setAttribute('data-ramp', _tsRampKey); _srTs.style.background = (typeof ramps !== 'undefined' && ramps[_tsRampKey]) ? ramps[_tsRampKey] : _srTs.style.background; }
+                }
                 renderGalleryFromScenes(scenesArr, _pane, _meta);
                 loadSpecificScene(scenesArr[0][0], _pane, { silent: true });
             }
@@ -51901,7 +52015,7 @@ function runTimeSeriesAnalysis() {
         if (slider && bar) {
             slider.max = Math.max(allDates.length - 1, 0);
             slider.value = 0;
-            bar.style.display = 'block';
+            bar.style.display = _tsRgbMode ? 'none' : 'block';
             if (lbl) lbl.textContent = allDates[0] || '—';
         }
 
@@ -53221,7 +53335,7 @@ refresh();
     }
     window.sylvaLocalizedNativeClasses = sylvaLocalizedNativeClasses;
 
-    function exportVisualFor(pane, key) {
+    function exportVisualFor(pane, key, sceneId) {
         var _paneStore = window._sylvaEditorStateByPane && window._sylvaEditorStateByPane[pane];
         var _entryPayload = window._sylvaLayerAnalyzePayloadByPane &&
             window._sylvaLayerAnalyzePayloadByPane[pane] && key ?
@@ -53232,14 +53346,27 @@ refresh();
         // ardından aktif ekrandaki DOM sınıfları bütün rasterlere uygulanıyordu.
         // Bu yüzden örneğin TWI için seçilen tek sınıf, DEM/Aspect/Slope vb.
         // bütün indirmelere taşınabiliyordu.
-        var state = (_paneStore && _paneStore[key]) ||
-            (_paneStore && _entryPayload && _entryPayload.index && _paneStore[_entryPayload.index]) || null;
+        var _sceneSpecificState = null;
+        if (sceneId && _paneStore) {
+            _sceneSpecificState = _paneStore[key + '::scene::' + String(sceneId)] || null;
+        }
+        var _isTimeSeriesExportScene = !!(sceneId && window._tsSliderPane === pane &&
+            (window._tsSliderSceneIds || []).indexOf(sceneId) !== -1);
+        // Zaman serisi sahnelerinde scene-specific kayıt yoksa katmanın genel
+        // state'ine DÖNME. Genel state örneğin 2022 Haziran'da yapılmış
+        // Classified ayarı olabilir ve bu ayarın 2021/2023/2024 sahnelerine
+        // taşınması yanlış olur. Diğer sahneler kendi doğal stretched/bar
+        // durumlarında dışa aktarılmalıdır.
+        var state = _sceneSpecificState || (_isTimeSeriesExportScene ? null : ((_paneStore && _paneStore[key]) ||
+            (_paneStore && _entryPayload && _entryPayload.index && _paneStore[_entryPayload.index]) || null));
         var colors = [], min, max, breaks = null;
         var _topKey = window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[pane];
         // DOM yalnızca GERÇEKTEN aktif/üstte olan katmanın editörünü temsil eder.
         // Toplu indirmede diğer katmanların kendi payload/state kayıtlarına
         // kesinlikle dokunulmaz.
-        var _domBelongsToThisEntry = (pane === activePane() && key === _topKey);
+        var _domCurrentScene = _sylvaSceneIdGet(pane);
+        var _domBelongsToThisEntry = (pane === activePane() && key === _topKey &&
+            (!sceneId || String(sceneId) === String(_domCurrentScene || '')));
         // 🛠️ BUG FİX (Faz 15 — "bar olarak indirmiştim, sınıflandırılmış
         // vermiş"): önceden bu fonksiyon yalnızca İLK ve SON sınıfın min/
         // max'ını (ve renklerin düz bir listesini) döndürüyordu — sunucu
@@ -53291,7 +53418,7 @@ refresh();
         // güncel classBreaks dizisini de taşır. Editör snapshot'ı herhangi bir
         // nedenle henüz oluşmadıysa bile indirme sınıflandırmayı kaybetmesin.
         var _exportLayerPayload = _entryPayload;
-        if ((!breaks || !breaks.length) && _exportLayerPayload && Array.isArray(_exportLayerPayload.classBreaks)) {
+        if ((!breaks || !breaks.length) && !_isTimeSeriesExportScene && _exportLayerPayload && Array.isArray(_exportLayerPayload.classBreaks)) {
             breaks = _exportLayerPayload.classBreaks.map(function (b) {
                 return {
                     min: parseFloat(b.min),
@@ -53350,17 +53477,16 @@ refresh();
         var _exportPayload = window._sylvaLayerAnalyzePayloadByPane && window._sylvaLayerAnalyzePayloadByPane[pane] && window._sylvaLayerAnalyzePayloadByPane[pane][key];
         var _exportIndex = _exportPayload && _exportPayload.index;
 
-        // Native classified çevresel/kentsel raster: kullanıcı ayrıca sınıflandırma
-        // uygulamamış olsa bile ekrandaki yerleşik sınıflar indirilen RAT/VAT/.clr
-        // paketine aynen taşınır. Kullanıcı gerçekten kendi Classified sınıflarını
-        // tanımladıysa yukarıdaki `breaks` önceliğini korur.
-        var _nativeEnvClasses = (!breaks || !breaks.length) ? sylvaLocalizedNativeClasses(_exportIndex) : null;
-        if (_nativeEnvClasses && _nativeEnvClasses.length) {
-            breaks = _nativeEnvClasses;
-            colors = _nativeEnvClasses.map(function(b){return String(b.color).replace(/^#/,'');});
-            min = _nativeEnvClasses[0].min;
-            max = _nativeEnvClasses[_nativeEnvClasses.length-1].max;
-        }
+        // 🛠️ BUG FİX v17 — "Yalnızca seçtiğim veri sınıflandırılsın, diğerleri
+        // bar olarak insin": sürekli çevresel/kentsel analizler için yerleşik
+        // sınıf tablosunu otomatik olarak `breaks`e dönüştürme. Bu eski davranış,
+        // kullanıcı NDVI/UHI/LST gibi TEK bir katmana Classified uyguladığında
+        // aynı paneldeki diğer katmanların da indirmede classified görünmesine
+        // neden olabiliyordu. Artık `breaks` yalnızca o katmanın kendi
+        // classificationType==='classified' state'inden veya payload'daki
+        // açık classBreaks kaydından gelir. Kullanıcı sınıflandırma yapmadıysa
+        // mode='bar' kalır ve ham/sürekli raster indirilir. Gerçekten kategorik
+        // bir veri seti (LULC vb.) kendi özel indirme yolunu zaten kullanır.
         var legendLabels = null;
         if (_exportIndex && typeof LULC_CLASS_DEFS !== 'undefined' && LULC_CLASS_DEFS[_exportIndex]) {
             legendLabels = LULC_CLASS_DEFS[_exportIndex].map(function(d){
@@ -53375,7 +53501,9 @@ refresh();
             // bağlanır; böylece ekran 1/2, panel yenileme veya gecikmeli çeviri
             // olsa bile ArcMap'e Türkçe Aspect adı sızmaz.
             var _aCurrent = _sylvaAspectExportLabels().map(function(x){ return x.label; });
-            var _aBaseColors = ['#bdbdbd','#2ca25f','#66c2a4','#99d8c9','#ccece6','#fdae61','#f46d43','#d73027','#7f0000'];
+            // Sunucudaki Aspect GeoTIFF renkleriyle birebir aynı palet. Böylece
+            // ekran + ZIP + ArcMap aynı yön için aynı rengi kullanır.
+            var _aBaseColors = ['#d9d9d9','#3c8d5a','#57b894','#8ed0c4','#c8e1d9','#f4b35f','#ee7b3a','#d83a2e','#8f1d14'];
             if (breaks && breaks.length === 9) {
                 legendLabels = breaks.map(function(b, i){
                     return { code:i+1, label:_aCurrent[i] || String(b.label || '').trim(), color:'#'+String(b.color || '').replace(/^#/,'') };
@@ -53461,7 +53589,11 @@ refresh();
             tsBaseEntries.forEach(function (entry) {
                 var indices = tsIndices.length ? tsIndices.slice() : [entry.index];
                 indices.forEach(function (idx) {
-                    if (!idx || /^(TOPO_CONTOUR|BUILDING_FOOTPRINT|RGB)$/i.test(idx)) return;
+                    // Zaman serisindeki RGB uydu görüntüsü de her gerçek
+                    // sceneId için ayrı ayrı indirilmelidir. Önceki sürümde
+                    // RGB burada özellikle filtrelendiği için indirme kuyruğu
+                    // yalnızca aktif/ilk RGB sahnesini alıyordu.
+                    if (!idx || /^(TOPO_CONTOUR|BUILDING_FOOTPRINT)$/i.test(idx)) return;
                     tsScenes.forEach(function (sceneId, sceneNo) {
                         if (!sceneId) return;
                         var p = Object.assign({}, entry.payload, {
@@ -53477,6 +53609,7 @@ refresh();
                             key: entry.key,
                             payload: p,
                             index: idx,
+                            sceneId: sceneId,
                             tsSceneNo: sceneNo + 1,
                             tsDate: (window._tsSliderDates || [])[sceneNo] || '',
                             // Gerçek GEE çekim tarihi; dönem etiketi yalnızca
@@ -53493,6 +53626,9 @@ refresh();
                     });
                 });
             });
+            // RGB zaman serisinde expanded artık her sceneId'yi içerir; böylece
+            // 2020-06-16, 2021-06-06, 2022-06-21, 2023-06-01 ... gibi galeride
+            // görünen tüm gerçek görüntüler ZIP kuyruğuna ayrı ayrı girer.
             if (expanded.length) result = expanded;
         }
         return result;
@@ -53617,7 +53753,7 @@ refresh();
                 filename: _entryFilename,
                 scale:scale, crs:crs,
                 clipMode:entry.payload.clipMode || 'clip', roi:entry.payload.roi || null, rendered:true,
-                visualization:exportVisualFor(pane, entry.key), flatTiff:false,
+                visualization:exportVisualFor(pane, entry.key, entry.sceneId || (entry.payload && entry.payload.sceneId) || ''), flatTiff:false,
                 // RGB uydu görüntüsünde indirme, harita önizlemesini yeniden
                 // üretmek için ±5 günlük komşu-sahne mozaiği kurmak zorunda
                 // kalmaz; seçilen gerçek sahne doğrudan dışa aktarılır.
@@ -54748,7 +54884,7 @@ window.openInfo=render;
   });
   [120,500,1200,2200].forEach(function(ms){ setTimeout(refreshMap2,ms); });
 })();
-</script>\n</body>
+</script></body>
 </script>
 <!-- SATELLITE DATASETS + ANALYSES DETAILED INFORMATION (EN master, 30-language translation) -->
 <style id="satellite-info-css">
