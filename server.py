@@ -296,6 +296,13 @@ _TILE_SESSION_INLINE_PARAMS_LIMIT = 6000
 _TILE_CACHE_MAX_ITEMS     = 2000       # bellekte tutulacak azami tile (~40 MB)
 _TILE_FETCH_RETRIES       = 3          # tek bir tile için tekrar deneme sayısı
 _TILE_FETCH_TIMEOUT       = 25         # saniye
+# GEE geçici 5xx hatası son retry sonrasında da sürerse tarayıcıya HTTP 503
+# döndürmek yerine 1x1 saydam bir PNG verilir. Böylece Leaflet konsolu
+# 'Failed to load resource: 503' ile doldurmaz; eksik karo görünmez kalır ve
+# sonraki harita/zoom yenilemesinde yeniden istenir.
+_SYLVA_EMPTY_TILE_PNG = __import__('base64').b64decode(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
+)
 _REBUILT_URL_CACHE_TTL_SECONDS = 20 * 60  # yenilenen map id'nin süreç-yerel önbellekte tutulma süresi
 _REBUILT_URL_CACHE_MAX_ITEMS   = 512
 
@@ -531,6 +538,7 @@ def _rebuild_tile_session_url(session):
     params = session.get('params')
     if not params:
         return None
+    params = _sanitize_rgb_payload(params)
     final_display, roi, result, vis, _probe = build_result_image(params)
     if session.get('kind') == 'highlight':
         extra = session.get('extra') or {}
@@ -603,8 +611,11 @@ def proxy_tile(sid, z, x, y):
             resp = _tile_http.get(url, timeout=_TILE_FETCH_TIMEOUT)
         except Exception as err:
             if attempt >= _TILE_FETCH_RETRIES:
-                print('[SylvaGIS] ❌ Tile alınamadı (ağ) z{}/x{}/y{}: {}'.format(z, x, y, err))
-                return Response(status=503)
+                print('[SylvaGIS] ⚠️ Tile alınamadı (ağ) z{}/x{}/y{}: {} — saydam yedek karo döndürülüyor.'.format(z, x, y, err))
+                return Response(_SYLVA_EMPTY_TILE_PNG, mimetype='image/png', headers={
+                    'Cache-Control': 'no-store, max-age=0',
+                    'X-SylvaGIS-Tile': 'transparent-fallback',
+                })
             time.sleep(delay)
             delay *= 2
             continue
@@ -636,10 +647,16 @@ def proxy_tile(sid, z, x, y):
             delay *= 2
             continue
 
-        print('[SylvaGIS] ❌ Tile hatası z{}/x{}/y{} → HTTP {}'.format(z, x, y, resp.status_code))
-        return Response(status=503)
+        print('[SylvaGIS] ⚠️ Tile hatası z{}/x{}/y{} → HTTP {} — saydam yedek karo döndürülüyor.'.format(z, x, y, resp.status_code))
+        return Response(_SYLVA_EMPTY_TILE_PNG, mimetype='image/png', headers={
+            'Cache-Control': 'no-store, max-age=0',
+            'X-SylvaGIS-Tile': 'transparent-fallback',
+        })
 
-    return Response(status=503)
+    return Response(_SYLVA_EMPTY_TILE_PNG, mimetype='image/png', headers={
+        'Cache-Control': 'no-store, max-age=0',
+        'X-SylvaGIS-Tile': 'transparent-fallback',
+    })
 
 
 # ════════════════════════════════════════════════════════════════
@@ -4423,6 +4440,29 @@ def _require_nonempty_image(image, empty_message):
     return image
 
 
+def _sanitize_rgb_payload(data):
+    """RGB uydu görüntülerinde tek bant analizlerinden kalan palette bilgisini
+    GEE visualize/getMapId zincirine taşımayı kesin olarak engeller.
+
+    RGB görüntüleri üç bantlıdır; Earth Engine Image.visualize() bu görüntülerde
+    palette kabul etmez. Eski NDVI/NDWI/EVI sınıflandırmasının payload içinde
+    kalması, özellikle dil/katman değişiminden sonra RGB harita veya indirme
+    oturumunun yeniden kurulmasında 400/500 hatasına yol açabiliyordu.
+    """
+    if not isinstance(data, dict) or data.get('index') != 'RGB':
+        return data
+    clean = dict(data)
+    clean.pop('palette', None)
+    clean.pop('classBreaks', None)
+    vis = clean.get('visualization')
+    if isinstance(vis, dict):
+        vis_clean = dict(vis)
+        vis_clean.pop('palette', None)
+        vis_clean.pop('breaks', None)
+        clean['visualization'] = vis_clean
+    return clean
+
+
 def build_result_image(data, for_export=False):
     """
     Ortak analiz görüntüsü oluşturma mantığı.
@@ -4440,6 +4480,10 @@ def build_result_image(data, for_export=False):
     vis sözlüğünü değiştirir) o dal for_export'tan etkilenmeden aynen
     çalışmaya devam eder.
     """
+    # RGB için palette/classification bilgisini fonksiyonun tamamında kes.
+    # Böylece gelecekte eklenen herhangi bir getMapId/visualize yolu da
+    # tek bant palette'ini üç bantlı RGB görüntüsüne uygulayamaz.
+    data = _sanitize_rgb_payload(data)
     roi_coords = data.get('roi')
     clip_mode  = data.get('clipMode', 'clip')
     satellite  = data.get('satellite', 's2-l2a')
@@ -6543,8 +6587,11 @@ def timeseries():
 def analyze():
     global _last_analyze_params, _last_analyze_native_crs
     try:
-        data = request.json
-        _last_analyze_params = dict(data) if data else {}
+        data = request.json or {}
+        # RGB payload'ında önceki indekslerin palette/classification bilgisini
+        # saklama; GEE Image.visualize() RGB'de palette kabul etmez.
+        data = _sanitize_rgb_payload(data)
+        _last_analyze_params = dict(data)
 
         # ── 🛰️ Uydu Görüntüsü Galerisi — hızlı yol ───────────────────
         # RGB (gerçek renk) önizlemesi için piksel histogramı/istatistik
@@ -7046,6 +7093,16 @@ def download_geotiff():
             data = dict(_last_analyze_params)
             session_native_crs = _last_analyze_native_crs
 
+        # İndirme oturumu eski bir indeksin palette'ini taşısa bile RGB
+        # görüntüsünde bu bilgi kesinlikle kullanılmaz.
+        data = _sanitize_rgb_payload(data)
+        if data.get('index') == 'RGB' and isinstance(req_data.get('visualization'), dict):
+            _clean_req_vis = dict(req_data.get('visualization') or {})
+            _clean_req_vis.pop('palette', None)
+            _clean_req_vis.pop('breaks', None)
+            req_data = dict(req_data)
+            req_data['visualization'] = _clean_req_vis
+
         filename = (req_data.get('filename') or 'SylvaGIS_export').strip() or 'SylvaGIS_export'
         scale    = int(req_data.get('scale', 30))
 
@@ -7354,6 +7411,15 @@ def download_geotiff():
             if isinstance(requested_vis.get('legendLabels'), list):
                 requested_legend_labels = requested_vis.get('legendLabels')
         is_true_color_rgb = (lulc_index == 'RGB') and not is_env_urban_raster
+        # GEE Image.visualize() palette yalnızca TEK bantlı görüntülerde geçerlidir.
+        # RGB uydu görüntüsü 3 bantlıdır (red/green/blue); istemciden önceki bir
+        # NDVI/NDWI sınıflandırmasının palette'i taşınırsa Landsat/Sentinel RGB
+        # indirmesinde 'Cannot provide a palette when visualizing more than one band'
+        # hatası oluşuyordu. RGB'de palette'i kesin olarak yok say; bands/min/max
+        # build_result_image() tarafından tanımlanan gerçek RGB görselleştirmesinde
+        # kalır. Bu, uydu görüntüsünün kendi renklerini değiştirmez.
+        if is_true_color_rgb:
+            vis.pop('palette', None)
         export_image = final_display
 
         # DYNAMIC WORLD GÜVENLİ DIŞA AKTARIMI: 0 = Water GERÇEK SINIFTIR.
