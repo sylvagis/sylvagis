@@ -7262,7 +7262,7 @@ def download_geotiff():
             if not data.get('classBreaks'):
                 data['classBreaks'] = _pre_requested_vis.get('breaks')
 
-        # 🛠️ BUG FİX — HIZLI RGB DIŞA AKTARIMI
+        # 🛠️ BUG FİX — HIZLI RGB DIŞA AKTARIMI (v25: harita ile aynı görüntü zinciri)
         # Gerçek uydu görüntüsü (RGB) için seçilmiş GEE sahnesini doğrudan
         # dışa aktar. Harita önizlemesinde kullanılan aynı-gün komşu sahne
         # mozaikleme/yeniden analiz zinciri indirme için gereksizdir. Ayrıca
@@ -7270,31 +7270,19 @@ def download_geotiff():
         # eski global ROI/analiz state'ine başvurulmaz.
         _fast_rgb = bool(req_data.get('fastRgbExport')) and data.get('index') == 'RGB'
         if _fast_rgb:
-            roi = make_roi(data.get('roi'))
-            _rgb_satellite = data.get('satellite', 's2-l2a')
-            _rgb_ds = SATELLITE_DATASETS.get(_rgb_satellite)
-            if not _rgb_ds:
-                raise ValueError('Bilinmeyen uydu görüntüsü veri seti: ' + str(_rgb_satellite))
-            _rgb_col = build_rgb_collection(_rgb_ds, roi, int(data.get('maxCloud', 20)))
-            _rgb_scene_id = data.get('sceneId')
-            if _rgb_scene_id:
-                _rgb_img = _rgb_col.filter(ee.Filter.eq('system:index', _rgb_scene_id)).first()
-                _rgb_img = _require_nonempty_image(_rgb_img, 'Seçilen uydu sahnesi bulunamadı.')
-            else:
-                _rgb_col2 = _rgb_col.filterDate(data.get('startDate'), data.get('endDate'))
-                _rgb_img = _require_nonempty_image(
-                    _rgb_col2.sort('system:time_start', False).first(),
-                    'Seçilen tarih/bulutluluk kriterlerine uygun uydu görüntüsü bulunamadı.'
-                )
-            _rgb_disp = _rgb_img.select(_rgb_ds['rgbBands'])
-            if _rgb_ds.get('scaleFactor', 1) != 1 or _rgb_ds.get('offset', 0) != 0:
-                _rgb_disp = _rgb_disp.multiply(_rgb_ds['scaleFactor']).add(_rgb_ds.get('offset', 0))
-            _rgb_disp = _rgb_disp.rename(['red', 'green', 'blue'])
-            result = _rgb_disp
-            vis = {'bands': ['red', 'green', 'blue'], 'min': _rgb_ds['visMin'], 'max': _rgb_ds['visMax']}
-            clip_mode = data.get('clipMode', 'clip')
-            final_display = _rgb_disp.clip(roi) if clip_mode == 'clip' else _rgb_disp
-            _unused_crs_probe = _rgb_img
+            # 🛠️ v25 — RGB indirme ile HARİTA arasındaki veri farkını kaldır.
+            # Önceki hızlı yol, seçilen sahneyi doğrudan alıp kendi RGB zincirini
+            # kuruyordu. Harita ise build_result_image(RGB) içinde aynı sahne için
+            # komşu tile/path-row/MGRS sahneleriyle boşluk doldurma (mosaic)
+            # kullanıyordu. Bu iki yol aynı fiziksel görüntüyü üretmediğinde,
+            # özellikle Landsat'ta su/göl gibi sahne sınırına yakın maskeli bölgeler
+            # indirilen TIFF'te NoData/boş görünürken ekranda dolu görünüyordu.
+            # Artık hızlı indirme de HARİTANIN KULLANDIĞI AYNI build_result_image()
+            # sonucunu temel alıyor. Böylece sahne, boşluk doldurma, ölçeklendirme,
+            # RGB bant sırası ve clip davranışı tek bir kaynaktan geliyor.
+            # Hızlılık korunuyor: build_result_image(RGB) histogram/istatistik
+            # hesaplamaz; yalnızca görüntüyü ve görselleştirme sözlüğünü hazırlar.
+            final_display, roi, result, vis, _unused_crs_probe = build_result_image(data, for_export=True)
         else:
             # 🛠️ BUG FİX (istenen davranış): "Lejantı Uygula" ile sınıflandırma
             # yapılmış olsa bile — NDVI, DEM, Eğim (Slope) vb. hiçbir analizde —
