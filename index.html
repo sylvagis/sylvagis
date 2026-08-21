@@ -18942,6 +18942,17 @@ function selectRamp(name) {
             // aralarında sabit bir güvenlik boşluğu bırakılır — bu sayede hiçbir
             // analizde/genişlikte veri iç içe geçmez.
             var tableSvg = '';
+            // 🛠️ BUG FİX: PNG/JPEG grafik indirmede sınıf adları (ör. bakı/aspect
+            // sınıfları "Kuzeydoğu Bakı" gibi) tablo sütunu grafik genişliğine
+            // sıkıştırıldığı için "Kuze…" gibi "…" ile KIRPILIYORDU — indirilen
+            // görselde tam sınıflandırma adı görünmüyordu. Artık isim asla
+            // kırpılmaz: önce TÜM isimlerin/başlıkların gerçek piksel genişliği
+            // ölçülür, tabloyu eksiksiz sığdırmak için gereken toplam genişlik
+            // hesaplanır ve gerekirse ÇIKTI GÖRSELİ (yalnızca tablo alanı, grafik
+            // kendi oranında SABİT kalır — asla gerilip bozulmaz) bu genişliğe
+            // GENİŞLETİLİR. Dar bir grafik + uzun sınıf adlarında bile tüm
+            // sınıflandırma adları eksiksiz görünür.
+            var outW = svgW;
             if (rowLines.length > 0) {
                 var measureCanvas = document.createElement('canvas');
                 var mctx = measureCanvas.getContext('2d');
@@ -18949,6 +18960,7 @@ function selectRamp(name) {
 
                 var hdrPctLabel = '%';
                 var hdrHaLabel  = t('col_area_ha','Alan (ha)');
+                var hdrNameLabel = t('col_class_name','Sınıf Adı');
                 var rowsMeta = rowLines.map(function(row) {
                     var pctStr = row.pct.toFixed(1) + '%';
                     var haStr  = row.ha !== null ? row.ha.toLocaleString('tr-TR', { maximumFractionDigits: 1 }) + ' ha' : '—';
@@ -18957,6 +18969,8 @@ function selectRamp(name) {
 
                 var maxPctW = mctx.measureText(hdrPctLabel).width;
                 var maxHaW  = mctx.measureText(hdrHaLabel).width;
+                var maxNameW = mctx.measureText(hdrNameLabel).width;
+                rowLines.forEach(function(row) { maxNameW = Math.max(maxNameW, mctx.measureText(row.name).width); });
                 rowsMeta.forEach(function(rm) {
                     maxPctW = Math.max(maxPctW, mctx.measureText(rm.pctStr).width);
                     maxHaW  = Math.max(maxHaW,  mctx.measureText(rm.haStr).width);
@@ -18964,33 +18978,26 @@ function selectRamp(name) {
 
                 var rightMargin   = 6;
                 var colGap        = 16; // sütunlar arası minimum güvenlik boşluğu
-                var haColRight    = svgW - rightMargin;               // "Alan (ha)" sütunu sağa yaslı biter
-                var pctColRight   = haColRight - maxHaW - colGap;      // "%" sütunu bundan önce, güvenli boşlukla biter
                 var nameColLeft   = 22;
-                var nameColMaxW   = Math.max(30, pctColRight - maxPctW - colGap - nameColLeft);
+                // Tabloyu (grafiği DEĞİL) tüm sınıf adlarını kırpmadan sığdıracak
+                // minimum genişliğe göre gerekirse büyüt.
+                var neededW = nameColLeft + maxNameW + colGap + maxPctW + colGap + maxHaW + rightMargin;
+                outW = Math.max(svgW, neededW);
 
-                // Sınıf adını piksel genişliğine göre kırp (karakter sayısına göre
-                // değil) — böylece uzun isimler de bir sonraki sütuna asla taşmaz.
-                function truncateToWidth(text, maxW) {
-                    if (mctx.measureText(text).width <= maxW) return text;
-                    var truncated = text;
-                    while (truncated.length > 1 && mctx.measureText(truncated + '…').width > maxW) {
-                        truncated = truncated.slice(0, -1);
-                    }
-                    return truncated + '…';
-                }
+                var haColRight    = outW - rightMargin;               // "Alan (ha)" sütunu sağa yaslı biter
+                var pctColRight   = haColRight - maxHaW - colGap;      // "%" sütunu bundan önce, güvenli boşlukla biter
 
                 var sepY = svgH + 4;
-                tableSvg += '<line x1="0" y1="' + sepY + '" x2="' + svgW + '" y2="' + sepY + '" stroke="#e2e8f0" stroke-width="1"/>';
+                tableSvg += '<line x1="0" y1="' + sepY + '" x2="' + outW + '" y2="' + sepY + '" stroke="#e2e8f0" stroke-width="1"/>';
                 var hdrY = svgH + 16;
-                tableSvg += '<text x="' + nameColLeft + '" y="' + hdrY + '" font-size="9" fill="#64748b" font-family="Arial,sans-serif">' + t('col_class_name','Sınıf Adı') + '</text>';
+                tableSvg += '<text x="' + nameColLeft + '" y="' + hdrY + '" font-size="9" fill="#64748b" font-family="Arial,sans-serif">' + hdrNameLabel + '</text>';
                 tableSvg += '<text x="' + pctColRight + '" y="' + hdrY + '" font-size="9" fill="#64748b" font-family="Arial,sans-serif" text-anchor="end">' + hdrPctLabel + '</text>';
                 tableSvg += '<text x="' + haColRight + '" y="' + hdrY + '" font-size="9" fill="#64748b" font-family="Arial,sans-serif" text-anchor="end">' + hdrHaLabel + '</text>';
                 rowLines.forEach(function(row, i) {
                     var y = svgH + 16 + (i + 1) * rowH;
                     var swatchY = y - 9;
                     tableSvg += '<rect x="6" y="' + swatchY + '" width="10" height="10" rx="2" fill="' + row.color + '"/>';
-                    var nm = truncateToWidth(row.name, nameColMaxW);
+                    var nm = row.name;
                     tableSvg += '<text x="' + nameColLeft + '" y="' + y + '" font-size="9" fill="#334155" font-family="Arial,sans-serif">' + nm.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</text>';
                     tableSvg += '<text x="' + pctColRight + '" y="' + y + '" font-size="9" fill="#334155" font-family="Arial,sans-serif" text-anchor="end">' + rowsMeta[i].pctStr + '</text>';
                     tableSvg += '<text x="' + haColRight + '" y="' + y + '" font-size="9" fill="#334155" font-family="Arial,sans-serif" text-anchor="end">' + rowsMeta[i].haStr + '</text>';
@@ -19012,8 +19019,8 @@ function selectRamp(name) {
             totalH = contentH + logoBandH;
 
             var fullSvg = '<?xml version="1.0" encoding="UTF-8"?>'
-                + '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + svgW + ' ' + contentH + '" width="' + svgW + '" height="' + contentH + '">'
-                + '<rect width="' + svgW + '" height="' + contentH + '" fill="#ffffff"/>'
+                + '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + outW + ' ' + contentH + '" width="' + outW + '" height="' + contentH + '">'
+                + '<rect width="' + outW + '" height="' + contentH + '" fill="#ffffff"/>'
                 + chartInner
                 + tableSvg
                 + '</svg>';
@@ -19023,7 +19030,7 @@ function selectRamp(name) {
             var img  = new Image();
             img.onload = function() {
                 var canvas = document.createElement('canvas');
-                canvas.width  = svgW * scale;
+                canvas.width  = outW * scale;
                 canvas.height = totalH * scale;
                 var ctx = canvas.getContext('2d');
                 ctx.fillStyle = '#ffffff';
@@ -21919,12 +21926,15 @@ function selectRamp(name) {
                     if (isMaj && i > 0) {
                         ctx.save();
                         ctx.fillStyle = '#3a4a5a';
+                        // 🛠️ Kullanıcı isteği: cetvelde "100px", "200px" gibi piksel
+                        // etiketleri yerine sade sıra numarası (1, 2, 3, ...) gösterilsin.
+                        var majLabel = String(i / 100);
                         if (isHorizontal) {
-                            ctx.fillText(i + 'px', i, 10);
+                            ctx.fillText(majLabel, i, 10);
                         } else {
                             ctx.translate(11, i);
                             ctx.rotate(-Math.PI / 2);
-                            ctx.fillText(i + 'px', 0, 0);
+                            ctx.fillText(majLabel, 0, 0);
                             ctx.restore();
                             continue;
                         }
@@ -22201,12 +22211,15 @@ function selectRamp(name) {
                     if (isMaj && i > 0) {
                         ctx.save();
                         ctx.fillStyle = '#3a4a5a';
+                        // 🛠️ Kullanıcı isteği: 2. ekran cetvelinde de "100px" yerine
+                        // sade sıra numarası (1, 2, 3, ...) gösterilsin.
+                        var majLabel = String(i / 100);
                         if (isHorizontal) {
-                            ctx.fillText(i + 'px', i, 10);
+                            ctx.fillText(majLabel, i, 10);
                         } else {
                             ctx.translate(11, i);
                             ctx.rotate(-Math.PI / 2);
-                            ctx.fillText(i + 'px', 0, 0);
+                            ctx.fillText(majLabel, 0, 0);
                         }
                         ctx.restore();
                     }
@@ -53279,7 +53292,17 @@ function refreshVisibleInfoBoxes(lang){['map-info-box','map2-info-box'].forEach(
 /* Sınıflandırılmış analizler, histogramı 7 sayısal aralığa bölmez. Sunulan
    sınıf tanımlarını (sıra = sınıf kodu) kullanır; böylece grafik/tabloda
    gerçek sınıf adı ve aynı lejant rengi yer alır. */
-function renderClassifiedChart(stats,meta,paneId){var hist=(stats&&stats.value)||null;if(!hist||!meta||!meta.classesRaw)return false;var raw;try{raw=JSON.parse(meta.classesRaw)}catch(e){return false}if(!Array.isArray(raw)||!raw.length)return false;var counts={};Object.keys(hist).forEach(function(k){var n=Number(k);if(!isNaN(n))counts[n]=(counts[n]||0)+Number(hist[k]||0)});var classes=raw.map(function(c,i){var code=(c.code!==undefined?Number(c.code):(c.value!==undefined?Number(c.value):i));return{min:code,max:code,name:c.label||('Class '+(i+1)),color:c.color||'#64748b'}});var total=Object.keys(counts).reduce(function(s,k){return s+counts[k]},0)||1;var percentages=classes.map(function(c){return((counts[c.min]||0)/total)*100});var pane=(paneId==='map2'||paneId==='map')?paneId:((typeof _sylvaActivePaneId==='function')?_sylvaActivePaneId():'map');var layer=pane==='map2'?window.currentLayer2:window.currentLayer;var areaHa=null;try{if(layer)areaHa=turf.area(layer.toGeoJSON())/10000}catch(e){}var data={classes:classes,percentages:percentages,areaHa:areaHa};if(typeof window.renderStatsChart==='function')window.renderStatsChart(data,pane);return true}
+function renderClassifiedChart(stats,meta,paneId){var hist=(stats&&stats.value)||null;if(!hist||!meta||!meta.classesRaw)return false;var raw;try{raw=JSON.parse(meta.classesRaw)}catch(e){return false}if(!Array.isArray(raw)||!raw.length)return false;var counts={};Object.keys(hist).forEach(function(k){var n=Number(k);if(!isNaN(n))counts[n]=(counts[n]||0)+Number(hist[k]||0)});
+    // 🛠️ BUG FİX (kullanıcı bildirimi — 2026-08-21): "Lejant sayfa diline
+    // (ör. Japonca) çevriliyor ama sağdaki grafik/クラス listesi hep Türkçe
+    // kalıyor" — KÖK NEDEN: bu fonksiyon sınıf isimlerini doğrudan
+    // data-legend-classes JSON'undaki ham (Türkçe) c.label değerinden
+    // alıyordu; harita lejantının kullandığı sylvaLocalizedNativeClasses()
+    // çeviri sözlüğüne hiç bakmıyordu. Artık aynı çeviri kaynağı burada da
+    // kullanılıyor, böylece grafik/tablo lejantla HER ZAMAN aynı dilde olur.
+    var _localizedForChart = (typeof window.sylvaLocalizedNativeClasses === 'function' && meta.analysisName)
+        ? window.sylvaLocalizedNativeClasses(meta.analysisName) : null;
+    var classes=raw.map(function(c,i){var code=(c.code!==undefined?Number(c.code):(c.value!==undefined?Number(c.value):i));var _locLabel=_localizedForChart&&_localizedForChart[i]&&_localizedForChart[i].label;return{min:code,max:code,name:_locLabel||c.label||('Class '+(i+1)),color:c.color||'#64748b'}});var total=Object.keys(counts).reduce(function(s,k){return s+counts[k]},0)||1;var percentages=classes.map(function(c){return((counts[c.min]||0)/total)*100});var pane=(paneId==='map2'||paneId==='map')?paneId:((typeof _sylvaActivePaneId==='function')?_sylvaActivePaneId():'map');var layer=pane==='map2'?window.currentLayer2:window.currentLayer;var areaHa=null;try{if(layer)areaHa=turf.area(layer.toGeoJSON())/10000}catch(e){}var data={classes:classes,percentages:percentages,areaHa:areaHa};if(typeof window.renderStatsChart==='function')window.renderStatsChart(data,pane);return true}
 var oldRenderChart=window.renderChart;if(typeof oldRenderChart==='function'){window.renderChart=function(stats,meta,paneId){var lulc=['LULC','LULC_ESA','LULC_MODIS','LULC_CORINE'];if(meta&&lulc.indexOf(meta.analysisName)===-1&&meta.legendType==='classified'&&meta.classesRaw&&renderClassifiedChart(stats,meta,paneId))return;return oldRenderChart.apply(this,arguments)}}
 /* Bilgi kartını üreten mevcut işlevden sonra çeviri uygulanır; böylece
    Source/Resolution/Description ve içerik aynı anda çevrilir. */
@@ -53459,9 +53482,28 @@ refresh();
         if (k === 'TOPO_ASPECT' && window.SYLVA_ASPECT_DIRECTION_LABELS) {
             var _aspectArr = window.SYLVA_ASPECT_DIRECTION_LABELS[lang] || window.SYLVA_ASPECT_DIRECTION_LABELS.en;
             if (_aspectArr && _aspectArr.length) {
+                // 🛠️ BUG FİX (kullanıcı bildirimi — 2026-08-21): "Bakı analizi
+                // ekranda doğru renklendirilip sınıflandırılıyor, ama ArcMap'te
+                // açılan raster tamamen kırmızı geliyor" — KÖK NEDEN: bu blok
+                // min/max olarak GERÇEK derece aralıkları (0–12.5°, 12.5–57.5°
+                // vb.) yerine yalnızca 0,1,2…8 gibi küçük "sınıf kodu" numaraları
+                // döndürüyordu. Bu değerler indirme isteğinde sunucuya "breaks"
+                // olarak gönderiliyor; sunucu ise indirilen ham bandı GERÇEK
+                // derece değerleriyle (0°–360°) karşılaştırdığı için hiçbir
+                // piksel bu anlamsız (0-0, 1-1, … 8-8) aralıklara denk gelmiyor,
+                // "en yakın sınıfa bağla" güvenlik mekanizması da neredeyse TÜM
+                // pikselleri en yüksek kodlu (9./koyu kırmızı) sınıfa itiyordu.
+                // ÇÖZÜM: burada da sunucudaki _DEFAULT_ASPECT_BREAKS ile BİREBİR
+                // aynı gerçek derece aralıkları kullanılıyor; böylece indirilen
+                // raster artık ekrandaki 9 sınıfla birebir aynı şekilde
+                // renklendiriliyor (ArcMap'te de doğru sınıflar/renkler gelir).
+                var _aspectDegreeRanges = [
+                    [-1.0, -0.5], [0.0, 12.5], [12.5, 57.5], [57.5, 102.5],
+                    [102.5, 147.5], [147.5, 192.5], [192.5, 237.5], [237.5, 282.5], [282.5, 327.5]
+                ];
                 return rows.map(function(c,i){
-                    var code=(c.code!==undefined?Number(c.code):i);
-                    return {min:code,max:code,color:String(c.color||'#64748b'),label:_aspectArr[i]||String(c.label||('Class '+(i+1)))};
+                    var rng = _aspectDegreeRanges[i] || [i, i];
+                    return {min:rng[0], max:rng[1], color:String(c.color||'#64748b'), label:_aspectArr[i]||String(c.label||('Class '+(i+1)))};
                 });
             }
         }
@@ -55633,10 +55675,18 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
     if(chartSection) setPassive(chartSection, rgb);
     var legend = document.getElementById(p === 'map2' ? 'map2-legend-box' : 'map-legend-box');
     if(legend){
-      legend.style.opacity = rgb ? '.35' : '1';
-      legend.style.pointerEvents = rgb ? 'none' : '';
-      legend.style.userSelect = rgb ? 'none' : '';
-      if(rgb) legend.setAttribute('aria-disabled','true'); else legend.removeAttribute('aria-disabled');
+      // 🛠️ BUG FİX (kullanıcı bildirimi — 2026-08-21): "Uydu analizlerinde
+      // sol alttaki lejant/bilgi kutusunun arkası lamba gibi solup şeffaf
+      // oluyor, sabit beyaz kalmalı" — KÖK NEDEN: ham uydu görüntüsü (RGB::
+      // katmanı) haritada üstteyken bu kutuya opacity=.35 uygulanıyordu.
+      // Hemen üstteki yorum zaten bu opacity'nin "harita üzerindeki gerçek
+      // analiz lejantına uygulanmaması" gerektiğini söylüyordu, ama kod bunun
+      // tam tersini yapıyordu. Artık haritanın üzerindeki bu kutunun arka
+      // planı/saydamlığı RGB durumundan etkilenmiyor — her zaman sabit/opak.
+      legend.style.opacity = '';
+      legend.style.pointerEvents = '';
+      legend.style.userSelect = '';
+      legend.removeAttribute('aria-disabled');
     }
   }
   function autoSizeLegend(box){
