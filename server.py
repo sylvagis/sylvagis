@@ -212,6 +212,49 @@ def _call_with_retry(fn, *args, retries=3, base_delay=1.5, **kwargs):
     raise last_err
 
 
+# 🛠️ BUG FİX (Full Data / tüm veri indirmede "GEE indirme (fallback)
+# isteği başarısız (HTTP 429)" hatası — SORUN: uydu analizi/uydu
+# görüntüsü çalışma alanının TAMAMI indirilmek istendiğinde 429
+# hatası anında kullanıcıya yansıyor, hiç tekrar denenmiyordu):
+#
+# KÖK NEDEN: yukarıdaki _call_with_retry() SADECE fn() bir Python
+# istisnası (exception) FIRLATTIĞINDA tekrar dener. Ama GEE'nin 429
+# "Too Many Requests / RESOURCE_EXHAUSTED" hatası requests.get()
+# çağrısından bir istisna olarak gelmez — normal bir HTTP yanıtı
+# olarak (status_code=429) döner. Yani requests.get() İÇİNDE hiçbir
+# hata oluşmaz, _call_with_retry bunu "başarılı" sanıp OLDUĞU GİBİ
+# geri döndürür; ancak yanıt gövdesi hata mesajıdır. Kod daha sonra
+# `if not r.ok` ile bunu YAKALAR ama bu noktada retry penceresi çoktan
+# kapanmıştır — kullanıcıya İLK 429'da direkt hata gösterilir.
+# Bu, özellikle "Full Data" (kırpmasız/tüm çalışma alanı) indirme
+# yolunda kullanılan bounded-fallback isteğinde gözlemlenen
+# "GEE indirme (fallback) isteği başarısız (HTTP 429)" hatasının
+# BİREBİR kök nedenidir.
+#
+# ÇÖZÜM: requests.get() bir sarmalayıcı (_gee_http_get) ile çağrılır;
+# bu sarmalayıcı 429/500/502/503/504 durum kodlarını GERÇEK bir Python
+# istisnasına çevirir — böylece _call_with_retry bunları artık
+# YAKALAYIP üstel geri-çekilmeyle otomatik tekrar dener (GEE Restricted
+# Mode'un eşzamanlılık penceresi boşalana kadar). Diğer durum kodları
+# (400/401/403/404 gibi kalıcı hatalar) DEĞİŞMEDEN, hemen (tekrar
+# denemeden) mevcut `if not r.ok` mantığına bırakılır.
+_RETRYABLE_HTTP_STATUS = (429, 500, 502, 503, 504)
+
+
+def _gee_http_get(url, timeout=180):
+    """requests.get() için ince bir sarmalayıcı: GEE bir 429/5xx HTTP
+    durum kodu döndürdüğünde bunu bir istisna olarak fırlatır ki
+    _call_with_retry() bunu yakalayıp otomatik tekrar deneyebilsin
+    (bkz. yukarıdaki BUG FİX notu). Kalıcı hata kodlarında (400/401/
+    403/404 vb.) normal şekilde yanıtı döndürür — çağıran kod bunu
+    `r.ok` ile kontrol etmeye devam eder."""
+    resp = requests.get(url, timeout=timeout)
+    if resp.status_code in _RETRYABLE_HTTP_STATUS:
+        body_snippet = (resp.text or '')[:500]
+        raise Exception('GEE HTTP {}: {}'.format(resp.status_code, body_snippet))
+    return resp
+
+
 # ════════════════════════════════════════════════════════════════
 # 🧱 TILE PROXY — "haritanın yarısı boş kalıyor" sorununun çözümü
 # ════════════════════════════════════════════════════════════════
@@ -8329,7 +8372,10 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
         # gerektiğinde (boyut sınırı aşıldığında) devreye giriyor.
 
         url = _call_with_retry(lambda: img.getDownloadURL(params))
-        r = _call_with_retry(lambda: requests.get(url, timeout=180), retries=2)
+        # 🛠️ BUG FİX: retries 2 → 5 ve _gee_http_get kullanımı — bkz.
+        # _gee_http_get() tanımındaki BUG FİX notu. GEE Restricted Mode
+        # 429'u artık burada sessizce yutulmaz, otomatik tekrar denenir.
+        r = _call_with_retry(lambda: _gee_http_get(url), retries=5, base_delay=2.0)
         if not r.ok:
             # GEE bazen boyut/limit hatalarını HTTP gövdesinde (200 dışı
             # durum koduyla) döner; ayrıştırılabilmesi için mesaja dahil et.
@@ -8355,7 +8401,11 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
                 fb_params = dict(params)
                 fb_params['region'] = fallback_region_geom
                 fb_url = _call_with_retry(lambda: img.getDownloadURL(fb_params))
-                fb_r = _call_with_retry(lambda: requests.get(fb_url, timeout=180), retries=2)
+                # 🛠️ BUG FİX: retries 2 → 5 ve _gee_http_get kullanımı — bu
+                # tam olarak "Full Data" (tüm çalışma alanı, kırpmasız)
+                # indirmede kullanıcının gördüğü "GEE indirme (fallback)
+                # isteği başarısız (HTTP 429)" hatasının oluştuğu satırdı.
+                fb_r = _call_with_retry(lambda: _gee_http_get(fb_url), retries=5, base_delay=2.0)
                 if not fb_r.ok:
                     body_snippet = (fb_r.text or '')[:500]
                     raise Exception(
@@ -8410,7 +8460,9 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
                     tile_params['formatOptions'] = {'noData': nodata_value}
 
                 tile_url = _call_with_retry(lambda: img.getDownloadURL(tile_params))
-                tr = _call_with_retry(lambda: requests.get(tile_url, timeout=180), retries=2)
+                # 🛠️ BUG FİX: retries 2 → 5 ve _gee_http_get kullanımı — bkz.
+                # yukarıdaki BUG FİX notları (aynı 429 sorunu karo indirmede de geçerli).
+                tr = _call_with_retry(lambda: _gee_http_get(tile_url), retries=5, base_delay=2.0)
                 if not tr.ok:
                     body_snippet = (tr.text or '')[:500]
                     _tile_err_msg = 'GEE karo indirme isteği başarısız (karo {}, HTTP {}): {}'.format(
@@ -9788,6 +9840,25 @@ def vector_download():
             return Response(zip_bytes, headers={
                 'Content-Type': 'application/zip',
                 'Content-Disposition': f'attachment; filename="{safe_name}_shp.zip"',
+            })
+
+        # 🛠️ BUG FİX: 'geojson' formatı ESKİDEN sunucuda HİÇ ele alınmıyordu
+        # — yalnızca kml/kmz/shp dalları vardı, geojson seçildiğinde kod
+        # doğrudan `else: return 'Bilinmeyen format: geojson'` hata dalına
+        # düşüyordu. İstemci (index.html) zaten geojson için ayrı bir
+        # istemci-taraflı ZIP paketleme mantığına sahipti (JSZip ile ham
+        # GeoJSON metnini .zip içine alır) — ama sunucu hiçbir zaman
+        # başarılı bir yanıt vermediği için o kod yoluna hiç ulaşılamıyordu.
+        # Artık ham GeoJSON FeatureCollection'ı doğrudan döndürülüyor;
+        # istemci bunu indirmeden önce kendi tarafında ZIP'liyor.
+        elif fmt == 'geojson':
+            geojson_bytes = json.dumps(
+                {'type': 'FeatureCollection', 'features': features},
+                ensure_ascii=False
+            ).encode('utf-8')
+            return Response(geojson_bytes, headers={
+                'Content-Type': 'application/geo+json; charset=utf-8',
+                'Content-Disposition': f'attachment; filename="{safe_name}.geojson"',
             })
 
         else:
