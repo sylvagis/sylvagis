@@ -22450,18 +22450,42 @@ function selectRamp(name) {
                 if (arr) arr.textContent = '▼';
             }
             function toggleSbBox(id, other) {
-                if (document.getElementById(id).classList.contains('open')) {
+                var box = document.getElementById(id);
+                if (!box) return;
+                if (box.classList.contains('open')) {
                     closeSbBox(id);
                 } else {
-                    closeSbBox(other);
+                    // 'other' opsiyoneldir. Basemap tek başına kullanılan
+                    // kutu olduğu için null geldiğinde closeSbBox çağrısı
+                    // yapılmamalıdır; aksi halde null.classList hatası
+                    // dropdown'ın hiç açılmamasına neden olur.
+                    if (other) closeSbBox(other);
                     openSbBox(id);
                 }
             }
 
             // Basemap header click
-            document.getElementById('sb-basemap-header').addEventListener('click', function(e) {
-                e.stopPropagation();
-                toggleSbBox('sb-basemap-box', null);
+            var _sbBasemapHeader = document.getElementById('sb-basemap-header');
+            if (_sbBasemapHeader) {
+                _sbBasemapHeader.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    toggleSbBox('sb-basemap-box', null);
+                });
+            }
+
+            // Basemap seçenekleri: her seçenek gerçekten switchBasemap()'i
+            // çağırmalı. Önceki sürümde seçenekler DOM'da vardı ancak click
+            // olayları bağlanmadığı için Basemap başlığına basıldığında liste
+            // açılmıyor/seçim yapılamıyordu.
+            document.querySelectorAll('#sb-basemap-dropdown .sb-dp-option[data-bm]').forEach(function(option) {
+                option.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    var key = this.getAttribute('data-bm');
+                    if (key && typeof switchBasemap === 'function') {
+                        switchBasemap(key);
+                    }
+                });
             });
 
             // Dışarı tıklanınca kapat
