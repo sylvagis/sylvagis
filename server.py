@@ -7001,10 +7001,6 @@ def download_geotiff():
         # LST, SAVI, NDBI/BSI, EVI, SMI, NBR, vb.) build_result_image()
         # üzerinden AYNI ortak kırpma/NoData mantığını kullandığı için bu
         # düzeltme tüm raster analiz dışa aktarımlarına otomatik uygulanır.
-        fresh_roi = req_data.get('roi')
-        if fresh_roi is not None:
-            data['roi'] = fresh_roi
-
         # 🔒 GÜVENLİK/DOĞRULUK DÜZELTMESİ (kullanıcılar arası analiz
         # karışması): _last_analyze_params/_last_analyze_native_crs sunucu
         # SÜRECİNDEKİ TÜM eşzamanlı kullanıcılar arasında paylaşılan TEK bir
@@ -7060,6 +7056,14 @@ def download_geotiff():
                 return jsonify({'success': False, 'error': 'Önce bir uydu analizi çalıştırın.'})
             data = dict(_last_analyze_params)
             session_native_crs = _last_analyze_native_crs
+
+        # Güncel çalışma alanı geometrisi, analiz verisi (data) seçildikten
+        # sonra uygulanmalıdır. Önceki sürümde bu atama data tanımlanmadan
+        # önce yapıldığı için tüm GeoTIFF indirmelerinde:
+        # "local variable 'data' referenced before assignment" oluşabiliyordu.
+        fresh_roi = req_data.get('roi')
+        if fresh_roi is not None:
+            data['roi'] = fresh_roi
 
         filename = (req_data.get('filename') or 'SylvaGIS').strip() or 'SylvaGIS'
         scale    = int(req_data.get('scale', 30))
@@ -9792,7 +9796,29 @@ def _vectorize_analysis_payload(data, crs='EPSG:4326'):
     if not class_meta:
         raise ValueError('Bu katman için vektöre aktarılabilir sınıf/lejant bilgisi bulunamadı.')
     vector_img=final_display
-    if not (isinstance(data.get('classBreaks'), list) and data.get('classBreaks')) and index not in LULC_CLASS_DEFS and index != 'TOPO_ASPECT':
+    # Kullanıcı sınıflandırması varsa continuous sonucu sınıf kodlarına
+    # dönüştür. Böylece NDVI/Eğim/TWI/BSI vb. sınıflandırılmış katmanlarda
+    # vektör özellikleri gerçek class_name + color ile eşleşir.
+    _payload_breaks = data.get('classBreaks')
+    if isinstance(_payload_breaks, list) and _payload_breaks and index not in LULC_CLASS_DEFS and index != 'TOPO_ASPECT':
+        try:
+            _valid_breaks=[]
+            for _b in _payload_breaks[:24]:
+                if not isinstance(_b, dict): continue
+                _lo=float(_b.get('min')); _hi=float(_b.get('max'))
+                if _hi < _lo: _lo,_hi=_hi,_lo
+                _valid_breaks.append((_lo,_hi))
+            if _valid_breaks:
+                _cls=ee.Image.constant(0).rename('class_value')
+                for _i,(_lo,_hi) in enumerate(_valid_breaks,1):
+                    _cond=result.gte(_lo).And(result.lte(_hi))
+                    _cls=_cls.where(_cond,_i)
+                vector_img=_cls.updateMask(result.mask())
+        except Exception:
+            # Sınıf aralıkları hatalıysa aşağıdaki palette fallback'i devreye
+            # girer; indirme tamamen sessizce bozulmaz.
+            vector_img=final_display
+    elif not (isinstance(_payload_breaks, list) and _payload_breaks) and index not in LULC_CLASS_DEFS and index != 'TOPO_ASPECT':
         pal=(vis or {}).get('palette') if isinstance(vis,dict) else None
         if isinstance(pal,list) and len(pal)>1:
             try:
