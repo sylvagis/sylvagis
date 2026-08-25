@@ -17897,8 +17897,14 @@ function selectRamp(name) {
                 // ramp'idir (NDVI: red-yellow-green vb.). Bu, renkli lejant ile
                 // siyah-beyaz GEE katmaninin ayrismasini onler.
                 palette:   (function() {
-                    var isTsAnalysis = window._tsSliderPane === _pane && !window._tsIsRgbMode;
+                    var isTsAnalysis = (opts.timeSeriesAnalysis === true) ||
+                        (window._tsSliderPane === _pane && !window._tsIsRgbMode);
                     var rEl = document.getElementById('selectedRamp');
+                    // Zaman serisi ilk sahnesi yüklenirken _tsSliderPane henüz
+                    // aşağıdaki kod tarafından atanmış olmayabilir. Bu durumda
+                    // seçili analiz checkbox'ının kendi ramp'ini MUTLAKA kullan.
+                    // Aksi halde selectedRamp siyah-beyaz kalır ve NDVI/NDWI/BSI
+                    // gibi analizler haritada gri tonlarda görünür.
                     var rKey = isTsAnalysis ? (meta.rampKey || 'black-white')
                         : (rEl ? (rEl.getAttribute('data-ramp') || meta.rampKey || 'black-white') : (meta.rampKey || 'black-white'));
                     if (rKey === '__gee__') return ['black', 'white'];
@@ -17965,7 +17971,10 @@ function selectRamp(name) {
                 // Sahne değişiminde aktif renk paleti ve lejant senkronize kalmalı.
                 // Kullanıcının seçtiği ramp'i koruyarak meta'yı klonla (Issue-4 düzeltmesi).
                 var activeRampEl = document.getElementById('selectedRamp');
-                var currentRampKey = (window._tsSliderPane === _pane && !window._tsIsRgbMode) ? (meta.rampKey || 'black-white') : ((activeRampEl && activeRampEl.getAttribute('data-ramp')) || meta.rampKey);
+                var currentRampKey = ((opts.timeSeriesAnalysis === true) ||
+                    (window._tsSliderPane === _pane && !window._tsIsRgbMode))
+                    ? (meta.rampKey || 'black-white')
+                    : ((activeRampEl && activeRampEl.getAttribute('data-ramp')) || meta.rampKey);
                 var metaForScene = Object.assign({}, meta, { rampKey: currentRampKey });
 
                 // Lejantı sıfırdan yeniden oluştur, ardından gerçek istatistikleri uygula
@@ -52338,7 +52347,8 @@ function runTimeSeriesAnalysis() {
                     startDate: String(sy) + '-01-01',
                     endDate: String(ey) + '-12-31',
                     satellite: satellite,
-                    maxCloud: cloudPct
+                    maxCloud: cloudPct,
+                    timeSeriesAnalysis: true
                 });
             }
 
@@ -54135,7 +54145,14 @@ refresh();
             // kaynağıdır.
             if (entryIndex === 'RGB') return;
             var _entryBreaks = entry.payload && entry.payload.classBreaks;
-            if (!Array.isArray(_entryBreaks) || !_entryBreaks.length) return;
+            var _entryClassificationType = String((entry.payload && entry.payload.classificationType) || '').toLowerCase();
+            var _isKnownClassified = ['LULC','LULC_ESA','LULC_MODIS','LULC_CORINE','FOREST_LOSS','URBAN_GROWTH'].indexOf(entryIndex) >= 0;
+            // Arazi kullanım ve diğer yerleşik sınıflandırılmış katmanlar,
+            // kullanıcı ayrıca sınıflandırma tablosuna dokunmasa bile kendi
+            // sınıf/renk tanımlarına sahiptir. Kullanıcının haritada
+            // sınıflandırdığı sürekli analizler ise classBreaks ile seçilir.
+            if (!((Array.isArray(_entryBreaks) && _entryBreaks.length) ||
+                  _entryClassificationType === 'classified' || _isKnownClassified)) return;
             var fp = JSON.stringify(entry.payload || {});
             if (seen[fp]) return;
             seen[fp] = true;
