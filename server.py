@@ -2019,6 +2019,10 @@ LULC_FAMILY_INDICES = (
 # Topografik Analizlerdeki GeoTIFF dışa aktarım hattını kullanır.
 # Bu liste ölçek/CRS/NoData/sınıflandırma gibi ortak indirme kararlarında
 # merkezi bir kaynak olarak kullanılır.
+_NATIVE_CATEGORICAL_RASTER_INDICES = {
+    'FOREST_LOSS', 'URBAN_GROWTH',
+}
+
 _ENV_URBAN_RASTER_INDICES = {
     'UHI_LST', 'UHI_TREND', 'LST_LULC_CORRELATION',
     'WATER_OCCURRENCE', 'WATER_CHANGE', 'WATER_SEASONALITY',
@@ -7057,6 +7061,12 @@ def download_geotiff():
             data = dict(_last_analyze_params)
             session_native_crs = _last_analyze_native_crs
 
+        # 🔒 KESİN DAVRANIŞ: Görüntü Alanı/Full Scene seçeneği kaldırıldı.
+        # Tüm raster dışa aktarımları yalnızca kullanıcının gerçek Çalışma Alanı
+        # (AOI) geometrisine göre yapılır. İstemciden yanlışlıkla clipMode='full'
+        # gelse bile sunucu bunu kabul etmez.
+        data['clipMode'] = 'clip'
+
         # Güncel çalışma alanı geometrisi, analiz verisi (data) seçildikten
         # sonra uygulanmalıdır. Önceki sürümde bu atama data tanımlanmadan
         # önce yapıldığı için tüm GeoTIFF indirmelerinde:
@@ -7125,9 +7135,9 @@ def download_geotiff():
             crs = session_native_crs if (session_native_crs and _re.match(r'^EPSG:\d+$', session_native_crs, _re.IGNORECASE)) else 'EPSG:4326'
         crs = crs.upper()
 
-        # Görüntü Alanı modu: istekten gelen değer son analizin üzerine yazar
-        if 'clipMode' in req_data:
-            data['clipMode'] = req_data['clipMode']
+        # Görüntü Alanı seçeneği kaldırıldı: istemciden gelen eski/full değeri
+        # kesinlikle kabul etme; bütün raster dışa aktarımları AOI ile sınırlı.
+        data['clipMode'] = 'clip'
 
         # AOI/Workspace geometrisi: istekten gelen güncel roi her zaman
         # önceliklidir (bkz. yukarıdaki BUG FİX açıklaması).
@@ -7264,7 +7274,27 @@ def download_geotiff():
         # — bilinear yerine en_yakın_komşu kullanmasını sağlar; aksi halde
         # komşu sınıflar arasında anlamsız ondalıklı "ara" kodlar üretilebilirdi).
         lulc_index = data.get('index')
-        is_lulc_categorical = lulc_index in LULC_CLASS_DEFS
+        # LULC ailesi yanında, kendi sınıf kodlarını üreten çevresel/kentsel
+        # rasterlar da yeniden projeksiyon/mozaik aşamasında NEAREST kullanmalı.
+        # Aksi halde örneğin FOREST_LOSS 0/1/2 sınıfları bilinear ile 1.5, 0.7
+        # gibi ara değerlere dönüşebilir ve ArcMap'teki sınıf/renk eşleşmesi bozulur.
+        is_native_categorical = str(lulc_index or '').upper() in _NATIVE_CATEGORICAL_RASTER_INDICES
+        is_lulc_categorical = (lulc_index in LULC_CLASS_DEFS) or is_native_categorical
+
+        # Sunucu tarafı yedek sınıflandırma: frontend'den visualization/breaks
+        # gelmese bile yerleşik sınıflandırılmış çevresel/kentsel katmanlar
+        # tekli ve toplu indirmede aynı sınıf kodu + renk + isim mantığını kullanır.
+        _native_export_breaks = {
+            'FOREST_LOSS': [
+                {'min':0,'max':0,'label':'Unchanged Forest','color':'#397d49'},
+                {'min':1,'max':1,'label':'Forest Loss','color':'#e11d48'},
+                {'min':2,'max':2,'label':'Forest Gain','color':'#22c55e'},
+            ],
+            'URBAN_GROWTH': [
+                {'min':0,'max':0,'label':'Unchanged','color':'#94a3b8'},
+                {'min':1,'max':1,'label':'New Urban Area','color':'#c4281b'},
+            ],
+        }
 
         nodata_value = -9999 if is_clip else None
         if is_clip and lulc_index == 'LULC':
@@ -7348,6 +7378,8 @@ def download_geotiff():
                 requested_breaks = requested_vis['breaks']
             if isinstance(requested_vis.get('legendLabels'), list):
                 requested_legend_labels = requested_vis.get('legendLabels')
+        if requested_breaks is None and str(lulc_index or '').upper() in _native_export_breaks:
+            requested_breaks = list(_native_export_breaks[str(lulc_index or '').upper()])
         is_true_color_rgb = (lulc_index == 'RGB') and not is_env_urban_raster
         export_image = final_display
 
@@ -7408,6 +7440,26 @@ def download_geotiff():
                 sym_files = None
                 print('[SylvaGIS] ⚠️ LULC renk tablosu/RAT oluşturulamadı, ham .tif '
                       'olarak devam ediliyor: {}'.format(sym_err))
+        elif is_native_categorical and requested_breaks:
+            # FOREST_LOSS / URBAN_GROWTH gibi LULC dışı ama doğal olarak
+            # sınıflandırılmış rasterlar: ham sınıf kodlarını önce NEAREST ile
+            # koru, sonra 1..N güvenli ArcMap sınıf kodlarına paketle.
+            try:
+                with __import__('rasterio').io.MemoryFile(tif_bytes) as _mf:
+                    with _mf.open() as _src:
+                        _band = _src.read(1).astype(float)
+                        _profile = _src.profile.copy()
+                        _valid = __import__('numpy').isfinite(_band)
+                        if _src.nodata is not None:
+                            _valid &= ~__import__('numpy').isclose(_band, float(_src.nodata))
+                _byte, _codes = _classify_by_breaks(_band, _valid, requested_breaks)
+                sym_files = _build_symbology_files_from_classes(
+                    _byte, _profile, _codes, safe_name, embed_colormap=True
+                )
+            except Exception as sym_err:
+                traceback.print_exc()
+                sym_files = None
+                print('[SylvaGIS] ⚠️ Yerleşik çevresel sınıf sembolojisi oluşturulamadı: {}'.format(sym_err))
         elif not is_true_color_rgb:
             # Sınıflandırılmış kullanıcı lejantı varsa SINIFLI raster üret.
             # Varsayılan "bar" modunda ise HAM/SÜREKLİ rasterı aynen koru;
@@ -8368,9 +8420,8 @@ def download_raw_bands():
         if not requested_bands or not isinstance(requested_bands, list):
             return jsonify({'success': False, 'error': 'Lütfen indirmek için en az bir bant seçin.'})
 
-        scope = data.get('scope') or 'clip'
-        if scope not in ('clip', 'full'):
-            scope = 'clip'
+        # Görüntü Alanı seçeneği kaldırıldı: ham bantlar daima Çalışma Alanı/AOI ile sınırlıdır.
+        scope = 'clip'
 
         # Geçerli bant adlarını + etiketlerini + yedek (katalog) çözünürlüğünü indeksle
         band_catalog = {}
