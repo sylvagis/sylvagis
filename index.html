@@ -11679,6 +11679,18 @@ function selectRamp(name) {
 
             _sylvaApplyClassificationVisualsForPane(_acmActivePaneId, classes);
             if (_acmActivePaneId === ((typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map')) {
+                // Zaman serisi uydu analizinde siniflandirma uygulaninca cizgi
+                // grafik yerine sinif alanlarini gosteren Sutun grafik hemen
+                // cizilir; Pasta grafik de kullanima acilir.
+                if (window._tsSliderPane === _acmActivePaneId && !window._tsIsRgbMode) {
+                    currentChartType = 'bar';
+                    var _tsBar = document.getElementById('btn-chart-bar');
+                    var _tsPie = document.getElementById('btn-chart-pie');
+                    var _tsLine = document.getElementById('btn-chart-line');
+                    if (_tsBar) { _tsBar.disabled = false; _tsBar.classList.remove('disabled-chart'); _tsBar.classList.add('active'); }
+                    if (_tsPie) { _tsPie.disabled = false; _tsPie.classList.remove('disabled-chart'); _tsPie.classList.remove('active'); }
+                    if (_tsLine) { _tsLine.classList.remove('active'); }
+                }
                 updateStatsChartFromClasses(classes);
             }
             _syncClassificationToGEEForPane(_acmActivePaneId, classes);
@@ -17872,9 +17884,15 @@ function selectRamp(name) {
                 index:     meta.analysisName,
                 maxCloud:  cloudSliderEl ? parseInt(cloudSliderEl.value, 10) : 20,
                 sceneId:   sceneId,
+                // Zaman serisi uydu analizlerinde renk kaynagi, onceki bir
+                // katmandan kalmis editor ramp'i degil analizin kendi varsayilan
+                // ramp'idir (NDVI: red-yellow-green vb.). Bu, renkli lejant ile
+                // siyah-beyaz GEE katmaninin ayrismasini onler.
                 palette:   (function() {
+                    var isTsAnalysis = window._tsSliderPane === _pane && !window._tsIsRgbMode;
                     var rEl = document.getElementById('selectedRamp');
-                    var rKey = rEl ? (rEl.getAttribute('data-ramp') || 'black-white') : 'black-white';
+                    var rKey = isTsAnalysis ? (meta.rampKey || 'black-white')
+                        : (rEl ? (rEl.getAttribute('data-ramp') || meta.rampKey || 'black-white') : (meta.rampKey || 'black-white'));
                     if (rKey === '__gee__') return ['black', 'white'];
                     return sampleRampColors(rKey, 6);
                 })()
@@ -17915,6 +17933,12 @@ function selectRamp(name) {
                 }
                 _applyGeeLayerClipMode(_sceneClipMode, _pane);
                 _sylvaApplyAutoOpacity(_pane, meta);
+                // Zaman serisi bir uydu ANALIZI oldugunda semboloji paneli aktif
+                // kalir; sadece ham RGB goruntuler bu editoru pasif kullanir.
+                if (window._tsSliderPane === _pane && !window._tsIsRgbMode) {
+                    var _tsLegendPanel = document.getElementById('legend-symbology-panel');
+                    if (_tsLegendPanel) { _tsLegendPanel.style.opacity = '1'; _tsLegendPanel.style.pointerEvents = ''; _tsLegendPanel.style.userSelect = ''; _tsLegendPanel.classList.remove('sylva-satellite-passive'); }
+                }
                 // 🛠️ BUG FİX: Uydu görüntü galerisinden (tarih/bulut oranı
                 // kartlarından) belirli bir sahne seçmek artık SADECE o kartın
                 // ait olduğu ekranı (_pane) etkiler — karşı ekrana yansıtılmaz.
@@ -17933,7 +17957,7 @@ function selectRamp(name) {
                 // Sahne değişiminde aktif renk paleti ve lejant senkronize kalmalı.
                 // Kullanıcının seçtiği ramp'i koruyarak meta'yı klonla (Issue-4 düzeltmesi).
                 var activeRampEl = document.getElementById('selectedRamp');
-                var currentRampKey = (activeRampEl && activeRampEl.getAttribute('data-ramp')) || meta.rampKey;
+                var currentRampKey = (window._tsSliderPane === _pane && !window._tsIsRgbMode) ? (meta.rampKey || 'black-white') : ((activeRampEl && activeRampEl.getAttribute('data-ramp')) || meta.rampKey);
                 var metaForScene = Object.assign({}, meta, { rampKey: currentRampKey });
 
                 // Lejantı sıfırdan yeniden oluştur, ardından gerçek istatistikleri uygula
@@ -18002,7 +18026,7 @@ function selectRamp(name) {
                     // göre yeniden kurulmalı, yoksa hep eski/statik aralıkta kalır.
                     if (currentClassificationType === 'classified') {
                         buildClassRows(parseInt(classCountSelect.value, 10) || 1);
-                        applyClassificationToMap();
+                        applyClassificationToMap(_pane);
                     }
                     // Stretched modda renk skalasını yeni min/max ile yeniden boyar
                     var mn = parseFloat(data.realStats.min);
@@ -53882,9 +53906,16 @@ refresh();
                     var _next = new Date(_d.getTime() + 24*3600*1000);
                     _end = _next.toISOString().slice(0,10);
                 }
+                // Indirme kapsami, zaman serisi olusturulurken sabitlenen eski
+                // katman durumundan degil, kullanicinin Indir'e bastigi andaki
+                // Goruntu Alani seciminden alinir. Onceki kod burada kosulsuz
+                // 'clip' gonderdigi icin Tum Veri Goruntusu ekranda acik olsa
+                // bile zaman serisindeki her RGB sahnesi AOI'ye kirpiliyordu.
+                var _tsDownloadClipMode = ((document.getElementById('viewMode') || {}).value === 'full')
+                    ? 'full' : 'clip';
                 var _rgbPayload = {
                     roi: _tsReq.roi || null,
-                    clipMode: 'clip',
+                    clipMode: _tsDownloadClipMode,
                     satellite: _tsReq.satellite || window._tsSliderSatellite || 's2-l2a',
                     index: 'RGB',
                     sceneId: sceneId,
@@ -53928,9 +53959,16 @@ refresh();
                     if (!idx || /^(TOPO_CONTOUR|BUILDING_FOOTPRINT)$/i.test(idx)) return;
                     tsScenes.forEach(function (sceneId, sceneNo) {
                         if (!sceneId) return;
+                        // Zaman serisi indeksleri (NDVI, NDWI, EVI vb.) de
+                        // indirme anındaki Görüntü Alanı seçimini kullanır.
+                        // Böylece Tüm Veri seçiliyken eski katman payload'ındaki
+                        // clip değeri çalışma alanına kırpma yapamaz.
+                        var _tsAnalysisClipMode = ((document.getElementById('viewMode') || {}).value === 'full')
+                            ? 'full' : 'clip';
                         var p = Object.assign({}, entry.payload, {
                             index: idx,
-                            sceneId: sceneId
+                            sceneId: sceneId,
+                            clipMode: _tsAnalysisClipMode
                         });
                         // Her zaman sahneye özgü sınıflandırmayı taşı.
                         // Bu kayıt yoksa classBreaks'i temizle; böylece önceki
@@ -54048,6 +54086,12 @@ refresh();
         // bitişini tutar, yoksa boş kalır (asla "bugün"e düşülmez).
         var scale=parseInt((document.getElementById('geotiff-scale') || {}).value,10) || 30;
         var crs=typeof getSelectedCrs === 'function' ? getSelectedCrs() : 'EPSG:4326';
+        // Indirme kapsami her dosya icin guncel Goruntu Alani secimini izler.
+        // Boylece Tum Veri Goruntusu seciliyken onceki analizden kalan
+        // payload.clipMode='clip' degeri yanlislikla AOI kirpmasi yapamaz.
+        // Calisma Alani seceneginde ise mevcut clip davranisi aynen korunur.
+        var _downloadClipMode = ((document.getElementById('viewMode') || {}).value === 'full')
+            ? 'full' : 'clip';
         // 🌐 ÇOK DİLLİ İNDİRME KUYRUĞU MESAJLARI: bu durum metinleri önceden
         // sabit Türkçe idi (30 dilli SYLVA_TRANSLATIONS/t() sistemine dahil
         // değildi). Artık her metin dlq_* anahtarlarıyla t() üzerinden aktif
@@ -54105,7 +54149,11 @@ refresh();
                 payload: entry.payload,
                 filename: _entryFilename,
                 scale:scale, crs:crs,
-                clipMode:entry.payload.clipMode || 'clip', roi:entry.payload.roi || null, rendered:true,
+                clipMode:_downloadClipMode,
+                // Full Scene'de ROI sunucuya kirpma siniri olarak tasinmaz;
+                // Calisma Alani seciliyken gercek AOI aynen gonderilir.
+                roi:_downloadClipMode === 'clip' ? (entry.payload.roi || null) : null,
+                rendered:true,
                 visualization:exportVisualFor(pane, entry.key, entry.payload && entry.payload.sceneId ? entry.payload.sceneId : null, entry.payload), flatTiff:false,
                 // RGB uydu görüntüsünde indirme, harita önizlemesini yeniden
                 // üretmek için ±5 günlük komşu-sahne mozaiği kurmak zorunda
@@ -54174,7 +54222,20 @@ refresh();
                 flatTiff: false,
                 fastRgbExport: !!item.fastRgbExport
             };
-            return responseBlob('/api/download-geotiff', body).then(function(blob){
+            // Ağ geçidi/GEE gecikmelerinde tarayıcı bazen geçici olarak
+            // "Failed to fetch" döndürüyor. Tek bir rasterin geçici hatası
+            // tüm toplu indirmenin bozulmasına neden olmasın diye kısa geri
+            // çekilmeyle iki kez daha dene.
+            function fetchItem(attempt) {
+                return responseBlob('/api/download-geotiff', body).catch(function(err) {
+                    var transient = /failed to fetch|networkerror|load failed/i.test(String(err && err.message || err));
+                    if (!transient || attempt >= 2) throw err;
+                    if (status) status.textContent = '⏳ ' + label + ' — bağlantı yeniden deneniyor (' + (attempt + 1) + '/2)…';
+                    return new Promise(function(resolve) { setTimeout(resolve, 1200 * (attempt + 1)); })
+                        .then(function() { return fetchItem(attempt + 1); });
+                });
+            }
+            return fetchItem(0).then(function(blob){
                 if (!blob || !blob.size) throw new Error(label + ': sunucu boş dosya döndürdü.');
                 if (status) status.textContent='✓ ' + _dlqFmt(_dlqT('dlq_progress', '{n}/{total} — {name} hazırlanıyor…'), {n:n,total:total,name:label}).replace('hazırlanıyor…','hazır.');
                 return blob;
@@ -55888,3 +55949,7 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
 
 </body>
 </html>
+
+
+
+
