@@ -7186,6 +7186,31 @@ def download_geotiff():
         # NoData sentinel'i de Byte aralığına UYGUN bir değere (0) çekilir
         # — tıpkı LULC semboloji paketinin (_build_lulc_symbology_zip) kendi
         # Byte çıktısı için zaten 0'ı NoData olarak kullanması gibi.
+        # 🛠️ BUG FİX (Sorun 1b — toplu/tekli indirmede Sentinel-2 Uydu
+        # Görüntüsü ArcMap'te TAMAMEN SİYAH geliyor): KÖK NEDEN — istemcinin
+        # bu katman için EKRANDA GERÇEKTEN kullandığı parlaklık/kontrast
+        # (min/max germe) değerleri `req_data['visualization']` içinde
+        # gönderiliyordu, ANCAK bu değer önceden yalnızca AŞAĞIDA (bu
+        # bloktan SONRA, ~200 satır ileride) `vis` sözlüğüne uygulanıyordu.
+        # Byte'a sıkıştırma (.unitScale(v_min,v_max).multiply(255)) İSE
+        # HER ZAMAN bu satırlardan HEMEN önce, yani istemci değeri henüz
+        # `vis`e YAZILMADAN, çalışıyordu — bu yüzden germe her zaman
+        # build_result_image()'in RGB dalındaki SABİT sunucu varsayılanını
+        # (ör. s2-l2a için min:0/max:0.3) kullanıyordu. Bu genelde "biraz
+        # yanlış" bir sonuç verir; ANCAK kullanıcı ekranda ışık/kontrastı
+        # değiştirdiyse (ör. daha geniş bir max germe uyguladıysa) sunucunun
+        # sabit dar aralığı, GERÇEK piksel değerlerini unitScale sonrası
+        # 0'a yakın bir yerde bırakabilir — clamp(0,255) ile TAMAMEN SİYAH
+        # bir Byte rastere kilitlenir. ÇÖZÜM: istemcinin gönderdiği min/max
+        # burada, germe hesaplanmadan HEMEN önce, erken okunup uygulanır;
+        # aşağıdaki asıl `requested_vis` bloğu aynı değerleri tekrar
+        # (zararsızca, idempotent) uygulamaya devam eder.
+        _early_requested_vis = req_data.get('visualization')
+        if isinstance(_early_requested_vis, dict):
+            for _early_vis_key in ('min', 'max'):
+                if _early_requested_vis.get(_early_vis_key) not in (None, '', []):
+                    vis[_early_vis_key] = _early_requested_vis[_early_vis_key]
+
         _is_byte_rgb_export = False
         if data.get('index') == 'RGB' and data.get('satellite') in ('s2-l1c', 's2-l2a'):
             v_min = vis.get('min', 0)
@@ -7318,12 +7343,34 @@ def download_geotiff():
         # gerçek bir sınıf kodu ASLA 0 olamaz (kodlar 1'den başlar) — ve
         # _build_lulc_symbology_zip() de kendi ürettiği Byte çıktısında
         # zaten bağımsız olarak 0'ı NoData kabul ediyor; artık ikisi TUTARLI.
+        # 🛠️ BUG FİX (Sorun 1a — toplu indirmede Orman Kaybı/Kentsel Gelişim
+        # "Class 4" tek sınıfa düşüyor, lejant/sınıf isimleri eksik geliyor):
+        # KÖK NEDEN Dynamic World Water=0 hatasıyla (yukarıdaki LULC notu)
+        # BİREBİR AYNI aile: FOREST_LOSS'ta 0 = "Orman (Değişmeyen)" ve
+        # URBAN_GROWTH'ta 0 = "Değişmeyen" — HER İKİSİ DE GERÇEK ve o AOI'de
+        # genellikle EN YAYGIN sınıf. Önceden bu iki analiz (LULC ailesi
+        # DIŞINDA sayıldığı için) alttaki else dalına düşüp nodata_value=0
+        # olarak dışa aktarılıyordu. ArcMap/rasterio, dosyanın NoData
+        # etiketiyle (0) TAM OLARAK eşleşen HER pikseli — gerçek "Orman
+        # (Değişmeyen)"/"Değişmeyen" verisi olsa bile — boş/şeffaf gösterir;
+        # aşağıdaki _classify_by_breaks çağrısı da src.nodata'ya (0) eşit
+        # pikselleri sınıflandırma dışı bırakır (bkz. ~satır 7453). Sonuç:
+        # o AOI'nin en geniş/yoğun sınıfı (Değişmeyen Orman/Alan) dosyadan
+        # TAMAMEN SİLİNİR, geriye yalnızca dağınık Kayıp/Kazanım pikselleri
+        # kalır — kullanıcının bildirdiği "eksik lejant" ve "dağınık küçük
+        # parçacıklar" (ekrandaki yoğun görünümle uyuşmayan) BİREBİR budur.
+        # ÇÖZÜM: Dynamic World ile AYNI desen — 0'ı GERÇEK sınıf olarak
+        # kullanan bu iki analizde de NoData sentinel'i 255'e çekilir;
+        # _classify_by_breaks zaten src.nodata'yı DİNAMİK okuduğu için bu
+        # değişiklik otomatik olarak doğru sınıflandırmaya yansır.
+        _NATIVE_CATEGORICAL_ZERO_IS_REAL_CLASS = {'FOREST_LOSS', 'URBAN_GROWTH'}
         if (_is_byte_rgb_export or is_lulc_categorical) and nodata_value is not None:
             # Byte çıktılarda 0 genel NoData sentinel'idir; ancak Dynamic World
-            # için 0 GERÇEK bir sınıftır (Water). Bu nedenle Dynamic World'de
-            # 255 NoData olarak korunur ve _build_lulc_symbology_zip() sınıfları
-            # 1..9 aralığına kaydırarak güvenli bir ArcMap/QGIS sembolojisi üretir.
-            if lulc_index == 'LULC':
+            # (Water) ile FOREST_LOSS/URBAN_GROWTH (Değişmeyen/Unchanged) için
+            # 0 GERÇEK bir sınıftır. Bu nedenle bunlarda 255 NoData olarak
+            # korunur ve sembolojisi 1..N aralığına kaydırarak güvenli bir
+            # ArcMap/QGIS sembolojisi üretir.
+            if lulc_index == 'LULC' or str(lulc_index or '').upper() in _NATIVE_CATEGORICAL_ZERO_IS_REAL_CLASS:
                 nodata_value = 255
             else:
                 nodata_value = 0
