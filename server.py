@@ -7316,21 +7316,13 @@ def download_geotiff():
         # siyah/koyu dikdörtgen olarak gösteriyordu. Ekrandaki min/max neyse
         # aynısı 0–255'e dönüştürülür. MSS gibi gerçek mavi bandı olmayan
         # kompozitler bu dalın dışında bırakılır.
-        _rgb_ds_for_export = SATELLITE_DATASETS.get(data.get('satellite')) if data.get('index') == 'RGB' else None
-        _is_true_color_rgb_dataset = bool(_rgb_ds_for_export and _rgb_ds_for_export.get('trueColor'))
-        if data.get('index') == 'RGB' and _is_true_color_rgb_dataset:
-            v_min = float(vis.get('min', _rgb_ds_for_export.get('visMin', 0)))
-            v_max = float(vis.get('max', _rgb_ds_for_export.get('visMax', 0.3)))
-            if v_max <= v_min:
-                v_max = v_min + 0.3
-            final_display = (
-                final_display
-                .unitScale(v_min, v_max)
-                .multiply(255)
-                .clamp(0, 255)
-                .toByte()
-            )
-            _is_byte_rgb_export = True
+        # RGB disari aktarimi icin piksel degerini burada elle Byte'a cevirmiyoruz.
+        # Onceki unitScale(...).toByte() adimi, toplu indirme yolundaki
+        # visualize() ve GeoTIFF metadata islemleriyle carpisip ArcMap'te
+        # tamamen siyah RGB karelere yol acabiliyordu. Asagida, nihai
+        # visualization araligi belirlendikten sonra GEE'nin tek adimli
+        # visualize() sonucu kullanilir.
+        _is_byte_rgb_export = False
 
         # Full modunda ROI ile kesmeden tüm görüntüyü indir;
         # Clip modunda yalnızca ROI sınırları içindeki pikseller alınır.
@@ -7547,7 +7539,10 @@ def download_geotiff():
         # ArcMap'te açılmıyor" BİREBİR budur. ÇÖZÜM: _is_byte_rgb_export
         # zaten Byte'a çevirmişse .visualize() BİR DAHA çağrılmaz;
         # final_display (zaten doğru renklerde) OLDUĞU GİBİ kullanılır.
-        if req_data.get('rendered') and is_true_color_rgb and not _is_byte_rgb_export:
+        # Gercek RGB goruntuler, toplu/tekli indirme ayrimi olmadan GEE'nin
+        # tek adimli ekran-germe cikisiyla Byte RGB olarak uretilir. Bu, ArcMap
+        # icin tutarli renk degerleri ve tek bir olcekleme asamasi saglar.
+        if is_true_color_rgb and not _is_byte_rgb_export:
             try:
                 # Son savunma: RGB üç bantlıysa palette hiçbir koşulda geçmez.
                 if is_true_color_rgb:
@@ -10077,3 +10072,4 @@ if __name__ == '__main__':
     # Proxy'yi kapatıp eski davranışa dönmek isterseniz: SYLVAGIS_TILE_PROXY=0
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
+
