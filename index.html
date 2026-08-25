@@ -11900,8 +11900,13 @@ function selectRamp(name) {
                 }).join('') +
                 '</div>';
 
+            // 🛠️ BUG FİX (Sorun 1f): Çevresel/Kentsel Analizler (FOREST_LOSS,
+            // URBAN_GROWTH vb.) sınıflandırılmış lejantında da tarih satırı
+            // gösterilmez — bkz. appendRealStatsToLegend()/applyRealStatsToLegendUI()
+            // içindeki aynı gerekçe (TOPO ile aynı muafiyet).
+            var _dynamicEnvUrban = (typeof isEnvUrbanAnalysis === 'function') && isEnvUrbanAnalysis(_dynamicAnalysisName);
             var classifiedInfoHtml = '';
-            if (_currentLegendDate) {
+            if (_currentLegendDate && !_dynamicTopo && !_dynamicEnvUrban) {
                 classifiedInfoHtml = '<div class="real-stats-row" style="font-size:0.62rem;color:#15803d;margin-top:4px;border-top:1px dashed #cbd5e1;padding-top:3px;">'
                     + '📡 ' + t('lbl_date') + ' ' + _currentLegendDate
                     + '</div>';
@@ -18304,18 +18309,32 @@ function selectRamp(name) {
             var meta = _gState.meta;
             var scenes = _sortedRgbScenes(paneId, dk);
 
+            // 🛠️ BUG FİX (Sorun 1e — Uydu Görüntüsü Galerisi önizleme metni
+            // HER ZAMAN sabit Türkçe geliyordu, seçili 30 dilden hiçbirine
+            // uymuyordu): "Önizleme yok" ve tarih biçimi (dateLabel) daha
+            // önce sırasıyla sabit Türkçe metin ve sabit 'tr-TR' yerel
+            // ayarıyla üretiliyordu — kullanıcı arayüz dilini değiştirse
+            // bile bu galeri kartları HER ZAMAN Türkçe kalıyordu. ÇÖZÜM:
+            // metin artık t('gallery_no_preview', ...) ile 30 dilin
+            // tamamından okunuyor; tarih de sabit 'tr-TR' yerine o an aktif
+            // arayüz diline (_sylvaLang) göre biçimlendiriliyor.
+            var _galleryDateLocale = (typeof window._sylvaLang === 'string' && window._sylvaLang) ? window._sylvaLang : 'en';
+            var _galleryNoPreviewTxt = (typeof t === 'function') ? t('gallery_no_preview', 'No preview') : 'No preview';
             scenes.forEach(function(scene) {
-                var dateLabel = scene.timestamp ? new Date(scene.timestamp).toLocaleDateString('tr-TR') : '—';
+                var dateLabel = scene.timestamp ? new Date(scene.timestamp).toLocaleDateString(_galleryDateLocale) : '—';
                 var cloudLabel = (typeof scene.cloud === 'number') ? ('☁ %' + scene.cloud.toFixed(1)) : '☁ —';
                 // 🛠️ BUG FİX (Görsel 1-2-3 - Boş/Kayıp Galeri Önizlemeleri):
                 // thumbnailUrl yüklenemezse (ör. sunucu tarafı indirme
                 // başarısız olduysa) <img> önceden hiçbir "onerror" işleyicisi
                 // olmadığı için sessizce BOŞ alan bırakıyordu — kart sadece
                 // tarih/bulutluluk metniyle kalıyordu. Artık yükleme
-                // başarısız olursa img gizlenip yerine 🛰️ simgesi ekleniyor.
+                // başarısız olursa img gizlenip yerine (dile göre) "Önizleme
+                // yok" metni gösteriliyor — img'in kardeşi olan bir <span>
+                // her zaman DOM'da hazır tutulup onerror'da görünür yapılıyor.
                 var thumbHtml = scene.thumbnailUrl
-                    ? '<img src="' + scene.thumbnailUrl + '" alt="' + escapeHtml(dateLabel) + '" style="width:100%;height:100%;object-fit:cover;display:block;" onerror="this.onerror=null;this.style.display=\'none\';">'
-                    : '<span style="font-size:0.68rem;color:#64748b;">Önizleme yok</span>';
+                    ? ('<img src="' + scene.thumbnailUrl + '" alt="' + escapeHtml(dateLabel) + '" style="width:100%;height:100%;object-fit:cover;display:block;" onerror="this.onerror=null;this.style.display=\'none\';var f=this.nextElementSibling;if(f)f.style.display=\'flex\';">'
+                        + '<span style="display:none;align-items:center;justify-content:center;width:100%;height:100%;font-size:0.68rem;color:#64748b;text-align:center;">' + escapeHtml(_galleryNoPreviewTxt) + '</span>')
+                    : ('<span style="font-size:0.68rem;color:#64748b;">' + escapeHtml(_galleryNoPreviewTxt) + '</span>');
 
                 var div = document.createElement('div');
                 div.className = 'gallery-item' + (scene.sceneId === _gState.activeSceneId ? ' active' : '');
@@ -19277,8 +19296,15 @@ function selectRamp(name) {
             var real = computeStatsMinMaxMean(stats);
             if (!real) return;
             // TOPO analizlerinde tarih satırı gösterilmez
+            // 🛠️ BUG FİX (Sorun 1f): Çevresel ve Kentsel Analizler (FOREST_LOSS,
+            // URBAN_GROWTH, UHI_LST vb.) statik/çift-dönemli çalışma alanı
+            // temelli analizlerdir — tek bir uydu sahnesi "tarih"i temsil
+            // etmez; bu yüzden TOPO ile AYNI şekilde tarih satırı kaldırılır.
             var _curMeta = (typeof getSelectedAnalysisMeta === 'function') ? getSelectedAnalysisMeta() : null;
-            var _skipDate = _curMeta && (typeof isTopoAnalysis === 'function') && isTopoAnalysis(_curMeta.analysisName);
+            var _skipDate = _curMeta && (
+                ((typeof isTopoAnalysis === 'function') && isTopoAnalysis(_curMeta.analysisName)) ||
+                ((typeof isEnvUrbanAnalysis === 'function') && isEnvUrbanAnalysis(_curMeta.analysisName))
+            );
 
             // Stretched mod min/max kutularını doldur (kullanıcı henüz girmemişse)
             var stretchedMinEl = document.getElementById('stretched-min');
@@ -19393,7 +19419,13 @@ function selectRamp(name) {
                 if (minSpan) minSpan.textContent = formatLegendVal(mn) + (_rsIsContour ? ' m' : '');
                 if (maxSpan) maxSpan.textContent = formatLegendVal(mx) + (_rsIsContour ? ' m' : '');
 
-                var _rsSkip = _rsMeta && (typeof isTopoAnalysis === 'function') && isTopoAnalysis(_rsMeta.analysisName);
+                // 🛠️ BUG FİX (Sorun 1f): bkz. appendRealStatsToLegend() içindeki
+                // aynı gerekçe — Çevresel/Kentsel Analizler de TOPO ile AYNI
+                // şekilde tarih satırından muaf tutulur.
+                var _rsSkip = _rsMeta && (
+                    ((typeof isTopoAnalysis === 'function') && isTopoAnalysis(_rsMeta.analysisName)) ||
+                    ((typeof isEnvUrbanAnalysis === 'function') && isEnvUrbanAnalysis(_rsMeta.analysisName))
+                );
                 if (!_rsSkip) {
                     var row = legendBox.querySelector('.real-stats-row');
                     if (!row) {
@@ -27390,6 +27422,7 @@ var SYLVA_TRANSLATIONS = {
     topo_hillshade_label: 'Hillshade', topo_relief_label: 'Relief Map',
     shadow_label: 'Shadow', light_label: 'Light', flat_label: 'Flat', high_label: 'High', low_label: 'Low',
     desc_satellite_img: 'Real satellite scenes matching AOI + date range + cloud cover criteria are scanned via Google Earth Engine and listed in the gallery with thumbnails.',
+    gallery_no_preview: 'No preview',
     dw_current: 'Dynamic World V1 — Land Cover',
     dw_label: 'Dynamic World V1 — Land Cover',
     desc_land_use: 'Current land cover classifications from Google Earth Engine — works directly on your AOI like NDVI/NDWI.',
@@ -27911,6 +27944,7 @@ var SYLVA_TRANSLATIONS = {
     topo_hillshade_label: 'Relyef soyasi', topo_relief_label: 'Relyef xaritasi',
     shadow_label: 'Soya', light_label: 'Yorugʻ', flat_label: 'Tekis', high_label: 'Yuqori', low_label: 'Past',
     desc_satellite_img: 'AOI + sana oraligʻi + bulutlilik mezonlariga mos real sputnik sahnalari Google Earth Engine orqali skanerlanadi va galereyada miniatyuralar bilan roʻyxatga olinadi.',
+    gallery_no_preview: 'Oldindan koʻrish yoʻq',
     dw_current: 'Joriy',
     desc_land_use: 'Google Earth Engine-dan joriy yer qoplami tasniflari — NDVI/NDWI kabi toʻgʻridan-toʻgʻri AOI ingizda ishlaydi.',
     desc_topo: 'Google Earth Engine orqali DEM maʼlumotlaridan hisoblangan topografik tahlillar — sana filtri kerak emas, faqat AOI ni tanlang.',
@@ -28433,6 +28467,7 @@ var SYLVA_TRANSLATIONS = {
     topo_hillshade_label: 'Σκίαση Ανάγλυφου', topo_relief_label: 'Χάρτης Ανάγλυφου',
     shadow_label: 'Σκιά', light_label: 'Φως', flat_label: 'Επίπεδο', high_label: 'Υψηλό', low_label: 'Χαμηλό',
     desc_satellite_img: 'Πραγματικές δορυφορικές σκηνές που πληρούν τα κριτήρια AOI + εύρους ημερομηνιών + νεφοκάλυψης σαρώνονται μέσω Google Earth Engine και εμφανίζονται στη συλλογή με μικρογραφίες.',
+    gallery_no_preview: 'Χωρίς προεπισκόπηση',
     dw_current: 'Τρέχον',
     desc_land_use: 'Τρέχουσες ταξινομήσεις κάλυψης γης από το Google Earth Engine — λειτουργεί απευθείας στο AOI σας όπως τα NDVI/NDWI.',
     desc_topo: 'Τοπογραφικές αναλύσεις υπολογισμένες από δεδομένα DEM μέσω Google Earth Engine — δεν χρειάζεται φίλτρο ημερομηνίας, απλώς επιλέξτε το AOI σας.',
@@ -28955,6 +28990,7 @@ var SYLVA_TRANSLATIONS = {
     topo_hillshade_label: 'Засенчване на релефа', topo_relief_label: 'Релефна карта',
     shadow_label: 'Сянка', light_label: 'Светлина', flat_label: 'Равнинно', high_label: 'Високо', low_label: 'Ниско',
     desc_satellite_img: 'Реални сателитни изображения, отговарящи на AOI, диапазона от дати и критериите за облачност, се сканират чрез Google Earth Engine и се показват в галерия с миниатюри.',
+    gallery_no_preview: 'Няма преглед',
     dw_current: 'Текущо',
     desc_land_use: 'Актуална класификация на земното покритие от Google Earth Engine — работи директно с вашия AOI, като NDVI/NDWI.',
     desc_topo: 'Топографски анализи, изчислени от ЦМР данни чрез Google Earth Engine — не е необходим филтър по дата, просто изберете AOI.',
@@ -29481,6 +29517,7 @@ var SYLVA_TRANSLATIONS = {
     topo_relief_label: 'Rölyef Haritası',
     shadow_label: 'Gölge', light_label: 'Işık', flat_label: 'Düz', high_label: 'Yüksek', low_label: 'Düşük',
     desc_satellite_img: 'Google Earth Engine üzerinden AOI + tarih aralığı + bulutluluk kriterine uyan gerçek sahneler taranır ve galeriye küçük önizlemeleriyle listelenir.',
+    gallery_no_preview: 'Önizleme yok',
     dw_current: 'Güncel',
     desc_land_use: 'Google Earth Engine üzerinden çekilen güncel arazi örtüsü sınıflandırmaları — NDVI/NDWI gibi doğrudan AOI\'ye göre çalışır.',
     desc_topo: 'Google Earth Engine üzerinden DEM verisi kullanılarak hesaplanan topoğrafik analizler — tarih filtresi gerekmez, yalnızca AOI seçin.',
@@ -30001,6 +30038,7 @@ var SYLVA_TRANSLATIONS = {
     topo_relief_label: 'Relyef Xəritəsi',
     shadow_label: 'Kölgə', light_label: 'İşıq', flat_label: 'Düz', high_label: 'Yüksək', low_label: 'Aşağı',
     desc_satellite_img: 'Google Earth Engine üzərindən AOI + tarix aralığı + buludluluq kriteriyasına uyğun real səhnələr axtarılır və qalereyada kiçik önizləmələri ilə göstərilir.',
+    gallery_no_preview: 'Önizləmə yoxdur',
     dw_current: 'Aktual',
     desc_land_use: 'Google Earth Engine üzərindən əldə edilən aktual torpaq örtüyü təsnifatları — NDVI/NDWI kimi birbaşa AOI-yə görə işləyir.',
     desc_topo: 'Google Earth Engine üzərindən DEM məlumatı istifadə edilərək hesablanan topoqrafik təhlillər — tarix filtri lazım deyil, yalnız AOI seçin.',
@@ -30519,6 +30557,7 @@ var SYLVA_TRANSLATIONS = {
     topo_relief_label: 'Reliefmodell',
     shadow_label: 'Árnyék', light_label: 'Fény', flat_label: 'Sík', high_label: 'Magas', low_label: 'Alacsony',
     desc_satellite_img: 'A Google Earth Engine az AOI + dátumtartomány + felhőborítási kritérium alapján tényleges felvételeket keres, és kis előnézettel jeleníti meg a galériában.',
+    gallery_no_preview: 'Nincs előnézet',
     dw_current: 'Aktuális',
     desc_land_use: 'A Google Earth Engine-ből származó aktuális területfedettségi osztályozások — a NDVI/NDWI-hez hasonlóan közvetlenül az AOI alapján működnek.',
     desc_topo: 'A DEM-adatok felhasználásával a Google Earth Engine-en számított topográfiai elemzések — dátumszűrésre nincs szükség, csak válassza ki az AOI-t.',
@@ -31035,6 +31074,7 @@ var SYLVA_TRANSLATIONS = {
     topo_relief_label: 'Рельеф картасы',
     shadow_label: 'Көлеңке', light_label: 'Жарық', flat_label: 'Жазық', high_label: 'Жоғары', low_label: 'Төмен',
     desc_satellite_img: 'Google Earth Engine арқылы AOI + күн диапазоны + бұлттылық өлшеміне сәйкес келетін нақты жерсерік суреттері сканерленіп, галереяда нобайлармен тізімделеді.',
+    gallery_no_preview: 'Алдын ала қарау жоқ',
     dw_current: 'Ағымдағы',
     desc_land_use: 'Google Earth Engine-дегі ағымдағы жер жамылғысы жіктеуі — NDVI/NDWI сияқты AOI-да тікелей жұмыс жасайды.',
     desc_topo: 'Google Earth Engine арқылы DEM деректерінен есептелген топографиялық талдаулар — күн сүзгісі қажет емес, тек AOI-ды таңдаңыз.',
@@ -31549,6 +31589,7 @@ var SYLVA_TRANSLATIONS = {
     topo_relief_label: 'Reliefkarte',
     shadow_label: 'Schatten', light_label: 'Licht', flat_label: 'Flach', high_label: 'Hoch', low_label: 'Niedrig',
     desc_satellite_img: 'Über Google Earth Engine werden echte Szenen gescannt, die AOI + Datumsbereich + Bewölkungskriterien erfüllen, und mit Vorschaubildern in der Galerie aufgeführt.',
+    gallery_no_preview: 'Keine Vorschau',
     dw_current: 'Aktuell',
     desc_land_use: 'Aktuelle Landbedeckungsklassifikationen von Google Earth Engine — funktioniert direkt auf Ihrem AOI wie NDVI/NDWI.',
     desc_topo: 'Topografische Analysen aus DEM-Daten via Google Earth Engine — kein Datumsfilter erforderlich, nur AOI auswählen.',
@@ -32072,6 +32113,7 @@ var SYLVA_TRANSLATIONS = {
     topo_relief_label: 'Carte de relief',
     shadow_label: 'Ombre', light_label: 'Lumière', flat_label: 'Plat', high_label: 'Élevé', low_label: 'Bas',
     desc_satellite_img: 'Des scènes réelles correspondant aux critères AOI + plage de dates + couverture nuageuse sont scannées via Google Earth Engine et listées dans la galerie avec des vignettes.',
+    gallery_no_preview: 'Aucun aperçu',
     dw_current: 'Actuel',
     desc_land_use: 'Classifications d\'occupation du sol actuelles depuis Google Earth Engine — fonctionne directement sur votre AOI comme NDVI/NDWI.',
     desc_topo: 'Analyses topographiques calculées à partir de données DEM via Google Earth Engine — aucun filtre de date nécessaire, sélectionnez simplement votre AOI.',
@@ -32595,6 +32637,7 @@ var SYLVA_TRANSLATIONS = {
     topo_relief_label: 'Mapa de relieve',
     shadow_label: 'Sombra', light_label: 'Luz', flat_label: 'Plano', high_label: 'Alto', low_label: 'Bajo',
     desc_satellite_img: 'Se escanean escenas reales que coinciden con los criterios de AOI + rango de fechas + cobertura de nubes a través de Google Earth Engine y se listan en la galería con miniaturas.',
+    gallery_no_preview: 'Sin vista previa',
     dw_current: 'Actual',
     desc_land_use: 'Clasificaciones actuales de cobertura del suelo de Google Earth Engine — funciona directamente en su AOI como NDVI/NDWI.',
     desc_topo: 'Análisis topográficos calculados a partir de datos DEM mediante Google Earth Engine — no se necesita filtro de fechas, solo seleccione su AOI.',
@@ -33118,6 +33161,7 @@ var SYLVA_TRANSLATIONS = {
     topo_relief_label: 'Mapa de relevo',
     shadow_label: 'Sombra', light_label: 'Luz', flat_label: 'Plano', high_label: 'Alto', low_label: 'Baixo',
     desc_satellite_img: 'São pesquisadas cenas reais que correspondem aos critérios de AOI + intervalo de datas + cobertura de nuvens através do Google Earth Engine e são listadas na galeria com miniaturas.',
+    gallery_no_preview: 'Sem pré-visualização',
     dw_current: 'Atual',
     desc_land_use: 'Classificações atuais de cobertura do solo do Google Earth Engine — funciona diretamente na sua AOI como NDVI/NDWI.',
     desc_topo: 'Análises topográficas calculadas a partir de dados DEM através do Google Earth Engine — não é necessário filtro de datas, basta selecionar a sua AOI.',
@@ -33641,6 +33685,7 @@ var SYLVA_TRANSLATIONS = {
     topo_relief_label: 'خريطة التضاريس',
     shadow_label: 'ظل', light_label: 'ضوء', flat_label: 'مستوٍ', high_label: 'مرتفع', low_label: 'منخفض',
     desc_satellite_img: 'يتم مسح المشاهد الفعلية المطابقة لمعايير AOI + نطاق التاريخ + الغطاء السحابي عبر Google Earth Engine وإدراجها في المعرض مع صور مصغرة.',
+    gallery_no_preview: 'لا توجد معاينة',
     dw_current: 'حالي',
     desc_land_use: 'تصنيفات الغطاء الأرضي الحالية من Google Earth Engine — تعمل مباشرةً على AOI مثل NDVI/NDWI.',
     desc_topo: 'تحليلات طبوغرافية محسوبة من بيانات DEM عبر Google Earth Engine — لا يلزم تصفية التاريخ، ما عليك سوى تحديد AOI.',
@@ -34164,6 +34209,7 @@ var SYLVA_TRANSLATIONS = {
     topo_relief_label: 'نقشه ناهمواری',
     shadow_label: 'سایه', light_label: 'نور', flat_label: 'مسطح', high_label: 'بلند', low_label: 'کم',
     desc_satellite_img: 'صحنه‌های واقعی مطابق با معیارهای AOI + محدوده تاریخ + پوشش ابری از طریق Google Earth Engine اسکن می‌شوند و با تصاویر کوچک در گالری فهرست می‌شوند.',
+    gallery_no_preview: 'پیش‌نمایش موجود نیست',
     dw_current: 'جاری',
     desc_land_use: 'دسته‌بندی‌های پوشش اراضی فعلی از Google Earth Engine — مستقیماً روی AOI شما مانند NDVI/NDWI کار می‌کند.',
     desc_topo: 'تحلیل‌های توپوگرافی محاسبه‌شده از داده‌های DEM از طریق Google Earth Engine — نیازی به فیلتر تاریخ نیست، فقط AOI را انتخاب کنید.',
@@ -34687,6 +34733,7 @@ var SYLVA_TRANSLATIONS = {
     topo_relief_label: '地势图',
     shadow_label: '阴影', light_label: '光照', flat_label: '平坦', high_label: '高', low_label: '低',
     desc_satellite_img: '通过 Google Earth Engine 扫描符合 AOI + 日期范围 + 云量标准的真实场景，并以缩略图形式列入图库。',
+    gallery_no_preview: '无预览',
     dw_current: '最新',
     desc_land_use: '来自 Google Earth Engine 的最新土地覆盖分类 — 直接基于您的 AOI 运行，如 NDVI/NDWI。',
     desc_topo: '通过 Google Earth Engine 使用 DEM 数据计算的地形分析 — 无需日期过滤，只需选择 AOI。',
@@ -35210,6 +35257,7 @@ var SYLVA_TRANSLATIONS = {
     topo_relief_label: '地形図',
     shadow_label: '影', light_label: '光', flat_label: '平坦', high_label: '高い', low_label: '低い',
     desc_satellite_img: 'AOI + 日付範囲 + 雲量の条件に合致する実際のシーンが Google Earth Engine でスキャンされ、サムネイルとともにギャラリーに一覧表示されます。',
+    gallery_no_preview: 'プレビューなし',
     dw_current: '最新',
     desc_land_use: 'Google Earth Engine からの最新の土地被覆分類 — NDVI/NDWI と同様にAOIで直接機能します。',
     desc_topo: 'Google Earth Engine のDEMデータから計算された地形解析 — 日付フィルター不要、AOIを選択するだけ。',
@@ -35733,6 +35781,7 @@ var SYLVA_TRANSLATIONS = {
     topo_relief_label: '지형도',
     shadow_label: '그늘', light_label: '빛', flat_label: '평탄', high_label: '높음', low_label: '낮음',
     desc_satellite_img: 'Google Earth Engine을 통해 AOI + 날짜 범위 + 구름 양 기준에 맞는 실제 장면이 스캔되어 썸네일과 함께 갤러리에 나열됩니다.',
+    gallery_no_preview: '미리보기 없음',
     dw_current: '최신',
     desc_land_use: 'Google Earth Engine의 최신 토지 피복 분류 — NDVI/NDWI처럼 AOI에 직접 작동합니다.',
     desc_topo: 'Google Earth Engine의 DEM 데이터로 계산된 지형 분석 — 날짜 필터 없이 AOI만 선택하면 됩니다.',
@@ -36228,6 +36277,7 @@ var SYLVA_TRANSLATIONS = {
     topo_relief_label: 'राहत मानचित्र',
     shadow_label: 'छाया', light_label: 'प्रकाश', flat_label: 'समतल', high_label: 'ऊंचा', low_label: 'कम',
     desc_satellite_img: 'Google Earth Engine के माध्यम से AOI + तिथि सीमा + बादल आवरण मानदंड से मेल खाते वास्तविक दृश्यों को स्कैन किया जाता है और थंबनेल के साथ गैलरी में सूचीबद्ध किया जाता है।',
+    gallery_no_preview: 'पूर्वावलोकन नहीं',
     dw_current: 'वर्तमान',
     desc_land_use: 'Google Earth Engine से वर्तमान भूमि आवरण वर्गीकरण — NDVI/NDWI की तरह सीधे आपके AOI पर काम करता है।',
     desc_topo: 'Google Earth Engine के माध्यम से DEM डेटा से गणना किए गए स्थलाकृतिक विश्लेषण — कोई तिथि फ़िल्टर आवश्यक नहीं, बस अपना AOI चुनें।',
@@ -36751,6 +36801,7 @@ var SYLVA_TRANSLATIONS = {
     topo_relief_label: 'Peta Relief',
     shadow_label: 'Bayangan', light_label: 'Cahaya', flat_label: 'Datar', high_label: 'Tinggi', low_label: 'Rendah',
     desc_satellite_img: 'Adegan nyata yang sesuai dengan kriteria AOI + rentang tanggal + tutupan awan dipindai melalui Google Earth Engine dan dicantumkan di galeri dengan thumbnail.',
+    gallery_no_preview: 'Tidak ada pratinjau',
     dw_current: 'Terkini',
     desc_land_use: 'Klasifikasi tutupan lahan terkini dari Google Earth Engine — bekerja langsung pada AOI Anda seperti NDVI/NDWI.',
     desc_topo: 'Analisis topografi yang dihitung dari data DEM melalui Google Earth Engine — tidak perlu filter tanggal, cukup pilih AOI Anda.',
@@ -37310,6 +37361,7 @@ var SYLVA_TRANSLATIONS = {
     topo_hillshade_label: 'Затенение рельефа', topo_relief_label: 'Карта рельефа',
     shadow_label: 'Тень', light_label: 'Свет', flat_label: 'Плоский', high_label: 'Высокий', low_label: 'Низкий',
     desc_satellite_img: 'Реальные спутниковые снимки, соответствующие AOI, диапазону дат и критериям облачности, сканируются через Google Earth Engine и отображаются в галерее с миниатюрами.',
+    gallery_no_preview: 'Нет предпросмотра',
     dw_current: 'Текущий',
     desc_land_use: 'Актуальная классификация земельного покрова из Google Earth Engine — работает напрямую с вашим AOI, как NDVI/NDWI.',
     desc_topo: 'Топографические анализы, рассчитанные по данным ЦМР через Google Earth Engine — фильтр по дате не нужен, просто выберите AOI.',
@@ -37826,6 +37878,7 @@ var SYLVA_TRANSLATIONS = {
     topo_hillshade_label: 'เงาภูมิประเทศ', topo_relief_label: 'แผนที่ภูมิประเทศ',
     shadow_label: 'เงา', light_label: 'แสง', flat_label: 'ราบ', high_label: 'สูง', low_label: 'ต่ำ',
     desc_satellite_img: 'ภาพดาวเทียมจริงที่ตรงกับ AOI + ช่วงวันที่ + เกณฑ์เมฆ จะถูกสแกนผ่าน Google Earth Engine และแสดงในแกลเลอรีพร้อมภาพตัวอย่างขนาดเล็ก',
+    gallery_no_preview: 'ไม่มีตัวอย่าง',
     dw_current: 'ปัจจุบัน',
     desc_land_use: 'การจำแนกประเภทการปกคลุมดินปัจจุบันจาก Google Earth Engine — ทำงานโดยตรงบน AOI ของคุณเหมือน NDVI/NDWI',
     desc_topo: 'การวิเคราะห์ภูมิประเทศที่คำนวณจากข้อมูล DEM ผ่าน Google Earth Engine — ไม่จำเป็นต้องกรองวันที่ เพียงเลือก AOI',
@@ -38348,6 +38401,7 @@ var SYLVA_TRANSLATIONS = {
     topo_hillshade_label: 'পাহাড়ি ছায়া (Hillshade)', topo_relief_label: 'ভূত্বক মানচিত্র',
     shadow_label: 'ছায়া', light_label: 'আলো', flat_label: 'সমতল', high_label: 'উচ্চ', low_label: 'নিম্ন',
     desc_satellite_img: 'AOI + তারিখ পরিসীমা + মেঘের আচ্ছাদন মানদণ্ডের সাথে মিলে যাওয়া প্রকৃত স্যাটেলাইট দৃশ্য Google Earth Engine-এর মাধ্যমে স্ক্যান করে থাম্বনেইলসহ গ্যালারিতে তালিকাভুক্ত করা হয়।',
+    gallery_no_preview: 'কোনো প্রিভিউ নেই',
     dw_current: 'বর্তমান',
     desc_land_use: 'Google Earth Engine থেকে বর্তমান ভূমি আচ্ছাদন শ্রেণিবিভাগ — NDVI/NDWI-এর মতো সরাসরি আপনার AOI-তে কাজ করে।',
     desc_topo: 'Google Earth Engine-এর মাধ্যমে DEM ডেটা থেকে গণনাকৃত ভূসংস্থানিক বিশ্লেষণ — কোনো তারিখ ফিল্টার প্রয়োজন নেই, শুধু আপনার AOI নির্বাচন করুন।',
@@ -38834,6 +38888,7 @@ var SYLVA_TRANSLATIONS = {
     topo_relief_label: 'Bản đồ địa hình nổi',
     shadow_label: 'Bóng râm', light_label: 'Ánh sáng', flat_label: 'Bằng phẳng', high_label: 'Cao', low_label: 'Thấp',
     desc_satellite_img: 'Các cảnh thực tế phù hợp với tiêu chí AOI + khoảng ngày + độ che phủ mây được quét qua Google Earth Engine và liệt kê trong thư viện kèm ảnh thu nhỏ.',
+    gallery_no_preview: 'Không có bản xem trước',
     dw_current: 'Hiện tại',
     desc_land_use: 'Phân loại lớp phủ đất hiện tại từ Google Earth Engine — hoạt động trực tiếp trên AOI của bạn giống như NDVI/NDWI.',
     desc_topo: 'Phân tích địa hình được tính toán từ dữ liệu DEM qua Google Earth Engine — không cần lọc theo ngày, chỉ cần chọn AOI của bạn.',
@@ -39191,6 +39246,7 @@ var SYLVA_TRANSLATIONS = {
     analysis_modules: 'تجزیہ اور ڈیٹا ماڈیول',
     sec_satellite_img: '🛰️ سیٹلائٹ تصویر',
     desc_satellite_img: 'Google Earth Engine کے ذریعے AOI + تاریخ کی حد + بادل کی مقدار کے معیار سے مطابقت رکھنے والے اصل سیٹلائٹ مناظر اسکین کیے جاتے ہیں اور تھمب نیل کے ساتھ گیلری میں درج کیے جاتے ہیں۔',
+    gallery_no_preview: 'کوئی پیش نظارہ نہیں',
     sec_satellite_analysis: '🌍 سیٹلائٹ ڈیٹا اور تجزیات',
     sec_land_use: '🏘️ زمین کا استعمال',
     desc_land_use: 'Google Earth Engine کی موجودہ زمینی احاطہ درجہ بندی — NDVI/NDWI کی طرح آپ کے AOI پر براہ راست کام کرتی ہے۔',
@@ -39717,6 +39773,7 @@ var SYLVA_TRANSLATIONS = {
     analysis_modules: 'Moduły analizy i danych',
     sec_satellite_img: '🛰️ Obraz satelitarny',
     desc_satellite_img: 'Rzeczywiste sceny satelitarne spełniające kryteria AOI + zakres dat + zachmurzenie są skanowane przez Google Earth Engine i wyświetlane w galerii z miniaturami.',
+    gallery_no_preview: 'Brak podglądu',
     sec_satellite_analysis: '🌍 Dane i analizy satelitarne',
     sec_land_use: '🏘️ Użytkowanie gruntów',
     desc_land_use: 'Aktualne klasyfikacje pokrycia terenu z Google Earth Engine — działa bezpośrednio na obszarze AOI jak NDVI/NDWI.',
@@ -40435,6 +40492,7 @@ var SYLVA_TRANSLATIONS = {
     topo_hillshade_label: 'Bayangan Bukit', topo_relief_label: 'Peta Relief',
     shadow_label: 'Bayang', light_label: 'Cahaya', flat_label: 'Rata', high_label: 'Tinggi', low_label: 'Rendah',
     desc_satellite_img: 'Adegan satelit sebenar yang sepadan dengan kriteria AOI + julat tarikh + litupan awan diimbas melalui Google Earth Engine dan disenaraikan dalam galeri dengan lakaran kecil.',
+    gallery_no_preview: 'Tiada pratonton',
     dw_current: 'Semasa',
     desc_land_use: 'Klasifikasi litupan tanah semasa daripada Google Earth Engine — berfungsi terus pada AOI anda seperti NDVI/NDWI.',
     desc_topo: 'Analisis topografi dikira daripada data DEM melalui Google Earth Engine — tiada penapis tarikh diperlukan, cukup pilih AOI anda.',
@@ -40951,6 +41009,7 @@ var SYLVA_TRANSLATIONS = {
       topo_relief_label: 'Рельеф картасы',
       shadow_label: 'Көлөкө', light_label: 'Жарык', flat_label: 'Жайпак', high_label: 'Жогорку', low_label: 'Төмөнкү',
       desc_satellite_img: 'Google Earth Engine аркылуу AOI + күн диапазону + булуттуулук өлчөмүнө ылайык келген чыныгы спутник сүрөттөрү изделип, галереяда кичинекей сүрөттөр менен тизмеленет.',
+      gallery_no_preview: 'Алдын ала көрүү жок',
       dw_current: 'Учурдагы',
       desc_land_use: 'Google Earth Engine дагы учурдагы жер жамынышы классификациясы — NDVI/NDWI сыяктуу AOI да түздөн-түз иштейт.',
       desc_topo: 'Google Earth Engine аркылуу DEM маалыматтарынан эсептелген топографиялык талдоолор — күн чыпкасы керек эмес, жөн гана AOI-ды тандаңыз.',
@@ -41436,6 +41495,7 @@ var SYLVA_TRANSLATIONS = {
     topo_hillshade_label: 'Сүүдэр', topo_relief_label: 'Рельефийн газрын зураг',
     shadow_label: 'Сүүдэр', light_label: 'Гэрэл', flat_label: 'Тэгш', high_label: 'Өндөр', low_label: 'Бага',
     desc_satellite_img: 'Google Earth Engine-ээр дамжуулан AOI + огнооны хүрээ + үүлний хувийн шалгуурыг хангасан бодит хиймэл дагуулын зурагнуудыг хайж, галерейд дүрстэйгээр жагсаана.',
+    gallery_no_preview: 'Урьдчилан харах боломжгүй',
     dw_current: 'Одоогийн',
     desc_land_use: 'Google Earth Engine-ийн одоогийн газрын бүрхэвчийн ангилал — NDVI/NDWI шиг AOI дээр шууд ажилладаг.',
     desc_topo: 'Google Earth Engine-ээр DEM өгөгдлөөс тооцоолсон топографийн шинжилгээ — огнооны шүүлтүүр хэрэггүй, зөвхөн AOI-г сонгоно уу.',
@@ -41927,6 +41987,7 @@ var SYLVA_TRANSLATIONS = {
       topo_relief_label: 'რელიეფის რუკა',
       shadow_label: 'ჩრდილი', light_label: 'სინათლე', flat_label: 'ბრტყელი', high_label: 'მაღალი', low_label: 'დაბალი',
       desc_satellite_img: 'Google Earth Engine-ის მეშვეობით AOI + თარიღის დიაპაზონი + ღრუბლიანობის ზღვარის შესაბამისი სატელიტური გამოსახულებები ეძებება და გალერეაში ჩამოთვლება.',
+      gallery_no_preview: 'გადახედვა არ არის',
       dw_current: 'მიმდინარე',
       desc_land_use: 'Google Earth Engine-ში მიმდინარე მიწის საფარის კლასიფიკაცია — AOI-ზე პირდაპირ მუშაობს, NDVI/NDWI-ს მსგავსად.',
       desc_topo: 'Google Earth Engine-ის მეშვეობით DEM მონაცემებიდან გამოთვლილი ტოპოგრაფიული ანალიზი — თარიღის ფილტრი არ სჭირდება, უბრალოდ აირჩიეთ AOI.',
@@ -42427,6 +42488,7 @@ var SYLVA_TRANSLATIONS = {
     topo_hillshade_label: 'Hillshade', topo_relief_label: 'Mappa di Rilievo',
     shadow_label: 'Ombra', light_label: 'Luce', flat_label: 'Pianeggiante', high_label: 'Alto', low_label: 'Basso',
     desc_satellite_img: 'Le scene satellitari reali corrispondenti ai criteri AOI + intervallo date + copertura nuvolosa vengono scansionate tramite Google Earth Engine e elencate nella galleria con miniature.',
+    gallery_no_preview: 'Nessuna anteprima',
     dw_current: 'Corrente',
     desc_land_use: 'Classificazioni attuali di copertura del suolo da Google Earth Engine — funziona direttamente sul tuo AOI come NDVI/NDWI.',
     desc_topo: 'Analisi topografiche calcolate dai dati DEM tramite Google Earth Engine — nessun filtro data, seleziona solo il tuo AOI.',
