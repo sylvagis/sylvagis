@@ -11229,11 +11229,12 @@ function selectRamp(name) {
                 _roi = _extractROIGeometry(_aoiForPane);
                 if (!_roi) return;
             }
-            var meta = getSelectedAnalysisMeta();
+            var meta = _forcedMeta || getSelectedAnalysisMeta();
             if (!meta || meta.legendType !== 'stretched') return; // sadece sürekli indeks katmanları
 
             var viewModeEl    = document.getElementById('viewMode');
             var cloudSliderEl = document.getElementById('cloud-slider');
+            var _sceneMaxCloud  = (opts.maxCloud !== undefined && opts.maxCloud !== null) ? parseInt(opts.maxCloud, 10) : (cloudSliderEl ? parseInt(cloudSliderEl.value, 10) : 20);
             var sensorRadio   = document.querySelector('.uydu-sensor-radio:checked');
             var startInput    = document.getElementById('date-start');
             var endInput      = document.getElementById('date-end');
@@ -17846,6 +17847,9 @@ function selectRamp(name) {
             opts = opts || {};
             var silent = !!opts.silent;
             var onDone = (typeof opts.onDone === 'function') ? opts.onDone : null;
+            // Zaman Serisi ilk sahnesini doğrudan yüklerken normal tarih alanlarına
+            // bağımlı kalma. Galeri tıklamasında kullanılan mevcut davranış korunur.
+            var _forcedMeta = opts.meta || null;
             // 🛠️ BUG FİX: paneId artık tıklanan galeri kartından (o kartın ait
             // olduğu ekrandan) gelir; verilmezse eskisi gibi o an aktif ekrana
             // düşer (geriye dönük uyumluluk için).
@@ -17853,7 +17857,7 @@ function selectRamp(name) {
                 ? paneId
                 : ((typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map');
             var _aoiForPane = (_pane === 'map2') ? currentLayer2 : currentLayer;
-            var meta = getSelectedAnalysisMeta();
+            var meta = _forcedMeta || getSelectedAnalysisMeta();
             if (!meta || !_aoiForPane) { if (onDone) onDone(); return; }
             _sylvaSceneIdSet(_pane, sceneId); // Sınıflandırma/Stretched senkronizasyonu bu sahneyi korusun
             // Yarış koşulu: bu sahne fetch'ine ait jenerasyon numarasını yakala
@@ -17862,8 +17866,12 @@ function selectRamp(name) {
             var startInput    = document.getElementById('date-start');
             var endInput      = document.getElementById('date-end');
             var sensorRadio   = document.querySelector('.uydu-sensor-radio:checked');
+            var _sceneStartDate = (opts.startDate !== undefined) ? opts.startDate : (startInput ? startInput.value : '');
+            var _sceneEndDate   = (opts.endDate !== undefined) ? opts.endDate : (endInput ? endInput.value : '');
+            var _sceneSatellite = opts.satellite || (sensorRadio ? sensorRadio.value : 's2-l2a');
             var viewModeEl    = document.getElementById('viewMode');
             var cloudSliderEl = document.getElementById('cloud-slider');
+            var _sceneMaxCloud = (opts.maxCloud !== undefined && opts.maxCloud !== null) ? parseInt(opts.maxCloud, 10) : (cloudSliderEl ? parseInt(cloudSliderEl.value, 10) : 20);
 
             var _roi = _extractROIGeometry(_aoiForPane);
             if (!_roi) { if (onDone) onDone(); return; }
@@ -17878,11 +17886,11 @@ function selectRamp(name) {
             var _specificSceneAnalyzePayload = {
                 roi:       _roi,
                 clipMode:  _sceneClipMode,
-                startDate: startInput    ? startInput.value : '',
-                endDate:   endInput      ? endInput.value   : '',
-                satellite: sensorRadio   ? sensorRadio.value : 's2-l2a',
+                startDate: _sceneStartDate,
+                endDate:   _sceneEndDate,
+                satellite: _sceneSatellite,
                 index:     meta.analysisName,
-                maxCloud:  cloudSliderEl ? parseInt(cloudSliderEl.value, 10) : 20,
+                maxCloud:  _sceneMaxCloud,
                 sceneId:   sceneId,
                 // Zaman serisi uydu analizlerinde renk kaynagi, onceki bir
                 // katmandan kalmis editor ramp'i degil analizin kendi varsayilan
@@ -17913,7 +17921,7 @@ function selectRamp(name) {
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (!data.success) {
-                    if (!silent) { hideSylvaLoading(); showNoDataModal(_TOAST_NO_DATA_MSG, (sensorRadio ? sensorRadio.value : '') + (meta && meta.analysisName ? (' — ' + _sylvaLayerFriendlyName(meta.analysisName)) : ''), data.error); }
+                    if (!silent) { hideSylvaLoading(); showNoDataModal(_TOAST_NO_DATA_MSG, _sceneSatellite + (meta && meta.analysisName ? (' — ' + _sylvaLayerFriendlyName(meta.analysisName)) : ''), data.error); }
                     if (onDone) onDone();
                     return;
                 }
@@ -25163,16 +25171,7 @@ function selectRamp(name) {
                 <button type="button" class="vdl-source-btn" id="vdl-src-workspace" onclick="selectVdlSource('workspace')">
                     <span data-i18n="vdl_workspace_label">📍 Çalışma Alanı</span>
                 </button>
-                <button type="button" class="vdl-source-btn" id="vdl-src-batch" onclick="selectVdlSource('batch')">
-                    <span>🗂️ Ekrandaki Tüm Analizler</span>
-                </button>
             </div>
-        </div>
-
-        <!-- Analiz tipi bilgisi -->
-        <div id="vdl-analysis-info" style="background:#f0fdfa;border:1px solid #99f6e4;border-radius:7px;padding:9px 12px;margin-bottom:14px;font-size:0.78rem;color:#0f766e;">
-            <div style="font-weight:700;margin-bottom:3px;">📊 <span id="vdl-info-type" data-i18n="vdl_no_analysis">—</span></div>
-            <div style="color:#64748b;font-size:0.72rem;" id="vdl-info-desc" data-i18n="vdl_info_desc">Son analiz sonucu sınıflandırılmış raster → poligon vektörüne dönüştürülür.</div>
         </div>
 
         <!-- Format Seçimi -->
@@ -25221,24 +25220,6 @@ function selectRamp(name) {
             <label for="vdl-filename" style="font-size:0.82rem; font-weight:600; color:#64748b; display:block; margin-bottom:6px;" data-i18n="lbl_filename">Dosya Adı</label>
             <input type="text" id="vdl-filename" value=""
                 style="width:100%; padding:8px 10px; border:1px solid #cbd5e1; border-radius:5px; font-size:0.85rem; outline:none; box-sizing:border-box;">
-        </div>
-
-        <!-- Koordinat Düzenleme -->
-        <div style="margin-bottom:6px;">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
-                <label style="font-size:0.82rem; font-weight:600; color:#64748b;" data-i18n="vdl_coord_label">📍 Alan Koordinatları (WGS 84)</label>
-                <button onclick="vdlResetCoords()" style="font-size:0.7rem;color:#0f766e;background:none;border:none;cursor:pointer;padding:0;" data-i18n="vdl_coord_reset">↺ Sıfırla</button>
-            </div>
-            <div id="vdl-coord-section">
-                <div class="vdl-coord-row">
-                    <div class="vdl-coord-field"><label for="vdl-coord-north" data-i18n="vdl_coord_north">Kuzey (max lat)</label><input type="number" id="vdl-coord-north" step="0.0001" placeholder="40.0000"></div>
-                    <div class="vdl-coord-field"><label for="vdl-coord-south" data-i18n="vdl_coord_south">Güney (min lat)</label><input type="number" id="vdl-coord-south" step="0.0001" placeholder="39.0000"></div>
-                </div>
-                <div class="vdl-coord-row">
-                    <div class="vdl-coord-field"><label for="vdl-coord-west" data-i18n="vdl_coord_west">Batı (min lon)</label><input type="number" id="vdl-coord-west" step="0.0001" placeholder="32.0000"></div>
-                    <div class="vdl-coord-field"><label for="vdl-coord-east" data-i18n="vdl_coord_east">Doğu (max lon)</label><input type="number" id="vdl-coord-east" step="0.0001" placeholder="33.0000"></div>
-                </div>
-            </div>
         </div>
 
         <!-- Koordinat Sistemi Seçici -->
@@ -26930,7 +26911,7 @@ function cancelGeoTiffDownload() {
                 if (/[<>]/.test(text)) return; // HTML içeriyorsa dokunma (güvenlik/yapı bozulmasın)
                 var lang = (typeof getLang === 'function') ? getLang()
                     : ((typeof _sylvaLang !== 'undefined' && _sylvaLang) || 'en');
-                if (!lang || lang === 'en') return; // İngilizce zaten orijinal dil
+                if (!lang) return;
                 if (typeof window._sylvaGoogleTranslateText !== 'function') return;
                 window._sylvaGoogleTranslateText(text, lang).then(function (translated) {
                     if (translated && typeof translated === 'string' && translated.trim() && translated !== text) {
@@ -26955,6 +26936,12 @@ function cancelGeoTiffDownload() {
             icon.textContent = _SYLVA_MODAL_ICONS[type] || '⚠️';
             titleEl.textContent = (_SYLVA_MODAL_TITLES[type] || _SYLVA_MODAL_TITLES.warning)[lang] || (_SYLVA_MODAL_TITLES[type] || _SYLVA_MODAL_TITLES.warning)['en'];
             bodyEl.textContent = msg || '';  // textContent avoids XSS from err.message
+            (function () {
+                var _origNoDataMsg = msg || '';
+                _sylvaLocalizeDynamicMessage(_origNoDataMsg, function (translated) {
+                    if (document.body.contains(bodyEl) && bodyEl.textContent === _origNoDataMsg) bodyEl.textContent = translated;
+                });
+            })();
             // 🛠️ BUG FİX: bkz. yukarıdaki _sylvaLocalizeDynamicMessage notu —
             // mesaj (ör. sunucudan/GEE'den gelen ham İngilizce hata metni)
             // arka planda seçili dile çevrilip HAZIR olduğunda, kullanıcı
@@ -26986,7 +26973,11 @@ function cancelGeoTiffDownload() {
         window.alert = function(msg) { sylvaAlert(String(msg || ''), 'warning'); };
 
         // ── Analiz Toast Bildirimi ───────────────────────────────────────────
-        var _TOAST_NO_DATA_MSG = 'Seçilen çalışma alanı veya belirlediğiniz parametreler için uygun veri bulunamadı. Lütfen tarih aralığını, bulutluluk oranını veya diğer analiz parametrelerini değiştirerek tekrar deneyiniz.';
+        var _TOAST_NO_DATA_MSG = (typeof t === 'function') ? t('no_data_msg') : 'No suitable data was found for the selected workspace or parameters. Please change the date range, cloud cover, or other analysis parameters and try again.';
+        function _sylvaRefreshLocalizedRuntimeMessages() {
+            _TOAST_NO_DATA_MSG = (typeof t === 'function') ? t('no_data_msg') : _TOAST_NO_DATA_MSG;
+        }
+        window._sylvaRefreshLocalizedRuntimeMessages = _sylvaRefreshLocalizedRuntimeMessages;
 
         function showAnalysisToast(msg, type) {
             var container = document.getElementById('sylva-toast-container');
@@ -27063,13 +27054,8 @@ function cancelGeoTiffDownload() {
             if (existing) existing.parentNode.removeChild(existing);
 
             var lang = (typeof _sylvaLang !== 'undefined' ? _sylvaLang : 'en');
-            var titleMap = {
-                en:'Warning', tr:'Uyarı', de:'Warnung', fr:'Avertissement',
-                es:'Advertencia', ar:'تحذير', fa:'هشدار', zh:'警告',
-                ja:'警告', ko:'경고', hi:'चेतावनी', id:'Perigatan', ru:'Предупреждение',
-                th:'คำเตือน', bn:'সতর্কตা', vi:'Cảnh báo', ur:'تنبیہ', pl:'Ostrzeżenie', ms:'Amaran', el:'Προειδοποίηση', kk:'Ескерту'
-            };
-            var titleText = titleMap[lang] || 'Warning';
+            var titleMap = (_SYLVA_MODAL_TITLES && _SYLVA_MODAL_TITLES.warning) ? _SYLVA_MODAL_TITLES.warning : {};
+            var titleText = titleMap[lang] || titleMap.en || 'Warning';
 
             // Overlay (arka plan karartması)
             var overlay = document.createElement('div');
@@ -27161,8 +27147,16 @@ function cancelGeoTiffDownload() {
                     'color:#92400e', 'text-align:left',
                     'word-break:break-word'
                 ].join(';');
-                var errLabel = (lang === 'tr') ? 'Sunucu ayrıntısı: ' : 'Server detail: ';
+                var errLabel = (typeof t === 'function') ? t('server_detail_prefix') : 'Server detail: ';
                 errEl.textContent = errLabel + String(serverError);
+                (function () {
+                    var _origServerErr = String(serverError);
+                    _sylvaLocalizeDynamicMessage(_origServerErr, function (translated) {
+                        if (document.body.contains(errEl) && errEl.textContent === errLabel + _origServerErr) {
+                            errEl.textContent = errLabel + translated;
+                        }
+                    });
+                })();
                 box.appendChild(errEl);
             }
 
@@ -29390,7 +29384,7 @@ var SYLVA_TRANSLATIONS = {
     vdl_cat_satellite: 'Sınıflandırılmış Uydu Analizi',
     vdl_no_analysis: 'Henüz analiz yok',
     vdl_no_analysis_desc: 'Önce haritada bir analiz çalıştırın, ardından sonucu vektör olarak indirin.',
-    vdl_info_desc: 'Sınıflandırılmış raster → poligon vektörü. (KML/KMZ: Google Earth, SHP: ArcGIS/QGIS)',
+    vdl_info_desc: '',
     vdl_coord_label: '📍 Alan Koordinatları (WGS 84)',
     vdl_coord_reset: '↺ Sıfırla',
     vdl_coord_north: 'Kuzey (max lat)',
@@ -42797,6 +42791,50 @@ var SYLVA_TRANSLATIONS = {
 // ── Üstte Gösterilecek Katman başlığı: 30 dil ────────────────────────────────
 // Bu metin teknik veri seti adlarından bağımsızdır; yalnızca kutunun başlık/tooltip
 // metnidir. Katman adları (Dynamic World, ESA, MODIS, CORINE) çevrilmez.
+
+// Runtime error/warning translations: all 30 supported languages.
+(function () {
+  var _runtimeI18n30 = {
+    "en": "No suitable data was found for the selected workspace or parameters. Please change the date range, cloud cover, or other analysis parameters and try again.",
+    "tr": "Seçilen çalışma alanı veya belirlediğiniz parametreler için uygun veri bulunamadı. Lütfen tarih aralığını, bulutluluk oranını veya diğer analiz parametrelerini değiştirerek tekrar deneyiniz.",
+    "de": "Für den ausgewählten Arbeitsbereich oder die angegebenen Parameter wurden keine passenden Daten gefunden. Bitte ändern Sie den Datumsbereich, die Wolkenbedeckung oder andere Analyseparameter und versuchen Sie es erneut.",
+    "fr": "Aucune donnée appropriée n’a été trouvée pour la zone de travail ou les paramètres sélectionnés. Veuillez modifier la plage de dates, la couverture nuageuse ou d’autres paramètres d’analyse, puis réessayer.",
+    "es": "No se encontraron datos adecuados para el área de trabajo o los parámetros seleccionados. Cambie el intervalo de fechas, la cobertura de nubes u otros parámetros de análisis y vuelva a intentarlo.",
+    "ar": "لم يتم العثور على بيانات مناسبة لمنطقة العمل أو المعلمات المحددة. يرجى تغيير نطاق التاريخ أو نسبة الغطاء السحابي أو معلمات التحليل الأخرى ثم المحاولة مرة أخرى.",
+    "fa": "داده مناسبی برای محدوده کاری یا پارامترهای انتخاب‌شده پیدا نشد. لطفاً بازه تاریخ، پوشش ابر یا سایر پارامترهای تحلیل را تغییر دهید و دوباره تلاش کنید.",
+    "zh": "未找到适用于所选工作区或参数的数据。请更改日期范围、云量或其他分析参数，然后重试。",
+    "ja": "選択した作業領域またはパラメータに適したデータが見つかりませんでした。日付範囲、雲量、その他の解析パラメータを変更して、もう一度お試しください。",
+    "ko": "선택한 작업 영역 또는 매개변수에 적합한 데이터를 찾을 수 없습니다. 날짜 범위, 구름량 또는 기타 분석 매개변수를 변경한 후 다시 시도하세요.",
+    "hi": "चयनित कार्य क्षेत्र या पैरामीटर के लिए उपयुक्त डेटा नहीं मिला। कृपया तारीख सीमा, बादल आवरण या अन्य विश्लेषण पैरामीटर बदलकर फिर प्रयास करें।",
+    "id": "Data yang sesuai untuk area kerja atau parameter yang dipilih tidak ditemukan. Silakan ubah rentang tanggal, tutupan awan, atau parameter analisis lainnya lalu coba lagi.",
+    "ru": "Подходящие данные для выбранной рабочей области или параметров не найдены. Измените диапазон дат, облачность или другие параметры анализа и повторите попытку.",
+    "th": "ไม่พบข้อมูลที่เหมาะสมสำหรับพื้นที่ทำงานหรือพารามิเตอร์ที่เลือก โปรดเปลี่ยนช่วงวันที่ ปริมาณเมฆ หรือพารามิเตอร์การวิเคราะห์อื่น แล้วลองอีกครั้ง",
+    "bn": "নির্বাচিত কর্মক্ষেত্র বা প্যারামিটারের জন্য উপযুক্ত ডেটা পাওয়া যায়নি। তারিখের পরিসর, মেঘের আচ্ছাদন বা অন্যান্য বিশ্লেষণ প্যারামিটার পরিবর্তন করে আবার চেষ্টা করুন।",
+    "vi": "Không tìm thấy dữ liệu phù hợp cho khu vực làm việc hoặc các tham số đã chọn. Hãy thay đổi khoảng thời gian, độ che phủ mây hoặc các tham số phân tích khác rồi thử lại.",
+    "ur": "منتخب ورک اسپیس یا پیرامیٹرز کے لیے موزوں ڈیٹا نہیں ملا۔ تاریخ کی حد، بادلوں کی کوریج یا دیگر تجزیاتی پیرامیٹرز تبدیل کرکے دوبارہ کوشش کریں۔",
+    "pl": "Nie znaleziono odpowiednich danych dla wybranego obszaru roboczego lub parametrów. Zmień zakres dat, zachmurzenie lub inne parametry analizy i spróbuj ponownie.",
+    "ms": "Data yang sesuai untuk kawasan kerja atau parameter yang dipilih tidak ditemui. Sila ubah julat tarikh, litupan awan atau parameter analisis lain dan cuba lagi.",
+    "el": "Δεν βρέθηκαν κατάλληλα δεδομένα για την επιλεγμένη περιοχή εργασίας ή τις παραμέτρους. Αλλάξτε το εύρος ημερομηνιών, την κάλυψη νεφών ή άλλες παραμέτρους ανάλυσης και δοκιμάστε ξανά.",
+    "kk": "Таңдалған жұмыс аймағы немесе параметрлер үшін сәйкес деректер табылмады. Күндер ауқымын, бұлттылықты немесе басқа талдау параметрлерін өзгертіп, қайта көріңіз.",
+    "ky": "Тандалган иш аймагы же параметрлер үчүн ылайыктуу маалымат табылган жок. Дата диапазонун, булуттуулукту же башка талдоо параметрлерин өзгөртүп, кайра аракет кылыңыз.",
+    "uz": "Tanlangan ish maydoni yoki parametrlar uchun mos maʼlumot topilmadi. Sana oralig‘i, bulutlilik yoki boshqa tahlil parametrlarini o‘zgartirib, qayta urinib ko‘ring.",
+    "bg": "Не са намерени подходящи данни за избраната работна област или параметри. Променете периода, облачността или други параметри за анализ и опитайте отново.",
+    "az": "Seçilmiş iş sahəsi və ya parametrlər üçün uyğun məlumat tapılmadı. Tarix aralığını, buludluluğu və ya digər analiz parametrlərini dəyişdirib yenidən cəhd edin.",
+    "hu": "A kiválasztott munkaterülethez vagy paraméterekhez nem található megfelelő adat. Módosítsa a dátumtartományt, a felhőborítottságot vagy más elemzési paramétereket, majd próbálja újra.",
+    "pt": "Não foram encontrados dados adequados para a área de trabalho ou os parâmetros selecionados. Altere o intervalo de datas, a cobertura de nuvens ou outros parâmetros de análise e tente novamente.",
+    "mn": "Сонгосон ажлын талбай эсвэл параметрт тохирох өгөгдөл олдсонгүй. Огнооны хүрээ, үүлшилт эсвэл бусад шинжилгээний параметрийг өөрчлөөд дахин оролдоно уу.",
+    "ka": "არჩეული სამუშაო არეალის ან პარამეტრებისთვის შესაფერისი მონაცემები ვერ მოიძებნა. შეცვალეთ თარიღების დიაპაზონი, ღრუბლიანობა ან სხვა ანალიზის პარამეტრები და ხელახლა სცადეთ.",
+    "it": "Non sono stati trovati dati adatti per l’area di lavoro o i parametri selezionati. Modifica l’intervallo di date, la copertura nuvolosa o altri parametri di analisi e riprova."
+  };
+  Object.keys(_runtimeI18n30).forEach(function (lang) {
+    if (SYLVA_TRANSLATIONS[lang]) {
+      SYLVA_TRANSLATIONS[lang].no_data_msg = _runtimeI18n30[lang];
+      SYLVA_TRANSLATIONS[lang].server_detail_prefix = {
+        en:'Server detail: ',tr:'Sunucu ayrıntısı: ',de:'Serverdetails: ',fr:'Détail du serveur : ',es:'Detalle del servidor: ',ar:'تفاصيل الخادم: ',fa:'جزئیات سرور: ',zh:'服务器详细信息：',ja:'サーバー詳細: ',ko:'서버 세부 정보: ',hi:'सर्वर विवरण: ',id:'Detail server: ',ru:'Сведения о сервере: ',th:'รายละเอียดเซิร์ฟเวอร์: ',bn:'সার্ভার বিবরণ: ',vi:'Chi tiết máy chủ: ',ur:'سرور کی تفصیل: ',pl:'Szczegóły serwera: ',ms:'Butiran pelayan: ',el:'Λεπτομέρειες διακομιστή: ',kk:'Сервер мәліметі: ',ky:'Сервер маалыматы: ',uz:'Server tafsiloti: ',bg:'Подробности за сървъра: ',az:'Server təfərrüatı: ',hu:'Szerver részletei: ',pt:'Detalhes do servidor: ',mn:'Серверийн дэлгэрэнгүй: ',ka:'სერვერის დეტალები: ',it:'Dettagli del server: '}[lang] || 'Server detail: ';
+    }
+  });
+})();
+
 (function () {
   var layerSwitchTitle30 = {
     en: 'Layer to Show on Top',
@@ -43828,6 +43866,8 @@ function applySylvaLang(lang) {
 
   // Refresh band count text in current language
   if (typeof updateRawBandsSelectedCount === 'function') updateRawBandsSelectedCount();
+  // Refresh all runtime warning/error fallback strings in the newly selected language.
+  if (typeof window._sylvaRefreshLocalizedRuntimeMessages === 'function') window._sylvaRefreshLocalizedRuntimeMessages();
 
   // Refresh last raw-bands download success message in current language
   if (typeof renderRawDlStatus === 'function') renderRawDlStatus();
@@ -48950,52 +48990,23 @@ function vdlResetCoords() {
 var _vdlSelectedSource = 'raster';
 function selectVdlSource(src) {
     _vdlSelectedSource = src;
-    ['raster', 'workspace', 'batch'].forEach(function(s) {
+    ['raster', 'workspace'].forEach(function(s) {
         var b = document.getElementById('vdl-src-' + s);
         if (b) { if (s === src) b.classList.add('selected'); else b.classList.remove('selected'); }
     });
-    // 🛠️ BUG FİX: kaynak "Çalışma Alanı" olarak değiştirildiğinde bilgi
-    // kutusu artık buna göre güncelleniyor — eskiden kaynak ne olursa
-    // olsun HER ZAMAN analiz durumunu ("Henüz analiz yapılmadı…") gösteriyordu,
-    // bu da Çalışma Alanı indirmesi için analiz gerekmediği hâlde kullanıcıyı
-    // yanlış yönlendiriyordu.
-    _vdlUpdateSourceInfoBox();
-}
-
-function _vdlUpdateSourceInfoBox() {
-    var infoType = document.getElementById('vdl-info-type');
-    var infoDesc = document.getElementById('vdl-info-desc');
-    if (!infoType || !infoDesc) return;
-    if (_vdlSelectedSource === 'batch') {
-        infoType.textContent = '🗂️ Ekrandaki Tüm Analizler';
-        infoDesc.textContent = 'Aktif ekrandaki sınıflandırılmış analizler, Eş Yükselti ve Bina Çatı Tespiti ayrı vektör dosyaları olarak tek ZIP içinde indirilir. Lejant/sınıf/renk bilgileri korunur.';
-    } else if (_vdlSelectedSource === 'workspace') {
-        var _vdlSrcPane = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
-        var _vdlSrcLayer = (_vdlSrcPane === 'map2') ? window._workspaceLayer2 : window._workspaceLayer;
-        if (_vdlSrcLayer) {
-            infoType.textContent = _vdlT('vdl_workspace_label', '📍 Çalışma Alanı');
-            infoDesc.textContent = _vdlT('vdl_workspace_desc',
-                'Haritada çizdiğiniz/yüklediğiniz çalışma alanı sınırı olduğu gibi vektör olarak indirilir.');
-        } else {
-            infoType.textContent = _vdlT('vdl_no_workspace', 'Çalışma alanı yok');
-            infoDesc.textContent = _vdlT('vdl_no_workspace_desc',
-                'Önce haritada bir çalışma alanı çizin veya yükleyin, ardından buraya dönüp indirin.');
-        }
+    // Raster Veri seçildiğinde tek bir son analiz değil, aktif çalışma
+    // ekranındaki TÜM SINIFLANDIRILMIŞ raster analizleri toplu vektör
+    // indirme kuyruğuna alınır. Liste indirme anında yeniden oluşturulur;
+    // böylece modal açıkken katman eklenip çıkarılsa bile güncel ekran kullanılır.
+    if (src === 'raster') {
+        var _selPane = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
+        window._vdlSelectedBatchEntries = (typeof vectorEntries === 'function') ? vectorEntries(_selPane) : [];
     } else {
-        var lbl = _vdlGetAnalysisLabel();
-        if (lbl) {
-            var cat = _vdlGetAnalysisCategory(lbl.split(' \u2014')[0].trim());
-            infoType.textContent = cat + ': ' + lbl;
-            infoDesc.textContent = _vdlT('vdl_info_desc',
-                'Classified raster \u2192 polygon vector. (KML/KMZ: Google Earth, SHP: ArcGIS/QGIS)');
-        } else {
-            infoType.textContent = _vdlT('vdl_no_analysis', 'No analysis yet');
-            infoDesc.textContent = _vdlT('vdl_no_analysis_desc',
-                'Run an analysis on the map first, then return to download the result as vector.');
-        }
+        window._vdlSelectedBatchEntries = [];
     }
 }
 
+function _vdlUpdateSourceInfoBox() { /* Bilgi metni kaldırıldı. */ }
 function openVectorDownloadDialog() {
     // 🆕 Pencere açılır açılmaz aktif ekranın son analizini sunucuyla
     // senkronize etmeye başla (arka planda; kullanıcı formu doldururken biter).
@@ -49024,8 +49035,6 @@ function openVectorDownloadDialog() {
     selectVdlSource('raster');
 
     // Analiz bilgisi — bkz. _vdlUpdateSourceInfoBox() (kaynağa göre doğru mesajı gösterir)
-    _vdlUpdateSourceInfoBox();
-
     // Koordinatları doldur
     vdlResetCoords();
 
@@ -49068,10 +49077,6 @@ function selectVdlFormat(fmt) {
 }
 
 function _executeVectorDownloadCore() {
-    if (_vdlSelectedSource === 'batch') {
-        _executeVectorBatchDownload();
-        return;
-    }
     var fmt      = _vdlSelectedFormat;
     var fnInput  = document.getElementById('vdl-filename');
     var filename = (fnInput ? fnInput.value.trim() : '') || ('SylvaGIS_' + _vdlT('file_vector', 'Vector'));
@@ -49260,6 +49265,18 @@ function _executeVectorDownloadCore() {
 
 
 function executeVectorDownload() {
+    // Raster Veri (Analiz Sonucu) seçimi = aktif çalışma ekranındaki
+    // TÜM SINIFLANDIRILMIŞ analizleri otomatik seç ve tek ZIP'te indir.
+    if (_vdlSelectedSource === 'raster') {
+        var _batchSync = window._sylvaDownloadSyncPromise;
+        window._sylvaDownloadSyncPromise = null;
+        if (_batchSync) {
+            _batchSync.then(function(){ _executeVectorBatchDownload(); });
+        } else {
+            _executeVectorBatchDownload();
+        }
+        return;
+    }
     if (window._sylvaDownloadSyncPromise) {
         var p = window._sylvaDownloadSyncPromise;
         window._sylvaDownloadSyncPromise = null;
@@ -52311,7 +52328,18 @@ function runTimeSeriesAnalysis() {
                 _renderRgbTimeSeriesGallery(data.gallery, _pane, satellite);
             } else {
                 renderGalleryFromScenes(scenesArr, _pane, _meta);
-                loadSpecificScene(scenesArr[0][0], _pane, { silent: true });
+                // Zaman serisi analizinde galeriye tıklamayı beklemeden ilk gerçek
+                // sahneyi hemen haritaya getir. Normal date-start/date-end alanları
+                // farklı bir aralıkta kalmış olsa bile bu istek TS'nin kendi aralığını
+                // kullanır; böylece analiz seçildiğinde ekran boş kalmaz.
+                loadSpecificScene(scenesArr[0][0], _pane, {
+                    silent: true,
+                    meta: _meta,
+                    startDate: String(sy) + '-01-01',
+                    endDate: String(ey) + '-12-31',
+                    satellite: satellite,
+                    maxCloud: cloudPct
+                });
             }
 
             // Zaman serisi sahneleri artık alt zaman kaydırıcısına değil, doğrudan
@@ -53850,6 +53878,47 @@ refresh();
         }
         return { min:min, max:max, palette:colors, mode: (breaks && breaks.length) ? 'classified' : 'bar', breaks: breaks, legendLabels: legendLabels };
     }
+    // 🛠️ DOWNLOAD GEOMETRY SAFETY
+    // Full-data export still needs the real AOI as a query/analysis region.
+    // clipMode='full' controls clipping; it must NOT remove ROI from the request.
+    function _sylvaCurrentWorkspaceGeometry(pane) {
+        try {
+            var p = (pane === 'map2') ? 'map2' : 'map';
+            var layer = (p === 'map2') ? window._workspaceLayer2 : window._workspaceLayer;
+            if (layer && typeof _extractROIGeometry === 'function') {
+                var g = _extractROIGeometry(layer);
+                if (g) return g;
+            }
+            if (layer && typeof layer.toGeoJSON === 'function') {
+                var fc = layer.toGeoJSON();
+                if (fc && fc.features && fc.features.length) {
+                    var polys = fc.features.filter(function(f){
+                        return f && f.geometry && /^(Polygon|MultiPolygon)$/i.test(String(f.geometry.type || ''));
+                    });
+                    if (polys.length === 1) return polys[0].geometry;
+                    if (polys.length > 1) {
+                        var coords=[];
+                        polys.forEach(function(f){
+                            if (f.geometry.type === 'Polygon') coords.push(f.geometry.coordinates);
+                            else coords = coords.concat(f.geometry.coordinates || []);
+                        });
+                        return {type:'MultiPolygon', coordinates:coords};
+                    }
+                }
+            }
+        } catch(e) {}
+        return null;
+    }
+
+    function _sylvaPayloadWithDownloadGeometry(payload, pane) {
+        var p = Object.assign({}, payload || {});
+        if (!p.roi) {
+            var g = _sylvaCurrentWorkspaceGeometry(pane);
+            if (g) p.roi = g;
+        }
+        return p;
+    }
+
     function rasterEntries(pane) {
         var result = [], seen = {};
         // Aktif galerideki seçili sahnenin GEE system:time_start değerini
@@ -53875,7 +53944,7 @@ refresh();
         var byLayer = window._sylvaLayerAnalyzePayloadByPane && window._sylvaLayerAnalyzePayloadByPane[pane] || {};
         var store = window._geeLayersByPane && window._geeLayersByPane[pane] || {};
         Object.keys(store).forEach(function (key) {
-            var payload = byLayer[key];
+            var payload = _sylvaPayloadWithDownloadGeometry(byLayer[key], pane);
             var index = payload && payload.index;
             if (!payload || !index || /^(TOPO_CONTOUR|BUILDING_FOOTPRINT)$/i.test(index)) return;
             var fingerprint = JSON.stringify(payload);
@@ -53890,7 +53959,7 @@ refresh();
         // bir raster olarak kabul et; böylece tek raster için ZIP isteği boş
         // listeye düşüp eski "en az iki raster" hatasını üretemez.
         if (!result.length) {
-            var fallback = window._lastAnalyzePayloadByPane && window._lastAnalyzePayloadByPane[pane];
+            var fallback = _sylvaPayloadWithDownloadGeometry(window._lastAnalyzePayloadByPane && window._lastAnalyzePayloadByPane[pane], pane);
             if (fallback && fallback.index && !/^(TOPO_CONTOUR|BUILDING_FOOTPRINT)$/i.test(fallback.index)) {
                 result.push({key:'active', payload:fallback, index:fallback.index, sceneDate: fallback.sceneDate || activeSceneDate(pane, fallback.satellite || '') || _activeSceneDate});
             }
@@ -53934,7 +54003,7 @@ refresh();
                 // sahnesiyle aynı kapsamı korur.
                 var _tsDownloadClipMode = 'full';
                 var _rgbPayload = {
-                    roi: _tsReq.roi || null,
+                    roi: _tsReq.roi || _sylvaCurrentWorkspaceGeometry(pane) || null,
                     clipMode: _tsDownloadClipMode,
                     satellite: _tsReq.satellite || window._tsSliderSatellite || 's2-l2a',
                     index: 'RGB',
@@ -53989,7 +54058,8 @@ refresh();
                         // Full Source Export kuralını kullanır.
                         var _tsAnalysisClipMode = (typeof isSatelliteIndexAnalysis === 'function' && isSatelliteIndexAnalysis(idx))
                             ? 'full' : _tsAnalysisViewMode;
-                        var p = Object.assign({}, entry.payload, {
+                        var p = _sylvaPayloadWithDownloadGeometry(entry.payload, pane);
+                        Object.assign(p, {
                             index: idx,
                             sceneId: sceneId,
                             clipMode: _tsAnalysisClipMode
@@ -54059,9 +54129,13 @@ refresh();
             var key = entry.key;
             if (key && visible[key] === false) return;
             var entryIndex = String(entry.index || (entry.payload && entry.payload.index) || '').toUpperCase();
-            // Gerçek RGB uydu görüntüsü vektörleştirilebilir bir sınıflandırma
-            // değildir; toplu vektör ZIP'ine bilinçli olarak alınmaz.
+            // Toplu vektör indirme yalnızca EKRANDA SINIFLANDIRILMIŞ olan
+            // raster analizleri seçer. RGB, ham/stretched raster ve sürekli
+            // analizler bu kuyruğa girmez; classBreaks gerçek sınıflandırmanın
+            // kaynağıdır.
             if (entryIndex === 'RGB') return;
+            var _entryBreaks = entry.payload && entry.payload.classBreaks;
+            if (!Array.isArray(_entryBreaks) || !_entryBreaks.length) return;
             var fp = JSON.stringify(entry.payload || {});
             if (seen[fp]) return;
             seen[fp] = true;
@@ -54070,14 +54144,12 @@ refresh();
         var byLayer = window._sylvaLayerAnalyzePayloadByPane && window._sylvaLayerAnalyzePayloadByPane[pane] || {};
         Object.keys(byLayer).forEach(function(key){
             if (visible[key] === false) return;
-            var p = byLayer[key];
+            var p = _sylvaPayloadWithDownloadGeometry(byLayer[key], pane);
             if (!p || !p.index) return;
             var idx = String(p.index).toUpperCase();
-            if (idx !== 'TOPO_CONTOUR' && idx !== 'BUILDING_FOOTPRINT') return;
-            var fp = JSON.stringify(p);
-            if (seen[fp]) return;
-            seen[fp] = true;
-            result.push({key:key, payload:p, index:p.index, sceneDate:p.sceneDate || ''});
+            // Eş Yükselti ve Bina Çatı Tespiti kendi özel vektör akışlarına
+            // sahiptir; "tüm sınıflandırılmış rasterlar" toplu seçimine dahil edilmez.
+            return;
         });
         return result;
     }
@@ -54318,7 +54390,7 @@ refresh();
                     // Full-source uydu rasterlarında AOI yalnızca analiz
                     // kriteri olarak kalır; export sırasında clip sınırı
                     // olarak kullanılmaz.
-                    roi: (_entryClipMode === 'clip') ? (entry.payload && entry.payload.roi ? entry.payload.roi : null) : null
+                    roi: (entry.payload && entry.payload.roi) ? entry.payload.roi : (_sylvaCurrentWorkspaceGeometry(pane) || null)
                 }),
                 filename: _entryFilename,
                 scale:scale, crs:crs,
@@ -54326,7 +54398,7 @@ refresh();
                 clipMode:_entryClipMode,
                 // Full Scene'de ROI sunucuya kirpma siniri olarak tasinmaz;
                 // Calisma Alani seciliyken gercek AOI aynen gonderilir.
-                roi:_entryClipMode === 'clip' ? (entry.payload.roi || null) : null,
+                roi:(entry.payload && entry.payload.roi) ? entry.payload.roi : (_sylvaCurrentWorkspaceGeometry(pane) || null),
                 rendered:true,
                 visualization:exportVisualFor(pane, entry.key, entry.payload && entry.payload.sceneId ? entry.payload.sceneId : null, entry.payload), flatTiff:false,
                 // RGB uydu görüntüsünde indirme, harita önizlemesini yeniden
