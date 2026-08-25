@@ -39,7 +39,7 @@ print('SylvaGIS server.py yüklendi — versiyon: topo-export-v4-raw-continuous-
 # ════════════════════════════════════════════════════════════════
 # 🏷️ Tutarlı Dosya İsimlendirme Kuralı (Export Convention) — yardımcılar
 # ════════════════════════════════════════════════════════════════
-# Kural: SylvaGIS_export_[Analiz_Türü]_[Sensör/Veri]_[Alan_Adı]_[Tarih]
+# Kural: SylvaGIS_[Analiz_Türü]_[Sensör/Veri]_[Alan_Adı]_[Tarih]
 #   Tarih formatı [YYYY-MM-DD]'dir; Alan_Adı boşsa segment atlanır.
 # 🛠️ BUG FİX: Dosya adı sanitizasyonu eskiden yalnızca ASCII harf/rakam
 # bırakıp geri kalan HER karakteri (Türkçe ç/ğ/ı/ö/ş/ü dahil) tek bir
@@ -108,10 +108,10 @@ def _sylva_export_type_and_source(analysis_index, satellite_key, dem_source=None
 
 def _sylva_build_export_basename(analysis_index, satellite_key, area_name=None,
                                   date_str=None, dem_source=None):
-    """SylvaGIS_export_[Analiz_Türü]_[Sensör/Veri]_[Alan_Adı]_[Tarih]
+    """SylvaGIS_[Analiz_Türü]_[Sensör/Veri]_[Alan_Adı]_[Tarih]
     kuralına uygun, uzantısız bir temel dosya adı üretir."""
     export_type, source = _sylva_export_type_and_source(analysis_index, satellite_key, dem_source)
-    parts = ['SylvaGIS_export', _sylva_safe_filename(export_type, allow_dots=False)]
+    parts = ['SylvaGIS', _sylva_safe_filename(export_type, allow_dots=False)]
     if source:
         parts.append(_sylva_safe_filename(source, allow_dots=False))
     area_clean = _sylva_safe_filename((area_name or '').strip().replace(' ', '_'), allow_dots=False)
@@ -210,49 +210,6 @@ def _call_with_retry(fn, *args, retries=3, base_delay=1.5, **kwargs):
             else:
                 raise
     raise last_err
-
-
-# 🛠️ BUG FİX (Full Data / tüm veri indirmede "GEE indirme (fallback)
-# isteği başarısız (HTTP 429)" hatası — SORUN: uydu analizi/uydu
-# görüntüsü çalışma alanının TAMAMI indirilmek istendiğinde 429
-# hatası anında kullanıcıya yansıyor, hiç tekrar denenmiyordu):
-#
-# KÖK NEDEN: yukarıdaki _call_with_retry() SADECE fn() bir Python
-# istisnası (exception) FIRLATTIĞINDA tekrar dener. Ama GEE'nin 429
-# "Too Many Requests / RESOURCE_EXHAUSTED" hatası requests.get()
-# çağrısından bir istisna olarak gelmez — normal bir HTTP yanıtı
-# olarak (status_code=429) döner. Yani requests.get() İÇİNDE hiçbir
-# hata oluşmaz, _call_with_retry bunu "başarılı" sanıp OLDUĞU GİBİ
-# geri döndürür; ancak yanıt gövdesi hata mesajıdır. Kod daha sonra
-# `if not r.ok` ile bunu YAKALAR ama bu noktada retry penceresi çoktan
-# kapanmıştır — kullanıcıya İLK 429'da direkt hata gösterilir.
-# Bu, özellikle "Full Data" (kırpmasız/tüm çalışma alanı) indirme
-# yolunda kullanılan bounded-fallback isteğinde gözlemlenen
-# "GEE indirme (fallback) isteği başarısız (HTTP 429)" hatasının
-# BİREBİR kök nedenidir.
-#
-# ÇÖZÜM: requests.get() bir sarmalayıcı (_gee_http_get) ile çağrılır;
-# bu sarmalayıcı 429/500/502/503/504 durum kodlarını GERÇEK bir Python
-# istisnasına çevirir — böylece _call_with_retry bunları artık
-# YAKALAYIP üstel geri-çekilmeyle otomatik tekrar dener (GEE Restricted
-# Mode'un eşzamanlılık penceresi boşalana kadar). Diğer durum kodları
-# (400/401/403/404 gibi kalıcı hatalar) DEĞİŞMEDEN, hemen (tekrar
-# denemeden) mevcut `if not r.ok` mantığına bırakılır.
-_RETRYABLE_HTTP_STATUS = (429, 500, 502, 503, 504)
-
-
-def _gee_http_get(url, timeout=180):
-    """requests.get() için ince bir sarmalayıcı: GEE bir 429/5xx HTTP
-    durum kodu döndürdüğünde bunu bir istisna olarak fırlatır ki
-    _call_with_retry() bunu yakalayıp otomatik tekrar deneyebilsin
-    (bkz. yukarıdaki BUG FİX notu). Kalıcı hata kodlarında (400/401/
-    403/404 vb.) normal şekilde yanıtı döndürür — çağıran kod bunu
-    `r.ok` ile kontrol etmeye devam eder."""
-    resp = requests.get(url, timeout=timeout)
-    if resp.status_code in _RETRYABLE_HTTP_STATUS:
-        body_snippet = (resp.text or '')[:500]
-        raise Exception('GEE HTTP {}: {}'.format(resp.status_code, body_snippet))
-    return resp
 
 
 # ════════════════════════════════════════════════════════════════
@@ -6433,28 +6390,50 @@ def _sylva_least_cloud_scene(roi, satellite, start_date, end_date, max_cloud, mo
         )
         if not props or 'system:index' not in props:
             return None
-        # Savunmacı tarih doğrulaması: GEE koleksiyon filtresi doğru olsa bile
-        # dönen sahnenin zaman damgası İSTENEN periyodun dışında ise bu sahneyi
-        # kesinlikle istemciye göndermiyoruz. Böylece önceki/başka bir galeriden
-        # 2026 gibi bir görüntünün 2020–2023 zaman serisine sızması mümkün değil.
-        _ts = props.get('system:time_start')
-        try:
-            _dt = datetime.datetime.utcfromtimestamp(float(_ts) / 1000.0)
-            _req_start = datetime.datetime.strptime(str(start_date)[:10], '%Y-%m-%d')
-            _req_end = datetime.datetime.strptime(str(end_date)[:10], '%Y-%m-%d')
-            if not (_req_start <= _dt < _req_end):
-                return None
-            if months and _dt.month not in set(int(m) for m in months):
-                return None
-        except Exception:
-            return None
         return {
             'sceneId':   props.get('system:index'),
-            'timestamp': _ts,
+            'timestamp': props.get('system:time_start'),
             'cloud':     props.get(cloud_prop) if cloud_prop else None,
         }
     except Exception:
         return None
+
+
+def _sylva_scene_thumbnail_data_uri(roi, satellite, scene_id, dimensions=128):
+    """Zaman serisi galerisi için belirli bir gerçek GEE sahnesinin
+    RGB önizlemesini sunucu tarafında üretip data: URI olarak döndürür.
+    Tarayıcı GEE thumbnail URL'sine doğrudan gitmez; böylece normal
+    Uydu Görüntüsü galerisiyle aynı CORS/CORB güvenli davranış korunur.
+    """
+    ds = SATELLITE_DATASETS.get(satellite)
+    if not ds or not scene_id:
+        return None
+    try:
+        col = None
+        for coll_id in ds.get('collections', []):
+            c = ee.ImageCollection(coll_id).filterBounds(roi).filter(ee.Filter.eq('system:index', scene_id))
+            col = c if col is None else col.merge(c)
+        if col is None:
+            return None
+        img = ee.Image(col.first()).select(ds['rgbBands'])
+        if ds.get('scaleFactor', 1) != 1 or ds.get('offset', 0) != 0:
+            img = img.multiply(ds['scaleFactor']).add(ds.get('offset', 0))
+        thumb_url = img.getThumbURL({
+            'region': roi,
+            'dimensions': dimensions,
+            'format': 'png',
+            'bands': ds['rgbBands'],
+            'min': ds['visMin'],
+            'max': ds['visMax'],
+        })
+        if not thumb_url:
+            return None
+        resp = _tile_http.get(thumb_url, timeout=_TILE_FETCH_TIMEOUT)
+        if resp.status_code == 200 and resp.content:
+            return 'data:image/png;base64,' + base64.b64encode(resp.content).decode('ascii')
+    except Exception as exc:
+        print('[SylvaGIS] ⚠️ Zaman serisi thumbnail üretilemedi (%s): %s' % (scene_id, exc))
+    return None
 
 
 @app.route('/api/timeseries', methods=['POST'])
@@ -6490,15 +6469,6 @@ def timeseries():
             return jsonify({'success': False, 'error': 'Bitiş yılı başlangıç yılından büyük olmalı.'}), 400
 
         ranges = _sylva_period_ranges(start_year, end_year, period)
-        # RGB uydu görüntüsü zaman serisinde Aylık seçilip belirli aylar
-        # işaretlendiyse yalnızca o ayların dönemlerini üret. Böylece örneğin
-        # 2019-2024 + Haziran seçimi, boş Ocak/Şubat/... dönemleri oluşturmaz;
-        # galeri ve zaman çizelgesi yalnızca kullanıcının istediği ayları getirir.
-        if str(data.get('mode') or '').strip().lower() == 'satellite-image' and period == 'monthly' and months:
-            ranges = [r for r in ranges if int(r[1][5:7]) in months]
-            if not ranges:
-                return jsonify({'success': False, 'error': 'Seçilen aylar ve tarih aralığı için geçerli bir zaman serisi dönemi bulunamadı.'}), 400
-
         # Güvenlik sınırı: çok uzun aralık + aylık periyot GEE'ye çok
         # sayıda ardışık istek anlamına gelir (timeout/limit riski).
         MAX_PERIODS = 240
@@ -6509,47 +6479,6 @@ def timeseries():
             }), 400
 
         roi = make_roi(data.get('roi'))
-
-        # 🛰️ Uydu Görüntüsü Time Series modu: kullanıcı tam 1 RGB veri seti
-        # seçtiğinde her ay/yıl dönemi için gerçek ve en az bulutlu sahneyi
-        # döndür. Bu modda NDVI gibi piksel ortalaması hesaplamak anlamsızdır;
-        # grafik serisi sahnenin bulutluluk yüzdesini gösterir, asıl çıktı
-        # galerideki GERÇEK uydu görüntüleridir.
-        if str(data.get('mode') or '').strip().lower() == 'satellite-image' or indices == ['RGB']:
-            if len(indices) != 1 or indices[0] != 'RGB':
-                return jsonify({'success': False, 'error': 'Uydu görüntüsü zaman serisi için tek bir RGB veri seti seçilmelidir.'}), 400
-            ds = SATELLITE_DATASETS.get(satellite)
-            if not ds:
-                return jsonify({'success': False, 'error': 'Bilinmeyen uydu görüntüsü veri seti.'}), 400
-
-            rgb_points = []
-            gallery = []
-            for label, sdate, edate in ranges:
-                scene = _sylva_least_cloud_scene(roi, satellite, sdate, edate, max_cloud, months=months)
-                if scene:
-                    scene['label'] = label
-                    gallery.append(scene)
-                    cloud_val = scene.get('cloud')
-                    try:
-                        cloud_val = round(float(cloud_val), 2) if cloud_val is not None else None
-                    except Exception:
-                        cloud_val = None
-                    rgb_points.append({'date': label, 'value': cloud_val})
-                else:
-                    rgb_points.append({'date': label, 'value': None})
-
-            return jsonify({
-                'success': True,
-                'period': period,
-                'satellite': satellite,
-                'mode': 'satellite-image',
-                'startYear': start_year,
-                'endYear': end_year,
-                'months': months or [],
-                'maxCloud': max_cloud,
-                'series': [{'index': 'RGB', 'points': rgb_points}],
-                'gallery': gallery,
-            })
 
         series = []
         for idx in indices:
@@ -6588,14 +6517,24 @@ def timeseries():
                 scene['label'] = label
                 gallery.append(scene)
 
+        # 🖼️ Zaman Serisi Uydu Görüntüsü galerisi artık normal Uydu
+        # Görüntüsü galerisiyle aynı gerçek sahne önizlemelerini kullanır.
+        # Önceden yalnızca sceneId/tarih/bulutluluk dönüyordu ve istemci
+        # emoji gösteriyordu. Her gerçek sahne için küçük RGB thumbnail
+        # sunucu tarafında alınır ve data URI olarak döndürülür; böylece
+        # tarayıcı GEE thumbnail adresine doğrudan erişmez (CORS/CORB sorunu yok).
+        if gallery:
+            def _thumb_for_scene(sc):
+                return _sylva_scene_thumbnail_data_uri(roi, satellite, sc.get('sceneId'), dimensions=128)
+            with ThreadPoolExecutor(max_workers=min(8, len(gallery))) as _ts_thumb_pool:
+                _thumbs = list(_ts_thumb_pool.map(_thumb_for_scene, gallery))
+            for _i, _scene in enumerate(gallery):
+                _scene['thumbnailUrl'] = _thumbs[_i] if _i < len(_thumbs) else None
+
         return jsonify({
             'success':  True,
             'period':   period,
             'satellite': satellite,
-            'startYear': start_year,
-            'endYear': end_year,
-            'months': months or [],
-            'maxCloud': max_cloud,
             'series':   series,
             'gallery':  gallery,
         })
@@ -6875,57 +6814,10 @@ def analyze():
         except Exception:
             pass
 
-        # 🛠️ BUG FİX (Çevresel ve Kentsel Analizler ekranda "bembeyaz"/soluk
-        # görünüyordu, lejanttaki renklendirmeye uymuyordu):
-        #
-        # KÖK NEDEN: Bu 27 analizin (_ENV_URBAN_RASTER_INDICES) her biri,
-        # yukarıdaki tile_url'i üretirken SABİT/tahmini bir min-max aralığıyla
-        # (ör. UHI_LST için -10..+10°C) renklendiriliyordu — bu, o analiz
-        # türü için TEORİK olarak mümkün en geniş aralıktı. Ancak seçilen
-        # AOI'nin GERÇEK veri aralığı çoğu zaman bundan çok daha DAR (ör.
-        # -1.19..+3.35) çıkıyor; bu durumda gerçek piksellerin TAMAMI, geniş
-        # sabit aralığın yalnızca ortasındaki dar bir bandına (genelde
-        # paletin BEYAZ/nötr orta rengine) sıkışıyor ve harita neredeyse
-        # tamamen beyaz/soluk görünüyordu — oysa lejant kutusu (yukarıdaki
-        # applyRealStatsToLegendUI, GERÇEK min/max'ı gösterir) ve indirilen
-        # ham GeoTIFF'e ArcMap'te elle uygulanan gerçek-aralık renklendirme
-        # doğru/canlı sonucu veriyordu. Yani ekran ile lejant/indirme
-        # arasındaki uyumsuzluk, İKİ FARKLI min-max aralığının aynı anda
-        # kullanılmasından kaynaklanıyordu.
-        #
-        # ÇÖZÜM: İstatistikler (gerçek min/max) hesaplandıktan SONRA, yalnızca
-        # bu 27 çevresel/kentsel analiz için, harita katmanı GERÇEK min/max
-        # ile TEK SEFERLİK yeniden üretilir (aynı palet, yalnızca aralık
-        # güncellenir) — böylece ekrandaki renkler artık lejanttaki ve
-        # ArcMap'teki gerçek-aralık renklendirmeyle BİREBİR uyuşur. LULC/
-        # TOPO/SAR ailesi ve RGB (yukarıda zaten ayrı ele alınıyor) bu
-        # yeniden üretimin DIŞINDA tutulur — onlarda min/max birer SINIF
-        # KODU/sabit eşiktir, gerçek veri aralığına göre esnetilirse sınıf-
-        # renk eşleşmesi bozulur (LULC'de zaten ayrı bir sınıf-renk tablosu
-        # mantığı var). Aralık geçersiz/dejenere ise (min/max yok ya da
-        # min==max, örn. AOI'nin tamamı tek bir değerdeyse) sessizce eski
-        # sabit aralığa geri dönülür — harita hiçbir zaman bu adım yüzünden
-        # bozulmaz/kaybolmaz.
-        try:
-            _env_index = data.get('index')
-            _real_mn = real_minmax.get('min')
-            _real_mx = real_minmax.get('max')
-            if (_env_index in _ENV_URBAN_RASTER_INDICES
-                    and isinstance(_real_mn, (int, float))
-                    and isinstance(_real_mx, (int, float))
-                    and _real_mx > _real_mn):
-                _stretched_vis = dict(vis)
-                _stretched_vis['min'] = _real_mn
-                _stretched_vis['max'] = _real_mx
-                _new_map_id = _call_with_retry(lambda: final_display.getMapId(_stretched_vis), retries=1)
-                _new_tile_url_direct = _new_map_id['tile_fetcher'].url_format
-                _sid = _register_tile_session(_new_tile_url_direct, params=data, kind='analyze', extra=_extra)
-                tile_url = _tile_url_for_client(_sid, _new_tile_url_direct)
-                tile_url_direct = _new_tile_url_direct
-                vis = _stretched_vis
-        except Exception as _restretch_err:
-            print('[SylvaGIS] ⚠️ Gerçek-aralık yeniden renklendirme başarısız '
-                  '(orijinal sabit aralık korunuyor): {}'.format(_restretch_err))
+        # NOT: tile_url yukarıda, istatistiklerden ÖNCE üretildi — burada
+        # ikinci bir getMapId() çağrısı YOKTUR. (Eskiden bu satırda tekrar
+        # üretiliyordu; bu hem gereksiz bir GEE isteğiydi hem de tile'ların
+        # kotanın en dolu olduğu anda oluşturulmasına yol açıyordu.)
 
         # ── Zaman serisi galerisi ────────────────────────────────
         # LULC ailesi statik/tek-katmanlı veri setleridir; zaman serisi
@@ -7091,19 +6983,6 @@ def download_geotiff():
     try:
         req_data = request.json or {}
 
-        # 🛠️ BUG FİX — TOPLU İNDİRMEDE PAYLOAD KAYBINI ÖNLE
-        # /api/download-geotiff-batch istemciden her rasterın güncel payload'ını
-        # `payload` alanında gönderir. Eski kod burada bu payload'ı yok sayıp
-        # _last_analyze_params adlı global son-analiz state'ine dönüyordu.
-        # Bu durum özellikle aynı anda Landsat + Sentinel RGB katmanlarında
-        # yanlış/eskimiş analiz state'i seçilmesine ve bazı sürümlerde
-        # "local variable 'roi' referenced before assignment" hatasına yol
-        # açıyordu. Toplu indirme artık ÖNCE gönderilen payload'ı kullanır;
-        # yalnızca eski istemcilerde payload yoksa analysis session/global
-        # geri dönüşü uygulanır.
-        _request_payload = req_data.get('payload')
-        _has_request_payload = isinstance(_request_payload, dict) and bool(_request_payload.get('index'))
-
         # 🛠️ BUG FİX (AOI dışı NoData/siyah alan / yanlış kırpma sorunu):
         # Frontend, güncel Çalışma Alanı/AOI geometrisini HER indirme
         # isteğinde 'roi' alanıyla birlikte gönderir (bkz. index.html —
@@ -7123,6 +7002,8 @@ def download_geotiff():
         # üzerinden AYNI ortak kırpma/NoData mantığını kullandığı için bu
         # düzeltme tüm raster analiz dışa aktarımlarına otomatik uygulanır.
         fresh_roi = req_data.get('roi')
+        if fresh_roi is not None:
+            data['roi'] = fresh_roi
 
         # 🔒 GÜVENLİK/DOĞRULUK DÜZELTMESİ (kullanıcılar arası analiz
         # karışması): _last_analyze_params/_last_analyze_native_crs sunucu
@@ -7138,10 +7019,31 @@ def download_geotiff():
         # global davranış AYNEN korunur — bu değişiklik geriye dönük
         # tamamen uyumludur.
         analysis_id = req_data.get('analysisId')
-        if _has_request_payload:
-            # Batch download'ın gönderdiği payload en güncel/izole kaynaktır.
-            data = dict(_request_payload)
-            session_native_crs = data.get('nativeCrs') or req_data.get('crs') or None
+        payload_data = req_data.get('payload')
+
+        # 🆕 TOPLU İNDİRME KÖK NEDEN DÜZELTMESİ:
+        # Toplu indirme akışı her raster için /api/download-geotiff'e kendi
+        # `payload` alanını gönderiyor. Eski kod burada payload'ı HİÇ
+        # okumuyor ve analysisId null olduğunda son çalıştırılan global
+        # `_last_analyze_params` kaydını kullanıyordu. Sonuç olarak aynı ZIP
+        # içindeki Sentinel RGB, NDVI ve çevresel/kentsel rasterların her biri
+        # yanlışlıkla SON analiz görüntüsünün verisini dışa aktarabiliyordu.
+        # Bu, özellikle RGB'nin siyah/yanlış raster gelmesi ve sınıflı
+        # çevresel analizlerin eksik/yanlış lejantla gelmesi belirtilerini
+        # doğrudan açıklıyordu.
+        #
+        # ÇÖZÜM: İstek açıkça bir raster payload'ı taşıyorsa onu ÖNCELE.
+        # Böylece her batch öğesi build_result_image() tarafından kendi
+        # index/satellite/sceneId/classBreaks/roi parametreleriyle yeniden
+        # oluşturulur. analysisId yalnızca eski/tekli istemciler için geri
+        # dönüş yolu olarak korunur; en son çare global davranıştır.
+        if isinstance(payload_data, dict) and payload_data.get('index'):
+            data = dict(payload_data)
+            session_native_crs = (data.get('nativeCrs') or
+                                  req_data.get('nativeCrs') or
+                                  _last_analyze_native_crs)
+            # Toplu indirme istemcisi güncel AOI'yi üst seviyede gönderir;
+            # aşağıdaki `fresh_roi` öncelik kuralı bunu ayrıca uygular.
         elif analysis_id:
             _session = _get_analysis_session(analysis_id)
             if _session is None:
@@ -7159,7 +7061,7 @@ def download_geotiff():
             data = dict(_last_analyze_params)
             session_native_crs = _last_analyze_native_crs
 
-        filename = (req_data.get('filename') or 'SylvaGIS_export').strip() or 'SylvaGIS_export'
+        filename = (req_data.get('filename') or 'SylvaGIS').strip() or 'SylvaGIS'
         scale    = int(req_data.get('scale', 30))
 
         # 🛠️ BUG FİX (LULC indirmeleri anormal derecede büyük/bozuk dosyalar
@@ -7228,53 +7130,14 @@ def download_geotiff():
         if fresh_roi:
             data['roi'] = fresh_roi
 
-        # 🛠️ BUG FİX — HIZLI RGB DIŞA AKTARIMI
-        # Gerçek uydu görüntüsü (RGB) için seçilmiş GEE sahnesini doğrudan
-        # dışa aktar. Harita önizlemesinde kullanılan aynı-gün komşu sahne
-        # mozaikleme/yeniden analiz zinciri indirme için gereksizdir. Ayrıca
-        # batch payload'ı doğrudan kullanıldığı için RGB indirme sırasında
-        # eski global ROI/analiz state'ine başvurulmaz.
-        _fast_rgb = bool(req_data.get('fastRgbExport')) and data.get('index') == 'RGB'
-        if _fast_rgb:
-            roi = make_roi(data.get('roi'))
-            _rgb_satellite = data.get('satellite', 's2-l2a')
-            _rgb_ds = SATELLITE_DATASETS.get(_rgb_satellite)
-            if not _rgb_ds:
-                raise ValueError('Bilinmeyen uydu görüntüsü veri seti: ' + str(_rgb_satellite))
-            _rgb_col = build_rgb_collection(_rgb_ds, roi, int(data.get('maxCloud', 20)))
-            _rgb_scene_id = data.get('sceneId')
-            if _rgb_scene_id:
-                _rgb_img = _rgb_col.filter(ee.Filter.eq('system:index', _rgb_scene_id)).first()
-                _rgb_img = _require_nonempty_image(_rgb_img, 'Seçilen uydu sahnesi bulunamadı.')
-                # Ekrandaki harita ile indirme aynı sahne mantığını kullanmalı.
-                # Seçilen sahne AOI'nin birden fazla tile/path-row parçasına
-                # denk geliyorsa, haritanın kullandığı aynı boşluk-doldurma
-                # mozaiğini indirime de uygula.
-                _rgb_img = _fill_scene_gaps_with_same_day_mosaic(_rgb_col, _rgb_img, _rgb_scene_id, roi)
-            else:
-                _rgb_col2 = _rgb_col.filterDate(data.get('startDate'), data.get('endDate'))
-                _rgb_img = _require_nonempty_image(
-                    _rgb_col2.sort('system:time_start', False).first(),
-                    'Seçilen tarih/bulutluluk kriterlerine uygun uydu görüntüsü bulunamadı.'
-                )
-            _rgb_disp = _rgb_img.select(_rgb_ds['rgbBands'])
-            if _rgb_ds.get('scaleFactor', 1) != 1 or _rgb_ds.get('offset', 0) != 0:
-                _rgb_disp = _rgb_disp.multiply(_rgb_ds['scaleFactor']).add(_rgb_ds.get('offset', 0))
-            _rgb_disp = _rgb_disp.rename(['red', 'green', 'blue'])
-            result = _rgb_disp
-            vis = {'bands': ['red', 'green', 'blue'], 'min': _rgb_ds['visMin'], 'max': _rgb_ds['visMax']}
-            clip_mode = data.get('clipMode', 'clip')
-            final_display = _rgb_disp.clip(roi) if clip_mode == 'clip' else _rgb_disp
-            _unused_crs_probe = _rgb_img
-        else:
-            # 🛠️ BUG FİX (istenen davranış): "Lejantı Uygula" ile sınıflandırma
-            # yapılmış olsa bile — NDVI, DEM, Eğim (Slope) vb. hiçbir analizde —
-            # indirilen GeoTIFF ASLA sınıf ID'lerine (1,2,3...) göre değil, her
-            # zaman haritadaki renk çubuğunun (color bar) dayandığı HAM/sürekli
-            # değerlere göre üretilir. for_export=True, build_result_image()
-            # içindeki classBreaks/build_classified_image() adımını komple
-            # atlatır.
-            final_display, roi, result, vis, _unused_crs_probe = build_result_image(data, for_export=True)
+        # 🛠️ BUG FİX (istenen davranış): "Lejantı Uygula" ile sınıflandırma
+        # yapılmış olsa bile — NDVI, DEM, Eğim (Slope) vb. hiçbir analizde —
+        # indirilen GeoTIFF ASLA sınıf ID'lerine (1,2,3...) göre değil, her
+        # zaman haritadaki renk çubuğunun (color bar) dayandığı HAM/sürekli
+        # değerlere göre üretilir. for_export=True, build_result_image()
+        # içindeki classBreaks/build_classified_image() adımını komple
+        # atlatır — bkz. build_result_image() docstring'i.
+        final_display, roi, result, vis, _unused_crs_probe = build_result_image(data, for_export=True)
 
         # ── 🌈 Sentinel-2 doğal renk parlaklık düzeltmesi ────────────
         # SORUN: Sentinel-2 RGB (B4-B3-B2) GeoTIFF'leri şu ana kadar ham
@@ -7284,14 +7147,14 @@ def download_geotiff():
         # dosyanın kendisi hâlâ "karanlık" ham reflectance içeriyordu. ArcMap
         # gibi CBS yazılımları bu ham float veriyi haritadaki gibi otomatik
         # germemediği için görüntü olması gerekenden çok koyu görünüyordu.
-        # ÇÖZÜM: Yalnızca gerçek renkli uydu görüntüsü (RGB) indirmelerinde — hem
+        # ÇÖZÜM: Yalnızca Sentinel-2 gerçek renk (RGB) indirmelerinde — hem
         # Clip hem de Tüm Veri modunda — haritada kullanılan aynı visMin/
         # visMax germe aralığı piksel değerlerine doğrudan uygulanır ve
         # sonuç 0-255 (Byte) aralığına dönüştürülür. Böylece indirilen
         # GeoTIFF, haritada görülen doğal renk görünümüyle eşleşir ve
         # ArcMap'te ek bir parlaklık/kontrast ayarı gerekmez.
-        # Gerçek renkli Landsat görüntüleri de ekranla aynı germe işleminden geçer;
-        # analiz rasterleri ve diğer veri setleri etkilenmez.
+        # Landsat ve diğer tüm veri setleri/indeksler ETKİLENMEZ; onlar
+        # hâlâ önceki (ham) davranışlarıyla dışa aktarılır.
         # 🛠️ BUG FİX (ArcMap "Could not open the specified file" — Sentinel-2
         # gerçek renk indirmelerinde): aşağıdaki .toByte() dönüşümü görüntüyü
         # Byte (0-255) aralığına daraltır. Ancak bu fonksiyonun ilerisinde
@@ -7310,24 +7173,24 @@ def download_geotiff():
         # — tıpkı LULC semboloji paketinin (_build_lulc_symbology_zip) kendi
         # Byte çıktısı için zaten 0'ı NoData olarak kullanması gibi.
         _is_byte_rgb_export = False
-        # 🛰️ TÜM gerçek renkli uydu görüntülerinde aynı ekran germe işlemi
-        # uygulanır. Önceki sürüm yalnızca Sentinel-2'yi Byte'a çeviriyordu;
-        # Landsat RGB ham float yansıma olarak iniyor ve ArcMap bazı sahneleri
-        # siyah/koyu dikdörtgen olarak gösteriyordu. Ekrandaki min/max neyse
-        # aynısı 0–255'e dönüştürülür. MSS gibi gerçek mavi bandı olmayan
-        # kompozitler bu dalın dışında bırakılır.
-        # RGB disari aktarimi icin piksel degerini burada elle Byte'a cevirmiyoruz.
-        # Onceki unitScale(...).toByte() adimi, toplu indirme yolundaki
-        # visualize() ve GeoTIFF metadata islemleriyle carpisip ArcMap'te
-        # tamamen siyah RGB karelere yol acabiliyordu. Asagida, nihai
-        # visualization araligi belirlendikten sonra GEE'nin tek adimli
-        # visualize() sonucu kullanilir.
-        _is_byte_rgb_export = False
+        if data.get('index') == 'RGB' and data.get('satellite') in ('s2-l1c', 's2-l2a'):
+            v_min = vis.get('min', 0)
+            v_max = vis.get('max', 0.3)
+            final_display = (
+                final_display
+                .unitScale(v_min, v_max)
+                .multiply(255)
+                .clamp(0, 255)
+                .toByte()
+            )
+            _is_byte_rgb_export = True
 
         # Full modunda ROI ile kesmeden tüm görüntüyü indir;
         # Clip modunda yalnızca ROI sınırları içindeki pikseller alınır.
         # LULC ailesi için bu davranış zorunludur: "Tüm Veri Görüntüsü" modu
-        # seçili olsa bile dışa aktarım kesinlikle AOI sınırlarına kesilir.
+        # seçili olsa bile bu statik ürünler AOI sınırlarına göre dışa aktarılır.
+        # RGB ve uydu indeksleri ise yukarıdaki FULL SOURCE EXPORT kuralı ile
+        # sahnenin/ürünün gerçek footprint'ini korur.
         #
         # ✅ MODÜLLER ARASI TUTARLILIK: Bu satır — ve aşağıdaki true-clip
         # bloğu — 🛰️ Uydu Görüntüsü (RGB), 🌍 Uydu Analizleri (NDVI, NDWI,
@@ -7341,15 +7204,36 @@ def download_geotiff():
         # 'clip' else ...` yapısını kullandığından (bkz. TOPO bloğu ~satır
         # 1064 ve indeks bloğu ~satır 1305), burada modüle özel HİÇBİR dal
         # eklemeye gerek yoktur.
-        is_clip = data.get('clipMode', 'clip') == 'clip' or data.get('index', 'NDVI') in LULC_FAMILY_INDICES
+        # 🆕 FULL SOURCE EXPORT (RGB + uydu tabanlı indeksler):
+        # Bu rasterlar çalışma alanının bounding-box'ına kırpılmamalıdır.
+        # Ekrandaki gerçek uydu sahnesinin/veri ürününün tamamı dışa aktarılır.
+        # Frontend ayrıca clipMode='full' gönderir; burada ikinci bir sunucu
+        # tarafı güvence olarak aynı kural uygulanır. LULC/TOPO/çevresel-kentsel
+        # rasterların mevcut kapsam kuralları korunur.
+        _satellite_source_indices = {
+            'RGB', 'NDVI', 'NDWI', 'EVI', 'SAVI', 'BSI', 'NDSI', 'NBR',
+            'AVI', 'SI', 'NDGI', 'NDMI', 'NPCRI', 'VHI', 'FRI', 'LST',
+            'SMI', 'SAR'
+        }
+        _is_full_source_satellite = data.get('index', 'NDVI') in _satellite_source_indices
+        if _is_full_source_satellite:
+            # RGB + klasik uydu indeksleri (SAR dahil) için AOI clip'i
+            # tamamen devre dışıdır; gerçek sahne/veri geometrisi korunur.
+            is_clip = False
+        else:
+            is_clip = (
+                data.get('clipMode', 'clip') == 'clip'
+                or data.get('index', 'NDVI') in LULC_FAMILY_INDICES
+            )
         if is_clip:
             export_region = roi
         else:
-            # "Tüm Veri" modunda görüntünün TAM kapsamı (sahne footprint'i)
-            # indirilir — çalışma alanıyla kısıtlanmaz. Küresel görüntülerde
-            # (global DEM vb.) geometry() sınırsız dönebilir; bu durumda
+            # Tüm Veri/Full Source modunda görüntünün TAM kapsamı
+            # (sahne footprint'i / analiz rasterının gerçek geometrisi)
+            # indirilir — çalışma alanının kare bounding-box'ı kullanılmaz.
+            # Küresel görüntülerde geometry() sınırsız dönebilir; bu durumda
             # _download_band_geotiff_bytes() fallback_region_geom (roi.bounds())
-            # ile otomatik olarak tekrar dener.
+            # ile yalnızca teknik bounded-geometry güvenlik ağı olarak tekrar dener.
             export_region = final_display.geometry()
 
         safe_name = _sylva_safe_filename(filename)
@@ -7417,27 +7301,7 @@ def download_geotiff():
             # için 0 GERÇEK bir sınıftır (Water). Bu nedenle Dynamic World'de
             # 255 NoData olarak korunur ve _build_lulc_symbology_zip() sınıfları
             # 1..9 aralığına kaydırarak güvenli bir ArcMap/QGIS sembolojisi üretir.
-            #
-            # 🛠️ BUG FİX (Sentinel-2/Landsat gerçek renk indirmeleri ArcMap'te
-            # TAMAMEN SİYAH açılıyordu): Aynı 0-çakışması sorunu, Dynamic
-            # World'e ek olarak gerçek renkli (true-color) RGB Byte
-            # indirmelerinde de vardı ve fark edilmemişti. unitScale(min,max)
-            # ile 0-255'e gerilen gerçek doğal renk kompozitlerinde koyu/
-            # gölgeli/su gibi DÜŞÜK yansımalı pikseller sıkça TAM OLARAK 0'a
-            # yuvarlanır — bunlar GERÇEK, geçerli görüntü verisidir. Ancak
-            # NoData sentinel'i de 0 olunca hem GEE'nin unmask(0) adımı hem de
-            # yerel true-clip (_true_clip_tif_bytes) bu GERÇEK koyu pikselleri
-            # "AOI dışı/geçersiz" ile ayırt edemiyor; AOI'nin önemli bir kısmı
-            # (bazen tamamı, ör. su/orman gölgesi ağırlıklı bir alan) NoData
-            # sanılıp maskeleniyor/siyaha boyanıyordu — ArcMap'te dosya
-            # başarıyla açılıyor ama görüntü baştan sona siyah görünüyordu.
-            # ÇÖZÜM: Dynamic World'deki AYNI teknik — gerçek renkli RGB Byte
-            # indirmelerinde de NoData sentinel'i 255'e (tam beyaz/doygun —
-            # 0-0.3 yansıma aralığına gerilmiş doğal renkte pratikte hiç
-            # oluşmaz) çekildi. Piksel değerleri DEĞİŞMEDİ; yalnızca "bu
-            # değer NoData'dır" etiketi artık gerçek görüntü verisiyle asla
-            # çakışmayan bir değere taşındı.
-            if lulc_index == 'LULC' or _is_byte_rgb_export:
+            if lulc_index == 'LULC':
                 nodata_value = 255
             else:
                 nodata_value = 0
@@ -7476,22 +7340,9 @@ def download_geotiff():
         requested_breaks = None
         requested_legend_labels = None
         if isinstance(requested_vis, dict):
-            # 🛰️ RGB GÜVENLİĞİ: RGB üç bantlı bir görüntüdür ve GEE .visualize()
-            # palette ile çok bantlı görüntüyü birlikte kabul etmez. Önceki
-            # analizden kalan palette/classification bilgisi istemci payload'ına
-            # sızsa bile gerçek RGB indirmesine uygulanmasına izin verme.
-            _is_rgb_request = str(lulc_index or '').upper() == 'RGB'
-            if _is_rgb_request:
-                if requested_vis.get('min') not in (None, ''):
-                    vis['min'] = float(requested_vis.get('min'))
-                if requested_vis.get('max') not in (None, ''):
-                    vis['max'] = float(requested_vis.get('max'))
-                vis['bands'] = ['red', 'green', 'blue']
-                vis.pop('palette', None)
-            else:
-                for _vis_key in ('min', 'max', 'palette'):
-                    if requested_vis.get(_vis_key) not in (None, '', []):
-                        vis[_vis_key] = requested_vis[_vis_key]
+            for _vis_key in ('min', 'max', 'palette'):
+                if requested_vis.get(_vis_key) not in (None, '', []):
+                    vis[_vis_key] = requested_vis[_vis_key]
             # 🛠️ BUG FİX (Faz 15 — "bar olarak indirmiştim, sınıflandırılmış
             # vermiş"): istemci artık, kullanıcı ekranda "Lejantı Uygula"
             # panelinde KENDİ sınıflarını tanımladıysa (mode:'classified')
@@ -7506,8 +7357,7 @@ def download_geotiff():
                 requested_breaks = requested_vis['breaks']
             if isinstance(requested_vis.get('legendLabels'), list):
                 requested_legend_labels = requested_vis.get('legendLabels')
-        _rgb_ds_for_export = SATELLITE_DATASETS.get(data.get('satellite')) if lulc_index == 'RGB' else None
-        is_true_color_rgb = (lulc_index == 'RGB') and bool(_rgb_ds_for_export and _rgb_ds_for_export.get('trueColor')) and not is_env_urban_raster
+        is_true_color_rgb = (lulc_index == 'RGB') and not is_env_urban_raster
         export_image = final_display
 
         # DYNAMIC WORLD GÜVENLİ DIŞA AKTARIMI: 0 = Water GERÇEK SINIFTIR.
@@ -7539,24 +7389,13 @@ def download_geotiff():
         # ArcMap'te açılmıyor" BİREBİR budur. ÇÖZÜM: _is_byte_rgb_export
         # zaten Byte'a çevirmişse .visualize() BİR DAHA çağrılmaz;
         # final_display (zaten doğru renklerde) OLDUĞU GİBİ kullanılır.
-        # Gercek RGB goruntuler, toplu/tekli indirme ayrimi olmadan GEE'nin
-        # tek adimli ekran-germe cikisiyla Byte RGB olarak uretilir. Bu, ArcMap
-        # icin tutarli renk degerleri ve tek bir olcekleme asamasi saglar.
-        if is_true_color_rgb and not _is_byte_rgb_export:
+        if req_data.get('rendered') and is_true_color_rgb and not _is_byte_rgb_export:
             try:
-                # Son savunma: RGB üç bantlıysa palette hiçbir koşulda geçmez.
-                if is_true_color_rgb:
-                    vis = dict(vis or {})
-                    vis.pop('palette', None)
-                    vis['bands'] = ['red', 'green', 'blue']
                 export_image = final_display.visualize(**vis)
                 # RGB görselleştirme Byte olduğundan NoData da Byte aralığında
                 # kalmalıdır; aksi ArcMap bazı TIFF'leri açmayı reddeder.
-                # 🛠️ BUG FİX: bkz. yukarıdaki _is_byte_rgb_export dalındaki AYNI
-                # başlıklı not — 0, gerçek koyu/gölgeli pikselleri de temsil
-                # edebildiğinden burada da 255 kullanılır (0 yerine).
                 if nodata_value is not None:
-                    nodata_value = 255
+                    nodata_value = 0
             except Exception as visual_err:
                 print('[SylvaGIS] Görsel GeoTIFF üretilemedi; ham bant indiriliyor: {}'.format(visual_err))
 
@@ -7566,29 +7405,6 @@ def download_geotiff():
             fallback_region_geom=roi.bounds(maxError=100),
             is_categorical=is_lulc_categorical
         )
-
-        # 🛰️ ArcMap/QGIS RGB tanıma güvencesi: GEE'den gelen 3 bantlı
-        # GeoTIFF'i gerçek RGB color interpretation/photometric metadata ile
-        # yeniden yaz. Piksel değerleri değiştirilmez; yalnızca CBS yazılımına
-        # Band1=Red, Band2=Green, Band3=Blue olduğunu açıkça bildirir.
-        if is_true_color_rgb:
-            try:
-                import rasterio as _rio_rgb
-                from rasterio.io import MemoryFile as _MF_rgb
-                from rasterio.enums import ColorInterp as _CI_rgb
-                with _MF_rgb(tif_bytes) as _mf_rgb:
-                    with _mf_rgb.open() as _src_rgb:
-                        if _src_rgb.count == 3:
-                            _prof_rgb = _src_rgb.profile.copy()
-                            _data_rgb = _src_rgb.read()
-                            _prof_rgb['photometric'] = 'RGB'
-                            with _MF_rgb() as _out_rgb_mf:
-                                with _out_rgb_mf.open(**_prof_rgb) as _dst_rgb:
-                                    _dst_rgb.write(_data_rgb)
-                                    _dst_rgb.colorinterp = (_CI_rgb.red, _CI_rgb.green, _CI_rgb.blue)
-                                tif_bytes = _out_rgb_mf.read()
-            except Exception as _rgb_meta_err:
-                print('[SylvaGIS] RGB GeoTIFF metadata düzenlenemedi; piksel verisi korunarak devam ediliyor:', _rgb_meta_err)
 
         sym_files = None
         if lulc_index in LULC_CLASS_DEFS:
@@ -8208,36 +8024,9 @@ def _true_clip_tif_bytes(tif_bytes, aoi_geom_4326, nodata_value, strict=False):
                 # crop=True: raster kapsamını da AOI'nin bounding box'ına daraltır
                 # (gereksiz kenar boşluğu kalmaz). nodata: poligon dışındaki TÜM
                 # pikseller — kaynak veri ne olursa olsun — bu değere sabitlenir.
-                #
-                # 🛠️ BUG FİX (Dynamic World'de "Su" sınıfı indirilen dosyada HİÇ
-                # yokken ekranda/grafiği vardı — 9 sınıf yerine 8 sınıf): kök
-                # neden all_touched=False idi. Bu ayarla rasterio bir pikseli
-                # yalnızca TAM MERKEZİ AOI poligonunun içine düşüyorsa "içeride"
-                # sayıyordu. Su gibi AOI sınırına YAKIN/dar/ince biçimde dağılmış
-                # bir sınıf (ör. bir göl kıyısı, AOI sınırı tam da o kıyı
-                # boyunca çizildiğinde) neredeyse TAMAMEN sınıra bitişik
-                # piksellerden oluşabilir — bu piksellerin çoğunun MERKEZİ
-                # poligonun az dışında kalabilir, all_touched=False bunların
-                # HEPSİNİ NoData'ya çevirip sınıfı tamamen "kaybettirir". Halbuki
-                # GEE'nin kendi ekran/haritada kullandığı clip() ve grafik/
-                # histogram hesaplaması (reduceRegion) bu kadar katı/piksel-
-                # merkezli değildir; bu yüzden ekranda ve grafikte su görünmeye
-                # devam ediyordu — yalnızca burada, yerel "true-clip" güvence
-                # katmanında kayboluyordu. ÇÖZÜM: all_touched=True — bir piksel,
-                # MERKEZİ değil, AOI poligonuyla HERHANGİ BİR şekilde kesişiyorsa
-                # (dokunuyorsa) "içeride" sayılır. Bu, AOI sınırına yakın ince
-                # sınıfların (su, dar bir şerit vb.) kaybolmasını önler; AOI
-                # dışı pikseller yine de NoData olarak kalmaya devam eder —
-                # yalnızca sınır pikselleri artık daha kapsayıcı (ekranla
-                # tutarlı) değerlendirilir. Bu değişiklik TÜM LULC ailesini
-                # (ve true-clip kullanan diğer tüm indirmeleri) aynı şekilde
-                # ve tutarlı biçimde etkiler — yalnızca Dynamic World'e özel
-                # bir dal EKLENMEDİ, çünkü sorun aslında ailenin TÜMÜNÜN
-                # paylaştığı ortak kırpma adımındaydı (su yalnızca AOI sınırına
-                # en sık bitişik sınıf olduğu için EN ÇOK etkilenen sınıftı).
                 out_image, out_transform = rio_mask(
                     src, [geom_dst], crop=True, nodata=nodata_value,
-                    all_touched=True, filled=True
+                    all_touched=False, filled=True
                 )
 
                 post_valid_ratio = _valid_ratio(out_image, nodata_value)
@@ -8367,10 +8156,7 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
         # gerektiğinde (boyut sınırı aşıldığında) devreye giriyor.
 
         url = _call_with_retry(lambda: img.getDownloadURL(params))
-        # 🛠️ BUG FİX: retries 2 → 5 ve _gee_http_get kullanımı — bkz.
-        # _gee_http_get() tanımındaki BUG FİX notu. GEE Restricted Mode
-        # 429'u artık burada sessizce yutulmaz, otomatik tekrar denenir.
-        r = _call_with_retry(lambda: _gee_http_get(url), retries=5, base_delay=2.0)
+        r = _call_with_retry(lambda: requests.get(url, timeout=180), retries=2)
         if not r.ok:
             # GEE bazen boyut/limit hatalarını HTTP gövdesinde (200 dışı
             # durum koduyla) döner; ayrıştırılabilmesi için mesaja dahil et.
@@ -8396,11 +8182,7 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
                 fb_params = dict(params)
                 fb_params['region'] = fallback_region_geom
                 fb_url = _call_with_retry(lambda: img.getDownloadURL(fb_params))
-                # 🛠️ BUG FİX: retries 2 → 5 ve _gee_http_get kullanımı — bu
-                # tam olarak "Full Data" (tüm çalışma alanı, kırpmasız)
-                # indirmede kullanıcının gördüğü "GEE indirme (fallback)
-                # isteği başarısız (HTTP 429)" hatasının oluştuğu satırdı.
-                fb_r = _call_with_retry(lambda: _gee_http_get(fb_url), retries=5, base_delay=2.0)
+                fb_r = _call_with_retry(lambda: requests.get(fb_url, timeout=180), retries=2)
                 if not fb_r.ok:
                     body_snippet = (fb_r.text or '')[:500]
                     raise Exception(
@@ -8455,9 +8237,7 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
                     tile_params['formatOptions'] = {'noData': nodata_value}
 
                 tile_url = _call_with_retry(lambda: img.getDownloadURL(tile_params))
-                # 🛠️ BUG FİX: retries 2 → 5 ve _gee_http_get kullanımı — bkz.
-                # yukarıdaki BUG FİX notları (aynı 429 sorunu karo indirmede de geçerli).
-                tr = _call_with_retry(lambda: _gee_http_get(tile_url), retries=5, base_delay=2.0)
+                tr = _call_with_retry(lambda: requests.get(tile_url, timeout=180), retries=2)
                 if not tr.ok:
                     body_snippet = (tr.text or '')[:500]
                     _tile_err_msg = 'GEE karo indirme isteği başarısız (karo {}, HTTP {}): {}'.format(
@@ -9173,7 +8953,10 @@ def _features_to_kml(features, name='SylvaGIS_vector'):
 
         lines.append(f'  <Placemark>')
         lines.append(f'    <name>{sax.escape(str(label))}</name>')
-        lines.append(f'    <Style><PolyStyle><color>{kml_color}</color><outline>1</outline></PolyStyle></Style>')
+        if gtype == 'LineString':
+            lines.append(f'    <Style><LineStyle><color>{kml_color}</color><width>3</width></LineStyle></Style>')
+        else:
+            lines.append(f'    <Style><PolyStyle><color>{kml_color}</color><outline>1</outline></PolyStyle></Style>')
 
         # ExtendedData (tüm özellikler)
         if props:
@@ -9713,7 +9496,7 @@ def topo_contour_vector():
 #                  raster görüntüsü GEE reduceToVectors() ile vektöre çevrilir
 #   'landuse'    — Son arazi kullanımı (LULC) analizinin sınıflandırılmış sonucu
 #
-# Format: 'kml', 'kmz', 'shp' (SHP → ZIP arşivi)
+# Format: 'kml', 'kmz', 'shp' (SHP → ZIP arşivi), 'geojson'
 # ════════════════════════════════════════════════════════════════
 @app.route('/api/vector-download', methods=['POST'])
 def vector_download():
@@ -9728,6 +9511,25 @@ def vector_download():
     # Güvenli dosya adı (Türkçe karakterler ASCII'ye çevrilir, silinmez —
     # bkz. _sylva_safe_filename() ve dosya başındaki BUG FİX notu)
     safe_name = _sylva_safe_filename(filename)[:80] or 'SylvaGIS_vector'
+
+    # 🆕 Toplu vektör kuyruğunun tek-katman çağrısı. UI her katmanı ayrı
+    # HTTP isteğiyle gönderir; böylece 1/8, 2/8… ilerleme gösterilebilir ve
+    # tek bir başarısız katman diğerlerini durdurmaz. Sunucu tarafındaki
+    # /api/vector-download-batch ise doğrudan API tüketicileri için de vardır.
+    if req_data.get('vectorizePayload'):
+        try:
+            payload = req_data.get('payload') or {}
+            feats, meta = _vectorize_analysis_payload(payload, crs)
+            body, out_name = _make_vector_response(fmt, feats, safe_name)
+            if fmt == 'kml': ctype = 'application/vnd.google-earth.kml+xml; charset=utf-8'
+            elif fmt == 'kmz': ctype = 'application/vnd.google-earth.kmz'
+            elif fmt == 'shp': ctype = 'application/zip'
+            else: ctype = 'application/geo+json; charset=utf-8'
+            return Response(body, headers={'Content-Type': ctype,
+                'Content-Disposition': f'attachment; filename=\"{out_name}\"'})
+        except Exception as ex:
+            traceback.print_exc()
+            return jsonify({'error': str(ex)}), 500
 
     try:
         # ── 1. Çalışma alanı geometrisi ───────────────────────────────
@@ -9791,7 +9593,12 @@ def vector_download():
                         # error margin"): bkz. _split_bbox_grid_aligned içindeki
                         # aynı düzeltme notu — maxError açıkça verilmeden .bounds()
                         # çağrısı GEE tarafından reddediliyordu.
-                        geometry=roi.bounds(maxError=100),
+                        # ÇALIŞMA ALANI SINIRINI KORU: Daha önce roi.bounds() kullanıldığı için
+                        # reduceToVectors kare bounding-box üzerinde çalışıyor ve KML/SHP/KMZ
+                        # Google Earth'te çalışma alanını dikkate almayan büyük bir kare olarak
+                        # görünüyordu. Artık gerçek AOI geometrisi kullanılıyor; vektörler çalışma
+                        # alanının gerçek poligon sınırı içinde üretiliyor.
+                        geometry=roi,
                         scale=vec_scale,
                         maxPixels=1e8,
                         geometryType='polygon',
@@ -9810,6 +9617,11 @@ def vector_download():
                 return jsonify({'error': 'Vektör geometri üretilemedi. Alan çok küçük ya da veri yok olabilir.'}), 400
 
             print(f'[SylvaGIS] Vektörizasyon tamamlandı: {len(features)} özellik')
+
+            # AOI gerçek geometrisi reduceToVectors() için region olarak kullanıldığı için
+            # kare bbox artık üretilmez. Workspace kaynağında ise zaten kullanıcının çizdiği
+            # gerçek GeoJSON geometrisi doğrudan features olarak korunur. Böylece KML, KMZ ve
+            # SHP çıktılarında çalışma alanının şekli ve sınırı kaybolmaz.
 
         # ── 3. Formatla ve gönder ──────────────────────────────────────
         if fmt == 'kml':
@@ -9837,21 +9649,20 @@ def vector_download():
                 'Content-Disposition': f'attachment; filename="{safe_name}_shp.zip"',
             })
 
-        # 🛠️ BUG FİX: 'geojson' formatı ESKİDEN sunucuda HİÇ ele alınmıyordu
-        # — yalnızca kml/kmz/shp dalları vardı, geojson seçildiğinde kod
-        # doğrudan `else: return 'Bilinmeyen format: geojson'` hata dalına
-        # düşüyordu. İstemci (index.html) zaten geojson için ayrı bir
-        # istemci-taraflı ZIP paketleme mantığına sahipti (JSZip ile ham
-        # GeoJSON metnini .zip içine alır) — ama sunucu hiçbir zaman
-        # başarılı bir yanıt vermediği için o kod yoluna hiç ulaşılamıyordu.
-        # Artık ham GeoJSON FeatureCollection'ı doğrudan döndürülüyor;
-        # istemci bunu indirmeden önce kendi tarafında ZIP'liyor.
         elif fmt == 'geojson':
-            geojson_bytes = json.dumps(
-                {'type': 'FeatureCollection', 'features': features},
-                ensure_ascii=False
-            ).encode('utf-8')
-            return Response(geojson_bytes, headers={
+            # GeoJSON da KML/KMZ/SHP ile aynı gerçek çalışma alanı geometrisini
+            # kullanır. Özellikle workspace kaynağında kullanıcı tarafından
+            # çizilen düzensiz poligon doğrudan features olarak korunur;
+            # kare bounding-box'a dönüştürülmez. Analiz kaynağında ise
+            # reduceToVectors() zaten geometry=roi ile gerçek AOI üzerinde
+            # çalıştığı için GeoJSON da aynı gerçek sınır içinde üretilir.
+            import json as _json
+            fc = {
+                'type': 'FeatureCollection',
+                'features': features,
+            }
+            body = _json.dumps(fc, ensure_ascii=False, separators=(',', ':'))
+            return Response(body, headers={
                 'Content-Type': 'application/geo+json; charset=utf-8',
                 'Content-Disposition': f'attachment; filename="{safe_name}.geojson"',
             })
@@ -9864,13 +9675,225 @@ def vector_download():
         return jsonify({'error': str(ex)}), 500
 
 
+# ════════════════════════════════════════════════════════════════
+# 📦 /api/vector-download-batch — aktif analizlerin toplu vektör çıktısı
+# ════════════════════════════════════════════════════════════════
+# Sunucu tarafı toplu API: katmanlar GEE Restricted Mode nedeniyle sıralı işlenir.
+
+def _vector_class_meta(data, vis):
+    index = str(data.get('index') or '').upper()
+    breaks = data.get('classBreaks')
+    if isinstance(breaks, list) and breaks:
+        out = []
+        for i, b in enumerate(sorted(breaks, key=lambda x: float(x.get('min', 0))), 1):
+            try:
+                lo = float(b.get('min')); hi = float(b.get('max'))
+            except Exception:
+                continue
+            out.append({'code': i, 'label': str(b.get('label') or f'{lo:g} – {hi:g}'),
+                        'color': str(b.get('color') or '#999999')})
+        if out:
+            return out
+    native = {
+        'FOREST_LOSS': [
+            {'code':0,'label':'Orman (Değişmeyen)','color':'#397d49'},
+            {'code':1,'label':'Orman Kaybı','color':'#e11d48'},
+            {'code':2,'label':'Orman Kazanımı','color':'#22c55e'},
+        ],
+        'URBAN_GROWTH': [
+            {'code':0,'label':'Değişmeyen','color':'#94a3b8'},
+            {'code':1,'label':'Yeni Kentsel Alan','color':'#c4281b'},
+        ],
+    }
+    if index in native:
+        return native[index]
+    if index in LULC_CLASS_DEFS:
+        return [dict(code=int(x['code']), label=str(x['label']), color=str(x['color']))
+                for x in LULC_CLASS_DEFS[index]]
+    if index == 'TOPO_ASPECT':
+        return [
+            {'code':1,'label':'Düz (-1)','color':'#d9d9d9'},
+            {'code':2,'label':'Kuzey (0–12.5° / 327.5–360°)','color':'#2ca25f'},
+            {'code':3,'label':'Kuzeydoğu (12.5–57.5°)','color':'#66c2a4'},
+            {'code':4,'label':'Doğu (57.5–102.5°)','color':'#99d8c9'},
+            {'code':5,'label':'Güneydoğu (102.5–147.5°)','color':'#ccece6'},
+            {'code':6,'label':'Güney (147.5–192.5°)','color':'#fdae61'},
+            {'code':7,'label':'Güneybatı (192.5–237.5°)','color':'#f46d43'},
+            {'code':8,'label':'Batı (237.5–282.5°)','color':'#d73027'},
+            {'code':9,'label':'Kuzeybatı (282.5–327.5°)','color':'#7f0000'},
+        ]
+    pal = (vis or {}).get('palette') if isinstance(vis, dict) else None
+    if not isinstance(pal, list) or not pal:
+        return []
+    try:
+        vmin=float((vis or {}).get('min',0)); vmax=float((vis or {}).get('max',len(pal)))
+    except Exception:
+        vmin, vmax = 0.0, float(len(pal))
+    n=max(2,min(len(pal),24)) if len(pal)>1 else 1
+    step=(vmax-vmin)/n if n else 1
+    return [{'code':i+1,
+             'label':f'{vmin+i*step:.4g} – {(vmax if i==n-1 else vmin+(i+1)*step):.4g}',
+             'color':'#'+str(pal[min(i,len(pal)-1)]).lstrip('#')}
+            for i in range(n)]
+
+
+def _enrich_vector_features(features, class_meta):
+    by_code={str(x['code']):x for x in (class_meta or [])}
+    out=[]
+    for feat in features or []:
+        f=dict(feat); props=dict(f.get('properties') or {})
+        raw=props.get('class_value', props.get('first', props.get('label','')))
+        try: code=int(float(raw))
+        except Exception: code=None
+        meta=by_code.get(str(code)) if code is not None else None
+        if meta:
+            props['class_value']=meta['code']; props['class_name']=meta['label']; props['color']=meta['color']
+        f['properties']=props; out.append(f)
+    return out
+
+
+def _vectorize_analysis_payload(data, crs='EPSG:4326'):
+    """Bir aktif analiz payload'ını gerçek AOI üzerinde sınıflı vektöre dönüştürür."""
+    data=dict(data or {})
+    index=str(data.get('index') or '').upper()
+    if index == 'RGB':
+        raise ValueError('RGB uydu görüntüsü sınıflandırılmış vektör katmanı değildir; vektör toplu indirmesine dahil edilmedi.')
+    if index == 'TOPO_CONTOUR':
+        result=_generate_contour_vectors(data)
+        if not result.get('success'):
+            raise ValueError(result.get('error') or 'Eş yükselti vektörü üretilemedi.')
+        feats=result.get('features') or []
+        color=str(data.get('contourLineColor') or '#1e3a8a')
+        for f in feats:
+            props=f.setdefault('properties',{})
+            props['class_name']='Eş Yükselti'; props['color']=color
+        return feats,[{'code':1,'label':'Eş Yükselti','color':color}]
+
+    if index == 'BUILDING_FOOTPRINT':
+        geom=data.get('roi') or data.get('geometry')
+        if not geom:
+            raise ValueError('Bina Çatı Tespiti için çalışma alanı geometrisi bulunamadı.')
+        # Mevcut asenkron/OSM yedekli bina hattını yeniden kullan; böylece
+        # toplu vektör indirme, haritadaki Bina Çatı Tespiti ile aynı veri
+        # kapsamını ve fallback davranışını korur.
+        with app.test_request_context('/api/building-footprints', method='POST', json={'geometry': geom}):
+            resp=building_footprints()
+        if isinstance(resp, tuple):
+            resp=resp[0]
+        if not isinstance(resp, Response) or resp.status_code >= 400:
+            raise ValueError('Bina verileri alınamadı.')
+        payload=resp.get_json(silent=True) or {}
+        if not payload.get('success'):
+            raise ValueError(payload.get('error') or 'Bina verileri alınamadı.')
+        feats=(payload.get('geojson') or {}).get('features') or []
+        for f in feats:
+            props=dict(f.get('properties') or {})
+            props.update({'class_value':1,'class_name':'Bina Çatı Poligonu','color':'#dc2626'})
+            f['properties']=props
+        return feats,[{'code':1,'label':'Bina Çatı Poligonu','color':'#dc2626'},
+                      {'code':0,'label':'Bina Dışı Alan','color':'#cbd5e1'}]
+
+    final_display, roi, result, vis, _ = _call_with_retry(build_result_image, data, for_export=False)
+    class_meta=_vector_class_meta(data, vis)
+    if not class_meta:
+        raise ValueError('Bu katman için vektöre aktarılabilir sınıf/lejant bilgisi bulunamadı.')
+    vector_img=final_display
+    if not (isinstance(data.get('classBreaks'), list) and data.get('classBreaks')) and index not in LULC_CLASS_DEFS and index != 'TOPO_ASPECT':
+        pal=(vis or {}).get('palette') if isinstance(vis,dict) else None
+        if isinstance(pal,list) and len(pal)>1:
+            try:
+                vmin=float(vis.get('min',0)); vmax=float(vis.get('max',1)); n=min(len(pal),24)
+                vector_img=result.subtract(vmin).divide(vmax-vmin).multiply(n).floor().add(1).clamp(1,n).toInt().updateMask(result.mask())
+            except Exception:
+                pass
+    if index == 'TOPO_ASPECT' and not (isinstance(data.get('classBreaks'), list) and data.get('classBreaks')):
+        a=result
+        vector_img=(ee.Image(1).where(a.gte(0).And(a.lt(12.5)),2)
+            .where(a.gte(12.5).And(a.lt(57.5)),3)
+            .where(a.gte(57.5).And(a.lt(102.5)),4)
+            .where(a.gte(102.5).And(a.lt(147.5)),5)
+            .where(a.gte(147.5).And(a.lt(192.5)),6)
+            .where(a.gte(192.5).And(a.lt(237.5)),7)
+            .where(a.gte(237.5).And(a.lt(282.5)),8)
+            .where(a.gte(282.5).And(a.lt(327.5)),9)
+            .where(a.gte(327.5),2).updateMask(a.mask()))
+        vector_img=vector_img.where(a.lt(0),1)
+
+    if index in LULC_CLASS_DEFS:
+        scale=100 if index in ('LULC','LULC_ESA','LULC_CORINE') else 500 if index=='LULC_MODIS' else 100
+    elif index.startswith('TOPO'):
+        scale=90
+    else:
+        scale=300
+    fc=_call_with_retry(lambda: vector_img.int().reduceToVectors(
+        reducer=ee.Reducer.first(), geometry=roi, scale=scale, maxPixels=1e8,
+        geometryType='polygon', eightConnected=False, labelProperty='class_value',
+        crs=crs if str(crs).upper().startswith('EPSG:') else 'EPSG:4326').limit(20000))
+    info=_call_with_retry(lambda: fc.getInfo()) or {}
+    feats=info.get('features') or []
+    if not feats:
+        raise ValueError('Vektör geometri üretilemedi; veri boş olabilir.')
+    return _enrich_vector_features(feats,class_meta),class_meta
+
+
+def _make_vector_response(fmt, features, safe_name):
+    if fmt=='kml':
+        return _features_to_kml(features,safe_name),f'{safe_name}.kml'
+    if fmt=='kmz':
+        kb=_features_to_kml(features,safe_name); b=io.BytesIO()
+        with zipfile.ZipFile(b,'w',zipfile.ZIP_DEFLATED) as z: z.writestr(f'{safe_name}.kml',kb)
+        return b.getvalue(),f'{safe_name}.kmz'
+    if fmt=='shp':
+        return _features_to_shp_zip(features,safe_name),f'{safe_name}_shp.zip'
+    if fmt=='geojson':
+        return json.dumps({'type':'FeatureCollection','features':features},ensure_ascii=False,separators=(',',':')).encode('utf-8'),f'{safe_name}.geojson'
+    raise ValueError(f'Bilinmeyen format: {fmt}')
+
+
+@app.route('/api/vector-download-batch', methods=['POST'])
+def vector_download_batch():
+    req=request.get_json(silent=True) or {}
+    fmt=str(req.get('format') or 'kml').lower().strip(); items=req.get('items') or []
+    if fmt not in ('kml','kmz','shp','geojson'):
+        return jsonify({'success':False,'error':'Geçersiz vektör formatı.'}),400
+    if not isinstance(items,list) or not items:
+        return jsonify({'success':False,'error':'Toplu vektör indirme için en az bir katman gerekir.'}),400
+    if len(items)>25:
+        return jsonify({'success':False,'error':'Tek ZIP içinde en fazla 25 katman indirilebilir.'}),400
+    master=io.BytesIO(); errors=[]; legends=[]; used=set()
+    with zipfile.ZipFile(master,'w',zipfile.ZIP_DEFLATED) as z:
+        for pos,item in enumerate(items,1):
+            try:
+                payload=item.get('payload') if isinstance(item,dict) else None
+                if not payload: raise ValueError('Katman payload bilgisi eksik.')
+                base=_sylva_safe_filename(str(item.get('filename') or f'SylvaGIS_vector_{pos}'))[:100] or f'SylvaGIS_vector_{pos}'
+                original=base; n=2
+                while base.lower() in used: base=f'{original}_{n}'; n+=1
+                used.add(base.lower())
+                feats,meta=_vectorize_analysis_payload(payload,str(req.get('crs') or 'EPSG:4326'))
+                body,name=_make_vector_response(fmt,feats,base); z.writestr(name,body)
+                legends.append(f'[{base}]')
+                for m in meta or []: legends.append(f"  {m.get('code','')} | {m.get('label','')} | {m.get('color','')}")
+            except Exception as ex:
+                errors.append((str(item.get('filename') or f'Katman {pos}'),str(ex)))
+        if errors:
+            lines=['SylvaGIS — İNDİRİLEMEYEN KATMANLAR','', 'Başarısız katmanlar aşağıdadır; başarılı katmanlar ZIP içinde korunmuştur.','']
+            lines.extend(f'- {name}: {err}' for name,err in errors)
+            z.writestr('INDIRILEMEYEN_KATMANLAR.txt','\n'.join(lines).encode('utf-8'))
+        if legends: z.writestr('LEJANTLAR.txt','\n'.join(legends).encode('utf-8'))
+    if not used:
+        return jsonify({'success':False,'error':'Hiçbir katman üretilemedi.'}),400
+    master.seek(0)
+    return Response(master.read(),headers={'Content-Type':'application/zip','Content-Disposition':'attachment; filename="SylvaGIS_vector_analyses.zip"'})
+
+
 @app.route('/api/download-geotiff-batch', methods=['POST'])
 def download_geotiff_batch():
     """Bir aktif ekrandaki birden fazla rasteri tek ZIP içinde döndürür."""
     req_data = request.json or {}
     items = req_data.get('items') or []
-    if not isinstance(items, list) or len(items) < 1:
-        return jsonify({'success': False, 'error': 'İndirilecek en az bir raster analiz seçilmelidir.'}), 400
+    if not isinstance(items, list) or len(items) < 2:
+        return jsonify({'success': False, 'error': 'ZIP için en az iki raster analiz gerekir.'}), 400
     if len(items) > 25:
         return jsonify({'success': False, 'error': 'Tek ZIP içinde en fazla 25 analiz indirilebilir.'}), 400
     # 🛠️ BUG FİX (Faz 18 — "toplu indirmede hata verdi, zip inmedi"):
@@ -10028,10 +10051,7 @@ def download_geotiff_batch():
                 )
         result = zip_buf.getvalue()
         response = Response(result, mimetype='application/zip')
-        _zip_filename = re.sub(r'[^A-Za-z0-9_.-]+', '_', str(req_data.get('zipFilename') or 'SylvaGIS_raster_analizleri.zip')).strip('._') or 'SylvaGIS_raster_analizleri.zip'
-        if not _zip_filename.lower().endswith('.zip'):
-            _zip_filename += '.zip'
-        response.headers['Content-Disposition'] = 'attachment; filename="{}"'.format(_zip_filename)
+        response.headers['Content-Disposition'] = 'attachment; filename="SylvaGIS_raster_analizleri.zip"'
         response.headers['Content-Length'] = str(len(result))
         return response
     except Exception as exc:
@@ -10072,4 +10092,3 @@ if __name__ == '__main__':
     # Proxy'yi kapatıp eski davranışa dönmek isterseniz: SYLVAGIS_TILE_PROXY=0
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
-
