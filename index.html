@@ -3435,6 +3435,10 @@ tr.class-highlight-active {
     }
 }
 </style>
+<style id="sylva-force-workspace-only-downloads">
+/* Workspace-only export: Full Data/View Area controls are intentionally hidden. */
+input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="full"] { display:none !important; }
+</style>
 </head>
 <body>
     <a href="#map" class="sylva-skip-link" data-i18n="skip_to_map">Haritaya geç</a>
@@ -3862,17 +3866,6 @@ tr.class-highlight-active {
                     </div>
                 </div>
 
-                <!-- Kutu 2: Görüntü Alanı -->
-                <div class="sb-panel-box" id="sb-view-box">
-                    <div class="sb-panel-header" id="sb-view-header">
-                        <span class="sbh-title"><span data-i18n="view_area">📐 Görüntü Alanı</span> <span id="sb-view-arrow">▼</span></span>
-                        <span class="sbh-active" id="sb-view-active" data-vm-label="true">Çalışma Alanı</span>
-                    </div>
-                    <div class="sb-panel-dropdown" id="sb-view-dropdown">
-                        <div class="sb-dp-option selected" data-vm="clip"><div class="sb-dp-thumb" style="background:#e0f0e0;">✂️</div><span data-i18n="workspace">Çalışma Alanı</span></div>
-                        <div class="sb-dp-option" data-vm="full"><div class="sb-dp-thumb" style="background:#e0e8f8;">🌐</div><span data-i18n="view_full">Tüm Veri Görüntüsü</span></div>
-                    </div>
-                </div>
 
             </div>
             <!-- ===== /BASEMAP & GÖRÜNTÜ ALANI ===== -->
@@ -4284,9 +4277,6 @@ tr.class-highlight-active {
                         <div style="display:flex; flex-direction:column; gap:4px;">
                             <label style="display:flex; align-items:center; gap:6px; font-size:0.76rem; color:#334155; cursor:pointer;">
                                 <input type="radio" name="raw-bands-scope" value="clip" checked><span data-i18n="scope_clip">🗂️ Clip (AOI sınırları içinde)</span>
-                            </label>
-                            <label style="display:flex; align-items:center; gap:6px; font-size:0.76rem; color:#334155; cursor:pointer;">
-                                <input type="radio" name="raw-bands-scope" value="full"><span data-i18n="scope_full">🌍 Tüm Veri (Full Scene — kırpma yok)</span>
                             </label>
                         </div>
                     </div>
@@ -5332,10 +5322,9 @@ tr.class-highlight-active {
 
     </div>
 
-    <!-- Görüntü Alanı — hidden, sol paneldeki kutular tarafından yönetilir -->
+    <!-- Görüntü Alanı seçeneği kaldırıldı. İndirmeler her zaman gerçek Çalışma Alanı/AOI ile sınırlıdır. -->
     <select id="viewMode" style="display:none;">
-        <option value="clip">Çalışma Alanı</option>
-        <option value="full">Tüm Veri Görüntüsü</option>
+        <option value="clip" selected>Çalışma Alanı</option>
     </select>
 
 </div>
@@ -22472,62 +22461,12 @@ function selectRamp(name) {
             // Basemap header click
             document.getElementById('sb-basemap-header').addEventListener('click', function(e) {
                 e.stopPropagation();
-                toggleSbBox('sb-basemap-box', 'sb-view-box');
+                toggleSbBox('sb-basemap-box', null);
             });
-
-            // View header click
-            document.getElementById('sb-view-header').addEventListener('click', function(e) {
-                e.stopPropagation();
-                toggleSbBox('sb-view-box', 'sb-basemap-box');
-            });
-
-            // Basemap seçeneklerine tıkla
-            document.querySelectorAll('#sb-basemap-dropdown .sb-dp-option').forEach(function(el) {
-                el.addEventListener('click', function(e) {
-                    e.stopPropagation();
-                    switchBasemap(el.dataset.bm);
-                });
-            });
-
-            // Görüntü Alanı seçeneklerine tıkla
-            var viewModeSelect = document.getElementById('viewMode');
-            var viewLabels = { 'clip': 'Çalışma Alanı', 'full': 'Tüm Veri' };
-
-            document.querySelectorAll('#sb-view-dropdown .sb-dp-option').forEach(function(el) {
-                el.addEventListener('click', function(e) {
-                    e.stopPropagation();
-                    var mode = el.dataset.vm;
-                    // Senkronize hidden select (mevcut JS mantığını tetikler)
-                    if (viewModeSelect) {
-                        viewModeSelect.value = mode;
-                        viewModeSelect.dispatchEvent(new Event('change'));
-                    }
-                    // UI güncelle
-                    document.getElementById('sb-view-active').textContent =
-                        mode === 'clip' ? t('workspace') : t('view_full');
-                    document.querySelectorAll('#sb-view-dropdown .sb-dp-option').forEach(function(opt) {
-                        opt.classList.toggle('selected', opt.dataset.vm === mode);
-                    });
-                    closeSbBox('sb-view-box');
-                });
-            });
-
-            // İndirme Kapsamı (Clip / Tüm Veri) seçeneklerini, Çalışma Alanı (AOI)
-            // ↔ Görüntü Alanı (Full Scene) modu her değiştiğinde senkronize et.
-            // (syncRawBandsScopeWithViewMode fonksiyonu bantlar render edildiğinde
-            // de çağrılır; burada yalnızca değişiklik dinleyicisini bağlıyoruz.)
-            if (viewModeSelect) {
-                viewModeSelect.addEventListener('change', function() {
-                    if (typeof syncRawBandsScopeWithViewMode === 'function') {
-                        syncRawBandsScopeWithViewMode();
-                    }
-                });
-            }
 
             // Dışarı tıklanınca kapat
             document.addEventListener('click', function() {
                 closeSbBox('sb-basemap-box');
-                closeSbBox('sb-view-box');
             });
             // Panel row'a tıklama propagation'ı durdur
             document.querySelectorAll('.sb-panel-box').forEach(function(box) {
@@ -25743,32 +25682,13 @@ function fetchRawBandsCatalog(datasetKey) {
 // aktif olmayan çalışma modunun kapsamını seçemez — o seçenek pasif
 // (saydam/devre dışı) hale getirilir ve aktif olan otomatik işaretlenir.
 function syncRawBandsScopeWithViewMode() {
-    var viewModeEl = document.getElementById('viewMode');
-    // 'clip' → Çalışma Alanı (AOI) modu, 'full' → Görüntü Alanı (Full Scene) modu
-    var mode       = viewModeEl ? viewModeEl.value : 'clip';
-    var clipRadio  = document.querySelector('input[name="raw-bands-scope"][value="clip"]');
-    var fullRadio  = document.querySelector('input[name="raw-bands-scope"][value="full"]');
-    if (!clipRadio || !fullRadio) return;
-
-    if (mode === 'full') {
-        fullRadio.disabled = false;
-        fullRadio.checked  = true;
-        clipRadio.checked  = false;
-        clipRadio.disabled = true;
-    } else {
-        clipRadio.disabled = false;
-        clipRadio.checked  = true;
-        fullRadio.checked  = false;
-        fullRadio.disabled = true;
-    }
-
-    // Pasif seçeneği görsel olarak soluklaştır
-    [clipRadio, fullRadio].forEach(function(radio) {
-        var label = radio.closest('label');
-        if (!label) return;
-        label.style.opacity = radio.disabled ? '0.45' : '1';
-        label.style.cursor  = radio.disabled ? 'not-allowed' : 'pointer';
-    });
+    // Görüntü Alanı seçeneği kaldırıldı: ham bantlar daima Çalışma Alanı/AOI ile indirilir.
+    var clipRadio = document.querySelector('input[name="raw-bands-scope"][value="clip"]');
+    if (!clipRadio) return;
+    clipRadio.checked = true;
+    clipRadio.disabled = false;
+    var label = clipRadio.closest('label');
+    if (label) { label.style.opacity = '1'; label.style.cursor = 'pointer'; }
 }
 
 // Çözünürlük gruplarını (10 m / 20 m / 30 m / 60 m …) checkbox listesi olarak çizer;
@@ -25987,7 +25907,8 @@ function downloadRawBands() {
     var aoiNameInput  = document.getElementById('raw-bands-aoi-name');
     var cloudSliderEl = document.getElementById('cloud-slider');
     var scopeInput    = document.querySelector('input[name="raw-bands-scope"]:checked');
-    var scope         = scopeInput ? scopeInput.value : 'clip';
+    // Workspace-only export: ignore any stale/full value and always clip to AOI.
+    var scope         = 'clip';
 
     // 📥 İndirme animasyonu: ZIP hazır olup indirilene kadar ekranı yarı
     // saydam beyaz katmanla kapla ve ortada yanıp sönen "SylvaGIS" göster.
@@ -26397,8 +26318,8 @@ function openGeoTiffDownloadDialog() {
     // Aktif Görüntü Alanı modunu göster
     var modeEl = document.getElementById('geotiff-clip-mode-info');
     if (modeEl) {
-        var vm = (document.getElementById('viewMode') || {}).value || 'clip';
-        modeEl.innerHTML = vm === 'clip' ? t('gtiff_clip_mode') : t('gtiff_full_mode');
+        var vm = 'clip';
+        modeEl.innerHTML = t('gtiff_clip_mode');
         modeEl.style.display = 'block';
     }
     // Piksel Çözünürlüğü: seçili uyduya göre seçenekleri ve varsayılanı güncelle.
@@ -26605,12 +26526,12 @@ function _executeGeoTiffDownloadCore() {
     // çağrıldığında fetch() isteği gerçekten iptal edilebilsin diye.
     _geotiffAbortController = new AbortController();
 
-    var _dlViewMode = (document.getElementById('viewMode') || {}).value || 'clip';
+    var _dlViewMode = 'clip';
     var _dlSelectedIndex = (window._lastAnalyzeMetaByPane && window._lastAnalyzeMetaByPane[_gtiffPane] && window._lastAnalyzeMetaByPane[_gtiffPane].analysisName) || '';
     var _dlTopKey = (window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[_gtiffPane]) || '';
     var _dlFullSource = (_dlSelectedIndex === 'RGB') || String(_dlTopKey).indexOf('RGB::') === 0 ||
         (typeof isSatelliteIndexAnalysis === 'function' && isSatelliteIndexAnalysis(_dlSelectedIndex));
-    var _dlClipMode = _dlFullSource ? 'full' : _dlViewMode;
+    var _dlClipMode = 'clip';
 
     // 🧩 AOI/Workspace geometrisi — "clip" modunda sunucunun rasteri Çalışma
     // Alanı sınırına kırpabilmesi için ROI (Region of Interest) geometrisi
@@ -54005,13 +53926,12 @@ refresh();
                 // Goruntu Alani seciminden alinir. Onceki kod burada kosulsuz
                 // 'clip' gonderdigi icin Tum Veri Goruntusu ekranda acik olsa
                 // bile zaman serisindeki her RGB sahnesi AOI'ye kirpiliyordu.
-                var _tsDownloadViewMode = ((document.getElementById('viewMode') || {}).value === 'full')
-                    ? 'full' : 'clip';
+                var _tsDownloadViewMode = 'clip';
                 // 🆕 Zaman Serisi RGB: her dönem gerçek sahnenin TAM veri
                 // kapsamı dışa aktarılır; AOI'nin kare bounding-box'ı ile
                 // kesilmez. Böylece ArcMap/QGIS çıktısı ekrandaki Full Data
                 // sahnesiyle aynı kapsamı korur.
-                var _tsDownloadClipMode = 'full';
+                var _tsDownloadClipMode = 'clip';
                 var _rgbPayload = {
                     roi: _tsReq.roi || _sylvaCurrentWorkspaceGeometry(pane) || null,
                     clipMode: _tsDownloadClipMode,
@@ -54062,12 +53982,10 @@ refresh();
                         // indirme anındaki Görüntü Alanı seçimini kullanır.
                         // Böylece Tüm Veri seçiliyken eski katman payload'ındaki
                         // clip değeri çalışma alanına kırpma yapamaz.
-                        var _tsAnalysisViewMode = ((document.getElementById('viewMode') || {}).value === 'full')
-                            ? 'full' : 'clip';
+                        var _tsAnalysisViewMode = 'clip';
                         // 🆕 Zaman Serisi uydu indeksleri de RGB ile aynı
                         // Full Source Export kuralını kullanır.
-                        var _tsAnalysisClipMode = (typeof isSatelliteIndexAnalysis === 'function' && isSatelliteIndexAnalysis(idx))
-                            ? 'full' : _tsAnalysisViewMode;
+                        var _tsAnalysisClipMode = 'clip';
                         var p = _sylvaPayloadWithDownloadGeometry(entry.payload, pane);
                         Object.assign(p, {
                             index: idx,
@@ -54334,8 +54252,7 @@ refresh();
         // Boylece Tum Veri Goruntusu seciliyken onceki analizden kalan
         // payload.clipMode='clip' degeri yanlislikla AOI kirpmasi yapamaz.
         // Calisma Alani seceneginde ise mevcut clip davranisi aynen korunur.
-        var _downloadViewMode = ((document.getElementById('viewMode') || {}).value === 'full')
-            ? 'full' : 'clip';
+        var _downloadViewMode = 'clip';
         // 🆕 FULL SOURCE EXPORT: Uydu Görüntüsü (RGB) ve uydu tabanlı klasik
         // indeksler (NDVI/NDWI/EVI/.../LST/SAR) artık indirmede AOI'nin
         // bounding-box'ına kırpılmaz. Her ZIP öğesi kendi veri türüne göre
@@ -54362,7 +54279,7 @@ refresh();
             var _ts = sylvaExportTypeAndSourceFromPayload(entry.payload);
             var _entryFullSource = (entry.index === 'RGB') ||
                 (typeof isSatelliteIndexAnalysis === 'function' && isSatelliteIndexAnalysis(entry.index));
-            var _entryClipMode = _entryFullSource ? 'full' : _downloadViewMode;
+            var _entryClipMode = 'clip';
             // SADECE uydu görüntüsü/uydu indekslerinde gerçek sahne tarihi
             // kullanılır. Zaman serisinde sceneDate doğrudan GEE sahnesinin
             // system:time_start değerinden gelir; normal galeride de aktif
