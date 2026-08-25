@@ -7210,31 +7210,19 @@ def download_geotiff():
         # Frontend ayrıca clipMode='full' gönderir; burada ikinci bir sunucu
         # tarafı güvence olarak aynı kural uygulanır. LULC/TOPO/çevresel-kentsel
         # rasterların mevcut kapsam kuralları korunur.
-        _satellite_source_indices = {
-            'RGB', 'NDVI', 'NDWI', 'EVI', 'SAVI', 'BSI', 'NDSI', 'NBR',
-            'AVI', 'SI', 'NDGI', 'NDMI', 'NPCRI', 'VHI', 'FRI', 'LST',
-            'SMI', 'SAR'
-        }
-        _is_full_source_satellite = data.get('index', 'NDVI') in _satellite_source_indices
-        if _is_full_source_satellite:
-            # RGB + klasik uydu indeksleri (SAR dahil) için AOI clip'i
-            # tamamen devre dışıdır; gerçek sahne/veri geometrisi korunur.
-            is_clip = False
-        else:
-            is_clip = (
-                data.get('clipMode', 'clip') == 'clip'
-                or data.get('index', 'NDVI') in LULC_FAMILY_INDICES
-            )
-        if is_clip:
-            export_region = roi
-        else:
-            # Tüm Veri/Full Source modunda görüntünün TAM kapsamı
-            # (sahne footprint'i / analiz rasterının gerçek geometrisi)
-            # indirilir — çalışma alanının kare bounding-box'ı kullanılmaz.
-            # Küresel görüntülerde geometry() sınırsız dönebilir; bu durumda
-            # _download_band_geotiff_bytes() fallback_region_geom (roi.bounds())
-            # ile yalnızca teknik bounded-geometry güvenlik ağı olarak tekrar dener.
-            export_region = final_display.geometry()
+        # 🛠️ KESİN AOI DIŞA AKTARIMI — kullanıcı tarafından çizilen çalışma alanının
+        # GERÇEK POLİGONU, koordinatları ve sınırları indirmeye birebir uygulanır.
+        # Önceki Full Source davranışı uydu görüntüsünü sahne geometrisiyle
+        # dışa aktarıyordu; GEE/Rasterio'nun region dikdörtgeni nedeniyle sonuç
+        # ArcMap/Google Earth'te çalışma alanını çevreleyen kare gibi görünüyordu.
+        # İstenen davranış: veri yalnızca analiz ekranındaki orijinal AOI içinde
+        # kalsın; AOI dışındaki pikseller gerçek NoData/maske olsun.
+        # GeoTIFF dosyasının teknik extent'i piksel ızgarası nedeniyle dikdörtgen
+        # olabilir, fakat DATA kareyi doldurmaz; yalnızca gerçek çalışma alanı
+        # poligonu içinde görünür. Bu nedenle hiçbir export yolunda roi.bounds()
+        # veya final_display.geometry() export region olarak kullanılmaz.
+        is_clip = True
+        export_region = roi
 
         safe_name = _sylva_safe_filename(filename)
 
@@ -7307,12 +7295,11 @@ def download_geotiff():
                 nodata_value = 0
 
         # 🔒 true-clip güvencesi: GEE'nin clip()/unmask() zincirinin ötesinde,
-        # AOI'nin GERÇEK poligon şeklini (EPSG:4326) de gönderiyoruz ki
-        # _download_band_geotiff_bytes() sonuçta ne dönerse dönsün (tek
-        # istek veya karo-mozaik) dosyayı yerel olarak KESİN bir şekilde
-        # bu poligona göre yeniden kırpsın. 'Tüm Veri' modunda (is_clip
-        # False) bu adım atlanır — mevcut davranış korunur.
-        aoi_geom_4326 = _call_with_retry(lambda: roi.getInfo()) if is_clip else None
+        # AOI'nin GERÇEK poligon geometrisini (EPSG:4326) her exportta yerel
+        # son-kesme aşamasına da gönderiyoruz. Böylece tek istek veya karo-mozaik
+        # sonucunda bile çalışma alanı dışındaki dikdörtgen pikseller gerçek
+        # NoData olur; çalışma alanının içine alan dolu bir kare veri oluşmaz.
+        aoi_geom_4326 = _call_with_retry(lambda: roi.getInfo())
 
         # 🎨 ArcMap/QGIS "Siyah-Beyaz + Rakam" / "Hepsi RGB İniyor" SORUNU
         # DÜZELTMESİ (bkz. _build_classified_symbology_zip() docstring'i):
@@ -9586,8 +9573,15 @@ def vector_download():
             print(f'[SylvaGIS] Vektörizasyon başlatılıyor: index={index} scale={vec_scale}')
             try:
                 # reduceToVectors: pikselleri poligona çevir
+                # GEE reduceToVectors() uses the first band as the integer
+                # label band. Reducer.first() consumes one additional band;
+                # a one-band image therefore raises:
+                # "Need 1+1 bands for Reducer.first, image has 1".
+                _vector_input = final_display.int().rename('class_value').addBands(
+                    ee.Image.constant(1).rename('vector_value')
+                )
                 vec_fc = _call_with_retry(
-                    lambda: final_display.int().reduceToVectors(
+                    lambda: _vector_input.reduceToVectors(
                         reducer=ee.Reducer.first(),
                         # 🛠️ BUG FİX (Görsel 5 - "Geometry.bounds: ... non-zero
                         # error margin"): bkz. _split_bbox_grid_aligned içindeki
@@ -9825,7 +9819,12 @@ def _vectorize_analysis_payload(data, crs='EPSG:4326'):
         scale=90
     else:
         scale=300
-    fc=_call_with_retry(lambda: vector_img.int().reduceToVectors(
+    # GEE reduceToVectors() requires one reducer input band in addition to
+    # the first label band. Add a constant second band for Reducer.first().
+    _vector_input = vector_img.int().rename('class_value').addBands(
+        ee.Image.constant(1).rename('vector_value')
+    )
+    fc=_call_with_retry(lambda: _vector_input.reduceToVectors(
         reducer=ee.Reducer.first(), geometry=roi, scale=scale, maxPixels=1e8,
         geometryType='polygon', eightConnected=False, labelProperty='class_value',
         crs=crs if str(crs).upper().startswith('EPSG:') else 'EPSG:4326').limit(20000))
