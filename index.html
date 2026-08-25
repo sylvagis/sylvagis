@@ -15402,7 +15402,7 @@ function selectRamp(name) {
                     // yerine uydu görüntüsü veri seti adı (ör. "Sentinel-2")
                     // gösterilir; diğer analizlerde (LULC/TOPO/Çevresel vb.)
                     // eskisi gibi tarih aralığı gösterilmeye devam eder.
-                    var _layerSuffixLabel = isSatelliteIndexAnalysis(meta.analysisName) ? _stackSatLabel : _stackDateLabel;
+                    var _layerSuffixLabel = isEnvUrbanAnalysis(meta.analysisName) ? '' : (isSatelliteIndexAnalysis(meta.analysisName) ? _stackSatLabel : _stackDateLabel);
                     window._sylvaLayerFriendlyNames[_thisLayerKey] = _baseLayerLabel + _layerSuffixLabel;
                     window._sylvaLayerBaseNames = window._sylvaLayerBaseNames || {};
                     window._sylvaLayerBaseNames[_thisLayerKey] = _baseLayerLabel;
@@ -18308,8 +18308,8 @@ function selectRamp(name) {
                 // tarih/bulutluluk metniyle kalıyordu. Artık yükleme
                 // başarısız olursa img gizlenip yerine 🛰️ simgesi ekleniyor.
                 var thumbHtml = scene.thumbnailUrl
-                    ? '<img src="' + scene.thumbnailUrl + '" alt="' + escapeHtml(dateLabel) + '" style="width:100%;height:100%;object-fit:cover;" onerror="this.onerror=null;this.style.display=\'none\';this.insertAdjacentHTML(\'afterend\',\'🛰️\');">'
-                    : '🛰️';
+                    ? '<img src="' + scene.thumbnailUrl + '" alt="' + escapeHtml(dateLabel) + '" style="width:100%;height:100%;object-fit:cover;display:block;" onerror="this.onerror=null;this.style.display=\'none\';">'
+                    : '<span style="font-size:0.68rem;color:#64748b;">Önizleme yok</span>';
 
                 var div = document.createElement('div');
                 div.className = 'gallery-item' + (scene.sceneId === _gState.activeSceneId ? ' active' : '');
@@ -24943,10 +24943,10 @@ function selectRamp(name) {
 
         <div style="margin-bottom:14px;">
             <label for="geotiff-filename" style="font-size:0.82rem; font-weight:600; color:#64748b; display:block; margin-bottom:6px;" data-i18n="lbl_filename">Dosya Adı</label>
-            <input type="text" id="geotiff-filename" value="SylvaGIS_export"
+            <input type="text" id="geotiff-filename" value="SylvaGIS"
                 style="width:100%; padding:8px 10px; border:1px solid #cbd5e1; border-radius:5px; font-size:0.85rem; outline:none; box-sizing:border-box;">
             <!-- 🆕 Tutarlı Dosya İsimlendirme Kuralı (Export Convention):
-                 SylvaGIS_export_[Analiz_Türü]_[Sensör/Veri]_[Alan_Adı]_[Tarih]
+                 SylvaGIS_[Analiz_Türü]_[Sensör/Veri]_[Alan_Adı]_[Tarih]
                  Bu alan, pencere her açıldığında ve Alan Adı değiştiğinde
                  sylvaSuggestGeoTiffFilename() tarafından otomatik doldurulur;
                  kullanıcı isterse üzerine yazıp kendi ismini de verebilir. -->
@@ -25162,6 +25162,9 @@ function selectRamp(name) {
                 </button>
                 <button type="button" class="vdl-source-btn" id="vdl-src-workspace" onclick="selectVdlSource('workspace')">
                     <span data-i18n="vdl_workspace_label">📍 Çalışma Alanı</span>
+                </button>
+                <button type="button" class="vdl-source-btn" id="vdl-src-batch" onclick="selectVdlSource('batch')">
+                    <span>🗂️ Ekrandaki Tüm Analizler</span>
                 </button>
             </div>
         </div>
@@ -26030,7 +26033,7 @@ function downloadRawBands() {
             // Başarılı: ZIP dosyası döndü
             var cd = r.headers.get('Content-Disposition') || '';
             var m = /filename="?([^"; ]+)"?/.exec(cd);
-            var filename = m ? m[1] : 'SylvaGIS_export.zip';
+            var filename = m ? m[1] : 'SylvaGIS.zip';
             var warn = r.headers.get('X-Partial-Errors');
             return r.blob().then(function(blob) {
                 return { blob: blob, filename: filename, warn: warn };
@@ -26194,13 +26197,13 @@ function _sylvaSyncActivePaneForDownload(callback) {
 // ════════════════════════════════════════════════════════════════
 // 🏷️ Tutarlı Dosya İsimlendirme Kuralı (Export Convention)
 // ════════════════════════════════════════════════════════════════
-// Kural: SylvaGIS_export_[Analiz_Türü]_[Sensör/Veri]_[Alan_Adı]_[Tarih]
+// Kural: SylvaGIS_[Analiz_Türü]_[Sensör/Veri]_[Alan_Adı]_[Tarih]
 //   Örnekler:
-//     LULC : SylvaGIS_export_LULC_ESA_Çaycuma_2020
-//     Uydu : SylvaGIS_export_RGB_Sentinel2_Çaycuma_2026-07-27
+//     LULC : SylvaGIS_LULC_ESA_Çaycuma_2020
+//     Uydu : SylvaGIS_RGB_Sentinel2_Çaycuma_2026-07-27
 //   Tarih formatı [YYYY-MM-DD]'dir. Alan_Adı boşsa o segment atlanır.
 // Bu, Sentinel-2/Landsat gibi farklı uydu verilerinin ZIP/TIF içinde
-// aynı ("SylvaGIS_export") isimle inip birbirinden ayırt edilememesi
+// aynı ("SylvaGIS") isimle inip birbirinden ayırt edilememesi
 // sorununu çözer — her indirmenin analiz türü, veri kaynağı, alan ve
 // tarihi artık doğrudan dosya adında görünür.
 
@@ -26291,7 +26294,7 @@ function sylvaExportTypeAndSourceFromPayload(payload) {
 // önerilen dosya adını (uzantısız) üretir: kullanıcı isterse üzerine
 // kendi ismini yazabilir — bu yalnızca akıllı bir varsayılandır.
 function sylvaSuggestGeoTiffFilename() {
-    var parts = ['SylvaGIS_export'];
+    var parts = ['SylvaGIS'];
     var ts = sylvaExportTypeAndSource();
     if (ts.type) parts.push(sylvaTranslitTR(ts.type).replace(/[^A-Za-z0-9]+/g, '_'));
     if (ts.source) parts.push(sylvaTranslitTR(ts.source).replace(/[^A-Za-z0-9]+/g, '_'));
@@ -26380,8 +26383,8 @@ function openGeoTiffDownloadDialog() {
     // görünüyordu. Artık pencere HER açılışta dosya adı varsayılana
     // sıfırlanıyor; kullanıcı isterse yine kendi ismini yazabilir, ama
     // önceki indirmeden kalan isim asla otomatik taşınmıyor.
-    // 🏷️ Export Convention: dosya adı artık sabit "SylvaGIS_export" yerine
-    // SylvaGIS_export_[Analiz_Türü]_[Sensör/Veri]_[Alan_Adı]_[Tarih]
+    // 🏷️ Export Convention: dosya adı artık sabit "SylvaGIS" yerine
+    // SylvaGIS_[Analiz_Türü]_[Sensör/Veri]_[Alan_Adı]_[Tarih]
     // kuralına göre otomatik önerilir (bkz. sylvaSuggestGeoTiffFilename).
     // Kullanıcı isterse üzerine yazabilir — bu yalnızca akıllı bir varsayılan.
     var areaNameInput = document.getElementById('geotiff-aoi-name');
@@ -26586,7 +26589,7 @@ function getSelectedCrs() {
 }
 
 function _executeGeoTiffDownloadCore() {
-    var filename = (document.getElementById('geotiff-filename').value || 'SylvaGIS_export').trim();
+    var filename = (document.getElementById('geotiff-filename').value || 'SylvaGIS').trim();
     var scale    = parseInt(document.getElementById('geotiff-scale').value) || 30;
     var crs      = getSelectedCrs();
     var status   = document.getElementById('geotiff-status');
@@ -26612,7 +26615,12 @@ function _executeGeoTiffDownloadCore() {
     // çağrıldığında fetch() isteği gerçekten iptal edilebilsin diye.
     _geotiffAbortController = new AbortController();
 
-    var _dlClipMode = (document.getElementById('viewMode') || {}).value || 'clip';
+    var _dlViewMode = (document.getElementById('viewMode') || {}).value || 'clip';
+    var _dlSelectedIndex = (window._lastAnalyzeMetaByPane && window._lastAnalyzeMetaByPane[_gtiffPane] && window._lastAnalyzeMetaByPane[_gtiffPane].analysisName) || '';
+    var _dlTopKey = (window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[_gtiffPane]) || '';
+    var _dlFullSource = (_dlSelectedIndex === 'RGB') || String(_dlTopKey).indexOf('RGB::') === 0 ||
+        (typeof isSatelliteIndexAnalysis === 'function' && isSatelliteIndexAnalysis(_dlSelectedIndex));
+    var _dlClipMode = _dlFullSource ? 'full' : _dlViewMode;
 
     // 🧩 AOI/Workspace geometrisi — "clip" modunda sunucunun rasteri Çalışma
     // Alanı sınırına kırpabilmesi için ROI (Region of Interest) geometrisi
@@ -48942,7 +48950,7 @@ function vdlResetCoords() {
 var _vdlSelectedSource = 'raster';
 function selectVdlSource(src) {
     _vdlSelectedSource = src;
-    ['raster', 'workspace'].forEach(function(s) {
+    ['raster', 'workspace', 'batch'].forEach(function(s) {
         var b = document.getElementById('vdl-src-' + s);
         if (b) { if (s === src) b.classList.add('selected'); else b.classList.remove('selected'); }
     });
@@ -48958,7 +48966,10 @@ function _vdlUpdateSourceInfoBox() {
     var infoType = document.getElementById('vdl-info-type');
     var infoDesc = document.getElementById('vdl-info-desc');
     if (!infoType || !infoDesc) return;
-    if (_vdlSelectedSource === 'workspace') {
+    if (_vdlSelectedSource === 'batch') {
+        infoType.textContent = '🗂️ Ekrandaki Tüm Analizler';
+        infoDesc.textContent = 'Aktif ekrandaki sınıflandırılmış analizler, Eş Yükselti ve Bina Çatı Tespiti ayrı vektör dosyaları olarak tek ZIP içinde indirilir. Lejant/sınıf/renk bilgileri korunur.';
+    } else if (_vdlSelectedSource === 'workspace') {
         var _vdlSrcPane = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
         var _vdlSrcLayer = (_vdlSrcPane === 'map2') ? window._workspaceLayer2 : window._workspaceLayer;
         if (_vdlSrcLayer) {
@@ -49057,6 +49068,10 @@ function selectVdlFormat(fmt) {
 }
 
 function _executeVectorDownloadCore() {
+    if (_vdlSelectedSource === 'batch') {
+        _executeVectorBatchDownload();
+        return;
+    }
     var fmt      = _vdlSelectedFormat;
     var fnInput  = document.getElementById('vdl-filename');
     var filename = (fnInput ? fnInput.value.trim() : '') || ('SylvaGIS_' + _vdlT('file_vector', 'Vector'));
@@ -52014,7 +52029,7 @@ function _renderRgbTimeSeriesGallery(gallery, paneId, satellite) {
     var meta = { datasetKey: satellite, datasetLabel: label, datasetName: label, analysisName: 'RGB' };
     var dsInfo = { key: satellite, datasetKey: satellite, datasetName: label, label: label };
     var state = _rgbGalleryStateFor(paneId, satellite);
-    state.scenes = gallery.map(function(g){ return { sceneId:g.sceneId, timestamp:g.timestamp, cloud:g.cloud, label:g.label || '' }; });
+    state.scenes = gallery.map(function(g){ return { sceneId:g.sceneId, timestamp:g.timestamp, cloud:g.cloud, label:g.label || '', thumbnailUrl:g.thumbnailUrl || null }; });
     state.dataset = dsInfo;
     state.meta = meta;
     state.sortKey = 'date';
@@ -53911,8 +53926,13 @@ refresh();
                 // Goruntu Alani seciminden alinir. Onceki kod burada kosulsuz
                 // 'clip' gonderdigi icin Tum Veri Goruntusu ekranda acik olsa
                 // bile zaman serisindeki her RGB sahnesi AOI'ye kirpiliyordu.
-                var _tsDownloadClipMode = ((document.getElementById('viewMode') || {}).value === 'full')
+                var _tsDownloadViewMode = ((document.getElementById('viewMode') || {}).value === 'full')
                     ? 'full' : 'clip';
+                // 🆕 Zaman Serisi RGB: her dönem gerçek sahnenin TAM veri
+                // kapsamı dışa aktarılır; AOI'nin kare bounding-box'ı ile
+                // kesilmez. Böylece ArcMap/QGIS çıktısı ekrandaki Full Data
+                // sahnesiyle aynı kapsamı korur.
+                var _tsDownloadClipMode = 'full';
                 var _rgbPayload = {
                     roi: _tsReq.roi || null,
                     clipMode: _tsDownloadClipMode,
@@ -53963,8 +53983,12 @@ refresh();
                         // indirme anındaki Görüntü Alanı seçimini kullanır.
                         // Böylece Tüm Veri seçiliyken eski katman payload'ındaki
                         // clip değeri çalışma alanına kırpma yapamaz.
-                        var _tsAnalysisClipMode = ((document.getElementById('viewMode') || {}).value === 'full')
+                        var _tsAnalysisViewMode = ((document.getElementById('viewMode') || {}).value === 'full')
                             ? 'full' : 'clip';
+                        // 🆕 Zaman Serisi uydu indeksleri de RGB ile aynı
+                        // Full Source Export kuralını kullanır.
+                        var _tsAnalysisClipMode = (typeof isSatelliteIndexAnalysis === 'function' && isSatelliteIndexAnalysis(idx))
+                            ? 'full' : _tsAnalysisViewMode;
                         var p = Object.assign({}, entry.payload, {
                             index: idx,
                             sceneId: sceneId,
@@ -54024,6 +54048,137 @@ refresh();
         }
         return result;
     }
+    // 🆕 Aktif ekrandaki vektöre uygun tüm katmanları toplar. rasterEntries()
+    // mevcut uydu/LULC/TOPO/çevresel katmanları taşır; burada daha önce bilinçli
+    // olarak dışarıda bırakılan Eş Yükselti ve Bina Çatı Tespiti de eklenir.
+    function vectorEntries(pane) {
+        var base = rasterEntries(pane) || [];
+        var result = [], seen = {};
+        var visible = window._sylvaLayerVisibleByPane && window._sylvaLayerVisibleByPane[pane] || {};
+        base.forEach(function(entry){
+            var key = entry.key;
+            if (key && visible[key] === false) return;
+            var entryIndex = String(entry.index || (entry.payload && entry.payload.index) || '').toUpperCase();
+            // Gerçek RGB uydu görüntüsü vektörleştirilebilir bir sınıflandırma
+            // değildir; toplu vektör ZIP'ine bilinçli olarak alınmaz.
+            if (entryIndex === 'RGB') return;
+            var fp = JSON.stringify(entry.payload || {});
+            if (seen[fp]) return;
+            seen[fp] = true;
+            result.push(entry);
+        });
+        var byLayer = window._sylvaLayerAnalyzePayloadByPane && window._sylvaLayerAnalyzePayloadByPane[pane] || {};
+        Object.keys(byLayer).forEach(function(key){
+            if (visible[key] === false) return;
+            var p = byLayer[key];
+            if (!p || !p.index) return;
+            var idx = String(p.index).toUpperCase();
+            if (idx !== 'TOPO_CONTOUR' && idx !== 'BUILDING_FOOTPRINT') return;
+            var fp = JSON.stringify(p);
+            if (seen[fp]) return;
+            seen[fp] = true;
+            result.push({key:key, payload:p, index:p.index, sceneDate:p.sceneDate || ''});
+        });
+        return result;
+    }
+
+    function _vectorBatchFilename(entry, n) {
+        var p = entry && entry.payload || {};
+        var idx = String(entry && entry.index || p.index || 'Analiz');
+        var date = entry && entry.sceneDate ? String(entry.sceneDate) : '';
+        var base = 'SylvaGIS_' + idx.replace(/[^A-Za-z0-9]+/g,'_');
+        if (p.satellite) base += '_' + String(p.satellite).replace(/[^A-Za-z0-9]+/g,'_');
+        if (date) base += '_' + date;
+        return safeName(base || ('SylvaGIS_Analiz_' + n));
+    }
+
+    function _executeVectorBatchDownload() {
+        var fmt = _vdlSelectedFormat;
+        var pane = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
+        var entries = vectorEntries(pane);
+        var status = document.getElementById('vdl-status');
+        var subEl = document.getElementById('vdl-bottom-indicator-sub');
+        var progressEl = document.getElementById('vdl-progress-index');
+        var btn = document.getElementById('vdl-btn-download');
+        var box = document.getElementById('vector-dialog-box');
+        if (!entries.length) {
+            if (status) { status.style.display='block'; status.style.color='#991b1b'; status.textContent='❌ Ekranda vektöre aktarılabilir aktif analiz bulunamadı.'; }
+            return;
+        }
+        if (entries.length > 25) {
+            if (status) { status.style.display='block'; status.style.color='#991b1b'; status.textContent='❌ Ekrandaki analiz sayısı 25 sınırını aşıyor. Lütfen katmanları azaltıp tekrar deneyin.'; }
+            return;
+        }
+        if (box) box.classList.add('downloading');
+        if (btn) { btn.disabled=true; btn.innerHTML='⏳…'; }
+        if (status) { status.style.display='block'; status.style.color='#1e3a8a'; }
+        var zip = (typeof JSZip !== 'undefined') ? new JSZip() : null;
+        if (!zip) { if(status) status.textContent='❌ JSZip kütüphanesi yüklenemedi.'; if(btn)btn.disabled=false; return; }
+        var errors=[]; var legends=[]; var used={};
+        function uniqueName(name) {
+            var out=name, i=2;
+            while(used[out.toLowerCase()]) out=name+'_'+(i++);
+            used[out.toLowerCase()]=true; return out;
+        }
+        function addBlob(blob, item, outName) {
+            var u8 = blob.arrayBuffer ? blob.arrayBuffer() : new Response(blob).arrayBuffer();
+            return u8.then(function(buf){
+                if (fmt === 'shp') {
+                    // SHP tek dosya değildir (.shp/.shx/.dbf/.prj). İç ZIP'i
+                    // ana ZIP'e katman klasörü olarak aç; böylece kullanıcı
+                    // tek tek dosyaları doğrudan çıkarabilir.
+                    return JSZip.loadAsync(buf).then(function(inner){
+                        var folder = outName.replace(/_shp\.zip$/i,'');
+                        var jobs=[];
+                        inner.forEach(function(path,file){
+                            if (!file.dir) jobs.push(file.async('arraybuffer').then(function(data){ zip.file(folder+'/'+path.split('/').pop(), data); }));
+                        });
+                        return Promise.all(jobs);
+                    });
+                }
+                zip.file(uniqueName(outName), buf);
+            });
+        }
+        var chain=Promise.resolve();
+        entries.forEach(function(entry, idx){
+            chain=chain.then(function(){
+                var n=idx+1, total=entries.length, label=entry.index || 'Analiz '+n;
+                if(status) status.textContent='⏳ '+n+'/'+total+' — '+label+' vektöre dönüştürülüyor…';
+                if(progressEl) progressEl.textContent='🗂️ '+label;
+                if(subEl) subEl.textContent='🔄 Raster → vektör → '+fmt.toUpperCase();
+                var filename=_vectorBatchFilename(entry,n);
+                var body={vectorizePayload:true, payload:entry.payload, format:fmt, filename:filename, crs:'EPSG:4326'};
+                return responseBlobNamed('/api/vector-download', body, filename + (fmt==='shp'?'_shp.zip':'.'+fmt))
+                    .then(function(res){
+                        return addBlob(res.blob, entry, res.name).then(function(){
+                            legends.push('['+filename+']');
+                            if (Array.isArray(entry.payload.classBreaks)) {
+                                entry.payload.classBreaks.forEach(function(c,i){ legends.push('  '+(i+1)+' | '+(c.label||'')+' | '+(c.color||'')); });
+                            }
+                        });
+                    })
+                    .catch(function(err){ errors.push({name:filename,error:(err&&err.message)||String(err)}); });
+            });
+        });
+        return chain.then(function(){
+            if (errors.length) {
+                var lines=['SylvaGIS — İNDİRİLEMEYEN KATMANLAR','', 'Başarısız katmanlar aşağıdadır; diğer başarılı katmanlar ZIP içinde korunmuştur.',''];
+                errors.forEach(function(e){ lines.push('- '+e.name+': '+e.error); });
+                zip.file('INDIRILEMEYEN_KATMANLAR.txt', lines.join('\n'));
+            }
+            if (legends.length) zip.file('LEJANTLAR.txt', legends.join('\n'));
+            if(status) status.textContent='⏳ ZIP dosyası hazırlanıyor…';
+            return zip.generateAsync({type:'blob',compression:'DEFLATE',compressionOptions:{level:6}});
+        }).then(function(blob){
+            var base='SylvaGIS_Vektor_Analizleri';
+            var a=document.createElement('a'), url=URL.createObjectURL(blob); a.href=url; a.download=base+'.zip'; document.body.appendChild(a); a.click(); a.remove();
+            setTimeout(function(){URL.revokeObjectURL(url);},60000);
+            if(status){ status.style.color='#065f46'; status.textContent='✓ '+entries.length+' katman işlendi.'+(errors.length?' '+errors.length+' katman için hata raporu ZIP içine eklendi.':''); }
+        }).catch(function(err){
+            if(status){status.style.color='#991b1b';status.textContent='❌ '+((err&&err.message)||'Toplu vektör indirme başarısız.');}
+        }).finally(function(){ if(btn) {btn.disabled=false;btn.innerHTML=_vdlT('btn_download','⬇️ İndir');} if(box) box.classList.remove('downloading'); });
+    }
+
     function requestJson(url, body) {
         return fetch((window.API_BASE || '') + url, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })
             .then(function (r) { return r.json().then(function (d) { if (!r.ok || !d || d.success === false) throw new Error((d && d.error) || r.statusText); return d; }); });
@@ -54069,7 +54224,7 @@ refresh();
     window.executeGeoTiffDownload = function () {
         var pane = activePane(), entries = rasterEntries(pane);
         var status=document.getElementById('geotiff-status'), btn=document.getElementById('btn-geotiff-execute');
-        var filename=(document.getElementById('geotiff-filename').value || 'SylvaGIS_export').trim();
+        var filename=(document.getElementById('geotiff-filename').value || 'SylvaGIS').trim();
         // 🏷️ Export Convention: dosya adı kutusu hâlâ otomatik önerilen
         // isimdeyse (kullanıcı elle değiştirmediyse), her katman kendi
         // [Analiz_Türü]_[Sensör/Veri] etiketiyle adlandırılır — bu, aynı
@@ -54090,8 +54245,14 @@ refresh();
         // Boylece Tum Veri Goruntusu seciliyken onceki analizden kalan
         // payload.clipMode='clip' degeri yanlislikla AOI kirpmasi yapamaz.
         // Calisma Alani seceneginde ise mevcut clip davranisi aynen korunur.
-        var _downloadClipMode = ((document.getElementById('viewMode') || {}).value === 'full')
+        var _downloadViewMode = ((document.getElementById('viewMode') || {}).value === 'full')
             ? 'full' : 'clip';
+        // 🆕 FULL SOURCE EXPORT: Uydu Görüntüsü (RGB) ve uydu tabanlı klasik
+        // indeksler (NDVI/NDWI/EVI/.../LST/SAR) artık indirmede AOI'nin
+        // bounding-box'ına kırpılmaz. Her ZIP öğesi kendi veri türüne göre
+        // aşağıdaki loop içinde full/clip kararını verir; böylece aynı ZIP'te
+        // RGB + LULC/TOPO/çevresel raster varsa yalnızca uydu kaynaklı rasterlar
+        // tam sahne olarak dışa aktarılır.
         // 🌐 ÇOK DİLLİ İNDİRME KUYRUĞU MESAJLARI: bu durum metinleri önceden
         // sabit Türkçe idi (30 dilli SYLVA_TRANSLATIONS/t() sistemine dahil
         // değildi). Artık her metin dlq_* anahtarlarıyla t() üzerinden aktif
@@ -54110,6 +54271,9 @@ refresh();
         var items=[];
         entries.forEach(function(entry, n) {
             var _ts = sylvaExportTypeAndSourceFromPayload(entry.payload);
+            var _entryFullSource = (entry.index === 'RGB') ||
+                (typeof isSatelliteIndexAnalysis === 'function' && isSatelliteIndexAnalysis(entry.index));
+            var _entryClipMode = _entryFullSource ? 'full' : _downloadViewMode;
             // SADECE uydu görüntüsü/uydu indekslerinde gerçek sahne tarihi
             // kullanılır. Zaman serisinde sceneDate doğrudan GEE sahnesinin
             // system:time_start değerinden gelir; normal galeride de aktif
@@ -54126,7 +54290,7 @@ refresh();
             }
             var _entryFilename;
             if (_gtiffIsAutoName) {
-                var _p = ['SylvaGIS_export'];
+                var _p = ['SylvaGIS'];
                 if (_ts.type) _p.push(sylvaTranslitTR(_ts.type).replace(/[^A-Za-z0-9]+/g, '_'));
                 if (_ts.source) _p.push(sylvaTranslitTR(_ts.source).replace(/[^A-Za-z0-9]+/g, '_'));
                 if (_gtiffAreaName) {
@@ -54146,13 +54310,23 @@ refresh();
                 // Böylece kullanıcı İndir'e bastığı anda TEK indirme isteği
                 // başlar; sunucu analiz oturumlarını kendi içinde hazırlar.
                 analysisId: null,
-                payload: entry.payload,
+                // Her rasterın kendi payload'ı korunur. Özellikle aynı ZIP içinde
+                // RGB + NDVI + çevresel/kentsel analizler birlikteyken sunucuya
+                // son aktif katmanın payload'ını değil, BU öğenin index/satellite/sceneId
+                // ve sınıflandırma bilgilerini göndermek zorunludur.
+                payload: Object.assign({}, entry.payload || {}, {
+                    // Full-source uydu rasterlarında AOI yalnızca analiz
+                    // kriteri olarak kalır; export sırasında clip sınırı
+                    // olarak kullanılmaz.
+                    roi: (_entryClipMode === 'clip') ? (entry.payload && entry.payload.roi ? entry.payload.roi : null) : null
+                }),
                 filename: _entryFilename,
                 scale:scale, crs:crs,
-                clipMode:_downloadClipMode,
+                nativeCrs: entry.payload && entry.payload.nativeCrs ? entry.payload.nativeCrs : null,
+                clipMode:_entryClipMode,
                 // Full Scene'de ROI sunucuya kirpma siniri olarak tasinmaz;
                 // Calisma Alani seciliyken gercek AOI aynen gonderilir.
-                roi:_downloadClipMode === 'clip' ? (entry.payload.roi || null) : null,
+                roi:_entryClipMode === 'clip' ? (entry.payload.roi || null) : null,
                 rendered:true,
                 visualization:exportVisualFor(pane, entry.key, entry.payload && entry.payload.sceneId ? entry.payload.sceneId : null, entry.payload), flatTiff:false,
                 // RGB uydu görüntüsünde indirme, harita önizlemesini yeniden
@@ -54183,7 +54357,7 @@ refresh();
             (_zipUniqueDates.length > 1 ? (_zipUniqueDates[0] + '_to_' + _zipUniqueDates[_zipUniqueDates.length - 1]) : '');
         var _batchName;
         if (_gtiffIsAutoName) {
-            var _zipBase = ['SylvaGIS_export'];
+            var _zipBase = ['SylvaGIS'];
             var _zipTs = sylvaExportTypeAndSourceFromPayload(entries[0].payload || {});
             if (_zipTs.type) _zipBase.push(sylvaTranslitTR(_zipTs.type).replace(/[^A-Za-z0-9]+/g, '_'));
             if (_zipTs.source) _zipBase.push(sylvaTranslitTR(_zipTs.source).replace(/[^A-Za-z0-9]+/g, '_'));
@@ -54212,6 +54386,7 @@ refresh();
             var body = {
                 analysisId: item.analysisId || null,
                 payload: item.payload,
+                nativeCrs: item.nativeCrs || null,
                 filename: item.filename,
                 scale: item.scale,
                 crs: item.crs,
@@ -54261,7 +54436,7 @@ refresh();
                 var sig = new Uint8Array(buf,0,Math.min(4,buf.byteLength));
                 var isZip = sig.length >= 2 && sig[0]===80 && sig[1]===75;
                 if(!isZip){
-                    _masterZip.file(_uniqueZipName((item.filename||'SylvaGIS_export')+'.tif'), buf);
+                    _masterZip.file(_uniqueZipName((item.filename||'SylvaGIS')+'.tif'), buf);
                     return;
                 }
                 return JSZip.loadAsync(buf).then(function(inner){
