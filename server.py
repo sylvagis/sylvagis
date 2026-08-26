@@ -20,12 +20,160 @@ import datetime
 import traceback
 import urllib.parse
 import requests
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
+
+# ════════════════════════════════════════════════════════════════
+# 💾 ANONİM PROJE / ANALİZ GEÇMİŞİ DEPOSU
+# E-posta/Gmail gerekmez. Tarayıcı başına rastgele client_id kullanılır.
+# SQLite WAL + kısa işlemler, yüzlerce istemcinin küçük kayıtlarını
+# düşük kaynak kullanımıyla yönetir. Büyük raster/GeoTIFF/KML içerikleri
+# bu veritabanına yazılmaz.
+# ════════════════════════════════════════════════════════════════
+_SYLVA_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sylvagis_data')
+os.makedirs(_SYLVA_DATA_DIR, exist_ok=True)
+_SYLVA_DB_PATH = os.path.join(_SYLVA_DATA_DIR, 'sylvagis.sqlite3')
+_SYLVA_MAX_CLIENT_ID = 128
+_SYLVA_MAX_PROJECT_NAME = 60
+_SYLVA_MAX_PROJECT_BYTES = 2 * 1024 * 1024
+_SYLVA_MAX_HISTORY_BYTES = 16 * 1024
+_SYLVA_HISTORY_MAX = 10
+
+def _sylva_db():
+    conn = sqlite3.connect(_SYLVA_DB_PATH, timeout=8.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('PRAGMA synchronous=NORMAL')
+    conn.execute('PRAGMA busy_timeout=8000')
+    return conn
+
+def _sylva_init_db():
+    with _sylva_db() as conn:
+        conn.executescript('''
+            CREATE TABLE IF NOT EXISTS projects (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                data TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(client_id, name)
+            );
+            CREATE INDEX IF NOT EXISTS idx_projects_client_updated
+                ON projects(client_id, updated_at DESC);
+            CREATE TABLE IF NOT EXISTS analysis_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id TEXT NOT NULL,
+                type TEXT NOT NULL,
+                icon TEXT,
+                filename TEXT,
+                ts INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_history_client_ts
+                ON analysis_history(client_id, ts DESC);
+        ''')
+
+_sylva_init_db()
+
+def _sylva_client_id():
+    value = (request.headers.get('X-Sylva-Client-Id') or '').strip()
+    if not value or len(value) > _SYLVA_MAX_CLIENT_ID or not re.fullmatch(r'[A-Za-z0-9._:-]{8,128}', value):
+        return None
+    return value
+
+def _sylva_require_client():
+    client_id = _sylva_client_id()
+    if not client_id:
+        return None, (jsonify({'ok': False, 'error': 'Geçersiz veya eksik istemci kimliği.'}), 400)
+    return client_id, None
+
+@app.route('/api/projects', methods=['GET', 'POST'])
+def sylva_projects():
+    client_id, error = _sylva_require_client()
+    if error:
+        return error
+    try:
+        if request.method == 'GET':
+            with _sylva_db() as conn:
+                rows = conn.execute('SELECT name, created_at, updated_at FROM projects WHERE client_id=? ORDER BY updated_at DESC LIMIT 100', (client_id,)).fetchall()
+            return jsonify({'ok': True, 'projects': [dict(r) for r in rows]})
+        data = request.get_json(silent=True) or {}
+        name = str(data.get('name') or '').strip()
+        project = data.get('project')
+        if not name or len(name) > _SYLVA_MAX_PROJECT_NAME:
+            return jsonify({'ok': False, 'error': 'Proje adı 1-60 karakter olmalıdır.'}), 400
+        if not isinstance(project, dict):
+            return jsonify({'ok': False, 'error': 'Geçersiz proje verisi.'}), 400
+        raw = json.dumps(project, ensure_ascii=False, separators=(',', ':'))
+        if len(raw.encode('utf-8')) > _SYLVA_MAX_PROJECT_BYTES:
+            return jsonify({'ok': False, 'error': 'Proje verisi çok büyük. Büyük dosyalar proje kaydına eklenmez.'}), 413
+        now = datetime.datetime.utcnow().replace(microsecond=0).isoformat() + 'Z'
+        with _sylva_db() as conn:
+            conn.execute('''INSERT INTO projects(client_id,name,data,created_at,updated_at)
+                            VALUES(?,?,?,?,?)
+                            ON CONFLICT(client_id,name) DO UPDATE SET data=excluded.data, updated_at=excluded.updated_at''', (client_id, name, raw, now, now))
+        return jsonify({'ok': True, 'name': name, 'updated_at': now})
+    except Exception:
+        traceback.print_exc()
+        return jsonify({'ok': False, 'error': 'Proje işlemi tamamlanamadı.'}), 500
+
+@app.route('/api/projects/<path:name>', methods=['GET', 'DELETE'])
+def sylva_project_item(name):
+    client_id, error = _sylva_require_client()
+    if error:
+        return error
+    name = urllib.parse.unquote(name).strip()
+    if not name or len(name) > _SYLVA_MAX_PROJECT_NAME:
+        return jsonify({'ok': False, 'error': 'Geçersiz proje adı.'}), 400
+    try:
+        with _sylva_db() as conn:
+            if request.method == 'GET':
+                row = conn.execute('SELECT name,data,created_at,updated_at FROM projects WHERE client_id=? AND name=?', (client_id,name)).fetchone()
+                if not row:
+                    return jsonify({'ok': False, 'error': 'Proje bulunamadı.'}), 404
+                return jsonify({'ok': True, 'project': json.loads(row['data']), 'name': row['name'], 'created_at': row['created_at'], 'updated_at': row['updated_at']})
+            cur = conn.execute('DELETE FROM projects WHERE client_id=? AND name=?', (client_id,name))
+            if cur.rowcount == 0:
+                return jsonify({'ok': False, 'error': 'Proje bulunamadı.'}), 404
+        return jsonify({'ok': True})
+    except Exception:
+        traceback.print_exc()
+        return jsonify({'ok': False, 'error': 'Proje işlemi tamamlanamadı.'}), 500
+
+@app.route('/api/analysis-history', methods=['GET', 'POST', 'DELETE'])
+def sylva_analysis_history():
+    client_id, error = _sylva_require_client()
+    if error:
+        return error
+    try:
+        with _sylva_db() as conn:
+            if request.method == 'GET':
+                rows = conn.execute('SELECT type,icon,filename,ts FROM analysis_history WHERE client_id=? ORDER BY ts DESC, id DESC LIMIT ?', (client_id, _SYLVA_HISTORY_MAX)).fetchall()
+                return jsonify({'ok': True, 'history': [dict(r) for r in rows]})
+            if request.method == 'DELETE':
+                conn.execute('DELETE FROM analysis_history WHERE client_id=?', (client_id,))
+                return jsonify({'ok': True})
+            data = request.get_json(silent=True) or {}
+            raw = json.dumps(data, ensure_ascii=False, separators=(',', ':'))
+            if len(raw.encode('utf-8')) > _SYLVA_MAX_HISTORY_BYTES:
+                return jsonify({'ok': False, 'error': 'Geçmiş kaydı çok büyük.'}), 413
+            typ = str(data.get('type') or 'Veri')[:80]
+            icon = str(data.get('icon') or '📄')[:16]
+            filename = str(data.get('filename') or '—')[:300]
+            ts = int(data.get('ts') or int(time.time()*1000))
+            conn.execute('INSERT INTO analysis_history(client_id,type,icon,filename,ts) VALUES(?,?,?,?,?)', (client_id,typ,icon,filename,ts))
+            conn.execute('''DELETE FROM analysis_history WHERE client_id=? AND id NOT IN
+                            (SELECT id FROM analysis_history WHERE client_id=? ORDER BY ts DESC, id DESC LIMIT ?)''', (client_id,client_id,_SYLVA_HISTORY_MAX))
+            rows = conn.execute('SELECT type,icon,filename,ts FROM analysis_history WHERE client_id=? ORDER BY ts DESC, id DESC LIMIT ?', (client_id,_SYLVA_HISTORY_MAX)).fetchall()
+            return jsonify({'ok': True, 'history': [dict(r) for r in rows]})
+    except Exception:
+        traceback.print_exc()
+        return jsonify({'ok': False, 'error': 'Analiz geçmişi işlemi tamamlanamadı.'}), 500
 
 # GEE dışa aktarma isteklerini süreç genelinde sıraya al. Earth Engine
 # Restricted Mode / 429 concurrency limit altında aynı anda birden fazla
@@ -10554,6 +10702,12 @@ def _enrich_vector_features(features, class_meta):
         try: code=int(float(raw))
         except Exception: code=None
         meta=by_code.get(str(code)) if code is not None else None
+        # Custom classBreaks are encoded by reduceToVectors() as 1..N. Keep the
+        # exact legend name/color even when GEE serializes class_value as a
+        # numeric string/float; the fallback below also protects older payloads
+        # that returned a zero-based class code.
+        if meta is None and code is not None:
+            meta = by_code.get(str(code + 1)) if str(code + 1) in by_code else None
         if meta:
             props['class_value']=meta['code']; props['class_name']=meta['label']; props['color']=meta['color']
         f['properties']=props; out.append(f)
