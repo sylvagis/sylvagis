@@ -4586,8 +4586,18 @@ def building_footprints_status(job_id):
     job = _get_building_job(job_id)
     with _building_jobs_lock:
         if not job:
+            # 🛠️ BUG FİX: Bu hata mesajı eskiden sabit Türkçe metin olarak
+            # dönüyordu; istemci de onu doğrudan ekrana yazıp SONRA arka
+            # planda Google Translate ile çevirip metni değiştiriyordu — bu
+            # da kullanıcının önce Türkçe, sonra seçtiği dilde (ör. Japonca)
+            # aynı mesajı art arda görmesine yol açıyordu. Artık bir hata
+            # KODU da (errorCode) döndürülüyor; istemci bu kodu görürse
+            # metni kendi 30-dilli çeviri tablosundan (t()) anında doğru
+            # dilde gösterir, Türkçe metne veya canlı çeviriye hiç gerek
+            # kalmaz.
             return jsonify({
                 'success': False,
+                'errorCode': 'job_not_found',
                 'error': 'İş bulunamadı (zaman aşımına uğramış olabilir).'
             }), 404
 
@@ -4623,6 +4633,7 @@ def building_footprints_cancel(job_id):
         if not job:
             return jsonify({
                 'success': False,
+                'errorCode': 'job_not_found_cancel',
                 'error': 'İş bulunamadı (zaten bitmiş/temizlenmiş olabilir).'
             }), 404
         if job['status'] == 'running':
