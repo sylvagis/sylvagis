@@ -2641,6 +2641,13 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
 
     new_profile = profile.copy()
     new_profile.update(dtype='uint8', count=1, nodata=0, compress='lzw')
+    # Sadece gerçek sınıf kodlarını kapsayan en küçük bit derinliğini kullan.
+    # Böylece 3 sınıflı bir raster 256 renk yuvasına genişlemez; ArcMap'te
+    # gereksiz/boş lejant satırları oluşmaz.
+    _n_needed = max(1, int(max_code) + 1)
+    _nbits = _choose_nbits(_n_needed)
+    if _nbits <= 8:
+        new_profile['nbits'] = _nbits
     # ArcMap'in TIFF içindeki otomatik palette/class renderer'ının, gerçek
     # sınıf sayısından bağımsız olarak 16/256 giriş üretip boş kutular
     # göstermesini engellemek için çıktı TIFF'inde GÖMÜLÜ ColorMap ve NBITS
@@ -2649,7 +2656,6 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
     # 1..N sınıf kodlarını taşır; kullanılmayan palette slotu diye bir şey
     # oluşturulmaz.
     new_profile.pop('photometric', None)
-    new_profile.pop('nbits', None)
     new_profile.pop('colormap', None)
 
     with MemoryFile() as out_memfile:
@@ -8072,6 +8078,29 @@ def download_geotiff():
                 requested_legend_labels = requested_vis.get('legendLabels')
         if requested_breaks is None and str(lulc_index or '').upper() in _native_export_breaks:
             requested_breaks = list(_native_export_breaks[str(lulc_index or '').upper()])
+            # Hazır çevresel/kentsel sınıfların ekran üzerindeki 30 dildeki
+            # isimleri ve gerçek renkleri istemciden legendLabels ile gelir.
+            # Sunucunun sabit İngilizce yedeği yalnızca fallback olsun;
+            # dışa aktarılan TIFF/RAT/VAT ekrandaki sınıf bilgisiyle birebir
+            # eşleşsin.
+            if isinstance(requested_legend_labels, list) and requested_legend_labels:
+                _ll_by_code = {}
+                for _ll in requested_legend_labels:
+                    if not isinstance(_ll, dict):
+                        continue
+                    try:
+                        _ll_code = int(_ll.get('code'))
+                    except Exception:
+                        continue
+                    _ll_by_code[_ll_code] = _ll
+                for _i, _br in enumerate(requested_breaks):
+                    _code = int(_br.get('code', _i))
+                    _ll = _ll_by_code.get(_code) or _ll_by_code.get(_i) or _ll_by_code.get(_i + 1)
+                    if _ll:
+                        if str(_ll.get('label') or '').strip():
+                            _br['label'] = str(_ll.get('label')).strip()
+                        if str(_ll.get('color') or '').strip():
+                            _br['color'] = str(_ll.get('color')).strip()
         is_true_color_rgb = (lulc_index == 'RGB') and not is_env_urban_raster
         export_image = final_display
 
