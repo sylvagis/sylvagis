@@ -2398,10 +2398,6 @@ tr.class-highlight-active {
         #btn-raw-bands-download, #btn-export-start, #btn-export-cancel,
         #sylva-guide-next-btn, #sylva-guide-prev-btn,
         #sylva-firstuse-open-btn, #sylva-firstuse-dismiss-btn,
-        #btn-export-gdrive, #btn-gtiff-gdrive, #btn-vector-gdrive {
-            min-height: 44px !important;
-            -webkit-tap-highlight-color: transparent;
-        }
         .mobile-tool-quick-btn { touch-action: manipulation; }
         /* details summary: parmakla kolay açılsın */
         details.main-module-details > summary,
@@ -3056,6 +3052,13 @@ tr.class-highlight-active {
 /* Workspace-only export: Full Data/View Area controls are intentionally hidden. */
 input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="full"] { display:none !important; }
 </style>
+
+<style id="sylva-i18n-boot-guard-20260826">
+/* Dil seçilmeden önce Türkçe/başlangıç metinlerinin görünmesini engeller.
+   Çeviri tamamlanınca .sylva-i18n-ready sınıfı eklenir. */
+html:not(.sylva-i18n-ready) body { visibility: hidden !important; }
+</style>
+
 </head>
 <body>
     <a href="#map" class="sylva-skip-link" data-i18n="skip_to_map">Haritaya geç</a>
@@ -4240,26 +4243,63 @@ function _sylvaCountVisibleGeeLayers(paneId) {
         return n;
     } catch (e) { return 0; }
 }
+
+// İndirme kilidi yalnızca farklı ana başlıklar "Önceki Analizin Üzerine Ekle"
+// ile aynı anda üst üste bindirildiğinde devreye girer. Aynı ana başlıktaki
+// çoklu seçimler (Sentinel-2 + Landsat, ESA + CORINE + MODIS, Eğim + Bakı +
+// Curvature, çoklu zaman serileri vb.) birlikte indirilebilir.
+function _sylvaDownloadMainCategory(paneId, layerKey) {
+    try {
+        var pane = (paneId === 'map2') ? 'map2' : 'map';
+        var byLayer = (window._sylvaLayerAnalyzePayloadByPane && window._sylvaLayerAnalyzePayloadByPane[pane]) || {};
+        var p = byLayer[layerKey] || {};
+        var idx = String((p && p.index) || '').toUpperCase();
+        var sat = String((p && (p.satellite || p.sensor || p.dataset)) || '').toUpperCase();
+        var source = String((p && (p.sourceModule || p.mainCategory || p.category)) || '').toUpperCase();
+        var name = String(layerKey || '').toUpperCase();
+        var all = idx + ' ' + sat + ' ' + source + ' ' + name;
+        if (/LULC|LAND.?COVER|CORINE|WORLDCOVER|DYNAMIC.?WORLD|MODIS.*COVER/.test(all)) return 'landuse';
+        if (/TOPO|DEM|SLOPE|ASPECT|CURV|CURVATURE|TPI|ROUGH|ELEVATION|HILLSHADE|TERRAIN/.test(all)) return 'topographic';
+        if (/URBAN|SPRAWL|UHI|HEAT.?ISLAND|ENV.?QUALITY|ENVIRONMENTAL|FOREST.?LOSS|LAND.?CHANGE|BUILT.?UP|NDBI|BUILDING.?FOOTPRINT|ROOF/.test(all)) return 'environmental_urban';
+        if (idx === 'RGB' || /SENTINEL|LANDSAT|MODIS|S2|S1|L8|L9|SAR|NDVI|NDWI|EVI|SAVI|LST|MSAVI|GNDVI|NBR|MNDWI|BSI/.test(all)) return 'satellite';
+        return 'other';
+    } catch (e) { return 'other'; }
+}
+function _sylvaHasMixedStackCategories(paneId) {
+    try {
+        var pane = (paneId === 'map2') ? 'map2' : 'map';
+        var vis = (window._sylvaLayerVisibleByPane && window._sylvaLayerVisibleByPane[pane]) || {};
+        var keys = Object.keys(vis).filter(function (k) { return vis[k] !== false; });
+        // Normal multi-selection is always downloadable. Only layers created by
+        // the explicit "Önceki Analizin Üzerine Ekle" flow (or the currently
+        // checked stack option) are candidates for the mixed-category lock.
+        var stackToggle = document.getElementById('toggle-stack-analysis');
+        var stackContext = !!(stackToggle && stackToggle.checked) || keys.some(function(k){ return /__t\d+$/i.test(String(k)); });
+        if (!stackContext) return false;
+        var cats = {};
+        keys.forEach(function (k) { cats[_sylvaDownloadMainCategory(pane, k)] = true; });
+        return Object.keys(cats).length > 1;
+    } catch (e) { return false; }
+}
 (function () {
     function _sylvaUpdateDownloadButtonsDisabledStateImpl() {
         try {
-            var isStacked = (_sylvaCountVisibleGeeLayers('map') > 1) || (_sylvaCountVisibleGeeLayers('map2') > 1);
+            var isMixedStacked = _sylvaHasMixedStackCategories('map') || _sylvaHasMixedStackCategories('map2');
             var ids = ['btn-geotiff-download', 'btn-vector-download', 'btn-geotiff-download-mobile', 'btn-vector-download-mobile'];
             var _titleTxt = (typeof t === 'function')
-                ? t('download_disabled_stack_mode', 'Ekranda birden fazla üst üste katman varken indirme geçici olarak kapalı')
-                : 'Ekranda birden fazla üst üste katman varken indirme geçici olarak kapalı';
+                ? t('download_disabled_stack_mode', 'Farklı ana başlıklardan üst üste eklenmiş katmanlar varken indirme geçici olarak kapalı')
+                : 'Farklı ana başlıklardan üst üste eklenmiş katmanlar varken indirme geçici olarak kapalı';
             ids.forEach(function (id) {
                 var btn = document.getElementById(id);
                 if (!btn) return;
-                btn.disabled = isStacked;
-                btn.style.opacity = isStacked ? '0.45' : '';
-                btn.style.cursor = isStacked ? 'not-allowed' : '';
-                btn.title = isStacked ? _titleTxt : '';
+                btn.disabled = isMixedStacked;
+                btn.style.opacity = isMixedStacked ? '0.45' : '';
+                btn.style.cursor = isMixedStacked ? 'not-allowed' : '';
+                btn.title = isMixedStacked ? _titleTxt : '';
             });
         } catch (e) {}
     }
     window._sylvaUpdateDownloadButtonsDisabledState = _sylvaUpdateDownloadButtonsDisabledStateImpl;
-    // Sayfa ilk açıldığında da mevcut duruma göre senkronize et.
     _sylvaUpdateDownloadButtonsDisabledStateImpl();
 })();
 
@@ -5019,7 +5059,7 @@ function _sylvaCountVisibleGeeLayers(paneId) {
             if (typeof playSylvaChime === 'function') playSylvaChime('download');
             if (typeof sylvaAddAnalysisHistoryEntry === 'function') sylvaAddAnalysisHistoryEntry('CSV', '📥', a.download);
         }).catch(function (err) {
-            if (typeof sylvaAlert === 'function') sylvaAlert((_t('err_jspdf', 'Excel dosyası oluşturulamadı')) + ': ' + err.message, 'error');
+            if (typeof sylvaAlert === 'function') sylvaAlert((_t('err_jspdf', 'Excel file could not be created')) + ': ' + err.message, 'error');
         });
     }
 
@@ -5204,7 +5244,7 @@ function _sylvaCountVisibleGeeLayers(paneId) {
             if (typeof sylvaAddAnalysisHistoryEntry === 'function') sylvaAddAnalysisHistoryEntry('PDF', '📄', fname);
         }).catch(function (err) {
             if (document.body.contains(reportEl)) document.body.removeChild(reportEl);
-            if (typeof sylvaAlert === 'function') sylvaAlert((_t('err_jspdf', 'PDF oluşturulamadı')) + ': ' + err.message, 'error');
+            if (typeof sylvaAlert === 'function') sylvaAlert((_t('err_jspdf', 'PDF could not be created')) + ': ' + err.message, 'error');
         });
     }
 
@@ -6032,12 +6072,6 @@ function _sylvaCountVisibleGeeLayers(paneId) {
         }
         #exp-progress-label { font-size: 0.78rem; color: #64748b; font-weight: 600; }
         .exp-footer { display: flex; align-items: center; gap: 8px; padding: 0 20px 20px; justify-content: space-between; }
-        #btn-export-gdrive {
-            padding: 8px 14px; border: 1px solid #cbd5e1; border-radius: 5px;
-            background: #f8fafc; font-size: 0.8rem; color: #374151;
-            cursor: pointer; display: flex; align-items: center; gap: 6px; opacity: 1;
-        }
-        #btn-export-gdrive:hover { background: #e2e8f0; border-color: #94a3b8; }
         #btn-export-cancel {
             padding: 8px 18px; border: 1px solid #cbd5e1; border-radius: 5px;
             background: #f1f5f9; cursor: pointer; font-weight: 600;
@@ -10387,7 +10421,17 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
                 return;
             }
             cb.disabled = false;
-            if (eligible || !cb._sylvaInfoBoxUserToggled) {
+            // Kullanıcı kutuyu kapattıysa, haritada başka bir yere tıklama,
+            // analiz/katman güncellemesi veya senkronizasyon onu yeniden açmamalı.
+            // Tercih ekran (pane) bazında korunur. İlk kez içerik geldiğinde
+            // herhangi bir tercih yoksa varsayılan olarak açık kalır.
+            cb._sylvaInfoBoxPreferenceByPane = cb._sylvaInfoBoxPreferenceByPane || {};
+            var _hasInfoPreference = Object.prototype.hasOwnProperty.call(
+                cb._sylvaInfoBoxPreferenceByPane, _ibaPane
+            );
+            if (_hasInfoPreference) {
+                cb.checked = !!cb._sylvaInfoBoxPreferenceByPane[_ibaPane];
+            } else if (eligible) {
                 cb.checked = true;
             }
             if (wrap) wrap.style.opacity = '1';
@@ -11565,7 +11609,7 @@ function selectRamp(name) {
                 row.innerHTML =
                     '<input type="number" class="class-input class-min" value="' + rowMin + '" placeholder="Min">' +
                     '<input type="number" class="class-input class-max" value="' + rowMax + '" placeholder="Max">' +
-                    '<input type="text" class="class-name" data-auto="' + (i + 1) + '" value="' + (t('class_word') || 'Class') + ' ' + (i + 1) + '" placeholder="' + (t('legend_name_placeholder') || 'Lejant Adı') + '">' +
+                    '<input type="text" class="class-name" data-auto="' + (i + 1) + '" value="' + (t('class_word') || 'Class') + ' ' + (i + 1) + '" placeholder="' + (t('legend_name_placeholder') || 'Legend Name') + '">' +
                     buildClassColorPickerHTML(i, color) +
                     '<button type="button" class="apply-btn" data-row="' + i + '" title="Uygula">➔</button>';
 
@@ -16306,7 +16350,7 @@ function selectRamp(name) {
                 .then(function (statusData) {
                     if (!_isCurrentBuildingRun()) { _stopBuildingPolling(); return; }
                     if (!statusData || !statusData.success) {
-                        throw new Error((statusData && statusData.error) || 'Durum sorgusu başarısız.');
+                        throw new Error((statusData && statusData.error) || 'Status query failed.');
                     }
                     if (statusData._transientMissing) {
                         if (_progressLabel) {
@@ -16357,7 +16401,7 @@ function selectRamp(name) {
                             coverageNote: statusData.coverageNote
                         }, false, null);
                     } else if (statusData.status === 'error') {
-                        _finishBuildingRun(null, true, statusData.error || 'Bina taraması sırasında hata oluştu.');
+                        _finishBuildingRun(null, true, statusData.error || 'Building scan failed.');
                     } else if (statusData.status === 'cancelled') {
                         _onBuildingCancelled();
                     }
@@ -16365,7 +16409,7 @@ function selectRamp(name) {
                 })
                 .catch(function (err) {
                     if (!_isCurrentBuildingRun()) { _stopBuildingPolling(); return; }
-                    _finishBuildingRun(null, true, (err && err.message) || 'Durum sorgusu sırasında beklenmeyen hata.');
+                    _finishBuildingRun(null, true, (err && err.message) || 'Unexpected status query error.');
                 });
             }
 
@@ -16400,7 +16444,7 @@ function selectRamp(name) {
             .then(function (data) {
                 if (!_isCurrentBuildingRun()) return;
                 if (!data || !data.success || !data.jobId) {
-                    throw new Error((data && data.error) || 'Bina taraması başlatılamadı.');
+                    throw new Error((data && data.error) || 'Building scan could not be started.');
                 }
                 _buildingJobId = data.jobId;
                 _buildingJobStartTime = Date.now();
@@ -17672,7 +17716,7 @@ function selectRamp(name) {
              var isNdwi = key === 'NDWI';
              var sensorTable = isNdwi ? _NDWI_SENSOR_INFO : _NDVI_SENSOR_INFO;
              var sensorInfo = sensorTable[(meta && meta.sensorKey) || ''] || {
-                 source: (meta && meta.sensorLabel) || 'Seçilen uydu sensörü',
+                 source: (meta && meta.sensorLabel) || 'Selected satellite sensor',
                  bands: isNdwi ? 'Green ve NIR bantları' : 'NIR ve Red bantları',
                  resolution: 'Sensör çözünürlüğüne göre'
              };
@@ -19131,7 +19175,7 @@ function selectRamp(name) {
                 playSylvaChime('download');
                 sylvaAddAnalysisHistoryEntry('CSV', '📥', a.download);
             }).catch(function(err) {
-                sylvaAlert((t('err_jspdf') || 'Excel dosyası oluşturulamadı') + ': ' + err.message, 'error');
+                sylvaAlert((t('err_jspdf') || 'Excel file could not be created') + ': ' + err.message, 'error');
             });
         }
 
@@ -19208,7 +19252,7 @@ function selectRamp(name) {
                 sylvaAddAnalysisHistoryEntry('PDF', '📄', 'SylvaGIS_' + t('file_analiz_raporu') + '.pdf');
             }).catch(function(err) {
                 if (document.body.contains(reportEl)) document.body.removeChild(reportEl);
-                sylvaAlert((t('err_jspdf') || 'PDF oluşturulamadı') + ': ' + err.message, 'error');
+                sylvaAlert((t('err_jspdf') || 'PDF could not be created') + ': ' + err.message, 'error');
             });
         }
 
@@ -24219,7 +24263,7 @@ function selectRamp(name) {
                 ]).then(function(results) {
                     var c1 = results[0], c2 = results[1];
                     if (!c1 || !c2) {
-                        sylvaAlert(t('export_dualscreen_error') || 'Çift ekran çıktısı hazırlanamadı.', 'error');
+                        sylvaAlert(t('export_dualscreen_error') || 'Dual-screen export could not be prepared.', 'error');
                         btnStart.disabled = false;
                         btnStart.innerHTML = t('btn_download');
                         return;
@@ -24239,7 +24283,7 @@ function selectRamp(name) {
                     setProgress(95, 'Dosya oluşturuluyor…');
                     saveCanvas(combined, fmt, filename, scale, combined.width / scale, combined.height / scale);
                 }).catch(function() {
-                    sylvaAlert(t('export_dualscreen_error') || 'Çift ekran çıktısı hazırlanamadı.', 'error');
+                    sylvaAlert(t('export_dualscreen_error') || 'Dual-screen export could not be prepared.', 'error');
                     btnStart.disabled = false;
                     btnStart.innerHTML = t('btn_download');
                 });
@@ -24707,9 +24751,6 @@ function selectRamp(name) {
 
             </div>
             <div class="exp-footer">
-                <button type="button" id="btn-export-gdrive" disabled style="opacity:0.4; cursor:not-allowed; pointer-events:none;">
-                    <span class="sylva-gdrive-label">Google Drive'a İndir</span>
-                </button>
                 <div style="display:flex; gap:8px;">
                     <button id="btn-export-cancel" data-i18n="btn_cancel">İptal</button>
                     <button id="btn-export-start" data-i18n="btn_download">⬇️ İndir</button>
@@ -25369,10 +25410,6 @@ function selectRamp(name) {
         <div id="geotiff-status" style="display:none; font-size:0.82rem; color:#1e3a8a; margin-bottom:12px; padding:8px; background:#eff6ff; border-radius:5px; border:1px solid #bfdbfe;"></div>
 
         <div style="display:flex; align-items:center; gap:8px;">
-            <button type="button" id="btn-gtiff-gdrive" disabled
-                style="padding:8px 14px; border:1px solid #cbd5e1; border-radius:5px; background:#f8fafc; font-size:0.8rem; color:#374151; cursor:not-allowed; display:flex; align-items:center; gap:6px; opacity:0.4; pointer-events:none;">
-                <span class="sylva-gdrive-label">Google Drive'a İndir</span>
-            </button>
             <div style="display:flex; gap:8px; justify-content:flex-end; margin-left:auto;">
             <button id="btn-geotiff-cancel" onclick="cancelGeoTiffDownload()"
                 style="padding:8px 18px; border:1px solid #cbd5e1; border-radius:5px; cursor:pointer; background:#f1f5f9; font-size:0.85rem; color:#475569;" data-i18n="btn_cancel">
@@ -25615,10 +25652,6 @@ function selectRamp(name) {
         <div id="vdl-status" style="display:none; font-size:0.8rem; padding:8px 10px; border-radius:5px; margin-bottom:12px;"></div>
 
         <div style="display:flex; align-items:center; gap:6px;">
-            <button type="button" id="btn-vector-gdrive" disabled
-                style="padding:6px 12px; border:1px solid #cbd5e1; border-radius:5px; background:#f8fafc; font-size:0.75rem; color:#374151; cursor:not-allowed; display:flex; align-items:center; gap:5px; opacity:0.4; pointer-events:none;">
-                <span class="sylva-gdrive-label">Google Drive'a İndir</span>
-            </button>
             <div style="display:flex; gap:6px; justify-content:flex-end; margin-left:auto;">
             <button onclick="closeVectorDownloadDialog()"
                 style="background:#f1f5f9; color:#475569; border:1px solid #cbd5e1; border-radius:5px; padding:6px 14px; font-size:0.8rem; font-weight:600; cursor:pointer;"
@@ -26028,7 +26061,7 @@ function fetchRawBandsCatalog(datasetKey) {
             // sunucu/GEE hata metni de artık arka planda seçili dile çevrilip
             // hazır olduğunda yerinde güncellenir.
             if (container) {
-                var _rbRawMsg = data.error || 'Bant kataloğu alınamadı.';
+                var _rbRawMsg = data.error || 'Band catalog could not be retrieved.';
                 container.innerHTML = '<div style="font-size:0.72rem;color:#991b1b;" class="sylva-rb-err-msg">❌ ' + escapeHtml(_rbRawMsg) + '</div>';
                 (function () {
                     var _msgEl = container.querySelector('.sylva-rb-err-msg');
@@ -30014,7 +30047,7 @@ var SYLVA_TRANSLATIONS = {
     dnbr_tooltip: 'Yangın öncesi ve sonrası tarih aralığı gerektirir (startDate2/endDate2)',
     dp_toggle_calendar: 'Takvimi aç / kapat',
     fri_tooltip: 'Yangın Risk İndeksi — kuraklık/nem stresi, yakıt yükü (NDVI) ve ısı stresini (varsa LST) birleştiren kompozit risk skoru (0=düşük, 1=yüksek risk)',
-    legend_name_placeholder: 'Lejant Adı',
+    legend_name_placeholder: 'Legend Name',
     panel_collapse_toggle: 'Paneli Daralt / Genişlet',
     ramp_autumn: 'Sonbahar',
     ramp_black_white: 'Siyah-Beyaz',
@@ -46121,7 +46154,7 @@ document.addEventListener('DOMContentLoaded',function(){
             contactUs:{title:'📄 Contatto', desc:'Inviaci le tue domande, feedback e suggerimenti da qui.'},            sylvaCv:{title:'Documenti SylvaGIS', desc:'Nella sezione SylvaGIS sono disponibili due PDF. Uno fornisce informazioni sulla piattaforma, mentre l\'altro dà dettagli sulle immagini satellitari e le analisi.'},
             privacyPolicy:{title:'🔒 Informativa sulla Privacy', desc:'Puoi consultare la nostra informativa sulla privacy da questo link nel piè di pagina.'},
             workspace:{title:'📍 Area di Lavoro', desc:"Definisci qui la regione da analizzare. Carica un file KML/KMZ/SHP o disegna un Poligono o Rettangolo sulla mappa per impostare la tua Area di Interesse (AOI). Tutte le analisi vengono eseguite entro quest'area."},
-            vectorAnalysisTools:{title:'🏠 Aree di lavoro & Analisi vettoriale', desc:'In questa sezione sono elencate le aree di lavoro che hai disegnato o caricato. Nell'area selezionata puoi usare Clip (ritaglio sull'AOI), Intersect, Erase, Merge e Buffer. Per Buffer, scegli distanza e unità e applica l'operazione.'},
+            vectorAnalysisTools:{title:'🏠 Aree di lavoro & Analisi vettoriale', desc:"In questa sezione sono elencate le aree di lavoro che hai disegnato o caricato. Nell\'area selezionata puoi usare Clip (ritaglio sull\'AOI), Intersect, Erase, Merge e Buffer. Per Buffer, scegli distanza e unità e applica l'operazione."},
             dates:{title:'📅 Selezione Date', desc:'Scegli le date di inizio e fine per la ricerca delle immagini satellitari. Il sistema cercherà scene acquisite in questo intervallo di date.\n☁️ Copertura Nuvolosa (Max): Usa il cursore per filtrare le scene nuvolose e dare priorità a immagini più nitide. Nota: Le analisi LULC e topografiche sono indipendenti da data e copertura nuvolosa.'},
             satelliteData:{title:'🛸 Selezione Dati Satellitari', desc:'Scegli il satellite/sensore da utilizzare, come Sentinel-2 o Landsat. Le scene reali corrispondenti ad AOI, date e copertura nuvolosa vengono elencate in una galleria.'},
             analysisModules:{title:'🌍 Moduli di Analisi', desc:'🌿 Indici Vegetazione e Acqua (NDVI, NDWI, EVI…): Attivati in base al sensore scelto. Analizza densità vegetazione, contenuto idrico e stress.\n🗺️ Uso/Copertura del Suolo (LULC): Mappa classi come foresta, urbano, zone umide.\n⛰️ Topografia (DEM, pendenza, esposizione, hillshade…): Strati statici basati su DEM per analisi del terreno e drenaggio.\n📡 Bande Grezze: Visualizza bande satellitari con valori originali dei pixel.\n🚀 Avvia Analisi: Premi dopo aver confermato le selezioni — calcolato su GEE e caricato sulla mappa. Usa i pulsanti ▶ sul bordo destro per attivare/disattivare la visibilità dei livelli.'},
@@ -46725,29 +46758,8 @@ document.addEventListener('DOMContentLoaded',function(){
 
     var guideBtn = document.getElementById('nav-guide-btn');
     if (guideBtn) guideBtn.addEventListener('click', function () {
-        // ── Login kontrolü ──────────────────────────────────────────────────
-        // Rehber / "Before You Start" tıklandığında kullanıcı giriş
-        // yapmamışsa uyarı göster ve login modalını aç.
-        var _ok = window._sylvaUserDone === true;
-        if (!_ok) {
-            try {
-                var _r = localStorage.getItem('sylva_user_profile');
-                if (_r) { var _d = JSON.parse(_r); if (_d && _d.user) _ok = true; }
-                if (!_ok) {
-                    var _o = localStorage.getItem('sylva_auth_session');
-                    if (_o) { var _od = JSON.parse(_o); if (_od && _od.user && _od.expires > Date.now()) _ok = true; }
-                }
-            } catch (ex) {}
-        }
-        if (!_ok) {
-            var _msg = (typeof t === 'function')
-                ? t('login_required_ui', '🔒 Please log in to use this feature.')
-                : '🔒 Please log in to use this feature.';
-            if (typeof sylvaAlert === 'function') sylvaAlert(_msg, 'warning');
-            if (typeof window.sylvaOpenLogin === 'function') window.sylvaOpenLogin();
-            return;
-        }
-        // ────────────────────────────────────────────────────────────────────
+        // Rehber bağımsız bir yardım özelliğidir; kullanıcı girişi gerektirmez.
+        // Eksik/kaldırılmış bir hedef adım olsa bile tur güvenli biçimde açılır.
         _captureTourSnapshot();
         startTour();
     });
@@ -51242,7 +51254,7 @@ function sylvaRenderAnalysisHistory() {
 }
 
 function sylvaClearAnalysisHistory() {
-    if (!confirm((typeof t === 'function' ? t('analysis_history_clear_confirm', null) : null) || 'Analiz geçmişi temizlensin mi?')) return;
+    if (!confirm((typeof t === 'function' ? t('analysis_history_clear_confirm', null) : null) || 'Clear analysis history?')) return;
     try { localStorage.removeItem(SYLVA_HIST_KEY); } catch (e) {}
     sylvaRenderAnalysisHistory();
 }
@@ -51274,271 +51286,7 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape')closePrivacy
 </script>
 
 
-<script>
-/* ═══════════════════════════════════════════════════════════════════
-   SylvaGIS — Google Drive Upload Patch
-   Adds:
-     1. btn_gdrive translations for all 30 supported languages
-     2. Google Drive upload via Google Identity Services + Drive API v3
-     3. Click handlers for all three Google Drive buttons
-   ═══════════════════════════════════════════════════════════════════ */
-(function () {
-    /* ── 1. Translations ──────────────────────────────────────────── */
-    var GDRIVE_LABELS = {
-        en: 'Save to Google Drive',
-        tr: "Google Drive'a Kaydet",
-        de: 'In Google Drive speichern',
-        fr: 'Enregistrer dans Google Drive',
-        es: 'Guardar en Google Drive',
-        pt: 'Salvar no Google Drive',
-        it: 'Salva su Google Drive',
-        ru: 'Сохранить на Google Диск',
-        ar: 'حفظ في Google Drive',
-        fa: 'ذخیره در Google Drive',
-        zh: '保存到 Google 云端硬盘',
-        ja: 'Google ドライブに保存',
-        ko: 'Google 드라이브에 저장',
-        hi: 'Google Drive में सहेजें',
-        id: 'Simpan ke Google Drive',
-        az: "Google Drive-a saxla",
-        kk: 'Google Drive-ға сақтау',
-        uz: "Google Drive'ga saqlash",
-        ky: "Google Drive'га сактоо",
-        pl: 'Zapisz na Google Drive',
-        el: 'Αποθήκευση στο Google Drive',
-        bg: 'Запази в Google Drive',
-        hu: 'Mentés Google Drive-ra',
-        th: 'บันทึกไปยัง Google Drive',
-        vi: 'Lưu vào Google Drive',
-        bn: 'Google Drive-এ সংরক্ষণ করুন',
-        ur: 'Google Drive میں محفوظ کریں',
-        ms: 'Simpan ke Google Drive',
-        mn: 'Google Drive-д хадгалах',
-        ka: 'Google Drive-ში შენახვა'
-    };
 
-    /* Inject into SYLVA_TRANSLATIONS once it is defined */
-    function injectTranslations() {
-        if (typeof SYLVA_TRANSLATIONS === 'undefined') {
-            setTimeout(injectTranslations, 200);
-            return;
-        }
-        Object.keys(GDRIVE_LABELS).forEach(function (lang) {
-            if (SYLVA_TRANSLATIONS[lang]) {
-                SYLVA_TRANSLATIONS[lang].btn_gdrive = GDRIVE_LABELS[lang];
-            }
-        });
-        /* Apply to already-rendered spans in case language was set before inject */
-        document.querySelectorAll('.sylva-gdrive-label').forEach(function (el) {
-            var lang = (typeof _sylvaLang !== 'undefined' && _sylvaLang) || 'tr';
-            el.textContent = GDRIVE_LABELS[lang] || GDRIVE_LABELS.en;
-        });
-    }
-    injectTranslations();
-
-    /* ── 2. Blob capture ──────────────────────────────────────────── */
-    window._sylvaLastExportBlob = null;
-    window._sylvaLastExportName = 'SylvaGIS_Map';
-
-    /* Wrap HTMLCanvasElement.prototype.toBlob to capture exported canvases */
-    var _origToBlob = HTMLCanvasElement.prototype.toBlob;
-    HTMLCanvasElement.prototype.toBlob = function (callback, type, quality) {
-        var self = this;
-        return _origToBlob.call(self, function (blob) {
-            /* Only capture when an export dialog is visible */
-            var isExportOpen = (function () {
-                var ids = ['export-modal-overlay', 'geotiff-download-overlay', 'vector-dialog-overlay'];
-                for (var i = 0; i < ids.length; i++) {
-                    var el = document.getElementById(ids[i]);
-                    if (el && el.style.display !== 'none' && el.style.display !== '') return true;
-                }
-                /* Fallback: check for any visible overlay with gdrive button */
-                var btns = document.querySelectorAll('#btn-export-gdrive,#btn-gtiff-gdrive,#btn-vector-gdrive');
-                for (var j = 0; j < btns.length; j++) {
-                    var btn = btns[j];
-                    var p = btn.parentElement;
-                    while (p) {
-                        var cs = window.getComputedStyle(p);
-                        if (cs.display !== 'none' && cs.visibility !== 'hidden') { p = p.parentElement; continue; }
-                        return false;
-                    }
-                    return true;
-                }
-                return false;
-            }());
-            if (blob && isExportOpen) {
-                window._sylvaLastExportBlob = blob;
-                var ext = (type === 'image/jpeg') ? '.jpg' : '.png';
-                var fnEl = document.getElementById('export-filename') || document.getElementById('export-fn');
-                var base = (fnEl && fnEl.value && fnEl.value.trim()) ? fnEl.value.trim() : 'SylvaGIS_Map';
-                window._sylvaLastExportName = base + ext;
-            }
-            callback(blob);
-        }, type, quality);
-    };
-
-    /* Also capture PDF blobs via jsPDF canvas output */
-    var _origCreateObjURL = URL.createObjectURL.bind(URL);
-    URL.createObjectURL = function (obj) {
-        if (obj instanceof Blob && obj.type === 'application/pdf') {
-            /* Opened only when pdf is generated from an export context */
-            var overlay = document.getElementById('export-modal-overlay');
-            if (overlay && overlay.style.display !== 'none') {
-                window._sylvaLastExportBlob = obj;
-                var fnEl2 = document.getElementById('export-filename');
-                var base2 = (fnEl2 && fnEl2.value && fnEl2.value.trim()) ? fnEl2.value.trim() : 'SylvaGIS_Map';
-                window._sylvaLastExportName = base2 + '.pdf';
-            }
-        }
-        return _origCreateObjURL(obj);
-    };
-
-    /* ── 3. Google Drive upload ───────────────────────────────────── */
-    /* Set your Google OAuth 2.0 Client ID here (create at console.cloud.google.com) */
-    window.SYLVA_GDRIVE_CLIENT_ID = window.SYLVA_GDRIVE_CLIENT_ID || '';
-
-    var _gsiLoaded = false;
-    var _gsiLoading = false;
-
-    function loadGSI(callback) {
-        if (_gsiLoaded && window.google && window.google.accounts) { callback(); return; }
-        if (_gsiLoading) { setTimeout(function () { loadGSI(callback); }, 150); return; }
-        _gsiLoading = true;
-        var s = document.createElement('script');
-        s.src = 'https://accounts.google.com/gsi/client';
-        s.async = true;
-        s.defer = true;
-        s.onload = function () { _gsiLoaded = true; _gsiLoading = false; callback(); };
-        s.onerror = function () { _gsiLoading = false; callback(new Error('GSI load failed')); };
-        document.head.appendChild(s);
-    }
-
-    function _showMsg(msg, type) {
-        if (typeof sylvaAlert === 'function') { sylvaAlert(msg, type || 'info'); return; }
-        alert(msg);
-    }
-
-    function _t(key, fallback) {
-        if (typeof t === 'function') { return t(key) || fallback; }
-        return fallback;
-    }
-
-    function _uploadToDrive(blob, filename, token) {
-        var metadata = { name: filename };
-        var form = new FormData();
-        form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-        form.append('file', blob);
-
-        fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
-            method: 'POST',
-            headers: { 'Authorization': 'Bearer ' + token },
-            body: form
-        })
-        .then(function (r) {
-            if (!r.ok) throw new Error('HTTP ' + r.status);
-            return r.json();
-        })
-        .then(function (data) {
-            var fileUrl = data.id ? ('https://drive.google.com/file/d/' + data.id + '/view') : '';
-            var msg = '✅ ' + (data.name || filename) + " — Google Drive'a kaydedildi!";
-            if (fileUrl) msg += ' <a href="' + fileUrl + '" target="_blank" style="color:#1e3a8a;">Aç</a>';
-            _showMsg(msg, 'success');
-        })
-        .catch(function (err) {
-            console.error('[SylvaGIS Drive]', err);
-            _showMsg('❌ Google Drive yüklemesi başarısız: ' + err.message, 'error');
-        });
-    }
-
-    window.sylvaUploadToGDrive = function (blob, filename) {
-        var clientId = window.SYLVA_GDRIVE_CLIENT_ID;
-
-        if (!clientId) {
-            /* Friendly setup dialog */
-            var hint = [
-                '🔑 Google Drive entegrasyonu için bir OAuth Client ID gereklidir.',
-                '',
-                'Kurulum adımları:',
-                '1. console.cloud.google.com → APIs & Services → Credentials',
-                '2. Create Credentials → OAuth 2.0 Client ID → Web Application',
-                '3. Authorized JS origins: ' + location.origin,
-                "4. Oluşturulan Client ID'yi aşağıya yapıştırın:"
-            ].join('\n');
-            var id = window.prompt(hint);
-            if (!id || !id.trim()) return;
-            window.SYLVA_GDRIVE_CLIENT_ID = id.trim();
-            clientId = id.trim();
-        }
-
-        loadGSI(function (err) {
-            if (err) { _showMsg('Google Sign-In kütüphanesi yüklenemedi.', 'error'); return; }
-            try {
-                var tokenClient = google.accounts.oauth2.initTokenClient({
-                    client_id: clientId,
-                    scope: 'https://www.googleapis.com/auth/drive.file',
-                    callback: function (response) {
-                        if (response.error) {
-                            _showMsg('Google Drive yetkilendirme hatası: ' + response.error, 'error');
-                            return;
-                        }
-                        _uploadToDrive(blob, filename, response.access_token);
-                    }
-                });
-                tokenClient.requestAccessToken({ prompt: 'consent' });
-            } catch (e) {
-                _showMsg('Google Drive yetkilendirme başlatılamadı: ' + e.message, 'error');
-            }
-        });
-    };
-
-    /* ── 4. Wire up click handlers after DOM ready ────────────────── */
-    function setupButtons() {
-        ['btn-export-gdrive', 'btn-gtiff-gdrive', 'btn-vector-gdrive'].forEach(function (id) {
-            var btn = document.getElementById(id);
-            if (!btn) return;
-            btn.addEventListener('click', function (e) {
-                e.preventDefault();
-                e.stopPropagation();
-                var blob = window._sylvaLastExportBlob;
-                var name = window._sylvaLastExportName || 'SylvaGIS_Map.png';
-                if (!blob) {
-                    _showMsg(_t('gdrive_export_first', 'Lütfen önce haritayı indirin, ardından bu butona tıklayın.'), 'info');
-                    return;
-                }
-                window.sylvaUploadToGDrive(blob, name);
-            });
-        });
-    }
-
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', setupButtons);
-    } else {
-        setupButtons();
-    }
-
-    /* ── 5. Hook applySylvaLang to update button labels on lang change ── */
-    var _prevApplySylvaLang = window.applySylvaLang;
-    function _patchApply() {
-        if (typeof window.applySylvaLang !== 'function' || window.applySylvaLang === _patched) {
-            setTimeout(_patchApply, 300);
-            return;
-        }
-        var original = window.applySylvaLang;
-        var _patched = function (lang) {
-            original.apply(this, arguments);
-            /* Update drive button labels that applySylvaLang may have missed */
-            var label = GDRIVE_LABELS[lang] || GDRIVE_LABELS.en;
-            document.querySelectorAll('.sylva-gdrive-label').forEach(function (el) {
-                el.textContent = label;
-            });
-        };
-        window.applySylvaLang = _patched;
-    }
-    /* Wait for real applySylvaLang to be defined */
-    setTimeout(_patchApply, 500);
-
-})();
-</script>
 
 <script>
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -51911,7 +51659,7 @@ function runTimeSeriesAnalysis() {
 
         if (!data.success) {
             _clearTsGalleryNow();
-            var errMsg = data.error || 'Zaman serisi hesaplanamadı.';
+            var errMsg = data.error || 'Time series could not be calculated.';
             if (typeof showAnalysisToast === 'function') showAnalysisToast(errMsg, 'error');
             else alert(errMsg);
             return;
@@ -53657,8 +53405,21 @@ refresh();
         var _buildingState = window._sylvaBuildingStateByPane && window._sylvaBuildingStateByPane[pane];
         var _buildingData  = window._sylvaBuildingDataByPane && window._sylvaBuildingDataByPane[pane];
         if (_buildingState && _buildingState.active && _buildingData) {
-            var _bp = _sylvaPayloadWithDownloadGeometry({ index: 'BUILDING_FOOTPRINT' }, pane);
-            var _bfp = JSON.stringify(_bp);
+            // Bina Çatı Tespiti sonucu zaten ekranda başarıyla üretilmiş gerçek
+            // GeoJSON geometrilerini kullan. İndirme sırasında yeniden GEE/OSM
+            // sorgusu çalıştırmak boş sonuç üretebildiği için artık aynı sonucu
+            // ikinci kez aramıyoruz; ekranda görünen poligonlar doğrudan dışa
+            // aktarım payload'ına taşınıyor.
+            var _bp = _sylvaPayloadWithDownloadGeometry({
+                index: 'BUILDING_FOOTPRINT',
+                roi: _buildingData.roi || _sylvaCurrentWorkspaceGeometry(pane),
+                geometry: _buildingData.roi || _sylvaCurrentWorkspaceGeometry(pane),
+                geojson: _buildingData.geojson,
+                buildingCount: _buildingData.buildingCount,
+                totalAreaM2: _buildingData.totalAreaM2,
+                dataset: _buildingData.dataset
+            }, pane);
+            var _bfp = JSON.stringify({index:_bp.index, geojson:_bp.geojson, roi:_bp.roi});
             if (!seen[_bfp]) {
                 seen[_bfp] = true;
                 result.push({ key: 'building_footprint', payload: _bp, index: 'BUILDING_FOOTPRINT' });
@@ -53679,14 +53440,54 @@ refresh();
     // fonksiyon window'a açılıyor ki dışarıdaki kod onlara erişebilsin.
     window.vectorEntries = vectorEntries;
     window.rasterEntries = rasterEntries;
+    // Aktif dildeki analiz başlığını dışa aktarma dosya adına taşır.
+    // Teknik indeks kodları (BUILDING_FOOTPRINT, NDVI vb.) kullanıcıya dosya
+    // adında gösterilmez; aktif dildeki gerçek analiz başlığı kullanılır.
+    function _sylvaLocalizedAnalysisTitle(analysisName) {
+        var key = String(analysisName || '').toUpperCase();
+        try {
+            if (key === 'BUILDING_FOOTPRINT') return t('building_roof_detection', 'Building Roof Detection');
+            if (typeof _DATASET_INFO_TITLE_KEYS !== 'undefined' && _DATASET_INFO_TITLE_KEYS[key]) {
+                var k = _DATASET_INFO_TITLE_KEYS[key].key;
+                if (k) return t(k, key);
+            }
+            // LULC/TOPO ve diğer modüller için DOM'daki data-analysis → data-i18n
+            // eşleşmesini de destekle; böylece yeni analizler de otomatik olarak
+            // aktif dilde adlandırılır.
+            var el = document.querySelector('[data-analysis="' + CSS.escape(key) + '"][data-i18n]');
+            if (el) {
+                var ik = el.getAttribute('data-i18n');
+                var tv = t(ik, '');
+                if (tv) return tv;
+            }
+            // Son çare: teknik başlığın SYLVA_TRANSLATIONS içinde doğrudan anahtar
+            // olarak bulunup bulunmadığını kontrol et.
+            var direct = t(key, '');
+            if (direct && direct !== key) return direct;
+        } catch (e) {}
+        return key;
+    }
+
+    function _sylvaSafeLocalizedFilename(value) {
+        // Unicode harf/rakamları koru (Korece, Çince, Arapça, Kiril vb.).
+        // Windows/macOS/Linux için geçersiz karakterleri temizle.
+        var s = String(value || 'Analiz').normalize('NFC')
+            .replace(/[<>:"\\/|?*\u0000-\u001F]/g, '_')
+            .replace(/\s+/g, '_')
+            .replace(/_+/g, '_')
+            .replace(/^[_ .]+|[_ .]+$/g, '');
+        return s || 'Analiz';
+    }
+
     function _vectorBatchFilename(entry, n) {
         var p = entry && entry.payload || {};
         var idx = String(entry && entry.index || p.index || 'Analiz');
+        var title = _sylvaLocalizedAnalysisTitle(idx);
         var date = entry && entry.sceneDate ? String(entry.sceneDate) : '';
-        var base = 'SylvaGIS_' + idx.replace(/[^A-Za-z0-9]+/g,'_');
-        if (p.satellite) base += '_' + String(p.satellite).replace(/[^A-Za-z0-9]+/g,'_');
-        if (date) base += '_' + date;
-        return safeName(base || ('SylvaGIS_Analiz_' + n));
+        var parts = ['SylvaGIS', title];
+        if (p.satellite) parts.push(String(p.satellite));
+        if (date) parts.push(date);
+        return _sylvaSafeLocalizedFilename(parts.join('_')) || ('SylvaGIS_Analiz_' + n);
     }
 
     function _executeVectorBatchDownload() {
@@ -53892,18 +53693,19 @@ refresh();
             var _entryFilename;
             if (_gtiffIsAutoName) {
                 var _p = ['SylvaGIS'];
-                if (_ts.type) _p.push(sylvaTranslitTR(_ts.type).replace(/[^A-Za-z0-9]+/g, '_'));
-                if (_ts.source) _p.push(sylvaTranslitTR(_ts.source).replace(/[^A-Za-z0-9]+/g, '_'));
+                var _localizedAnalysisTitle = _sylvaLocalizedAnalysisTitle(entry.index || (entry.payload && entry.payload.index) || _ts.type || 'Analiz');
+                if (_localizedAnalysisTitle) _p.push(_localizedAnalysisTitle);
+                if (_ts.source) _p.push(String(_ts.source));
                 if (_gtiffAreaName) {
                     var _ac = sylvaTranslitTR(_gtiffAreaName).replace(/\s+/g, '_').replace(/[^A-Za-z0-9_\-]+/g, '');
                     if (_ac) _p.push(_ac);
                 }
                 if (_entryDatePart) _p.push(_entryDatePart);
-                _entryFilename = safeName(_p.join('_'));
+                _entryFilename = _sylvaSafeLocalizedFilename(_p.join('_'));
             } else {
                 var _suffix = _ts.type + (_ts.source ? ('_' + _ts.source) : '');
                 if (_entryDatePart) _suffix += '_' + _entryDatePart;
-                _entryFilename = safeName(filename + '_' + _suffix);
+                _entryFilename = _sylvaSafeLocalizedFilename(filename + '_' + _suffix);
             }
             items.push({
                 // Yeni batch akışı: ağır /api/analyze çağrısını tarayıcıda
@@ -55368,6 +55170,200 @@ window.openInfo=render;
 
   [100, 500, 1200, 2200].forEach(function(ms){ setTimeout(sync, ms); });
   window.sylvaSyncRgbPassiveChartLegend = sync;
+})();
+</script>
+
+
+<script id="sylva-global-i18n-hardening-20260826">
+(function(){
+  'use strict';
+
+  var LANGS = ['en','uz','el','bg','tr','az','hu','kk','de','fr','es','pt','ar','fa','zh','ja','ko','hi','id','ru','th','bn','vi','ur','pl','ms','ky','mn','ka','it'];
+  var MAP = {zh:'zh-CN',pt:'pt',tr:'tr',de:'de',fr:'fr',es:'es',it:'it',ru:'ru',ar:'ar',fa:'fa',ja:'ja',ko:'ko',hi:'hi',id:'id',az:'az',kk:'kk',uz:'uz',ky:'ky',pl:'pl',el:'el',bg:'bg',hu:'hu',th:'th',vi:'vi',bn:'bn',ur:'ur',ms:'ms',mn:'mn',ka:'ka'};
+  var busy = false;
+  var cache = Object.create(null);
+  var observer = null;
+
+  function getLang(){
+    try {
+      var saved = localStorage.getItem('sylvaSelectedLanguage');
+      if(saved && LANGS.indexOf(saved) >= 0) return saved;
+    } catch(e){}
+    return (typeof window._sylvaLang === 'string' && LANGS.indexOf(window._sylvaLang) >= 0) ? window._sylvaLang : 'en';
+  }
+
+  function hasTurkish(s){
+    return /[çğıöşüÇĞİÖŞÜ]/.test(String(s||''));
+  }
+
+  function isProtectedTextNode(n){
+    if(!n || !n.parentElement) return true;
+    var p=n.parentElement;
+    if(!String(n.nodeValue||'').trim()) return true;
+    if(p.closest('script,style,noscript,template')) return true;
+    if(p.closest('.leaflet-container,.leaflet-control,.leaflet-popup,.leaflet-tooltip')) return true;
+    if(p.closest('.lang-menu,.lang-opt,#lang-menu,#mqb-lang-menu')) return true;
+    if(p.closest('[data-i18n],[data-i18n-html],[data-i18n-placeholder],[data-i18n-title],[data-i18n-aria-label]')) return true;
+    if(p.closest('input,textarea')) return true;
+    if(p.hasAttribute('data-sylva-i18n-runtime')) return true;
+    return false;
+  }
+
+  function translateText(s, lang){
+    s = String(s||'');
+    if(!s.trim() || lang === 'tr') return Promise.resolve(s);
+    var key = lang + '|' + s;
+    if(cache[key]) return cache[key];
+    if(typeof window._sylvaGoogleTranslateText === 'function'){
+      cache[key] = window._sylvaGoogleTranslateText(s, lang).then(function(v){
+        return (v && String(v).trim()) ? String(v) : s;
+      }).catch(function(){ return s; });
+      return cache[key];
+    }
+    var tl = MAP[lang] || lang;
+    var url='https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl='+encodeURIComponent(tl)+'&dt=t&q='+encodeURIComponent(s);
+    cache[key] = fetch(url,{credentials:'omit'}).then(function(r){return r.json();}).then(function(d){
+      var v = Array.isArray(d)&&Array.isArray(d[0]) ? d[0].map(function(x){return x&&x[0]||''}).join('') : '';
+      return v && v.trim() ? v : s;
+    }).catch(function(){return s;});
+    return cache[key];
+  }
+
+  function missingKeysFor(lang){
+    try{
+      var T = window.SYLVA_TRANSLATIONS || {};
+      var en = T.en || {};
+      var cur = T[lang] || {};
+      return Object.keys(en).filter(function(k){ return cur[k] === undefined; });
+    }catch(e){ return []; }
+  }
+
+  function fillMissingTranslationKeys(lang){
+    if(lang === 'en' || !window.SYLVA_TRANSLATIONS) return Promise.resolve();
+    var T = window.SYLVA_TRANSLATIONS;
+    var en = T.en || {};
+    var cur = T[lang] || (T[lang] = {});
+    var keys = missingKeysFor(lang);
+    if(!keys.length) return Promise.resolve();
+    return Promise.all(keys.map(function(k){
+      return translateText(String(en[k]), lang).then(function(v){ cur[k] = v || en[k]; });
+    })).then(function(){});
+  }
+
+  function collectUnlocalizedTextNodes(root){
+    var out=[], seen=Object.create(null);
+    if(!root) return out;
+    var walker=document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    while(walker.nextNode()){
+      var n=walker.currentNode, s=String(n.nodeValue||'').trim();
+      if(!s || !hasTurkish(s) || isProtectedTextNode(n)) continue;
+      // Do not translate pure code/comments/technical identifiers.
+      if(/^(?:EPSG|SRTM|ALOS|DEM|NDVI|NDWI|EVI|SAVI|LST|SAR|AOI|GEE|PNG|JPEG|PDF|GeoTIFF|QGIS|ArcGIS)\b/i.test(s)) continue;
+      var k=s;
+      if(!seen[k]){ seen[k]=true; out.push({node:n,source:s}); }
+    }
+    return out;
+  }
+
+  function localizeStaticDom(lang){
+    if(lang === 'tr') return Promise.resolve();
+    var items=collectUnlocalizedTextNodes(document.body);
+    return Promise.all(items.map(function(item){
+      item.node.parentElement && item.node.parentElement.setAttribute('data-sylva-i18n-runtime','pending');
+      return translateText(item.source, lang).then(function(v){
+        if(item.node && item.node.parentNode && String(item.node.nodeValue||'').trim()===item.source){
+          item.node.nodeValue = String(item.node.nodeValue).replace(item.source, v);
+        }
+      }).finally(function(){
+        if(item.node && item.node.parentElement) item.node.parentElement.removeAttribute('data-sylva-i18n-runtime');
+      });
+    }));
+  }
+
+  function setReady(){
+    document.documentElement.classList.add('sylva-i18n-ready');
+  }
+
+  function localizeAll(lang, reveal){
+    if(busy) return;
+    busy=true;
+    if(reveal) document.documentElement.classList.remove('sylva-i18n-ready');
+
+    var work = fillMissingTranslationKeys(lang).then(function(){
+      // Missing translation keys are now present; rerender all i18n-bound UI
+      // directly in the selected language.
+      try{
+        if(typeof oldApply === 'function'){
+          oldApply.call(window, lang);
+        }
+      }catch(e){}
+      return localizeStaticDom(lang);
+    });
+
+    // Never leave the application invisible forever if the remote translation
+    // service is unavailable.
+    Promise.race([
+      work,
+      new Promise(function(resolve){ setTimeout(resolve, 7000); })
+    ]).then(function(){
+      busy=false;
+      if(reveal) setReady();
+    }).catch(function(){
+      busy=false;
+      if(reveal) setReady();
+    });
+  }
+
+  // First paint: resolve the saved language before the user sees the UI.
+  function boot(){
+    var lang=getLang();
+    if(lang === 'tr'){
+      setReady();
+      return;
+    }
+    localizeAll(lang,true);
+  }
+
+  // Language switches: hide the page during the complete language pass so
+  // Turkish source text is never shown first.
+  var oldApply = window.applySylvaLang;
+  if(typeof oldApply === 'function' && !window._sylvaGlobalI18nHardeningWrapped){
+    window.applySylvaLang = function(lang){
+      if(LANGS.indexOf(lang)<0) lang='en';
+      document.documentElement.classList.remove('sylva-i18n-ready');
+      var result;
+      try { result=oldApply.apply(this,arguments); } catch(e) { result=undefined; }
+      // Continue with missing keys + unlocalized runtime/static text.
+      localizeAll(lang,false);
+      return result;
+    };
+    window._sylvaGlobalI18nHardeningWrapped=true;
+  }
+
+  // Dynamic dialogs/warnings generated later in the session are localized too.
+  // Only text nodes containing Turkish source text are considered, so map/data
+  // labels and user-entered values are not rewritten.
+  function observeDynamic(){
+    if(observer || !document.body) return;
+    var queued=false;
+    observer=new MutationObserver(function(){
+      if(queued) return;
+      queued=true;
+      setTimeout(function(){
+        queued=false;
+        var lang=getLang();
+        if(lang !== 'tr' && !busy) localizeStaticDom(lang);
+      },120);
+    });
+    observer.observe(document.body,{subtree:true,childList:true});
+  }
+
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded',function(){ observeDynamic(); setTimeout(boot,0); },{once:true});
+  }else{
+    observeDynamic();
+    setTimeout(boot,0);
+  }
 })();
 </script>
 
