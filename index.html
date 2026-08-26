@@ -3053,7 +3053,11 @@ tr.class-highlight-active {
 input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="full"] { display:none !important; }
 </style>
 
-
+<style id="sylva-i18n-boot-guard-20260826">
+/* Dil seçilmeden önce Türkçe/başlangıç metinlerinin görünmesini engeller.
+   Çeviri tamamlanınca .sylva-i18n-ready sınıfı eklenir. */
+html:not(.sylva-i18n-ready) body { visibility: hidden !important; }
+</style>
 
 </head>
 <body>
@@ -51570,9 +51574,26 @@ function runTimeSeriesAnalysis() {
         checkedBoxes.forEach(function(cb){ idxs.push(cb.getAttribute('data-analysis')); });
         if (!idxs.length) { alert(t('ts_alert_index')); return; }
     }
+    // Yeni Zaman Serisi çalıştırılırken önceki analizlerin 'Üstte Gösterilecek Katman'
+    // listesinden ve haritadan temizlenmesi gerekir. Aksi halde örneğin daha önce
+    // çalıştırılmış EVI/BSI/CORINE gibi katman adları zaman serisi NDVI sonucunun
+    // üstünde kalabiliyordu. 'Önceki Analizin Üzerine Ekle' açıkça kullanılmışsa
+    // kullanıcının bilinçli stack tercihi korunur; normal Zaman Serisi çalıştırmada
+    // ise yeni zaman serisi temiz bir analiz ekranı olarak başlar.
+    if (typeof _stackMode === 'undefined' || !_stackMode) {
+        try {
+            var _tsPaneBeforeClear = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+            if (typeof _clearAllAnalysisOutputs === 'function') _clearAllAnalysisOutputs(_tsPaneBeforeClear);
+            if (typeof _sylvaClearGeeLayers === 'function') _sylvaClearGeeLayers(_tsPaneBeforeClear);
+            if (typeof window._sylvaMirrorThisRun !== 'undefined' && window._sylvaMirrorThisRun && _tsPaneBeforeClear === 'map' && window.map2) {
+                if (typeof _clearAllAnalysisOutputs === 'function') _clearAllAnalysisOutputs('map2');
+                if (typeof _sylvaClearGeeLayers === 'function') _sylvaClearGeeLayers('map2');
+            }
+        } catch (_tsLayerClearErr) { console.warn('[SylvaGIS] Time Series layer reset:', _tsLayerClearErr); }
+    }
+
     // Yeni isteğe başlamadan ÖNCE eski galeri/indirme kuyruğunu temizle.
-    // Böylece 2026 gibi önceki bir sonucun kartları, 2020–2023 isteği boş
-    // dönse bile ekranda kalamaz.
+    // Böylece önceki zaman serisinin kartları yeni isteğe karışamaz.
     _clearTsGalleryNow();
 
     // Zaman Serisi indirmesinde her gerçek dönem + her seçili indeks ayrı
@@ -51738,6 +51759,46 @@ function runTimeSeriesAnalysis() {
             if (_tsChartDlRow2) { _tsChartDlRow2.style.opacity = ''; _tsChartDlRow2.style.pointerEvents = ''; }
             window._setTsLineData({ series: series });
             window.setChartType('line');
+
+            // Zaman Serisi uydu ANALİZİ sonucunda Lejant ve Semboloji paneli
+            // kullanıcı tarafından düzenlenebilir olmalıdır. Ham uydu görüntüsü
+            // zaman serisinde pasif kalabilir; NDVI/NDWI/EVI/LST vb. analizlerde
+            // sınıflandırma, renk rampası, Min/Max ve Lejantı Uygula aktif edilir.
+            (function(){
+                var _tsPanel = document.getElementById('legend-symbology-panel');
+                if (_tsPanel) {
+                    _tsPanel.style.opacity = '1';
+                    _tsPanel.style.pointerEvents = '';
+                    _tsPanel.style.userSelect = '';
+                    _tsPanel.classList.remove('sylva-satellite-passive','sylva-passive-soft');
+                    _tsPanel.removeAttribute('aria-disabled');
+                    _tsPanel.querySelectorAll('input,select,button').forEach(function(el){
+                        if (el.getAttribute('data-sylva-rgb-passive') === '1' || el.getAttribute('data-sylva-passive-disabled') === '1') {
+                            el.disabled = false;
+                            el.removeAttribute('data-sylva-rgb-passive');
+                            el.removeAttribute('data-sylva-passive-disabled');
+                        }
+                    });
+                }
+                // Zaman Serisi indeks sonucu için sınıflandırma editörü tekrar hazır olsun.
+                try {
+                    if (typeof setClassificationType === 'function') {
+                        setClassificationType(window.currentClassificationType || 'stretched');
+                    }
+                } catch(e) {}
+                try {
+                    if (typeof window.sylvaSyncLegendPassiveAndAutosize === 'function') {
+                        window.sylvaSyncLegendPassiveAndAutosize();
+                    }
+                    // Yukarıdaki pasif-panel senkronizasyonu ham RGB katmanını baz alır;
+                    // zaman serisi indeksinde açıkça yeniden etkinleştir.
+                    var _lp2 = document.getElementById('legend-symbology-panel');
+                    if (_lp2 && !window._tsIsRgbMode) {
+                        _lp2.style.opacity='1'; _lp2.style.pointerEvents=''; _lp2.style.userSelect='';
+                        _lp2.classList.remove('sylva-satellite-passive');
+                    }
+                } catch(e) {}
+            })();
         }
 
         // Sağ paneli aç
@@ -53342,6 +53403,28 @@ refresh();
         }
         return result;
     }
+    // Vektör dışa aktarımında sınıf adlarını ekranın aktif diliyle taşır.
+    // Sunucu, KML/GeoJSON/SHP özellikleri ve LEJANTLAR.txt için bunu kullanır.
+    function _sylvaLocalizedVectorPayload(payload) {
+        var p = Object.assign({}, payload || {});
+        var idx = String(p.index || '').toUpperCase();
+        try {
+            var loc = (typeof window.sylvaLocalizedNativeClasses === 'function')
+                ? window.sylvaLocalizedNativeClasses(idx) : null;
+            if (Array.isArray(loc) && loc.length) {
+                p.localizedClassMeta = loc.map(function(c, i){
+                    return { code: c.code !== undefined ? c.code : i,
+                             label: c.label || ('Class ' + (i+1)),
+                             color: c.color || '#64748b' };
+                });
+            } else if (Array.isArray(p.classBreaks) && p.classBreaks.length) {
+                p.localizedClassMeta = p.classBreaks.map(function(c, i){
+                    return { code:i+1, label:c.label || ('Class '+(i+1)), color:c.color || '#64748b' };
+                });
+            }
+        } catch(e) {}
+        return p;
+    }
     // 🆕 Aktif ekrandaki vektöre uygun tüm katmanları toplar. rasterEntries()
     // mevcut uydu/LULC/TOPO/çevresel katmanları taşır; burada daha önce bilinçli
     // olarak dışarıda bırakılan Eş Yükselti ve Bina Çatı Tespiti de eklenir.
@@ -53351,7 +53434,11 @@ refresh();
         var visible = window._sylvaLayerVisibleByPane && window._sylvaLayerVisibleByPane[pane] || {};
         base.forEach(function(entry){
             var key = entry.key;
-            if (key && visible[key] === false) return;
+            // Raster toplu indirme gibi, ekranda seçilmiş/oluşturulmuş tüm
+            // katmanları kuyruğa al. Katman anahtarının görünürlük durumu
+            // yalnızca haritadaki üst üste gösterimi kontrol eder; indirme
+            // kuyruğunda ESA + CORINE + MODIS gibi aynı ana başlıktaki tüm
+            // sınıflandırılmış veriler korunmalıdır.
             var entryIndex = String(entry.index || (entry.payload && entry.payload.index) || '').toUpperCase();
             // Toplu vektör indirme yalnızca EKRANDA SINIFLANDIRILMIŞ olan
             // raster analizleri seçer. RGB, ham/stretched raster ve sürekli
@@ -53367,6 +53454,7 @@ refresh();
             // sınıflandırdığı sürekli analizler ise classBreaks ile seçilir.
             if (!((Array.isArray(_entryBreaks) && _entryBreaks.length) ||
                   _entryClassificationType === 'classified' || _isKnownClassified)) return;
+            entry.payload = _sylvaLocalizedVectorPayload(entry.payload);
             var fp = JSON.stringify(entry.payload || {});
             if (seen[fp]) return;
             seen[fp] = true;
@@ -53385,8 +53473,7 @@ refresh();
         // gerçekten sonuç listesine ekleniyor.
         var byLayer = window._sylvaLayerAnalyzePayloadByPane && window._sylvaLayerAnalyzePayloadByPane[pane] || {};
         Object.keys(byLayer).forEach(function(key){
-            if (visible[key] === false) return;
-            var p = _sylvaPayloadWithDownloadGeometry(byLayer[key], pane);
+            var p = _sylvaLocalizedVectorPayload(_sylvaPayloadWithDownloadGeometry(byLayer[key], pane));
             if (!p || !p.index) return;
             var idx = String(p.index).toUpperCase();
             if (idx !== 'TOPO_CONTOUR') return;
@@ -53406,7 +53493,7 @@ refresh();
             // sorgusu çalıştırmak boş sonuç üretebildiği için artık aynı sonucu
             // ikinci kez aramıyoruz; ekranda görünen poligonlar doğrudan dışa
             // aktarım payload'ına taşınıyor.
-            var _bp = _sylvaPayloadWithDownloadGeometry({
+            var _bp = _sylvaLocalizedVectorPayload(_sylvaPayloadWithDownloadGeometry({
                 index: 'BUILDING_FOOTPRINT',
                 roi: _buildingData.roi || _sylvaCurrentWorkspaceGeometry(pane),
                 geometry: _buildingData.roi || _sylvaCurrentWorkspaceGeometry(pane),
@@ -53414,7 +53501,7 @@ refresh();
                 buildingCount: _buildingData.buildingCount,
                 totalAreaM2: _buildingData.totalAreaM2,
                 dataset: _buildingData.dataset
-            }, pane);
+            }, pane));
             var _bfp = JSON.stringify({index:_bp.index, geojson:_bp.geojson, roi:_bp.roi});
             if (!seen[_bfp]) {
                 seen[_bfp] = true;
@@ -53854,14 +53941,25 @@ refresh();
         if (_masterZip) {
             _downloadPromise = Promise.resolve().then(function(){
                 var chain = Promise.resolve();
+                var _batchErrors = [];
                 items.forEach(function(item, idx){
                     chain = chain.then(function(){
                         return _directGeoTiffItem(item, idx+1, items.length).then(function(blob){
                             return _addReturnedZipToMaster(blob, item);
+                        }).catch(function(err){
+                            _batchErrors.push({name:item.filename || ('Raster '+(idx+1)), error:(err && err.message) || String(err)});
+                            // Bir LULC/başka katman geçici olarak alınamazsa diğer
+                            // başarılı katmanların ZIP'e girmesini engelleme.
+                            return null;
                         });
                     });
                 });
                 return chain.then(function(){
+                    if (_batchErrors.length) {
+                        var _lines=['SylvaGIS — İNDİRİLEMEYEN KATMANLAR','','Başarısız katmanlar aşağıdadır; başarılı katmanlar ZIP içinde korunmuştur.',''];
+                        _batchErrors.forEach(function(e){ _lines.push('- '+e.name+': '+e.error); });
+                        _masterZip.file('INDIRILEMEYEN_KATMANLAR.txt', _lines.join('\n'));
+                    }
                     if (status) status.textContent='⏳ ' + _dlqT('dlq_building_geotiff', 'ZIP dosyası hazırlanıyor…');
                     return _masterZip.generateAsync({type:'blob', compression:'DEFLATE', compressionOptions:{level:6}});
                 });
