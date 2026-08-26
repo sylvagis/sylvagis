@@ -2570,7 +2570,16 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
         new_tif_bytes = out_memfile.read()
 
     # Sınıflandırılmış rasterlarda sınıf kodlarının karışmaması için nearest.
-    new_tif_bytes = _add_internal_raster_overviews(new_tif_bytes, 'nearest')
+    # ÖNEMLİ: ArcMap'te gömülü ColorMap kullanan küçük sınıflı rasterlarda
+    # overview yeniden yazımı TIFF'in NBITS bilgisini 8-bit'e genişletip
+    # ColorMap'i 256 girişe çıkarabiliyor. Bu da 3 sınıflı çevresel/kentsel
+    # rasterlerde yüzlerce siyah/boş lejant kutusu oluşturuyor. Bu paketleme
+    # fonksiyonu zaten sınıf renklerini/isimlerini gömülü ColorMap + RAT/VAT
+    # ile taşıdığı için ColorMap'li sınıflandırılmış çıktıda overview
+    # üretmiyoruz; böylece gerçek sınıf sayısı (örn. 3 + NoData = 4) aynen
+    # korunuyor. Sürekli rasterlar için overview hattı değişmez.
+    if not embed_colormap:
+        new_tif_bytes = _add_internal_raster_overviews(new_tif_bytes, 'nearest')
 
     # ── .clr (klasik GDAL/ESRI renk eşleştirme dosyası) ──────────────
     # Sadece gerçek sınıflar .clr içine yazılır; NoData/boş palette slotu
