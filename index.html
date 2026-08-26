@@ -24601,6 +24601,12 @@ function selectRamp(name) {
                     reject(new Error('Hiçbir render kütüphanesi yüklenemedi'));
                 }
             }
+            // 🆕 3B Görselleştirme (Serbest Gezinti/Uçuş) — Google Earth Pro'daki
+            // gibi ETİKETLİ gerçek altlık dokusu için, ayrı bir <script> bloğundaki
+            // 3B motor kodundan bu HAZIR/test edilmiş (GEE tile dahil) harita
+            // yakalama fonksiyonunu çağırıyor — aynı sebepten window'a açılıyor
+            // (bkz. yukarıdaki window.vectorEntries/_sylvaCurrentWorkspaceGeometry).
+            window.getLeafletCanvas = getLeafletCanvas;
 
             // ════════════════════════════════════════════════════════════
             // 🖥️🖥️ ÇİFT EKRAN ÇIKTISI — bir ekranı (paneId: 'map' | 'map2')
@@ -52629,6 +52635,7 @@ var _sylva3D = {
     moveState: { f: 0, b: 0, l: 0, r: 0 },
     joystickVec: { x: 0, y: 0 }, joystickActive: false,
     lookYaw: 0, lookPitch: 0,
+    mouseLookActive: false, mouseLastX: 0, mouseLastY: 0,
     playerX: 0, playerZ: 0, eyeHeight: 10, eyeHeightOffset: 0,
     routeLine: null, routeTotalKm: 0, routeAltitude: 100, routeCamMode: 'down'
 };
@@ -52810,6 +52817,75 @@ function _sylva3DRoiForRoute(routeLatLngs) {
     return _sylva3DPaddedBboxFromLatLngs(flat, 0.01); // ~1 km güvenlik payı
 }
 
+/* 🆕 Kullanıcı isteği: Google Earth Pro'daki gibi ETİKETLİ (yer adları,
+   yollar vb. dahil) gerçek bir altlık görüntüsünü 3B arazinin dokusu
+   olarak kullan — ekranda giydirilecek bir analiz YOKKEN. Bunun için
+   YENİ bir sunucu isteği veya yeni bir kütüphane GEREKMEDİ: proje zaten
+   PDF/rapor dışa aktarımı için 2B haritayı (GEE karoları dahil) piksel
+   piksel görüntüye çeviren, test edilmiş getLeafletCanvas() fonksiyonunu
+   içeriyordu (bkz. yukarıdaki window.getLeafletCanvas exposure) — burada
+   AYNI teknik yeniden kullanıldı. Akış: 1) 2B haritayı arazi ızgarasıyla
+   BİREBİR AYNI sınırlara (bounds) kilitle, 2) karoların/etiketlerin
+   yüklenmesi için kısa bir bekleme, 3) haritayı görüntüye çevir,
+   4) tam o sınırlara denk gelen piksel dikdörtgenini kırp (haritanın
+   en-boy oranı ile ızgaranınki farklı olabileceğinden fitBounds() fazladan
+   alan gösterebilir — kırpma olmadan doku kaymış/gerilmiş görünürdü),
+   5) haritayı ÖNCEKİ konumuna geri al (kullanıcı 2B haritayı farklı bir
+   yerde bırakmışsa şaşırmasın diye). Herhangi bir adım başarısız olursa
+   callback(null) ile GÜVENLİ GERİ DÖNÜŞ yapılır — çağıran taraf bu
+   durumda sunucunun hillshade dokusunu kullanmaya devam eder. */
+function _sylva3DCaptureBasemapTexture(pane, bounds, callback) {
+    try {
+        var m = (pane === 'map2') ? window.map2 : window.map;
+        if (!m || !m.getBounds || typeof window.getLeafletCanvas !== 'function') { callback(null); return; }
+        var prevCenter = m.getCenter(), prevZoom = m.getZoom();
+        var done = false;
+        var finish = function (result) {
+            if (done) return;
+            done = true;
+            try { m.setView(prevCenter, prevZoom, { animate: false }); } catch (_e) {}
+            callback(result);
+        };
+        // Bir sebepten 'moveend' hiç tetiklenmezse (ör. zaten aynı sınırlardaysa)
+        // sonsuza dek beklenmesin diye güvenlik zaman aşımı.
+        var safetyTimer = setTimeout(function () { finish(null); }, 6000);
+        m.once('moveend', function () {
+            setTimeout(function () {
+                try {
+                    window.getLeafletCanvas(2, pane).then(function (canvas) {
+                        clearTimeout(safetyTimer);
+                        try {
+                            var mapSize = m.getSize();
+                            var scale = mapSize.x ? (canvas.width / mapSize.x) : 1;
+                            var p1 = m.latLngToContainerPoint([bounds.north, bounds.west]);
+                            var p2 = m.latLngToContainerPoint([bounds.south, bounds.east]);
+                            var sx = Math.max(0, Math.round(Math.min(p1.x, p2.x) * scale));
+                            var sy = Math.max(0, Math.round(Math.min(p1.y, p2.y) * scale));
+                            var sw2 = Math.min(canvas.width - sx, Math.round(Math.abs(p2.x - p1.x) * scale));
+                            var sh2 = Math.min(canvas.height - sy, Math.round(Math.abs(p2.y - p1.y) * scale));
+                            if (sw2 <= 4 || sh2 <= 4) { finish(canvas.toDataURL('image/png')); return; }
+                            var crop = document.createElement('canvas');
+                            crop.width = sw2; crop.height = sh2;
+                            crop.getContext('2d').drawImage(canvas, sx, sy, sw2, sh2, 0, 0, sw2, sh2);
+                            finish(crop.toDataURL('image/png'));
+                        } catch (cropErr) {
+                            console.warn('[SylvaGIS 3D] Altlık kırpma başarısız, tüm görüntü kullanılıyor:', cropErr);
+                            try { finish(canvas.toDataURL('image/png')); } catch (_e2) { finish(null); }
+                        }
+                    }).catch(function (capErr) {
+                        clearTimeout(safetyTimer);
+                        console.warn('[SylvaGIS 3D] Altlık yakalanamadı, gölgelendirmeye dönülüyor:', capErr);
+                        finish(null);
+                    });
+                } catch (e3) { clearTimeout(safetyTimer); finish(null); }
+            }, 700); // karo/etiketlerin tam yüklenmesi için kısa bekleme
+        });
+        m.fitBounds([[bounds.south, bounds.west], [bounds.north, bounds.east]], { animate: false });
+    } catch (e) {
+        callback(null);
+    }
+}
+
 /* ── Oturum başlatma: tri-state katman tespiti + arazi/doku yükleme ── */
 function _sylva3DSetLoading(on, msg) {
     var box = document.getElementById('topo3d-loading-box');
@@ -52819,64 +52895,112 @@ function _sylva3DSetLoading(on, msg) {
     if (t2 && msg) t2.textContent = msg;
 }
 function _sylva3DShowLoadError(msg) {
+    console.error('[SylvaGIS 3D]', msg);
     if (typeof showAnalysisToast === 'function') showAnalysisToast('❌ ' + msg, 'error');
+    else if (typeof sylvaAlert === 'function') sylvaAlert('❌ ' + msg, 'error');
     exit3DMode();
 }
 
+/* 🛠️ BUG FİX: "beyaz ekran, uçuş yok" şikâyeti — önceki sürümde bu
+   fonksiyonun (ve içindeki senkron adımların: ROI hesaplama, katman
+   listesi okuma vb.) etrafında hiçbir try/catch YOKTU. Beklenmedik bir
+   JS hatası sessizce fırlayıp fonksiyonu yarıda kesebiliyordu — overlay
+   zaten açılmış (start3DFlight/startFreeNav içinde) ama arkasında hiçbir
+   şey render edilmediği için kullanıcı sadece boş/şeffaf (beyaz) bir
+   ekran görüyordu, HİÇBİR hata mesajı da gösterilmiyordu. Artık TÜM akış
+   try/catch ile sarılı; herhangi bir hata artık _sylva3DShowLoadError()
+   ile görünür bir mesaj olarak kullanıcıya gösteriliyor (ve konsola
+   yazılıyor) — bir daha "sessiz" beyaz ekran olmayacak. */
 function _sylva3DStartSession(mode) {
-    _sylva3D.mode = mode;
-    var pane = _sylva3DActiveMapId();
-    var entries = (typeof rasterEntries === 'function') ? (rasterEntries(pane) || []) : [];
-    var picker = document.getElementById('topo3d-layer-picker-box');
-    var select = document.getElementById('topo3d-layer-picker');
-    var chosenPayload = null;
-    window._sylva3DEntries = entries;
-    if (entries.length >= 2) {
-        if (select) {
-            select.innerHTML = '';
-            entries.forEach(function (e, i) {
-                var opt = document.createElement('option');
-                opt.value = String(i);
-                opt.textContent = e.index + (e.sceneDate ? ' (' + e.sceneDate + ')' : '');
-                select.appendChild(opt);
-            });
-            select.value = String(entries.length - 1); // varsayılan: en son eklenen katman
+    try {
+        _sylva3D.mode = mode;
+        var pane = _sylva3DActiveMapId();
+        var entries = (typeof rasterEntries === 'function') ? (rasterEntries(pane) || []) : [];
+        var picker = document.getElementById('topo3d-layer-picker-box');
+        var select = document.getElementById('topo3d-layer-picker');
+        var chosenPayload = null;
+        window._sylva3DEntries = entries;
+        if (entries.length >= 2) {
+            if (select) {
+                select.innerHTML = '';
+                entries.forEach(function (e, i) {
+                    var opt = document.createElement('option');
+                    opt.value = String(i);
+                    opt.textContent = e.index + (e.sceneDate ? ' (' + e.sceneDate + ')' : '');
+                    select.appendChild(opt);
+                });
+                select.value = String(entries.length - 1); // varsayılan: en son eklenen katman
+            }
+            if (picker) picker.style.display = 'flex';
+            chosenPayload = entries[entries.length - 1].payload;
+        } else {
+            if (picker) picker.style.display = 'none';
+            chosenPayload = entries.length === 1 ? entries[0].payload : null;
         }
-        if (picker) picker.style.display = 'flex';
-        chosenPayload = entries[entries.length - 1].payload;
-    } else {
-        if (picker) picker.style.display = 'none';
-        chosenPayload = entries.length === 1 ? entries[0].payload : null;
-    }
 
-    var routeLatLngs = (window._topo3dRouteLayer && window._topo3dRouteLayer.getLatLngs) ? window._topo3dRouteLayer.getLatLngs() : [];
-    var roiGeom = (mode === 'route') ? _sylva3DRoiForRoute(routeLatLngs) : _sylva3DRoiForFree(pane);
-    if (!roiGeom) {
-        _sylva3DShowLoadError(typeof t === 'function' ? t('topo_3d_no_area', 'Arazi için bir alan bulunamadı. Lütfen haritada bir çalışma alanı/rota çizin.') : 'Arazi için bir alan bulunamadı.');
-        return;
-    }
-    _sylva3DSetLoading(true, typeof t === 'function' ? t('topo_3d_loading', 'Arazi hazırlanıyor…') : 'Arazi hazırlanıyor…');
-    _sylva3DFetchTerrain(roiGeom, chosenPayload).then(function (res) {
-        _sylva3DSetLoading(false);
-        if (!res || !res.success) {
-            _sylva3DShowLoadError((res && res.error) || (typeof t === 'function' ? t('topo_3d_terrain_failed', 'Arazi verisi alınamadı.') : 'Arazi verisi alınamadı.'));
+        var routeLatLngs = (window._topo3dRouteLayer && window._topo3dRouteLayer.getLatLngs) ? window._topo3dRouteLayer.getLatLngs() : [];
+        var roiGeom = (mode === 'route') ? _sylva3DRoiForRoute(routeLatLngs) : _sylva3DRoiForFree(pane);
+        if (!roiGeom) {
+            _sylva3DShowLoadError(typeof t === 'function' ? t('topo_3d_no_area', 'Arazi için bir alan bulunamadı. Lütfen haritada bir çalışma alanı/rota çizin.') : 'Arazi için bir alan bulunamadı.');
             return;
         }
-        var container = document.getElementById('sylva-3d-canvas-container');
-        if (!container) return;
-        if (!_sylva3D.renderer) _sylva3DBuildScene(container);
-        _sylva3DBuildTerrainMesh(res);
-        if (mode === 'route') {
-            _sylva3DSetupRoute(routeLatLngs);
-        } else {
-            _sylva3DSetupFreePosition();
-            if (!_sylva3D.controlsReady) { _sylva3DSetupFreeControls(); _sylva3D.controlsReady = true; }
-        }
-        _sylva3DStartRenderLoop();
-    }).catch(function (err) {
+        _sylva3DSetLoading(true, typeof t === 'function' ? t('topo_3d_loading', 'Arazi hazırlanıyor…') : 'Arazi hazırlanıyor…');
+        _sylva3DFetchTerrain(roiGeom, chosenPayload).then(function (res) {
+            try {
+                if (!res || !res.success) {
+                    _sylva3DSetLoading(false);
+                    _sylva3DShowLoadError((res && res.error) || (typeof t === 'function' ? t('topo_3d_terrain_failed', 'Arazi verisi alınamadı.') : 'Arazi verisi alınamadı.'));
+                    return;
+                }
+                var finish = function (finalRes) {
+                    try {
+                        _sylva3DSetLoading(false);
+                        var container = document.getElementById('sylva-3d-canvas-container');
+                        if (!container) { _sylva3DShowLoadError('3B render alanı (canvas kabı) bulunamadı.'); return; }
+                        if (!_sylva3D.renderer) _sylva3DBuildScene(container);
+                        _sylva3DBuildTerrainMesh(finalRes);
+                        if (mode === 'route') {
+                            _sylva3DSetupRoute(routeLatLngs);
+                        } else {
+                            _sylva3DSetupFreePosition();
+                            if (!_sylva3D.controlsReady) { _sylva3DSetupFreeControls(); _sylva3D.controlsReady = true; }
+                        }
+                        _sylva3DStartRenderLoop();
+                    } catch (buildErr) {
+                        _sylva3DShowLoadError('3B sahne kurulamadı: ' + String((buildErr && buildErr.message) || buildErr));
+                    }
+                };
+                // 🆕 Kullanıcı isteği: Google Earth Pro'daki gibi ETİKETLİ gerçek
+                // altlık görüntüsü. Ekranda aktif/giydirilecek bir analiz YOKSA,
+                // sunucunun gölgelendirme (hillshade) dokusu yerine, kullanıcının
+                // 2B haritada o an gördüğü GERÇEK altlığı (etiketler dahil, PDF/
+                // rapor dışa aktarımında da kullanılan aynı GEE-tile-uyumlu
+                // getLeafletCanvas() yakalama tekniğiyle) doku olarak kullan.
+                // Yakalama herhangi bir sebeple başarısız olursa GÜVENLİ GERİ
+                // DÖNÜŞ: sunucunun hillshade dokusu (res.texture) olduğu gibi
+                // kullanılmaya devam eder — özellik asla tamamen bozulmaz.
+                if (!chosenPayload && res.bounds) {
+                    _sylva3DSetLoading(true, typeof t === 'function' ? t('topo_3d_loading', 'Arazi hazırlanıyor…') : 'Arazi hazırlanıyor…');
+                    _sylva3DCaptureBasemapTexture(pane, res.bounds, function (dataUrl) {
+                        if (dataUrl) { res.texture = dataUrl; res.textureSource = 'basemap'; }
+                        finish(res);
+                    });
+                } else {
+                    _sylva3DSetLoading(false);
+                    finish(res);
+                }
+            } catch (thenErr) {
+                _sylva3DSetLoading(false);
+                _sylva3DShowLoadError(String((thenErr && thenErr.message) || thenErr));
+            }
+        }).catch(function (err) {
+            _sylva3DSetLoading(false);
+            _sylva3DShowLoadError(String((err && err.message) || err));
+        });
+    } catch (startErr) {
         _sylva3DSetLoading(false);
-        _sylva3DShowLoadError(String((err && err.message) || err));
-    });
+        _sylva3DShowLoadError(String((startErr && startErr.message) || startErr));
+    }
 }
 
 /* Çoklu analiz durumunda kullanıcı seçim kutusundan katman değiştirdiğinde:
@@ -52966,11 +53090,32 @@ function _sylva3DSetupFreePosition() {
     _sylva3D.camera.position.set(local.x, groundY + _sylva3D.eyeHeight, local.z);
 }
 
+/* 🛠️ BUG FİX + kullanıcı isteği: Masaüstü bakış kontrolü artık tarayıcının
+   Pointer Lock API'sini KULLANMIYOR — o API bazı iframe/gömülü ortamlarda
+   veya izin ilkeleri (permissions policy) kısıtlı sayfalarda SESSİZCE
+   başarısız olabiliyordu (hiçbir hata göstermeden kilit hiç etkinleşmiyor,
+   bakış hiç dönmüyordu — "uçuş yok" şikâyetinin olası nedenlerinden biri
+   buydu). Bunun yerine, Google Earth Pro'daki gibi KLASİK "sol tık basılı
+   tut + sürükle = bak" yöntemi kullanılıyor — mobildeki dokunma-sürükleme
+   bakış koduyla AYNI mantık, sadece fare olaylarıyla tetikleniyor. Ekstra
+   izin istemez, iframe içinde de güvenilir çalışır. */
+function _sylva3DOnMouseDown(e) {
+    if (e.button !== 0) return; // yalnızca sol tık
+    _sylva3D.mouseLookActive = true;
+    _sylva3D.mouseLastX = e.clientX; _sylva3D.mouseLastY = e.clientY;
+    if (_sylva3D.renderer) _sylva3D.renderer.domElement.style.cursor = 'grabbing';
+}
 function _sylva3DOnMouseMove(e) {
-    if (!_sylva3D.renderer || document.pointerLockElement !== _sylva3D.renderer.domElement) return;
-    _sylva3D.lookYaw   -= (e.movementX || 0) * 0.0022;
-    _sylva3D.lookPitch -= (e.movementY || 0) * 0.0022;
+    if (!_sylva3D.mouseLookActive) return;
+    var dx = e.clientX - _sylva3D.mouseLastX, dy = e.clientY - _sylva3D.mouseLastY;
+    _sylva3D.mouseLastX = e.clientX; _sylva3D.mouseLastY = e.clientY;
+    _sylva3D.lookYaw   -= dx * 0.0028;
+    _sylva3D.lookPitch -= dy * 0.0028;
     _sylva3D.lookPitch = Math.max(-1.3, Math.min(1.3, _sylva3D.lookPitch));
+}
+function _sylva3DOnMouseUp() {
+    _sylva3D.mouseLookActive = false;
+    if (_sylva3D.renderer) _sylva3D.renderer.domElement.style.cursor = 'grab';
 }
 function _sylva3DOnKeyDown(e) {
     if (e.code === 'KeyW' || e.code === 'ArrowUp')    _sylva3D.moveState.f = 1;
@@ -52990,13 +53135,14 @@ function _sylva3DOnWheel(e) {
 }
 function _sylva3DSetupFreeControls() {
     var domEl = _sylva3D.renderer.domElement;
+    domEl.style.cursor = 'grab';
+    domEl.addEventListener('mousedown', _sylva3DOnMouseDown);
     document.addEventListener('mousemove', _sylva3DOnMouseMove);
+    document.addEventListener('mouseup', _sylva3DOnMouseUp);
     document.addEventListener('keydown', _sylva3DOnKeyDown);
     document.addEventListener('keyup', _sylva3DOnKeyUp);
     domEl.addEventListener('wheel', _sylva3DOnWheel, { passive: false });
-    domEl.addEventListener('click', function () {
-        if (!_sylva3D.joystickActive && domEl.requestPointerLock) domEl.requestPointerLock();
-    });
+    domEl.addEventListener('contextmenu', function (e) { e.preventDefault(); });
     _sylva3DSetupMobileControls(); // tek seferlik global kurulum (bkz. içindeki koruma)
 }
 /* Mobil joystick/bakış dokunma olayları — sayfa boyunca YALNIZCA BİR KEZ
@@ -53133,8 +53279,9 @@ function snapshot3D() {
    sayfa boyunca tek seferlik, bkz. _sylva3DSetupMobileControls). */
 function _sylva3DTeardown() {
     if (_sylva3D.animReq) { cancelAnimationFrame(_sylva3D.animReq); _sylva3D.animReq = null; }
-    try { if (document.pointerLockElement) document.exitPointerLock(); } catch (_e) {}
+    _sylva3D.mouseLookActive = false;
     document.removeEventListener('mousemove', _sylva3DOnMouseMove);
+    document.removeEventListener('mouseup', _sylva3DOnMouseUp);
     document.removeEventListener('keydown', _sylva3DOnKeyDown);
     document.removeEventListener('keyup', _sylva3DOnKeyUp);
     window.removeEventListener('resize', _sylva3DOnResize);
