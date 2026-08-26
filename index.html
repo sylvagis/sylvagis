@@ -4328,6 +4328,27 @@ function _sylvaHasMixedStackCategories(paneId) {
             // runTimeSeriesAnalysis() içindeki SET noktası ve normal analiz/
             // galeri/bina analizi başarı noktalarındaki RESET noktaları).
             var isTsVectorLocked = !!window._sylvaTsDownloadLock;
+            // Çevresel/Kentsel analizlerde vektör indirme yalnızca
+            // sınıflandırılmış sonuçlarda kullanılabilir. Gerili/stretched
+            // (sürekli) sonuçlarda vektör indirme düğmesi tamamen kapatılır.
+            var isEnvUrbanStretched = false;
+            try {
+                ['map','map2'].forEach(function(pane){
+                    if (isEnvUrbanStretched) return;
+                    var vis=(window._sylvaLayerVisibleByPane&&window._sylvaLayerVisibleByPane[pane])||{};
+                    var byLayer=(window._sylvaLayerAnalyzePayloadByPane&&window._sylvaLayerAnalyzePayloadByPane[pane])||{};
+                    Object.keys(vis).forEach(function(k){
+                        if(isEnvUrbanStretched||vis[k]===false)return;
+                        var pp=byLayer[k]||{};
+                        var idx=String(pp.index||'').toUpperCase();
+                        if(!idx||typeof isEnvUrbanAnalysis!=='function'||!isEnvUrbanAnalysis(idx))return;
+                        var ctype=String(pp.classificationType||pp.legendType||'').toLowerCase();
+                        var br=pp.classBreaks;
+                        var classified=(ctype==='classified')||(Array.isArray(br)&&br.length>0)||['FOREST_LOSS','URBAN_GROWTH'].indexOf(idx)>=0;
+                        if(!classified)isEnvUrbanStretched=true;
+                    });
+                });
+            } catch(e) {}
             var geoIds = ['btn-geotiff-download', 'btn-geotiff-download-mobile'];
             var vecIds = ['btn-vector-download', 'btn-vector-download-mobile'];
             var _titleTxt = (typeof t === 'function')
@@ -4336,6 +4357,9 @@ function _sylvaHasMixedStackCategories(paneId) {
             var _tsVectorTitleTxt = (typeof t === 'function')
                 ? t('download_disabled_ts_vector', 'Zaman serisi analizi sonucunda vektör indirme kullanılamaz — GeoTIFF indirme aktiftir')
                 : 'Zaman serisi analizi sonucunda vektör indirme kullanılamaz — GeoTIFF indirme aktiftir';
+            var _envStretchedVectorTitleTxt = (typeof t === 'function')
+                ? t('download_disabled_env_stretched_vector', 'Gerili (stretched) çevresel/kentsel analizlerde vektör indirme kullanılamaz — yalnızca sınıflandırılmış sonuçlar vektör olarak indirilebilir')
+                : 'Gerili (stretched) çevresel/kentsel analizlerde vektör indirme kullanılamaz — yalnızca sınıflandırılmış sonuçlar vektör olarak indirilebilir';
             geoIds.forEach(function (id) {
                 var btn = document.getElementById(id);
                 if (!btn) return;
@@ -4347,11 +4371,11 @@ function _sylvaHasMixedStackCategories(paneId) {
             vecIds.forEach(function (id) {
                 var btn = document.getElementById(id);
                 if (!btn) return;
-                var isDisabled = isMixedStacked || isTsVectorLocked;
+                var isDisabled = isMixedStacked || isTsVectorLocked || isEnvUrbanStretched;
                 btn.disabled = isDisabled;
                 btn.style.opacity = isDisabled ? '0.45' : '';
                 btn.style.cursor = isDisabled ? 'not-allowed' : '';
-                btn.title = isDisabled ? (isMixedStacked ? _titleTxt : _tsVectorTitleTxt) : '';
+                btn.title = isDisabled ? (isMixedStacked ? _titleTxt : (isTsVectorLocked ? _tsVectorTitleTxt : _envStretchedVectorTitleTxt)) : '';
             });
         } catch (e) {}
     }
@@ -5910,12 +5934,11 @@ function _sylvaHasMixedStackCategories(paneId) {
             <h3 class="sylva-sec-hdr" onclick="sylvaToggleSec('analysis-history-body')"><span data-i18n="analysis_history_title">📜 Analiz Geçmişi</span><button type="button" class="sylva-sec-arrow" id="analysis-history-arrow" onclick="event.stopPropagation();sylvaToggleSec('analysis-history-body')" title="Daralt / Genişlet">▼</button></h3>
             <div id="analysis-history-body" class="sylva-sec-body">
                 <div id="analysis-history-list" style="display:flex; flex-direction:column; gap:6px; max-height:280px; overflow-y:auto;"></div>
-                <div id="analysis-history-empty" style="font-size:0.78rem; color:#94a3b8; text-align:center; padding:14px 8px;" data-i18n="analysis_history_empty">Henüz indirilmiş bir analiz yok. Bir sonucu indirdiğinizde burada listelenir (son 10 kayıt).</div>
-                <button type="button" id="analysis-history-clear-btn" class="btn-tool" style="margin-top:8px; width:100%; font-size:0.76rem; display:none;" onclick="sylvaClearAnalysisHistory()" data-i18n="analysis_history_clear">🗑️ Geçmişi Temizle</button>
+                <div id="analysis-history-empty" style="font-size:0.78rem; color:#94a3b8; text-align:center; padding:14px 8px;" data-i18n="project_none_saved">Kayıtlı proje yok</div>
             </div>
             </div><!-- /analysis-history-section -->
 
-            <!-- Proje Kaydet / Yükle (tarayıcıda, sunucusuz) -->
+            <!-- Proje Kaydet -->
             <div id="sb-project-manager" style="border:1px solid #e2e8f0; border-radius:8px; padding:10px; background:#f8fafc; display:flex; flex-direction:column; gap:8px; margin-top:5px;">
                 <div id="sb-project-manager-title" style="font-size:0.85rem; font-weight:700; color:#1e3a8a; display:flex; align-items:center; gap:6px;">
                     🗂️ <span data-i18n="project_manager">Proje Yöneticisi</span>
@@ -5924,13 +5947,6 @@ function _sylvaHasMixedStackCategories(paneId) {
                     <input type="text" id="project-name-input" placeholder="Proje adı..." data-i18n-placeholder="project_name_placeholder" maxlength="60"
                            style="flex:1; min-width:0; padding:6px 8px; border:1px solid #cbd5e1; border-radius:5px; font-size:0.8rem;">
                     <button type="button" class="btn-tool" id="btn-save-project" style="flex:none; padding:6px 10px; font-size:0.8rem;" title="Mevcut görünüm ve ayarları kaydet" data-i18n-title="project_save_title" data-i18n="project_save_btn">💾 Kaydet</button>
-                </div>
-                <div style="display:flex; gap:6px;">
-                    <select id="project-select" style="flex:1; min-width:0; padding:6px 8px; border:1px solid #cbd5e1; border-radius:5px; font-size:0.8rem;">
-                        <option value="" id="project-select-empty-opt" data-i18n="project_none_saved">Kayıtlı proje yok</option>
-                    </select>
-                    <button type="button" class="btn-tool" id="btn-load-project" style="flex:none; padding:6px 10px; font-size:0.8rem;" title="Seçili projeyi yükle" data-i18n-title="project_load_title" data-i18n="project_load_btn">📂 Yükle</button>
-                    <button type="button" class="btn-tool btn-danger" id="btn-delete-project" style="flex:none; padding:6px 8px; font-size:0.8rem;" title="Seçili projeyi sil" data-i18n-title="project_delete_title">🗑️</button>
                 </div>
                 <div id="project-status-msg" style="font-size:0.7rem; color:#64748b; min-height:14px;"></div>
             </div>
@@ -9392,36 +9408,19 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
     })();
 
     // ===========================================================
-    // Proje Kaydet / Yükle — sunucu taraflı, anonim kullanıcı kimliği
+    // Proje Kaydet — sunucu taraflı, anonim kullanıcı kimliği
+    // Klasörden/dosyadan proje yükleme kaldırıldı. Kaydedilen projeler
+    // doğrudan Analiz Geçmişi bölümünde listelenir.
     // ===========================================================
-    // E-posta/Gmail hesabı gerekmez. Tarayıcıda oluşturulan rastgele bir
-    // istemci kimliği kullanılır; proje verileri SQLite'ta tutulur.
-    // Yalnızca görünüm/ayar/AOI gibi küçük proje metadatası gönderilir;
-    // büyük raster/analiz dosyaları veritabanına yazılmaz.
     var PROJECT_MANAGER_ENABLED = true;
     (function () {
         if (!PROJECT_MANAGER_ENABLED) return;
         var nameInput = document.getElementById('project-name-input');
         var saveBtn   = document.getElementById('btn-save-project');
-        var loadBtn   = document.getElementById('btn-load-project');
-        var delBtn    = document.getElementById('btn-delete-project');
-        var selectEl  = document.getElementById('project-select');
         var statusEl  = document.getElementById('project-status-msg');
-        if (!nameInput || !saveBtn || !loadBtn || !delBtn || !selectEl) return;
+        if (!nameInput || !saveBtn) return;
 
-        function getClientId() {
-            var key = 'sylva_anonymous_client_id_v1';
-            try {
-                var id = localStorage.getItem(key);
-                if (id && /^[a-f0-9-]{20,64}$/i.test(id)) return id;
-                if (window.crypto && typeof window.crypto.randomUUID === 'function') id = window.crypto.randomUUID();
-                else id = 'sylva-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 14);
-                localStorage.setItem(key, id);
-                return id;
-            } catch (e) {
-                return 'sylva-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 14);
-            }
-        }
+        function getClientId() { return window._sylvaAnonymousClientId || 'sylva-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,14); }
         var CLIENT_ID = getClientId();
         var API = (typeof API_BASE !== 'undefined' ? API_BASE : '');
         function api(path, options) {
@@ -9439,14 +9438,11 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
             statusEl.textContent = msg || '';
             statusEl.style.color = isError ? '#b91c1c' : '#64748b';
         }
-
         function captureLayoutState() {
             var state = { checkboxes: {}, selects: {}, ranges: {} };
             var container = document.getElementById('sb-map-layout-options');
             if (!container) return state;
-            container.querySelectorAll('input[type="checkbox"]').forEach(function (el) {
-                if (el.id && !el.disabled) state.checkboxes[el.id] = el.checked;
-            });
+            container.querySelectorAll('input[type="checkbox"]').forEach(function (el) { if (el.id && !el.disabled) state.checkboxes[el.id] = el.checked; });
             container.querySelectorAll('select').forEach(function (el) { if (el.id) state.selects[el.id] = el.value; });
             container.querySelectorAll('input[type="range"]').forEach(function (el) { if (el.id) state.ranges[el.id] = el.value; });
             return state;
@@ -9457,6 +9453,7 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
             Object.keys(state.selects || {}).forEach(function (id) { var el=document.getElementById(id); if(el && el.value!==state.selects[id]){el.value=state.selects[id];el.dispatchEvent(new Event('change'));} });
             Object.keys(state.ranges || {}).forEach(function (id) { var el=document.getElementById(id); if(el){el.value=state.ranges[id];el.dispatchEvent(new Event('input'));el.dispatchEvent(new Event('change'));} });
         }
+        window._sylvaApplySavedProjectLayout = applyLayoutState;
         function readWorkspace() {
             try {
                 var wsLayer = window._workspaceLayer || (typeof currentLayer !== 'undefined' ? currentLayer : null);
@@ -9464,46 +9461,22 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
             } catch (e) {}
             return null;
         }
-        function refreshSelect(selectedName) {
-            api('/api/projects', {method:'GET'}).then(function(data){
-                var projects = data.projects || [];
-                selectEl.innerHTML = '';
-                var empty = document.createElement('option'); empty.value=''; empty.textContent=(typeof t==='function'?t('project_none_saved','Kayıtlı proje yok'):'Kayıtlı proje yok'); selectEl.appendChild(empty);
-                projects.forEach(function(p){ var opt=document.createElement('option'); opt.value=p.name; opt.textContent=p.name; selectEl.appendChild(opt); });
-                if(selectedName) selectEl.value=selectedName;
-                loadBtn.disabled = !projects.length;
-                delBtn.disabled = !projects.length;
-            }).catch(function(e){ showStatus(e.message || 'Projeler alınamadı.', true); });
-        }
         saveBtn.addEventListener('click', function(){
             var name=(nameInput.value||'').trim();
-            if(!name){showStatus('Lütfen bir proje adı girin.',true);return;}
+            if(!name){showStatus((typeof t==='function'?t('project_name_placeholder','Lütfen bir proje adı girin.'):'Lütfen bir proje adı girin.'),true);nameInput.focus();return;}
             var mapObj=window._sylvaMap || (typeof map!=='undefined'?map:null), center=mapObj?mapObj.getCenter():null;
             var project={savedAt:new Date().toISOString(),view:center?{lat:center.lat,lng:center.lng,zoom:mapObj.getZoom()}:null,basemap:(typeof currentBasemapKey!=='undefined'?currentBasemapKey:null),scaleUnit:window._sylvaScaleUnit||null,layout:captureLayoutState(),workspace:readWorkspace()};
             saveBtn.disabled=true;
-            api('/api/projects',{method:'POST',body:JSON.stringify({name:name,project:project})}).then(function(){showStatus('"'+name+'" kaydedildi.',false);nameInput.value='';refreshSelect(name);}).catch(function(e){showStatus(e.message||'Proje kaydedilemedi.',true);}).finally(function(){saveBtn.disabled=false;});
-        });
-        loadBtn.addEventListener('click', function(){
-            var name=selectEl.value;if(!name)return;loadBtn.disabled=true;
-            api('/api/projects/'+encodeURIComponent(name),{method:'GET'}).then(function(data){
-                var project=data.project||{};var mapObj=window._sylvaMap||(typeof map!=='undefined'?map:null);
-                if(mapObj&&project.view) mapObj.setView([project.view.lat,project.view.lng],project.view.zoom);
-                if(project.basemap&&typeof switchBasemap==='function'&&project.basemap!==currentBasemapKey){switchBasemap(project.basemap);var bmBtn=document.querySelector('[data-bm="'+project.basemap+'"]');if(bmBtn){document.querySelectorAll('[data-bm]').forEach(function(b){b.classList.remove('active');});bmBtn.classList.add('active');}}
-                applyLayoutState(project.layout);
-                if(project.scaleUnit){window._sylvaScaleUnit=project.scaleUnit;try{localStorage.setItem('sylva_scale_unit',project.scaleUnit);}catch(e){}var su=document.getElementById('scale-unit-select');if(su)su.value=project.scaleUnit;if(window._sylvaScaleControl&&typeof window._sylvaScaleControl._update==='function')window._sylvaScaleControl._update();if(window._sylvaMap2ScaleControl&&typeof window._sylvaMap2ScaleControl._update==='function')window._sylvaMap2ScaleControl._update();}
-                try{if(project.workspace&&typeof L.geoJSON==='function'&&typeof setCurrentLayer==='function'){setCurrentLayer(L.geoJSON(project.workspace));}else if(!project.workspace&&typeof clearCurrentLayer==='function'){clearCurrentLayer();}}catch(e){console.warn('Çalışma alanı geri yüklenemedi:',e);}
-                showStatus('"'+name+'" yüklendi.',false);
-            }).catch(function(e){showStatus(e.message||'Proje yüklenemedi.',true);}).finally(function(){loadBtn.disabled=false;});
-        });
-        delBtn.addEventListener('click', function(){
-            var name=selectEl.value;if(!name)return;
-            if(!confirm('"'+name+'" projesi silinsin mi?'))return;
-            delBtn.disabled=true;
-            api('/api/projects/'+encodeURIComponent(name),{method:'DELETE'}).then(function(){showStatus('"'+name+'" silindi.',false);refreshSelect();}).catch(function(e){showStatus(e.message||'Proje silinemedi.',true);}).finally(function(){delBtn.disabled=false;});
+            showStatus('Kaydediliyor…',false);
+            api('/api/projects',{method:'POST',body:JSON.stringify({name:name,project:project})}).then(function(){
+                showStatus('"'+name+'" kaydedildi ve Analiz Geçmişi\'ne eklendi.',false);
+                nameInput.value='';
+                if(typeof sylvaLoadAnalysisHistory==='function') sylvaLoadAnalysisHistory();
+            }).catch(function(e){showStatus(e.message||'Proje kaydedilemedi.',true);}).finally(function(){saveBtn.disabled=false;});
         });
         nameInput.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();saveBtn.click();}});
-        refreshSelect();
     })();
+
     // Checkbox işaretli   → galeri tamamen açık  (display:flex, opacity:1, etkileşimli)
     // Checkbox işaretsiz  → galeri tamamen kapalı (display:none)  — ara durum yok
     document.getElementById('toggle-gallery').addEventListener('change', function() {
@@ -51270,22 +51243,59 @@ function sylvaHistoryApi(path, options){
     var base=(typeof API_BASE!=='undefined'?API_BASE:'');
     return fetch(base+path,options).then(function(r){return r.json().catch(function(){return {ok:false,error:'Sunucu yanıtı okunamadı.'};}).then(function(d){if(!r.ok||d.ok===false)throw new Error(d.error||'İşlem başarısız.');return d;});});
 }
-function sylvaGetAnalysisHistory(){return window._sylvaHistoryCache||[];}
-function sylvaAddAnalysisHistoryEntry(type, icon, filename){
-    var item={type:type||'Veri',icon:icon||'📄',filename:filename||'—',ts:Date.now()};
-    sylvaHistoryApi('/api/analysis-history',{method:'POST',body:JSON.stringify(item)}).then(function(data){window._sylvaHistoryCache=data.history||[];sylvaRenderAnalysisHistory();}).catch(function(e){console.warn('Analiz geçmişi kaydedilemedi:',e);});
-}
+/* Analiz Geçmişi artık yalnızca kullanıcının "Kaydet" dediği projeleri gösterir.
+   İndirme işlemleri geçmişe eklenmez. */
+function sylvaGetAnalysisHistory(){return window._sylvaProjectHistoryCache||[];}
+function sylvaAddAnalysisHistoryEntry(){ /* Eski indirme çağrıları geriye dönük uyumluluk için etkisizdir. */ }
 function sylvaFormatHistDate(ts){try{var d=new Date(ts),p=function(n){return String(n).padStart(2,'0')};return p(d.getDate())+'.'+p(d.getMonth()+1)+'.'+d.getFullYear()+' '+p(d.getHours())+':'+p(d.getMinutes());}catch(e){return ''}}
+function sylvaProjectApi(path, options){return sylvaHistoryApi(path,options);}
 function sylvaRenderAnalysisHistory(){
-    var listEl=document.getElementById('analysis-history-list'),emptyEl=document.getElementById('analysis-history-empty'),clearBtn=document.getElementById('analysis-history-clear-btn');if(!listEl)return;
+    var listEl=document.getElementById('analysis-history-list'),emptyEl=document.getElementById('analysis-history-empty');if(!listEl)return;
     var list=sylvaGetAnalysisHistory();
-    if(!list.length){listEl.innerHTML='';if(emptyEl)emptyEl.style.display='block';if(clearBtn)clearBtn.style.display='none';return;}
-    if(emptyEl)emptyEl.style.display='none';if(clearBtn)clearBtn.style.display='block';
-    var noteTxt=(typeof t==='function')?t('analysis_history_note','Sunucuda saklandı'):'Sunucuda saklandı';
-    listEl.innerHTML=list.map(function(item){return '<div class="sylva-hist-item"><span class="sylva-hist-icon">'+escapeHtml(item.icon||'📄')+'</span><div class="sylva-hist-body"><div class="sylva-hist-name">'+escapeHtml(item.filename||'—')+'</div><div class="sylva-hist-meta">'+escapeHtml(item.type||'')+' · '+sylvaFormatHistDate(item.ts)+'</div><div class="sylva-hist-note">'+escapeHtml(noteTxt)+'</div></div></div>';}).join('');
+    if(!list.length){listEl.innerHTML='';if(emptyEl)emptyEl.style.display='block';return;}
+    if(emptyEl)emptyEl.style.display='none';
+    var loadLabel=(typeof t==='function')?t('project_load_btn','📂 Yükle'):'📂 Yükle';
+    var deleteTitle=(typeof t==='function')?t('project_delete_title','Projeyi sil'):'Projeyi sil';
+    listEl.innerHTML=list.map(function(item,idx){
+        var name=String(item.name||'');
+        return '<div class="sylva-hist-item" data-project-name="'+escapeHtml(name)+'">'+
+          '<span class="sylva-hist-icon">🗂️</span>'+
+          '<div class="sylva-hist-body">'+
+            '<div class="sylva-hist-name">'+escapeHtml(name)+'</div>'+
+            '<div class="sylva-hist-meta">'+escapeHtml(sylvaFormatHistDate(item.updated_at ? Date.parse(item.updated_at) : (item.created_at ? Date.parse(item.created_at) : Date.now())))+'</div>'+
+            '<div style="display:flex;gap:5px;margin-top:6px;flex-wrap:wrap;">'+
+              '<button type="button" class="btn-tool sylva-project-show-btn" data-project-name="'+escapeHtml(name)+'" style="font-size:0.72rem;padding:4px 7px;">'+escapeHtml(loadLabel)+'</button>'+
+              '<button type="button" class="btn-tool btn-danger sylva-project-delete-btn" data-project-name="'+escapeHtml(name)+'" title="'+escapeHtml(deleteTitle)+'" style="font-size:0.72rem;padding:4px 7px;">🗑️</button>'+
+            '</div>'+
+          '</div>'+
+        '</div>';}).join('');
 }
-function sylvaLoadAnalysisHistory(){sylvaHistoryApi('/api/analysis-history',{method:'GET'}).then(function(data){window._sylvaHistoryCache=data.history||[];sylvaRenderAnalysisHistory();}).catch(function(e){console.warn('Analiz geçmişi alınamadı:',e);sylvaRenderAnalysisHistory();});}
-function sylvaClearAnalysisHistory(){if(!confirm((typeof t==='function'?t('analysis_history_clear_confirm',null):null)||'Analiz geçmişi temizlensin mi?'))return;sylvaHistoryApi('/api/analysis-history',{method:'DELETE'}).then(function(){window._sylvaHistoryCache=[];sylvaRenderAnalysisHistory();}).catch(function(e){console.warn('Analiz geçmişi temizlenemedi:',e);});}
+function sylvaLoadAnalysisHistory(){
+    sylvaProjectApi('/api/projects',{method:'GET'}).then(function(data){window._sylvaProjectHistoryCache=data.projects||[];sylvaRenderAnalysisHistory();}).catch(function(e){console.warn('Kayıtlı projeler alınamadı:',e);window._sylvaProjectHistoryCache=[];sylvaRenderAnalysisHistory();});
+}
+function sylvaLoadSavedProject(name, statusEl){
+    if(!name)return;
+    sylvaProjectApi('/api/projects/'+encodeURIComponent(name),{method:'GET'}).then(function(data){
+        var project=data.project||{};var mapObj=window._sylvaMap||(typeof map!=='undefined'?map:null);
+        if(mapObj&&project.view) mapObj.setView([project.view.lat,project.view.lng],project.view.zoom);
+        if(project.basemap&&typeof switchBasemap==='function'&&project.basemap!==currentBasemapKey){switchBasemap(project.basemap);var bmBtn=document.querySelector('[data-bm="'+project.basemap+'"]');if(bmBtn){document.querySelectorAll('[data-bm]').forEach(function(b){b.classList.remove('active');});bmBtn.classList.add('active');}}
+        if(typeof window._sylvaApplySavedProjectLayout==='function') window._sylvaApplySavedProjectLayout(project.layout);
+        if(project.scaleUnit){window._sylvaScaleUnit=project.scaleUnit;try{localStorage.setItem('sylva_scale_unit',project.scaleUnit);}catch(e){}var su=document.getElementById('scale-unit-select');if(su)su.value=project.scaleUnit;if(window._sylvaScaleControl&&typeof window._sylvaScaleControl._update==='function')window._sylvaScaleControl._update();if(window._sylvaMap2ScaleControl&&typeof window._sylvaMap2ScaleControl._update==='function')window._sylvaMap2ScaleControl._update();}
+        try{if(project.workspace&&typeof L.geoJSON==='function'&&typeof setCurrentLayer==='function'){setCurrentLayer(L.geoJSON(project.workspace));}else if(!project.workspace&&typeof clearCurrentLayer==='function'){clearCurrentLayer();}}catch(e){console.warn('Çalışma alanı geri yüklenemedi:',e);}
+        if(statusEl){statusEl.textContent='"'+name+'" yüklendi.';statusEl.style.color='#64748b';}
+    }).catch(function(e){if(statusEl){statusEl.textContent=e.message||'Proje yüklenemedi.';statusEl.style.color='#b91c1c';}});
+}
+document.addEventListener('click',function(e){
+    var load=e.target.closest&&e.target.closest('.sylva-project-show-btn');
+    if(load){sylvaLoadSavedProject(load.getAttribute('data-project-name'),document.getElementById('project-status-msg'));return;}
+    var del=e.target.closest&&e.target.closest('.sylva-project-delete-btn');
+    if(del){
+        var name=del.getAttribute('data-project-name');
+        if(!name||!confirm('"'+name+'" projesi silinsin mi?'))return;
+        del.disabled=true;
+        sylvaProjectApi('/api/projects/'+encodeURIComponent(name),{method:'DELETE'}).then(function(){sylvaLoadAnalysisHistory();}).catch(function(err){console.warn('Proje silinemedi:',err);del.disabled=false;});
+    }
+});
 document.addEventListener('DOMContentLoaded',sylvaLoadAnalysisHistory);
 
 var _pvLock=false;
@@ -52732,9 +52742,21 @@ function _initSwipeDrag(divider) {
 var ENV_DETAIL_EN={"UHI_LST":{"title":"Urban Heat Island Intensity","show":"Maps relative land-surface-temperature anomalies inside the AOI by comparing each valid pixel with the AOI reference mean. It is intended to reveal spatial heat contrasts between built, vegetated, bare, and water-influenced surfaces and to support heat-mitigation screening. The product is a relative surface-temperature indicator, not a direct measurement of near-surface air temperature.","source":"Landsat Collection 2 Level-2 land-surface temperature (LST), processed in Google Earth Engine. The calculation uses the selected thermal observations and masks invalid/cloud-contaminated pixels before deriving the AOI-relative field.","date":"Use a consistent warm-season period and comparable cloud-free observations; a 2–4 week composite is preferable when the goal is a representative seasonal surface condition. Do not mix substantially different seasons unless the purpose is explicitly seasonal comparison. The selected date window should be applied consistently to all compared layers.","resolution":"Landsat thermal LST is delivered at approximately 30 m analysis resolution after resampling; the effective spatial detail is controlled by the source thermal band, masking, compositing and the final analysis scale.","accuracy":"There is no single universal percentage accuracy for the derived anomaly. Reliability depends on Landsat LST quality, emissivity assumptions, cloud/shadow masking, atmospheric correction, the reference mean, sample size and spatial scale. Relative anomalies are generally more defensible for within-AOI comparison than absolute temperature claims.","method":"The workflow obtains valid LST pixels, masks unsuitable observations, calculates a representative AOI reference temperature, and subtracts that reference from each pixel. The resulting difference field is then rendered as a continuous raster and summarized for the selected AOI.","interpret":"Positive values mean the surface is warmer than the AOI reference; negative values mean it is cooler. Large positive areas should be interpreted together with land cover, imperviousness, vegetation, moisture, elevation and shading because these factors can produce similar thermal patterns.","legend":"Blue represents cooler relative LST, white is near the AOI reference, and red represents warmer relative LST. The numeric legend is in relative degrees Celsius; the exact minimum and maximum shown are derived from the current result rather than fixed universal thresholds.","limits":"Cloud contamination, haze, emissivity differences, terrain shadow, water, vegetation phenology, acquisition time and mixed pixels can change the signal. The map is a screening and planning layer and should not be treated as a building-level thermal measurement without local validation.","note":"This is an analytical screening product. Reliability depends on the source dataset, observation conditions, masking, processing method, spatial scale and local validation."},"UHI_TREND":{"title":"Temporal Heat Change Trend","show":"Shows the spatial pattern of surface-temperature change between two comparable periods. It is designed to identify where surface conditions became relatively warmer or cooler and to support temporal heat-island screening, rather than to claim a causal climate trend from only two observations.","source":"Landsat Collection 2 Level-2 LST composites calculated separately for the two selected periods and differenced on a common spatial grid.","date":"Select two periods from the same month or comparable season, preferably with similar cloud-free observation quality and acquisition timing. For seasonal studies, compare like-for-like phenological conditions; for long-term studies, use consistent seasonal windows across years.","resolution":"Approximately 30 m nominal Landsat LST analysis resolution, with effective detail depending on the thermal source, compositing scale and valid-pixel coverage.","accuracy":"No single percentage accuracy applies to the change surface. Confidence is controlled by the quality and comparability of both periods, atmospheric and emissivity effects, cloud masking, temporal sampling and spatial registration. Small differences can be less reliable than persistent, spatially coherent changes.","method":"A representative LST field is generated for each period after quality masking. The second-period surface is aligned to the first and the first-period value is subtracted from the second, producing a relative temperature-change raster.","interpret":"Positive values indicate warming relative to the first period and negative values indicate cooling. Interpret only after checking whether vegetation, soil moisture, irrigation, cloud residuals, land-cover change or acquisition timing could explain the difference.","legend":"Blue indicates cooling, neutral/white values indicate little change, and red indicates warming. The legend values are relative LST change in °C and should be read as change between the selected periods, not absolute air temperature.","limits":"Two-date change detection is sensitive to seasonality, cloud screening, sun angle, soil moisture and image availability. A two-period result should not be presented as a statistically established multi-year trend without a longer time series.","note":"This is an analytical or screening product; interpretation should emphasize comparable acquisition conditions and repeated observations."},"LST_LULC_CORRELATION":{"title":"Land-Cover–Temperature Relationship","show":"Evaluates whether land-cover classes or a selected environmental layer vary systematically with surface temperature within the same AOI. It is a statistical association measure that helps compare thermal behavior among surface types; it is not a causal model and does not prove that one land-cover class causes a temperature response.","source":"Landsat-derived land-surface temperature matched to the selected land-cover, vegetation or analysis layer on a common analysis grid inside the AOI.","date":"Use a cloud-free period representing one consistent season and keep the temperature and comparison layer temporally comparable. If land cover is static, document its reference year; if it is dynamic, use the closest valid date or period to the LST observations.","resolution":"The correlation is calculated on the analysis grid used to match the input layers; the effective spatial scale is therefore limited by the coarser or resampled input and the sampling strategy.","accuracy":"Correlation has no sensor-style accuracy percentage. Reliability depends on sample size, spatial autocorrelation, class balance, mixed pixels, classification quality, temperature retrieval quality and whether both inputs represent the same period.","method":"Pixels or class-level observations are paired inside the AOI and summarized with a correlation statistic appropriate to the calculation. The procedure measures co-variation between the variables rather than fitting a physical causal model.","interpret":"Values near +1 indicate strong positive co-variation, values near -1 indicate strong inverse co-variation, and values near 0 indicate weak linear association for the selected calculation. Always inspect sample size and class composition before drawing conclusions.","legend":"For correlation-style legends, negative values represent inverse association, values near zero represent weak association, and positive values represent positive association. The color ramp should therefore be read as relationship strength and direction, not as temperature itself.","limits":"Spatial autocorrelation, confounding factors such as elevation or moisture, unequal class areas, mixed pixels and temporal mismatch can inflate or suppress correlation. Correlation must not be interpreted as proof of causation.","note":"This is an analytical screening product. Reliability depends on the source datasets, spatial scale, sample design, processing method and local validation."},"WATER_OCCURRENCE":{"title":"Historical Water Occurrence","show":"Shows the historical frequency with which surface water was detected at each location in the archive. It is useful for identifying persistent, seasonal and rarely observed water areas and for understanding the historical stability of mapped water surfaces.","source":"JRC Global Surface Water v1.4, derived from Landsat observations and distributed as a precomputed historical water-occurrence product.","date":"The source archive covers 1984–2021. Because occurrence is precomputed from the historical archive, the current satellite-date selector does not redefine the observation period; use the product's stated archive period when reporting results.","resolution":"The JRC product is approximately 30 m at the source raster scale. The displayed map may be resampled for visualization, but the underlying occurrence values should be interpreted at the source grid scale.","accuracy":"The product has published global validation information, but performance varies with water type, season, cloud/shadow conditions, narrow channels and mixed pixels. A single percentage should not be assumed to describe every AOI.","method":"The archive counts the proportion of valid observations classified as water at each pixel. The resulting percentage expresses historical observation frequency rather than a continuous physical measurement of water depth or volume.","interpret":"High occurrence indicates that water was detected consistently across many valid observations; low occurrence indicates rare or intermittent detection. Seasonal wetlands, floodplains and temporary ponds may legitimately have intermediate values.","legend":"The legend is a percentage scale from low occurrence to high occurrence. Values close to 0% mean water was rarely or never detected, while values near 100% indicate persistent observed water.","limits":"Historical occurrence can reflect changing shorelines, reservoir operations, floods, droughts and sensor observation gaps. It does not establish legal water boundaries or current conditions by itself.","note":"Use the archive date and source definition when citing this layer; do not treat the occurrence percentage as a direct hydrological measurement."},"WATER_CHANGE":{"title":"Water-Surface Change Areas","show":"Identifies locations where the mapped surface-water state changed between two selected periods. It is intended to screen possible water expansion, contraction, inundation or drying and to guide further inspection of the underlying imagery.","source":"Sentinel-2 optical reflectance processed into NDWI-based water masks for the two comparison periods.","date":"Choose cloud-free periods from the same season, preferably 1–3 month windows with enough valid observations. Record both start and end periods because the result is a two-period comparison rather than a single-date measurement.","resolution":"Sentinel-2 bands used for NDWI are available at 10 m for the primary green/NIR inputs; the effective change-map resolution is approximately 10 m after resampling and masking.","accuracy":"Accuracy depends on water-mask thresholding, cloud and shadow removal, shoreline complexity, turbidity, vegetation over water and the comparability of the two periods. No single percentage accuracy applies to every shoreline or water type.","method":"NDWI is calculated for each period, converted to a water/non-water mask using the analysis threshold, and compared cell by cell. Areas switching from non-water to water are identified separately from areas switching from water to non-water.","interpret":"Water gain suggests newly detected water; water loss suggests reduced detected water. Inspect the original imagery because shadows, wet soil, floating vegetation, irrigation and temporary turbidity can create false changes.","legend":"The legend should distinguish stable/no-change areas from water gain and water loss. Colors represent change classes rather than a continuous water-depth scale.","limits":"Tide, reservoir operation, precipitation, irrigation, image date, cloud shadows and seasonal vegetation can mimic real hydrological change. Use comparable acquisition conditions and field or high-resolution imagery for important decisions.","note":"This is a change-screening layer, not a cadastral or hydrometric boundary product."},"WATER_SEASONALITY":{"title":"Seasonal Water Variation","show":"Shows the typical number of months in which water was observed at each location during the historical record. It separates persistent water from locations where water appears only during part of the year.","source":"JRC Global Surface Water Seasonality, a historical product derived from the Landsat-based Global Surface Water archive.","date":"The source represents the historical 1984–2021 period and is independent of the current satellite date filter. Report the archive period rather than the current application date when documenting the result.","resolution":"Approximately 30 m source raster resolution. Visualization may be resampled when zoomed, but the analytical value corresponds to the source grid.","accuracy":"Reliability varies for narrow rivers, ephemeral ponds, wetlands, cloud-prone areas and locations with sparse valid observations. No single accuracy percentage should be transferred to every local AOI.","method":"The source archive summarizes the seasonal persistence of detected water and expresses it as the number of months with observed water conditions. The application displays the resulting seasonal value without converting it into water depth or discharge.","interpret":"Values near 0 months indicate rare or absent seasonal water detection; values near 12 months indicate persistent water. Intermediate values indicate seasonal or intermittent presence.","legend":"The legend is a month-count scale, not a percentage and not a depth measurement. Higher values mean greater seasonal persistence of observed water.","limits":"Seasonality is historical and may not represent current reservoir operations, climate conditions or recent drainage. Small water bodies and narrow channels can be affected by pixel size and observation frequency.","note":"Use the historical product period and source definition when interpreting or citing the map."},"RESERVOIR_VOLUME":{"title":"Reservoir/Lake Volume Change Estimate","show":"Provides a screening indicator of relative reservoir or lake storage tendency by measuring changes in mapped water surface area. It does not calculate true water volume unless bathymetry or an area–elevation relationship is supplied.","source":"Sentinel-2 NDWI-derived water masks from two comparison periods; no bathymetric survey or measured stage–storage curve is included in the default calculation.","date":"Use comparable seasonal periods, ideally several weeks long, with low cloud contamination. Record the exact start and end dates for both periods because seasonal water-level variation can dominate the apparent change.","resolution":"Approximately 10 m Sentinel-2 water-mask scale. The effective uncertainty is larger at shorelines because mixed pixels and water-level edges are especially sensitive to the source resolution.","accuracy":"The result is an area-change proxy, so accuracy depends on water-mask quality, shoreline complexity, cloud/shadow screening and the stability of the water-body boundary. It cannot be assigned a universal volume accuracy without bathymetry and calibration data.","method":"Water masks are derived for both periods and their surface areas are compared. A storage tendency is inferred from the direction and magnitude of area change, without claiming a direct cubic-metre volume estimate.","interpret":"An increase means the detected water surface expanded; a decrease means it contracted. The result is strongest for reservoirs with a stable shoreline geometry and a known relationship between surface area and water level.","legend":"The legend represents relative water-area/storage tendency, not measured volume. Any displayed positive or negative range should be interpreted as an index of change rather than a calibrated hydrometric quantity.","limits":"Bathymetry, shoreline slope, dam operation, precipitation, evaporation and seasonal water-level cycles can decouple area change from actual storage change. Engineering or water-resource decisions require gauge and bathymetric data.","note":"This layer is a screening estimate, not a substitute for reservoir level, bathymetry or hydrological monitoring."},"WATER_QUALITY_PROXY":{"title":"Water Quality Proxy","show":"Provides a relative optical signal associated with turbidity or suspended-material conditions in water. It is intended for spatial screening and comparison, not for regulatory water-quality compliance or laboratory concentration measurement.","source":"Sentinel-2 multispectral surface reflectance bands and an optical proxy derived from their relative response over water.","date":"Select a short, cloud-free observation window and avoid periods with strong sunglint, haze, cloud shadow or rapidly changing water conditions. For comparison, use similar seasons and acquisition geometry.","resolution":"Primary Sentinel-2 optical bands are available at 10–20 m depending on the band used. The proxy inherits the effective scale and limitations of the selected bands and processing grid.","accuracy":"There is no universal accuracy percentage because optical response depends on sediment type, particle size, water color, depth, bottom reflectance and atmospheric correction. Local calibration with field samples is required for quantitative concentration estimates.","method":"The selected reflectance bands are combined into an empirical optical index and masked to water. The resulting index is normalized or displayed as a continuous relative signal for comparison across the AOI.","interpret":"Higher values generally indicate stronger turbidity-like or suspended-material optical response, while lower values indicate clearer optical conditions. The direction depends on the exact proxy definition and should be checked against its legend.","legend":"The legend represents relative optical intensity, not mg/L, NTU or another laboratory unit unless a local calibration has explicitly converted it.","limits":"Bottom reflectance in shallow water, algae, sunglint, haze, cloud shadow and changing illumination can strongly affect the result. Never treat the proxy as a regulatory water-quality measurement without field validation.","note":"Use this product for screening and relative spatial comparison only."},"VEG_CHANGE":{"title":"Vegetation Change","show":"Maps relative change in vegetation condition between two periods using a vegetation-index difference. It highlights areas where vegetation signal strengthened, weakened or remained comparatively stable.","source":"Sentinel-2 multispectral reflectance with NDVI-derived vegetation condition for two selected periods.","date":"Select periods from the same phenological stage and preferably the same season. Use comparable cloud-free windows and document both dates because phenology can produce changes larger than the environmental signal of interest.","resolution":"NDVI uses Sentinel-2 10 m red and near-infrared bands; the final change raster is therefore approximately 10 m at source scale, subject to masking and resampling.","accuracy":"Accuracy depends on atmospheric correction, cloud/shadow masking, canopy structure, soil background and seasonal comparability. NDVI change does not have a single universal percentage accuracy.","method":"NDVI is calculated for each period and the difference between the later and earlier values is mapped. Pixels with invalid observations are masked so that missing data are not interpreted as vegetation loss or gain.","interpret":"Positive change generally indicates stronger vegetation index response and negative change indicates weakening. Interpret alongside rainfall, irrigation, crop cycle, land cover and fire disturbance before attributing a cause.","legend":"Green indicates vegetation increase or stronger condition, red indicates decline, and neutral colors indicate little change. The numeric scale is an NDVI difference and is not a percentage of biomass change.","limits":"Phenology, crop rotation, soil moisture, shadows, clouds and different observation dates can mimic vegetation change. Use consistent seasons and, where important, field or high-resolution validation.","note":"The layer is a remote-sensing change indicator, not a direct measurement of biomass, yield or plant health."},"FOREST_LOSS":{"title":"Forest Loss/Gain","show":"Screens areas where forest-cover or forest-condition signals indicate potential loss, gain or persistence between comparison periods. It is intended to prioritize areas for inspection and does not constitute a legal forest boundary or verified deforestation record.","source":"Sentinel-2 vegetation information combined with forest-cover masks and change rules implemented in the analysis workflow.","date":"Use comparable leaf-on periods with sufficient cloud-free imagery. For disturbance mapping, select a pre-disturbance period and a post-disturbance period close enough to the event to reduce unrelated seasonal change.","resolution":"Sentinel-2 optical inputs are approximately 10 m for the main vegetation bands; the effective forest-change map inherits this scale and the resolution of the forest mask.","accuracy":"Reliability depends on forest-mask quality, canopy density, season, cloud/shadow masking, fire and harvest signatures, and mixed pixels. No universal percentage accuracy applies to the derived screening classes.","method":"Forest and vegetation masks are generated for the selected periods and compared using spectral and change criteria. The workflow identifies candidate loss/gain areas rather than directly observing the legal cause of change.","interpret":"Red areas indicate candidate forest loss or disturbance, green indicates gain or retained forest depending on the class definition, and neutral areas indicate limited detected change. Always consult the legend for the exact class meaning.","legend":"Harvest, fire, drought, storm damage, seasonal leaf-off, cloud shadow and plantation rotation can resemble permanent forest loss. Confirm important locations with multi-date imagery and field or authoritative forest data.","limits":"This is a screening product and should not be used alone for regulatory or legal forest accounting.","note":"This is an analytical or screening product. Reliability depends on the source dataset, observation conditions, processing method, spatial scale and local validation."},"BURN_SEVERITY":{"title":"Burn Severity","show":"Maps the relative magnitude of vegetation and surface disturbance associated with fire by comparing pre-fire and post-fire spectral conditions. It is designed to distinguish stronger from weaker burn impact and to support rapid post-fire prioritization.","source":"Sentinel-2 multispectral imagery using an NBR/dNBR-type change indicator derived from near-infrared and shortwave-infrared response.","date":"Choose a representative pre-fire period and the nearest suitable cloud-free post-fire period, commonly within 1–3 months when possible. Avoid comparing different seasonal states unless necessary, and record the exact pre/post windows because vegetation recovery begins immediately after fire.","resolution":"Sentinel-2 NBR inputs use 10–20 m bands; the resulting burn-severity map is approximately 20 m when SWIR resolution controls the calculation, subject to the final resampling scale.","accuracy":"There is no single universal percentage accuracy. Reliability depends on fire timing, severity, vegetation type, pre-fire condition, cloud/shadow masking, smoke effects, soil exposure and the time between fire and post-fire observation. Local burn-severity plots or authoritative fire data improve validation.","method":"NBR is calculated before and after the disturbance and the difference is used to estimate spectral change. The sign and magnitude indicate the direction and relative strength of disturbance, while the exact class thresholds determine the displayed severity categories.","interpret":"Higher positive dNBR-type values generally indicate stronger burn-related spectral change; values near zero indicate limited change; negative values can indicate regrowth, phenological difference or noise depending on the formulation.","legend":"The legend must be read according to the configured burn-severity intervals. Low, moderate and high colors represent relative disturbance classes and are not automatically equivalent to a universal field severity standard unless the same validated thresholds are used.","limits":"Smoke, cloud, wet soil, pre-existing vegetation stress, harvesting and post-fire regrowth can alter the index. Fire severity should be validated with field observations or authoritative burn assessments for operational decisions.","note":"This is a remote-sensing screening indicator and not a fire-management certification or legal damage assessment."},"CANOPY_HEIGHT_BIOMASS":{"title":"Canopy Height / Biomass-Carbon","show":"Provides a spatial indicator of vegetation canopy height and its potential relationship to biomass and carbon stocks. Height is a structural variable; converting it to biomass or carbon requires a model calibrated for species, forest type and site conditions.","source":"A global model-based canopy-height product or equivalent remote-sensing structural dataset selected by the application. The exact reference product and version should be reported with the exported analysis.","date":"Use the source product's stated reference period because the canopy-height model is not necessarily updated for the current satellite date. Do not imply that a current-date selector changes the structural reference year.","resolution":"The native resolution depends on the selected canopy-height product and may be substantially coarser than Sentinel-2. The analysis preserves or resamples the source grid as required by the map display.","accuracy":"Model uncertainty varies with forest structure, biome, terrain and reference data density. There is no universal local percentage accuracy; quantitative biomass/carbon estimates require validation and calibration for the target ecosystem.","method":"The application clips the structural surface to the AOI and displays the source height indicator. If biomass/carbon is estimated, the conversion must use an explicit allometric or model relationship rather than assuming a fixed height-to-carbon ratio.","interpret":"Higher values indicate taller canopy or stronger structural signal. Do not equate a high canopy value directly with a specific tonne-per-hectare carbon stock without a validated conversion model.","legend":"Continuous colors represent relative or numeric canopy-height values according to the active legend. If a biomass or carbon proxy is shown, its units and calibration must be read from the legend and analysis metadata.","limits":"Terrain, sparse canopies, plantations, mixed pixels and model extrapolation can introduce error. The product is unsuitable as a substitute for forest inventory measurements where legally or financially precise carbon accounting is required.","note":"Treat structural values as model outputs with source-specific uncertainty and reference dates."},"FOREST_HEALTH":{"title":"Forest Health Monitoring","show":"Tracks relative changes in vegetation vigor that may indicate forest stress, disturbance or recovery between two periods. It is a remote-sensing indicator and cannot diagnose a specific biological cause by itself.","source":"Sentinel-2 NDVI-based vegetation comparison, combined with the forest context used by the analysis.","date":"Select two comparable growing-season periods with similar phenology and adequate cloud-free observations. If monitoring a disturbance, use a stable pre-event baseline and a clearly defined post-event period.","resolution":"Approximately 10 m at the Sentinel-2 vegetation-band scale, with effective detail controlled by masking, resampling and the forest mask.","accuracy":"There is no fixed percentage accuracy. Reliability depends on canopy structure, season, atmospheric correction, cloud/shadow masking, soil background and the representativeness of the two periods.","method":"Vegetation index values are calculated for each period and compared to identify relative weakening or strengthening. The method is designed to reveal spatial patterns rather than identify pathogens, species-level causes or physiological mechanisms.","interpret":"Red/yellow areas indicate reduced vegetation signal or potential stress; green areas indicate stronger or recovering vegetation. Verify whether observed changes correspond to drought, harvest, fire, pests, phenology or management before assigning a cause.","legend":"The legend expresses relative change in the selected health indicator. It is not a clinical-style health score and should not be interpreted as a direct percentage of tree mortality.","limits":"Phenology, irrigation, crop/forest mixture, haze and sensor differences can create apparent stress. Multi-date analysis and field observations are recommended for forest-management decisions.","note":"This is a screening indicator for relative vegetation condition and recovery."},"URBAN_GROWTH":{"title":"Urban Expansion","show":"Screens areas where spectral and built-up indicators suggest potential expansion of developed surfaces. It is designed to highlight candidate growth zones for planning review, not to establish legal development boundaries or construction permits.","source":"Sentinel-2 multispectral reflectance and built-up-area proxy indicators compared between two periods.","date":"Compare periods from the same season with similar moisture and illumination conditions. For meaningful growth screening, a separation of roughly 6–12 months or more is preferable when the application objective is development change rather than short-term construction disturbance.","resolution":"Primary Sentinel-2 optical inputs are approximately 10 m; the effective urban-growth result depends on the proxy bands, thresholding and resampling.","accuracy":"No single accuracy percentage applies. Bare soil, construction sites, harvested fields, dry vegetation and shadows can be confused with built-up surfaces; accuracy therefore depends strongly on local calibration and the comparison periods.","method":"Built-up proxy values are calculated for the selected periods and differenced or thresholded to identify candidate new development. The workflow is intended as a spatial screening method and should be checked against recent imagery.","interpret":"Positive change or the high-change class indicates stronger evidence of newly developed or impervious surface; low or neutral values indicate limited detected change. Construction and bare-soil areas require visual confirmation.","legend":"The legend should be read as relative urban-growth/change strength. Colors do not represent a legal land-use category, floor-area ratio or exact built-up percentage.","limits":"Seasonal soil moisture, agriculture, demolition, road construction and shadows can create false positives. Use planning datasets, parcel records and high-resolution imagery for regulatory decisions.","note":"This product is a planning-screening layer, not a cadastral or permitting dataset."},"IMPERVIOUS_CHANGE":{"title":"Impervious-Surface Change","show":"Shows relative change in surfaces such as asphalt, concrete and roofs that reduce infiltration. It helps identify locations where urban sealing may have increased or decreased between two periods.","source":"Sentinel-2 multispectral reflectance and an imperviousness proxy calculated for two comparison periods.","date":"Use the same season and similar moisture conditions for both periods. Avoid comparing wet and dry conditions because soil and vegetation moisture can strongly alter spectral response.","resolution":"Sentinel-2 optical inputs are approximately 10 m, while the effective impervious-change scale depends on the proxy and resampling.","accuracy":"There is no universal percentage accuracy for the proxy. Mixed pixels, bright roofs, bare soil, shadows, construction stages and vegetation cover affect the signal; local validation is required for quantitative imperviousness estimates.","method":"The workflow derives an imperviousness-related spectral signal for each period and compares them to identify relative change. It does not directly measure the engineering fraction of sealed surface unless calibrated against reference data.","interpret":"Higher positive change generally indicates increasing impervious-surface tendency; negative change indicates a reduction in the proxy. Interpret with urban growth, land cover and recent imagery.","legend":"The legend represents relative imperviousness/change strength. It should not be read as a legally certified percentage of impervious cover unless explicitly calibrated and labeled as such.","limits":"Wet soil, exposed aggregate, construction materials and seasonal vegetation can produce false signals. For stormwater or planning design, use surveyed or validated impervious-surface datasets.","note":"This is a remote-sensing proxy for urban surface sealing."},"BUILDING_FOOTPRINT":{"title":"Building/Roof Detection","show":"Shows a screening-level indication of likely building or roof presence from satellite-derived or model-based evidence. It is intended to help identify candidate structures and should not be interpreted as a legal building footprint, cadastral boundary or permit record.","source":"Satellite-derived or model-based building/roof mask used by the application; the exact source and version should be reported with the exported result.","date":"Prefer the most recent cloud-free observation or model reference period available for the area. When comparing dates, keep the source and processing version consistent.","resolution":"Resolution depends on the source model or imagery and can vary across the AOI. The visible map resolution is not necessarily the same as the true positional accuracy of the building boundary.","accuracy":"Detection performance varies with roof material, building size, tree cover, shadows, density and imagery quality. There is no universal accuracy percentage that guarantees correct detection for every city or neighborhood.","method":"The workflow identifies pixels or objects whose spectral, textural or model features are consistent with built structures. Candidate detections are displayed as a screening layer and may be simplified at map scale.","interpret":"High-probability or highlighted areas indicate stronger evidence of building/roof presence; neutral areas indicate weaker evidence. The legend describes detection confidence or class meaning, not property ownership or legal status.","legend":"Trees, shadows, vehicles, bright bare surfaces and complex roofs can produce false positives or missed detections. Confirm building geometry with authoritative cadastral or high-resolution survey data when required.","limits":"This layer is explicitly a screening product and should not be used as a legal building boundary without independent verification.","note":"This is an analytical or screening product. Reliability depends on the source dataset, observation conditions, processing method, spatial scale and local validation."},"NIGHTLIGHTS_ECONOMIC":{"title":"Night Lights — Economic Activity Change","show":"Maps changes in nighttime radiance as an indirect indicator of human activity, electrification and energy use. It can reveal broad spatial changes in activity but cannot directly measure income, GDP, employment or economic welfare.","source":"VIIRS Day/Night Band nighttime-light observations, typically aggregated over monthly or multi-month periods. The effective footprint is much coarser than building-scale imagery.","date":"Compare averages covering the same months or seasons, ideally over 3–12 months, to reduce transient events and lunar/atmospheric effects. Record both comparison windows because a single monthly image is highly sensitive to short-term conditions.","resolution":"VIIRS nighttime-light data are commonly used at roughly 500 m-class spatial scale, with geolocation and point-spread effects that can spread light beyond the emitting source.","accuracy":"Radiometric quality is generally suitable for regional change screening, but interpretation is affected by saturation, blooming, stray light, cloud contamination, atmospheric conditions and changes in lighting technology. No universal economic accuracy percentage exists.","method":"Nighttime radiance is aggregated for each period and compared spatially. The result measures change in observed light signal rather than a direct economic variable.","interpret":"Positive change means increased observed radiance and negative change means decreased radiance. Consider new lighting, outages, curfews, fires, industrial schedules and seasonal activity before interpreting economic meaning.","legend":"The legend represents relative radiance or radiance change. It is not a currency scale and should not be labeled as direct economic growth without an independent econometric calibration.","limits":"Blooming can assign light to nearby unlit areas, while dark rural areas may contain sub-pixel activity. Weather and sensor processing can also influence monthly values.","note":"Use night lights as a complementary regional indicator alongside socioeconomic statistics and administrative data."},"DROUGHT_INDEX":{"title":"Drought Monitoring","show":"Provides a simplified rainfall-deficit indicator intended to screen areas experiencing unusually dry conditions relative to a historical precipitation reference. It is not a full drought declaration system and should be interpreted with soil moisture, vegetation and water-resource information.","source":"CHIRPS precipitation, approximately 5 km daily rainfall data, combined with a historical precipitation reference within the analysis workflow.","date":"Use at least a 1–3 month accumulation and preferably a full season or hydrological year for drought assessment. Keep the reference period and analysis period consistent and document the exact dates used.","resolution":"CHIRPS is approximately 0.05° (~5 km) at source resolution. The map may display finer pixels through resampling, but this does not create new meteorological information.","accuracy":"Precipitation estimates have regional uncertainty due to gauge density, satellite retrieval conditions and terrain. The derived indicator has no single fixed percentage accuracy and should not be treated as a local rain-gauge replacement.","method":"Rainfall is accumulated over the selected period, compared with the chosen historical baseline or normalized into the application's drought indicator, and mapped as a continuous relative surface.","interpret":"Lower values indicate a larger rainfall deficit or stronger dry signal; higher values indicate wetter or closer-to-normal conditions according to the configured formulation. Cross-check with vegetation and soil-moisture indicators.","legend":"The legend expresses relative drought severity or rainfall anomaly. It is not automatically equivalent to a standardized SPI/SPEI value unless the calculation explicitly uses that standardized index.","limits":"Spatial scale is coarse compared with agricultural fields or urban parcels. Topography, local convective rainfall, irrigation and groundwater conditions can differ substantially from the precipitation proxy.","note":"Use as an early-warning and screening layer, not as a stand-alone drought declaration or water-allocation measurement."},"FLOOD_MAPPING":{"title":"Flood Mapping","show":"Rapidly screens newly inundated areas by comparing water masks before and after an event. It is designed for event response and prioritization of potentially flooded zones, not for engineering flood depth or hydraulic modeling.","source":"Sentinel-2 multispectral imagery and NDWI-based water masks from pre-event and post-event periods.","date":"Use the nearest suitable cloud-free pre-event and post-event observations. The post-event image should be close enough to the event to capture inundation but clear enough to avoid cloud/shadow contamination; record both dates.","resolution":"Approximately 10 m for the primary Sentinel-2 water-mask inputs. Narrow channels and small inundated features may still be mixed at the pixel scale.","accuracy":"Accuracy depends on cloud/shadow masking, water threshold selection, vegetation over water, turbidity and the representativeness of the pre-event baseline. There is no universal flood-detection accuracy for every event.","method":"NDWI or equivalent water indicators are generated for both periods, converted to masks and compared. New water detections are separated from persistent water where the workflow supports that distinction.","interpret":"Newly detected water may indicate inundation, but it can also reflect irrigation, seasonal wetlands, reservoir operations or shadows. Confirm critical locations with SAR, high-resolution imagery, gauges or field observations.","legend":"The legend distinguishes new water/flood signal, existing water and stable non-water according to the configured classes. It does not provide water depth, flow velocity or flood probability.","limits":"Clouds, shadows, buildings, vegetation and rapidly changing water levels can cause false positives or missed areas. Hydraulic decisions require DEM, rainfall, drainage and hydraulic model inputs.","note":"This is a rapid remote-sensing flood-screening product."},"LANDSLIDE_SUSCEPTIBILITY":{"title":"Landslide Susceptibility Map","show":"Provides a relative screening score indicating where terrain and surface conditions may be more favorable for landslide susceptibility. It identifies potential priority zones but does not confirm that a landslide will occur at a location or time.","source":"DEM-derived terrain variables such as slope/elevation and satellite-derived surface or vegetation indicators combined in a relative susceptibility model.","date":"Topographic variables are date-independent for a fixed DEM. Environmental inputs should use a representative recent period and, for event analysis, a clearly documented rainfall or disturbance period.","resolution":"The resolution is controlled by the DEM and the coarsest environmental input used by the model. Resampling to a finer display grid does not improve the true spatial resolution.","accuracy":"There is no universal percentage accuracy for a relative susceptibility index. Reliability depends on DEM quality, conditioning factors, model weights, landslide inventory quality and local geological validation.","method":"Terrain derivatives and environmental indicators are normalized or combined into a relative susceptibility score. The method is a screening model unless calibrated against a local inventory and validated with independent landslide observations.","interpret":"Higher values indicate greater relative susceptibility under the model assumptions. They do not represent probability of failure, expected landslide volume or return period unless explicitly calibrated.","legend":"Low-to-high colors represent relative susceptibility classes or a continuous score. The legend must be read as relative risk ranking rather than a binary safe/unsafe boundary.","limits":"Geology, soil depth, drainage, faults, rainfall intensity, land management and retaining structures may not be fully represented. Detailed geotechnical investigation is required for engineering decisions.","note":"Use for regional screening and prioritization, not site-specific engineering certification."},"DROUGHT_RISK_COMPOSITE":{"title":"Composite Drought Risk Index","show":"Combines multiple environmental signals into a relative drought-risk score to identify areas where precipitation deficit and surface stress occur together. It is intended for prioritization rather than as a direct measurement of groundwater or agricultural loss.","source":"Multi-source proxy analysis with CHIRPS precipitation as a major component and complementary surface indicators such as vegetation or moisture response where available.","date":"Use a consistent analysis period of at least one month and preferably a full growing season. Compare like-for-like seasons when assessing interannual change and document the baseline used for normalization.","resolution":"Spatial resolution is governed by the coarsest source, often precipitation at approximately 5 km when CHIRPS controls the composite. Finer display pixels do not increase the underlying information content.","accuracy":"Composite accuracy depends on every component, normalization choice and weighting scheme. There is no single percentage accuracy unless the index has been calibrated against a validated drought reference dataset.","method":"Input indicators are normalized to comparable ranges and combined according to the configured weighting or scoring method. The result is a relative composite index rather than a directly observed physical quantity.","interpret":"Higher values indicate greater relative drought risk under the configured scoring system; lower values indicate lower relative risk. Inspect the component layers to understand which factor is driving the score.","legend":"A 0–1 legend represents relative index magnitude when normalized that way. It should not be interpreted as a probability of drought, percent crop loss or groundwater depletion unless separately calibrated.","limits":"Weights, source resolution, missing observations, irrigation and local water management can change the composite. The index should be tested against local drought records before operational use.","note":"Use as a multi-indicator screening tool and always inspect component datasets."},"EARTHQUAKE_DAMAGE_PROXY":{"title":"Post-Earthquake Damage Proxy","show":"Screens clusters of possible surface or built-environment change after an earthquake to help prioritize field inspection. It is not a confirmed building-damage map and cannot determine structural safety from satellite change alone.","source":"Sentinel-2 optical imagery from a recent pre-event period and the first suitable post-event period, combined into a relative change proxy.","date":"Choose a stable pre-event baseline close to the event and the first cloud-free post-event image that provides adequate coverage. Avoid long gaps that introduce unrelated land-cover or construction changes.","resolution":"Approximately 10 m for the primary optical inputs, although actual damage visibility depends on building size, shadow, rubble pattern and mixed pixels.","accuracy":"Accuracy varies strongly by urban density, building type, cloud cover, image geometry and the nature of damage. There is no universal percentage accuracy for the proxy; authoritative damage inventories and field checks are required.","method":"Spectral or texture-related changes are calculated between the two periods and summarized spatially to identify clusters of unusual change. The method detects change signals rather than inferring structural failure mechanisms.","interpret":"Strong positive change indicates stronger detected disturbance relative to the baseline. Stable areas have little spectral change. Disturbance may be caused by rubble, shadows, debris, demolition or ordinary construction and therefore requires verification.","legend":"The legend represents relative disturbance/change strength. It does not directly encode damage grades such as minor, moderate or severe unless an independently validated classification has been applied.","limits":"Clouds, shadows, viewing geometry, vegetation and pre-existing construction can produce false positives. Critical emergency decisions must rely on field teams, engineering inspection and authoritative damage assessments.","note":"This is a rapid prioritization proxy, not a structural safety assessment."},"NO2_TIMESERIES":{"title":"NO₂ Time Series","show":"Shows changes in satellite-observed atmospheric nitrogen dioxide column density, a regional indicator associated with combustion and atmospheric chemistry. It does not directly represent ground-level NO₂ concentration at a person's breathing height.","source":"Sentinel-5P TROPOMI NO₂ satellite product, processed into temporal summaries over the AOI.","date":"Monthly or 1–3 month averages are preferable to single observations for stable comparisons. Compare the same months or seasons across years and document cloud filtering and the averaging period.","resolution":"TROPOMI NO₂ has an effective spatial footprint of roughly 3.5 × 5.5 km for later mission products, with the exact resolution depending on product version and observation conditions.","accuracy":"Satellite column retrieval quality varies with cloud fraction, surface reflectance, aerosols, viewing geometry and atmospheric conditions. It should not be assigned a local ground-monitoring accuracy percentage.","method":"Valid satellite NO₂ columns are filtered and aggregated over the selected period. The resulting temporal surface or statistic summarizes the column signal rather than converting it to a surface concentration.","interpret":"Higher values indicate stronger satellite-observed NO₂ column signal and lower values weaker signal. Interpret changes with wind, boundary-layer height, seasonality and emission patterns.","legend":"The legend represents column-density or relative anomaly values. It is not a legal air-quality limit such as a ground-level µg/m³ standard.","limits":"Clouds, atmospheric transport, vertical mixing and the coarse footprint mean that local sources may not align exactly with the mapped maximum. Ground stations are needed for regulatory exposure assessment.","note":"Use as regional air-quality and emission-pattern screening, not as a substitute for ground monitoring."},"AEROSOL_OPTICAL_DEPTH":{"title":"Aerosol Optical Depth","show":"Maps the column-integrated optical effect of atmospheric particles such as smoke, dust and haze. It describes aerosol loading along the atmospheric path and is not equivalent to ground-level PM2.5 concentration.","source":"Satellite aerosol optical-depth product processed from multispectral observations; the exact sensor/product version should be reported with the analysis output.","date":"Weekly or monthly averaging reduces single-observation noise. Avoid periods dominated by clouds and compare the same season when assessing temporal change.","resolution":"Spatial resolution depends on the selected aerosol product and is generally coarser than high-resolution land imagery. The display grid should not be interpreted as the true particle-scale resolution.","accuracy":"Retrieval quality depends on surface reflectance, cloud screening, aerosol type, viewing geometry and atmospheric conditions. There is no universal local percentage accuracy and no direct one-to-one conversion to PM2.5.","method":"Valid aerosol observations are filtered and aggregated to produce an optical-depth field. The result represents attenuation by the aerosol column rather than a surface mass concentration.","interpret":"Higher values indicate stronger aerosol optical loading; lower values indicate more optically transparent atmospheric conditions. Wind, humidity and aerosol composition should be considered when interpreting patterns.","legend":"The legend is AOD or a relative aerosol signal, not µg/m³ of PM2.5. If a different normalized scale is displayed, follow the exact legend title and units.","limits":"Cloud contamination, bright surfaces, smoke type and humidity can affect retrievals. Ground-based particulate monitoring is required for health-exposure assessment.","note":"Use for atmospheric screening and regional comparison, not direct public-health concentration measurement."},"SO2_CO_ANOMALY":{"title":"SO₂/CO Anomaly Map","show":"Highlights unusual satellite-observed sulfur dioxide and carbon monoxide signals relative to a comparison period or baseline. It can reveal regional pollution plumes and episodic atmospheric events but does not directly quantify source emissions or human exposure.","source":"Sentinel-5P TROPOMI SO₂ and CO products, aggregated and compared consistently across the selected periods.","date":"Use consistent monthly or seasonal periods and document the baseline. For event studies, choose dates that capture the event while maintaining comparable cloud and meteorological conditions.","resolution":"TROPOMI atmospheric products have kilometer-scale footprints that vary by product version and observation conditions; they are much coarser than parcel or street scales.","accuracy":"Retrieval uncertainty depends on cloud fraction, aerosol loading, vertical sensitivity, viewing geometry and atmospheric transport. No single percentage accuracy can be applied to local source attribution.","method":"The workflow aggregates valid SO₂/CO observations and compares them with the selected reference period to derive a relative anomaly surface.","interpret":"Positive anomalies indicate stronger-than-baseline satellite signals and negative anomalies indicate weaker signals. Wind direction and atmospheric transport must be considered before linking a hotspot to a local source.","legend":"The legend represents relative column anomaly or pollutant-signal magnitude. It is not a direct emissions-rate, stack concentration or exposure scale.","limits":"Coarse footprints can mix multiple sources and transport can move pollutants far from their origin. Ground stations and dispersion modeling are required for source attribution or regulatory assessment.","note":"Use for regional atmospheric anomaly screening and plume interpretation."},"COASTLINE_CHANGE":{"title":"Coastline Change","show":"Screens apparent movement of the land–water boundary between two periods to identify possible shoreline erosion or accretion. It is a remote-sensing change indicator and not a legal shoreline survey.","source":"Sentinel-2 or Landsat optical imagery with NDWI or related water/land boundary extraction for two periods.","date":"Use comparable seasons and, where possible, similar tide and water-level conditions. Record both dates and tidal/water-level context because shoreline position can change without permanent erosion or accretion.","resolution":"Approximately 10 m for Sentinel-2 water-boundary inputs and 30 m for Landsat optical inputs. Positional uncertainty can be several pixels depending on shoreline complexity and water conditions.","accuracy":"Accuracy depends on tide, waves, water level, image geolocation, thresholding and beach slope. A single pixel-size accuracy statement is insufficient for a legal shoreline position.","method":"Water masks are extracted for both periods, boundaries are compared on a common grid, and areas of apparent land loss or gain are mapped.","interpret":"Positive/negative change must be interpreted according to the legend's sign convention. Apparent land loss can indicate erosion, while apparent gain can indicate accretion, sediment deposition or temporary water-level differences.","legend":"The legend expresses relative boundary movement/change classes, not necessarily metres of permanent shoreline migration unless the calculation explicitly converts displacement to distance.","limits":"Tide, storm surge, waves, seasonal lake/reservoir levels, wet sand and different image dates can dominate the signal. Coastal engineering and legal boundary work require surveyed shorelines and tidal datums.","note":"Use for screening of possible coastal or shoreline change and follow with geodetic validation."},"SST_TREND":{"title":"Sea Surface Temperature Trend","show":"Shows relative sea-surface-temperature change between two selected periods. It is useful for identifying broad warming or cooling patterns, but short-lived currents, coastal mixing and seasonal variability can produce strong local signals.","source":"NOAA Climate Data Record Optimum Interpolation Sea Surface Temperature (OISST) v2.1 or the equivalent SST source configured by the application.","date":"Compare monthly or seasonal averages from the same part of the year. For trend analysis, use repeated comparable periods rather than a single pair of dates and document the baseline interval.","resolution":"OISST is a gridded global SST product at approximately 0.25° (~25 km) spatial resolution. The map may display a finer visual grid through resampling without increasing native detail.","accuracy":"Product uncertainty varies with in situ observations, satellite retrievals, cloud conditions and coastal complexity. No universal local percentage accuracy should be assumed, especially near shore where mixed land–water pixels are important.","method":"SST values are aggregated for the selected periods and differenced on a common grid. The output is a temperature-change field, not a subsurface ocean temperature or heat-content estimate.","interpret":"Positive values indicate warming relative to the reference period; negative values indicate cooling. Interpret persistent patterns separately from transient currents, fronts and storm-related anomalies.","legend":"Blue/cool colors represent negative change, neutral colors little change, and warm/red colors positive change when using the standard diverging ramp. The numeric values are temperature differences in °C.","limits":"The coarse grid cannot resolve small bays, narrow coastal currents or nearshore thermal gradients reliably. Use higher-resolution regional SST or in situ observations for coastal engineering or marine habitat work.","note":"This is a regional ocean-temperature screening product and should be interpreted at its native spatial scale."}};
 var I={}; Object.keys(ENV_DETAIL_EN).forEach(function(k){var d=ENV_DETAIL_EN[k];I[k]=[d.title,d.show,d.source,d.date,d.legend];});
 var SUPPORTED_INFO_LANGS={en:1,tr:1,de:1,fr:1,es:1,pt:1,it:1,ru:1,ar:1,fa:1,zh:1,ja:1,ko:1,hi:1,id:1,th:1,bn:1,vi:1,ur:1,pl:1,ms:1,el:1,uz:1,az:1,bg:1,hu:1,ka:1,kk:1,ky:1,mn:1};
-function selectedInfoLang(){return (typeof window._sylvaLang==='string'&&window._sylvaLang)||'en'}
+function selectedInfoLang(){
+  try {
+    var raw=(typeof window._sylvaLang==='string'&&window._sylvaLang)||localStorage.getItem('sylvaSelectedLanguage')||'en';
+    raw=String(raw).toLowerCase().replace('_','-');
+    return raw.split('-')[0] || 'en';
+  } catch(e){ return 'en'; }
+}
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
-function translateInfoText(text,lang){if(!text||lang==='en')return Promise.resolve(text);if(typeof window._sylvaGoogleTranslateText==='function')return window._sylvaGoogleTranslateText(text,lang);return Promise.resolve(text)}
+function translateInfoText(text,lang){
+  if(!text||lang==='en') return Promise.resolve(text);
+  if(typeof window._sylvaGoogleTranslateText==='function'){
+    return window._sylvaGoogleTranslateText(text,lang).then(function(v){return (v&&String(v).trim())?v:text}).catch(function(){return text});
+  }
+  return Promise.resolve(text);
+}
 var INFO_LABELS={
 tr:{show:'Ne gösterir?',source:'Veri kaynağı',date:'Tarih / dönem ve tarih seçme mantığı',resolution:'Uzamsal çözünürlük',accuracy:'Güvenilirlik / doğruluk',method:'Yöntem / nasıl üretilir?',interpret:'Nasıl yorumlanır?',legend:'Efsane / lejant anlamı',limits:'Sınırlamalar ve uyarılar'},
 en:{show:'What it shows',source:'Data source',date:'Date / period and date-selection logic',resolution:'Spatial resolution',accuracy:'Reliability / accuracy',method:'Method / how it is produced',interpret:'How to interpret it',legend:'Legend meaning',limits:'Limitations and cautions'},
@@ -52799,7 +52821,13 @@ document.addEventListener('change',function(e){var input=e.target;if(!input||!in
 (function(){'use strict';
 /* Mavi i düğmesinin araç ipucu/erişilebilirlik metni — uygulamanın 30 dili. */
 var INFO_BUTTON_TEXT={tr:'Bu analiz hakkında bilgi',en:'Information about this analysis',de:'Informationen zu dieser Analyse',fr:'Informations sur cette analyse',es:'Información sobre este análisis',pt:'Informações sobre esta análise',ar:'معلومات عن هذا التحليل',fa:'اطلاعات درباره این تحلیل',zh:'有关此分析的信息',ja:'この分析についての情報',ko:'이 분석에 대한 정보',hi:'इस विश्लेषण की जानकारी',id:'Informasi tentang analisis ini',ru:'Информация об этом анализе',th:'ข้อมูลเกี่ยวกับการวิเคราะห์นี้',bn:'এই বিশ্লেষণ সম্পর্কে তথ্য',vi:'Thông tin về phân tích này',ur:'اس تجزیے کے بارے میں معلومات',pl:'Informacje o tej analizie',ms:'Maklumat tentang analisis ini',el:'Πληροφορίες για αυτή την ανάλυση',uz:'Bu tahlil haqida ma’lumot',az:'Bu analiz haqqında məlumat',bg:'Информация за този анализ',hu:'Információ erről az elemzésről',it:'Informazioni su questa analisi',ka:'ინფორმაცია ამ ანალიზის შესახებ',kk:'Осы талдау туралы ақпарат',ky:'Бул талдоо тууралуу маалымат',mn:'Энэ шинжилгээний тухай мэдээлэл'};
-function selectedInfoLang(){return (typeof window._sylvaLang==='string'&&window._sylvaLang)||'en'}
+function selectedInfoLang(){
+  try {
+    var raw=(typeof window._sylvaLang==='string'&&window._sylvaLang)||localStorage.getItem('sylvaSelectedLanguage')||'en';
+    raw=String(raw).toLowerCase().replace('_','-');
+    return raw.split('-')[0] || 'en';
+  } catch(e){ return 'en'; }
+}
 function refreshInfoButtons(lang){var text=INFO_BUTTON_TEXT[lang]||INFO_BUTTON_TEXT.en;document.querySelectorAll('#env-urban-analyses-details .env-info-btn').forEach(function(btn){btn.title=text;btn.setAttribute('aria-label',text)})}
 /* Kart içindeki sabit değerleri de seçili dile çevirir. `data-env-original`
    metnin her dil değişiminde Türkçeye geri dönüp yeniden çevrilmesini sağlar. */
@@ -55807,3 +55835,154 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
 
 
 
+
+<!-- 2026-08-26: Çevresel ve Kentsel Analizlerde Lejant/Semboloji pasifliği -->
+<script id="sylva-env-urban-legend-passive-final-20260826">
+(function(){
+  'use strict';
+
+  // Çevresel ve Kentsel Analizler bölümündeki TÜM analizler için
+  // Lejant ve Semboloji panosu tamamen pasiftir. Kullanıcı tarafından
+  // sınıflandırma, renk rampası, Min/Max veya sınıf renkleri seçilemez.
+  // Bu analizler haritada sunucunun/analizin kendi özgün görselleştirmesiyle kalır.
+  function isEnvUrbanAnalysis(name){
+    name=String(name||'').toUpperCase();
+    if(!name) return false;
+    return !!document.querySelector('#env-urban-analyses-details input[data-analysis="'+CSS.escape(name)+'"]');
+  }
+
+  function activePane(){
+    return (typeof window._sylvaActivePaneId==='function') ? window._sylvaActivePaneId() : 'map';
+  }
+  function activeMeta(){
+    var p=activePane();
+    return (window._lastAnalyzeMetaByPane && window._lastAnalyzeMetaByPane[p]) || window._lastAnalyzeMeta || null;
+  }
+
+  function lockPanel(){
+    var panel=document.getElementById('legend-symbology-panel');
+    if(!panel) return;
+    panel.style.opacity='.35';
+    panel.style.pointerEvents='none';
+    panel.style.userSelect='none';
+    panel.setAttribute('aria-disabled','true');
+    panel.setAttribute('data-sylva-env-urban-passive','1');
+    panel.querySelectorAll('input,select,button').forEach(function(el){
+      el.disabled=true;
+      el.setAttribute('data-sylva-env-urban-disabled','1');
+    });
+  }
+
+  function unlockPanel(){
+    var panel=document.getElementById('legend-symbology-panel');
+    if(!panel || panel.getAttribute('data-sylva-env-urban-passive')!=='1') return;
+    panel.style.opacity='1';
+    panel.style.pointerEvents='';
+    panel.style.userSelect='';
+    panel.removeAttribute('aria-disabled');
+    panel.removeAttribute('data-sylva-env-urban-passive');
+    panel.querySelectorAll('[data-sylva-env-urban-disabled]').forEach(function(el){
+      el.disabled=false;
+      el.removeAttribute('data-sylva-env-urban-disabled');
+    });
+  }
+
+  function resetEditorToNative(meta){
+    // Önceden başka bir katmanda seçilmiş özel sınıflandırma/rampa bu analize
+    // taşınmasın. Sadece editör durumunu temizler; analiz verisini değiştirmez.
+    try{
+      var p=activePane();
+      var store=window._sylvaEditorStateByPane && window._sylvaEditorStateByPane[p];
+      var top=window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[p];
+      if(store && top && Object.prototype.hasOwnProperty.call(store,top)) delete store[top];
+    }catch(e){}
+
+    try{
+      var nativeType=String(meta && meta.legendType || 'stretched').toLowerCase();
+      if(typeof setClassificationType==='function'){
+        setClassificationType(nativeType==='classified' ? 'classified' : 'stretched');
+      }
+      var ramp=document.getElementById('selectedRamp');
+      if(ramp && meta && meta.rampKey && typeof ramps!=='undefined' && ramps[meta.rampKey]){
+        ramp.setAttribute('data-ramp',meta.rampKey);
+        ramp.style.background=ramps[meta.rampKey];
+      }
+    }catch(e){}
+  }
+
+  function sync(){
+    var meta=activeMeta();
+    var name=String(meta && meta.analysisName || '').toUpperCase();
+    if(isEnvUrbanAnalysis(name)){
+      resetEditorToNative(meta);
+      lockPanel();
+    }else{
+      unlockPanel();
+    }
+  }
+
+  // Lejant/Semboloji tarafındaki mevcut kilit açıcı fonksiyonlar daha sonra
+  // çalışsa bile çevresel/kentsel analizlerde son söz bu kontroldedir.
+  var oldSyncNative=window.syncNativeClassEditorState;
+  window.syncNativeClassEditorState=function(){
+    var meta=activeMeta();
+    if(isEnvUrbanAnalysis(String(meta&&meta.analysisName||''))){
+      resetEditorToNative(meta);
+      lockPanel();
+      return;
+    }
+    if(typeof oldSyncNative==='function') return oldSyncNative.apply(this,arguments);
+  };
+
+  var oldSetNative=window.setNativeLegendEditorLocked;
+  window.setNativeLegendEditorLocked=function(meta){
+    if(isEnvUrbanAnalysis(String(meta&&meta.analysisName||''))){
+      resetEditorToNative(meta);
+      lockPanel();
+      return;
+    }
+    if(typeof oldSetNative==='function') return oldSetNative.apply(this,arguments);
+  };
+
+  // "Lejantı Uygula", renk rampası veya sınıflandırma kontrollerine programatik
+  // tıklama gelse bile çevresel/kentsel analizlerde işlemi engelle.
+  document.addEventListener('click',function(e){
+    var meta=activeMeta();
+    if(!isEnvUrbanAnalysis(String(meta&&meta.analysisName||''))) return;
+    if(e.target && e.target.closest && e.target.closest('#btn-apply-legend, #btn-apply-stretched, #btn-apply-classification, #paletteList, #classification-type-group, #stretched-settings, #classified-settings')){
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      resetEditorToNative(meta);
+      lockPanel();
+    }
+  },true);
+
+  document.addEventListener('change',function(e){
+    var meta=activeMeta();
+    if(!isEnvUrbanAnalysis(String(meta&&meta.analysisName||''))) return;
+    if(e.target && e.target.closest && e.target.closest('#legend-symbology-panel')){
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      resetEditorToNative(meta);
+      lockPanel();
+    }
+  },true);
+
+  // Yeni analiz sonucu geldiğinde ve katman değiştiğinde tekrar uygula.
+  document.addEventListener('change',function(e){
+    if(e.target && (e.target.matches('input[data-analysis]') || e.target.matches('.sylva-layer-switch-visibility'))){
+      setTimeout(sync,50);
+      setTimeout(sync,250);
+      setTimeout(sync,700);
+    }
+  });
+  [100,500,1200,2200].forEach(function(ms){setTimeout(sync,ms);});
+
+  // Analiz lejantı render edildikten sonra da pasiflik korunur.
+  var mo=new MutationObserver(function(){
+    clearTimeout(mo._t);
+    mo._t=setTimeout(sync,80);
+  });
+  mo.observe(document.body,{subtree:true,childList:true});
+})();
+</script>
