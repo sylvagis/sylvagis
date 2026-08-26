@@ -10221,37 +10221,12 @@ def _vectorize_analysis_payload(data, crs='EPSG:4326'):
         return feats,[{'code':1,'label':'Eş Yükselti','color':color}]
 
     if index == 'BUILDING_FOOTPRINT':
-        # ÖNEMLİ: Bina/çatı analizi asenkron olarak zaten ekranda gerçek
-        # GeoJSON poligonlarını üretir. Vektör indirmede aynı sonucu yeniden
-        # GEE/OSM'den sorgulamak bazı durumlarda boş veri üretebiliyordu
-        # (özellikle önbellek/AOI veya OSM fallback farklılaştığında).
-        # İstemci ekranda gösterilen geojson'u payload'a gönderiyorsa onu
-        # DOĞRUDAN kullan; böylece indirilen poligonlar ekrandaki çatılarla
-        # birebir aynı olur. Eski istemciler için yeniden sorgu fallback'i
-        # aşağıda korunur.
-        supplied_geojson = data.get('geojson')
-        feats = []
-        if isinstance(supplied_geojson, dict):
-            feats = supplied_geojson.get('features') or []
-        if feats:
-            clean=[]
-            for f in feats:
-                if not isinstance(f, dict) or not f.get('geometry'):
-                    continue
-                nf=dict(f)
-                props=dict(nf.get('properties') or {})
-                props.update({'class_value':1,'class_name':'Bina Çatı Poligonu','color':'#dc2626'})
-                nf['properties']=props
-                clean.append(nf)
-            if clean:
-                return clean,[{'code':1,'label':'Bina Çatı Poligonu','color':'#dc2626'},
-                              {'code':0,'label':'Bina Dışı Alan','color':'#cbd5e1'}]
-
         geom=data.get('roi') or data.get('geometry')
         if not geom:
             raise ValueError('Bina Çatı Tespiti için çalışma alanı geometrisi bulunamadı.')
-        # Geriye dönük uyumluluk: eski istemciler geojson göndermiyorsa
-        # mevcut asenkron/OSM yedekli bina hattını yeniden kullan.
+        # Mevcut asenkron/OSM yedekli bina hattını yeniden kullan; böylece
+        # toplu vektör indirme, haritadaki Bina Çatı Tespiti ile aynı veri
+        # kapsamını ve fallback davranışını korur.
         with app.test_request_context('/api/building-footprints', method='POST', json={'geometry': geom}):
             resp=building_footprints()
         if isinstance(resp, tuple):
@@ -10266,8 +10241,6 @@ def _vectorize_analysis_payload(data, crs='EPSG:4326'):
             props=dict(f.get('properties') or {})
             props.update({'class_value':1,'class_name':'Bina Çatı Poligonu','color':'#dc2626'})
             f['properties']=props
-        if not feats:
-            raise ValueError('Bina Çatı Tespiti sonucunda dışa aktarılabilir poligon bulunamadı.')
         return feats,[{'code':1,'label':'Bina Çatı Poligonu','color':'#dc2626'},
                       {'code':0,'label':'Bina Dışı Alan','color':'#cbd5e1'}]
 
