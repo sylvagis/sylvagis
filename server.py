@@ -6393,12 +6393,18 @@ def build_result_image(data, for_export=False):
         vis    = {'min': -0.5, 'max': 0.5, 'palette': ['e0f2fe', '38bdf8', '0369a1']}
 
     elif index == 'EVI':
+        # EVI'de payda bazı piksellerde sıfıra çok yaklaşabildiği için
+        # birkaç uç piksel ArcMap/QGIS'in otomatik görüntü germe aralığını
+        # bozup rasterın tamamını neredeyse siyah gösterebiliyordu.
+        # NDVI/NDWI'deki güvenli sürekli-raster davranışıyla aynı şekilde
+        # geçersiz payda piksellerini maskele, fiziksel olarak makul EVI
+        # aralığını koru ve Float32 olarak üret. Ham değerler sınıflandırılmaz.
         nir   = image_refl.select(b['nir'])
         red   = image_refl.select(b['red'])
         blue  = image_refl.select(b['blue'])
-        result = (nir.subtract(red)).divide(
-            nir.add(red.multiply(6)).subtract(blue.multiply(7.5)).add(1)
-        ).multiply(2.5).rename('value')
+        denom = nir.add(red.multiply(6)).subtract(blue.multiply(7.5)).add(1)
+        result = (nir.subtract(red)).divide(denom).multiply(2.5)\
+            .updateMask(denom.abs().gt(1e-6)).clamp(-1.5, 1.5).toFloat().rename('value')
         vis    = {'min': -0.2, 'max': 0.8, 'palette': ['f7fcf5', '74c476', '00441b']}
 
     elif index == 'SAVI':
@@ -6425,13 +6431,16 @@ def build_result_image(data, for_export=False):
         vis    = {'min': -0.5, 'max': 0.8, 'palette': ['f8fafc', '93c5fd', '1d4ed8']}
 
     elif index == 'BSI':
+        # BSI paydasının çok küçük olduğu hatalı/boş pikselleri dışarıda
+        # bırak. Böylece birkaç sonsuz/çok büyük değer tüm rasterın otomatik
+        # stretch aralığını bozup ArcMap'te siyah kare görünümüne yol açmaz.
         nir   = image_refl.select(b['nir'])
         red   = image_refl.select(b['red'])
         blue  = image_refl.select(b['blue'])
         swir  = image_refl.select(b['swir'])
-        result = swir.add(red).subtract(nir).subtract(blue).divide(
-            swir.add(red).add(nir).add(blue)
-        ).rename('value')
+        denom = swir.add(red).add(nir).add(blue)
+        result = swir.add(red).subtract(nir).subtract(blue).divide(denom)\
+            .updateMask(denom.abs().gt(1e-6)).clamp(-1, 1).toFloat().rename('value')
         vis    = {'min': -1.0, 'max': 1.0, 'palette': ['fff7ec', 'fdae6b', 'a63603']}
 
     elif index == 'LST' and b['thermal']:
@@ -7825,6 +7834,21 @@ def download_geotiff():
                     nodata_value = 0
             except Exception as visual_err:
                 print('[SylvaGIS] Görsel GeoTIFF üretilemedi; ham bant indiriliyor: {}'.format(visual_err))
+
+        # Sürekli uydu indeksleri (NDVI/NDWI/EVI/SAVI/BSI vb.) ArcMap/QGIS'te
+        # doğrudan açılabilir tek bantlı Float32 raster olarak korunur.
+        # Kullanıcı sınıflandırma seçmiş olsa bile bu piksel değerleri burada
+        # RGB'ye veya yapay sınıf kodlarına çevrilmez; sınıflandırma yalnızca
+        # kullanıcı özellikle 'classified' lejantı seçtiğinde sidecar olarak
+        # uygulanır. EVI/BSI için yukarıdaki geçersiz-payda maskeleri de böylece
+        # aynı NDVI/NDWI indirme hattından geçer.
+        if str(lulc_index or '').upper() in {
+            'NDVI','NDWI','EVI','SAVI','BSI','NDSI','NBR','AVI','SI','NDGI','NDMI','NPCRI','VHI','FRI'
+        }:
+            try:
+                export_image = export_image.toFloat()
+            except Exception:
+                pass
 
         tif_bytes = _download_band_geotiff_bytes(
             export_image, export_region, scale, crs, safe_name,
@@ -10283,6 +10307,22 @@ def vector_download():
 
 def _vector_class_meta(data, vis):
     index = str(data.get('index') or '').upper()
+    # Frontend aktif dilde ürettiği sınıf adlarını payload'a taşıyabilir.
+    # Vektör/KML/SHP/GeoJSON ve LEJANTLAR.txt aynı dili kullanmalı;
+    # sunucudaki Türkçe yerleşik sınıf adları yalnızca geri dönüş yoludur.
+    localized = data.get('localizedClassMeta')
+    if isinstance(localized, list) and localized:
+        out=[]
+        for i, item in enumerate(localized):
+            if not isinstance(item, dict):
+                continue
+            out.append({
+                'code': item.get('code', i+1),
+                'label': str(item.get('label') or f'Class {i+1}'),
+                'color': str(item.get('color') or '#999999')
+            })
+        if out:
+            return out
     breaks = data.get('classBreaks')
     if isinstance(breaks, list) and breaks:
         out = []
