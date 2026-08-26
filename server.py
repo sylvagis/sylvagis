@@ -4889,19 +4889,44 @@ def build_result_image(data, for_export=False):
         # DEĞİLDİ — aynı ağır hesaplama her yeniden denemede aynı şekilde
         # tekrar tetiklendiği için mevcut 2 kez yeniden deneme mekanizması
         # da sorunu çözemiyordu.
-        # ÇÖZÜM: En yeni gözlemden geriye doğru sıralanıp en fazla 24
-        # gözlemle (120 günlük pencerede günde ~1 kesişen sahne varsayımıyla
-        # normal/küçük bir AOI için zaten yeterli kapsama) sınırlandırılıyor.
-        # Bu, küçük/orta ölçekli çalışma alanlarının davranışını DEĞİŞTİRMEZ
-        # (zaten 24'ten az kesişen sahne buluyorlardı) — yalnızca çok büyük/
-        # çok karolu alanlarda hesaplamayı makul bir üst sınırda tutarak
-        # zaman aşımını önler.
+        # ÇÖZÜM (22./23. paket düzeltmesinin devamı — kullanıcı bildirimi:
+        # önceki 120 gün/24 görüntü sınırı sonrasında da "Failed to fetch"
+        # HÂLÂ aynen devam ediyordu, 2 yeniden denemeden sonra bile):
+        # Pencere 120 günden 45 güne, üst sınır 24'ten 10 gözleme daha da
+        # düşürüldü — Sentinel-2'nin ~5 günlük tekrar ziyaret aralığında,
+        # tek bir karo için 45 günlük pencerede zaten normalde ~9 gözlem
+        # olur; bu nedenle küçük/orta bir çalışma alanının kapsamı/dolgu
+        # kalitesi pratikte DEĞİŞMEZ, yalnızca çok büyük/çok karolu
+        # alanlardaki en kötü durum hesaplama yükü daha da azalır.
         recent = (dw_col
-            .filterDate(ee.Date(datetime.datetime.utcnow()).advance(-120, 'day'), ee.Date(datetime.datetime.utcnow()))
+            .filterDate(ee.Date(datetime.datetime.utcnow()).advance(-45, 'day'), ee.Date(datetime.datetime.utcnow()))
             .select('label')
             .sort('system:time_start', False)
-            .limit(24)
+            .limit(10)
             .sort('system:time_start'))
+        # 🛠️ BUG FİX (kullanıcı bildirimi — yukarıdaki süre/sayı sınırlaması
+        # TEK BAŞINA sorunu çözmedi, "Failed to fetch" hâlâ tutarlı şekilde
+        # tekrarlanıyordu): KÖK NEDEN İHTİMALİ — eğer bu AOI+tarih aralığında
+        # HİÇBİR Dynamic World gözlemi yoksa (ör. çok ıssız/az ziyaret edilen
+        # bir bölge, ya da GEE tarafında geçici bir veri boşluğu), önceki kod
+        # sessizce TAMAMEN BOŞ (hiçbir geçerli pikseli olmayan) bir mozaik
+        # üretmeye devam ediyordu. Böyle tamamen boş bir görüntüyü dışa
+        # aktarmaya çalışmak, GEE/rasterio tarafında normal bir JSON hata
+        # yanıtı yerine sunucunun yanıtı yarıda kesip bağlantıyı düşürmesine
+        # yol açabiliyordu — tarayıcı bunu "Failed to fetch" olarak
+        # gösteriyordu (bu, açık/okunabilir bir hata mesajından TAMAMEN
+        # FARKLIDIR). ÇÖZÜM: gözlem sayısı burada AÇIKÇA kontrol edilir; hiç
+        # gözlem yoksa, isteği anlaşılır bir JSON hatasıyla ERKENDEN
+        # sonlandırıyoruz — böylece hem sorun kesin olarak teşhis edilebilir
+        # hale gelir hem de olası bağlantı-düşürme senaryosu tamamen ortadan
+        # kalkar.
+        _dw_obs_count = _call_with_retry(lambda: recent.size().getInfo())
+        if not _dw_obs_count:
+            raise ValueError(
+                'Bu çalışma alanında/son 45 günde Dynamic World (Google Arazi '
+                'Kullanımı) gözlemi bulunamadı. Lütfen çalışma alanını '
+                'değiştirip tekrar deneyin.'
+            )
         # IMPORTANT: Do NOT use temporal mode() here. Dynamic World images are
         # individually cloud/cloud-shadow masked, so mode() can leave a pixel
         # dependent on the subset of observations that happened to be valid.
@@ -5847,13 +5872,29 @@ def build_result_image(data, for_export=False):
         # her iki dönem için AOI'yi kapsayan sahnelerin ortalaması alınır.
         s2, e2 = _env_urban_require_period2(data)
 
-        def _dw_built_mean(s, e):
-            return (ee.ImageCollection('GOOGLE/DYNAMICWORLD/V1')
-                    .filterBounds(roi).filterDate(s, e)
-                    .select('built').mean())
+        # 🛠️ BUG FİX (Dynamic World'de Arazi Kullanımı'nda (LULC) doğrulanan
+        # ve aynı köke sahip olası sorunun önlenmesi — bkz. 26. paket): bu
+        # analiz de AYNI GOOGLE/DYNAMICWORLD/V1 koleksiyonunu kullanıyor.
+        # Seçilen dönemlerden biri bu AOI'yi hiç kesişmiyorsa (gözlem yoksa),
+        # önceden sessizce TAMAMEN BOŞ bir görüntü üretilmeye devam
+        # ediliyordu — bu, indirme sırasında belirsiz bir bağlantı
+        # kopmasına ("Failed to fetch") yol açabilir. Artık her iki dönem
+        # için de gözlem olup olmadığı AÇIKÇA kontrol edilir; yoksa
+        # anlaşılır bir hata döner.
+        def _dw_built_mean(s, e, period_label):
+            col = (ee.ImageCollection('GOOGLE/DYNAMICWORLD/V1')
+                   .filterBounds(roi).filterDate(s, e))
+            _obs_count = _call_with_retry(lambda: col.size().getInfo())
+            if not _obs_count:
+                raise ValueError(
+                    'Bu çalışma alanında {} için Dynamic World gözlemi bulunamadı. '
+                    'Lütfen tarih aralığını veya çalışma alanını değiştirip '
+                    'tekrar deneyin.'.format(period_label)
+                )
+            return col.select('built').mean()
 
-        built1 = _dw_built_mean(start_date, end_date)
-        built2 = _dw_built_mean(s2, e2)
+        built1 = _dw_built_mean(start_date, end_date, '1. Dönem')
+        built2 = _dw_built_mean(s2, e2, '2. Dönem')
 
         if index == 'URBAN_GROWTH':
             # Otomatik/2 sınıf (HTML'deki data-legend-classes ile birebir
@@ -10567,6 +10608,29 @@ def _vectorize_analysis_payload(data, crs='EPSG:4326'):
         scale=100 if index in ('LULC','LULC_ESA','LULC_CORINE') else 500 if index=='LULC_MODIS' else 100
     elif index.startswith('TOPO'):
         scale=90
+    elif index in ('FOREST_LOSS', 'URBAN_GROWTH', 'IMPERVIOUS_CHANGE'):
+        # 🛠️ BUG FİX (kullanıcı bildirimi — Çevresel/Kentsel Analizler'de
+        # FOREST_LOSS vektör indirmesi 2 yeniden denemeden sonra bile
+        # kalıcı olarak "Failed to fetch" ile başarısız oluyordu): KÖK
+        # NEDEN — bu katmanlarda "Değişmeyen/Unchanged" sınıfı (kod 0)
+        # neredeyse TÜM çalışma alanını kaplayan, tek büyük ve çok
+        # köşeli/karmaşık bir bölgedir. 22. paketteki "kayıp sınıf"
+        # düzeltmesiyle her sınıf artık kendi reduceToVectors() çağrısını
+        # aldığından, bu devasa "Değişmeyen" sınıfının 300 m ölçekte
+        # vektörleştirilmesi tek başına çok uzun sürebiliyor ve isteği
+        # zaman aşımına uğratabiliyordu — bu GEÇİCİ bir ağ sorunu değildi,
+        # bu yüzden otomatik yeniden deneme de (24. paket) yardımcı
+        # olamıyordu. ÇÖZÜM: bu üç değişim-tespiti katmanı için vektör
+        # ölçeği 300 m'den 600 m'ye çıkarıldı — piksel/köşe sayısı ~4 kat
+        # azalır, hesaplama süresi buna bağlı olarak düşer. Değişim
+        # alanlarının (kayıp/kazanım, yeni kentsel alan) genel dağılımı ve
+        # sınıf renkleri/isimleri AYNEN korunur; yalnızca çok ince/tekli
+        # piksel detayları biraz daha genelleştirilir (bu tür değişim
+        # katmanları zaten genel eğilim göstergesi olarak kullanılır, ince
+        # piksel hassasiyeti gerektirmez). Raster (GeoTIFF) indirmesi bu
+        # değişiklikten ETKİLENMEZ — yalnızca vektör (KML/SHP/GeoJSON)
+        # yolunu kullanır.
+        scale=600
     else:
         scale=300
     # GEE reduceToVectors() requires one reducer input band in addition to
