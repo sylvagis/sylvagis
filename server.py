@@ -2444,8 +2444,12 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
 
     real_codes = sorted(code_info.keys())
     max_code = real_codes[-1] if real_codes else 0
-    nbits = _choose_nbits(max_code + 1)
-    n_total = 1 << nbits
+    # 🛠️ TEMİZLİK (Sorun 1a düzeltmesiyle bağlantılı): nbits/n_total tabanlı
+    # palet-boyutu kırpma denemesi zaten new_profile.pop('nbits', ...) ile
+    # etkisiz hale getiriliyordu (bkz. hemen aşağıdaki not) ve gömülü
+    # ColorMap artık her zaman tam 256 girişle (şeffaf varsayılan + gerçek
+    # sınıflar) yazılıyor — bkz. aşağıdaki embed_colormap bloğu. Kullanılmayan
+    # nbits/n_total hesaplaması kaldırıldı.
 
     new_profile = profile.copy()
     new_profile.update(dtype='uint8', count=1, nodata=0, compress='lzw')
@@ -2476,7 +2480,20 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
             # isimleri RAT/VAT + .clr sidecar'larında tutulur. Böylece
             # ColorMap padding'inden gelen boş lejant kutuları oluşmaz.
             if embed_colormap:
-                colormap = {i: (255, 255, 255, 0) for i in range(n_total)}
+                # 🛠️ KÖK NEDEN DÜZELTMESİ (Sorun 1a — ArcMap'te kullanılmayan
+                # palet indeksleri SİYAH doluyor): new_profile'dan 'nbits'
+                # BİLİNÇLİ olarak kaldırıldığı için (yukarıdaki not) GDAL bu
+                # dosyayı her zaman standart 8-bit/256 girişli bir palet
+                # olarak yazıyor — ANCAK burada colormap sözlüğü yalnızca
+                # n_total (ör. 4) girişle sınırlı kalıyordu. GDAL, sözlükte
+                # HİÇ bulunmayan palet indekslerini (n_total..255) varsayılan
+                # olarak OPAK SİYAH (0,0,0,255) ile dolduruyor — şeffaf DEĞİL.
+                # Bu, doğrudan rasterio ile test edilip DOĞRULANDI. Gerçek
+                # sınıf sayısı kaç olursa olsun TÜM 256 girişi burada açıkça
+                # şeffaf olarak tanımlayıp sonra yalnızca gerçek sınıfları
+                # üzerine yazmak, GDAL'ın sessiz siyah-doldurma varsayılanına
+                # bağımlılığı ortadan kaldırır.
+                colormap = {i: (255, 255, 255, 0) for i in range(256)}
                 for code in real_codes:
                     _, rgb = code_info[code]
                     colormap[code] = (rgb[0], rgb[1], rgb[2], 255)
@@ -2848,6 +2865,30 @@ def _add_internal_raster_overviews(tif_bytes, resampling='bilinear'):
                 profile = src.profile.copy()
                 data = src.read()
                 tags = [src.tags(i) for i in range(1, src.count + 1)]
+                # 🛠️ KÖK NEDEN DÜZELTMESİ (Sorun 1a — Orman Kaybı/Kentsel
+                # Gelişim gibi sınıflandırılmış rasterlarda ArcMap'te renk/
+                # isim TAMAMEN kayboluyor, jenerik tek bir "Class N" görünüyor):
+                # Bu fonksiyon, dahili piramit (overview) eklemek için TIFF'i
+                # sıfırdan yeniden yazıyordu — ama _build_symbology_files_
+                # from_classes() tarafından biraz önce write_colormap() ile
+                # GÖMÜLEN renk tablosunu (ColorMap) hiç OKUMUYOR/KOPYALAMIYORDU.
+                # Sonuç: bu fonksiyon her çalıştığında (ki her sınıflandırılmış
+                # dışa aktarımda ÇALIŞIYOR) az önce eklenen renk tablosu
+                # SESSİZCE SİLİNİYORDU — ArcMap'e giden nihai .tif dosyasında
+                # hiçbir gömülü renk/palet kalmıyordu. ArcMap sürükle-bırakta
+                # RAT/VAT sidecar'larını otomatik okumadığından (bkz. Faz 14/15
+                # notları), rengi/ismi kaybolan dosya jenerik tek bir sınıfla
+                # (ör. "Class 4") açılıyordu. Bu, doğrudan rasterio ile
+                # sentetik bir sınıflandırılmış raster üretilip bu fonksiyondan
+                # geçirilerek DOĞRULANDI: öncesinde write_colormap() ile 3
+                # sınıf/renk doğru şekilde gömülüyor, ANCAK bu fonksiyondan
+                # sonra dst.colormap(1) "NULL color table" hatasıyla BOŞ
+                # dönüyordu. ÇÖZÜM: kaynak banttaki renk tablosu (varsa) burada
+                # okunup yeni dosyaya AYNEN yazılıyor.
+                try:
+                    cmap = src.colormap(1)
+                except ValueError:
+                    cmap = None
                 levels = [2, 4, 8, 16, 32, 64, 128, 256, 512]
                 levels = [lv for lv in levels if src.width // lv >= 32 and src.height // lv >= 32]
                 if not levels:
@@ -2868,6 +2909,8 @@ def _add_internal_raster_overviews(tif_bytes, resampling='bilinear'):
                         for i, tg in enumerate(tags, 1):
                             if tg:
                                 dst.update_tags(i, **tg)
+                        if cmap:
+                            dst.write_colormap(1, cmap)
                         dst.build_overviews(levels, method)
                         dst.update_tags(ns='rio_overview', resampling=str(resampling))
                     return out.read()
