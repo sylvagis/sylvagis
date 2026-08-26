@@ -1019,6 +1019,32 @@ tr.class-highlight-active {
             .map-legend.sylva-legend-many .sylva-legend-rows { grid-template-columns: 1fr; width: 100%; }
             .map-legend { max-width: calc(100vw - 30px); }
         }
+        /* 🆕 Hava Durumu (Son 30 Gün) kutusu — Lejant kutusuyla (.map-legend)
+           aynı görsel dile sahip, küçük ve SÜRÜKLENEBİLİR bir panel.
+           Varsayılan konumu sağ-alt (.map-bottom-right) — Lejant (sol-alt)
+           ve Galeri (üst) ile çakışmaz. */
+        .sylva-weather-panel {
+            background: #ffffff; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            font-size: 0.7rem; pointer-events: auto; box-sizing: border-box;
+            width: 168px; max-width: calc(100vw - 30px); cursor: grab; user-select: none;
+        }
+        .sylva-weather-panel.dragging { cursor: grabbing; }
+        .sylva-weather-panel-head {
+            display: flex; align-items: center; justify-content: space-between; gap: 6px;
+            padding: 5px 7px; font-weight: 700; color: #1e3a8a; font-size: 0.7rem;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        .sylva-weather-panel-list { max-height: 220px; overflow-y: auto; padding: 2px 0; }
+        .sylva-weather-day-row {
+            display: grid; grid-template-columns: auto 1fr; gap: 2px 6px; align-items: center;
+            padding: 3px 7px; border-bottom: 1px dashed #eef2f7; font-size: 0.66rem; color: #334155;
+        }
+        .sylva-weather-day-row:last-child { border-bottom: none; }
+        .sylva-weather-day-row.sylva-weather-day-ref { background: #eff6ff; }
+        .sylva-weather-day-emoji { font-size: 1.05rem; grid-row: span 2; text-align: center; }
+        .sylva-weather-day-date { font-weight: 700; color: #1e293b; }
+        .sylva-weather-day-metrics { color: #64748b; font-size: 0.64rem; white-space: nowrap; }
+        .sylva-weather-day-nodata { color: #94a3b8; font-style: italic; grid-column: 2; }
          /* Eş yükselti çizgisi örneği: referans görseldeki gibi çizgi,
             kendi çerçevesinin içinde yatay ve dikey olarak ortalanır. */
          .sylva-contour-color-input {
@@ -4692,35 +4718,56 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
 
 <script>
 // 🆕 ("şimdilik" geçici önlem — Sorun: "Add to Previous Analysis" / Üst Üste
-// Ekleme modunda toplu/istiflenmiş indirmelerin bozuk çıkması): Kullanıcının
-// isteği üzerine, "🗂️ Önceki Analizin Üzerine Ekle" kutusu işaretliyken
-// (stack modu AÇIK) Raster (GeoTIFF) ve Vektör indirme düğmeleri GEÇİCİ
-// olarak devre dışı bırakılır — ekrana katman ekleme/görüntüleme (Analizi
-// Çalıştır) işlevi TAMAMEN normal çalışmaya devam eder, yalnızca indirme
-// engellenir. Kutu işareti kaldırılınca (stack modu KAPALI) düğmeler tekrar
-// normal şekilde aktif olur. Hem masaüstü panelindeki (id'li) hem de mobil
-// çekmecedeki (id'li) iki düğme çifti de birlikte güncellenir.
+// Ekleme modunda toplu/istiflenmiş indirmelerin bozuk çıkması): Raster
+// (GeoTIFF) ve Vektör indirme düğmeleri, ekranda AYNI ANDA GÖRÜNÜR duran
+// katman sayısı 1'den fazlaysa GEÇİCİ olarak devre dışı bırakılır.
+//
+// 🛠️ BUG FİX (kutunun işaretini kaldırınca indirme yanlışlıkla tekrar
+// açılıyordu): İLK sürümde bu kilit doğrudan "🗂️ Önceki Analizin Üzerine
+// Ekle" KUTUCUĞUNUN O ANKİ işaretli/işaretsiz durumuna bakıyordu. Ama kutu
+// işareti kaldırıldığında önceden üst üste eklenmiş katmanlar haritadan
+// SİLİNMİYOR — hepsi ekranda kalmaya devam ediyor. Kullanıcı birkaç farklı
+// analizi stack modunda ekrana getirip SONRA kutuyu kapatınca, indirme
+// düğmeleri (hâlâ birden fazla katman ekranda dururken) yanlışlıkla tekrar
+// AKTİF oluyordu — tam olarak bildirilen sorun. Artık kilit kutucuğun
+// durumuna DEĞİL, o an haritada GERÇEKTEN görünür olan katman sayısına
+// bakıyor (window._sylvaLayerVisibleByPane — _sylvaAddGeeLayer() ve katman
+// görünürlük checkbox'ları her değiştiğinde bu fonksiyon yeniden çağrılır,
+// bkz. o çağrı noktalarındaki notlar). Böylece:
+//   • Birden fazla katman ekranda kaldığı sürece — kutu işaretli olsun ya
+//     da olmasın — indirme KAPALI kalır.
+//   • Kullanıcı kutuyu kapatıp YENİ bir (stack olmayan) analiz çalıştırınca
+//     _sylvaAddGeeLayer() diğer tüm katmanları otomatik gizler, görünür
+//     katman sayısı 1'e düşer ve indirme OTOMATİK olarak tekrar açılır.
+function _sylvaCountVisibleGeeLayers(paneId) {
+    try {
+        var key = (paneId === 'map2') ? 'map2' : 'map';
+        var vis = (window._sylvaLayerVisibleByPane && window._sylvaLayerVisibleByPane[key]) || {};
+        var n = 0;
+        Object.keys(vis).forEach(function (k) { if (vis[k] !== false) n++; });
+        return n;
+    } catch (e) { return 0; }
+}
 (function () {
     function _sylvaUpdateDownloadButtonsDisabledStateImpl() {
         try {
-            var stackEl = document.getElementById('toggle-stack-analysis');
-            var isStack = !!(stackEl && stackEl.checked);
+            var isStacked = (_sylvaCountVisibleGeeLayers('map') > 1) || (_sylvaCountVisibleGeeLayers('map2') > 1);
             var ids = ['btn-geotiff-download', 'btn-vector-download', 'btn-geotiff-download-mobile', 'btn-vector-download-mobile'];
             var _titleTxt = (typeof t === 'function')
-                ? t('download_disabled_stack_mode', 'Üst üste ekleme modunda indirme geçici olarak kapalı')
-                : 'Üst üste ekleme modunda indirme geçici olarak kapalı';
+                ? t('download_disabled_stack_mode', 'Ekranda birden fazla üst üste katman varken indirme geçici olarak kapalı')
+                : 'Ekranda birden fazla üst üste katman varken indirme geçici olarak kapalı';
             ids.forEach(function (id) {
                 var btn = document.getElementById(id);
                 if (!btn) return;
-                btn.disabled = isStack;
-                btn.style.opacity = isStack ? '0.45' : '';
-                btn.style.cursor = isStack ? 'not-allowed' : '';
-                btn.title = isStack ? _titleTxt : '';
+                btn.disabled = isStacked;
+                btn.style.opacity = isStacked ? '0.45' : '';
+                btn.style.cursor = isStacked ? 'not-allowed' : '';
+                btn.title = isStacked ? _titleTxt : '';
             });
         } catch (e) {}
     }
     window._sylvaUpdateDownloadButtonsDisabledState = _sylvaUpdateDownloadButtonsDisabledStateImpl;
-    // Sayfa ilk açıldığında da kutucuğun mevcut durumuna göre senkronize et.
+    // Sayfa ilk açıldığında da mevcut duruma göre senkronize et.
     _sylvaUpdateDownloadButtonsDisabledStateImpl();
 })();
 
@@ -4969,6 +5016,12 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
             </div>
 
             <div class="map-bottom-right">
+                <!-- 🆕 Hava Durumu (Son 30 Gün) kutusu — "🌦️ Hava Durumu" kutucuğu
+                     işaretliyken, o an ekrandaki analizin referans tarihinden
+                     geriye en fazla 30 gün süren günlük hava durumu burada
+                     listelenir. Lejant kutusu gibi küçük ve SÜRÜKLENEBİLİR
+                     (draggable) — bkz. initWeatherPanelDrag(). -->
+                <div class="sylva-weather-panel" id="weather-panel-map" style="display:none;"></div>
             </div>
             <div class="map-bottom-left">
                 <div class="map-legend" id="map-legend-box" style="display:none;"></div>
@@ -5203,6 +5256,7 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                  </div>
             </div>
             <div class="map2-overlay map-bottom-right">
+                <div class="sylva-weather-panel" id="weather-panel-map2" style="display:none;"></div>
             </div>
             <div class="map2-bottom-left">
                 <!-- Ekran 2 için lejant aynası: #map-legend-box ile senkronize
@@ -5223,6 +5277,259 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
         </div>
 
         </div><!-- /map-panes-row -->
+
+<script>
+// ════════════════════════════════════════════════════════════════
+// 🆕 HAVA DURUMU (Son 30 Gün) — kullanıcı isteği üzerine eklendi.
+// "🌦️ Hava Durumu" kutucuğu işaretliyken, o an ekrandaki analizin
+// REFERANS TARİHİNDEN geriye en fazla 30 gün süren günlük hava durumu
+// (emoji + min/maks/ort. sıcaklık + yağış + nem) Lejant kutusu gibi
+// küçük, sürüklenebilir bir panelde gösterilir. Backend: /api/weather
+// (Open-Meteo Historical Weather — GEE'ye hiç istek atılmaz).
+//
+// REFERANS TARİH KURALI (kullanıcının talebiyle birebir):
+//   • Arazi Kullanımı (LULC) / Topografik / tam-statik (tarihsiz)
+//     Çevresel-Kentsel analizler → "Analizi Çalıştır"ın basıldığı GÜN
+//     (bugün) ve geriye 30 gün.
+//   • Uydu Görüntüsü (RGB) galerisi → seçili SAHNENİN gerçek çekim
+//     tarihi ve geriye 30 gün (NDVI/uydu görüntüsü ile aynı mantık).
+//   • Tarih aralığı SEÇEN diğer analizler (NDVI/NDWI, çevresel/kentsel
+//     analizlerin tarihli olanları) → seçilen aralığın 1. (başlangıç)
+//     tarihi ve geriye 30 gün.
+// ════════════════════════════════════════════════════════════════
+(function () {
+    var STATE = {
+        map:  { active: false, days: [], refDate: null, mode: 'point', pointsUsed: [], aoiDiagonalKm: null, _reqGen: 0 },
+        map2: { active: false, days: [], refDate: null, mode: 'point', pointsUsed: [], aoiDiagonalKm: null, _reqGen: 0 }
+    };
+
+    function _wxTodayStr() {
+        var d = new Date();
+        var mm = String(d.getMonth() + 1).padStart(2, '0');
+        var dd = String(d.getDate()).padStart(2, '0');
+        return d.getFullYear() + '-' + mm + '-' + dd;
+    }
+
+    // WMO hava kodu → emoji (Open-Meteo'nun 'weather_code' alanı ile aynı
+    // standart tablo; bkz. https://open-meteo.com/en/docs).
+    function _wxEmojiForCode(code) {
+        if (code === null || code === undefined) return '❓';
+        if (code === 0) return '☀️';
+        if (code === 1 || code === 2) return '🌤️';
+        if (code === 3) return '☁️';
+        if (code === 45 || code === 48) return '🌫️';
+        if (code >= 51 && code <= 57) return '🌦️';
+        if (code >= 61 && code <= 67) return '🌧️';
+        if (code >= 71 && code <= 77) return '❄️';
+        if (code >= 80 && code <= 82) return '🌦️';
+        if (code >= 85 && code <= 86) return '🌨️';
+        if (code >= 95 && code <= 99) return '⛈️';
+        return '🌡️';
+    }
+
+    // Bu analizin tarihe hiç ihtiyacı yoksa (LULC/TOPO/Bina Ayak İzi/tam-
+    // statik Çevresel-Kentsel) TRUE — bkz. _updateDateCloudControlsVisibility()
+    // içindeki BİREBİR AYNI kural (isStatic), tutarlılık için buradan da
+    // aynı yardımcı fonksiyonlar kullanılıyor.
+    function _wxIsDateless(analysisName) {
+        return !!(
+            (typeof isLulcAnalysis === 'function' && isLulcAnalysis(analysisName)) ||
+            (typeof isTopoAnalysis === 'function' && isTopoAnalysis(analysisName)) ||
+            (typeof isBuildingFootprintAnalysis === 'function' && isBuildingFootprintAnalysis(analysisName)) ||
+            (typeof isEnvUrbanFullyStaticAnalysis === 'function' && isEnvUrbanFullyStaticAnalysis(analysisName))
+        );
+    }
+
+    function _wxReferenceDate(paneId) {
+        var meta = (window._lastAnalyzeMetaByPane && window._lastAnalyzeMetaByPane[paneId]) || null;
+        var payload = (window._lastAnalyzePayloadByPane && window._lastAnalyzePayloadByPane[paneId]) || null;
+        var todayStr = _wxTodayStr();
+        if (meta && _wxIsDateless(meta.analysisName)) return todayStr;
+        if (payload && payload.sceneDate) return payload.sceneDate; // 🛰️ Uydu Görüntüsü (RGB) sahnesi
+        if (payload && payload.startDate) return payload.startDate; // NDVI/NDWI ve tarihli çevresel-kentsel analizler
+        return todayStr;
+    }
+
+    function _wxRoiFor(paneId) {
+        var payload = (window._lastAnalyzePayloadByPane && window._lastAnalyzePayloadByPane[paneId]) || null;
+        if (payload && payload.roi) return payload.roi;
+        // Yedek: henüz hiçbir analiz payload'ı kaydedilmemişse, ekrandaki
+        // çizilen alandan doğrudan çıkar.
+        var aoi = (paneId === 'map2') ? (typeof currentLayer2 !== 'undefined' ? currentLayer2 : null)
+                                       : (typeof currentLayer  !== 'undefined' ? currentLayer  : null);
+        return (typeof _extractROIGeometry === 'function') ? _extractROIGeometry(aoi) : null;
+    }
+
+    function _wxPanelEl(paneId) {
+        return document.getElementById(paneId === 'map2' ? 'weather-panel-map2' : 'weather-panel-map');
+    }
+
+    function _wxFmtNum(v, digits) {
+        if (v === null || v === undefined || typeof v !== 'number' || isNaN(v)) return '—';
+        return v.toFixed(digits === undefined ? 1 : digits);
+    }
+
+    function _wxRenderPanel(paneId) {
+        var panel = _wxPanelEl(paneId);
+        if (!panel) return;
+        var st = STATE[paneId === 'map2' ? 'map2' : 'map'];
+        if (!st.active || !st.days || !st.days.length) {
+            panel.style.display = 'none';
+            panel.innerHTML = '';
+            return;
+        }
+        var _t = (typeof t === 'function') ? t : function (k, f) { return f || k; };
+        // En yeni (referans) gün en üstte; geriye doğru kronolojik.
+        var rows = st.days.slice().reverse().map(function (day) {
+            var isRef = (day.date === st.refDate);
+            var hasData = (day.weatherCode !== null && day.weatherCode !== undefined) ||
+                          (typeof day.tempMax === 'number') || (typeof day.tempMin === 'number');
+            var emoji = _wxEmojiForCode(day.weatherCode);
+            var metricsHtml;
+            if (hasData) {
+                metricsHtml =
+                    '<div class="sylva-weather-day-metrics">' + escapeHtml(_t('lbl_temp_min', 'Min')) + ' ' + _wxFmtNum(day.tempMin) + '°C · ' +
+                        escapeHtml(_t('lbl_temp_max', 'Max')) + ' ' + _wxFmtNum(day.tempMax) + '°C</div>' +
+                    '<div class="sylva-weather-day-metrics">' + escapeHtml(_t('lbl_temp_avg', 'Avg')) + ' ' + _wxFmtNum(day.tempMean) + '°C</div>' +
+                    '<div class="sylva-weather-day-metrics">💧 ' + _wxFmtNum(day.precipitation) + 'mm' +
+                        (typeof day.humidity === 'number' ? ('  💦 ' + _wxFmtNum(day.humidity, 0) + '%') : '') + '</div>';
+            } else {
+                metricsHtml = '<div class="sylva-weather-day-nodata">' + escapeHtml(_t('weather_no_data', 'No data for this day')) + '</div>';
+            }
+            return '<div class="sylva-weather-day-row' + (isRef ? ' sylva-weather-day-ref' : '') + '">' +
+                '<div class="sylva-weather-day-emoji">' + emoji + '</div>' +
+                '<div class="sylva-weather-day-date">' + escapeHtml(day.date) + '</div>' +
+                metricsHtml +
+                '</div>';
+        }).join('');
+        // 🆕 Şeffaflık satırı: kullanıcı bunun "havza/idari sınır" gibi bir
+        // alan adına değil, GERÇEKTE hangi koordinat noktasına (ya da küçük/
+        // uzun bir alan için kaç noktanın ortalamasına) dayandığını görsün.
+        var transparencyHtml = '';
+        if (st.pointsUsed && st.pointsUsed.length) {
+            var n = st.pointsUsed.length;
+            var p0 = st.pointsUsed[0]; // [lat, lon]
+            var coordTxt = (p0 && typeof p0[0] === 'number' && typeof p0[1] === 'number')
+                ? (p0[0].toFixed(3) + '°, ' + p0[1].toFixed(3) + '°') : '';
+            var modeTxt = (n > 1)
+                ? ('📍 ' + n + '× ' + escapeHtml(_t('weather_area_avg', 'Area average')) +
+                   (st.aoiDiagonalKm ? (' (~' + Math.round(st.aoiDiagonalKm) + ' km)') : ''))
+                : ('📍 ' + escapeHtml(_t('weather_single_point', 'Single point')) + (coordTxt ? (' — ' + coordTxt) : ''));
+            transparencyHtml = '<div style="font-size:0.6rem;color:#94a3b8;font-weight:400;">' + modeTxt + '</div>';
+        }
+        panel.innerHTML =
+            '<div class="sylva-weather-panel-head" style="display:block;">' +
+                '<div><span>🌦️ ' + escapeHtml(_t('weather_panel_title', 'Weather (Last 30 Days)')) + '</span></div>' +
+                transparencyHtml +
+            '</div>' +
+            '<div class="sylva-weather-panel-list">' + rows + '</div>';
+        panel.style.display = 'block';
+    }
+
+    function _wxFetch(paneId) {
+        var key = (paneId === 'map2') ? 'map2' : 'map';
+        var roi = _wxRoiFor(paneId);
+        if (!roi) return;
+        var refDate = _wxReferenceDate(paneId);
+        var st = STATE[key];
+        st.active = true;
+        var genTok = (st._reqGen = (st._reqGen || 0) + 1);
+        fetch(API_BASE + '/api/weather', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ roi: roi, date: refDate })
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (genTok !== st._reqGen) return; // daha yeni bir istek varsa bu yanıtı yoksay
+            var toggleEl = document.getElementById('toggle-weather');
+            if (!toggleEl || !toggleEl.checked) return; // yanıt gelene kadar kullanıcı kapatmış olabilir
+            if (!data.success) { st.days = []; st.refDate = refDate; _wxRenderPanel(paneId); return; }
+            st.days = data.days || [];
+            st.refDate = refDate;
+            // 🆕 Şeffaflık: hangi noktanın/noktaların kullanıldığı (havza gibi
+            // büyük alanlarda tek merkez nokta yerine birkaç noktanın
+            // ortalaması alınabiliyor — bkz. server.py /api/weather).
+            st.mode = data.mode || 'point';
+            st.pointsUsed = data.pointsUsed || [];
+            st.aoiDiagonalKm = (typeof data.aoiDiagonalKm === 'number') ? data.aoiDiagonalKm : null;
+            _wxRenderPanel(paneId);
+        })
+        .catch(function () { /* sessizce yoksay — hava durumu ikincil/yardımcı bir bilgi kutusu */ });
+    }
+
+    // 🌐 Dışa açık API — her analiz tamamlanma noktasından (RGB dahil)
+    // çağrılır; kutu işaretli DEĞİLSE hiçbir şey yapmaz (no-op).
+    window._sylvaRefreshWeatherPanel = function (paneId) {
+        var toggleEl = document.getElementById('toggle-weather');
+        if (!toggleEl || !toggleEl.checked) return;
+        _wxFetch(paneId);
+    };
+
+    window._sylvaWeatherToggleChanged = function (checked) {
+        if (checked) {
+            _wxFetch('map');
+            _wxFetch('map2');
+        } else {
+            ['map', 'map2'].forEach(function (p) {
+                STATE[p].active = false;
+                STATE[p].days = [];
+                var panel = _wxPanelEl(p);
+                if (panel) { panel.style.display = 'none'; panel.innerHTML = ''; }
+            });
+        }
+    };
+
+    // ── Sürükleme (Lejant kutusundaki gibi ama boyutlandırma YOK — daha
+    // basit): yalnızca başlık (.sylva-weather-panel-head) tutup sürüklenir,
+    // liste içeriğinde kaydırma (scroll) engellenmez.
+    function _wxInitDrag(panelId, containerId) {
+        var panel = document.getElementById(panelId);
+        var container = document.getElementById(containerId);
+        if (!panel || !container) return;
+        var dragging = false, detached = false, offX = 0, offY = 0;
+
+        panel.addEventListener('mousedown', function (e) {
+            var head = e.target.closest ? e.target.closest('.sylva-weather-panel-head') : null;
+            if (!head) return; // yalnızca başlıktan sürüklenebilir
+            e.preventDefault();
+            var pRect = panel.getBoundingClientRect();
+            var cRect = container.getBoundingClientRect();
+            if (!detached) {
+                panel.style.position = 'absolute';
+                panel.style.left = (pRect.left - cRect.left) + 'px';
+                panel.style.top  = (pRect.top  - cRect.top)  + 'px';
+                panel.style.right = 'auto';
+                panel.style.bottom = 'auto';
+                panel.style.zIndex = '600';
+                container.appendChild(panel);
+                detached = true;
+            }
+            offX = e.clientX - pRect.left;
+            offY = e.clientY - pRect.top;
+            dragging = true;
+            panel.classList.add('dragging');
+        });
+        document.addEventListener('mousemove', function (e) {
+            if (!dragging) return;
+            var cRect = container.getBoundingClientRect();
+            var newLeft = e.clientX - cRect.left - offX;
+            var newTop  = e.clientY - cRect.top  - offY;
+            newLeft = Math.max(0, Math.min(newLeft, cRect.width  - panel.offsetWidth));
+            newTop  = Math.max(0, Math.min(newTop,  cRect.height - panel.offsetHeight));
+            panel.style.left = newLeft + 'px';
+            panel.style.top  = newTop  + 'px';
+        });
+        document.addEventListener('mouseup', function () {
+            if (!dragging) return;
+            dragging = false;
+            panel.classList.remove('dragging');
+        });
+    }
+    _wxInitDrag('weather-panel-map', 'map-wrapper-inner');
+    _wxInitDrag('weather-panel-map2', 'map2-wrapper');
+})();
+</script>
 
         <div class="sidebar-right" id="sidebar-right">
             <button class="right-collapse-btn" id="right-collapse-btn" data-i18n-title="panel_collapse_toggle" title="Paneli Daralt / Genişlet">◀</button>
@@ -5284,9 +5591,16 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
         <span data-i18n="utm_grid">UTM Grid</span>
     </label>
 
-    <!-- Çalışma Alanı + pasif Hava Durumu: diğer seçeneklerle aynı iki sütunlu düzen -->
-    <div class="option-item" id="workspace-opacity-toggle-wrap" style="grid-column: span 2; margin-top:2px; opacity:0.4; display:grid; grid-template-columns:1fr 1fr; column-gap:8px; align-items:center;">
-        <label class="option-item" style="padding:0;position:relative;">
+    <!-- Çalışma Alanı (hâlâ pasif) + Hava Durumu (🆕 artık AKTİF): diğer
+         seçeneklerle aynı iki sütunlu düzen. Not: eskiden bu SARMALAYICI
+         (wrap) div'in kendisi opacity:0.4 idi — bu, CSS'te ÇOCUKLARIN
+         KENDİ opacity değerinden BAĞIMSIZ olarak TÜM alt ağacı soluklaştırır
+         (opacity, alt öğelerin kendi opacity'siyle "geri açılamaz"). Hava
+         Durumu artık aktif olduğu için soluklaştırma sarmalayıcıdan
+         kaldırılıp YALNIZCA hâlâ pasif olan "Çalışma Alanı" etiketine
+         taşındı; Hava Durumu etiketi tam opak (aktif görünür) kaldı. -->
+    <div class="option-item" id="workspace-opacity-toggle-wrap" style="grid-column: span 2; margin-top:2px; display:grid; grid-template-columns:1fr 1fr; column-gap:8px; align-items:center;">
+        <label class="option-item" style="padding:0;position:relative;opacity:0.4;">
             <input type="checkbox" id="toggle-workspace-opacity" disabled>
             <span data-i18n="workspace">Çalışma Alanı</span>
             <span id="ws-stroke-preview"
@@ -5298,7 +5612,7 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                  onclick="event.stopPropagation()"></div>
         </label>
         <label class="option-item" style="padding:0;">
-            <input type="checkbox" id="toggle-weather" disabled aria-disabled="true" style="flex-shrink:0;cursor:default;">
+            <input type="checkbox" id="toggle-weather" style="flex-shrink:0;cursor:pointer;" onchange="if (typeof _sylvaWeatherToggleChanged === 'function') _sylvaWeatherToggleChanged(this.checked);">
             <span data-i18n="weather">Hava Durumu</span>
         </label>
     </div>
@@ -13087,6 +13401,14 @@ function selectRamp(name) {
                     });
                 }
             }
+            // 🆕 İndirme düğmelerinin kilit durumu artık "Önceki Analizin
+            // Üzerine Ekle" kutucuğunun O ANKİ işaret durumuna DEĞİL, ekranda
+            // GERÇEKTEN aynı anda görünür duran katman sayısına göre
+            // belirleniyor — bkz. _sylvaUpdateDownloadButtonsDisabledState
+            // tanımındaki BUG FİX notu (kutucuğun işareti kaldırılsa bile
+            // önceden üst üste eklenmiş katmanlar ekranda kalmaya devam
+            // ediyorsa indirme yine kapalı kalmalı).
+            if (typeof window._sylvaUpdateDownloadButtonsDisabledState === 'function') window._sylvaUpdateDownloadButtonsDisabledState();
             return layer;
         }
         function _sylvaClearGeeLayers(paneId) {
@@ -13110,6 +13432,7 @@ function selectRamp(name) {
             window._sylvaTopGeeLayerByPane = window._sylvaTopGeeLayerByPane || { map: null, map2: null };
             window._sylvaTopGeeLayerByPane[key] = null;
             if (typeof _sylvaRenderLayerSwitchBox === 'function') _sylvaRenderLayerSwitchBox(paneId);
+            if (typeof window._sylvaUpdateDownloadButtonsDisabledState === 'function') window._sylvaUpdateDownloadButtonsDisabledState();
         }
 
         // 🗂️ Birden fazla analiz/veri seti aynı anda seçilip haritaya
@@ -13977,6 +14300,12 @@ function selectRamp(name) {
                     } catch (err) {}
                 }
                 if (typeof _sylvaRenderLayerSwitchBox === 'function') _sylvaRenderLayerSwitchBox(vPaneId);
+                // 🆕 Kullanıcı bu kutudan elle bir katmanı görünür/gizli yaparak
+                // da (Analizi Çalıştır'a hiç basmadan) o pane'de aynı anda
+                // görünür katman sayısını değiştirebilir — indirme
+                // düğmelerinin kilit durumu burada da yeniden değerlendirilir
+                // (bkz. _sylvaUpdateDownloadButtonsDisabledState tanımı).
+                if (typeof window._sylvaUpdateDownloadButtonsDisabledState === 'function') window._sylvaUpdateDownloadButtonsDisabledState();
                 return;
             }
             var item = e.target && e.target.closest ? e.target.closest('.sylva-layer-switch-item') : null;
@@ -16457,6 +16786,10 @@ function selectRamp(name) {
             window._lastAnalyzeMetaByPane = window._lastAnalyzeMetaByPane || { map: null, map2: null };
             window._lastAnalyzeMetaByPane[_pane] = window._lastAnalyzeMeta;
             _ensureDefaultVisibility();
+            // 🆕 Hava Durumu kutusu işaretliyse (kullanıcı isteğiyle eklendi),
+            // bu analizin referans tarihine göre panel otomatik yenilenir —
+            // kutu işaretli DEĞİLSE fonksiyon hiçbir şey yapmaz (no-op).
+            if (typeof window._sylvaRefreshWeatherPanel === 'function') window._sylvaRefreshWeatherPanel(_pane);
 
             // Bu analizin (meta + sunucu yanıtı) verisini pane+analysisName
             // bazında sakla — katman kutusundan geri dönüldüğünde kullanılır.
@@ -18671,6 +19004,11 @@ function selectRamp(name) {
                     window._sylvaMirrorDataLayer({ force: true, srcId: paneId, layerKey: _layerKey, tileUrl: data.tileUrl, isTop: _isTopForPane });
                 }
                 _ensureDefaultVisibility();
+                // 🆕 Hava Durumu kutusu işaretliyse, bu uydu görüntüsü sahnesinin
+                // GERÇEK çekim tarihine (sceneDate) göre panel otomatik yenilenir
+                // — hem otomatik ilk yüklemede hem de galeriden elle sahne
+                // seçildiğinde (her iki durumda da bu fonksiyon çalışır).
+                if (typeof window._sylvaRefreshWeatherPanel === 'function') window._sylvaRefreshWeatherPanel(paneId);
             })
             .catch(function(err) { hideSylvaLoading(); showAnalysisToast('Görüntü yüklenemedi: ' + err.message, 'error'); });
         }
@@ -27290,7 +27628,7 @@ var SYLVA_TRANSLATIONS = {
     sidebar_title: 'Workspace & Data Selection',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ Polygon', btn_polygon_short: 'Polygon', btn_rectangle: '▭ Rectangle',
-    view_area: '📐 View Area', workspace: 'Workspace', weather: 'Weather', view_full: 'Full Data View',
+    view_area: '📐 View Area', workspace: 'Workspace', weather: 'Weather', weather_panel_title: 'Weather (Last 30 Days)', lbl_temp_min: 'Min Temp', lbl_temp_max: 'Max Temp', lbl_temp_avg: 'Avg Temp', lbl_precipitation: 'Precipitation', lbl_humidity: 'Humidity', weather_no_data: 'No data for this day', weather_single_point: 'Single point', weather_area_avg: 'Area average', view_full: 'Full Data View',
     lbl_area: 'Area:', lbl_perimeter: 'Perimeter:',
     date_title: 'Date Selection', date_start: 'Start', date_end: 'End',
     cloud_label: 'Cloud Cover (Max)',
@@ -27826,7 +28164,7 @@ var SYLVA_TRANSLATIONS = {
     sidebar_title: 'Ish maydoni va maʼlumot tanlash',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ Poligon', btn_polygon_short: 'Poligon', btn_rectangle: '▭ Toʻgʻri toʻrtburchak',
-    view_area: '📐 Koʻrish maydoni', workspace: 'Ish maydoni', weather: 'Ob-havo', view_full: 'Toʻliq maʼlumot koʻrinishi',
+    view_area: '📐 Koʻrish maydoni', workspace: 'Ish maydoni', weather: 'Ob-havo', weather_panel_title: 'Ob-havo (Oxirgi 30 kun)', lbl_temp_min: 'Min harorat', lbl_temp_max: 'Maks harorat', lbl_temp_avg: 'Oʻrtacha harorat', lbl_precipitation: 'Yogʻingarchilik', lbl_humidity: 'Namlik', weather_no_data: 'Bu kun uchun maʼlumot yoʻq', weather_single_point: 'Bitta nuqta', weather_area_avg: 'Hudud oʻrtachasi', view_full: 'Toʻliq maʼlumot koʻrinishi',
     lbl_area: 'Maydon:', lbl_perimeter: 'Perimetr:',
     date_title: 'Sana tanlash', date_start: 'Boshlanish', date_end: 'Tugash',
     cloud_label: 'Bulutlilik (Maksimal)',
@@ -28343,7 +28681,7 @@ var SYLVA_TRANSLATIONS = {
     sidebar_title: 'Χώρος Εργασίας & Επιλογή Δεδομένων',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ Πολύγωνο', btn_polygon_short: 'Πολύγωνο', btn_rectangle: '▭ Ορθογώνιο',
-    view_area: '📐 Προβολή Περιοχής', workspace: 'Χώρος Εργασίας', weather: 'Καιρός', view_full: 'Πλήρης Προβολή Δεδομένων',
+    view_area: '📐 Προβολή Περιοχής', workspace: 'Χώρος Εργασίας', weather: 'Καιρός', weather_panel_title: 'Καιρός (Τελευταίες 30 Ημέρες)', lbl_temp_min: 'Ελάχ. Θερμοκρασία', lbl_temp_max: 'Μέγ. Θερμοκρασία', lbl_temp_avg: 'Μέση Θερμοκρασία', lbl_precipitation: 'Βροχόπτωση', lbl_humidity: 'Υγρασία', weather_no_data: 'Δεν υπάρχουν δεδομένα για αυτή την ημέρα', weather_single_point: 'Ένα σημείο', weather_area_avg: 'Μέσος όρος περιοχής', view_full: 'Πλήρης Προβολή Δεδομένων',
     lbl_area: 'Εμβαδόν:', lbl_perimeter: 'Περίμετρος:',
     date_title: 'Επιλογή Ημερομηνίας', date_start: 'Έναρξη', date_end: 'Λήξη',
     cloud_label: 'Νεφοκάλυψη (Μέγ.)',
@@ -28866,7 +29204,7 @@ var SYLVA_TRANSLATIONS = {
     sidebar_title: 'Работна област и избор на данни',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ Полигон', btn_polygon_short: 'Полигон', btn_rectangle: '▭ Правоъгълник',
-    view_area: '📐 Покажи областта', workspace: 'Работна област', weather: 'Времето', view_full: 'Пълен преглед на данните',
+    view_area: '📐 Покажи областта', workspace: 'Работна област', weather: 'Времето', weather_panel_title: 'Времето (Последните 30 дни)', lbl_temp_min: 'Мин. температура', lbl_temp_max: 'Макс. температура', lbl_temp_avg: 'Средна температура', lbl_precipitation: 'Валежи', lbl_humidity: 'Влажност', weather_no_data: 'Няма данни за този ден', weather_single_point: 'Една точка', weather_area_avg: 'Средно за областта', view_full: 'Пълен преглед на данните',
     lbl_area: 'Площ:', lbl_perimeter: 'Периметър:',
     date_title: 'Избор на дата', date_start: 'Начало', date_end: 'Край',
     cloud_label: 'Облачност (макс.)',
@@ -29389,7 +29727,7 @@ var SYLVA_TRANSLATIONS = {
     sidebar_title: 'Çalışma Alanı & Veri Seçimi',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ Poligon', btn_polygon_short: 'Poligon', btn_rectangle: '▭ Dikdörtgen',
-    view_area: '📐 Görüntü Alanı', workspace: 'Çalışma Alanı', weather: 'Hava Durumu', view_full: 'Tüm Veri Görüntüsü',
+    view_area: '📐 Görüntü Alanı', workspace: 'Çalışma Alanı', weather: 'Hava Durumu', weather_panel_title: 'Hava Durumu (Son 30 Gün)', lbl_temp_min: 'Min Sıcaklık', lbl_temp_max: 'Maks Sıcaklık', lbl_temp_avg: 'Ort. Sıcaklık', lbl_precipitation: 'Yağış', lbl_humidity: 'Nem', weather_no_data: 'Bu gün için veri yok', weather_single_point: 'Tek nokta', weather_area_avg: 'Alan ortalaması', view_full: 'Tüm Veri Görüntüsü',
     lbl_area: 'Alan:', lbl_perimeter: 'Çevre:',
     date_title: 'Tarih Seçimi', date_start: 'Başlangıç', date_end: 'Bitiş',
     cloud_label: 'Bulutluluk Oranı (Maks)',
@@ -29918,7 +30256,7 @@ var SYLVA_TRANSLATIONS = {
     sidebar_title: 'İş Sahəsi & Məlumat Seçimi',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ Poliqon', btn_polygon_short: 'Poliqon', btn_rectangle: '▭ Düzbucaqlı',
-    view_area: '📐 Görüntü Sahəsi', workspace: 'İş Sahəsi', weather: 'Hava', view_full: 'Bütün Məlumat Görüntüsü',
+    view_area: '📐 Görüntü Sahəsi', workspace: 'İş Sahəsi', weather: 'Hava', weather_panel_title: 'Hava (Son 30 Gün)', lbl_temp_min: 'Min Temperatur', lbl_temp_max: 'Maks Temperatur', lbl_temp_avg: 'Orta Temperatur', lbl_precipitation: 'Yağıntı', lbl_humidity: 'Rütubət', weather_no_data: 'Bu gün üçün məlumat yoxdur', weather_single_point: 'Tək nöqtə', weather_area_avg: 'Sahə ortalaması', view_full: 'Bütün Məlumat Görüntüsü',
     lbl_area: 'Sahə:', lbl_perimeter: 'Perimetr:',
     date_title: 'Tarix Seçimi', date_start: 'Başlanğıc', date_end: 'Son',
     cloud_label: 'Buludluluq Nisbəti (Maks)',
@@ -30437,7 +30775,7 @@ var SYLVA_TRANSLATIONS = {
     sidebar_title: 'Munkaterület és Adatválasztás',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ Sokszög', btn_polygon_short: 'Sokszög', btn_rectangle: '▭ Téglalap',
-    view_area: '📐 Megjelenítési Terület', workspace: 'Munkaterület', weather: 'Időjárás', view_full: 'Teljes Adatnézet',
+    view_area: '📐 Megjelenítési Terület', workspace: 'Munkaterület', weather: 'Időjárás', weather_panel_title: 'Időjárás (Utolsó 30 Nap)', lbl_temp_min: 'Min. hőmérséklet', lbl_temp_max: 'Max. hőmérséklet', lbl_temp_avg: 'Átlaghőmérséklet', lbl_precipitation: 'Csapadék', lbl_humidity: 'Páratartalom', weather_no_data: 'Nincs adat erre a napra', weather_single_point: 'Egy pont', weather_area_avg: 'Terület átlag', view_full: 'Teljes Adatnézet',
     lbl_area: 'Terület:', lbl_perimeter: 'Kerület:',
     date_title: 'Dátumválasztás', date_start: 'Kezdés', date_end: 'Befejezés',
     cloud_label: 'Felhőborítás Aránya (Max)',
@@ -30955,7 +31293,7 @@ var SYLVA_TRANSLATIONS = {
     sidebar_title: 'Жұмыс кеңістігі және деректерді таңдау',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ Көпбұрыш', btn_polygon_short: 'Көпбұрыш', btn_rectangle: '▭ Тіктөртбұрыш',
-    view_area: '📐 Қарау аймағы', workspace: 'Жұмыс кеңістігі', weather: 'Ауа райы', view_full: 'Толық деректер көрінісі',
+    view_area: '📐 Қарау аймағы', workspace: 'Жұмыс кеңістігі', weather: 'Ауа райы', weather_panel_title: 'Ауа райы (Соңғы 30 күн)', lbl_temp_min: 'Ең төм. температура', lbl_temp_max: 'Ең жоғ. температура', lbl_temp_avg: 'Орташа температура', lbl_precipitation: 'Жауын-шашын', lbl_humidity: 'Ылғалдылық', weather_no_data: 'Бұл күнге деректер жоқ', weather_single_point: 'Бір нүкте', weather_area_avg: 'Аймақ орташасы', view_full: 'Толық деректер көрінісі',
     lbl_area: 'Аудан:', lbl_perimeter: 'Периметр:',
     date_title: 'Күн таңдау', date_start: 'Басталуы', date_end: 'Аяқталуы',
     cloud_label: 'Бұлттылық (Макс)',
@@ -31457,7 +31795,7 @@ var SYLVA_TRANSLATIONS = {
     sidebar_title: 'Arbeitsbereich & Datenauswahl',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ Polygon', btn_polygon_short: 'Polygon', btn_rectangle: '▭ Rechteck',
-    view_area: '📐 Ansichtsbereich', workspace: 'Arbeitsbereich', weather: 'Wetter', view_full: 'Vollständige Datenansicht',
+    view_area: '📐 Ansichtsbereich', workspace: 'Arbeitsbereich', weather: 'Wetter', weather_panel_title: 'Wetter (Letzte 30 Tage)', lbl_temp_min: 'Min. Temperatur', lbl_temp_max: 'Max. Temperatur', lbl_temp_avg: 'Durchschn. Temperatur', lbl_precipitation: 'Niederschlag', lbl_humidity: 'Luftfeuchtigkeit', weather_no_data: 'Keine Daten für diesen Tag', weather_single_point: 'Einzelner Punkt', weather_area_avg: 'Flächendurchschnitt', view_full: 'Vollständige Datenansicht',
     lbl_area: 'Fläche:', lbl_perimeter: 'Umfang:',
     date_title: 'Datumsauswahl', date_start: 'Start', date_end: 'Ende',
     cloud_label: 'Bewölkung (Max)',
@@ -31981,7 +32319,7 @@ var SYLVA_TRANSLATIONS = {
     sidebar_title: 'Espace de travail & Sélection de données',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ Polygone', btn_polygon_short: 'Polygone', btn_rectangle: '▭ Rectangle',
-    view_area: '📐 Zone de vue', workspace: 'Espace de travail', weather: 'Météo', view_full: 'Vue données complètes',
+    view_area: '📐 Zone de vue', workspace: 'Espace de travail', weather: 'Météo', weather_panel_title: 'Météo (30 derniers jours)', lbl_temp_min: 'Temp. min', lbl_temp_max: 'Temp. max', lbl_temp_avg: 'Temp. moy.', lbl_precipitation: 'Précipitations', lbl_humidity: 'Humidité', weather_no_data: 'Aucune donnée pour ce jour', weather_single_point: 'Point unique', weather_area_avg: 'Moyenne de la zone', view_full: 'Vue données complètes',
     lbl_area: 'Surface :', lbl_perimeter: 'Périmètre :',
     date_title: 'Sélection de date', date_start: 'Début', date_end: 'Fin',
     cloud_label: 'Couverture nuageuse (Max)',
@@ -32505,7 +32843,7 @@ var SYLVA_TRANSLATIONS = {
     sidebar_title: 'Área de trabajo & Selección de datos',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ Polígono', btn_polygon_short: 'Polígono', btn_rectangle: '▭ Rectángulo',
-    view_area: '📐 Área de vista', workspace: 'Área de trabajo', weather: 'Clima', view_full: 'Vista completa de datos',
+    view_area: '📐 Área de vista', workspace: 'Área de trabajo', weather: 'Clima', weather_panel_title: 'Clima (Últimos 30 Días)', lbl_temp_min: 'Temp. mín.', lbl_temp_max: 'Temp. máx.', lbl_temp_avg: 'Temp. media', lbl_precipitation: 'Precipitación', lbl_humidity: 'Humedad', weather_no_data: 'Sin datos para este día', weather_single_point: 'Punto único', weather_area_avg: 'Promedio del área', view_full: 'Vista completa de datos',
     lbl_area: 'Área:', lbl_perimeter: 'Perímetro:',
     date_title: 'Selección de fechas', date_start: 'Inicio', date_end: 'Fin',
     cloud_label: 'Nubosidad (Máx)',
@@ -33029,7 +33367,7 @@ var SYLVA_TRANSLATIONS = {
     sidebar_title: 'Área de trabalho & Seleção de dados',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ Polígono', btn_polygon_short: 'Polígono', btn_rectangle: '▭ Retângulo',
-    view_area: '📐 Área de visualização', workspace: 'Área de trabalho', weather: 'Clima', view_full: 'Vista completa dos dados',
+    view_area: '📐 Área de visualização', workspace: 'Área de trabalho', weather: 'Clima', weather_panel_title: 'Clima (Últimos 30 Dias)', lbl_temp_min: 'Temp. mín.', lbl_temp_max: 'Temp. máx.', lbl_temp_avg: 'Temp. média', lbl_precipitation: 'Precipitação', lbl_humidity: 'Umidade', weather_no_data: 'Sem dados para este dia', weather_single_point: 'Ponto único', weather_area_avg: 'Média da área', view_full: 'Vista completa dos dados',
     lbl_area: 'Área:', lbl_perimeter: 'Perímetro:',
     date_title: 'Seleção de datas', date_start: 'Início', date_end: 'Fim',
     cloud_label: 'Nebulosidade (Máx)',
@@ -33553,7 +33891,7 @@ var SYLVA_TRANSLATIONS = {
     sidebar_title: 'منطقة العمل واختيار البيانات',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ مضلع', btn_polygon_short: 'مضلع', btn_rectangle: '▭ مستطيل',
-    view_area: '📐 منطقة العرض', workspace: 'منطقة العمل', weather: 'الطقس', view_full: 'عرض البيانات الكاملة',
+    view_area: '📐 منطقة العرض', workspace: 'منطقة العمل', weather: 'الطقس', weather_panel_title: 'الطقس (آخر 30 يومًا)', lbl_temp_min: 'أدنى درجة حرارة', lbl_temp_max: 'أعلى درجة حرارة', lbl_temp_avg: 'متوسط درجة الحرارة', lbl_precipitation: 'هطول الأمطار', lbl_humidity: 'الرطوبة', weather_no_data: 'لا توجد بيانات لهذا اليوم', weather_single_point: 'نقطة واحدة', weather_area_avg: 'متوسط المنطقة', view_full: 'عرض البيانات الكاملة',
     lbl_area: 'المساحة:', lbl_perimeter: 'المحيط:',
     date_title: 'اختيار التاريخ', date_start: 'البداية', date_end: 'النهاية',
     cloud_label: 'الغطاء السحابي (الحد الأقصى)',
@@ -34077,7 +34415,7 @@ var SYLVA_TRANSLATIONS = {
     sidebar_title: 'فضای کاری و انتخاب داده',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ چندضلعی', btn_polygon_short: 'چندضلعی', btn_rectangle: '▭ مستطیل',
-    view_area: '📐 محدوده نمایش', workspace: 'فضای کاری', weather: 'آب‌وهوا', view_full: 'نمایش کامل داده',
+    view_area: '📐 محدوده نمایش', workspace: 'فضای کاری', weather: 'آب‌وهوا', weather_panel_title: 'آب‌وهوا (۳۰ روز اخیر)', lbl_temp_min: 'کمینه دما', lbl_temp_max: 'بیشینه دما', lbl_temp_avg: 'دمای میانگین', lbl_precipitation: 'بارش', lbl_humidity: 'رطوبت', weather_no_data: 'داده‌ای برای این روز موجود نیست', weather_single_point: 'تک نقطه', weather_area_avg: 'میانگین منطقه', view_full: 'نمایش کامل داده',
     lbl_area: 'مساحت:', lbl_perimeter: 'محیط:',
     date_title: 'انتخاب تاریخ', date_start: 'شروع', date_end: 'پایان',
     cloud_label: 'پوشش ابری (حداکثر)',
@@ -34601,7 +34939,7 @@ var SYLVA_TRANSLATIONS = {
     sidebar_title: '工作区与数据选择',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ 多边形', btn_polygon_short: '多边形', btn_rectangle: '▭ 矩形',
-    view_area: '📐 视图区域', workspace: '工作区', weather: '天气', view_full: '完整数据视图',
+    view_area: '📐 视图区域', workspace: '工作区', weather: '天气', weather_panel_title: '天气（近30天）', lbl_temp_min: '最低气温', lbl_temp_max: '最高气温', lbl_temp_avg: '平均气温', lbl_precipitation: '降水量', lbl_humidity: '湿度', weather_no_data: '当天无数据', weather_single_point: '单点', weather_area_avg: '区域平均', view_full: '完整数据视图',
     lbl_area: '面积：', lbl_perimeter: '周长：',
     date_title: '日期选择', date_start: '开始', date_end: '结束',
     cloud_label: '云量（最大）',
@@ -35125,7 +35463,7 @@ var SYLVA_TRANSLATIONS = {
     sidebar_title: 'ワークスペース＆データ選択',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ ポリゴン', btn_polygon_short: 'ポリゴン', btn_rectangle: '▭ 長方形',
-    view_area: '📐 表示エリア', workspace: 'ワークスペース', weather: '天気', view_full: '全データ表示',
+    view_area: '📐 表示エリア', workspace: 'ワークスペース', weather: '天気', weather_panel_title: '天気（過去30日間）', lbl_temp_min: '最低気温', lbl_temp_max: '最高気温', lbl_temp_avg: '平均気温', lbl_precipitation: '降水量', lbl_humidity: '湿度', weather_no_data: 'この日のデータはありません', weather_single_point: '単一地点', weather_area_avg: 'エリア平均', view_full: '全データ表示',
     lbl_area: '面積：', lbl_perimeter: '周囲長：',
     date_title: '日付選択', date_start: '開始', date_end: '終了',
     cloud_label: '雲量（最大）',
@@ -35649,7 +35987,7 @@ var SYLVA_TRANSLATIONS = {
     sidebar_title: '작업 공간 및 데이터 선택',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ 다각형', btn_polygon_short: '다각형', btn_rectangle: '▭ 직사각형',
-    view_area: '📐 보기 영역', workspace: '작업 공간', weather: '날씨', view_full: '전체 데이터 보기',
+    view_area: '📐 보기 영역', workspace: '작업 공간', weather: '날씨', weather_panel_title: '날씨 (최근 30일)', lbl_temp_min: '최저 기온', lbl_temp_max: '최고 기온', lbl_temp_avg: '평균 기온', lbl_precipitation: '강수량', lbl_humidity: '습도', weather_no_data: '이 날짜에 대한 데이터가 없습니다', weather_single_point: '단일 지점', weather_area_avg: '지역 평균', view_full: '전체 데이터 보기',
     lbl_area: '면적:', lbl_perimeter: '둘레:',
     date_title: '날짜 선택', date_start: '시작', date_end: '종료',
     cloud_label: '구름 양 (최대)',
@@ -36173,7 +36511,7 @@ var SYLVA_TRANSLATIONS = {
     sidebar_title: 'कार्यक्षेत्र और डेटा चयन',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ बहुभुज', btn_polygon_short: 'बहुभुज', btn_rectangle: '▭ आयत',
-    view_area: '📐 दृश्य क्षेत्र', workspace: 'कार्यक्षेत्र', weather: 'मौसम', view_full: 'पूर्ण डेटा दृश्य',
+    view_area: '📐 दृश्य क्षेत्र', workspace: 'कार्यक्षेत्र', weather: 'मौसम', weather_panel_title: 'मौसम (पिछले 30 दिन)', lbl_temp_min: 'न्यूनतम तापमान', lbl_temp_max: 'अधिकतम तापमान', lbl_temp_avg: 'औसत तापमान', lbl_precipitation: 'वर्षा', lbl_humidity: 'नमी', weather_no_data: 'इस दिन का डेटा उपलब्ध नहीं है', weather_single_point: 'एकल बिंदु', weather_area_avg: 'क्षेत्र औसत', view_full: 'पूर्ण डेटा दृश्य',
     lbl_area: 'क्षेत्रफल:', lbl_perimeter: 'परिधि:',
     date_title: 'तिथि चयन', date_start: 'प्रारंभ', date_end: 'समाप्ति',
     cloud_label: 'बादल आवरण (अधिकतम)',
@@ -36697,7 +37035,7 @@ var SYLVA_TRANSLATIONS = {
     sidebar_title: 'Ruang Kerja & Pemilihan Data',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ Poligon', btn_polygon_short: 'Poligon', btn_rectangle: '▭ Persegi Panjang',
-    view_area: '📐 Area Tampilan', workspace: 'Ruang Kerja', weather: 'Cuaca', view_full: 'Tampilan Data Penuh',
+    view_area: '📐 Area Tampilan', workspace: 'Ruang Kerja', weather: 'Cuaca', view_full: 'Tampilan Data Penuh', weather_panel_title: 'Cuaca (30 Hari Terakhir)', lbl_temp_min: 'Suhu Min', lbl_temp_max: 'Suhu Maks', lbl_temp_avg: 'Suhu Rata-rata', lbl_precipitation: 'Curah Hujan', lbl_humidity: 'Kelembapan', weather_no_data: 'Tidak ada data untuk hari ini', weather_single_point: 'Satu titik', weather_area_avg: 'Rata-rata area',
     lbl_area: 'Luas:', lbl_perimeter: 'Keliling:',
     date_title: 'Pilih Tanggal', date_start: 'Mulai', date_end: 'Selesai',
     cloud_label: 'Tutupan Awan (Maks)',
@@ -37237,7 +37575,7 @@ var SYLVA_TRANSLATIONS = {
     sidebar_title: 'Рабочая область и выбор данных',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ Полигон', btn_polygon_short: 'Полигон', btn_rectangle: '▭ Прямоугольник',
-    view_area: '📐 Показать область', workspace: 'Рабочая область', weather: 'Погода', view_full: 'Полный просмотр данных',
+    view_area: '📐 Показать область', workspace: 'Рабочая область', weather: 'Погода', weather_panel_title: 'Погода (последние 30 дней)', lbl_temp_min: 'Мин. температура', lbl_temp_max: 'Макс. температура', lbl_temp_avg: 'Средняя температура', lbl_precipitation: 'Осадки', lbl_humidity: 'Влажность', weather_no_data: 'Нет данных за этот день', weather_single_point: 'Одна точка', weather_area_avg: 'Среднее по площади', view_full: 'Полный просмотр данных',
     lbl_area: 'Площадь:', lbl_perimeter: 'Периметр:',
     date_title: 'Выбор даты', date_start: 'Начало', date_end: 'Конец',
     cloud_label: 'Облачность (макс.)',
@@ -37759,7 +38097,7 @@ var SYLVA_TRANSLATIONS = {
     sidebar_title: 'พื้นที่ทำงาน & การเลือกข้อมูล',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ รูปหลายเหลี่ยม', btn_polygon_short: 'รูปหลายเหลี่ยม', btn_rectangle: '▭ สี่เหลี่ยมผืนผ้า',
-    view_area: '📐 พื้นที่ดู', workspace: 'พื้นที่ทำงาน', weather: 'สภาพอากาศ', view_full: 'ดูข้อมูลทั้งหมด',
+    view_area: '📐 พื้นที่ดู', workspace: 'พื้นที่ทำงาน', weather: 'สภาพอากาศ', weather_panel_title: 'สภาพอากาศ (30 วันล่าสุด)', lbl_temp_min: 'อุณหภูมิต่ำสุด', lbl_temp_max: 'อุณหภูมิสูงสุด', lbl_temp_avg: 'อุณหภูมิเฉลี่ย', lbl_precipitation: 'ปริมาณน้ำฝน', lbl_humidity: 'ความชื้น', weather_no_data: 'ไม่มีข้อมูลสำหรับวันนี้', weather_single_point: 'จุดเดียว', weather_area_avg: 'ค่าเฉลี่ยพื้นที่', view_full: 'ดูข้อมูลทั้งหมด',
     lbl_area: 'พื้นที่:', lbl_perimeter: 'เส้นรอบวง:',
     date_title: 'เลือกวันที่', date_start: 'เริ่มต้น', date_end: 'สิ้นสุด',
     cloud_label: 'ความครอบคลุมเมฆ (สูงสุด)',
@@ -38277,7 +38615,7 @@ var SYLVA_TRANSLATIONS = {
     sidebar_title: 'কর্মক্ষেত্র ও ডেটা নির্বাচন',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ বহুভুজ', btn_polygon_short: 'বহুভুজ', btn_rectangle: '▭ আয়তক্ষেত্র',
-    view_area: '📐 প্রদর্শন এলাকা', workspace: 'কর্মক্ষেত্র', weather: 'আবহাওয়া', view_full: 'সম্পূর্ণ ডেটা প্রদর্শন',
+    view_area: '📐 প্রদর্শন এলাকা', workspace: 'কর্মক্ষেত্র', weather: 'আবহাওয়া', weather_panel_title: 'আবহাওয়া (গত ৩০ দিন)', lbl_temp_min: 'সর্বনিম্ন তাপমাত্রা', lbl_temp_max: 'সর্বোচ্চ তাপমাত্রা', lbl_temp_avg: 'গড় তাপমাত্রা', lbl_precipitation: 'বৃষ্টিপাত', lbl_humidity: 'আর্দ্রতা', weather_no_data: 'এই দিনের কোনো তথ্য নেই', weather_single_point: 'একক বিন্দু', weather_area_avg: 'এলাকার গড়', view_full: 'সম্পূর্ণ ডেটা প্রদর্শন',
     lbl_area: 'ক্ষেত্রফল:', lbl_perimeter: 'পরিধি:',
     date_title: 'তারিখ নির্বাচন', date_start: 'শুরু', date_end: 'শেষ',
     cloud_label: 'মেঘের আচ্ছাদন (সর্বোচ্চ)',
@@ -38784,7 +39122,7 @@ var SYLVA_TRANSLATIONS = {
     sidebar_title: 'Không gian làm việc & Chọn dữ liệu',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ Đa giác', btn_polygon_short: 'Đa giác', btn_rectangle: '▭ Hình chữ nhật',
-    view_area: '📐 Khu vực xem', workspace: 'Không gian làm việc', weather: 'Thời tiết', view_full: 'Xem toàn bộ dữ liệu',
+    view_area: '📐 Khu vực xem', workspace: 'Không gian làm việc', weather: 'Thời tiết', weather_panel_title: 'Thời tiết (30 Ngày Qua)', lbl_temp_min: 'Nhiệt độ thấp nhất', lbl_temp_max: 'Nhiệt độ cao nhất', lbl_temp_avg: 'Nhiệt độ trung bình', lbl_precipitation: 'Lượng mưa', lbl_humidity: 'Độ ẩm', weather_no_data: 'Không có dữ liệu cho ngày này', weather_single_point: 'Một điểm', weather_area_avg: 'Trung bình khu vực', view_full: 'Xem toàn bộ dữ liệu',
     lbl_area: 'Diện tích:', lbl_perimeter: 'Chu vi:',
     date_title: 'Chọn ngày', date_start: 'Bắt đầu', date_end: 'Kết thúc',
     cloud_label: 'Độ che phủ mây (Tối đa)',
@@ -39324,7 +39662,7 @@ var SYLVA_TRANSLATIONS = {
     sidebar_title: 'کام کی جگہ اور ڈیٹا کا انتخاب',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ کثیر الاضلاع', btn_polygon_short: 'کثیر الاضلاع', btn_rectangle: '▭ مستطیل',
-    view_area: '📐 منظر کا علاقہ', workspace: 'کام کی جگہ', weather: 'موسم', view_full: 'مکمل ڈیٹا منظر',
+    view_area: '📐 منظر کا علاقہ', workspace: 'کام کی جگہ', weather: 'موسم', weather_panel_title: 'موسم (پچھلے 30 دن)', lbl_temp_min: 'کم از کم درجہ حرارت', lbl_temp_max: 'زیادہ سے زیادہ درجہ حرارت', lbl_temp_avg: 'اوسط درجہ حرارت', lbl_precipitation: 'بارش', lbl_humidity: 'نمی', weather_no_data: 'اس دن کا کوئی ڈیٹا نہیں ہے', weather_single_point: 'واحد نقطہ', weather_area_avg: 'رقبے کا اوسط', view_full: 'مکمل ڈیٹا منظر',
     lbl_area: 'رقبہ:', lbl_perimeter: 'محیط:',
     date_title: 'تاریخ کا انتخاب', date_start: 'آغاز', date_end: 'اختتام',
     cloud_label: 'بادل کی مقدار (زیادہ سے زیادہ)',
@@ -39851,7 +40189,7 @@ var SYLVA_TRANSLATIONS = {
     sidebar_title: 'Obszar roboczy i wybór danych',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ Wielokąt', btn_polygon_short: 'Wielokąt', btn_rectangle: '▭ Prostokąt',
-    view_area: '📐 Obszar widoku', workspace: 'Obszar roboczy', weather: 'Pogoda', view_full: 'Pełny widok danych',
+    view_area: '📐 Obszar widoku', workspace: 'Obszar roboczy', weather: 'Pogoda', weather_panel_title: 'Pogoda (ostatnie 30 dni)', lbl_temp_min: 'Min. temperatura', lbl_temp_max: 'Maks. temperatura', lbl_temp_avg: 'Śr. temperatura', lbl_precipitation: 'Opady', lbl_humidity: 'Wilgotność', weather_no_data: 'Brak danych dla tego dnia', weather_single_point: 'Pojedynczy punkt', weather_area_avg: 'Średnia dla obszaru', view_full: 'Pełny widok danych',
     lbl_area: 'Powierzchnia:', lbl_perimeter: 'Obwód:',
     date_title: 'Wybór daty', date_start: 'Początek', date_end: 'Koniec',
     cloud_label: 'Zachmurzenie (maks.)',
@@ -40368,7 +40706,7 @@ var SYLVA_TRANSLATIONS = {
     sidebar_title: 'Ruang Kerja & Pemilihan Data',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ Poligon', btn_polygon_short: 'Poligon', btn_rectangle: '▭ Segi Empat',
-    view_area: '📐 Kawasan Paparan', workspace: 'Ruang Kerja', weather: 'Cuaca', view_full: 'Paparan Data Penuh',
+    view_area: '📐 Kawasan Paparan', workspace: 'Ruang Kerja', weather: 'Cuaca', view_full: 'Paparan Data Penuh', weather_panel_title: 'Cuaca (30 Hari Lepas)', lbl_temp_min: 'Suhu Min', lbl_temp_max: 'Suhu Maks', lbl_temp_avg: 'Suhu Purata', lbl_precipitation: 'Hujan', lbl_humidity: 'Kelembapan', weather_no_data: 'Tiada data untuk hari ini', weather_single_point: 'Satu titik', weather_area_avg: 'Purata kawasan',
     lbl_area: 'Keluasan:', lbl_perimeter: 'Perimeter:',
     date_title: 'Pemilihan Tarikh', date_start: 'Mula', date_end: 'Tamat',
     cloud_label: 'Litupan Awan (Maks)',
@@ -40890,7 +41228,7 @@ var SYLVA_TRANSLATIONS = {
       sidebar_title: 'Жумуш мейкиндиги жана маалымат тандоо',
       btn_upload: '📂 KML / KMZ / SHP',
       btn_polygon: '⬠ Полигон', btn_polygon_short: 'Полигон', btn_rectangle: '▭ Тик бурчтук',
-      view_area: '📐 Көрүү аймагы', workspace: 'Жумуш мейкиндиги', weather: 'Аба ырайы', view_full: 'Толук маалымат көрүнүшү',
+      view_area: '📐 Көрүү аймагы', workspace: 'Жумуш мейкиндиги', weather: 'Аба ырайы', weather_panel_title: 'Аба ырайы (Акыркы 30 күн)', lbl_temp_min: 'Эң төм. температура', lbl_temp_max: 'Эң жог. температура', lbl_temp_avg: 'Орточо температура', lbl_precipitation: 'Жаан-чачын', lbl_humidity: 'Нымдуулук', weather_no_data: 'Бул күн үчүн маалымат жок', weather_single_point: 'Бир чекит', weather_area_avg: 'Аймактын орточосу', view_full: 'Толук маалымат көрүнүшү',
       lbl_area: 'Аянт:', lbl_perimeter: 'Периметр:',
       date_title: 'Күн тандоо', date_start: 'Башталышы', date_end: 'Аякталышы',
       cloud_label: 'Булуттуулук (Макс)',
@@ -41384,7 +41722,7 @@ var SYLVA_TRANSLATIONS = {
     sidebar_title: 'Ажлын орчин & Өгөгдөл сонгох',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ Полигон', btn_polygon_short: 'Полигон', btn_rectangle: '▭ Тэгш өнцөгт',
-    view_area: '📐 Харах хэсэг', workspace: 'Ажлын орчин', weather: 'Цаг агаар', view_full: 'Бүтэн өгөгдөл харах',
+    view_area: '📐 Харах хэсэг', workspace: 'Ажлын орчин', weather: 'Цаг агаар', weather_panel_title: 'Цаг агаар (Сүүлийн 30 хоног)', lbl_temp_min: 'Хамгийн бага температур', lbl_temp_max: 'Хамгийн их температур', lbl_temp_avg: 'Дундаж температур', lbl_precipitation: 'Хур тунадас', lbl_humidity: 'Чийгшил', weather_no_data: 'Энэ өдрийн мэдээлэл алга', weather_single_point: 'Ганц цэг', weather_area_avg: 'Талбайн дундаж', view_full: 'Бүтэн өгөгдөл харах',
     lbl_area: 'Талбай:', lbl_perimeter: 'Периметр:',
     date_title: 'Огноо сонгох', date_start: 'Эхлэх', date_end: 'Дуусах',
     cloud_label: 'Үүлний хувь (Дээд хэмжээ)',
@@ -41868,7 +42206,7 @@ var SYLVA_TRANSLATIONS = {
       sidebar_title: 'სამუშაო სივრცე და მონაცემების შერჩევა',
       btn_upload: '📂 KML / KMZ / SHP',
       btn_polygon: '⬠ პოლიგონი', btn_polygon_short: 'პოლიგონი', btn_rectangle: '▭ მართკუთხედი',
-      view_area: '📐 სანახავი ადგილი', workspace: 'სამუშაო სივრცე', weather: 'ამინდი', view_full: 'მთლიანი მონაცემების ხედი',
+      view_area: '📐 სანახავი ადგილი', workspace: 'სამუშაო სივრცე', weather: 'ამინდი', weather_panel_title: 'ამინდი (ბოლო 30 დღე)', lbl_temp_min: 'მინ. ტემპერატურა', lbl_temp_max: 'მაქს. ტემპერატურა', lbl_temp_avg: 'საშ. ტემპერატურა', lbl_precipitation: 'ნალექი', lbl_humidity: 'ტენიანობა', weather_no_data: 'ამ დღისთვის მონაცემები არ არის', weather_single_point: 'ერთი წერტილი', weather_area_avg: 'ტერიტორიის საშუალო', view_full: 'მთლიანი მონაცემების ხედი',
       lbl_area: 'ფართობი:', lbl_perimeter: 'პერიმეტრი:',
       date_title: 'თარიღის შერჩევა', date_start: 'დასაწყისი', date_end: 'დასასრული',
       cloud_label: 'ღრუბლიანობა (მაქს)',
@@ -42369,7 +42707,7 @@ var SYLVA_TRANSLATIONS = {
     sidebar_title: 'Area di Lavoro e Selezione Dati',
     btn_upload: '📂 KML / KMZ / SHP',
     btn_polygon: '⬠ Poligono', btn_polygon_short: 'Poligono', btn_rectangle: '▭ Rettangolo',
-    view_area: '📐 Area di Visualizzazione', workspace: 'Area di Lavoro', weather: 'Meteo', view_full: 'Vista Dati Completa',
+    view_area: '📐 Area di Visualizzazione', workspace: 'Area di Lavoro', weather: 'Meteo', weather_panel_title: 'Meteo (Ultimi 30 Giorni)', lbl_temp_min: 'Temp. min', lbl_temp_max: 'Temp. max', lbl_temp_avg: 'Temp. media', lbl_precipitation: 'Precipitazioni', lbl_humidity: 'Umidità', weather_no_data: 'Nessun dato per questo giorno', weather_single_point: 'Punto singolo', weather_area_avg: 'Media dell\'area', view_full: 'Vista Dati Completa',
     lbl_area: 'Area:', lbl_perimeter: 'Perimetro:',
     date_title: 'Selezione Data', date_start: 'Inizio', date_end: 'Fine',
     cloud_label: 'Copertura Nuvolosa (Max)',
