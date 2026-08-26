@@ -9932,6 +9932,154 @@ def topo_contour_vector():
 
 
 # ════════════════════════════════════════════════════════════════
+# 🆕 /api/terrain-3d-data — 3B Görselleştirme için arazi + doku üretimi
+# ════════════════════════════════════════════════════════════════
+# Frontend'deki Three.js tabanlı 3B arazi motoru (bkz. index.html
+# _sylva3D* fonksiyonları) için:
+#   1) Seçilen çalışma alanının DEM yükseklik IZGARASINI (heightmap,
+#      satır×sütun sayısal dizi) üretir — tarayıcıda gerçek bir 3B
+#      mesh (üçgen ağı) kurmak için kullanılır.
+#   2) Bu ızgarayı kaplayacak bir DOKU (texture PNG) üretir:
+#        - `activeAnalysis` gönderildiyse (ekranda aktif bir
+#          sınıflandırılmış/renkli analiz varsa), o analizin GERÇEK
+#          renklendirilmiş (visualize()) çıktısı doku olarak kullanılır
+#          — "seçili analiz katmanını DEM yüzeyine giydir" isteğinin
+#          sunucu tarafı karşılığı budur.
+#        - Hiç analiz yoksa (veya doku üretimi herhangi bir sebeple
+#          başarısız olursa) DEM'in kendisinden türetilen bir
+#          gölgelendirme (hillshade) varsayılan doku olarak kullanılır
+#          — böylece özellik EKRANDA HİÇBİR ANALİZ OLMASA BİLE çalışır.
+# ════════════════════════════════════════════════════════════════
+@app.route('/api/terrain-3d-data', methods=['POST'])
+def terrain_3d_data():
+    req_data = request.get_json(silent=True) or {}
+    try:
+        roi_coords = req_data.get('roi')
+        if not roi_coords:
+            return jsonify({'success': False, 'error': 'Çalışma alanı geometrisi bulunamadı. Haritada bir alan çizin.'}), 400
+        roi = make_roi(roi_coords)
+
+        import numpy as _np3d
+        from rasterio.io import MemoryFile as _MemoryFile3d
+
+        # ── DEM kaynağı seç (diğer topografik uç noktalarla — bkz.
+        # _generate_contour_vectors — birebir aynı mantık) ──
+        _srtm_fb3d = ee.Image('USGS/SRTMGL1_003').select('elevation')
+        dem_source = req_data.get('demSource', 'SRTM')
+        if dem_source == 'ALOS':
+            dem = (ee.ImageCollection('JAXA/ALOS/AW3D30/V3_2')
+                   .filterBounds(roi).mosaic().select('DSM').rename('elevation')).unmask(_srtm_fb3d)
+        elif dem_source == 'Copernicus':
+            dem = (ee.ImageCollection('COPERNICUS/DEM/GLO30')
+                   .filterBounds(roi).mosaic().select('DEM').rename('elevation')).unmask(_srtm_fb3d)
+        elif dem_source == 'NASADEM':
+            dem = ee.Image('NASA/NASADEM_HGT/001').select('elevation')
+        else:
+            dem = ee.Image('USGS/SRTMGL1_003').select('elevation')
+
+        dem_smooth = dem.focalMean(radius=15, units='meters')
+        region = roi.bounds(maxError=100)
+        scale = 30
+
+        tif_bytes = _download_band_geotiff_bytes(
+            dem_smooth, region, scale, 'EPSG:4326', 'terrain3d_dem',
+            fallback_region_geom=region,
+        )
+
+        with _MemoryFile3d(tif_bytes) as memfile:
+            with memfile.open() as src:
+                Z = src.read(1).astype('float64')
+                bnds = src.bounds  # left, bottom, right, top (EPSG:4326)
+
+        if Z.size == 0:
+            return jsonify({'success': False, 'error': 'Yükselti verisi indirilemedi.'}), 500
+
+        # Olağandışı/dolgu değerlerini (ör. deniz/okyanus maskesi) NaN yap
+        Z[(Z < -1000) | (Z > 9000)] = _np3d.nan
+        valid_mask = ~_np3d.isnan(Z)
+        if not valid_mask.any():
+            return jsonify({'success': False, 'error': 'Bu alanda yükselti verisi bulunamadı.'}), 400
+        z_valid = Z[valid_mask]
+        e_min = float(z_valid.min())
+        e_max = float(z_valid.max())
+        # Kalan NaN (nodata) hücreleri, arazi genel ortalamasıyla dolduruluyor
+        # — tam hassasiyet gerekmiyor, sadece mesh'te delik/uçurum oluşmasını
+        # engellemek için (yalnızca az sayıda kıyı/karo kenarı pikselini etkiler).
+        if _np3d.isnan(Z).any():
+            Z[_np3d.isnan(Z)] = float(z_valid.mean())
+
+        rows, cols = Z.shape
+        if rows < 2 or cols < 2:
+            return jsonify({'success': False, 'error': 'Alan, 3B arazi üretmek için çok küçük.'}), 400
+
+        # ── Performans: mesh çözünürlüğünü sınırla — tarayıcı tarafında
+        # binlerce üçgen render edilecek; çok büyük alanlarda ham DEM
+        # ızgarası (yüzlerce satır/sütun) tarayıcıyı/mobil cihazı
+        # kilitleyebilir. Basit bir örnekleme (decimation) ile en fazla
+        # 140×140 hücreye indiriliyor — bu bir 3B ÖNİZLEME/keşif aracı
+        # olduğundan, kaybedilen ayrıntı GeoTIFF indirmelerini etkilemez.
+        _GRID_MAX = 140
+        if rows > _GRID_MAX or cols > _GRID_MAX:
+            r_step = max(1, rows // _GRID_MAX)
+            c_step = max(1, cols // _GRID_MAX)
+            Z = Z[::r_step, ::c_step]
+            rows, cols = Z.shape
+
+        elevation_grid = Z.round(2).tolist()
+
+        # ── Doku (texture) üretimi ──
+        analysis_payload = req_data.get('activeAnalysis')
+        texture_data_uri = None
+        texture_source = 'hillshade'
+        analysis_label = None
+        if isinstance(analysis_payload, dict) and analysis_payload.get('index'):
+            try:
+                _payload3d = dict(analysis_payload)
+                _payload3d['roi'] = roi_coords
+                _final_display3d, _roi3d, _result3d, _vis3d, _ = _call_with_retry(build_result_image, _payload3d, for_export=False)
+                _vis_img3d = _final_display3d.visualize(**_vis3d)
+                _thumb_url3d = _call_with_retry(lambda: _vis_img3d.getThumbURL({
+                    'region': roi, 'dimensions': 640, 'format': 'png',
+                }))
+                if _thumb_url3d:
+                    _resp3d = _tile_http.get(_thumb_url3d, timeout=_TILE_FETCH_TIMEOUT)
+                    if _resp3d.status_code == 200 and _resp3d.content:
+                        texture_data_uri = 'data:image/png;base64,' + base64.b64encode(_resp3d.content).decode('ascii')
+                        texture_source = 'analysis'
+                        analysis_label = str(analysis_payload.get('index') or '')
+            except Exception as _tex_err:
+                print('[SylvaGIS 3D] Analiz dokusu üretilemedi, hillshade\'e dönülüyor:', _tex_err)
+
+        if not texture_data_uri:
+            try:
+                _hillshade3d = ee.Terrain.hillshade(dem_smooth)
+                _thumb_url_hs = _call_with_retry(lambda: _hillshade3d.getThumbURL({
+                    'region': roi, 'dimensions': 640, 'format': 'png', 'min': 0, 'max': 255,
+                }))
+                if _thumb_url_hs:
+                    _resp_hs = _tile_http.get(_thumb_url_hs, timeout=_TILE_FETCH_TIMEOUT)
+                    if _resp_hs.status_code == 200 and _resp_hs.content:
+                        texture_data_uri = 'data:image/png;base64,' + base64.b64encode(_resp_hs.content).decode('ascii')
+            except Exception as _hs_err:
+                print('[SylvaGIS 3D] Hillshade dokusu da üretilemedi:', _hs_err)
+
+        return jsonify({
+            'success': True,
+            'bounds': {'west': bnds.left, 'south': bnds.bottom, 'east': bnds.right, 'north': bnds.top},
+            'rows': rows, 'cols': cols,
+            'elevation': elevation_grid,
+            'elevationMin': e_min, 'elevationMax': e_max,
+            'texture': texture_data_uri,
+            'textureSource': texture_source,
+            'analysisLabel': analysis_label,
+            'demSource': dem_source,
+        })
+    except Exception as ex:
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(ex)}), 500
+
+
+# ════════════════════════════════════════════════════════════════
 # 📥 /api/vector-download — Raster → Vektör dışa aktarımı
 # ════════════════════════════════════════════════════════════════
 # Üç veri kaynağını destekler:
@@ -10307,8 +10455,48 @@ def _vectorize_analysis_payload(data, crs='EPSG:4326'):
         reducer=ee.Reducer.first(), geometry=roi, scale=scale, maxPixels=1e8,
         geometryType='polygon', eightConnected=False, labelProperty='class_value',
         crs=crs if str(crs).upper().startswith('EPSG:') else 'EPSG:4326').limit(20000))
-    info=_call_with_retry(lambda: fc.getInfo()) or {}
-    feats=info.get('features') or []
+
+    # 🆕 GÜNCELLEME: reduceToVectors() varsayılan olarak aynı sınıfa ait
+    # her bitişik piksel kümesini AYRI bir poligon/feature olarak üretir
+    # — bu yüzden örn. 5 sınıflı bir katman KML/SHP'ye onlarca (hatta
+    # yüzlerce) "Sınıf 1", "Sınıf 1", "Sınıf 1"... şeklinde tekrar eden
+    # ayrı poligon olarak iniyordu (Google Earth'te Yerler panelinde
+    # dağınık bir liste oluşuyordu). Artık her sınıf koduna ait TÜM
+    # poligonlar, GEE tarafında (FeatureCollection.geometry() ile) TEK
+    # bir (multi)geometriye birleştirilir (dissolve) — dışa aktarılan
+    # dosyada her sınıf için tek bir satır/poligon görünür, lejant çok
+    # daha düzenli olur. Birleştirme herhangi bir sebeple başarısız
+    # olursa (çok karmaşık geometri, GEE zaman aşımı vb.) sessizce eski
+    # (birleştirilmemiş) davranışa geri dönülür — indirme asla tamamen
+    # bozulmaz.
+    feats = None
+    try:
+        class_codes = sorted(set(int(m['code']) for m in (class_meta or [])))
+        if class_codes:
+            codes_list = ee.List(class_codes)
+
+            def _merge_one_class(code):
+                code_num = ee.Number(code)
+                subset = fc.filter(ee.Filter.eq('class_value', code_num))
+                return ee.Algorithms.If(
+                    subset.size().gt(0),
+                    ee.Feature(subset.geometry(1)).set('class_value', code_num),
+                    None
+                )
+
+            merged_list = codes_list.map(_merge_one_class, True)
+            merged_fc = ee.FeatureCollection(merged_list)
+            merged_info = _call_with_retry(lambda: merged_fc.getInfo()) or {}
+            merged_feats = merged_info.get('features') or []
+            if merged_feats:
+                feats = merged_feats
+    except Exception as dissolve_error:
+        print('[SylvaGIS] Vektör sınıf birleştirme (dissolve) başarısız, birleştirilmemiş poligonlar kullanılacak:', dissolve_error)
+        feats = None
+
+    if not feats:
+        info=_call_with_retry(lambda: fc.getInfo()) or {}
+        feats=info.get('features') or []
     if not feats:
         raise ValueError('Vektör geometri üretilemedi; veri boş olabilir.')
     return _enrich_vector_features(feats,class_meta),class_meta
