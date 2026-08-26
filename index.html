@@ -5137,7 +5137,6 @@ function _sylvaHasMixedStackCategories(paneId) {
             a.click();
             document.body.removeChild(a);
             if (typeof playSylvaChime === 'function') playSylvaChime('download');
-            if (typeof sylvaAddAnalysisHistoryEntry === 'function') sylvaAddAnalysisHistoryEntry('CSV', '📥', a.download);
         }).catch(function (err) {
             if (typeof sylvaAlert === 'function') sylvaAlert((_t('err_jspdf', 'Excel file could not be created')) + ': ' + err.message, 'error');
         });
@@ -5321,7 +5320,6 @@ function _sylvaHasMixedStackCategories(paneId) {
             var fname = (filenameBase || 'SylvaGIS_Weather') + '.pdf';
             doc.save(fname);
             if (typeof playSylvaChime === 'function') playSylvaChime('download');
-            if (typeof sylvaAddAnalysisHistoryEntry === 'function') sylvaAddAnalysisHistoryEntry('PDF', '📄', fname);
         }).catch(function (err) {
             if (document.body.contains(reportEl)) document.body.removeChild(reportEl);
             if (typeof sylvaAlert === 'function') sylvaAlert((_t('err_jspdf', 'PDF could not be created')) + ': ' + err.message, 'error');
@@ -5929,27 +5927,6 @@ function _sylvaHasMixedStackCategories(paneId) {
             </div>
             </div><!-- /data-charts-body -->
             </div><!-- /data-charts-section -->
-
-            <div id="analysis-history-section">
-            <h3 class="sylva-sec-hdr" onclick="sylvaToggleSec('analysis-history-body')"><span data-i18n="analysis_history_title">📜 Analiz Geçmişi</span><button type="button" class="sylva-sec-arrow" id="analysis-history-arrow" onclick="event.stopPropagation();sylvaToggleSec('analysis-history-body')" title="Daralt / Genişlet">▼</button></h3>
-            <div id="analysis-history-body" class="sylva-sec-body">
-                <div id="analysis-history-list" style="display:flex; flex-direction:column; gap:6px; max-height:280px; overflow-y:auto;"></div>
-                <div id="analysis-history-empty" style="font-size:0.78rem; color:#94a3b8; text-align:center; padding:14px 8px;" data-i18n="project_none_saved">Kayıtlı proje yok</div>
-            </div>
-            </div><!-- /analysis-history-section -->
-
-            <!-- Proje Kaydet -->
-            <div id="sb-project-manager" style="border:1px solid #e2e8f0; border-radius:8px; padding:10px; background:#f8fafc; display:flex; flex-direction:column; gap:8px; margin-top:5px;">
-                <div id="sb-project-manager-title" style="font-size:0.85rem; font-weight:700; color:#1e3a8a; display:flex; align-items:center; gap:6px;">
-                    🗂️ <span data-i18n="project_manager">Proje Yöneticisi</span>
-                </div>
-                <div style="display:flex; gap:6px;">
-                    <input type="text" id="project-name-input" placeholder="Proje adı..." data-i18n-placeholder="project_name_placeholder" maxlength="60"
-                           style="flex:1; min-width:0; padding:6px 8px; border:1px solid #cbd5e1; border-radius:5px; font-size:0.8rem;">
-                    <button type="button" class="btn-tool" id="btn-save-project" style="flex:none; padding:6px 10px; font-size:0.8rem;" title="Mevcut görünüm ve ayarları kaydet" data-i18n-title="project_save_title" data-i18n="project_save_btn">💾 Kaydet</button>
-                </div>
-                <div id="project-status-msg" style="font-size:0.7rem; color:#64748b; min-height:14px;"></div>
-            </div>
 
             <div style="margin-top: auto; display: flex; flex-direction: column; gap: 10px;">
                 <hr style="border:none; border-top:1px solid #1e3a8a; opacity:0.18; margin:0;">
@@ -9405,76 +9382,6 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
                 window._sylvaMap2ScaleControl._update();
             }
         });
-    })();
-
-    // ===========================================================
-    // Proje Kaydet — sunucu taraflı, anonim kullanıcı kimliği
-    // Klasörden/dosyadan proje yükleme kaldırıldı. Kaydedilen projeler
-    // doğrudan Analiz Geçmişi bölümünde listelenir.
-    // ===========================================================
-    var PROJECT_MANAGER_ENABLED = true;
-    (function () {
-        if (!PROJECT_MANAGER_ENABLED) return;
-        var nameInput = document.getElementById('project-name-input');
-        var saveBtn   = document.getElementById('btn-save-project');
-        var statusEl  = document.getElementById('project-status-msg');
-        if (!nameInput || !saveBtn) return;
-
-        function getClientId() { return window._sylvaAnonymousClientId || 'sylva-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,14); }
-        var CLIENT_ID = getClientId();
-        var API = (typeof API_BASE !== 'undefined' ? API_BASE : '');
-        function api(path, options) {
-            options = options || {};
-            options.headers = Object.assign({'Content-Type':'application/json', 'X-Sylva-Client-Id': CLIENT_ID}, options.headers || {});
-            return fetch(API + path, options).then(function (r) {
-                return r.json().catch(function(){ return {ok:false,error:'Sunucu yanıtı okunamadı.'}; }).then(function(data){
-                    if (!r.ok || data.ok === false || data.success === false) throw new Error(data.error || 'İşlem başarısız.');
-                    return data;
-                });
-            });
-        }
-        function showStatus(msg, isError) {
-            if (!statusEl) return;
-            statusEl.textContent = msg || '';
-            statusEl.style.color = isError ? '#b91c1c' : '#64748b';
-        }
-        function captureLayoutState() {
-            var state = { checkboxes: {}, selects: {}, ranges: {} };
-            var container = document.getElementById('sb-map-layout-options');
-            if (!container) return state;
-            container.querySelectorAll('input[type="checkbox"]').forEach(function (el) { if (el.id && !el.disabled) state.checkboxes[el.id] = el.checked; });
-            container.querySelectorAll('select').forEach(function (el) { if (el.id) state.selects[el.id] = el.value; });
-            container.querySelectorAll('input[type="range"]').forEach(function (el) { if (el.id) state.ranges[el.id] = el.value; });
-            return state;
-        }
-        function applyLayoutState(state) {
-            if (!state) return;
-            Object.keys(state.checkboxes || {}).forEach(function (id) { var el=document.getElementById(id); if(el && !el.disabled && el.checked!==state.checkboxes[id]){el.checked=state.checkboxes[id];el.dispatchEvent(new Event('change'));} });
-            Object.keys(state.selects || {}).forEach(function (id) { var el=document.getElementById(id); if(el && el.value!==state.selects[id]){el.value=state.selects[id];el.dispatchEvent(new Event('change'));} });
-            Object.keys(state.ranges || {}).forEach(function (id) { var el=document.getElementById(id); if(el){el.value=state.ranges[id];el.dispatchEvent(new Event('input'));el.dispatchEvent(new Event('change'));} });
-        }
-        window._sylvaApplySavedProjectLayout = applyLayoutState;
-        function readWorkspace() {
-            try {
-                var wsLayer = window._workspaceLayer || (typeof currentLayer !== 'undefined' ? currentLayer : null);
-                if (wsLayer && typeof wsLayer.toGeoJSON === 'function') return wsLayer.toGeoJSON();
-            } catch (e) {}
-            return null;
-        }
-        saveBtn.addEventListener('click', function(){
-            var name=(nameInput.value||'').trim();
-            if(!name){showStatus((typeof t==='function'?t('project_name_placeholder','Lütfen bir proje adı girin.'):'Lütfen bir proje adı girin.'),true);nameInput.focus();return;}
-            var mapObj=window._sylvaMap || (typeof map!=='undefined'?map:null), center=mapObj?mapObj.getCenter():null;
-            var project={savedAt:new Date().toISOString(),view:center?{lat:center.lat,lng:center.lng,zoom:mapObj.getZoom()}:null,basemap:(typeof currentBasemapKey!=='undefined'?currentBasemapKey:null),scaleUnit:window._sylvaScaleUnit||null,layout:captureLayoutState(),workspace:readWorkspace()};
-            saveBtn.disabled=true;
-            showStatus('Kaydediliyor…',false);
-            api('/api/projects',{method:'POST',body:JSON.stringify({name:name,project:project})}).then(function(){
-                showStatus('"'+name+'" kaydedildi ve Analiz Geçmişi\'ne eklendi.',false);
-                nameInput.value='';
-                if(typeof sylvaLoadAnalysisHistory==='function') sylvaLoadAnalysisHistory();
-            }).catch(function(e){showStatus(e.message||'Proje kaydedilemedi.',true);}).finally(function(){saveBtn.disabled=false;});
-        });
-        nameInput.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();saveBtn.click();}});
     })();
 
     // Checkbox işaretli   → galeri tamamen açık  (display:flex, opacity:1, etkileşimli)
@@ -19181,7 +19088,7 @@ function selectRamp(name) {
                 a.click();
                 document.body.removeChild(a);
                 playSylvaChime('download');
-                sylvaAddAnalysisHistoryEntry('CSV', '📥', a.download);
+
             }).catch(function(err) {
                 sylvaAlert((t('err_jspdf') || 'Excel file could not be created') + ': ' + err.message, 'error');
             });
@@ -19257,7 +19164,7 @@ function selectRamp(name) {
                 }
                 doc.save('SylvaGIS_' + t('file_analiz_raporu') + '.pdf');
                 playSylvaChime('download');
-                sylvaAddAnalysisHistoryEntry('PDF', '📄', 'SylvaGIS_' + t('file_analiz_raporu') + '.pdf');
+
             }).catch(function(err) {
                 if (document.body.contains(reportEl)) document.body.removeChild(reportEl);
                 sylvaAlert((t('err_jspdf') || 'PDF could not be created') + ': ' + err.message, 'error');
@@ -19485,7 +19392,7 @@ function selectRamp(name) {
                         }).then(function(w) {
                             return w.close();
                         }).then(function() {
-                            sylvaAddAnalysisHistoryEntry('Grafik Görseli', '🖼️', filename + ext);
+
                         }).catch(function(e) {
                             if (e.name !== 'AbortError') _fallbackChartDownload(resultBlob, filename + ext);
                         });
@@ -19504,7 +19411,7 @@ function selectRamp(name) {
             a.download = filename;
             document.body.appendChild(a); a.click(); document.body.removeChild(a);
             setTimeout(function() { URL.revokeObjectURL(a.href); }, 2000);
-            sylvaAddAnalysisHistoryEntry('Grafik Görseli', '🖼️', filename);
+
         }
 
         // ── Histogram → 7 bin → bar/pie SVG grafiği ─────────────────
@@ -24596,7 +24503,7 @@ function selectRamp(name) {
                     window.showSaveFilePicker(opts)
                         .then(function(fh) { return fh.createWritable(); })
                         .then(function(w)  { return w.write(blob).then(function() { return w.close(); }); })
-                        .then(function()   { setProgress(100, '✅ ' + name + ' kaydedildi!'); sylvaAddAnalysisHistoryEntry('Harita Çıktısı', '🖨️', name); setTimeout(closeModal, 1200); })
+                        .then(function()   { setProgress(100, '✅ ' + name + ' kaydedildi!'); setTimeout(closeModal, 1200); })
                         .catch(function(e) {
                             if (e.name === 'AbortError') return; // Kullanıcı iptal etti
                             _fallbackDownload(blob, name);
@@ -24615,7 +24522,7 @@ function selectRamp(name) {
                 document.body.removeChild(a);
                 setTimeout(function() { URL.revokeObjectURL(url); }, 2000);
                 setProgress(100, t('export_dl_started'));
-                sylvaAddAnalysisHistoryEntry('Harita Çıktısı', '🖨️', name);
+
                 setTimeout(closeModal, 1000);
             }
 
@@ -26389,7 +26296,7 @@ function downloadRawBands() {
             status.style.border = '1px solid #6ee7b7';
             _lastRawDlResult = { filename: result.filename, bandCount: selectedBands.length, scope: scope, warn: result.warn };
             renderRawDlStatus();
-            sylvaAddAnalysisHistoryEntry('Ham Bant (ZIP)', '🛰️', result.filename);
+
         }
     })
     .catch(function(err) {
@@ -27060,7 +26967,6 @@ function _executeGeoTiffDownloadCore() {
         // Bir sonraki açılışta durum mesajı sıfırdan başlasın
         status.style.display = 'none';
         status.innerHTML = '';
-        sylvaAddAnalysisHistoryEntry('GeoTIFF', '🗺️', res.tifName);
 
         // 🆕 BUG FİX (Arazi Kullanımı/LULC indirmesi ArcMap'te "Could not
         // open the specified file" hatası veriyordu): LULC indirmeleri
@@ -49642,7 +49548,7 @@ function _executeVectorDownloadCore() {
                 .then(function(fh) { return fh.createWritable(); })
                 .then(function(w)  { return w.write(blob).then(function() { return w; }); })
                 .then(function(w)  { return w.close(); })
-                .then(function()   { sylvaAddAnalysisHistoryEntry('Vektör', '📐', finalName); closeVectorDownloadDialog(); })
+                .then(function()   { closeVectorDownloadDialog(); })
                 .catch(function(e) {
                     if (e.name !== 'AbortError') { _vdlFallbackDownload(blob, finalName); }
                     closeVectorDownloadDialog();
@@ -49706,7 +49612,7 @@ function _vdlFallbackDownload(blob, name) {
     document.body.appendChild(a);
     a.click();
     setTimeout(function() { URL.revokeObjectURL(a.href); document.body.removeChild(a); }, 3000);
-    sylvaAddAnalysisHistoryEntry('Vektör', '📐', name);
+
 }
 // Close on overlay click
 (function() {
@@ -51284,80 +51190,6 @@ function sylvaToggleSec(bodyId){
   var col = body.classList.toggle('sec-collapsed');
   if(arrow) arrow.classList.toggle('sec-collapsed', col);
 }
-/* ══════════════════════════════════════════════════
-   SylvaGIS — Analiz Geçmişi (sunucu taraflı, son 10 kayıt)
-   E-posta/Gmail hesabı gerekmez. Tarayıcıya ait rastgele istemci kimliği
-   ile kayıtlar birbirinden ayrılır; büyük dosyalar veritabanına konmaz.
-   ══════════════════════════════════════════════════ */
-var SYLVA_HIST_MAX = 10;
-(function(){
-    var key='sylva_anonymous_client_id_v1';
-    try{
-        var id=localStorage.getItem(key);
-        if(!id){id=(window.crypto&&typeof window.crypto.randomUUID==='function')?window.crypto.randomUUID():'sylva-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,14);localStorage.setItem(key,id);}
-        window._sylvaAnonymousClientId=id;
-    }catch(e){window._sylvaAnonymousClientId='sylva-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,14);}
-})();
-function sylvaHistoryApi(path, options){
-    options=options||{};options.headers=Object.assign({'Content-Type':'application/json','X-Sylva-Client-Id':window._sylvaAnonymousClientId||''},options.headers||{});
-    var base=(typeof API_BASE!=='undefined'?API_BASE:'');
-    return fetch(base+path,options).then(function(r){return r.json().catch(function(){return {ok:false,error:'Sunucu yanıtı okunamadı.'};}).then(function(d){if(!r.ok||d.ok===false)throw new Error(d.error||'İşlem başarısız.');return d;});});
-}
-/* Analiz Geçmişi artık yalnızca kullanıcının "Kaydet" dediği projeleri gösterir.
-   İndirme işlemleri geçmişe eklenmez. */
-function sylvaGetAnalysisHistory(){return window._sylvaProjectHistoryCache||[];}
-function sylvaAddAnalysisHistoryEntry(){ /* Eski indirme çağrıları geriye dönük uyumluluk için etkisizdir. */ }
-function sylvaFormatHistDate(ts){try{var d=new Date(ts),p=function(n){return String(n).padStart(2,'0')};return p(d.getDate())+'.'+p(d.getMonth()+1)+'.'+d.getFullYear()+' '+p(d.getHours())+':'+p(d.getMinutes());}catch(e){return ''}}
-function sylvaProjectApi(path, options){return sylvaHistoryApi(path,options);}
-function sylvaRenderAnalysisHistory(){
-    var listEl=document.getElementById('analysis-history-list'),emptyEl=document.getElementById('analysis-history-empty');if(!listEl)return;
-    var list=sylvaGetAnalysisHistory();
-    if(!list.length){listEl.innerHTML='';if(emptyEl)emptyEl.style.display='block';return;}
-    if(emptyEl)emptyEl.style.display='none';
-    var loadLabel=(typeof t==='function')?t('project_load_btn','📂 Yükle'):'📂 Yükle';
-    var deleteTitle=(typeof t==='function')?t('project_delete_title','Projeyi sil'):'Projeyi sil';
-    listEl.innerHTML=list.map(function(item,idx){
-        var name=String(item.name||'');
-        return '<div class="sylva-hist-item" data-project-name="'+escapeHtml(name)+'">'+
-          '<span class="sylva-hist-icon">🗂️</span>'+
-          '<div class="sylva-hist-body">'+
-            '<div class="sylva-hist-name">'+escapeHtml(name)+'</div>'+
-            '<div class="sylva-hist-meta">'+escapeHtml(sylvaFormatHistDate(item.updated_at ? Date.parse(item.updated_at) : (item.created_at ? Date.parse(item.created_at) : Date.now())))+'</div>'+
-            '<div style="display:flex;gap:5px;margin-top:6px;flex-wrap:wrap;">'+
-              '<button type="button" class="btn-tool sylva-project-show-btn" data-project-name="'+escapeHtml(name)+'" style="font-size:0.72rem;padding:4px 7px;">'+escapeHtml(loadLabel)+'</button>'+
-              '<button type="button" class="btn-tool btn-danger sylva-project-delete-btn" data-project-name="'+escapeHtml(name)+'" title="'+escapeHtml(deleteTitle)+'" style="font-size:0.72rem;padding:4px 7px;">🗑️</button>'+
-            '</div>'+
-          '</div>'+
-        '</div>';}).join('');
-}
-function sylvaLoadAnalysisHistory(){
-    sylvaProjectApi('/api/projects',{method:'GET'}).then(function(data){window._sylvaProjectHistoryCache=data.projects||[];sylvaRenderAnalysisHistory();}).catch(function(e){console.warn('Kayıtlı projeler alınamadı:',e);window._sylvaProjectHistoryCache=[];sylvaRenderAnalysisHistory();});
-}
-function sylvaLoadSavedProject(name, statusEl){
-    if(!name)return;
-    sylvaProjectApi('/api/projects/'+encodeURIComponent(name),{method:'GET'}).then(function(data){
-        var project=data.project||{};var mapObj=window._sylvaMap||(typeof map!=='undefined'?map:null);
-        if(mapObj&&project.view) mapObj.setView([project.view.lat,project.view.lng],project.view.zoom);
-        if(project.basemap&&typeof switchBasemap==='function'&&project.basemap!==currentBasemapKey){switchBasemap(project.basemap);var bmBtn=document.querySelector('[data-bm="'+project.basemap+'"]');if(bmBtn){document.querySelectorAll('[data-bm]').forEach(function(b){b.classList.remove('active');});bmBtn.classList.add('active');}}
-        if(typeof window._sylvaApplySavedProjectLayout==='function') window._sylvaApplySavedProjectLayout(project.layout);
-        if(project.scaleUnit){window._sylvaScaleUnit=project.scaleUnit;try{localStorage.setItem('sylva_scale_unit',project.scaleUnit);}catch(e){}var su=document.getElementById('scale-unit-select');if(su)su.value=project.scaleUnit;if(window._sylvaScaleControl&&typeof window._sylvaScaleControl._update==='function')window._sylvaScaleControl._update();if(window._sylvaMap2ScaleControl&&typeof window._sylvaMap2ScaleControl._update==='function')window._sylvaMap2ScaleControl._update();}
-        try{if(project.workspace&&typeof L.geoJSON==='function'&&typeof setCurrentLayer==='function'){setCurrentLayer(L.geoJSON(project.workspace));}else if(!project.workspace&&typeof clearCurrentLayer==='function'){clearCurrentLayer();}}catch(e){console.warn('Çalışma alanı geri yüklenemedi:',e);}
-        if(statusEl){statusEl.textContent='"'+name+'" yüklendi.';statusEl.style.color='#64748b';}
-    }).catch(function(e){if(statusEl){statusEl.textContent=e.message||'Proje yüklenemedi.';statusEl.style.color='#b91c1c';}});
-}
-document.addEventListener('click',function(e){
-    var load=e.target.closest&&e.target.closest('.sylva-project-show-btn');
-    if(load){sylvaLoadSavedProject(load.getAttribute('data-project-name'),document.getElementById('project-status-msg'));return;}
-    var del=e.target.closest&&e.target.closest('.sylva-project-delete-btn');
-    if(del){
-        var name=del.getAttribute('data-project-name');
-        if(!name||!confirm('"'+name+'" projesi silinsin mi?'))return;
-        del.disabled=true;
-        sylvaProjectApi('/api/projects/'+encodeURIComponent(name),{method:'DELETE'}).then(function(){sylvaLoadAnalysisHistory();}).catch(function(err){console.warn('Proje silinemedi:',err);del.disabled=false;});
-    }
-});
-document.addEventListener('DOMContentLoaded',sylvaLoadAnalysisHistory);
-
 var _pvLock=false;
 function openPrivacyPolicy(){
   if(_pvLock)return; _pvLock=true; setTimeout(function(){_pvLock=false;},600);
@@ -52970,9 +52802,8 @@ rows.forEach(function(row,i){var trigger=row.querySelector('.class-color-trigger
 root.setAttribute('data-sylva-palette-signature',signature)}
 
 /* Analiz geçmişi aktif: kayıtlar anonim istemci kimliği ile sunucu SQLite deposunda tutulur. */
-function disableAnalysisHistory(){var section=document.getElementById('analysis-history-section');if(section){section.style.opacity='';section.style.pointerEvents='';section.removeAttribute('aria-disabled')}}
 
-var queued=false;function refresh(){if(queued)return;queued=true;setTimeout(function(){queued=false;hideEmptyLegendDates();syncNativeClassEditorState();paintInitialClassRows(false);disableAnalysisHistory()},20)}
+var queued=false;function refresh(){if(queued)return;queued=true;setTimeout(function(){queued=false;hideEmptyLegendDates();syncNativeClassEditorState();paintInitialClassRows(false)},20)}
 new MutationObserver(refresh).observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['style','class']});
 document.addEventListener('click',function(e){if(e.target&&e.target.closest('#btn-type-classified'))setTimeout(function(){paintInitialClassRows(true)},20)});
 refresh();
