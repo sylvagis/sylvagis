@@ -52879,6 +52879,24 @@ refresh();
     function sylvaLocalizedNativeClasses(index) {
         var k=String(index||'').toUpperCase();
         if(k==='BUILDING_FOOTPRINT') return null;
+        // 🛠️ BUG FİX (kullanıcı bildirimi — vektör indirmede LULC lejantı
+        // her zaman Türkçe iniyordu): LULC/LULC_ESA/LULC_MODIS/LULC_CORINE
+        // için ekran lejantı (renderAnalysisLegend, bkz. yukarıdaki
+        // LULC_CLASS_DEFS + t(d.key) kullanımı) zaten 30 dilli i18n
+        // anahtarlarıyla doğru çeviriyi gösteriyordu — ama bu fonksiyon
+        // (vektör/KML/SHP/GeoJSON indirmesinin sınıf adlarını taşıyan
+        // localizedClassMeta'nın KAYNAĞI) bu i18n anahtarlarından habersizdi;
+        // bunun yerine aşağıdaki data-legend-classes DOM özniteliğindeki HAM
+        // (her zaman Türkçe) etiketlere düşüyordu. Sonuç: ekran lejantı aktif
+        // dilde, indirilen vektör dosyası her zaman Türkçe. ÇÖZÜM: ekran
+        // lejantıyla AYNI kaynağı (LULC_CLASS_DEFS + t(d.key)) burada da
+        // kullan; böylece raster ve vektör indirmeleri birebir aynı dilde iner.
+        if (typeof window.LULC_CLASS_DEFS !== 'undefined' && window.LULC_CLASS_DEFS[k]) {
+            return window.LULC_CLASS_DEFS[k].map(function(d){
+                var lbl = d.key ? (t(d.key) || d.label) : d.label;
+                return { min: d.code, max: d.code, color: String(d.color || '#64748b'), label: String(lbl) };
+            });
+        }
         var el=document.querySelector('input[name="sylva-module"][data-analysis="'+k+'"]');
         if(!el || (el.getAttribute('data-legend-type')||'').toLowerCase()!=='classified') return null;
         var raw=el.getAttribute('data-legend-classes');
@@ -53628,6 +53646,32 @@ refresh();
                 zip.file(uniqueName(outName), buf);
             });
         }
+        // 🛠️ BUG FİX (kullanıcı bildirimi — birden fazla TOPO analizi
+        // ekranda açıkken vektör indirmesi Eğim(Slope) VE Eş Yükselti için
+        // birlikte "Failed to fetch" ile başarısız oluyordu, ZIP boş
+        // kalıyordu): KÖK NEDEN — raster (GeoTIFF) toplu indirmesinde
+        // (bkz. yukarıdaki _directGeoTiffItem/fetchItem) geçici ağ/ağ
+        // geçidi hatalarına karşı 2 kez otomatik yeniden deneme mekanizması
+        // VARDI, ama vektör toplu indirmesi bu korumayı hiç almamıştı — tek
+        // bir fetch() denenip ilk hata anında o katman doğrudan "başarısız"
+        // olarak işaretleniyordu. Eş Yükselti (her yükselti seviyesi için
+        // ayrı bir sunucu hesaplaması) ve sınıflandırılmış Eğim (her sınıf
+        // için ayrı bir sunucu hesaplaması — bkz. _vectorize_analysis_payload)
+        // gibi AĞIR/uzun süren vektör dönüşümleri, aynı toplu indirmede arka
+        // arkaya çalıştırıldığında ağ geçidi zaman aşımı gibi geçici
+        // sorunlara diğer katmanlardan daha açıktır. ÇÖZÜM: vektör toplu
+        // indirmesine de raster ile BİREBİR AYNI (geçici hata deseni
+        // eşleşirse kısa geri çekilmeyle 2 kez daha deneme) mekanizması
+        // eklendi.
+        function fetchVectorItem(body, fallbackName, label, attempt) {
+            return responseBlobNamed('/api/vector-download', body, fallbackName).catch(function(err) {
+                var transient = /failed to fetch|networkerror|load failed/i.test(String(err && err.message || err));
+                if (!transient || attempt >= 2) throw err;
+                if (status) status.textContent = '⏳ ' + label + ' — ' + _vdlT('vdl_batch_retry_suffix', 'bağlantı yeniden deneniyor') + ' (' + (attempt + 1) + '/2)…';
+                return new Promise(function(resolve) { setTimeout(resolve, 1200 * (attempt + 1)); })
+                    .then(function() { return fetchVectorItem(body, fallbackName, label, attempt + 1); });
+            });
+        }
         var chain=Promise.resolve();
         entries.forEach(function(entry, idx){
             chain=chain.then(function(){
@@ -53637,7 +53681,7 @@ refresh();
                 if(subEl) subEl.textContent='🔄 '+_vdlT('vdl_batch_raster_to_vector_prefix','Raster → vektör → ')+fmt.toUpperCase();
                 var filename=_vectorBatchFilename(entry,n);
                 var body={vectorizePayload:true, payload:entry.payload, format:fmt, filename:filename, crs:'EPSG:4326'};
-                return responseBlobNamed('/api/vector-download', body, filename + (fmt==='shp'?'_shp.zip':'.'+fmt))
+                return fetchVectorItem(body, filename + (fmt==='shp'?'_shp.zip':'.'+fmt), label, 0)
                     .then(function(res){
                         return addBlob(res.blob, entry, res.name);
                     })
