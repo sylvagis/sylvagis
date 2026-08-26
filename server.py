@@ -10631,7 +10631,33 @@ def _vectorize_analysis_payload(data, crs='EPSG:4326'):
     # dönüştür. Böylece NDVI/Eğim/TWI/BSI vb. sınıflandırılmış katmanlarda
     # vektör özellikleri gerçek class_name + color ile eşleşir.
     _payload_breaks = data.get('classBreaks')
-    if isinstance(_payload_breaks, list) and _payload_breaks and index not in LULC_CLASS_DEFS and index != 'TOPO_ASPECT':
+    # 🛠️ BUG FİX (kullanıcı bildirimi — Çevresel/Kentsel Analizler'de Orman
+    # Kaybı ekranda 3 sınıf (Orman/Değişmeyen, Kayıp, Kazanım) gösterirken
+    # indirilen vektörde (KML/SHP/GeoJSON) yalnızca 2, eksik ve YANLIŞ
+    # etiketli sınıf olarak geliyordu): KÖK NEDEN — FOREST_LOSS/URBAN_GROWTH
+    # zaten build_result_image() içinde native 0/1/2 (ya da 0/1) sınıf
+    # kodlarını üretir (bkz. _NATIVE_CATEGORICAL_RASTER_INDICES ve raster
+    # dışa aktarımdaki eşdeğer düzeltme, ~satır 7863). Ancak bu iki koşul
+    # yalnızca `index not in LULC_CLASS_DEFS` kontrolü yaptığından (FOREST_LOSS/
+    # URBAN_GROWTH bu sözlükte YOKTUR — ayrı bir "native" aile), istemciden
+    # classBreaks gelmediğinde aşağıdaki `elif` dalı devreye giriyor ve
+    # zaten kategorik olan 0/1/2 değerlerini SANKİ SÜREKLİ bir değişkenmiş
+    # gibi palette uzunluğuna göre yeniden kutuluyordu (0→1, 1→2, 2→3).
+    # Sonuç: _vector_class_meta()'nın native sözlüğü (kod 0/1/2) artık
+    # üretilen kodlarla (1/2/3) EŞLEŞMİYORDU — kod 0 (Orman/Değişmeyen)
+    # hiç eşleşmediği için TAMAMEN KAYBOLUYOR, kod 1 (gerçek Orman Kaybı)
+    # "Orman (Değişmeyen)" pikselleriyle karışıp yanlışlıkla "Orman Kaybı"
+    # etiketiyle çıkıyor, kod 2 (gerçek Orman Kazanımı) da yanlışlıkla
+    # gerçek kayıp pikselleriyle eşleşiyor, ve gerçek kazanım (kayan kod 3)
+    # hiçbir sınıf koduna karşılık gelmediği için sessizce dışa aktarımdan
+    # DÜŞÜYORDU. ÇÖZÜM: bu native kategorik katmanlar
+    # (_NATIVE_CATEGORICAL_RASTER_INDICES) her iki dalda da LULC_CLASS_DEFS
+    # ile AYNI şekilde hariç tutulur — vector_img, üstteki `final_display`
+    # (native 0/1/2 kodları) olarak KALIR ve _vector_class_meta ile birebir
+    # eşleşir. IMPERVIOUS_CHANGE gibi GERÇEKTEN sürekli (continuous) değişim
+    # katmanları bu istisnaya DAHİL DEĞİLDİR — onlar için palette tabanlı
+    # kutulama davranışı (doğru şekilde) aynen sürüyor.
+    if index not in LULC_CLASS_DEFS and index != 'TOPO_ASPECT' and index not in _NATIVE_CATEGORICAL_RASTER_INDICES and isinstance(_payload_breaks, list) and _payload_breaks:
         try:
             _valid_breaks=[]
             for _b in _payload_breaks[:24]:
@@ -10649,7 +10675,7 @@ def _vectorize_analysis_payload(data, crs='EPSG:4326'):
             # Sınıf aralıkları hatalıysa aşağıdaki palette fallback'i devreye
             # girer; indirme tamamen sessizce bozulmaz.
             vector_img=final_display
-    elif not (isinstance(_payload_breaks, list) and _payload_breaks) and index not in LULC_CLASS_DEFS and index != 'TOPO_ASPECT':
+    elif index not in LULC_CLASS_DEFS and index != 'TOPO_ASPECT' and index not in _NATIVE_CATEGORICAL_RASTER_INDICES and not (isinstance(_payload_breaks, list) and _payload_breaks):
         pal=(vis or {}).get('palette') if isinstance(vis,dict) else None
         if isinstance(pal,list) and len(pal)>1:
             try:
