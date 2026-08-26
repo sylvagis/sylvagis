@@ -2716,6 +2716,100 @@ def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name, legend_labels=No
     return _build_symbology_files_from_classes(out, profile, shifted_info, safe_name, embed_colormap=False)
 
 
+def _build_native_categorical_symbology_zip(tif_bytes, breaks, safe_name):
+    """
+    🛠️ BUG FİX (kullanıcı bildirimi — "Çevresel ve Kentsel Analizler'deki
+    hazır sınıflandırılmış veriler (Orman Kaybı/Kazanımı, Kentsel Gelişim)
+    ArcMap'te ekrandakiyle aynı gelmiyor: lejantta 'Orman (Değişmeyen)'
+    eksik, onlarca gereksiz/boş kutu var, değerler orijinalinden farklı."):
+
+    KÖK NEDEN: FOREST_LOSS/URBAN_GROWTH, sunucuda EMBED_COLORMAP=TRUE
+    kullanan TEK analizdi (bkz. _build_symbology_files_from_classes
+    docstring'indeki Faz 13/14/15 geçmişi) — yani ArcMap'e RAT/VAT
+    sidecar'larının YANINDA bir de GeoTIFF'in içine gömülü bir Color
+    Table (+ NBITS ile daraltılmış bit derinliği) yazılıyordu. Bu, CORINE/
+    ESA/MODIS/Dynamic World'ün (LULC ailesi, _build_lulc_symbology_zip)
+    kullandığı ve ArcMap'te DOĞRULANMIŞ şekilde çalışan yoldan FARKLIYDI —
+    LULC ailesi hiçbir zaman gömülü ColorMap yazmaz, yalnızca ArcMap'in
+    kendi klasik "Value Attribute Table" (RED/GREEN/BLUE alanlı .tif.vat.dbf)
+    kuralına güvenir. Gömülü ColorMap + NBITS kombinasyonu ArcMap'te
+    (rasterio ile bu ortamda doğrulanamayan, sürüme bağlı) tutarsız
+    yorumlanabiliyor: bit derinliği tam uygulanmazsa ArcMap paletin TÜM
+    2^8/2^4 girişini ayrı bir lejant satırı sanıyor (kullanılmayan girişler
+    "boş/siyah kutu" olarak listeleniyor) ve hatta bazı gerçek sınıflar
+    (ör. kod 1 = "Orman Değişmeyen") beklenmedik şekilde görünmez olabiliyor.
+
+    ÇÖZÜM: Bu fonksiyon, FOREST_LOSS/URBAN_GROWTH gibi LULC dışı ama Hansen/
+    Dynamic World kaynaklı, doğal olarak sınıflandırılmış (0/1/2 gibi sabit
+    kodlu) rasterlar için _build_lulc_symbology_zip ile BİREBİR AYNI ilkeyi
+    izler:
+      • Piksellerin GERÇEK sınıf değeri (0, 1, 2 …) korunur — genel amaçlı
+        _classify_by_breaks()'in keyfi kullanıcı aralıkları için kullandığı
+        "1'den başlayan SIRA numarası" kodlaması KULLANILMAZ. Kod, yalnızca
+        0'ı NoData'ya ayırabilmek için gerektiğinde (kodlar 0'dan
+        başlıyorsa) +1 kaydırılır — CORINE (111+)/ESA (10+) gibi zaten 0'dan
+        başlamayan veri setlerinde bu kayma sıfırdır, yani piksel değerleri
+        HİÇ değişmez.
+      • embed_colormap=False: CORINE/ESA/MODIS/Dynamic World'de ArcMap'te
+        sorunsuz otomatik renklendiği doğrulanmış RAT/VAT/.clr tabanlı
+        sembolojiyle aynı yol izlenir; gömülü ColorMap YAZILMAZ.
+      • Yalnızca AOI'de GERÇEKTEN bulunan sınıflar sembolojiye/lejanta dahil
+        edilir (kullanıcının seçmediği veya AOI'de hiç olmayan sınıflar
+        gereksiz boş satır olarak eklenmez).
+    """
+    import numpy as np
+    from rasterio.io import MemoryFile
+
+    code_info = {}
+    for b in (breaks or []):
+        try:
+            lo = int(round(float(b.get('min'))))
+            hi = int(round(float(b.get('max'))))
+        except (TypeError, ValueError):
+            continue
+        if lo != hi:
+            # Bu aile yalnızca tek-değerli (min==max) doğal/sabit sınıflar
+            # için tasarlanmıştır; genel aralıklı sınıflandırma gerekiyorsa
+            # çağıran taraf _classify_by_breaks()'e düşmelidir.
+            continue
+        hexc = _named_color_to_hex(b.get('color') or 'ffffff')
+        try:
+            rgb = tuple(int(hexc[k:k + 2], 16) for k in (0, 2, 4))
+        except ValueError:
+            rgb = (255, 255, 255)
+        label = str(b.get('label') or '').strip() or str(lo)
+        code_info[lo] = (label, rgb)
+
+    if not code_info:
+        return None
+
+    # Dynamic World/LULC ailesiyle AYNI ilke: gerçek kodlar 0'dan başlıyorsa
+    # (FOREST_LOSS: 0/1/2, URBAN_GROWTH: 0/1), 0'ı yalnızca NoData'ya
+    # ayırabilmek için TÜM kodlar +1 kaydırılır. Zaten 0'dan başlamayan bir
+    # sınıf ailesi olsaydı kayma sıfır olur, değerler bire bir korunurdu.
+    shift = 1 if min(code_info.keys()) == 0 else 0
+    shifted_info = {code + shift: v for code, v in code_info.items()}
+
+    with MemoryFile(tif_bytes) as memfile:
+        with memfile.open() as src:
+            band = src.read(1).astype(np.float64)
+            profile = src.profile.copy()
+            src_nodata = src.nodata
+
+    valid = np.isfinite(band)
+    if src_nodata is not None:
+        valid &= ~np.isclose(band, float(src_nodata))
+
+    rounded = np.rint(band).astype(np.int64)
+    present_original = set(int(v) for v in np.unique(rounded[valid]))
+    present_shifted = set(v + shift for v in present_original)
+    shifted_info = {k: v for k, v in shifted_info.items() if k in present_shifted}
+    out = np.where(valid, rounded + shift, 0)
+    out = np.clip(out, 0, 255).astype(np.uint8)
+
+    return _build_symbology_files_from_classes(out, profile, shifted_info, safe_name, embed_colormap=False)
+
+
 def _build_rgb_symbology_zip(tif_bytes, safe_name):
     """🛰️ Gerçek Uydu Görüntüsü (doğal renk RGB kompoziti) indirmeleri için.
     Bu FİZİKSEL olarak 3 bantlı bir görüntüdür — LULC/sınıflandırılmış
@@ -8047,23 +8141,22 @@ def download_geotiff():
                 print('[SylvaGIS] ⚠️ LULC renk tablosu/RAT oluşturulamadı, ham .tif '
                       'olarak devam ediliyor: {}'.format(sym_err))
         elif is_native_categorical and requested_breaks:
+            # 🛠️ BUG FİX (kullanıcı bildirimi — "Orman Kaybı/Kazanımı ArcMap'te
+            # ekrandakiyle aynı gelmiyor, lejantta 'Orman Değişmeyen' eksik,
+            # onlarca gereksiz boş kutu var, değerler orijinalinden farklı"):
             # FOREST_LOSS / URBAN_GROWTH gibi LULC dışı ama doğal olarak
-            # sınıflandırılmış rasterlar: ham sınıf kodlarını NEAREST ile koru,
-            # ardından yalnızca GERÇEKTEN kullanılan sınıfları 1..N kodlarına
-            # paketle. Böylece 0/1/2 gibi gerçek sınıflar kaybolmaz; ArcMap'e
-            # de yalnızca gerçek renk/lejant girişleri (artı tek NoData girişi)
-            # gider.
+            # sınıflandırılmış (0/1/2 gibi sabit kodlu) rasterlar artık
+            # CORINE/ESA/MODIS/Dynamic World ile BİREBİR AYNI, ArcMap'te
+            # doğrulanmış yolu (_build_native_categorical_symbology_zip —
+            # gerçek sınıf değerlerini koruyan, embed_colormap=False RAT/VAT/
+            # .clr tabanlı sembolojiyi) kullanır. Önceki hâl, sunucudaki TEK
+            # embed_colormap=True çağrısıydı ve gömülü ColorMap+NBITS
+            # kombinasyonu ArcMap'te "boş kutu" ve kaybolan sınıf sorununu
+            # üretiyordu (bkz. _build_native_categorical_symbology_zip
+            # docstring'i).
             try:
-                with __import__('rasterio').io.MemoryFile(tif_bytes) as _mf:
-                    with _mf.open() as _src:
-                        _band = _src.read(1).astype(float)
-                        _profile = _src.profile.copy()
-                        _valid = __import__('numpy').isfinite(_band)
-                        if _src.nodata is not None:
-                            _valid &= ~__import__('numpy').isclose(_band, float(_src.nodata))
-                _byte, _codes = _classify_by_breaks(_band, _valid, requested_breaks)
-                sym_files = _build_symbology_files_from_classes(
-                    _byte, _profile, _codes, safe_name, embed_colormap=True
+                sym_files = _build_native_categorical_symbology_zip(
+                    tif_bytes, requested_breaks, safe_name
                 )
             except Exception as sym_err:
                 traceback.print_exc()
