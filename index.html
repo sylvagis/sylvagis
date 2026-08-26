@@ -1034,6 +1034,20 @@ tr.class-highlight-active {
             padding: 5px 7px; font-weight: 700; color: #1e3a8a; font-size: 0.7rem;
             border-bottom: 1px solid #e2e8f0;
         }
+        /* 🆕 Hava Durumu paneli başlığındaki indirme (📥) ve bilgi (i) butonları.
+           İndirme butonu, uygulamanın diğer yerlerindeki küçük yuvarlak
+           butonlarla aynı ölçüde ama kendi ikonuyla; bilgi butonu ise
+           uygulamada zaten kullanılan .env-info-btn sınıfının AYNISI
+           (görsel tutarlılık için kasıtlı olarak yeniden kullanılıyor). */
+        .sylva-weather-head-btn {
+            width: 15px; height: 15px; min-width: 15px; padding: 0; border: 1px solid #cbd5e1;
+            border-radius: 50%; background: #fff; color: #1677d2; font-size: 9px; line-height: 13px;
+            text-align: center; cursor: pointer; box-shadow: 0 1px 1px rgba(100,116,139,0.4);
+            display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto;
+        }
+        .sylva-weather-head-btn:hover, .sylva-weather-head-btn:focus {
+            background: #eff6ff; outline: 2px solid #93c5fd; outline-offset: 1px;
+        }
         .sylva-weather-panel-list { max-height: 220px; overflow-y: auto; padding: 2px 0; }
         .sylva-weather-day-row {
             display: grid; grid-template-columns: auto 1fr; gap: 2px 6px; align-items: center;
@@ -5417,9 +5431,25 @@ function _sylvaCountVisibleGeeLayers(paneId) {
                 : ('📍 ' + escapeHtml(_t('weather_single_point', 'Single point')) + (coordTxt ? (' — ' + coordTxt) : ''));
             transparencyHtml = '<div style="font-size:0.6rem;color:#94a3b8;font-weight:400;">' + modeTxt + '</div>';
         }
+        // 🆕 Başlık satırı: sol tarafta panel adı, sağ tarafta indirme (📥) ve
+        // bilgi (i) butonları — kullanıcının talebiyle eklendi. Bilgi butonu
+        // uygulamanın diğer yerlerinde bilgilendirme için kullanılan beyaz
+        // yuvarlak "i" kutusuyla (.env-info-btn) BİREBİR AYNI görsel dilde.
+        var dlBtnTitle = escapeHtml(_t('weather_download_btn_title', 'Hava durumu verisini indir (Excel / PDF)'));
+        var infoBtnTitle = escapeHtml(_t('weather_info_btn_title', 'Bu veri hakkında bilgi'));
+        var headBtnsHtml =
+            '<span style="display:flex;align-items:center;gap:5px;flex:0 0 auto;">' +
+                '<button type="button" class="sylva-weather-head-btn" title="' + dlBtnTitle + '" aria-label="' + dlBtnTitle + '" ' +
+                    'onclick="event.stopPropagation();window._wxOpenExportDialog(\'' + paneId + '\')">📥</button>' +
+                '<button type="button" class="env-info-btn" title="' + infoBtnTitle + '" aria-label="' + infoBtnTitle + '" ' +
+                    'onclick="event.stopPropagation();window._wxOpenInfoDialog(\'' + paneId + '\')">i</button>' +
+            '</span>';
         panel.innerHTML =
             '<div class="sylva-weather-panel-head" style="display:block;">' +
-                '<div><span>🌦️ ' + escapeHtml(_t('weather_panel_title', 'Weather (Last 30 Days)')) + '</span></div>' +
+                '<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;">' +
+                    '<span>🌦️ ' + escapeHtml(_t('weather_panel_title', 'Weather (Last 30 Days)')) + '</span>' +
+                    headBtnsHtml +
+                '</div>' +
                 transparencyHtml +
             '</div>' +
             '<div class="sylva-weather-panel-list">' + rows + '</div>';
@@ -5492,6 +5522,10 @@ function _sylvaCountVisibleGeeLayers(paneId) {
         panel.addEventListener('mousedown', function (e) {
             var head = e.target.closest ? e.target.closest('.sylva-weather-panel-head') : null;
             if (!head) return; // yalnızca başlıktan sürüklenebilir
+            // 🆕 Başlıktaki indirme (📥) / bilgi (i) butonlarına tıklamak
+            // sürüklemeyi BAŞLATMASIN — yoksa buton tıklaması yerine panel
+            // sürüklenmeye başlar ve tıklama olayı (click) tetiklenmeyebilir.
+            if (e.target.closest && e.target.closest('button')) return;
             e.preventDefault();
             var pRect = panel.getBoundingClientRect();
             var cRect = container.getBoundingClientRect();
@@ -5528,6 +5562,305 @@ function _sylvaCountVisibleGeeLayers(paneId) {
     }
     _wxInitDrag('weather-panel-map', 'map-wrapper-inner');
     _wxInitDrag('weather-panel-map2', 'map2-wrapper');
+
+    // ════════════════════════════════════════════════════════════════
+    // 🆕 1) İNDİRME (Excel / PDF) — panel başlığındaki 📥 butonuna
+    //    tıklanınca dosya adı + format (Excel/PDF) seçilebilen küçük bir
+    //    diyalog açılır; "indirme yeri" tarayıcının kendi "Farklı Kaydet"
+    //    davranışına bırakılır (mevcut Grafik İndirme diyaloğuyla — bkz.
+    //    openChartDownloadDialog/executeChartDownload — AYNI mantık).
+    // ════════════════════════════════════════════════════════════════
+    function _wxSheetRows(paneId) {
+        var st = STATE[paneId === 'map2' ? 'map2' : 'map'];
+        var _t = (typeof t === 'function') ? t : function (k, f) { return f || k; };
+        var days = (st.days || []).slice().sort(function (a, b) {
+            return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0);
+        });
+        var header = [
+            _t('lbl_date', 'Date'), _t('lbl_temp_min', 'Min Temp'), _t('lbl_temp_max', 'Max Temp'),
+            _t('lbl_temp_avg', 'Avg Temp'), _t('lbl_precipitation', 'Precipitation'), _t('lbl_humidity', 'Humidity')
+        ];
+        var rows = [header.map(function (h) { return { v: h, n: false }; })];
+        days.forEach(function (day) {
+            rows.push([
+                { v: day.date || '', n: false },
+                { v: (typeof day.tempMin === 'number') ? day.tempMin : '', n: (typeof day.tempMin === 'number') },
+                { v: (typeof day.tempMax === 'number') ? day.tempMax : '', n: (typeof day.tempMax === 'number') },
+                { v: (typeof day.tempMean === 'number') ? day.tempMean : '', n: (typeof day.tempMean === 'number') },
+                { v: (typeof day.precipitation === 'number') ? day.precipitation : '', n: (typeof day.precipitation === 'number') },
+                { v: (typeof day.humidity === 'number') ? day.humidity : '', n: (typeof day.humidity === 'number') }
+            ]);
+        });
+        return rows;
+    }
+
+    // Gerçek bir .xlsx (Open XML) paketi — mevcut downloadCSV() ile AYNI
+    // yöntem (JSZip ile elle paketleme), ama kaynak veri DOM tablosu değil
+    // st.days (hava durumu API yanıtı).
+    function _wxBuildXlsx(paneId, filenameBase) {
+        var st = STATE[paneId === 'map2' ? 'map2' : 'map'];
+        var _t = (typeof t === 'function') ? t : function (k, f) { return f || k; };
+        if (!st.days || !st.days.length) { if (typeof sylvaAlert === 'function') sylvaAlert(_t('run_first', 'Run an analysis first'), 'info'); return; }
+        if (typeof JSZip === 'undefined') { if (typeof sylvaAlert === 'function') sylvaAlert(_t('err_jspdf', 'JSZip library could not be loaded.'), 'error'); return; }
+
+        function xmlEscapeLocal(s) {
+            return String(s).replace(/[&<>"']/g, function (ch) {
+                return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[ch];
+            });
+        }
+        function colLetterLocal(idx) {
+            var s = ''; idx++;
+            while (idx > 0) { var rem = (idx - 1) % 26; s = String.fromCharCode(65 + rem) + s; idx = Math.floor((idx - 1) / 26); }
+            return s;
+        }
+        function sanitizeSheetNameLocal(name) {
+            var cleaned = String(name || '').replace(/[\[\]:*?/\\]/g, ' ').trim();
+            cleaned = cleaned.slice(0, 31).replace(/^'+/, '').replace(/'+$/, '');
+            return cleaned || 'Weather';
+        }
+
+        var rowsData = _wxSheetRows(paneId);
+        var sheetRowsXml = rowsData.map(function (vals, rIdx) {
+            var cellsXml = vals.map(function (cell, cIdx) {
+                var ref = colLetterLocal(cIdx) + (rIdx + 1);
+                if (cell.n && cell.v !== '' && !isNaN(Number(cell.v))) return '<c r="' + ref + '"><v>' + Number(cell.v) + '</v></c>';
+                return '<c r="' + ref + '" t="inlineStr"><is><t xml:space="preserve">' + xmlEscapeLocal(cell.v) + '</t></is></c>';
+            }).join('');
+            return '<row r="' + (rIdx + 1) + '">' + cellsXml + '</row>';
+        }).join('');
+
+        var contentTypesXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+            '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+            '<Default Extension="xml" ContentType="application/xml"/>' +
+            '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+            '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
+            '</Types>';
+        var rootRelsXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>' +
+            '</Relationships>';
+        var workbookXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+            '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+            '<sheets><sheet name="' + xmlEscapeLocal(sanitizeSheetNameLocal(_t('weather_panel_title', 'Weather'))) + '" sheetId="1" r:id="rId1"/></sheets>' +
+            '</workbook>';
+        var workbookRelsXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>' +
+            '</Relationships>';
+        var sheetXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+            '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+            '<sheetData>' + sheetRowsXml + '</sheetData>' +
+            '</worksheet>';
+
+        var zip = new JSZip();
+        zip.file('[Content_Types].xml', contentTypesXml);
+        zip.folder('_rels').file('.rels', rootRelsXml);
+        var xl = zip.folder('xl');
+        xl.file('workbook.xml', workbookXml);
+        xl.folder('_rels').file('workbook.xml.rels', workbookRelsXml);
+        xl.folder('worksheets').file('sheet1.xml', sheetXml);
+
+        zip.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }).then(function (blob) {
+            var a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = (filenameBase || 'SylvaGIS_Weather') + '.xlsx';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            if (typeof playSylvaChime === 'function') playSylvaChime('download');
+            if (typeof sylvaAddAnalysisHistoryEntry === 'function') sylvaAddAnalysisHistoryEntry('CSV', '📥', a.download);
+        }).catch(function (err) {
+            if (typeof sylvaAlert === 'function') sylvaAlert((_t('err_jspdf', 'Excel dosyası oluşturulamadı')) + ': ' + err.message, 'error');
+        });
+    }
+
+    // PDF: downloadPDF() ile AYNI yöntem (html2canvas ile TARAYICININ KENDİ
+    // Unicode fontuyla görsele dönüştürüp jsPDF'e PNG olarak gömme — RTL ve
+    // Latin-olmayan diller dahil TÜM diller sorunsuz görünsün diye).
+    function _wxBuildPdf(paneId, filenameBase) {
+        var st = STATE[paneId === 'map2' ? 'map2' : 'map'];
+        var _t = (typeof t === 'function') ? t : function (k, f) { return f || k; };
+        if (!st.days || !st.days.length) { if (typeof sylvaAlert === 'function') sylvaAlert(_t('run_first', 'Run an analysis first'), 'info'); return; }
+        var jspdfLib = window.jspdf || window.jsPDF;
+        if (!jspdfLib) { if (typeof sylvaAlert === 'function') sylvaAlert(_t('err_jspdf', 'jsPDF library could not be loaded.'), 'error'); return; }
+        if (typeof html2canvas === 'undefined') { if (typeof sylvaAlert === 'function') sylvaAlert(_t('err_jspdf', 'html2canvas library could not be loaded.'), 'error'); return; }
+        var JsPDF = jspdfLib.jsPDF || jspdfLib;
+        var isRTL = !!(typeof SYLVA_RTL !== 'undefined' && typeof _sylvaLang !== 'undefined' && SYLVA_RTL[_sylvaLang]);
+
+        var rowsData = _wxSheetRows(paneId);
+        var header = rowsData[0];
+        var bodyRows = rowsData.slice(1);
+
+        var reportEl = document.createElement('div');
+        reportEl.style.cssText = 'position:fixed;left:-100000px;top:0;background:#ffffff;padding:24px;' +
+            'width:640px;box-sizing:border-box;font-family:Arial,"Segoe UI","Noto Sans",sans-serif;' +
+            'direction:' + (isRTL ? 'rtl' : 'ltr') + ';color:#0f172a;';
+
+        var titleTxt = escapeHtml(_t('weather_panel_title', 'Weather (Last 30 Days)'));
+        var metaTxt = '';
+        if (st.pointsUsed && st.pointsUsed.length) {
+            var n = st.pointsUsed.length;
+            metaTxt = (n > 1)
+                ? ('📍 ' + n + '× ' + escapeHtml(_t('weather_area_avg', 'Area average')) + (st.aoiDiagonalKm ? (' (~' + Math.round(st.aoiDiagonalKm) + ' km)') : ''))
+                : ('📍 ' + escapeHtml(_t('weather_single_point', 'Single point')));
+        }
+        reportEl.innerHTML =
+            '<div style="font-size:20px;font-weight:700;margin-bottom:4px;">' + titleTxt + '</div>' +
+            '<div style="font-size:12px;color:#64748b;margin-bottom:4px;">' + escapeHtml(_t('pdf_date_label', 'Date:')) + ' ' + new Date().toLocaleDateString(typeof _sylvaLang !== 'undefined' ? _sylvaLang : undefined) + '</div>' +
+            (metaTxt ? ('<div style="font-size:12px;color:#64748b;margin-bottom:16px;">' + metaTxt + '</div>') : '<div style="margin-bottom:16px;"></div>');
+
+        var table = document.createElement('table');
+        table.style.width = '100%'; table.style.borderCollapse = 'collapse'; table.style.fontSize = '13px';
+        var thead = document.createElement('thead'); var trh = document.createElement('tr');
+        header.forEach(function (h) {
+            var th = document.createElement('th');
+            th.textContent = h.v; th.style.padding = '8px 6px'; th.style.background = '#1e3a8a';
+            th.style.color = '#ffffff'; th.style.borderBottom = '1px solid #cbd5e1'; th.style.textAlign = isRTL ? 'right' : 'left';
+            trh.appendChild(th);
+        });
+        thead.appendChild(trh); table.appendChild(thead);
+        var tbody = document.createElement('tbody');
+        bodyRows.forEach(function (vals) {
+            var tr = document.createElement('tr');
+            vals.forEach(function (cell) {
+                var td = document.createElement('td');
+                td.textContent = (cell.v === '' || cell.v === undefined || cell.v === null) ? '—' : String(cell.v);
+                td.style.padding = '6px 6px'; td.style.borderBottom = '1px solid #e2e8f0';
+                tr.appendChild(td);
+            });
+            tbody.appendChild(tr);
+        });
+        table.appendChild(tbody);
+        reportEl.appendChild(table);
+        document.body.appendChild(reportEl);
+
+        html2canvas(reportEl, { backgroundColor: '#ffffff', scale: 2, useCORS: true }).then(function (canvas) {
+            if (document.body.contains(reportEl)) document.body.removeChild(reportEl);
+            var doc = new JsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+            var pageW = doc.internal.pageSize.getWidth();
+            var pageH = doc.internal.pageSize.getHeight();
+            var margin = 24;
+            var imgW = pageW - margin * 2;
+            var pxToPt = imgW / canvas.width;
+            var pageContentPx = (pageH - margin * 2) / pxToPt;
+            var y = 0, first = true;
+            while (y < canvas.height) {
+                var sliceH = Math.min(pageContentPx, canvas.height - y);
+                var sliceCanvas = document.createElement('canvas');
+                sliceCanvas.width = canvas.width; sliceCanvas.height = sliceH;
+                sliceCanvas.getContext('2d').drawImage(canvas, 0, y, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
+                if (!first) doc.addPage();
+                doc.addImage(sliceCanvas.toDataURL('image/png'), 'PNG', margin, margin, imgW, sliceH * pxToPt);
+                y += sliceH; first = false;
+            }
+            var fname = (filenameBase || 'SylvaGIS_Weather') + '.pdf';
+            doc.save(fname);
+            if (typeof playSylvaChime === 'function') playSylvaChime('download');
+            if (typeof sylvaAddAnalysisHistoryEntry === 'function') sylvaAddAnalysisHistoryEntry('PDF', '📄', fname);
+        }).catch(function (err) {
+            if (document.body.contains(reportEl)) document.body.removeChild(reportEl);
+            if (typeof sylvaAlert === 'function') sylvaAlert((_t('err_jspdf', 'PDF oluşturulamadı')) + ': ' + err.message, 'error');
+        });
+    }
+
+    // Dosya adı + format seçim diyaloğu (mevcut Grafik İndirme diyaloğuyla
+    // AYNI görsel dil — bkz. #chart-download-modal).
+    window._wxOpenExportDialog = function (paneId) {
+        var st = STATE[paneId === 'map2' ? 'map2' : 'map'];
+        var _t = (typeof t === 'function') ? t : function (k, f) { return f || k; };
+        if (!st.days || !st.days.length) { if (typeof sylvaAlert === 'function') sylvaAlert(_t('run_first', 'Run an analysis first'), 'info'); return; }
+        var old = document.querySelector('.sylva-weather-export-backdrop');
+        if (old) old.remove();
+        var defaultName = 'SylvaGIS_' + String(_t('weather_panel_title', 'Weather')).replace(/[^\p{L}\p{N}]+/gu, '_').replace(/^_+|_+$/g, '');
+        var html =
+            '<div class="sylva-weather-export-backdrop" style="position:fixed;inset:0;background:rgba(0,0,0,0.52);z-index:99999;display:flex;align-items:center;justify-content:center;">' +
+            '<div style="background:#fff;border-radius:10px;padding:28px 24px 20px;width:340px;max-width:92vw;box-shadow:0 12px 40px rgba(0,0,0,0.25);position:relative;box-sizing:border-box;">' +
+            '<h3 style="color:#1e3a8a;margin:0 0 18px;font-size:1rem;">' + escapeHtml(_t('weather_export_dialog_title', '📥 Hava Durumu Verisini İndir')) + '</h3>' +
+            '<div style="margin-bottom:14px;">' +
+            '<label style="font-size:0.82rem;font-weight:600;color:#64748b;display:block;margin-bottom:6px;">' + escapeHtml(_t('lbl_format', 'Format')) + '</label>' +
+            '<div style="display:flex;gap:16px;">' +
+            '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.85rem;"><input type="radio" name="wx-dl-fmt" value="xlsx" checked> ' + escapeHtml(_t('weather_export_fmt_xlsx', 'Excel (.xlsx)')) + '</label>' +
+            '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.85rem;"><input type="radio" name="wx-dl-fmt" value="pdf"> ' + escapeHtml(_t('weather_export_fmt_pdf', 'PDF')) + '</label>' +
+            '</div>' +
+            '</div>' +
+            '<div style="margin-bottom:20px;">' +
+            '<label for="wx-dl-filename" style="font-size:0.82rem;font-weight:600;color:#64748b;display:block;margin-bottom:6px;">' + escapeHtml(_t('lbl_filename', 'Dosya Adı')) + '</label>' +
+            '<input type="text" id="wx-dl-filename" value="' + escapeHtml(defaultName) + '" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:5px;font-size:0.85rem;outline:none;box-sizing:border-box;">' +
+            '</div>' +
+            '<p style="font-size:0.72rem;color:#94a3b8;margin-bottom:14px;">' + escapeHtml(_t('chart_dl_hint', '💡 Kayıt konumu için klasör seçimi destekleniyorsa otomatik açılır; desteklenmiyorsa Tarayıcı İndirmeler klasörüne kaydedilir.')) + '</p>' +
+            '<div style="display:flex;gap:8px;justify-content:flex-end;">' +
+            '<button type="button" class="sylva-weather-export-cancel" style="padding:8px 18px;border:1px solid #cbd5e1;border-radius:5px;cursor:pointer;background:#f1f5f9;font-size:0.85rem;color:#475569;">' + escapeHtml(_t('btn_cancel', 'İptal')) + '</button>' +
+            '<button type="button" class="sylva-weather-export-go" style="padding:8px 18px;background:#1e3a8a;color:#fff;border:none;border-radius:5px;cursor:pointer;font-weight:600;font-size:0.85rem;">⬇️ ' + escapeHtml(_t('btn_download', 'İndir')) + '</button>' +
+            '</div>' +
+            '</div>' +
+            '</div>';
+        document.body.insertAdjacentHTML('beforeend', html);
+        var backdrop = document.querySelector('.sylva-weather-export-backdrop');
+        if (!backdrop) return;
+        function closeDlg() { if (backdrop && backdrop.parentNode) backdrop.parentNode.removeChild(backdrop); document.removeEventListener('keydown', escHandler); }
+        function escHandler(e) { if (e.key === 'Escape') closeDlg(); }
+        backdrop.addEventListener('click', function (e) { if (e.target === backdrop) closeDlg(); });
+        backdrop.querySelector('.sylva-weather-export-cancel').addEventListener('click', closeDlg);
+        backdrop.querySelector('.sylva-weather-export-go').addEventListener('click', function () {
+            var fmtEl = backdrop.querySelector('input[name="wx-dl-fmt"]:checked');
+            var fnInput = document.getElementById('wx-dl-filename');
+            var format = fmtEl ? fmtEl.value : 'xlsx';
+            var baseName = (fnInput ? fnInput.value.trim() : '') || defaultName;
+            closeDlg();
+            if (format === 'pdf') { _wxBuildPdf(paneId, baseName); } else { _wxBuildXlsx(paneId, baseName); }
+        });
+        document.addEventListener('keydown', escHandler);
+    };
+
+    // ════════════════════════════════════════════════════════════════
+    // 🆕 2) BİLGİLENDİRME — panel başlığındaki "i" butonuna tıklanınca,
+    //    uygulamanın diğer yerlerinde kullanılan .env-info-backdrop /
+    //    .env-info-modal / .env-info-close CSS sınıfları (AYNEN, yeni CSS
+    //    eklemeden) yeniden kullanılarak bir bilgi kutusu açılır: verinin
+    //    kaynağı, çözünürlüğü/doğruluk sınırı, o anki analiz için
+    //    kullanılan yöntem (tek nokta / alan ortalaması — dinamik), tarih
+    //    aralığı ve genel bir uyarı notu.
+    // ════════════════════════════════════════════════════════════════
+    window._wxOpenInfoDialog = function (paneId) {
+        var st = STATE[paneId === 'map2' ? 'map2' : 'map'];
+        var _t = (typeof t === 'function') ? t : function (k, f) { return f || k; };
+        var old = document.querySelector('.sylva-weather-info-backdrop');
+        if (old) old.remove();
+
+        var methodTxt;
+        if (st.pointsUsed && st.pointsUsed.length > 1) {
+            methodTxt = _t('weather_info_method_area',
+                'Çalışma alanınız yeterince büyük/uzun olduğu için (köşegen ~{km} km), çizdiğiniz sınırların İÇİNE düşen {n} farklı noktadan ayrı ayrı veri alınıp ORTALAMASI gösteriliyor.')
+                .replace('{km}', st.aoiDiagonalKm ? Math.round(st.aoiDiagonalKm) : '—')
+                .replace('{n}', st.pointsUsed.length);
+        } else {
+            methodTxt = _t('weather_info_method_point',
+                'Çalışma alanınız yeterince küçük olduğu için, alanın merkez (sınırlayıcı kutu) noktasından TEK nokta verisi gösteriliyor.');
+        }
+
+        var html =
+            '<div class="env-info-backdrop sylva-weather-info-backdrop">' +
+            '<section class="env-info-modal" role="dialog" aria-modal="true" style="width:min(420px,100%);">' +
+            '<button type="button" class="env-info-close" aria-label="Close">×</button>' +
+            '<h2>' + escapeHtml(_t('weather_info_title', '🌦️ Bu Veri Hakkında')) + '</h2>' +
+            '<p><b>' + escapeHtml(_t('weather_info_source_label', 'Kaynak:')) + '</b> ' + escapeHtml(_t('weather_info_source_text', 'Open-Meteo Historical Weather (Archive) API — ERA5/ERA5-Land yeniden analiz (reanalysis) verisi. Gerçek bir hava istasyonu ölçümü DEĞİLDİR; modellenmiş/uydu tabanlı bir tahmindir.')) + '</p>' +
+            '<p style="margin-top:10px;"><b>' + escapeHtml(_t('weather_info_resolution_label', 'Çözünürlük:')) + '</b> ' + escapeHtml(_t('weather_info_resolution_text', '~9-11 km. Bu nedenle vadi, tepe, kıyı etkisi gibi küçük yerel farklar tam olarak yansımayabilir.')) + '</p>' +
+            '<p style="margin-top:10px;"><b>' + escapeHtml(_t('weather_info_method_label', 'Yöntem:')) + '</b> ' + escapeHtml(methodTxt) + '</p>' +
+            '<p style="margin-top:10px;"><b>' + escapeHtml(_t('weather_info_range_label', 'Tarih Aralığı:')) + '</b> ' + escapeHtml(_t('weather_info_range_text', 'Analizin referans tarihinden geriye doğru en fazla 30 gün.')) + '</p>' +
+            '<div class="info-note">' + escapeHtml(_t('weather_info_disclaimer', '⚠️ Bu veriler genel eğilim takibi ve planlama amaçlıdır; kritik/yasal kararlar için resmi meteoroloji kurumlarının ölçüm verileri kullanılmalıdır.')) + '</div>' +
+            '</section>' +
+            '</div>';
+        document.body.insertAdjacentHTML('beforeend', html);
+        var backdrop = document.querySelector('.sylva-weather-info-backdrop');
+        if (!backdrop) return;
+        function closeDlg() { if (backdrop && backdrop.parentNode) backdrop.parentNode.removeChild(backdrop); document.removeEventListener('keydown', escHandler); }
+        function escHandler(e) { if (e.key === 'Escape') closeDlg(); }
+        backdrop.addEventListener('click', function (e) { if (e.target === backdrop || (e.target.closest && e.target.closest('.env-info-close'))) closeDlg(); });
+        document.addEventListener('keydown', escHandler);
+        var closeBtn = backdrop.querySelector('.env-info-close');
+        if (closeBtn) closeBtn.focus();
+    };
 })();
 </script>
 
@@ -15171,6 +15504,20 @@ function selectRamp(name) {
         }
 
         function runAnalysis() {
+            // 🆕 Her "Analizi Çalıştır" tıklamasında "🌦️ Hava Durumu" kutucuğu
+            // OTOMATİK olarak kapatılır (işareti kaldırılır) — kullanıcının
+            // isteği: önceki analizde açık kalmış olsa bile, YENİ bir analize
+            // geçince hava durumu paneli ekranda otomatik görünmesin; kullanıcı
+            // isterse sonradan kendi eliyle tekrar işaretleyebilir. Bu hem Zaman
+            // Serisi hem normal analiz akışını kapsasın diye fonksiyonun EN
+            // BAŞINDA (aşağıdaki Zaman Serisi yönlendirmesinden ÖNCE) yapılır.
+            (function () {
+                var _wxToggle = document.getElementById('toggle-weather');
+                if (_wxToggle && _wxToggle.checked) {
+                    _wxToggle.checked = false;
+                    if (typeof window._sylvaWeatherToggleChanged === 'function') window._sylvaWeatherToggleChanged(false);
+                }
+            })();
             // 🛠️ BUG FİX (KÖK NEDEN): "📈 Zaman Serisi ve Değişim Analizi" bölümünde
             // bir periyot (Aylık/Yıllık) seçiliyken, kullanıcı ts-start-year/
             // ts-end-year/ts-cloud-pct değerlerini girip genel "🚀 Analizi Çalıştır"
