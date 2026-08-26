@@ -69,6 +69,44 @@ def _sylva_safe_filename(text, allow_dots=True):
     return cleaned.strip('_. ')
 
 
+def _content_disposition(filename):
+    """Verilen (uzantılı) dosya adından RFC 6266 uyumlu bir Content-Disposition
+    header DEĞERİ üretir.
+
+    🛠️ BUG FİX (kullanıcı bildirimi — "Arazi Kullanımı (Dynamic World) Türkçe
+    arayüzde sorunsuz iniyor ama diğer 29 dilin çoğunda hiç inmiyor", hem
+    raster hem vektör): KÖK NEDEN — dosya adı, aktif arayüz dilindeki analiz
+    başlığından üretiliyor (_sylva_safe_filename Unicode harfleri BİLEREK
+    koruyor — bkz. yukarıdaki fonksiyon docstring'i, "Korece/Arapça/Çince/
+    Kiril kaybolmasın" amacıyla). Bu Unicode dosya adı doğrudan
+    'Content-Disposition: attachment; filename="..."' header'ına
+    yerleştiriliyordu. HTTP header değerleri yalnızca Latin-1 (ISO-8859-1)
+    baytlarını kabul eder (bkz. PEP 3333/WSGI) — Türkçe ("Güncel" gibi yalnızca
+    ü/ö/ş içeren dosya adları TESADÜFEN Latin-1 sınırları içinde kaldığı için
+    çalışıyordu), ama Korece/Çince/Japonca/Arapça/Farsça/Kiril/Tayca/Bengalce/
+    Gürcüce/Yunanca gibi Latin-1 DIŞI karakterler içeren diğer ~25 dilde,
+    Flask/Werkzeug yanıtı 200 ile başlatıp header'ı yazarken
+    UnicodeEncodeError fırlatıyor — bu, route zaten yanıt döndürdükten SONRA
+    olduğu için hiçbir try/except tarafından yakalanamıyor, bağlantı yanıt
+    gövdesi hiç gönderilmeden koparılıyor. Tarayıcı bunu sıradan bir
+    "Failed to fetch" (ağ hatası) olarak gösteriyor — indirme sessizce hiç
+    başlamıyormuş gibi görünüyordu.
+    ÇÖZÜM: Artık iki parça birden gönderiliyor — eski/uyumsuz istemciler için
+    yalnızca ASCII karakterlerden oluşan güvenli bir yedek isim
+    (filename="...") VE RFC 5987/6266 ile standartlaştırılmış, tam
+    localized ismi yüzde-kodlamalı olarak taşıyan bir filename*=UTF-8''...
+    parametresi (modern tüm tarayıcılar bunu kullanıp indirilen dosyaya
+    gerçek/localized adını verir). Header'ın kendisi artık HER ZAMAN saf
+    ASCII/Latin-1 içerir; hangi dil/alfabe olursa olsun asla bu hataya yol
+    açmaz.
+    """
+    name = str(filename or 'SylvaGIS')
+    ascii_fallback = name.encode('ascii', 'ignore').decode('ascii')
+    ascii_fallback = re.sub(r'[\"\\\r\n]+', '_', ascii_fallback).strip() or 'SylvaGIS'
+    encoded = urllib.parse.quote(name, safe='')
+    return "attachment; filename=\"{}\"; filename*=UTF-8''{}".format(ascii_fallback, encoded)
+
+
 # LULC ailesi indeks kodu → gerçek veri kaynağı etiketi (Sensör/Veri segmenti)
 _LULC_SOURCE_LABELS = {
     'LULC': 'DynamicWorld',
@@ -7232,22 +7270,50 @@ def analyze():
                     _stats_dem = ee.Image('USGS/SRTMGL1_003').select('elevation')
                 _stats_img = _stats_dem.rename('value')
 
-            mm = _call_with_retry(
-                lambda: _stats_img.reduceRegion(
-                    reducer    = combined_reducer,
-                    geometry   = roi,
-                    scale      = stats_scale,
-                    maxPixels  = 1e9,
-                    bestEffort = True,
-                ).getInfo()
-            )
+            try:
+                mm = _call_with_retry(
+                    lambda: _stats_img.reduceRegion(
+                        reducer    = combined_reducer,
+                        geometry   = roi,
+                        scale      = stats_scale,
+                        maxPixels  = 1e9,
+                        bestEffort = True,
+                    ).getInfo()
+                )
+            except Exception as _mm_err:
+                # 🛠️ BUG FİX (kullanıcı bildirimi — "topografik analizlerde hem
+                # vektör hem de raster veri inmiyor"): KÖK NEDEN'in bir parçası —
+                # istemci tarafı (index.html), TOPO analizlerinde bu min/max
+                # hesaplaması başarısız olduğunda katmanı haritaya HİÇ EKLEMİYOR
+                # olabiliyordu (bkz. index.html'deki ilgili BUG FİX notu — o taraf
+                # da artık bunu engellemiyor). Ama kök nedeni burada da azaltmak
+                # için: ilk deneme (bestEffort ile bile) geçici bir GEE
+                # zaman aşımı/ağ aksaklığıyla başarısız olursa, çok daha kaba bir
+                # ölçekte (stats_scale'in 4 katı, üst sınır 500 m) TEK BİR ek
+                # deneme yapılır — bu, büyük/karmaşık çalışma alanlarında
+                # istatistik hesaplamasının başarı ihtimalini belirgin şekilde
+                # artırır, tile üretimini (ki zaten ayrı ve önceden tamamlanmış
+                # durumda) hiç etkilemez.
+                print('[SylvaGIS] ⚠️ Gerçek min/max hesaplanamadı (1. deneme) — '
+                      'daha kaba ölçekle tekrar deneniyor: {}'.format(_mm_err))
+                _coarse_scale = min(max(stats_scale * 4, stats_scale + 100), 500)
+                mm = _call_with_retry(
+                    lambda: _stats_img.reduceRegion(
+                        reducer    = combined_reducer,
+                        geometry   = roi,
+                        scale      = _coarse_scale,
+                        maxPixels  = 1e9,
+                        bestEffort = True,
+                    ).getInfo()
+                )
             real_minmax = {
                 'min':  mm.get('value_min'),
                 'max':  mm.get('value_max'),
                 'mean': mm.get('value_mean')
             }
-        except Exception:
-            pass
+        except Exception as _mm_err2:
+            print('[SylvaGIS] ⚠️ Gerçek min/max hesaplanamadı (kaba ölçekle de) — '
+                  'katman yine de gösterilecek/indirilebilir kalacak: {}'.format(_mm_err2))
 
         # NOT: tile_url yukarıda, istatistiklerden ÖNCE üretildi — burada
         # ikinci bir getMapId() çağrısı YOKTUR. (Eskiden bu satırda tekrar
@@ -8030,7 +8096,7 @@ def download_geotiff():
                         zf.writestr(fname, fbytes)
                 zip_bytes = zip_buf.getvalue()
                 resp = Response(zip_bytes, mimetype='application/zip')
-                resp.headers['Content-Disposition'] = 'attachment; filename="{}.zip"'.format(safe_name)
+                resp.headers['Content-Disposition'] = _content_disposition('{}.zip'.format(safe_name))
                 resp.headers['Content-Length'] = str(len(zip_bytes))
                 return resp
 
@@ -8046,7 +8112,7 @@ def download_geotiff():
             zf.writestr('{}.tif'.format(safe_name), tif_bytes)
         zip_bytes = zip_buf.getvalue()
         resp = Response(zip_bytes, mimetype='application/zip')
-        resp.headers['Content-Disposition'] = 'attachment; filename="{}.zip"'.format(safe_name)
+        resp.headers['Content-Disposition'] = _content_disposition('{}.zip'.format(safe_name))
         resp.headers['Content-Length'] = str(len(zip_bytes))
         return resp
 
@@ -10245,7 +10311,7 @@ def vector_download():
             elif fmt == 'shp': ctype = 'application/zip'
             else: ctype = 'application/geo+json; charset=utf-8'
             return Response(body, headers={'Content-Type': ctype,
-                'Content-Disposition': f'attachment; filename=\"{out_name}\"'})
+                'Content-Disposition': _content_disposition(out_name)})
         except Exception as ex:
             traceback.print_exc()
             return jsonify({'error': str(ex)}), 500
@@ -10354,7 +10420,7 @@ def vector_download():
             body = _features_to_kml(features, safe_name)
             return Response(body, headers={
                 'Content-Type': 'application/vnd.google-earth.kml+xml; charset=utf-8',
-                'Content-Disposition': f'attachment; filename="{safe_name}.kml"',
+                'Content-Disposition': _content_disposition('{}.kml'.format(safe_name)),
             })
 
         elif fmt == 'kmz':
@@ -10365,14 +10431,14 @@ def vector_download():
             buf.seek(0)
             return Response(buf.read(), headers={
                 'Content-Type': 'application/vnd.google-earth.kmz',
-                'Content-Disposition': f'attachment; filename="{safe_name}.kmz"',
+                'Content-Disposition': _content_disposition('{}.kmz'.format(safe_name)),
             })
 
         elif fmt == 'shp':
             zip_bytes = _features_to_shp_zip(features, safe_name)
             return Response(zip_bytes, headers={
                 'Content-Type': 'application/zip',
-                'Content-Disposition': f'attachment; filename="{safe_name}_shp.zip"',
+                'Content-Disposition': _content_disposition('{}_shp.zip'.format(safe_name)),
             })
 
         elif fmt == 'geojson':
@@ -10390,7 +10456,7 @@ def vector_download():
             body = _json.dumps(fc, ensure_ascii=False, separators=(',', ':'))
             return Response(body, headers={
                 'Content-Type': 'application/geo+json; charset=utf-8',
-                'Content-Disposition': f'attachment; filename="{safe_name}.geojson"',
+                'Content-Disposition': _content_disposition('{}.geojson'.format(safe_name)),
             })
 
         else:
