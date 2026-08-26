@@ -4874,9 +4874,33 @@ def build_result_image(data, for_export=False):
         # Son 120 günlük Dynamic World gözlemlerini AOI üzerinde birleştiriyoruz;
         # böylece çalışma alanının tamamı dolu gelir. label bandında sınıf,
         # probability bandlarında kalite korunur.
+        #
+        # 🛠️ BUG FİX (kullanıcı bildirimi — "Arazi Kullanımı" raster/vektör
+        # indirmesi hem raster hem vektörde "Failed to fetch" ile başarısız
+        # oluyordu, tekrar denemelerde de düzelmiyordu): KÖK NEDEN — geniş
+        # bir çalışma alanı (birden fazla Sentinel-2 karosunu/orbitini
+        # kesen büyük bir AOI) için, 120 günlük pencerede AOI'yi kesişen
+        # Dynamic World görüntülerinin sayısı onlarcaya (bazen yüzlerce
+        # kesişen karo-sahne kombinasyonuna) çıkabiliyordu — bunların TÜMÜNÜ
+        # mosaic() ile birleştirmek GEE tarafında çok uzun sürüyor, bu da
+        # sunucunun/ağ geçidinin isteği zaman aşımına uğratıp bağlantıyı
+        # kesmesine yol açıyordu; tarayıcı bunu "Failed to fetch" olarak
+        # gösteriyordu. Bu, tek seferlik/ağa bağlı geçici bir arıza
+        # DEĞİLDİ — aynı ağır hesaplama her yeniden denemede aynı şekilde
+        # tekrar tetiklendiği için mevcut 2 kez yeniden deneme mekanizması
+        # da sorunu çözemiyordu.
+        # ÇÖZÜM: En yeni gözlemden geriye doğru sıralanıp en fazla 24
+        # gözlemle (120 günlük pencerede günde ~1 kesişen sahne varsayımıyla
+        # normal/küçük bir AOI için zaten yeterli kapsama) sınırlandırılıyor.
+        # Bu, küçük/orta ölçekli çalışma alanlarının davranışını DEĞİŞTİRMEZ
+        # (zaten 24'ten az kesişen sahne buluyorlardı) — yalnızca çok büyük/
+        # çok karolu alanlarda hesaplamayı makul bir üst sınırda tutarak
+        # zaman aşımını önler.
         recent = (dw_col
             .filterDate(ee.Date(datetime.datetime.utcnow()).advance(-120, 'day'), ee.Date(datetime.datetime.utcnow()))
             .select('label')
+            .sort('system:time_start', False)
+            .limit(24)
             .sort('system:time_start'))
         # IMPORTANT: Do NOT use temporal mode() here. Dynamic World images are
         # individually cloud/cloud-shadow masked, so mode() can leave a pixel
@@ -9494,6 +9518,42 @@ def _features_to_shp_zip(features, name='SylvaGIS_vector'):
         def _flat_ring(ring):
             return [list(pt) for pt in ring]
 
+        def _signed_area(ring):
+            # Shoelace formülü: alan > 0 → saat yönünün TERSİ (CCW),
+            # alan < 0 → saat yönü (CW) (x sağa, y yukarı standart eksende).
+            area = 0.0
+            n = len(ring)
+            if n < 3:
+                return 0.0
+            for i in range(n):
+                x1, y1 = ring[i][0], ring[i][1]
+                x2, y2 = ring[(i + 1) % n][0], ring[(i + 1) % n][1]
+                area += (x1 * y2 - x2 * y1)
+            return area / 2.0
+
+        def _ring_for_shp(ring, is_hole):
+            # KÖK NEDEN (ArcMap "General function failure"): GeoJSON/GEE
+            # halkaları OGC/RFC7946 kuralına göre yönlendirilir — dış halka
+            # SAAT YÖNÜNÜN TERSİ (CCW), delik (iç) halkalar SAAT YÖNÜ (CW).
+            # ESRI Shapefile biçimi ise TAM TERSİNİ zorunlu kılar: dış halka
+            # SAAT YÖNÜ (CW), delik halkalar SAAT YÖNÜNÜN TERSİ (CCW). Bu
+            # fonksiyon eskiden halkaları doğrudan (yön düzeltmeden) yazıyordu;
+            # bu, ESRI kurallarına aykırı bir .shp üretiyordu. Çoğu görüntüleyici
+            # (QGIS, Leaflet vb.) yönü esnek yorumladığı için sorun fark
+            # edilmiyordu, ama ArcMap/ArcGIS yanlış yönlü halkalarda katmanı
+            # hiç çizemeyip "General function failure" hatası veriyordu.
+            # ÇÖZÜM: her halkanın işaretli alanını (shoelace) hesaplayıp,
+            # ESRI kuralına uymuyorsa noktaları ters çeviriyoruz.
+            r = _flat_ring(ring)
+            area = _signed_area(r)
+            if is_hole:
+                if area < 0:      # delik CCW olmalı (alan > 0); CW ise ters çevir
+                    r = list(reversed(r))
+            else:
+                if area > 0:      # dış halka CW olmalı (alan < 0); CCW ise ters çevir
+                    r = list(reversed(r))
+            return r
+
         for feat in features:
             props = feat.get('properties') or {}
             geom  = feat.get('geometry') or {}
@@ -9505,13 +9565,13 @@ def _features_to_shp_zip(features, name='SylvaGIS_vector'):
             col  = str(props.get('color') or '')
 
             if gtype == 'Polygon':
-                parts = [_flat_ring(r) for r in coords]
+                parts = [_ring_for_shp(r, i > 0) for i, r in enumerate(coords)]
                 w.poly(parts)
                 w.record(cv, cn, col)
             elif gtype == 'MultiPolygon':
                 all_parts = []
                 for poly in coords:
-                    all_parts.extend([_flat_ring(r) for r in poly])
+                    all_parts.extend([_ring_for_shp(r, i > 0) for i, r in enumerate(poly)])
                 w.poly(all_parts)
                 w.record(cv, cn, col)
             elif gtype == 'Point':
@@ -10514,24 +10574,31 @@ def _vectorize_analysis_payload(data, crs='EPSG:4326'):
     _vector_input = vector_img.int().rename('class_value').addBands(
         ee.Image.constant(1).rename('vector_value')
     )
-    fc=_call_with_retry(lambda: _vector_input.reduceToVectors(
-        reducer=ee.Reducer.first(), geometry=roi, scale=scale, maxPixels=1e8,
-        geometryType='polygon', eightConnected=False, labelProperty='class_value',
-        crs=crs if str(crs).upper().startswith('EPSG:') else 'EPSG:4326').limit(20000))
 
-    # 🆕 GÜNCELLEME: reduceToVectors() varsayılan olarak aynı sınıfa ait
-    # her bitişik piksel kümesini AYRI bir poligon/feature olarak üretir
-    # — bu yüzden örn. 5 sınıflı bir katman KML/SHP'ye onlarca (hatta
-    # yüzlerce) "Sınıf 1", "Sınıf 1", "Sınıf 1"... şeklinde tekrar eden
-    # ayrı poligon olarak iniyordu (Google Earth'te Yerler panelinde
-    # dağınık bir liste oluşuyordu). Artık her sınıf koduna ait TÜM
-    # poligonlar, GEE tarafında (FeatureCollection.geometry() ile) TEK
-    # bir (multi)geometriye birleştirilir (dissolve) — dışa aktarılan
-    # dosyada her sınıf için tek bir satır/poligon görünür, lejant çok
-    # daha düzenli olur. Birleştirme herhangi bir sebeple başarısız
-    # olursa (çok karmaşık geometri, GEE zaman aşımı vb.) sessizce eski
-    # (birleştirilmemiş) davranışa geri dönülür — indirme asla tamamen
-    # bozulmaz.
+    # 🛠️ BUG FİX (kullanıcı bildirimi — "ekranda lejant 4 sınıf ama
+    # indirilen KML'de 1. sınıf hiç yok"): KÖK NEDEN — eskiden TÜM
+    # sınıfların ham (dissolve edilmemiş) poligon parçaları TEK bir ortak
+    # reduceToVectors() çağrısında üretilip ortak bir '.limit(20000)'
+    # sınırına tabi tutuluyordu. Baskın/çok parçalı bir sınıf (ör. birçok
+    # küçük ayrı yerleşim lekesi üreten bir sınıf) bu 20000 parça payının
+    # büyük kısmını (hatta tamamını) tüketebiliyordu; GEE'nin dahili tarama
+    # sırasına göre DAHA GEÇ karşılaşılan seyrek/az pikselli bir sınıf
+    # (ör. yukarıdaki örnekte Sınıf 1) sınıra ulaşıldığında hiç işlenmeden
+    # kalıyor, bu da dissolve adımında o sınıfı tamamen kayıp gösteriyordu.
+    # Bu, tesadüfi değil — her indirmede aynı şekilde tekrarlanan sistemik
+    # bir sorundu.
+    #
+    # ÇÖZÜM: Artık HER sınıf kodu için AYRI, kendi maskeli görüntüsü
+    # üzerinde çalışan bir reduceToVectors() çağrısı yapılıyor — böylece
+    # her sınıfın kendi 20000 parçalık payı vardır ve baskın bir sınıf
+    # diğerlerinin payını asla tüketemez. Tüm bu ayrı çağrılar GEE
+    # tarafında tek bir gecikmeli (lazy) hesap grafiğinde birleştirilip
+    # yine TEK bir getInfo() ile sunucuya indirilir (ekstra ağ turu yok).
+    # Her sınıf için sonuç, önceki davranışla aynı şekilde dissolve edilir
+    # (TEK bir (multi)geometri/satır). Herhangi bir sebeple bu yeni yol
+    # başarısız olursa (çok karmaşık geometri, GEE zaman aşımı vb.),
+    # sessizce eski (paylaşılan tek reduceToVectors) davranışa geri
+    # dönülür — indirme asla tamamen bozulmaz.
     feats = None
     try:
         class_codes = sorted(set(int(m['code']) for m in (class_meta or [])))
@@ -10540,10 +10607,16 @@ def _vectorize_analysis_payload(data, crs='EPSG:4326'):
 
             def _merge_one_class(code):
                 code_num = ee.Number(code)
-                subset = fc.filter(ee.Filter.eq('class_value', code_num))
+                class_input = vector_img.eq(code_num).selfMask() \
+                    .multiply(0).add(code_num).rename('class_value') \
+                    .addBands(ee.Image.constant(1).rename('vector_value'))
+                class_fc = class_input.reduceToVectors(
+                    reducer=ee.Reducer.first(), geometry=roi, scale=scale, maxPixels=1e8,
+                    geometryType='polygon', eightConnected=False, labelProperty='class_value',
+                    crs=crs if str(crs).upper().startswith('EPSG:') else 'EPSG:4326').limit(20000)
                 return ee.Algorithms.If(
-                    subset.size().gt(0),
-                    ee.Feature(subset.geometry(1)).set('class_value', code_num),
+                    class_fc.size().gt(0),
+                    ee.Feature(class_fc.geometry(1)).set('class_value', code_num),
                     None
                 )
 
@@ -10554,10 +10627,15 @@ def _vectorize_analysis_payload(data, crs='EPSG:4326'):
             if merged_feats:
                 feats = merged_feats
     except Exception as dissolve_error:
-        print('[SylvaGIS] Vektör sınıf birleştirme (dissolve) başarısız, birleştirilmemiş poligonlar kullanılacak:', dissolve_error)
+        print('[SylvaGIS] Vektör sınıf bazlı birleştirme (dissolve) başarısız, paylaşılan tek reduceToVectors çağrısına geri dönülüyor:', dissolve_error)
         feats = None
 
     if not feats:
+        # Eski (paylaşılan tek çağrı) davranışına güvenli geri dönüş.
+        fc=_call_with_retry(lambda: _vector_input.reduceToVectors(
+            reducer=ee.Reducer.first(), geometry=roi, scale=scale, maxPixels=1e8,
+            geometryType='polygon', eightConnected=False, labelProperty='class_value',
+            crs=crs if str(crs).upper().startswith('EPSG:') else 'EPSG:4326').limit(20000))
         info=_call_with_retry(lambda: fc.getInfo()) or {}
         feats=info.get('features') or []
     if not feats:
