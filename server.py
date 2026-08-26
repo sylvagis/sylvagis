@@ -3166,6 +3166,307 @@ def ping():
 
 
 # ════════════════════════════════════════════════════════════════
+# 🌦️ HAVA DURUMU (Son 30 Gün) — Open-Meteo Geçmiş Hava Durumu Arşivi
+# ════════════════════════════════════════════════════════════════
+# Kullanıcı isteği üzerine eklendi: Çalışma Alanı + Hava Durumu kutusu
+# işaretlenip bir analiz ekrandayken, o analizin "referans tarihi"nden
+# geriye doğru en fazla 30 gün süren GÜNLÜK hava durumu (WMO hava kodu,
+# min/maks/ortalama sıcaklık, yağış, nem) döndürülür.
+#
+# VERİ KAYNAĞI: Open-Meteo Historical Weather (Archive) API
+#   https://archive-api.open-meteo.com/v1/archive
+#   - API anahtarı GEREKMEZ, ücretsizdir (ERA5/ERA5-Land tabanlı, 1940'tan
+#     günümüze küresel kapsama — herhangi bir geçmiş tarih/konum çalışır).
+#   - Ücretsiz kullanım kotası dakikada 600 / saatte 5.000 / günde 10.000
+#     istek — bu uygulamanın trafiği için fazlasıyla yeterli.
+#   - Cloud Run'da EK bir kurulum/gizli anahtar GEREKMEZ; Cloud Run
+#     varsayılan olarak dışa (internete) HTTPS erişimine izin verir.
+#
+# GEE'YE HİÇ İSTEK ATILMAZ: AOI'nin merkez noktası, mevcut
+# _roi_center_lonlat() ile GeoJSON'dan tamamen yerel olarak hesaplanır
+# (UTM dilim seçiminde kullanılan aynı, ağ çağrısı gerektirmeyen yöntem).
+#
+# NEM NOTU: Open-Meteo'nun 'daily' bloğunda GÜNLÜK bir nem ortalaması YOK
+# (yalnızca SAATLİK 'relative_humidity_2m' var) — bu yüzden saatlik nem de
+# aynı istekte (aynı çağrıda, 'hourly' parametresiyle) çekilip, sunucu
+# tarafında her gün için 24 saatlik değerin ortalaması alınarak günlük
+# nem yaklaşık olarak hesaplanır.
+#
+# 🆕 ALAN-DUYARLI ÇOK-NOKTALI ÖRNEKLEME ("nokta mı, alan mı" sorusu):
+# Kullanıcı sordu: "havza gibi bir alan çizersem, bana O havzanın mı
+# verisi geliyor?" — Cevap: Open-Meteo'nun kendisi bir "alan" kavramı
+# sunmuyor, YALNIZCA tek bir (enlem, boylam) noktası için veri veriyor.
+# ERA5-Land (Open-Meteo'nun bu servis için kullandığı model) ~9-11 km'lik
+# bir gridde çalışıyor — yani küçük/orta AOI'ler için TEK merkez nokta
+# zaten o grid hücresini temsil eder ve yeterlidir. Ama havza gibi BÜYÜK
+# veya UZUN/İNCE bir AOI için tek nokta yanıltıcı olabilir (özellikle
+# yükselti farkı olan arazide). Bu yüzden:
+#   • AOI'nin bbox köşegeni _WEATHER_AREA_MODE_THRESHOLD_KM'den KÜÇÜKSE →
+#     eskisi gibi TEK nokta (bbox merkezi) kullanılır ("point" modu).
+#   • BÜYÜKSE → bbox'ın 4 çeyreğinin merkezinden ve poligonun GERÇEK
+#     içine düşen (basit bir "noktanın poligon içinde mi" testiyle
+#     doğrulanmış) noktalardan en fazla 5 tanesi seçilip HER biri için
+#     ayrı ayrı Open-Meteo sorgusu yapılır (paralel), sonra sıcaklık/
+#     yağış/nem günlük bazda ORTALAMASI alınır ("area" modu). Hava kodu
+#     (weatherCode, emoji için) ortalanamayacağı için her zaman bbox
+#     merkezine en yakın/ilk noktanın kodu kullanılır.
+# ŞEFFAFLIK: yanıt, hangi modun ve KAÇ/HANGİ noktanın kullanıldığını
+# ('mode', 'pointsUsed', 'aoiDiagonalKm') da döndürür — istemci bunu
+# panelde kullanıcıya göstererek hangi verinin nereden geldiğini gizli
+# tutmaz (profesyonel/şeffaf bir GIS aracı için önemli).
+_WEATHER_HTTP_TIMEOUT = 12
+_WEATHER_MAX_LOOKBACK_DAYS = 30
+_WEATHER_AREA_MODE_THRESHOLD_KM = 18.0
+_WEATHER_MAX_SAMPLE_POINTS = 5
+
+
+def _haversine_km(lon1, lat1, lon2, lat2):
+    """İki (lon, lat) nokta arası büyük daire mesafesi (km)."""
+    r = 6371.0088
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlmb = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2.0) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlmb / 2.0) ** 2
+    a = min(1.0, max(0.0, a))
+    return 2.0 * r * math.asin(math.sqrt(a))
+
+
+def _point_in_ring(lon, lat, ring):
+    """Ray-casting: (lon, lat) noktası bir GeoJSON halkasının (ring) içinde mi?"""
+    inside = False
+    n = len(ring)
+    if n < 3:
+        return False
+    j = n - 1
+    for i in range(n):
+        xi, yi = ring[i][0], ring[i][1]
+        xj, yj = ring[j][0], ring[j][1]
+        if (yi > lat) != (yj > lat):
+            denom = (yj - yi) or 1e-12
+            x_int = (xj - xi) * (lat - yi) / denom + xi
+            if lon < x_int:
+                inside = not inside
+        j = i
+    return inside
+
+
+def _point_in_geojson(lon, lat, geometry):
+    """(lon, lat) noktası bir GeoJSON Polygon/MultiPolygon'un GERÇEK sınırları
+    içinde mi (donut/iç halkalar da dikkate alınarak) — basit ama doğru bir
+    kontrol; GEE'ye hiç istek atmaz."""
+    if not isinstance(geometry, dict):
+        return False
+    gtype = geometry.get('type')
+    coords = geometry.get('coordinates')
+    if gtype == 'Feature':
+        return _point_in_geojson(lon, lat, geometry.get('geometry') or {})
+    if gtype == 'Polygon':
+        if not coords:
+            return False
+        if not _point_in_ring(lon, lat, coords[0]):
+            return False
+        for hole in coords[1:]:
+            if _point_in_ring(lon, lat, hole):
+                return False
+        return True
+    if gtype == 'MultiPolygon':
+        for poly_coords in (coords or []):
+            if _point_in_geojson(lon, lat, {'type': 'Polygon', 'coordinates': poly_coords}):
+                return True
+        return False
+    return False
+
+
+def _weather_choose_sample_points(geom_dict, west, south, east, north):
+    """Büyük/uzun bir AOI için en fazla _WEATHER_MAX_SAMPLE_POINTS adet
+    örnekleme noktası seçer — bbox merkezi HER ZAMAN ilk sıradadır (yedek/
+    referans), ardından bbox'ın 4 çeyrek-merkezinden POLİGONUN GERÇEKTEN
+    İÇİNE düşenler eklenir."""
+    cx, cy = (west + east) / 2.0, (south + north) / 2.0
+    points = [(cx, cy)]
+    quadrant_candidates = [
+        (west + (east - west) * 0.25, south + (north - south) * 0.25),
+        (west + (east - west) * 0.75, south + (north - south) * 0.25),
+        (west + (east - west) * 0.25, south + (north - south) * 0.75),
+        (west + (east - west) * 0.75, south + (north - south) * 0.75),
+    ]
+    for qlon, qlat in quadrant_candidates:
+        if len(points) >= _WEATHER_MAX_SAMPLE_POINTS:
+            break
+        try:
+            if _point_in_geojson(qlon, qlat, geom_dict):
+                points.append((qlon, qlat))
+        except Exception:
+            pass
+    return points
+
+
+def _weather_fetch_one_point(lon, lat, start_date, ref_date):
+    """Tek bir (lon, lat) noktası için Open-Meteo'dan günlük veri çeker ve
+    zaten ayrıştırılmış {date: {...}} sözlüğü döndürür (ham JSON değil) —
+    hem tekli hem çoklu nokta modunda ORTAK kullanılır."""
+    params = {
+        'latitude': lat,
+        'longitude': lon,
+        'start_date': start_date.isoformat(),
+        'end_date': ref_date.isoformat(),
+        'daily': 'weather_code,temperature_2m_max,temperature_2m_min,temperature_2m_mean,precipitation_sum',
+        'hourly': 'relative_humidity_2m',
+        'timezone': 'auto',
+    }
+    resp = requests.get('https://archive-api.open-meteo.com/v1/archive', params=params, timeout=_WEATHER_HTTP_TIMEOUT)
+    resp.raise_for_status()
+    wj = resp.json()
+
+    daily = wj.get('daily') or {}
+    d_dates  = daily.get('time') or []
+    d_codes  = daily.get('weather_code') or []
+    d_tmax   = daily.get('temperature_2m_max') or []
+    d_tmin   = daily.get('temperature_2m_min') or []
+    d_tmean  = daily.get('temperature_2m_mean') or []
+    d_precip = daily.get('precipitation_sum') or []
+
+    # Saatlik nemi günlük ortalamaya indirge (bkz. yukarıdaki NEM NOTU).
+    hourly = wj.get('hourly') or {}
+    h_times = hourly.get('time') or []
+    h_hums  = hourly.get('relative_humidity_2m') or []
+    hum_by_date = {}
+    for _i, _ts in enumerate(h_times):
+        if not _ts or len(_ts) < 10:
+            continue
+        _d = _ts[:10]
+        _v = h_hums[_i] if _i < len(h_hums) else None
+        if _v is None:
+            continue
+        hum_by_date.setdefault(_d, []).append(_v)
+
+    by_date = {}
+    for i, d in enumerate(d_dates):
+        hums = hum_by_date.get(d)
+        by_date[d] = {
+            'weatherCode':   d_codes[i]  if i < len(d_codes)  else None,
+            'tempMax':       d_tmax[i]   if i < len(d_tmax)   else None,
+            'tempMin':       d_tmin[i]   if i < len(d_tmin)   else None,
+            'tempMean':      d_tmean[i]  if i < len(d_tmean)  else None,
+            'precipitation': d_precip[i] if i < len(d_precip) else None,
+            'humidity':      (sum(hums) / len(hums)) if hums else None,
+        }
+    return by_date
+
+
+def _weather_avg(values):
+    vals = [v for v in values if isinstance(v, (int, float))]
+    if not vals:
+        return None
+    return sum(vals) / len(vals)
+
+
+@app.route('/api/weather', methods=['POST'])
+def weather_history():
+    """
+    Body: {"roi": <GeoJSON geometrisi>, "date": "YYYY-MM-DD"}
+    Dönüş: {"success": true, "days": [{"date","weatherCode","tempMin",
+            "tempMax","tempMean","precipitation","humidity"}, ...],
+            "lat", "lon", "refDate", "mode": "point"|"area",
+            "pointsUsed": [[lat, lon], ...], "aoiDiagonalKm": <float>}
+    'days' EN ESKİDEN EN YENİYE (start_date -> date) sıralıdır.
+    """
+    try:
+        data = request.json or {}
+        roi_geojson = data.get('roi')
+        ref_date_str = str(data.get('date') or '').strip()
+        if not roi_geojson:
+            return jsonify({'success': False, 'error': 'roi (çalışma alanı) eksik.'})
+
+        try:
+            ref_date = datetime.datetime.strptime(ref_date_str, '%Y-%m-%d').date()
+        except Exception:
+            return jsonify({'success': False, 'error': 'Geçersiz veya eksik tarih: ' + repr(ref_date_str)})
+
+        start_date = ref_date - datetime.timedelta(days=_WEATHER_MAX_LOOKBACK_DAYS)
+
+        try:
+            geom_dict = _normalize_to_geojson(roi_geojson)
+            west, south, east, north = _geojson_bbox(geom_dict)
+            diag_km = _haversine_km(west, south, east, north)
+        except Exception as _center_err:
+            return jsonify({'success': False, 'error': 'Çalışma alanı sınırları hesaplanamadı: ' + str(_center_err)})
+
+        if diag_km > _WEATHER_AREA_MODE_THRESHOLD_KM:
+            mode = 'area'
+            lonlat_points = _weather_choose_sample_points(geom_dict, west, south, east, north)
+        else:
+            mode = 'point'
+            lonlat_points = [((west + east) / 2.0, (south + north) / 2.0)]
+
+        # Noktalar PARALEL çekilir — çoklu nokta modunda (en fazla 5 nokta)
+        # sıralı çekim gecikmeyi 5 katına kadar çıkarabilir.
+        point_results = [None] * len(lonlat_points)
+        point_errors = [None] * len(lonlat_points)
+        with ThreadPoolExecutor(max_workers=min(5, len(lonlat_points))) as _wx_pool:
+            future_to_idx = {
+                _wx_pool.submit(_weather_fetch_one_point, lon, lat, start_date, ref_date): idx
+                for idx, (lon, lat) in enumerate(lonlat_points)
+            }
+            for fut in as_completed(future_to_idx):
+                idx = future_to_idx[fut]
+                try:
+                    point_results[idx] = fut.result()
+                except Exception as _pt_err:
+                    point_errors[idx] = str(_pt_err)
+
+        # İlk (bbox merkezi) nokta başarısız olduysa — ve tek nokta modundaysa
+        # — bu bir hata; çoklu nokta modunda diğer noktalar yine de kullanılabilir.
+        successful = [r for r in point_results if r]
+        if not successful:
+            return jsonify({'success': False, 'error': 'Hava durumu servisinden veri alınamadı: ' +
+                             (point_errors[0] or 'bilinmeyen hata')})
+
+        # Tüm günlerin birleşik kümesi (bir nokta diğerinden eksik gün
+        # döndürmüş olabilir — nadir ama olası).
+        all_dates = []
+        seen_dates = set()
+        for by_date in successful:
+            for d in by_date.keys():
+                if d not in seen_dates:
+                    seen_dates.add(d)
+                    all_dates.append(d)
+        all_dates.sort()
+
+        days = []
+        for d in all_dates:
+            day_entries = [r[d] for r in successful if d in r]
+            # Hava kodu ORTALANAMAZ (kategorik) — bbox merkezine en yakın/
+            # ilk BAŞARILI noktanın kodu temsilci olarak kullanılır.
+            weather_code = day_entries[0]['weatherCode'] if day_entries else None
+            days.append({
+                'date': d,
+                'weatherCode':   weather_code,
+                'tempMax':       _weather_avg([e['tempMax'] for e in day_entries]),
+                'tempMin':       _weather_avg([e['tempMin'] for e in day_entries]),
+                'tempMean':      _weather_avg([e['tempMean'] for e in day_entries]),
+                'precipitation': _weather_avg([e['precipitation'] for e in day_entries]),
+                'humidity':      _weather_avg([e['humidity'] for e in day_entries]),
+            })
+
+        ref_lon, ref_lat = lonlat_points[0]
+        return jsonify({
+            'success': True,
+            'days': days,
+            'lat': ref_lat,
+            'lon': ref_lon,
+            'refDate': ref_date.isoformat(),
+            'mode': mode,
+            'pointsUsed': [[lat, lon] for (lon, lat) in lonlat_points],
+            'aoiDiagonalKm': round(diag_km, 1),
+        })
+    except requests.exceptions.RequestException as e:
+        return jsonify({'success': False, 'error': 'Hava durumu servisine ulaşılamadı: ' + str(e)})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+# ════════════════════════════════════════════════════════════════
 # 📧 İLETİŞİM FORMU — sylvagis.world@gmail.com adresine otomatik gönderim
 # ════════════════════════════════════════════════════════════════
 # Kullanıcının mail istemcisini (Gmail vb.) açmadan, formdaki bilgiler
