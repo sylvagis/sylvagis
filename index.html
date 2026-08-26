@@ -3491,8 +3491,8 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
             <div class="mobile-tab-panel" id="mobile-tab-harita"></div>
             <div class="mobile-tab-panel" id="mobile-tab-cikti" style="padding:16px;flex-direction:column;gap:12px;">
                 <h2 style="color:#1e3a8a;border-bottom:2px solid #f1f5f9;padding-bottom:5px;margin-bottom:5px;font-size:1.1rem;" data-i18n="mobile_output">Çıktı</h2>
-                <button class="btn-tool" style="background-color:#152d6e;border-color:#152d6e;color:#fff;font-weight:600;width:100%;padding:10px;" onclick="openGeoTiffDownloadDialog()" data-i18n="btn_geotiff">📥 Veriyi Raster İndir (GeoTIFF)</button>
-                <button class="btn-tool" style="background-color:#0891b2;border-color:#0891b2;color:#fff;font-weight:600;width:100%;padding:10px;" onclick="openVectorDownloadDialog()" data-i18n="btn_vector">📥 Veriyi Vektör İndir</button>
+                <button class="btn-tool" id="btn-geotiff-download-mobile" style="background-color:#152d6e;border-color:#152d6e;color:#fff;font-weight:600;width:100%;padding:10px;" onclick="openGeoTiffDownloadDialog()" data-i18n="btn_geotiff">📥 Veriyi Raster İndir (GeoTIFF)</button>
+                <button class="btn-tool" id="btn-vector-download-mobile" style="background-color:#0891b2;border-color:#0891b2;color:#fff;font-weight:600;width:100%;padding:10px;" onclick="openVectorDownloadDialog()" data-i18n="btn_vector">📥 Veriyi Vektör İndir</button>
                 <button class="btn-tool" style="background-color:#10b981;border-color:#10b981;color:#fff;font-weight:600;width:100%;padding:10px;" onclick="document.getElementById('btn-open-export')&&document.getElementById('btn-open-export').click()" data-i18n="btn_export">🖨️ Görsel Çıktı Al (PNG / JPEG / PDF)</button>
             </div>
         </div>
@@ -4684,13 +4684,46 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
             <label class="option-item" id="stack-analysis-toggle-wrap" style="grid-column: span 2; margin: 8px 0 4px; display:flex; align-items:center; gap:8px; font-size:0.85rem; padding:8px 10px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; cursor:pointer; transition:background .15s,border-color .15s;"
                    onmouseover="this.style.background='#f1f5f9';this.style.borderColor='#cbd5e1';"
                    onmouseout="this.style.background='#f8fafc';this.style.borderColor='#e2e8f0';">
-                <input type="checkbox" id="toggle-stack-analysis" style="width:15px;height:15px;cursor:pointer;accent-color:#1e3a8a;flex-shrink:0;">
+                <input type="checkbox" id="toggle-stack-analysis" style="width:15px;height:15px;cursor:pointer;accent-color:#1e3a8a;flex-shrink:0;" onchange="if (typeof _sylvaUpdateDownloadButtonsDisabledState === 'function') _sylvaUpdateDownloadButtonsDisabledState();">
                 <span data-i18n="stack_analysis_toggle" style="color:#334155;font-weight:500;">🗂️ Önceki Analizin Üzerine Ekle</span>
             </label>
             <button class="btn-primary" id="btn-run-analysis" data-i18n="run_analysis" style="width: 50%; align-self: center; margin-top: 15px;" onclick="runAnalysis()">🚀 Analizi Çalıştır</button>
         </div>
 
 <script>
+// 🆕 ("şimdilik" geçici önlem — Sorun: "Add to Previous Analysis" / Üst Üste
+// Ekleme modunda toplu/istiflenmiş indirmelerin bozuk çıkması): Kullanıcının
+// isteği üzerine, "🗂️ Önceki Analizin Üzerine Ekle" kutusu işaretliyken
+// (stack modu AÇIK) Raster (GeoTIFF) ve Vektör indirme düğmeleri GEÇİCİ
+// olarak devre dışı bırakılır — ekrana katman ekleme/görüntüleme (Analizi
+// Çalıştır) işlevi TAMAMEN normal çalışmaya devam eder, yalnızca indirme
+// engellenir. Kutu işareti kaldırılınca (stack modu KAPALI) düğmeler tekrar
+// normal şekilde aktif olur. Hem masaüstü panelindeki (id'li) hem de mobil
+// çekmecedeki (id'li) iki düğme çifti de birlikte güncellenir.
+(function () {
+    function _sylvaUpdateDownloadButtonsDisabledStateImpl() {
+        try {
+            var stackEl = document.getElementById('toggle-stack-analysis');
+            var isStack = !!(stackEl && stackEl.checked);
+            var ids = ['btn-geotiff-download', 'btn-vector-download', 'btn-geotiff-download-mobile', 'btn-vector-download-mobile'];
+            var _titleTxt = (typeof t === 'function')
+                ? t('download_disabled_stack_mode', 'Üst üste ekleme modunda indirme geçici olarak kapalı')
+                : 'Üst üste ekleme modunda indirme geçici olarak kapalı';
+            ids.forEach(function (id) {
+                var btn = document.getElementById(id);
+                if (!btn) return;
+                btn.disabled = isStack;
+                btn.style.opacity = isStack ? '0.45' : '';
+                btn.style.cursor = isStack ? 'not-allowed' : '';
+                btn.title = isStack ? _titleTxt : '';
+            });
+        } catch (e) {}
+    }
+    window._sylvaUpdateDownloadButtonsDisabledState = _sylvaUpdateDownloadButtonsDisabledStateImpl;
+    // Sayfa ilk açıldığında da kutucuğun mevcut durumuna göre senkronize et.
+    _sylvaUpdateDownloadButtonsDisabledStateImpl();
+})();
+
 // ===== Ana modül akordeonu =====
 // Ana modüller yerleşik <details> davranışını kullanır. Önceki sürümde
 // summary tıklaması iptal edilip Web Animations API ile ayrıca yönetiliyordu.
@@ -14592,14 +14625,42 @@ function selectRamp(name) {
         // da makul bir süre içinde 'load' tetiklenmezse (güvenlik ağı),
         // overlay yine de kapanır — ekran sonsuza dek takılı kalmaz.
         function _hideLoadingWhenTileReady(layer) {
-            _waitForTileReady(layer, hideSylvaLoading);
+            // 🛠️ İYİLEŞTİRME ("veriler ekrana geç geliyor"): Genel amaçlı
+            // _waitForTileReady() (aşağıda) GÖRÜNÜMDEKİ TÜM karolar bitene kadar
+            // bekler — bu, Zaman Serisi video oynatımı için doğru davranıştır
+            // (bir sonraki kareye ancak veri TAM gelince geçilmeli). Ama SADECE
+            // yükleme ekranını (overlay) kapatmak için bu kadar katı beklemeye
+            // gerek yok: İLK karo ekrana geldiği an harita artık görsel olarak
+            // "boş" değildir, o yüzden overlay o an kapatılabilir — kullanıcı
+            // artık geri kalan karoların (görünüm dışı/kenar karoları dahil)
+            // tamamlanmasını beklemek zorunda kalmaz. Ayrıca güvenlik ağı süresi
+            // 12 sn'den 6 sn'ye düşürüldü, böylece 'load'/'tileload' hiç
+            // tetiklenmese bile ekran daha kısa sürede kilitli kalmaktan çıkar.
+            // (DÜRÜSTLÜK NOTU: bu zamanlama yalnızca canlı tarayıcıda
+            // gözlemlenebildiğinden, yerel ortamımda uçtan uca DOĞRULANAMADI —
+            // mantığa dayalı, güvenli/geriye dönük bir iyileştirmedir.)
+            var done = false;
+            function finish() {
+                if (done) return;
+                done = true;
+                hideSylvaLoading();
+            }
+            if (layer && typeof layer.once === 'function') {
+                layer.once('load', finish);
+                layer.once('tileload', finish);
+                layer.once('tileerror', finish);
+            } else {
+                setTimeout(finish, 0);
+            }
+            setTimeout(finish, 6000); // güvenlik ağı
         }
         // 🎬 Genel amaçlı: verilen katmanın karoları (tile) TAMAMEN yükleyip
-        // ekrana yansıyana kadar bekler, sonra callback'i çağırır. Yükleme
-        // overlay'inden bağımsızdır — hem normal analiz akışında (yükleme
-        // ekranını kapatmak için) hem de Zaman Serisi "video" oynatımında
-        // (bir sonraki kareye SADECE veri+lejant tam gelince geçmek için)
-        // kullanılır.
+        // ekrana yansıyana kadar bekler, sonra callback'i çağırır. Zaman Serisi
+        // "video" oynatımında kullanılır (bir sonraki kareye SADECE veri+lejant
+        // tam gelince geçilmeli — bu yüzden burası İLK karo değil, TÜM
+        // karoların bitişini bekler). Sıradan yükleme ekranını (overlay)
+        // kapatmak için artık bunun yerine daha erken tepki veren
+        // _hideLoadingWhenTileReady() kullanılıyor (yukarıda tanımlı).
         function _waitForTileReady(layer, cb) {
             var done = false;
             function finish() {
@@ -18382,7 +18443,34 @@ function selectRamp(name) {
             var viewModeEl = document.getElementById('viewMode');
             var cloudSliderEl = document.getElementById('cloud-slider');
             var _roi = _extractROIGeometry(_aoiForPane);
-            if (!_roi) return;
+            if (!_roi) {
+                // 🛠️ BUG FİX ("Analizi Çalıştır" sonrası ekran boş kalıyor, ancak
+                // galeriden elle bir sahne seçilince veri geliyordu): Galeri ilk
+                // kez otomatik açıldığında (_isInitialRun) bu fonksiyon hemen
+                // çağrılıyor, ama AOI (çizilen alan) katmanı haritaya henüz TAM
+                // kaydolmamış olabiliyordu — bu durumda geometri çıkarımı
+                // sessizce boş dönüyor ve fonksiyon HİÇBİR hata/uyarı
+                // GÖSTERMEDEN return ediyordu; ekran boş kalıyordu. Kullanıcı
+                // galeriden ELİYLE bir sahneye tıkladığında ise (AOI artık hazır
+                // olduğundan) aynı fonksiyon başarıyla çalışıyordu — bu da
+                // "sadece galeriden seçince geliyor" belirtisini açıklıyor.
+                // Artık İLK otomatik yüklemede AOI henüz hazır değilse, kısa bir
+                // gecikmeyle (en fazla birkaç kez) OTOMATİK olarak yeniden
+                // denenir; kullanıcının hiçbir şey yapmasına gerek kalmaz.
+                // (DÜRÜSTLÜK NOTU: bu senkronizasyon zamanlaması yalnızca canlı
+                // tarayıcıda gözlemlenebildiğinden, bu düzeltme yerel ortamımda
+                // uçtan uca çalıştırılarak DOĞRULANAMADI — mantığa dayalı,
+                // güvenli/geriye dönük bir iyileştirmedir.)
+                if (_isInitialRun) {
+                    var _sylvaRoiRetryN = (arguments.length > 9 && typeof arguments[9] === 'number') ? arguments[9] : 0;
+                    if (_sylvaRoiRetryN < 6) {
+                        setTimeout(function () {
+                            loadRgbScene(sceneId, meta, dsInfo, paneId, _isInitialRun, _mirrorThisRun, stackKey, friendlyLabel, isStackMode, _sylvaRoiRetryN + 1);
+                        }, 350);
+                    }
+                }
+                return;
+            }
             var _rgbClipMode = viewModeEl ? viewModeEl.value : 'clip';
 
             showSylvaLoading();
