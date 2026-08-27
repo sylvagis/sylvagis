@@ -2650,7 +2650,7 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
     }
 
 
-def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name, legend_labels=None):
+def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name, legend_labels=None, nodata_value=None):
     """
     LULC ailesi (LULC, LULC_ESA, LULC_MODIS, LULC_CORINE) GeoTIFF'ini alır;
     çıktısı, ArcMap/QGIS'te doğrudan RENKLİ ve İSİMLENDİRİLMİŞ açılan, SADECE
@@ -2699,9 +2699,16 @@ def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name, legend_labels=No
             profile = src.profile.copy()
             src_nodata = src.nodata
 
+    # Faz 52: bkz. _build_native_categorical_symbology_zip'teki AYNI notu —
+    # dosyadan geri okunan src.nodata etiketi yerine, çağıranın (download_geotiff)
+    # GEE'ye GERÇEKTEN gönderdiği NoData değeri önceliklidir; bu, Dynamic World'de
+    # (kod 0 = Water, gerçek bir sınıf) aynı "0 yanlışlıkla NoData sayılıp
+    # kayboluyor" riskine karşı bir güvence katmanıdır.
+    effective_nodata = nodata_value if nodata_value is not None else src_nodata
+
     valid = np.isfinite(band)
-    if src_nodata is not None:
-        valid &= ~np.isclose(band, float(src_nodata))
+    if effective_nodata is not None:
+        valid &= ~np.isclose(band, float(effective_nodata))
 
     rounded = np.rint(band).astype(np.int64)
     # Yalnızca AOI/çıktı rasterinde gerçekten bulunan sınıfları sidecar'a koy.
@@ -2728,7 +2735,7 @@ def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name, legend_labels=No
     return _build_symbology_files_from_classes(out, profile, shifted_info, safe_name, embed_colormap=True)
 
 
-def _build_native_categorical_symbology_zip(tif_bytes, breaks, safe_name):
+def _build_native_categorical_symbology_zip(tif_bytes, breaks, safe_name, nodata_value=None):
     """
     🛠️ BUG FİX (kullanıcı bildirimi — "Çevresel ve Kentsel Analizler'deki
     hazır sınıflandırılmış veriler (Orman Kaybı/Kazanımı, Kentsel Gelişim)
@@ -2811,9 +2818,37 @@ def _build_native_categorical_symbology_zip(tif_bytes, breaks, safe_name):
             profile = src.profile.copy()
             src_nodata = src.nodata
 
+    # 🛠️ KÖK NEDEN DÜZELTMESİ (Faz 52 — kullanıcı bildirimi: "Orman
+    # (Değişmeyen)/Unchanged sınıfı [gerçek kod 0] rasterda TAMAMEN yok —
+    # yalnızca Kayıp/Kazanım [veya Yeni Kentsel Alan] var, arka plan
+    # bomboş; KML'de ise hepsi var"): bu fonksiyon eskiden GEÇERLİ/valid
+    # piksel maskesini SADECE dosyadan geri okunan `src.nodata` etiketine
+    # göre belirliyordu. download_geotiff() FOREST_LOSS/URBAN_GROWTH için
+    # NoData'yı BİLİNÇLİ olarak 255'e ayarlar (bkz. o fonksiyondaki
+    # _NATIVE_CATEGORICAL_ZERO_IS_REAL_CLASS notu — 0 GERÇEK bir sınıftır,
+    # NoData DEĞİLDİR) ve bu değeri img.unmask(255) + formatOptions.noData
+    # ile GEE'ye bizzat kendisi gönderir. Ancak büyük AOI'lerde devreye
+    # giren karo-bölme+mozaikleme (rasterio.merge) ve/veya CRS yeniden-
+    # projeksiyon adımlarından SONRA dosyanın GDAL/rasterio ile GERİ
+    # OKUNAN `nodata` etiketi, ara adımlardaki profil kopyalama/birleştirme
+    # sırasında beklenenden FARKLI (ör. hiç ayarlanmamış → rasterio'nun
+    # bazı sürümlerinde None yerine 0 gibi okunması) çıkabiliyordu. Böyle
+    # bir uyuşmazlıkta `valid` maskesi YANLIŞLIKLA gerçek 0 değerli
+    # "Değişmeyen" piksellerini de NoData sayıp `present_original`'dan
+    # (ve dolayısıyla hem lejanttan hem de çıktı bandından) TAMAMEN
+    # SİLİYORDU — kullanıcının ekran görüntüsündeki "lejantta sadece 2
+    # sınıf, harita arka planı bomboş" belirtisi tam olarak budur.
+    # ÇÖZÜM: artık çağıran taraf (download_geotiff), GEE'ye GERÇEKTEN
+    # gönderdiği/bildiği NoData değerini (255) `nodata_value` parametresiyle
+    # doğrudan bu fonksiyona da iletir; bu, dosyadan GERİ OKUNAN
+    # `src.nodata` etiketinden HER ZAMAN ÖNCELİKLİDİR — böylece 0 değerli
+    # gerçek sınıf pikselleri, ara adımlarda etiket kaybı/uyuşmazlığı olsa
+    # bile ASLA yanlışlıkla NoData sayılmaz.
+    effective_nodata = nodata_value if nodata_value is not None else src_nodata
+
     valid = np.isfinite(band)
-    if src_nodata is not None:
-        valid &= ~np.isclose(band, float(src_nodata))
+    if effective_nodata is not None:
+        valid &= ~np.isclose(band, float(effective_nodata))
 
     rounded = np.rint(band).astype(np.int64)
     present_original = set(int(v) for v in np.unique(rounded[valid]))
@@ -5792,10 +5827,50 @@ def build_result_image(data, for_export=False):
             'Lütfen tarih aralığını veya ay filtresini genişletin.'
         )
         sar = _sar_col.mean().rename('value')
-        vis    = {'min': -25, 'max': 0,
-                  'palette': ['black', 'white']}
         result = sar
-        final_display = sar.clip(roi) if clip_mode == 'clip' else sar
+        vis = {'min': -25, 'max': 0, 'palette': ['black', 'white']}
+
+        # 🛠️ KÖK NEDEN DÜZELTMESİ (kullanıcı bildirimi — "SAR'da lejant/
+        # renklendirme sınıflandırması çalışmıyor, veri hep siyah-beyaz;
+        # NDVI/NDWI gibi normal çalışsın"): SAR bloğu önceden `vis`i sabit
+        # siyah-beyaza kilitleyip HEMEN return ediyordu — bu fonksiyonun
+        # NDVI/NDWI/EVI/... gibi diğer TÜM sürekli indekslerin kullandığı
+        # ortak "class_breaks / custom_palette / min / max" uygulama bloğuna
+        # (bkz. bu fonksiyonun biraz yukarısındaki custom_palette/class_breaks
+        # dalları) HİÇ ULAŞMIYORDU. Yani kullanıcı "Lejantı Uygula"
+        # panelinden bir renk rampası veya sınıflandırma seçip gönderse bile
+        # bu seçim SAR için sunucuda tamamen YOK SAYILIYOR, harita her zaman
+        # sabit siyah-beyaz kalıyordu — kullanıcının bildirdiği belirti tam
+        # olarak budur. ÇÖZÜM: SAR artık diğer indekslerle BİREBİR AYNI
+        # class_breaks/custom_palette/min/max mantığını kullanıyor. Dışa
+        # aktarım (for_export=True) etkilenmez — GeoTIFF'e her zaman ham/
+        # sürekli dB değerleri yazılmaya devam eder, yalnızca harita
+        # önizlemesindeki renklendirme değişir.
+        custom_palette = data.get('palette')
+        custom_min = data.get('min')
+        custom_max = data.get('max')
+        if for_export:
+            display_result = result
+        elif class_breaks and isinstance(class_breaks, list) and len(class_breaks) > 0:
+            classified_img, classified_vis = build_classified_image(result, class_breaks)
+            if classified_img is not None:
+                display_result = classified_img
+                vis = classified_vis
+            else:
+                display_result = result
+        elif custom_palette and isinstance(custom_palette, list) and len(custom_palette):
+            display_result = result
+            vis = dict(vis)
+            # GEE paleti # ön-ekini kabul etmez — strip ederek gönder
+            vis['palette'] = [str(c).lstrip('#') for c in custom_palette]
+            if custom_min is not None:
+                vis['min'] = float(custom_min)
+            if custom_max is not None:
+                vis['max'] = float(custom_max)
+        else:
+            display_result = result
+
+        final_display = display_result.clip(roi) if clip_mode == 'clip' else display_result
         # 🛠️ BUG FİX: .mean() de median() gibi çıktı projeksiyonunu EPSG:4326'ya
         # sıfırlar — gerçek/native CRS'i reduce edilmeden ÖNCEki tek bir
         # sahneden (_sar_col.first()) okuyoruz (yukarıda zaten doğrulandı).
@@ -6420,9 +6495,19 @@ def build_result_image(data, for_export=False):
         band_offset  = 0
 
     elif satellite == 'l89-l2':
+        # 🛠️ BUG FİX (Faz 51 — Landsat 7/4-5/1-5 tam entegrasyon): bu dal
+        # eskiden yalnızca LC08'i sorguluyordu; SATELLITE_DATASETS['l89-l2']
+        # ve RGB galeri yolunun (build_rgb_collection) kullandığı gerçek
+        # koleksiyon listesi LC09'u da içeriyor. Sentinel-2/L89 zaten
+        # "çalışıyor" bildirildiği için bu ekleme yalnızca ek tarih/sahne
+        # kapsamı KAZANDIRIR, mevcut davranışı BOZMAZ (birleştirme, var olan
+        # LC08 sahnelerini asla dışlamaz).
         col = (ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
                .filterBounds(roi)
                .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
+        col = col.merge(ee.ImageCollection('LANDSAT/LC09/C02/T1_L2')
+                        .filterBounds(roi)
+                        .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
         b = {'nir': 'SR_B5', 'red': 'SR_B4', 'green': 'SR_B3',
              'swir': 'SR_B6', 'blue': 'SR_B2', 'thermal': 'ST_B10'}
         scale_factor = 2.75e-5
@@ -6438,9 +6523,18 @@ def build_result_image(data, for_export=False):
         band_offset  = -0.2
 
     elif satellite == 'l45-l2':
+        # 🛠️ BUG FİX (Faz 51 — Landsat 4-5 tam entegrasyon): bu dal eskiden
+        # yalnızca LT05'i sorguluyordu; SATELLITE_DATASETS['l45-l2'] ve RGB
+        # galeri yolu (build_rgb_collection) LT04'ü de içeriyor. LT04
+        # 1982-1993 arasını kapsar — LT05 (1984-2012) ile birlikte 4-5
+        # ailesinin tüm zaman aralığını NDVI/NDWI/... analizlerinde de
+        # eksiksiz kullanılabilir kılar.
         col = (ee.ImageCollection('LANDSAT/LT05/C02/T1_L2')
                .filterBounds(roi)
                .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
+        col = col.merge(ee.ImageCollection('LANDSAT/LT04/C02/T1_L2')
+                        .filterBounds(roi)
+                        .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
         b = {'nir': 'SR_B4', 'red': 'SR_B3', 'green': 'SR_B2',
              'swir': 'SR_B5', 'blue': 'SR_B1', 'thermal': 'ST_B6'}
         scale_factor = 2.75e-5
@@ -7479,46 +7573,42 @@ def analyze():
             try:
                 roi_coords = data.get('roi')
                 roi_geo = make_roi(roi_coords)
-                if satellite == 's2-l2a':
-                    col2 = (ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
-                            .filterBounds(roi_geo)
-                            .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', max_cloud)))
-                elif satellite == 's2-l1c':
-                    col2 = (ee.ImageCollection('COPERNICUS/S2_HARMONIZED')
-                            .filterBounds(roi_geo)
-                            .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', max_cloud)))
-                elif satellite == 'l89-l2':
-                    col2 = (ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
-                            .filterBounds(roi_geo)
-                            .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
-                elif satellite == 'l89-l1':
-                    col2 = (ee.ImageCollection('LANDSAT/LC08/C02/T1_TOA')
-                            .filterBounds(roi_geo)
-                            .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
-                elif satellite == 'l7-l2':
-                    col2 = (ee.ImageCollection('LANDSAT/LE07/C02/T1_L2')
-                            .filterBounds(roi_geo)
-                            .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
-                elif satellite == 'l7-l1':
-                    col2 = (ee.ImageCollection('LANDSAT/LE07/C02/T1_TOA')
-                            .filterBounds(roi_geo)
-                            .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
-                elif satellite in ('l45-l2',):
-                    col2 = (ee.ImageCollection('LANDSAT/LT05/C02/T1_L2')
-                            .filterBounds(roi_geo)
-                            .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
-                elif satellite == 'l45-l1':
-                    col2 = (ee.ImageCollection('LANDSAT/LT05/C02/T1_TOA')
-                            .filterBounds(roi_geo)
-                            .filter(ee.Filter.lt('CLOUD_COVER', max_cloud)))
-                elif satellite == 'mss-l1':
-                    col2 = (ee.ImageCollection('LANDSAT/LM05/C02/T1')
-                            .filterBounds(roi_geo))
+                # 🛠️ KÖK NEDEN DÜZELTMESİ (Faz 51 — "Sentinel-2/Landsat 8-9
+                # sorunsuz çalışıyor ama Landsat 7/4-5/1-5 çalışmıyor... Server
+                # detail: The selected scene was not found" hatası):
+                # Bu blok (zaman serisi galerisi şeridini besleyen sahne
+                # listesi) eskiden KENDİ AYRI/elle kopyalanmış koleksiyon
+                # sorgusuna sahipti — SATELLITE_DATASETS'teki gerçek
+                # koleksiyon listesinden (ve kullanıcı bir sahneye TIKLADIĞINDA
+                # gerçekten kullanılan build_rgb_collection() / RGB analiz
+                # dalındaki koleksiyonlardan) BAĞIMSIZ ve EKSİKTİ:
+                #   • l89-l2/l89-l1 için yalnızca LC08 (LC09 eksik)
+                #   • l45-l2/l45-l1 için yalnızca LT05 (LT04 eksik)
+                #   • mss-l1 için yalnızca LM05 (LM04/03/02/01 eksik)
+                # Böylece galeri şeridinde görünen bir sahne, kullanıcı ona
+                # TIKLADIĞINDA aranan koleksiyonda HİÇ OLMAYABİLİYORDU (iki
+                # kod yolu farklı koleksiyon kümeleri kullandığı için) — "The
+                # selected scene was not found" hatası tam olarak burada
+                # doğuyordu. Ayrıca mss-l1 için 'CLOUD_COVER' özniteliği
+                # istenip (bu koleksiyonda böyle bir öznitelik YOK) sunucuda
+                # sessizce İSTİSNA fırlatılıyor, galeri şeridi TAMAMEN BOŞ
+                # kalıyordu (Landsat 1-5 MSS hiç sahne göstermiyordu).
+                # ÇÖZÜM: artık TEK kaynak — SATELLITE_DATASETS + aynı
+                # build_rgb_collection() fonksiyonu (RGB/sahne-tıklama yolunun
+                # da kullandığı) — galeri şeridini besliyor. Bu, şeritte
+                # gösterilen HER sahnenin, tıklandığında aranacak koleksiyonda
+                # KESİN olarak bulunmasını garanti eder ve tüm Landsat
+                # ailelerine (7 / 4-5 / 1-5 MSS) eksiksiz çoklu-koleksiyon
+                # kapsamı (LC09/LT04/LM04-01 dahil) kazandırır.
+                _ds2 = SATELLITE_DATASETS.get(satellite)
+                if _ds2:
+                    col2 = build_rgb_collection(_ds2, roi_geo, max_cloud)
+                    cloud_prop = _ds2.get('cloudProp')
                 else:
                     col2 = (ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
                             .filterBounds(roi_geo)
                             .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', max_cloud)))
-                cloud_prop = 'CLOUDY_PIXEL_PERCENTAGE' if satellite.startswith('s2') else 'CLOUD_COVER'
+                    cloud_prop = 'CLOUDY_PIXEL_PERCENTAGE'
                 months_filter = _parse_months_param(data)
                 limited    = _collect_scenes_across_years(
                     col2, start_date, end_date, months=months_filter,
@@ -7526,7 +7616,15 @@ def analyze():
                 )
                 scene_ids  = _call_with_retry(lambda: limited.aggregate_array('system:index').getInfo(), retries=1)
                 timestamps = _call_with_retry(lambda: limited.aggregate_array('system:time_start').getInfo(), retries=1)
-                clouds_arr = _call_with_retry(lambda: limited.aggregate_array(cloud_prop).getInfo(), retries=1)
+                # mss-l1 (Landsat 1-5) gibi tutarlı bir bulutluluk özniteliği
+                # taşımayan veri setlerinde (cloud_prop None) aggregate_array
+                # hiç çağrılmaz — eskiden burada sessizce İSTİSNA fırlatılıp
+                # TÜM galeri şeridi boşalıyordu; artık bulut % bilgisi
+                # olmadan (None) sahneler yine de listelenir.
+                if cloud_prop:
+                    clouds_arr = _call_with_retry(lambda: limited.aggregate_array(cloud_prop).getInfo(), retries=1)
+                else:
+                    clouds_arr = [None] * len(scene_ids)
                 scenes_list = list(zip(scene_ids, timestamps, clouds_arr))
             except Exception:
                 scenes_list = []
@@ -8160,7 +8258,8 @@ def download_geotiff():
         if lulc_index in LULC_CLASS_DEFS:
             try:
                 sym_files = _build_lulc_symbology_zip(
-                    tif_bytes, lulc_index, safe_name, legend_labels=requested_legend_labels
+                    tif_bytes, lulc_index, safe_name, legend_labels=requested_legend_labels,
+                    nodata_value=nodata_value
                 )
             except Exception as sym_err:
                 traceback.print_exc()
@@ -8185,8 +8284,14 @@ def download_geotiff():
             # + dinamik NBITS her iki sorunu da (Faz 13'ün 256 girişlik şişkin
             # palet VE Faz 14'ün RAT'ın otomatik okunmaması) aynı anda çözer.
             try:
+                # Faz 52: dosyadan GERİ OKUNAN nodata etiketine güvenmek yerine,
+                # GEE'ye GERÇEKTEN gönderilen NoData değeri (255) burada da
+                # doğrudan iletilir — bkz. _build_native_categorical_symbology_zip
+                # docstring'indeki Faz 52 notu (0 değerli "Değişmeyen" sınıfının
+                # büyük AOI'lerde/karo-mozaikleme sonrası yanlışlıkla NoData
+                # sayılıp tamamen kaybolması sorunu).
                 sym_files = _build_native_categorical_symbology_zip(
-                    tif_bytes, requested_breaks, safe_name
+                    tif_bytes, requested_breaks, safe_name, nodata_value=nodata_value
                 )
             except Exception as sym_err:
                 traceback.print_exc()
