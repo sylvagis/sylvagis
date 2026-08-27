@@ -10848,6 +10848,50 @@ def _enrich_vector_features(features, class_meta):
     return out
 
 
+def _building_footprint_legend_labels(data):
+    """Bina Çatı Tespiti KML/SHP/GeoJSON dışa aktarımı için lejant etiketlerini
+    döndürür.
+
+    🛠️ BUG FİX (kullanıcı bildirimi — "Bina Çatı Tespiti'ni İngilizce
+    lejantla indirdim ama Google Earth Pro'da lejant adları her zaman
+    Türkçe kalıyor, hangi dilde analiz sayfasıysa o dile göre inmesi
+    gerekiyor"): KÖK NEDEN — bu analiz için lejant etiketleri
+    (_vectorize_analysis_payload → BUILDING_FOOTPRINT dalı) doğrudan
+    sabit-kodlanmış Türkçe metin ('Bina Çatı Poligonu' / 'Bina Dışı Alan')
+    kullanıyordu; diğer katmanların kullandığı `localizedClassMeta` (aktif
+    arayüz dilinde istemci tarafından üretilen sınıf adı/renk listesi —
+    bkz. _vector_class_meta() içindeki AYNI mekanizma) hiç kontrol
+    edilmiyordu. Aslında istemci tarafında (index.html →
+    sylvaLocalizedNativeClasses) Bina Çatı Tespiti bu mekanizmadan BİLİNÇLİ
+    olarak hariç tutuluyordu (30 dilli çeviriler tanımlıydı ama hiç
+    kullanılmıyordu). ÇÖZÜM: istemci artık bu sınıfı da localizedClassMeta
+    içinde gönderiyor (code:1=çatı, code:0=bina dışı); sunucu burada önce bu
+    veriyi kullanır, yalnızca hiç gelmezse (eski istemci/geriye dönük
+    uyumluluk) Türkçe/İngilizce sabit değerlere düşer.
+    """
+    roof_label, roof_color = 'Bina Çatı Poligonu', '#dc2626'
+    outside_label, outside_color = 'Bina Dışı Alan', '#cbd5e1'
+    localized = data.get('localizedClassMeta')
+    if isinstance(localized, list):
+        for item in localized:
+            if not isinstance(item, dict):
+                continue
+            try:
+                code = int(item.get('code'))
+            except Exception:
+                continue
+            label = item.get('label')
+            if not label:
+                continue
+            if code == 1:
+                roof_label = str(label)
+                roof_color = str(item.get('color') or roof_color)
+            elif code == 0:
+                outside_label = str(label)
+                outside_color = str(item.get('color') or outside_color)
+    return roof_label, roof_color, outside_label, outside_color
+
+
 def _vectorize_analysis_payload(data, crs='EPSG:4326'):
     """Bir aktif analiz payload'ını gerçek AOI üzerinde sınıflı vektöre dönüştürür."""
     data=dict(data or {})
@@ -10869,6 +10913,7 @@ def _vectorize_analysis_payload(data, crs='EPSG:4326'):
         # Öncelik: analiz ekranında zaten başarıyla üretilmiş gerçek GeoJSON.
         # Böylece indirme aşamasında aynı bina sorgusunu ikinci kez çalıştırıp
         # farklı/boş bir kapsam dönmesi engellenir.
+        roof_label, roof_color, outside_label, outside_color = _building_footprint_legend_labels(data)
         supplied_geojson=data.get('geojson')
         if isinstance(supplied_geojson, dict):
             feats=supplied_geojson.get('features') or []
@@ -10879,12 +10924,12 @@ def _vectorize_analysis_payload(data, crs='EPSG:4326'):
                         continue
                     nf=dict(f)
                     props=dict(nf.get('properties') or {})
-                    props.update({'class_value':1,'class_name':'Bina Çatı Poligonu','color':'#dc2626'})
+                    props.update({'class_value':1,'class_name':roof_label,'color':roof_color})
                     nf['properties']=props
                     out.append(nf)
                 if out:
-                    return out,[{'code':1,'label':'Bina Çatı Poligonu','color':'#dc2626'},
-                                {'code':0,'label':'Bina Dışı Alan','color':'#cbd5e1'}]
+                    return out,[{'code':1,'label':roof_label,'color':roof_color},
+                                {'code':0,'label':outside_label,'color':outside_color}]
 
         # Geriye dönük uyumluluk: eski istemciler GeoJSON göndermiyorsa
         # mevcut asenkron/OSM yedekli bina hattını yeniden kullan.
@@ -10905,10 +10950,10 @@ def _vectorize_analysis_payload(data, crs='EPSG:4326'):
             raise ValueError('Bina Çatı Tespiti sonucunda dışa aktarılabilir poligon bulunamadı.')
         for f in feats:
             props=dict(f.get('properties') or {})
-            props.update({'class_value':1,'class_name':'Bina Çatı Poligonu','color':'#dc2626'})
+            props.update({'class_value':1,'class_name':roof_label,'color':roof_color})
             f['properties']=props
-        return feats,[{'code':1,'label':'Bina Çatı Poligonu','color':'#dc2626'},
-                      {'code':0,'label':'Bina Dışı Alan','color':'#cbd5e1'}]
+        return feats,[{'code':1,'label':roof_label,'color':roof_color},
+                      {'code':0,'label':outside_label,'color':outside_color}]
 
     final_display, roi, result, vis, _ = _call_with_retry(build_result_image, data, for_export=False)
     class_meta=_vector_class_meta(data, vis)
