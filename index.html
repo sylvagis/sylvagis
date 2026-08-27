@@ -688,7 +688,15 @@ tr.class-highlight-active {
         .map-panes-row { display: flex; flex: 1; min-width: 0; min-height: 0; }
         .ruler-container { flex: 1; min-width: 0; overflow: hidden; }
         .ruler-map-row { flex: 1; min-height: 0; overflow: hidden; }
-        #map { width: 100%; height: 100%; background-color: #e5e7eb; z-index: 1; }
+        /* 🛠️ BUG FİX (Faz 59 — "basemap sınırı hep gri çizgi ile sınır
+           olsun"): Harita alanı ile altındaki sabit çubuk (mobil araç
+           çubuğu/footer) arasında önceden HİÇBİR görsel ayırıcı yoktu —
+           harita rengi (ör. koyu mavi okyanus) doğrudan gri çubuğa
+           bitişiyor, sınır belirsiz görünüyordu. Artık haritanın alt
+           kenarında, cetvellerde zaten kullanılan aynı gri tonda
+           (#b0bac6) KALICI ince bir çizgi var — ekran boyutundan
+           bağımsız olarak her zaman görünür. */
+        #map { width: 100%; height: 100%; background-color: #e5e7eb; z-index: 1; box-sizing: border-box; border-bottom: 2px solid #b0bac6; }
         /* Tek ekrana geçildiğinde son tıklanan sağ ekran ana ekran olur.
            Harita DOM'dan kaldırılmaz; bu nedenle çizimler, emojiler, metinler,
            analiz katmanları ve Leaflet görünümü korunur. */
@@ -709,7 +717,8 @@ tr.class-highlight-active {
            ═══════════════════════════════════════════════════════════ */
         .sylva-map2-wrapper { flex: 1; min-width: 0; min-height: 0; position: relative; border-left: 2px solid #1e3a8a; }
         .sylva-map2-wrapper { flex-direction: column; }
-        #map2 { width: 100%; height: 100%; background-color: #e5e7eb; z-index: 1; }
+        /* Faz 59: Ekran 2 için de Ekran 1 ile aynı kalıcı gri sınır çizgisi. */
+        #map2 { width: 100%; height: 100%; background-color: #e5e7eb; z-index: 1; box-sizing: border-box; border-bottom: 2px solid #b0bac6; }
         /* Çift ekranda ayarların hangi pencereye uygulanacağını açıkça göster. */
         body.sylva-dual-screen-on .sylva-active-map-pane {
             outline-offset: -2px;
@@ -1414,7 +1423,14 @@ tr.class-highlight-active {
             height: 62px;
             z-index: 1000;
             background: #fff;
-            border-top: 1px solid #e2e8f0;
+            /* 🛠️ BUG FİX (Faz 60 — "küçük ekranda tuşlarla sınır olsun"):
+               Önceki çok soluk (#e2e8f0, 1px) üst çizgi, haritanın Faz
+               59'da eklenen alt sınır çizgisiyle (2px, #b0bac6) görsel
+               olarak eşleşmiyor, haritayla düğme sırası arasındaki sınır
+               belirsiz kalıyordu. Artık AYNI renk/kalınlıkta (2px,
+               #b0bac6) — harita ile düğmeler arasında net, tutarlı bir
+               çizgi. */
+            border-top: 2px solid #b0bac6;
             padding: 6px 10px;
             gap: 6px;
             align-items: center;
@@ -8286,10 +8302,52 @@ function _sylvaHasMixedStackCategories(paneId) {
         function _sylvaSyncSingleScreenBottomClearance() {
             try {
                 if (window._sylvaDualScreenActive) return;
+                // 🛠️ BUG FİX (Faz 61 — "hala aynı, logo bile tam
+                // görünmüyor küçük ekranda"): Mobilde (≤640px) harita ile
+                // mobil araç çubuğu (62px) + footer (40px) arasındaki pay
+                // ÖNCEDEN (Faz 45'ten önce) yıllardır SORUNSUZ çalışan,
+                // sabit/statik bir CSS değeriyle (102px !important)
+                // ayrılıyordu. Faz 45'ten beri bu JS ölçümü o statik değeri
+                // EZİYOR (override ediyor) — ölçüm birkaç piksel bile
+                // eksik/gecikmeli olsa (yazı tipi/simge geç yüklenmesi,
+                // ölçüm zamanlaması vb.), haritanın en alt kısmı (köşedeki
+                // logo kutusu dahil) sabit konumlu (z-index'i daha yüksek)
+                // araç çubuğunun ALTINDA/ARKASINDA kalıp GÖRSEL OLARAK
+                // ÖRTÜLÜYOR — kırpılma değil, üstüne binme. Defalarca
+                // denenen dinamik düzeltmeler bu riski tam ortadan
+                // kaldıramadı. Çözüm: mobilde (≤640px) JS artık HİÇBİR
+                // pay hesaplamıyor/eklemiyor — doğrudan uzun süredir
+                // GÜVENİLİR olan statik 102px CSS değerine geri dönülüyor.
+                // Yalnızca daha önce statik bir değerin OLMADIĞI tablet/
+                // geniş aralıklarda (641-1366px) dinamik ölçüm devam eder.
+                if (window.innerWidth <= 640) {
+                    document.querySelectorAll('.ruler-map-row, .map2-ruler-map-row').forEach(function (row) {
+                        row.style.removeProperty('padding-bottom');
+                        row.style.removeProperty('box-sizing');
+                    });
+                    if (typeof window._sylvaFullMapResize === 'function') window._sylvaFullMapResize();
+                    return;
+                }
+                // 🛠️ BUG FİX (Faz 58 — "tam ekranda hâlâ boşluk var"): Bu
+                // ölçüm önceden yalnızca GEOMETRİYE (elemanın alt kenarı
+                // görünüm alanının altına yakın mı) bakıyordu — footer
+                // NORMAL belge akışında (position:relative/static) olsa
+                // BİLE, sırf o an rastlantısal olarak görünümün en altına
+                // denk geldiği için (ör. geniş masaüstünde ekstra pay
+                // GEREKMEDİĞİ hâlde) "sabit çubuk" sanılıyordu. Bu da
+                // haritanın satırına GEREKSİZ bir boşluk ekleyip tam
+                // masaüstü genişliğinde YENİ bir gri boşluk YARATIYORDU —
+                // hâlbuki geniş masaüstünde footer zaten normal akışta,
+                // hiçbir ek paya gerek yok. Çözüm: yalnızca GERÇEKTEN
+                // "position: fixed" (veya "sticky") olan elemanlar pay
+                // ayırmaya değer sayılır — normal akıştaki bir footer,
+                // görünümün altına ne kadar yakın olursa olsun ASLA pay
+                // gerektirmez (zaten kendi doğal konumunda, üstüne binmez).
                 function bottomBarHeight(el) {
                     if (!el) return 0;
                     var cs = window.getComputedStyle(el);
                     if (cs.display === 'none' || cs.visibility === 'hidden') return 0;
+                    if (cs.position !== 'fixed' && cs.position !== 'sticky') return 0;
                     var rect = el.getBoundingClientRect();
                     if (rect.height <= 0 || rect.width <= 0) return 0;
                     var gapFromViewportBottom = window.innerHeight - rect.bottom;
@@ -8305,10 +8363,36 @@ function _sylvaHasMixedStackCategories(paneId) {
                 // (en üstte duran çubuğunki her zaman daha büyük değeri
                 // üretir), bu yüzden ikisinin TOPLAMI değil MAKSİMUMU alınır.
                 var clearance = Math.max(toolbarH, footerH);
+                // 🛠️ BUG FİX (Faz 57 — "harita ile alttaki gri bar arasında
+                // hâlâ boşluk var"): Tablet (641-900px) ve geniş-güvenlik-ağı
+                // (≤1366px) aralıklarında .main-container KENDİSİ ZATEN
+                // footer için 40px pay ayırıyordu (bkz. CSS). Yukarıdaki
+                // ölçüm bunu BİLMEDEN .ruler-map-row'a AYRICA tam ölçülen
+                // payı (~40px) ekliyordu — iki kat pay (40+40≈80px) haritayı
+                // gereğinden fazla küçültüp harita ile footer arasında tam
+                // da şikayet edilen gri boşluğu YARATIYORDU. Çözüm: önce
+                // .main-container'ın kendi GERÇEK (hesaplanmış) alt
+                // dolgusunu ölç, yalnızca GERİ KALAN net farkı .ruler-map-
+                // row'a ekle — iki kat sayım asla oluşmaz. Mobilde (≤640)
+                // .main-container hiç pay ayırmadığından (net = tam pay)
+                // eski/doğru davranış aynen korunur.
+                var _mainContainerEl = document.querySelector('.main-container');
+                var _mainContainerPB = 0;
+                if (_mainContainerEl) {
+                    _mainContainerPB = parseFloat(window.getComputedStyle(_mainContainerEl).paddingBottom) || 0;
+                }
+                // Faz 61: sabit çubuk (z-index'i haritadan/logo kutusundan
+                // her zaman YÜKSEK) ile harita arasında bir-iki piksellik
+                // bir ölçüm sapması bile içeriğin (ör. köşedeki logo
+                // kutusunun) sabit çubuğun ALTINDA kalıp görsel olarak
+                // örtülmesine yol açabildiğinden, küçük bir güvenlik payı
+                // (4px) eklenir — eksik pay asla olmasın diye, fazlası
+                // (birkaç piksellik) görsel olarak fark edilmez.
+                var netClearance = Math.max(0, clearance - _mainContainerPB + (clearance > 0 ? 4 : 0));
                 var rows = document.querySelectorAll('.ruler-map-row, .map2-ruler-map-row');
                 rows.forEach(function (row) {
-                    if (clearance > 0) {
-                        row.style.setProperty('padding-bottom', clearance + 'px', 'important');
+                    if (netClearance > 0) {
+                        row.style.setProperty('padding-bottom', netClearance + 'px', 'important');
                         row.style.setProperty('box-sizing', 'border-box', 'important');
                     } else {
                         row.style.removeProperty('padding-bottom');
