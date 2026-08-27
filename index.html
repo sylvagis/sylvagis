@@ -3545,37 +3545,6 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
     </div>
 </div>
 
-            <!-- ===== VEKTÖR İŞLEMLERİ PANELİ ===== -->
-            <div id="sb-vector-ops-wrap">
-                <div id="sb-vector-ops-header" onclick="sylvaToggleVectorOps()">
-                    <span data-i18n="vec_ops_header">✂️ Vektör İşlemleri</span>
-                    <span id="sb-vector-ops-arrow">▼</span>
-                </div>
-                <div id="sb-vector-ops-dropdown">
-                    <button class="sb-vec-op-btn" onclick="sylvaVecOp('clip')" data-i18n="vec_op_clip_btn">✂️ Clip — AOI ile Kırp</button>
-                    <button class="sb-vec-op-btn" onclick="sylvaVecOp('buffer')" data-i18n="vec_op_buffer_btn">⭕ Buffer — Tampon Bölge</button>
-                    <div id="sb-buffer-opts">
-                        <label for="sb-buffer-dist" style="font-size:0.74rem;color:#065f46;font-weight:600;" data-i18n="vec_op_dist_lbl">Mesafe</label>
-                        <div style="display:flex;gap:6px;align-items:center;">
-                            <input type="number" id="sb-buffer-dist" value="1" min="0.01" step="0.1"
-                                style="flex:1;padding:4px 6px;border:1px solid #86efac;border-radius:4px;font-size:0.8rem;">
-                            <select id="sb-buffer-unit" style="padding:4px 6px;border:1px solid #86efac;border-radius:4px;font-size:0.78rem;">
-                                <option value="kilometers">km</option>
-                                <option value="meters">m</option>
-                                <option value="miles">mi</option>
-                            </select>
-                        </div>
-                        <button class="sb-vec-op-btn" style="background:#dcfce7;border-color:#86efac;color:#065f46;" onclick="sylvaRunBuffer()" data-i18n="vec_op_apply">▶ Uygula</button>
-                    </div>
-                    <button class="sb-vec-op-btn" onclick="sylvaVecOp('merge')" data-i18n="vec_op_merge_btn">🔗 Merge — Geometrileri Birleştir</button>
-                    <button class="sb-vec-op-btn" onclick="sylvaVecOp('dissolve')" data-i18n="vec_op_dissolve_btn">🔀 Dissolve — Örtüşenleri Eritir</button>
-                    <button class="sb-vec-op-btn" onclick="sylvaVecOp('intersect')" data-i18n="vec_op_intersect_btn">⊗ Intersect — Kesişim</button>
-                    <button class="sb-vec-op-btn" onclick="sylvaVecOp('erase')" data-i18n="vec_op_erase_btn">⊖ Erase — Fark (Çıkar)</button>
-                    <div id="sb-vec-op-result"></div>
-                </div>
-            </div>
-            <!-- ===== /VEKTÖR İŞLEMLERİ PANELİ ===== -->
-
             <!-- ===== BASEMAP & GÖRÜNTÜ ALANI KOMPAKT KUTULARI ===== -->
             <div class="sb-panel-row">
 
@@ -8329,32 +8298,30 @@ function _sylvaHasMixedStackCategories(paneId) {
         function _sylvaSyncSingleScreenBottomClearance() {
             try {
                 if (window._sylvaDualScreenActive) return;
-                // 🛠️ BUG FİX (Faz 61 — "hala aynı, logo bile tam
-                // görünmüyor küçük ekranda"): Mobilde (≤640px) harita ile
-                // mobil araç çubuğu (62px) + footer (40px) arasındaki pay
-                // ÖNCEDEN (Faz 45'ten önce) yıllardır SORUNSUZ çalışan,
-                // sabit/statik bir CSS değeriyle (102px !important)
-                // ayrılıyordu. Faz 45'ten beri bu JS ölçümü o statik değeri
-                // EZİYOR (override ediyor) — ölçüm birkaç piksel bile
-                // eksik/gecikmeli olsa (yazı tipi/simge geç yüklenmesi,
-                // ölçüm zamanlaması vb.), haritanın en alt kısmı (köşedeki
-                // logo kutusu dahil) sabit konumlu (z-index'i daha yüksek)
-                // araç çubuğunun ALTINDA/ARKASINDA kalıp GÖRSEL OLARAK
-                // ÖRTÜLÜYOR — kırpılma değil, üstüne binme. Defalarca
-                // denenen dinamik düzeltmeler bu riski tam ortadan
-                // kaldıramadı. Çözüm: mobilde (≤640px) JS artık HİÇBİR
-                // pay hesaplamıyor/eklemiyor — doğrudan uzun süredir
-                // GÜVENİLİR olan statik 102px CSS değerine geri dönülüyor.
-                // Yalnızca daha önce statik bir değerin OLMADIĞI tablet/
-                // geniş aralıklarda (641-1366px) dinamik ölçüm devam eder.
-                if (window.innerWidth <= 640) {
-                    document.querySelectorAll('.ruler-map-row, .map2-ruler-map-row').forEach(function (row) {
-                        row.style.removeProperty('padding-bottom');
-                        row.style.removeProperty('box-sizing');
-                    });
-                    if (typeof window._sylvaFullMapResize === 'function') window._sylvaFullMapResize();
-                    return;
-                }
+                // 🛠️ BUG FİX (Faz 62 — "logo yarıda kesilmiş, X/Y/Z
+                // koordinatları görünmüyor küçük ekranda; gri çizgiye göre
+                // değil, oradaki 4 tuşa (mobile-toolbar) göre sınır
+                // algılansın, aralarında boşluk olmasın"): Faz 61'de
+                // mobilde (≤640px) statik bir 102px (toolbar 62 + footer
+                // 40) varsayımına dönülmüştü — ama bu SABİT sayı yalnızca
+                // belirli bir dilde/metinde doğruydu; ör. bazı dillerde
+                // (Moğolca "Газрын зургийн загвар" gibi) tuş etiketi daha
+                // uzun olduğunda tuş sırasının GERÇEK yüksekliği 62px'i
+                // aşabiliyor, statik değer bunu bilmediğinden harita
+                // gereğinden fazla aşağı uzanıyor ve köşedeki logo/koordinat
+                // kutusu sabit tuş sırasının ARKASINDA kalıp yarıda
+                // kesiliyormuş gibi görünüyordu. ÇÖZÜM: mobilde de artık
+                // AYNI gerçek-geometri ölçümü (aşağıdaki bottomBarHeight)
+                // kullanılıyor — sınır, varsayılan bir çizgiye değil,
+                // #mobile-toolbar'ın (4 tuş) ve footer'ın o an GERÇEKTEN
+                // render edilen yüksekliğine göre belirleniyor. Faz 61'in
+                // asıl endişesini (ölçüm ilk anda eksik/gecikmeli gelirse
+                // pay kısa kalabilir) gidermek için ölçülen değer hiçbir
+                // zaman uzun süredir güvenilir olan 102px tabanının ALTINA
+                // düşürülmez — yalnızca gerekirse (metin/tuş daha uzun
+                // render edildiyse) ARTIRILIR, böylece pay ne fazla (boşluk)
+                // ne eksik (üstüne binme) kalır.
+                var _sylvaMobileFloor = (window.innerWidth <= 640) ? 102 : 0;
                 // 🛠️ BUG FİX (Faz 58 — "tam ekranda hâlâ boşluk var"): Bu
                 // ölçüm önceden yalnızca GEOMETRİYE (elemanın alt kenarı
                 // görünüm alanının altına yakın mı) bakıyordu — footer
@@ -8416,6 +8383,12 @@ function _sylvaHasMixedStackCategories(paneId) {
                 // (4px) eklenir — eksik pay asla olmasın diye, fazlası
                 // (birkaç piksellik) görsel olarak fark edilmez.
                 var netClearance = Math.max(0, clearance - _mainContainerPB + (clearance > 0 ? 4 : 0));
+                // Mobilde (≤640px) hesaplanan pay, uzun süredir güvenilir
+                // olan 102px'in altına asla düşürülmez — yalnızca tuş
+                // sırası gerçekten daha uzun render edildiyse üzerine çıkar.
+                if (_sylvaMobileFloor > 0) {
+                    netClearance = Math.max(netClearance, _sylvaMobileFloor);
+                }
                 var rows = document.querySelectorAll('.ruler-map-row, .map2-ruler-map-row');
                 rows.forEach(function (row) {
                     if (netClearance > 0) {
