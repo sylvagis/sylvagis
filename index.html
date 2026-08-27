@@ -565,7 +565,25 @@ tr.class-highlight-active {
         /* Sol Panel */
         .sidebar-left { width: 340px; flex-shrink: 1; min-width: 240px; border-right: 1px solid #e2e8f0; z-index: 100; position: relative; transition: width 0.32s cubic-bezier(.4,0,.2,1); overflow: hidden; }
         .sidebar-left.collapsed { width: 28px; min-width: 28px; }
-        .sidebar-left.collapsed > *:not(.left-collapse-btn):not(.left-collapsed-label) { display: none; }
+        /* 🛠️ BUG FİX (Çalışma Alanı paneli daraltılınca altındaki metinler
+           "Workspace" yazısının arkasında görünmeye devam ediyordu):
+           Eski kural (".sidebar-left.collapsed > *:not(...) {display:none}")
+           yalnızca DOĞRUDAN çocuklara uygulanıyordu. Ancak #geom-info gibi
+           bazı kutular, bir alan çizildiğinde JS tarafından SATIR İÇİ
+           (inline) "style.display" ile gösteriliyor; inline stil her zaman
+           class tabanlı CSS kuralından daha yüksek önceliğe sahip olduğundan
+           panel daraltılsa bile bu kutular (Alan/Çevre bilgisi vb.) görünür
+           kalabiliyor ve dikey "Workspace" yazısının altında/arkasında
+           metin sızıntısı olarak beliriyordu. ÇÖZÜM: Sağ paneldeki
+           (.sidebar-right/.panel-content) ÇALIŞAN yöntemle birebir aynı
+           yaklaşım uygulandı — artık tüm gerçek içerik TEK bir sarmalayıcı
+           (.left-panel-content) içine alınıyor ve daraltıldığında sadece bu
+           sarmalayıcı gizleniyor; ata (parent) öğe display:none olduğunda
+           içindeki hiçbir öğenin kendi inline stili artık görünürlüğü
+           etkileyemiyor.
+        */
+        .left-panel-content { display: flex; flex-direction: column; gap: 15px; }
+        .sidebar-left.collapsed .left-panel-content { display: none; }
         .left-collapse-btn {
             position: absolute; top: 10px; right: 6px; z-index: 200;
             background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 5px;
@@ -582,7 +600,7 @@ tr.class-highlight-active {
     text-align: center; pointer-events: none;
 }
         .sidebar-left.collapsed .left-collapsed-label { display: flex; justify-content: center; }
-        .sidebar-left > h2 { padding-top: 18px; }
+        .left-panel-content > h2 { padding-top: 18px; }
 
         /* Çizim ve Dosya Araçları */
         .tool-row { display: flex; gap: 8px; }
@@ -3458,6 +3476,7 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
         <div class="sidebar-left panel" id="sidebar-left">
             <button class="left-collapse-btn" id="left-collapse-btn" data-i18n-title="panel_collapse_toggle" title="Paneli Daralt / Genişlet">▶</button>
             <div class="left-collapsed-label" data-i18n="workspace">Çalışma Alanı</div>
+            <div class="left-panel-content">
             <h2 data-i18n="sidebar_title">Çalışma Alanı &amp; Veri Seçimi</h2>
 
             <input type="file" id="file-upload" accept=".kml,.kmz,.zip,.shp,.shx,.dbf,.prj" multiple style="display: none;">
@@ -3486,7 +3505,7 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                     </label>
                 </div>
                 <div id="vaw-location-sync-row" class="vaw-sync-row">
-                    <label class="vaw-sync-label" for="vaw-location-sync-checkbox" title="Sadece iki ekranın haritasını (basemap) birlikte kaydırıp yakınlaştırır; poligon, veri veya lejanta karışmaz.">
+                    <label class="vaw-sync-label" for="vaw-location-sync-checkbox" data-i18n-title="vaw_location_sync_tooltip" title="Sadece iki ekranın haritasını (basemap) birlikte kaydırıp yakınlaştırır; poligon, veri veya lejanta karışmaz.">
                         <input type="checkbox" id="vaw-location-sync-checkbox" disabled
                                onchange="window.sylvaToggleLocationSync && window.sylvaToggleLocationSync(this.checked)">
                         <span data-i18n="vaw_location_sync_label">Haritaları Birlikte Gez (Sadece Basemap)</span>
@@ -4330,6 +4349,7 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                 <span data-i18n="stack_analysis_toggle" style="color:#334155;font-weight:500;">🗂️ Önceki Analizin Üzerine Ekle</span>
             </label>
             <button class="btn-primary" id="btn-run-analysis" data-i18n="run_analysis" style="width: 50%; align-self: center; margin-top: 15px;" onclick="runAnalysis()">Analizi Çalıştır</button>
+            </div>
         </div>
 
 <script>
@@ -6531,7 +6551,14 @@ function _sylvaHasMixedStackCategories(paneId) {
                 // kontrolüdür. İçerik yokken tıklanabilir görünmesi yerine
                 // yalnızca boş bir kutuyu açmaması için devre dışı kalır.
                 infoCbSync.disabled = !infoHasContent;
-                infoCbSync.checked = infoHasContent && infoBoxSync.style.display !== 'none';
+                // Analiz sonucu bilgi kutusu artık otomatik açılmaz; checkbox aktif ama işaretsizdir.
+                // Bina Çatı Tespiti kendi özel akışında otomatik açık kalır.
+                var _syncPaneKey = id === 'map2' ? 'map2' : 'map';
+                var _syncBuildingActive = !!(window._sylvaBuildingStateByPane &&
+                    window._sylvaBuildingStateByPane[_syncPaneKey] &&
+                    window._sylvaBuildingStateByPane[_syncPaneKey].active);
+                infoCbSync.checked = _syncBuildingActive && infoHasContent && infoBoxSync.style.display !== 'none';
+                if (!_syncBuildingActive && infoHasContent) infoBoxSync.style.display = 'none';
                 if (infoWrapSync) infoWrapSync.style.opacity = infoHasContent ? '1' : '0.4';
             }
 
@@ -10529,7 +10556,8 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
             if (_hasInfoPreference) {
                 cb.checked = !!cb._sylvaInfoBoxPreferenceByPane[_ibaPane];
             } else if (eligible) {
-                cb.checked = true;
+                // Yeni analiz geldiğinde aktif olsun, fakat kullanıcı istemedikçe haritada görünmesin.
+                cb.checked = false;
             }
             if (wrap) wrap.style.opacity = '1';
             if (box) {
@@ -13564,7 +13592,7 @@ function selectRamp(name) {
             var hasPreference = Object.prototype.hasOwnProperty.call(
                 cb._sylvaInfoBoxPreferenceByPane, paneId
             );
-            cb.checked = hasPreference ? !!cb._sylvaInfoBoxPreferenceByPane[paneId] : true;
+            cb.checked = hasPreference ? !!cb._sylvaInfoBoxPreferenceByPane[paneId] : false;
             box.style.display = cb.checked ? 'block' : 'none';
             if (wrap) wrap.style.opacity = '1';
             if (window._sylvaLegendInfoByPane && window._sylvaLegendInfoByPane[paneId]) {
@@ -16798,7 +16826,7 @@ function selectRamp(name) {
                     if (_ibHasPreference) {
                         _ibCb2.checked = !!_ibCb2._sylvaInfoBoxPreferenceByPane[_pane];
                     } else {
-                        _ibCb2.checked = true;
+                        _ibCb2.checked = false;
                     }
                 }
                 var _infoBox = document.getElementById(_pane === 'map2' ? 'map2-info-box' : 'map-info-box');
@@ -18514,7 +18542,7 @@ function selectRamp(name) {
                         var _ibHasPreference = Object.prototype.hasOwnProperty.call(
                             _ibCb2._sylvaInfoBoxPreferenceByPane, _pane
                         );
-                        _ibCb2.checked = _ibHasPreference ? !!_ibCb2._sylvaInfoBoxPreferenceByPane[_pane] : true;
+                        _ibCb2.checked = _ibHasPreference ? !!_ibCb2._sylvaInfoBoxPreferenceByPane[_pane] : false;
                     }
                     var _infoBox2 = document.getElementById(_pane === 'map2' ? 'map2-info-box' : 'map-info-box');
                     if (_infoBox2 && _infoBox2.innerHTML.trim()) {
@@ -18860,7 +18888,12 @@ function selectRamp(name) {
                 div.setAttribute('data-scene-id', scene.sceneId);
                 if (scene.timestamp) div.setAttribute('data-scene-timestamp', String(scene.timestamp));
                 div.setAttribute('data-dataset-key', dk);
-                div.title = (ds ? ds.datasetName : '') + '\n' + dateLabel + '\nScene ID: ' + scene.sceneId;
+                // 🛠️ BUG FİX (Galeri hover/title metni her zaman Türkçe "Yüzey
+                // Yansıması" gösteriyordu): ds.datasetName sunucudan HER ZAMAN
+                // Türkçe gelir (bkz. server.py); önceden burada hiç çeviri
+                // uygulanmadan doğrudan kullanılıyordu. Artık translateDatasetName()
+                // ile o an aktif arayüz diline (30 dilin biri) göre çevriliyor.
+                div.title = (ds ? translateDatasetName(ds.datasetName) : '') + '\n' + dateLabel + '\nScene ID: ' + scene.sceneId;
                 div.innerHTML = '<div class="gallery-img">' + thumbHtml + '</div>'
                               + '<div class="gallery-info">' + dateLabel + '<br>' + cloudLabel + '</div>';
                 div.addEventListener('click', function() {
@@ -26388,6 +26421,59 @@ var BAND_LABEL_MAP = {
     }
 };
 
+// ── Dataset "Yüzey Yansıması / TOA Yansıması" term localization (30 dil) ─────
+// 🛠️ BUG FİX (Uydu Görüntü Galerisi hover metni her zaman Türkçe kalıyordu):
+// Sunucu (server.py) dataset adlarını HER ZAMAN Türkçe döndürür (ör. "Sentinel-2
+// MSI Level-2A (Yüzey Yansıması)"). Galeri kartlarındaki hover/title metni bu
+// ham ismi doğrudan kullanıyordu (translateDatasetName() hiç çağrılmıyordu),
+// bu yüzden arayüz dili değiştirilse bile fareyle üzerine gelince her zaman
+// "Yüzey Yansıması" yazıyordu. Artık bu terim aşağıdaki 30 dilin tamamında
+// karşılığı olan RS_REFLECTANCE_I18N sözlüğünden, o an aktif arayüz diline
+// göre çevrilir; sensör/görev adı (Sentinel-2, Landsat vb.) değişmeden kalır.
+var RS_REFLECTANCE_I18N = {
+    en: { surface: 'Surface Reflectance', toa: 'TOA Reflectance' },
+    tr: { surface: 'Yüzey Yansıması', toa: 'TOA Yansıması' },
+    uz: { surface: 'Sirt reflektansi', toa: 'TOA reflektansi' },
+    el: { surface: 'Ανακλαστικότητα Επιφάνειας', toa: 'Ανακλαστικότητα TOA' },
+    bg: { surface: 'Отражение на повърхността', toa: 'TOA отражение' },
+    az: { surface: 'Səth Əksi', toa: 'TOA Əksi' },
+    hu: { surface: 'Felszíni reflektancia', toa: 'TOA reflektancia' },
+    kk: { surface: 'Беттік шағылысу', toa: 'TOA шағылысуы' },
+    de: { surface: 'Oberflächenreflexion', toa: 'TOA-Reflexion' },
+    fr: { surface: 'Réflectance de surface', toa: 'Réflectance TOA' },
+    es: { surface: 'Reflectancia de superficie', toa: 'Reflectancia TOA' },
+    pt: { surface: 'Refletância de superfície', toa: 'Refletância TOA' },
+    ar: { surface: 'انعكاسية السطح', toa: 'انعكاسية TOA' },
+    fa: { surface: 'بازتاب سطحی', toa: 'بازتاب TOA' },
+    zh: { surface: '地表反射率', toa: 'TOA反射率' },
+    ja: { surface: '地表反射率', toa: 'TOA反射率' },
+    ko: { surface: '지표 반사율', toa: 'TOA 반사율' },
+    hi: { surface: 'सतह परावर्तन', toa: 'TOA परावर्तन' },
+    id: { surface: 'Reflektansi Permukaan', toa: 'Reflektansi TOA' },
+    ru: { surface: 'Отражение поверхности', toa: 'TOA-отражение' },
+    th: { surface: 'การสะท้อนพื้นผิว', toa: 'การสะท้อน TOA' },
+    bn: { surface: 'ভূপৃষ্ঠ প্রতিফলন', toa: 'TOA প্রতিফলন' },
+    vi: { surface: 'Phản xạ bề mặt', toa: 'Phản xạ TOA' },
+    ur: { surface: 'سطحی انعکاس', toa: 'TOA انعکاس' },
+    pl: { surface: 'Odbicie powierzchniowe', toa: 'Odbicie TOA' },
+    ms: { surface: 'Pantulan Permukaan', toa: 'Pantulan TOA' },
+    ky: { surface: 'Беттик чагылуу', toa: 'TOA чагылуусу' },
+    mn: { surface: 'Гадаргын тусгал', toa: 'TOA тусгал' },
+    ka: { surface: 'ზედაპირის არეკვლა', toa: 'TOA არეკვლა' },
+    it: { surface: 'Riflettanza di superficie', toa: 'Riflettanza TOA' }
+};
+
+function localizeReflectanceTerm(name) {
+    if (!name) return name;
+    var lang = (typeof window._sylvaLang === 'string' && window._sylvaLang) ? window._sylvaLang : 'en';
+    var terms = RS_REFLECTANCE_I18N[lang] || RS_REFLECTANCE_I18N.en;
+    return name
+        .replace(/Yüzey Yansıması/g, terms.surface)
+        .replace(/Yüzey Yansıma(?!sı)/g, terms.surface)
+        .replace(/TOA Yansıması/g, terms.toa)
+        .replace(/TOA Yansıma(?!sı)/g, terms.toa);
+}
+
 function translateBandLabel(label) {
     if (!label) return label;
     // Remote sensing band names always remain in English regardless of UI language
@@ -26401,16 +26487,11 @@ function translateBandLabel(label) {
 
 function translateDatasetName(name) {
     if (!name) return name;
-    // Dataset/product names (e.g. "Surface Reflectance", "TOA Reflectance") always
-    // remain in English regardless of UI language (international RS standard).
-    var enMap = BAND_LABEL_MAP['en'];
-    if (enMap) {
-        if (enMap[name]) return enMap[name];
-        var result = name;
-        Object.keys(enMap).forEach(function(k) { result = result.replace(k, enMap[k]); });
-        if (result !== name) return result;
-    }
-    return name;
+    // 🛠️ DÜZELTME: "Yüzey Yansıması" / "TOA Yansıması" artık sabit İngilizce
+    // yerine, o an seçili 30 dilden birine göre çevrilir (bkz. RS_REFLECTANCE_I18N).
+    // Sensör/görev adı (Sentinel-2, Landsat vb.) uluslararası standart olduğu
+    // için değişmeden kalır.
+    return localizeReflectanceTerm(name);
 }
 
 function translateBandsInfo(info) {
@@ -43539,6 +43620,49 @@ var SYLVA_TRANSLATIONS = {
   });
 })();
 
+// ── Haritada göster/gizle tooltip metni: 30 dil ─────────────────────────────
+// Katman ve çalışma alanı görünürlük checkbox'larının title değeri artık
+// sabit Türkçe değildir; seçili arayüz dilinden alınır.
+(function () {
+  var layerVisibilityHint30 = {
+    en: 'Show/hide on map',
+    tr: 'Haritada göster/gizle',
+    de: 'Auf der Karte anzeigen/ausblenden',
+    fr: 'Afficher/masquer sur la carte',
+    es: 'Mostrar/ocultar en el mapa',
+    pt: 'Mostrar/ocultar no mapa',
+    ar: 'إظهار/إخفاء على الخريطة',
+    fa: 'نمایش/پنهان کردن روی نقشه',
+    zh: '在地图上显示/隐藏',
+    ja: '地図上で表示/非表示',
+    ko: '지도에서 표시/숨기기',
+    hi: 'मानचित्र पर दिखाएँ/छिपाएँ',
+    id: 'Tampilkan/sembunyikan di peta',
+    ru: 'Показать/скрыть на карте',
+    th: 'แสดง/ซ่อนบนแผนที่',
+    bn: 'মানচিত্রে দেখান/লুকান',
+    vi: 'Hiện/ẩn trên bản đồ',
+    ur: 'نقشے پر دکھائیں/چھپائیں',
+    pl: 'Pokaż/ukryj na mapie',
+    ms: 'Tunjukkan/sembunyikan pada peta',
+    el: 'Εμφάνιση/απόκρυψη στον χάρτη',
+    kk: 'Картада көрсету/жасыру',
+    ky: 'Картада көрсөтүү/жашыруу',
+    uz: 'Xaritada ko‘rsatish/yashirish',
+    bg: 'Показване/скриване на картата',
+    az: 'Xəritədə göstər/gizlət',
+    hu: 'Megjelenítés/elrejtés a térképen',
+    mn: 'Газрын зураг дээр харуулах/нуух',
+    ka: 'რუკაზე ჩვენება/დამალვა',
+    it: 'Mostra/nascondi sulla mappa'
+  };
+  Object.keys(layerVisibilityHint30).forEach(function (lang) {
+    if (SYLVA_TRANSLATIONS[lang]) {
+      SYLVA_TRANSLATIONS[lang].layer_switch_visibility_hint = layerVisibilityHint30[lang];
+    }
+  });
+})();
+
 
 // Bina çatı analizi için kullanıcıya görünen metinler — desteklenen 30 dil.
 (function () {
@@ -44043,6 +44167,57 @@ var SYLVA_TRANSLATIONS = {
   Object.keys(locationSyncLabels).forEach(function (lang) {
     if (SYLVA_TRANSLATIONS[lang]) {
       SYLVA_TRANSLATIONS[lang].vaw_location_sync_label = locationSyncLabels[lang];
+    }
+  });
+})();
+
+// 🛠️ BUG FİX (kullanıcı bildirimi — "sayfa İngilizce ama 'Haritaları
+// Birlikte Gez' onay kutusunun üzerine gelince çıkan açıklama (tooltip)
+// her zaman Türkçe kalıyor"): KÖK NEDEN — bu tooltip, ilgili <label>
+// elementinin HTML'deki sabit `title="Sadece iki ekranın haritasını
+// (basemap) birlikte kaydırıp yakınlaştırır; poligon, veri veya lejanta
+// karışmaz."` özniteliğinden geliyordu; `data-i18n-title` KULLANMIYORDU,
+// bu yüzden dil değişince (bkz. yukarıdaki "[data-i18n-title] elementlerini
+// çevir" döngüsü) diğer 30 dilli tooltip'ler gibi güncellenmiyordu. ÇÖZÜM:
+// "Haritaları Birlikte Gez" etiketiyle AYNI 30 dil için tooltip metni
+// eklenip ilgili <label>'a data-i18n-title="vaw_location_sync_tooltip"
+// bağlandı (bkz. index.html içindeki #vaw-location-sync-row <label>).
+(function () {
+  var locationSyncTooltips = {
+    en: 'Only pans and zooms both maps\' basemap together; it does not affect polygons, data or the legend.',
+    uz: 'Faqat ikkala ekranning asosiy xaritasini (basemap) birga surib kattalashtiradi; poligon, ma\u02bclumot yoki legendaga taʼsir qilmaydi.',
+    el: '\u03A3\u03C5\u03B3\u03C7\u03C1\u03BF\u03BD\u03AF\u03B6\u03B5\u03B9 \u03BC\u03CC\u03BD\u03BF \u03C4\u03B7 \u03BC\u03B5\u03C4\u03B1\u03BA\u03AF\u03BD\u03B7\u03C3\u03B7/\u03B6\u03BF\u03CD\u03BC \u03C4\u03BF\u03C5 \u03B2\u03B1\u03C3\u03B9\u03BA\u03BF\u03CD \u03C7\u03AC\u03C1\u03C4\u03B7 \u03BA\u03B1\u03B9 \u03C3\u03C4\u03B9\u03C2 \u03B4\u03CD\u03BF \u03BF\u03B8\u03CC\u03BD\u03B5\u03C2\u00B7 \u03B4\u03B5\u03BD \u03B5\u03C0\u03B7\u03C1\u03B5\u03AC\u03B6\u03B5\u03B9 \u03C0\u03BF\u03BB\u03CD\u03B3\u03C9\u03BD\u03B1, \u03B4\u03B5\u03B4\u03BF\u03BC\u03AD\u03BD\u03B1 \u03AE \u03C5\u03C0\u03CC\u03BC\u03BD\u03B7\u03BC\u03B1.',
+    bg: '\u0421\u0438\u043D\u0445\u0440\u043E\u043D\u0438\u0437\u0438\u0440\u0430 \u0441\u0430\u043C\u043E \u043F\u0430\u043D\u0438\u0440\u0430\u043D\u0435\u0442\u043E/\u0437\u0443\u043C\u0438\u0440\u0430\u043D\u0435\u0442\u043E \u043D\u0430 \u0431\u0430\u0437\u043E\u0432\u0430\u0442\u0430 \u043A\u0430\u0440\u0442\u0430 \u0432 \u0434\u0432\u0430\u0442\u0430 \u0435\u043A\u0440\u0430\u043D\u0430; \u043D\u0435 \u0437\u0430\u0441\u044F\u0433\u0430 \u043F\u043E\u043B\u0438\u0433\u043E\u043D\u0438, \u0434\u0430\u043D\u043D\u0438 \u0438\u043B\u0438 \u043B\u0435\u0433\u0435\u043D\u0434\u0430\u0442\u0430.',
+    tr: 'Sadece iki ekranın haritasını (basemap) birlikte kaydırıp yakınlaştırır; poligon, veri veya lejanta karışmaz.',
+    az: 'Yalnız hər iki ekranın əsas xəritəsini (basemap) birlikdə sürüşdürüb yaxınlaşdırır; poliqon, məlumat və ya legendə təsir etmir.',
+    hu: 'Csak a két képernyő alaptérképét görgeti és nagyítja együtt; nincs hatással a poligonokra, adatokra vagy a jelmagyarázatra.',
+    kk: '\u0422\u0435\u043A \u0435\u043A\u0456 \u044D\u043A\u0440\u0430\u043D\u043D\u044B\u04A3 \u043D\u0435\u0433\u0456\u0437\u0433\u0456 \u043A\u0430\u0440\u0442\u0430\u0441\u044B\u043D (basemap) \u0431\u0456\u0440\u0433\u0435 \u0436\u044B\u043B\u0436\u044B\u0442\u0443 \u0436\u04D9\u043D\u0435 \u04AF\u043B\u043A\u0435\u0439\u0442\u0443 \u04AF\u0448\u0456\u043D; \u043F\u043E\u043B\u0438\u0433\u043E\u043D\u0433\u0430, \u0434\u0435\u0440\u0435\u043A\u0442\u0435\u0440\u0433\u0435 \u043D\u0435\u043C\u0435\u0441\u0435 \u043B\u0435\u0433\u0435\u043D\u0434\u0430\u0493\u0430 \u04D9\u0441\u0435\u0440 \u0435\u0442\u043F\u0435\u0439\u0434\u0456.',
+    de: 'Verschiebt und zoomt nur die Basiskarte beider Ansichten gemeinsam; Polygone, Daten oder die Legende sind davon nicht betroffen.',
+    fr: 'Ne fait que déplacer et zoomer ensemble le fond de carte des deux écrans ; n\u2019affecte ni les polygones, ni les données, ni la légende.',
+    es: 'Solo desplaza y hace zoom en el mapa base de ambas pantallas a la vez; no afecta a los polígonos, los datos ni la leyenda.',
+    pt: 'Apenas desloca e amplia em conjunto o mapa base dos dois ecrãs; não afeta polígonos, dados ou a legenda.',
+    ar: '\u064A\u064F\u0632\u0627\u0645\u0646 \u0641\u0642\u0637 \u0627\u0644\u062A\u062D\u0631\u064A\u0643 \u0648\u0627\u0644\u062A\u0643\u0628\u064A\u0631/\u0627\u0644\u062A\u0635\u063A\u064A\u0631 \u0641\u064A \u0627\u0644\u062E\u0631\u064A\u0637\u0629 \u0627\u0644\u0623\u0633\u0627\u0633\u064A\u0629 \u0644\u0644\u0634\u0627\u0634\u062A\u064A\u0646 \u0645\u0639\u064B\u0627\u061B \u0648\u0644\u0627 \u064A\u0624\u062B\u0631 \u0639\u0644\u0649 \u0627\u0644\u0645\u0636\u0644\u0639\u0627\u062A \u0623\u0648 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A \u0623\u0648 \u0645\u0641\u062A\u0627\u062D \u0627\u0644\u062E\u0631\u064A\u0637\u0629.',
+    fa: '\u0641\u0642\u0637 \u062C\u0627\u0628\u0647\u200C\u062C\u0627\u06CC\u06CC \u0648 \u0632\u0648\u0645 \u0646\u0642\u0634\u0647 \u067E\u0627\u06CC\u0647 (basemap) \u0647\u0631 \u062F\u0648 \u0635\u0641\u062D\u0647 \u0631\u0627 \u0628\u0627 \u0647\u0645 \u0647\u0645\u0627\u0647\u0646\u06AF \u0645\u06CC\u200C\u06A9\u0646\u062F\u061B \u0631\u0648\u06CC \u0686\u0646\u062F\u0636\u0644\u0639\u06CC\u200C\u0647\u0627\u060C \u062F\u0627\u062F\u0647\u200C\u0647\u0627 \u06CC\u0627 \u0631\u0627\u0647\u0646\u0645\u0627 \u062A\u0623\u062B\u06CC\u0631\u06CC \u0646\u062F\u0627\u0631\u062F.',
+    zh: '\u4EC5\u540C\u6B65\u5E73\u79FB\u548C\u7F29\u653E\u4E24\u4E2A\u9762\u677F\u7684\u5E95\u56FE\uFF08basemap\uFF09\uFF1B\u4E0D\u5F71\u54CD\u591A\u8FB9\u5F62\u3001\u6570\u636E\u6216\u56FE\u4F8B\u3002',
+    ja: '\u4E21\u65B9\u306E\u30D9\u30FC\u30B9\u30DE\u30C3\u30D7\u306E\u30D1\u30F3\u3068\u30BA\u30FC\u30E0\u3060\u3051\u3092\u9023\u52D5\u3055\u305B\u307E\u3059\u3002\u30DD\u30EA\u30B4\u30F3\u3001\u30C7\u30FC\u30BF\u3001\u51E1\u4F8B\u306B\u306F\u5F71\u97FF\u3057\u307E\u305B\u3093\u3002',
+    ko: '\uB450 \uD654\uBA74\uC758 \uBCA0\uC774\uC2A4\uB9F5(basemap)\uB9CC \uD568\uAED8 \uC774\uB3D9/\uD655\uB300\uD569\uB2C8\uB2E4. \uD3F4\uB9AC\uACE4, \uB370\uC774\uD130, \uBC94\uB840\uC5D0\uB294 \uC601\uD5A5\uC744 \uC8FC\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.',
+    hi: '\u092F\u0939 \u0915\u0947\u0935\u0932 \u0926\u094B\u0928\u094B\u0902 \u0938\u094D\u0915\u094D\u0930\u0940\u0928 \u0915\u0947 \u092C\u0947\u0938\u092E\u0948\u092A \u0915\u094B \u090F\u0915 \u0938\u093E\u0925 \u092A\u0948\u0928 \u0914\u0930 \u091C\u093C\u0942\u092E \u0915\u0930\u0924\u093E \u0939\u0948; \u092F\u0939 \u092C\u0939\u0941\u092D\u0941\u091C, \u0921\u0947\u091F\u093E \u092F\u093E \u0932\u0940\u091C\u0947\u0902\u0921 \u0915\u094B \u092A\u094D\u0930\u092D\u093E\u0935\u093F\u0924 \u0928\u0939\u0940\u0902 \u0915\u0930\u0924\u093E\u0964',
+    id: 'Hanya menggeser dan memperbesar/memperkecil peta dasar (basemap) kedua layar secara bersamaan; tidak memengaruhi poligon, data, atau legenda.',
+    ru: '\u0421\u0438\u043D\u0445\u0440\u043E\u043D\u0438\u0437\u0438\u0440\u0443\u0435\u0442 \u0442\u043E\u043B\u044C\u043A\u043E \u043F\u0435\u0440\u0435\u043C\u0435\u0449\u0435\u043D\u0438\u0435 \u0438 \u043C\u0430\u0441\u0448\u0442\u0430\u0431\u0438\u0440\u043E\u0432\u0430\u043D\u0438\u0435 \u0431\u0430\u0437\u043E\u0432\u043E\u0439 \u043A\u0430\u0440\u0442\u044B \u043D\u0430 \u043E\u0431\u043E\u0438\u0445 \u044D\u043A\u0440\u0430\u043D\u0430\u0445; \u043D\u0435 \u0432\u043B\u0438\u044F\u0435\u0442 \u043D\u0430 \u043F\u043E\u043B\u0438\u0433\u043E\u043D\u044B, \u0434\u0430\u043D\u043D\u044B\u0435 \u0438\u043B\u0438 \u043B\u0435\u0433\u0435\u043D\u0434\u0443.',
+    th: '\u0E0B\u0E34\u0E07\u0E01\u0E4C\u0E40\u0E09\u0E1E\u0E32\u0E30\u0E01\u0E32\u0E23\u0E40\u0E25\u0E37\u0E48\u0E2D\u0E19\u0E41\u0E25\u0E30\u0E0B\u0E39\u0E21\u0E41\u0E1C\u0E19\u0E17\u0E35\u0E48\u0E10\u0E32\u0E19 (basemap) \u0E02\u0E2D\u0E07\u0E2A\u0E2D\u0E07\u0E2B\u0E19\u0E49\u0E32\u0E08\u0E2D\u0E44\u0E1B\u0E14\u0E49\u0E27\u0E22\u0E01\u0E31\u0E19\u0E40\u0E17\u0E48\u0E32\u0E19\u0E31\u0E49\u0E19 \u0E44\u0E21\u0E48\u0E01\u0E23\u0E30\u0E17\u0E1A\u0E15\u0E48\u0E2D\u0E23\u0E39\u0E1B\u0E2B\u0E25\u0E32\u0E22\u0E40\u0E2B\u0E25\u0E35\u0E48\u0E22\u0E21 \u0E02\u0E49\u0E2D\u0E21\u0E39\u0E25 \u0E2B\u0E23\u0E37\u0E2D\u0E04\u0E33\u0E2D\u0E18\u0E34\u0E1A\u0E32\u0E22\u0E41\u0E1C\u0E19\u0E17\u0E35\u0E48',
+    bn: '\u098F\u099F\u09BF \u09B6\u09C1\u09A7\u09C1\u09AE\u09BE\u09A4\u09CD\u09B0 \u09A6\u09C1\u099F\u09BF \u09B8\u09CD\u0995\u09CD\u09B0\u09BF\u09A8\u09C7\u09B0 \u09AC\u09C7\u09B8\u09AE\u09CD\u09AF\u09BE\u09AA (basemap) \u098F\u0995\u09B8\u0999\u09CD\u0997\u09C7 \u09B8\u09B0\u09BE\u09A8\u09CB \u098F\u09AC\u0982 \u099C\u09C1\u09AE \u0995\u09B0\u09C7; \u098F\u099F\u09BF \u09AC\u09B9\u09C1\u09AD\u09C1\u099C, \u09A1\u09C7\u099F\u09BE \u09AC\u09BE \u09B2\u09BF\u099C\u09C7\u09A8\u09CD\u09A1\u0995\u09C7 \u09AA\u09CD\u09B0\u09AD\u09BE\u09AC\u09BF\u09A4 \u0995\u09B0\u09C7 \u09A8\u09BE\u0964',
+    vi: 'Ch\u1EC9 di chuy\u1EC3n v\u00E0 thu ph\u00F3ng b\u1EA3n \u0111\u1ED3 n\u1EC1n (basemap) c\u1EE7a c\u1EA3 hai m\u00E0n h\u00ECnh c\u00F9ng nhau; kh\u00F4ng \u1EA3nh h\u01B0\u1EDFng \u0111\u1EBFn \u0111a gi\u00E1c, d\u1EEF li\u1EC7u ho\u1EB7c ch\u00FA gi\u1EA3i.',
+    ur: '\u06CC\u06C1 \u0635\u0631\u0641 \u062F\u0648\u0646\u0648\u06BA \u0627\u0633\u06A9\u0631\u06CC\u0646\u0632 \u06A9\u06D2 \u0628\u06CC\u0633 \u0645\u06CC\u067E (basemap) \u06A9\u0648 \u0627\u06A9\u0679\u06BE\u0627 \u0645\u0646\u062A\u0642\u0644 \u0627\u0648\u0631 \u0632\u0648\u0645 \u06A9\u0631\u062A\u0627 \u06C1\u06D2\u061B \u06CC\u06C1 \u067E\u0627\u0644\u06CC\u06AF\u0646\u0632\u060C \u0688\u06CC\u0679\u0627 \u06CC\u0627 \u0644\u06CC\u062C\u0646\u0688 \u067E\u0631 \u0627\u062B\u0631\u0627\u0646\u062F\u0627\u0632 \u0646\u06C1\u06CC\u06BA \u06C1\u0648\u062A\u0627\u06BE',
+    pl: 'Synchronizuje wy\u0142\u0105cznie przesuwanie i przybli\u017Canie mapy podk\u0142adowej (basemap) obu ekran\u00F3w; nie wp\u0142ywa na poligony, dane ani legend\u0119.',
+    ms: 'Hanya menyegerakkan pengesotan dan zum peta asas (basemap) kedua-dua skrin bersama; tidak menjejaskan poligon, data atau legenda.',
+    ky: '\u0424\u0430\u043A\u0430\u0442 \u044D\u043A\u0438 \u044D\u043A\u0440\u0430\u043D\u0434\u044B\u043D \u043D\u0435\u0433\u0438\u0437\u0433\u0438 \u043A\u0430\u0440\u0442\u0430\u0441\u044B\u043D (basemap) \u0431\u0438\u0440\u0433\u0435 \u0436\u044B\u043B\u0434\u044B\u0440\u0443\u0443 \u0436\u0430\u043D\u0430 \u0447\u043E\u04A3\u0434\u043E\u0440\u0443\u0443\u043D\u0443 \u0448\u0430\u0439\u043A\u0435\u0448\u0442\u0438\u0440\u0435\u0442; \u043F\u043E\u043B\u0438\u0433\u043E\u043D\u0433\u043E, \u0434\u0430\u043D\u043D\u044B\u043B\u0430\u0440\u0433\u0430 \u0436\u0430 \u0431\u0435\u043B\u0433\u0438\u0433\u0435 \u0442\u0438\u0439\u0431\u0438\u0441\u0438\u0437.',
+    mn: '\u0417\u04E9\u0432\u0445\u04E9\u043D \u0434\u044D\u043B\u0433\u04AF\u04AF\u0440\u0438\u0439\u043D \u0441\u0443\u0443\u0440\u044C \u0437\u0443\u0440\u0433\u0438\u0439\u0433 (basemap) \u0445\u0430\u043C\u0442 \u0448\u0438\u043B\u0436\u04AF\u04AF\u043B\u0436, \u0442\u043E\u043C\u0440\u0443\u0443\u043B\u0434\u0430\u0433; \u04E9\u04E9\u0440\u0447\u043B\u04E9\u043D\u0433, \u043C\u044D\u0434\u044D\u044D\u043B\u044D\u043B \u044D\u0441\u0432\u044D\u043B \u0442\u0430\u0439\u043B\u0431\u0430\u0440\u0442 \u043D\u04E9\u043B\u04E9\u04E9\u043B\u04E9\u0445\u0433\u04AF\u0439.',
+    ka: '\u10DB\u10EE\u10DD\u10DA\u10DD\u10D3 \u10DD\u10E0\u10D8\u10D5\u10D4 \u10D4\u10D9\u10E0\u10D0\u10DC\u10D8\u10E1 \u10E1\u10D0\u10D1\u10D0\u10D6\u10D8\u10E1\u10DD \u10E0\u10E3\u10D9\u10D0\u10E1 (basemap) \u10D0\u10D3\u10D2\u10D8\u10DA\u10D4\u10D1\u10E1 \u10D3\u10D0 \u10D0\u10D3\u10D8\u10D3\u10D4\u10D1\u10D3\u10D0 \u10D4\u10E0\u10D7\u10D0\u10D3, \u10DC\u10D4 \u10DB\u10DD\u10E5\u10DB\u10D4\u10D3\u10D4\u10D1\u10D0 \u10DE\u10DD\u10DA\u10D8\u10D2\u10DD\u10DC\u10D4\u10D1\u10E1, \u10DB\u10DD\u10DC\u10D0\u10EA\u10D4\u10DB\u10D4\u10D1\u10E1 \u10D0\u10DC \u10DA\u10D4\u10D2\u10D4\u10DC\u10D3\u10D0\u10E1.',
+    it: 'Sposta e zoomma insieme solo la mappa base delle due schermate; non influisce su poligoni, dati o legenda.'
+  };
+  Object.keys(locationSyncTooltips).forEach(function (lang) {
+    if (SYLVA_TRANSLATIONS[lang]) {
+      SYLVA_TRANSLATIONS[lang].vaw_location_sync_tooltip = locationSyncTooltips[lang];
     }
   });
 })();
@@ -50869,7 +51044,7 @@ renderWorkspaceList();
         _wsGrouped.forEach(function(ws){
             var vis = ws.visible !== false;
             html += '<div class="vaw-ws-row" data-ws="' + ws.id + '" style="opacity:' + (vis ? '1' : '0.45') + '">' +
-                '<input type="checkbox" class="vaw-vis-cb" ' + (vis ? 'checked' : '') + ' title="Haritada göster/gizle" style="flex-shrink:0;cursor:pointer;width:14px;height:14px;accent-color:' + ws.color + ';">' +
+                '<input type="checkbox" class="vaw-vis-cb" ' + (vis ? 'checked' : '') + ' title="' + escapeHtml(t('layer_switch_visibility_hint', 'Haritada göster/gizle')) + '" style="flex-shrink:0;cursor:pointer;width:14px;height:14px;accent-color:' + ws.color + ';">' +
                 '<span class="vaw-ws-swatch" style="background:' + ws.color + ';"></span>' +
                 '<span class="vaw-ws-name" title="İsmi değiştirmek için tıklayın">' + esc(wsDisplayName(ws)) + '</span>' +
                 '<button data-act="del" title="Sil" style="color:#dc2626;">🗑️</button>' +
@@ -53215,7 +53390,27 @@ refresh();
     // Bina Çatı Tespiti burada özellikle dışarıda bırakılır.
     function sylvaLocalizedNativeClasses(index) {
         var k=String(index||'').toUpperCase();
-        if(k==='BUILDING_FOOTPRINT') return null;
+        // 🛠️ BUG FİX (kullanıcı bildirimi — "Bina Çatı Tespiti'ni İngilizce
+        // lejantla indirdim ama Google Earth'te lejant adları hep Türkçe
+        // kalıyor"): KÖK NEDEN — bu fonksiyon BUILDING_FOOTPRINT için
+        // BİLİNÇLİ olarak `null` döndürüyordu (aşağıdaki eski satır: "if
+        // (k==='BUILDING_FOOTPRINT') return null;"). `null` dönünce
+        // _sylvaLocalizedVectorPayload() hiç `localizedClassMeta` eklemiyor,
+        // sunucu da (_vectorize_analysis_payload → BUILDING_FOOTPRINT dalı)
+        // her zaman sabit-kodlanmış Türkçe "Bina Çatı Poligonu" / "Bina Dışı
+        // Alan" etiketlerini kullanıyordu — aktif arayüz dili ne olursa
+        // olsun. 30 dilli çeviriler (building_roof_polygon/
+        // building_outside_area — bkz. yukarıdaki buildingRoofLabels bloğu)
+        // zaten mevcuttu ama hiç KULLANILMIYORDU. ÇÖZÜM: LULC'de olduğu gibi
+        // artık aktif dildeki gerçek çeviriyi (t() ile) code:1/0 ile birlikte
+        // döndürüyoruz; böylece ekran lejantı, KML/SHP/GeoJSON dışa aktarımı
+        // ve LEJANTLAR.txt hepsi aynı dilde iner.
+        if (k === 'BUILDING_FOOTPRINT') {
+            return [
+                { code: 1, label: String(t('building_roof_polygon', 'Building roof polygon')), color: '#dc2626' },
+                { code: 0, label: String(t('building_outside_area', 'Outside building area')), color: '#cbd5e1' }
+            ];
+        }
         // 🛠️ BUG FİX (kullanıcı bildirimi — vektör indirmede LULC lejantı
         // her zaman Türkçe iniyordu): LULC/LULC_ESA/LULC_MODIS/LULC_CORINE
         // için ekran lejantı (renderAnalysisLegend, bkz. yukarıdaki
