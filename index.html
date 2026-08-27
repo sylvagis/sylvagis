@@ -717,25 +717,38 @@ tr.class-highlight-active {
         }
         /* Sağ harita aktif olduğunda sarı, sol harita aktif olduğunda yeşil
            çerçeve yanıp söner; böylece aktif pencere renk ile ayırt edilir. */
+        /* 🛠️ BUG FİX (Faz 56 — "ekran 1 ve 2 arasındaki beyaz çizgiyi
+           incelt"): Aktif pencereyi gösteren bu anahat (outline), özellikle
+           çift ekran alt alta dizildiğinde (dar pencere), iki harita
+           arasındaki sınırda kalın/parlak bir çubuk gibi görünüyordu —
+           anahat genişliği (3-5px) ve etrafındaki parlama (box-shadow blur
+           8-26px) toplamda gerçekte olduğundan çok daha kalın bir çizgi
+           izlenimi veriyordu. Aktif pencere göstergesi işlevi KORUNUYOR
+           (hâlâ sarı/yeşil yanıp sönüyor) — yalnızca anahat genişliği ve
+           parlama yarıçapı belirgin şekilde inceltildi. */
         body.sylva-dual-screen-on #map2-wrapper.sylva-active-map-pane {
-            outline: 3px solid rgba(234, 179, 8, 0.95);
+            outline: 1.5px solid rgba(234, 179, 8, 0.95);
             animation: sylva-active-pane-yellow-blink 1.8s ease-in-out infinite;
         }
         body.sylva-dual-screen-on #ruler-container.sylva-active-map-pane {
-            outline: 5px solid rgba(163, 230, 53, 1);
+            outline: 1.5px solid rgba(163, 230, 53, 1);
             animation: sylva-active-pane-green-blink 1.8s ease-in-out infinite;
         }
         @keyframes sylva-active-pane-yellow-blink {
-            0%, 100% { outline-color: rgba(234, 179, 8, 0.72); box-shadow: inset 0 0 0 2px rgba(254, 240, 138, 0.34), 0 0 8px rgba(234, 179, 8, 0.32); }
-            50%      { outline-color: rgba(250, 204, 21, 1);    box-shadow: inset 0 0 0 3px rgba(254, 240, 138, 0.92), 0 0 22px rgba(234, 179, 8, 0.72); }
+            0%, 100% { outline-color: rgba(234, 179, 8, 0.72); box-shadow: inset 0 0 0 1px rgba(254, 240, 138, 0.34), 0 0 3px rgba(234, 179, 8, 0.32); }
+            50%      { outline-color: rgba(250, 204, 21, 1);    box-shadow: inset 0 0 0 1px rgba(254, 240, 138, 0.92), 0 0 7px rgba(234, 179, 8, 0.72); }
         }
         @keyframes sylva-active-pane-green-blink {
-            0%, 100% { outline-color: rgba(132, 204, 22, 0.92); box-shadow: inset 0 0 0 2px rgba(217, 249, 157, 0.58), 0 0 10px rgba(132, 204, 22, 0.52); }
-            50%      { outline-color: rgba(190, 242, 100, 1); box-shadow: inset 0 0 0 3px rgba(236, 252, 203, 1), 0 0 26px rgba(132, 204, 22, 0.92); }
+            0%, 100% { outline-color: rgba(132, 204, 22, 0.92); box-shadow: inset 0 0 0 1px rgba(217, 249, 157, 0.58), 0 0 3px rgba(132, 204, 22, 0.52); }
+            50%      { outline-color: rgba(190, 242, 100, 1); box-shadow: inset 0 0 0 1px rgba(236, 252, 203, 1), 0 0 8px rgba(132, 204, 22, 0.92); }
         }
         /* Sağ haritanın bağımsız cetveli: yatay üstte, dikey cetvel sağda. */
         .map2-ruler-container {
             display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0;
+            /* Faz 56: Ekran 1'in .ruler-container'ıyla (overflow:hidden)
+               tutarlılık — Ekran 2'nin içeriği kendi ayrılan alanının
+               dışına taşmasın diye. */
+            overflow: hidden;
         }
         .map2-ruler-top-row {
             display: flex; flex-direction: row; height: 22px; flex-shrink: 0;
@@ -755,7 +768,7 @@ tr.class-highlight-active {
             border-left: 1px solid #b0bac6; position: relative;
             overflow: hidden; cursor: crosshair; user-select: none;
         }
-        .map2-ruler-map-row { display: flex; flex: 1; min-height: 0; }
+        .map2-ruler-map-row { display: flex; flex: 1; min-height: 0; overflow: hidden; }
         .map2-ruler-map-row #map2 { flex: 1; min-width: 0; min-height: 0; }
         .map2-ruler-h canvas, .map2-ruler-v canvas { display: block; }
         /* 🛠️ Hizalama düzeltmesi: Ekran 2'nin sağında 22px genişliğinde dikey
@@ -1577,6 +1590,53 @@ tr.class-highlight-active {
             .sidebar-right .panel-content {
                 overflow-y: auto !important;
             }
+        }
+
+        /* ===========================================================
+           🛠️ BUG FİX (Faz 55 — "ekranı küçültünce en alttaki
+           LinkedIn/Instagram/İletişim çubuğu (footer) görünmüyor, menüler
+           üstüne çıkmış"): Yukarıdaki üç ayrı kural (tablet 641-900px,
+           geniş-tablet 901-1366px + YALNIZCA yatay/landscape) TÜM olası
+           pencere boyutu/yön kombinasyonlarını kapsamıyordu. Örneğin
+           901-1366px arasında ama DİKEY (portrait) bir pencere (bazı
+           dizüstü/masaüstü ekranlarında tarayıcı penceresini dar ama uzun
+           boyuta küçültünce ortaya çıkar) hiçbir kurala girmiyordu — bu
+           durumda footer normal belge akışında kalıyor, body/html
+           overflow:hidden olmadığı için sayfanın gerçek alt kenarına kadar
+           kaydırma yapılmadan görünmüyordu; sonuç: yüzen harita
+           kontrol düğmeleri (zoom/pusula/katman/cetvel) görünüm alanının
+           en altına dayanıyor, footer'ın kendisi ekranın dışında kalıyordu.
+           ÇÖZÜM: Bu tek, YÖN/ORIENTATION KOŞULU OLMAYAN "güvenlik ağı"
+           kuralı, ≤1366px genişliğindeki HER pencere boyutu/yön
+           kombinasyonu için footer'ı her zaman sabit ve görünür tutar —
+           yukarıdaki üç özel kuralın kapsamadığı hiçbir boşluk kalmaz.
+           Daha spesifik kurallar (tablet/mobil) bu genel kuraldan SONRA
+           gelmeye devam eder ve CSS sırasına göre kendi ek davranışlarını
+           (mobile-toolbar, quick-bar vb.) üzerine eklemeyi sürdürür. */
+        @media (max-width: 1366px) {
+            html, body { height: 100%; height: 100dvh; overflow: hidden; }
+            body { overflow: hidden; }
+            .footer {
+                display: flex !important;
+                position: fixed !important;
+                bottom: 0 !important;
+                left: 0 !important;
+                right: 0 !important;
+                height: 40px !important;
+                z-index: 999 !important;
+                padding: 0 14px !important;
+                flex-wrap: nowrap !important;
+                overflow-x: auto !important;
+                scrollbar-width: none !important;
+                gap: 0 8px !important;
+                font-size: 0.72rem;
+                background-color: #e2e8f0 !important;
+                border-top: 1px solid #cbd5e1 !important;
+                box-shadow: none !important;
+                align-items: center !important;
+            }
+            .footer::-webkit-scrollbar { display: none !important; }
+            .main-container { padding-bottom: 40px; box-sizing: border-box; }
         }
 
         /* ===========================================================
@@ -3063,7 +3123,20 @@ tr.class-highlight-active {
     }
 }
 
-@media (max-width: 640px) {
+/* 🛠️ BUG FİX (Faz 56 — "çift ekranda Ekran 2'nin altındaki logo/
+   koordinat/lejant ve arama büyüteci düğmesi görünmüyor"): Bu kesin
+   yükseklik/50-50 pay kuralı önceden yalnızca ≤640px (mobil) genişlikte
+   uygulanıyordu. 641-900px arasında (tablet — tam bu sorunun bildirildiği
+   pencere genişliği) #map-panes-row hiç açık bir height almıyor, iki
+   panel yalnızca varsayılan flex:1'e güveniyordu. Bu aralıkta bazı
+   durumlarda iki panel TAM eşit bölünmüyor; Ekran 2'nin (#map2-wrapper)
+   gerçek yüksekliği beklenenden az kalabiliyor — bu da köşedeki mutlak
+   konumlu logo/koordinat kutusunun (bottom:15px) ve yan araç çubuğunun alt
+   ucundaki arama büyüteci düğmesinin görünüm alanının dışında/kesilmiş
+   kalmasına yol açıyordu. Aynı, halihazırda ≤640px'te güvenilir şekilde
+   çalışan kesin 50-50 payı artık 900px'e kadar (tüm alt-alta-dizilmiş
+   çift ekran aralığı) uygulanıyor. */
+@media (max-width: 900px) {
     body.sylva-dual-screen-on #map-panes-row {
         height: 100% !important;
     }
@@ -8114,6 +8187,13 @@ function _sylvaHasMixedStackCategories(paneId) {
                     window._sylvaSyncDualScreenBottomClearance();
                     setTimeout(window._sylvaSyncDualScreenBottomClearance, 300);
                 }
+                // 🛠️ Faz 55: çift ekrandan tek ekrana dönüldüğünde de (veya
+                // tam tersi) .ruler-map-row'un alt boşluğu gerçek çubuk
+                // yüksekliğine göre anında yeniden hesaplansın.
+                if (typeof window._sylvaSyncSingleScreenBottomClearance === 'function') {
+                    window._sylvaSyncSingleScreenBottomClearance();
+                    setTimeout(window._sylvaSyncSingleScreenBottomClearance, 300);
+                }
             }, 80);
             if (typeof window._sylvaUpdateMap2SearchAvailability === 'function') {
                 window._sylvaUpdateMap2SearchAvailability();
@@ -8182,6 +8262,79 @@ function _sylvaHasMixedStackCategories(paneId) {
                 if (_sylvaClearanceFooterEl) _sylvaBottomClearanceRO.observe(_sylvaClearanceFooterEl);
             }
         } catch (e) {}
+
+        // ═══════════════════════════════════════════════════════════
+        // 🛠️ BUG FİX (Faz 55 — "haritanın ve tuşların arasında gri bir
+        // boşluk var, ekranı küçültünce"): TEK ekran modunda .ruler-map-
+        // row'a CSS'te SABİT px değerleriyle (64px/102px) tahmin edilen
+        // alt boşluk (mobile-toolbar + footer payı), bazı ara pencere
+        // boyutlarında GERÇEK render edilen yükseklikle örtüşmüyordu —
+        // örneğin yalnızca footer (40px) görünürken CSS hâlâ toolbar+
+        // footer'ı (102px) varsayabiliyordu. Fazla ayrılan bu pay,
+        // Leaflet'in konteynerini gereğinden fazla küçültüyor ve harita
+        // ile alttaki düğmeler arasında boş/gri bir şerit bırakıyordu.
+        // ÇÖZÜM: yukarıdaki çift ekran düzeltmesiyle AYNI güvenilir
+        // geometri tabanlı ölçüm yöntemi (elemanın gerçekten ekranın alt
+        // kenarına yaslanıp yaslanmadığını getBoundingClientRect ile
+        // kontrol etme) burada TEK ekran için de kullanılıyor — sabit
+        // piksel tahminleri yerine mobile-toolbar/footer'ın GERÇEK
+        // yüksekliği ölçülüp doğrudan .ruler-map-row'a (ve tek başına
+        // görünen map2 sürümüne) o kadar padding-bottom veriliyor. Çift
+        // ekran aktifken bu fonksiyon hiçbir şey yapmaz — o modun kendi
+        // (yukarıdaki, kasıtlı olarak sıfır boşluklu) mantığı geçerlidir.
+        // ═══════════════════════════════════════════════════════════
+        function _sylvaSyncSingleScreenBottomClearance() {
+            try {
+                if (window._sylvaDualScreenActive) return;
+                function bottomBarHeight(el) {
+                    if (!el) return 0;
+                    var cs = window.getComputedStyle(el);
+                    if (cs.display === 'none' || cs.visibility === 'hidden') return 0;
+                    var rect = el.getBoundingClientRect();
+                    if (rect.height <= 0 || rect.width <= 0) return 0;
+                    var gapFromViewportBottom = window.innerHeight - rect.bottom;
+                    if (gapFromViewportBottom < -2 || gapFromViewportBottom > 6) return 0; // ekranın altına yaslanmamış
+                    return window.innerHeight - rect.top;
+                }
+                var toolbarH = bottomBarHeight(document.getElementById('mobile-toolbar'));
+                var footerH = bottomBarHeight(document.querySelector('.footer'));
+                // İki çubuk da ekranın altına yaslanmışsa (üst üste değil,
+                // toolbar footer'ın ÜSTÜNDE) toplam pay, en üstteki
+                // çubuğun üst kenarından ekranın altına kadar olan
+                // mesafedir — bottomBarHeight() bunu zaten doğru veriyor
+                // (en üstte duran çubuğunki her zaman daha büyük değeri
+                // üretir), bu yüzden ikisinin TOPLAMI değil MAKSİMUMU alınır.
+                var clearance = Math.max(toolbarH, footerH);
+                var rows = document.querySelectorAll('.ruler-map-row, .map2-ruler-map-row');
+                rows.forEach(function (row) {
+                    if (clearance > 0) {
+                        row.style.setProperty('padding-bottom', clearance + 'px', 'important');
+                        row.style.setProperty('box-sizing', 'border-box', 'important');
+                    } else {
+                        row.style.removeProperty('padding-bottom');
+                        row.style.removeProperty('box-sizing');
+                    }
+                });
+                if (typeof window._sylvaFullMapResize === 'function') window._sylvaFullMapResize();
+            } catch (e) {}
+        }
+        window._sylvaSyncSingleScreenBottomClearance = _sylvaSyncSingleScreenBottomClearance;
+        window.addEventListener('resize', _sylvaSyncSingleScreenBottomClearance);
+        window.addEventListener('orientationchange', function () { setTimeout(_sylvaSyncSingleScreenBottomClearance, 200); });
+        try {
+            if (window.ResizeObserver) {
+                var _sylvaSingleClearanceRO = new ResizeObserver(function () {
+                    _sylvaSyncSingleScreenBottomClearance();
+                });
+                var _sylvaSingleClearanceToolbarEl = document.getElementById('mobile-toolbar');
+                var _sylvaSingleClearanceFooterEl = document.querySelector('.footer');
+                if (_sylvaSingleClearanceToolbarEl) _sylvaSingleClearanceRO.observe(_sylvaSingleClearanceToolbarEl);
+                if (_sylvaSingleClearanceFooterEl) _sylvaSingleClearanceRO.observe(_sylvaSingleClearanceFooterEl);
+            }
+        } catch (e) {}
+        setTimeout(_sylvaSyncSingleScreenBottomClearance, 100);
+        setTimeout(_sylvaSyncSingleScreenBottomClearance, 500);
+        setTimeout(_sylvaSyncSingleScreenBottomClearance, 1200);
 
         // ═══════════════════════════════════════════════════════════
         // 🛠️ BUG FİX (Pencere/kapsayıcı küçültülünce basemap kayboluyor):
@@ -16635,6 +16788,66 @@ function selectRamp(name) {
                     // CLASSIFIED modunda açılmalı ve gerçek histogram grafiği
                     // analiz tamamlandığı anda görünmelidir.
                     if (typeof setClassificationType === 'function') setClassificationType('classified');
+                    // 🛠️ BUG FİX (Faz 54 — "raster indirmede yine gereksiz boş
+                    // kutular geldi, Orman (Değişmeyen) kayboluyor"): Paket 42
+                    // yalnızca sunucu tarafındaki nodata/valid-mask mantığını
+                    // düzeltmişti, ama GERÇEK kök neden istemci (index.html)
+                    // tarafındaymış. FOREST_LOSS/URBAN_GROWTH ekrana geldiğinde
+                    // yukarıdaki setClassificationType('classified') çağrısı
+                    // currentClassificationType'ı 'classified' yapıyor — ANCAK
+                    // #class-rows-container DOM'u bu analizin GERÇEK 3 (veya 2)
+                    // sınıfıyla HİÇ doldurulmuyordu; önceki, tamamen alakasız bir
+                    // analizden kalma "çöp" satırlar orada kalıyordu (yalnızca
+                    // Bakı/TOPO_ASPECT için ayrı bir doldurma mekanizması vardı).
+                    // exportVisualFor() (bkz. index.html ~53104 ve ~53118)
+                    // classificationType==='classified' olduğunu görünce bu ÇÖP
+                    // satırları GERÇEK sınıflar sanıp sunucuya 'breaks' olarak
+                    // gönderiyordu — bu da sunucunun kendi güvenilir 3 sınıflı
+                    // yedek listesini (server.py _native_export_breaks, yalnızca
+                    // requested_breaks None ise devreye girer) tamamen devre
+                    // dışı bırakıyor, "Orman (Değişmeyen)" sınıfı indirilen
+                    // rasterdan/lejanttan kayboluyordu (ArcMap'te 2 boş kutu).
+                    // ÇÖZÜM: kodları KESİN OLARAK bilinen (sıralı 0,1,2...,
+                    // server.py'deki _native_export_breaks ile birebir eşleşen)
+                    // FOREST_LOSS ve URBAN_GROWTH için #class-rows-container'ı
+                    // BURADA, ekrana her geldiğinde, doğrudan classesRaw'daki
+                    // GERÇEK sınıflarla dolduruyoruz — Bakı için zaten var olan
+                    // desenin (setAspectRows) aynısı. Böylece hem ekrandaki
+                    // lejant hem indirilen dosya HER ZAMAN aynı, TAM sınıf
+                    // listesini kullanır; LULC/WorldCover/MODIS/CORINE gibi
+                    // sıralı olmayan (gerçek arazi kodlu) diğer native
+                    // sınıflandırılmış analizler bu bloktan ETKİLENMEZ, kendi
+                    // mevcut (renderLulcLegendAndChart tabanlı) akışlarını
+                    // aynen korur.
+                    try {
+                        var _nativeSeqAn = String(meta.analysisName || '').toUpperCase();
+                        if ((_nativeSeqAn === 'FOREST_LOSS' || _nativeSeqAn === 'URBAN_GROWTH') && meta.classesRaw) {
+                            var _nativeSeqRows = JSON.parse(meta.classesRaw);
+                            if (Array.isArray(_nativeSeqRows) && _nativeSeqRows.length) {
+                                var _nsCountEl = document.getElementById('class-count');
+                                if (_nsCountEl) _nsCountEl.value = String(_nativeSeqRows.length);
+                                if (typeof buildClassRows === 'function') buildClassRows(_nativeSeqRows.length);
+                                var _nsRoot = document.getElementById('class-rows-container');
+                                var _nsDomRows = _nsRoot ? _nsRoot.querySelectorAll('.classification-row') : [];
+                                _nativeSeqRows.forEach(function (c, i) {
+                                    var row = _nsDomRows[i];
+                                    if (!row) return;
+                                    var mn = row.querySelector('.class-min'), mx = row.querySelector('.class-max'),
+                                        nm = row.querySelector('.class-name'), tr = row.querySelector('.class-color-trigger');
+                                    if (mn) mn.value = i;
+                                    if (mx) mx.value = i;
+                                    if (nm) { nm.value = String(c.label || ('Class ' + i)); nm.setAttribute('data-auto', '1'); nm.removeAttribute('data-user-edited'); }
+                                    if (tr) {
+                                        var _nsCol = String(c.color || '#999999');
+                                        if (_nsCol.charAt(0) !== '#') _nsCol = '#' + _nsCol;
+                                        tr.style.background = _nsCol;
+                                        tr.setAttribute('data-selected-color', _nsCol);
+                                        tr.removeAttribute('data-pending-color');
+                                    }
+                                });
+                            }
+                        }
+                    } catch (_nativeSeqErr) {}
                     var _freshStats = (meta && meta._lastStats) ? meta._lastStats : null;
                     if (_freshStats) {
                         if (typeof isLulcAnalysis === 'function' && isLulcAnalysis(meta.analysisName) &&
