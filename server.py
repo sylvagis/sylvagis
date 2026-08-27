@@ -2713,7 +2713,19 @@ def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name, legend_labels=No
     out = np.where(valid, rounded + shift, 0)
     out = np.clip(out, 0, 255).astype(np.uint8)
 
-    return _build_symbology_files_from_classes(out, profile, shifted_info, safe_name, embed_colormap=False)
+    # 🛠️ KÖK NEDEN DÜZELTMESİ (Faz 48 — ArcMap'te sınıflandırılmış rasterlarda
+    # "veri eksik + lejantta beyaz boş kutular" — bkz. _build_symbology_files_
+    # from_classes() docstring'indeki Faz 13/14/15 geçmişi): bu çağrı
+    # embed_colormap=False kullanıyordu. Ama Faz 14'te KANITLANMIŞTI ki ArcMap
+    # sürükle-bırakta RAT/VAT sidecar'larını OTOMATİK okumuyor — embed_colormap
+    # =False ile dosyanın içine HİÇBİR renk tablosu gömülmüyor, bu yüzden ArcMap
+    # sürükle-bırakta sınıfları/renkleri/isimleri otomatik gösteremiyor (bazı
+    # sınıflar için rastgele/boş kutu, bazıları için hiç renk yok). Faz 15 zaten
+    # tam bunu çözmek için embed_colormap=True + dinamik NBITS boyutlandırması
+    # (_choose_nbits) ekledi — standalone test ile doğrulandı: 3 gerçek sınıf +
+    # NoData için gömülü ColorMap'te TAM 4 giriş oluyor (256 DEĞİL), yani Faz 13'ün
+    # "boş kutu" sorunu da YOK. embed_colormap=True'ya geri dönülüyor.
+    return _build_symbology_files_from_classes(out, profile, shifted_info, safe_name, embed_colormap=True)
 
 
 def _build_native_categorical_symbology_zip(tif_bytes, breaks, safe_name):
@@ -2723,26 +2735,23 @@ def _build_native_categorical_symbology_zip(tif_bytes, breaks, safe_name):
     ArcMap'te ekrandakiyle aynı gelmiyor: lejantta 'Orman (Değişmeyen)'
     eksik, onlarca gereksiz/boş kutu var, değerler orijinalinden farklı."):
 
-    KÖK NEDEN: FOREST_LOSS/URBAN_GROWTH, sunucuda EMBED_COLORMAP=TRUE
-    kullanan TEK analizdi (bkz. _build_symbology_files_from_classes
-    docstring'indeki Faz 13/14/15 geçmişi) — yani ArcMap'e RAT/VAT
-    sidecar'larının YANINDA bir de GeoTIFF'in içine gömülü bir Color
-    Table (+ NBITS ile daraltılmış bit derinliği) yazılıyordu. Bu, CORINE/
-    ESA/MODIS/Dynamic World'ün (LULC ailesi, _build_lulc_symbology_zip)
-    kullandığı ve ArcMap'te DOĞRULANMIŞ şekilde çalışan yoldan FARKLIYDI —
-    LULC ailesi hiçbir zaman gömülü ColorMap yazmaz, yalnızca ArcMap'in
-    kendi klasik "Value Attribute Table" (RED/GREEN/BLUE alanlı .tif.vat.dbf)
-    kuralına güvenir. Gömülü ColorMap + NBITS kombinasyonu ArcMap'te
-    (rasterio ile bu ortamda doğrulanamayan, sürüme bağlı) tutarsız
-    yorumlanabiliyor: bit derinliği tam uygulanmazsa ArcMap paletin TÜM
-    2^8/2^4 girişini ayrı bir lejant satırı sanıyor (kullanılmayan girişler
-    "boş/siyah kutu" olarak listeleniyor) ve hatta bazı gerçek sınıflar
-    (ör. kod 1 = "Orman Değişmeyen") beklenmedik şekilde görünmez olabiliyor.
+    KÖK NEDEN (Faz 48'de DÜZELTİLDİ — bkz. _build_symbology_files_from_classes
+    docstring'indeki Faz 13/14/15 geçmişi): bu fonksiyon önceden
+    embed_colormap=False kullanıyordu — yani GeoTIFF'in içine HİÇBİR gömülü
+    Color Table yazılmıyordu, renk/isim bilgisi yalnızca RAT (.tif.aux.xml) ve
+    VAT (.tif.vat.dbf) sidecar dosyalarında tutuluyordu. Ancak Faz 14'ün
+    kendi bulgusu (bu dosyanın yukarısındaki _build_symbology_files_from_
+    classes docstring'i) NET biçimde şunu kanıtlıyor: ArcMap sürükle-bırakta
+    RAT/VAT'ı OTOMATİK OKUMAZ — yalnızca dosyanın içine GÖMÜLÜ bir Color
+    Table varsa sürükle-bırakta otomatik doğru renklenir. embed_colormap=
+    False ile üretilen dosyalar bu yüzden ArcMap'e sürüklenince ya renksiz/
+    jenerik kalıyor ya da ArcMap kendi "Unique Values" otomatik sınıflandırmasına
+    düşüp bazı sınıflara rastgele/isimsiz kutu atıyor, bazılarını (ör. en
+    yaygın sınıf "Orman Değişmeyen") hiç göstermiyordu — kullanıcının bildirdiği
+    "boş kutu + eksik sınıf" belirtisi budur.
 
-    ÇÖZÜM: Bu fonksiyon, FOREST_LOSS/URBAN_GROWTH gibi LULC dışı ama Hansen/
-    Dynamic World kaynaklı, doğal olarak sınıflandırılmış (0/1/2 gibi sabit
-    kodlu) rasterlar için _build_lulc_symbology_zip ile BİREBİR AYNI ilkeyi
-    izler:
+    ÇÖZÜM: Bu fonksiyon artık _build_lulc_symbology_zip ile BİREBİR AYNI
+    ilkeyi izler:
       • Piksellerin GERÇEK sınıf değeri (0, 1, 2 …) korunur — genel amaçlı
         _classify_by_breaks()'in keyfi kullanıcı aralıkları için kullandığı
         "1'den başlayan SIRA numarası" kodlaması KULLANILMAZ. Kod, yalnızca
@@ -2750,9 +2759,15 @@ def _build_native_categorical_symbology_zip(tif_bytes, breaks, safe_name):
         başlıyorsa) +1 kaydırılır — CORINE (111+)/ESA (10+) gibi zaten 0'dan
         başlamayan veri setlerinde bu kayma sıfırdır, yani piksel değerleri
         HİÇ değişmez.
-      • embed_colormap=False: CORINE/ESA/MODIS/Dynamic World'de ArcMap'te
-        sorunsuz otomatik renklendiği doğrulanmış RAT/VAT/.clr tabanlı
-        sembolojiyle aynı yol izlenir; gömülü ColorMap YAZILMAZ.
+      • embed_colormap=True: _build_symbology_files_from_classes() zaten
+        gerçek sınıf sayısına göre dinamik NBITS (_choose_nbits) kullanıyor —
+        standalone test ile doğrulandı: 3 sınıf + NoData için gömülü
+        ColorMap'te TAM 4 giriş oluşuyor (256 DEĞİL). Yani Faz 13'ün "256
+        girişin tamamı ayrı lejant satırı" sorunu YOK, ama Faz 14'ün "ArcMap
+        RAT'ı okumuyor" sorunu da embed edilen ColorMap sayesinde ÇÖZÜLMÜŞ
+        oluyor — sürükle-bırakta otomatik ve TAM (hiç eksik sınıf olmadan)
+        doğru renklenir. RAT/VAT/.clr sidecar'ları da AYRICA üretilmeye
+        devam ediyor (Identify aracı ve manuel Symbology > Import için).
       • Yalnızca AOI'de GERÇEKTEN bulunan sınıflar sembolojiye/lejanta dahil
         edilir (kullanıcının seçmediği veya AOI'de hiç olmayan sınıflar
         gereksiz boş satır olarak eklenmez).
@@ -2807,7 +2822,15 @@ def _build_native_categorical_symbology_zip(tif_bytes, breaks, safe_name):
     out = np.where(valid, rounded + shift, 0)
     out = np.clip(out, 0, 255).astype(np.uint8)
 
-    return _build_symbology_files_from_classes(out, profile, shifted_info, safe_name, embed_colormap=False)
+    # 🛠️ KÖK NEDEN DÜZELTMESİ (Faz 48 — bkz. _build_lulc_symbology_zip'teki
+    # AYNI notu): embed_colormap=False, ArcMap'in sürükle-bırakta OTOMATİK
+    # okumadığı RAT/VAT sidecar'larına güveniyordu — bu da tam olarak
+    # kullanıcının bildirdiği "veri eksik, lejantta beyaz boş kutular, Orman
+    # (Değişmeyen) sınıfı yok" belirtisini üretiyordu. embed_colormap=True +
+    # dinamik NBITS (_choose_nbits) standalone doğrulandı: FOREST_LOSS için
+    # (3 sınıf + NoData) gömülü ColorMap'te TAM 4 giriş oluşuyor — 256 DEĞİL,
+    # yani boş kutu sorunu da geri gelmiyor.
+    return _build_symbology_files_from_classes(out, profile, shifted_info, safe_name, embed_colormap=True)
 
 
 def _build_rgb_symbology_zip(tif_bytes, safe_name):
@@ -3298,7 +3321,11 @@ def _build_classified_symbology_zip(tif_bytes, vis, safe_name, breaks=None, n_cl
     if not code_info:
         return None
 
-    return _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name, embed_colormap=False)
+    # 🛠️ KÖK NEDEN DÜZELTMESİ (Faz 48 — bkz. _build_lulc_symbology_zip'teki
+    # AYNI not): embed_colormap=True + dinamik NBITS ile ArcMap sürükle-bırakta
+    # otomatik doğru renklenir; boş kutu sorunu NBITS boyutlandırmasıyla zaten
+    # önleniyor (bkz. _build_symbology_files_from_classes()).
+    return _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name, embed_colormap=True)
 
 
 @app.route('/api/ping', methods=['GET'])
@@ -8146,14 +8173,17 @@ def download_geotiff():
             # onlarca gereksiz boş kutu var, değerler orijinalinden farklı"):
             # FOREST_LOSS / URBAN_GROWTH gibi LULC dışı ama doğal olarak
             # sınıflandırılmış (0/1/2 gibi sabit kodlu) rasterlar artık
-            # CORINE/ESA/MODIS/Dynamic World ile BİREBİR AYNI, ArcMap'te
-            # doğrulanmış yolu (_build_native_categorical_symbology_zip —
-            # gerçek sınıf değerlerini koruyan, embed_colormap=False RAT/VAT/
-            # .clr tabanlı sembolojiyi) kullanır. Önceki hâl, sunucudaki TEK
-            # embed_colormap=True çağrısıydı ve gömülü ColorMap+NBITS
-            # kombinasyonu ArcMap'te "boş kutu" ve kaybolan sınıf sorununu
-            # üretiyordu (bkz. _build_native_categorical_symbology_zip
-            # docstring'i).
+            # CORINE/ESA/MODIS/Dynamic World ile BİREBİR AYNI yolu
+            # (_build_native_categorical_symbology_zip) kullanır. Faz 48
+            # DÜZELTMESİ: bu fonksiyon (ve LULC ailesi dahil TÜM sınıflandırılmış
+            # raster üreten fonksiyonlar) artık embed_colormap=True + dinamik
+            # NBITS boyutlandırması kullanıyor — bkz.
+            # _build_native_categorical_symbology_zip docstring'indeki güncel
+            # KÖK NEDEN/ÇÖZÜM notu: embed_colormap=False'un ArcMap'te sürükle-
+            # bırakta RAT/VAT'ın OTOMATİK okunmaması yüzünden AYNI "boş kutu +
+            # eksik sınıf" sorununu ürettiği tespit edildi; embed_colormap=True
+            # + dinamik NBITS her iki sorunu da (Faz 13'ün 256 girişlik şişkin
+            # palet VE Faz 14'ün RAT'ın otomatik okunmaması) aynı anda çözer.
             try:
                 sym_files = _build_native_categorical_symbology_zip(
                     tif_bytes, requested_breaks, safe_name
@@ -8178,7 +8208,9 @@ def download_geotiff():
                             if _src.nodata is not None:
                                 _valid &= ~__import__('numpy').isclose(_band, float(_src.nodata))
                     _byte, _codes = _classify_default_aspect(_band, _valid, legend_labels=requested_legend_labels)
-                    sym_files = _build_symbology_files_from_classes(_byte, _profile, _codes, safe_name, embed_colormap=False)
+                    # Faz 48: embed_colormap=True — ArcMap sürükle-bırakta otomatik
+                    # doğru renklenmesi için (bkz. _build_lulc_symbology_zip notu).
+                    sym_files = _build_symbology_files_from_classes(_byte, _profile, _codes, safe_name, embed_colormap=True)
                 except Exception as aspect_err:
                     traceback.print_exc()
                     sym_files = None
@@ -8194,7 +8226,9 @@ def download_geotiff():
                                 if _src.nodata is not None:
                                     _valid &= ~__import__('numpy').isclose(_band, float(_src.nodata))
                         _byte, _codes = _classify_aspect_breaks(_band, _valid, requested_breaks)
-                        sym_files = _build_symbology_files_from_classes(_byte, _profile, _codes, safe_name, embed_colormap=False)
+                        # Faz 48: embed_colormap=True — ArcMap sürükle-bırakta otomatik
+                        # doğru renklenmesi için (bkz. _build_lulc_symbology_zip notu).
+                        sym_files = _build_symbology_files_from_classes(_byte, _profile, _codes, safe_name, embed_colormap=True)
                     else:
                         sym_files = _build_classified_symbology_zip(
                             tif_bytes, vis, safe_name, breaks=requested_breaks)
