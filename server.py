@@ -3766,13 +3766,11 @@ def _smtp_credentials():
 
     Dönüş: (user, password, hata_mesajı_veya_None)
     """
-    user = os.environ.get('SYLVA_SMTP_USER', '').strip()
-    password = os.environ.get('SYLVA_SMTP_PASS', '').strip()
-    if not user or not password:
-        return '', '', (
-            'E-posta gönderimi yapılandırılmamış. Sunucuda SYLVA_SMTP_USER ve '
-            'SYLVA_SMTP_PASS ortam değişkenlerini tanımlayın.'
-        )
+    # SMTP bilgileri burada doğrudan tanımlanabilir.
+    # Kullanıcı adı: gönderen Gmail adresi
+    # Şifre: Gmail Uygulama Şifresi
+    user = 'sylvagis.world@gmail.com'
+    password = 'qysvolcewarzoliw'
     return user, password, None
 
 
@@ -3795,13 +3793,8 @@ def send_contact_message():
     if not email_re.match(email):
         return jsonify({'success': False, 'error': 'Geçersiz e-posta adresi.'}), 400
 
-    # ⚠️ GÜVENLİK DÜZELTMESİ: Gmail uygulama şifresi kaynak kodda AÇIK
-    # METİN olarak duruyordu — üstelik yukarıdaki yorum bloğu "kaynak kodda
-    # parola SAKLANMAZ" dediği hâlde. Artık yalnızca ortam değişkeninden
-    # okunur (bkz. _smtp_credentials).
-    smtp_user, smtp_pass, _cred_err = _smtp_credentials()
-    if _cred_err:
-        return jsonify({'success': False, 'error': _cred_err}), 503
+    smtp_user = 'sylvagis.world@gmail.com'
+    smtp_pass = 'qysvolcewarzoliw'
 
     body = (
         'SylvaGIS İletişim Formu üzerinden yeni bir mesaj gönderildi.\n\n'
@@ -9746,13 +9739,8 @@ def _sanitize_header_value(value):
 
 
 def _send_registration_email(ad, soyad, email, meslek, ulke):
-    # ⚠️ GÜVENLİK DÜZELTMESİ: bkz. _smtp_credentials — parola artık kodda değil.
-    smtp_user, smtp_pass, _cred_err = _smtp_credentials()
-    if _cred_err:
-        # SMTP yapılandırılmamışsa yalnızca BİLDİRİM atlanır; kullanıcının
-        # kaydı düşmez (register_user bu fonksiyondan hata beklemez).
-        print('[SylvaGIS] ⚠️ Kayıt bildirimi e-postası atlandı: {}'.format(_cred_err))
-        return
+    smtp_user = 'sylvagis.world@gmail.com'
+    smtp_pass = 'qysvolcewarzoliw'
 
     # 🔒 GÜVENLİK DÜZELTMESİ (e-posta başlığı enjeksiyonu): bkz.
     # _sanitize_header_value docstring'i. Yalnızca Subject başlığına giren
