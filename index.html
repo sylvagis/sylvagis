@@ -969,7 +969,7 @@ tr.class-highlight-active {
         .sylva-weather-head-btn:hover, .sylva-weather-head-btn:focus {
             background: #eff6ff; outline: 2px solid #93c5fd; outline-offset: 1px;
         }
-        .sylva-weather-panel-list { padding: 2px 0; }
+        .sylva-weather-panel-list { max-height: 220px; overflow-y: auto; padding: 2px 0; }
         .sylva-weather-day-row {
             display: grid; grid-template-columns: auto 1fr; gap: 2px 6px; align-items: center;
             padding: 3px 7px; border-bottom: 1px dashed #eef2f7; font-size: 0.66rem; color: #334155;
@@ -5376,16 +5376,6 @@ function _sylvaHasMixedStackCategories(paneId) {
         ]).then(function (results) {
             var canvas = results[0], logo = results[1];
             if (document.body.contains(reportEl)) document.body.removeChild(reportEl);
-            // 🛠️ BUG FİX: canvas.height, reportEl'in ALT PADDING'ini (24px) de
-            // içeriyordu — tablo son satırdan sonra kalan bu boşluk, bir
-            // önceki sürümde ayrı (neredeyse tamamen BOŞ) bir sayfa olarak
-            // basılıyordu. Artık sayfalama son satırın GERÇEK alt sınırına
-            // (rowBoundaries'teki son satır) kadar yapılıyor; sonrasındaki
-            // dolgu/boşluk hiçbir sayfaya dahil edilmiyor.
-            var contentBottomPx = rowBoundaries.length
-                ? rowBoundaries[rowBoundaries.length - 1].bottom
-                : canvas.height;
-            if (contentBottomPx > canvas.height) contentBottomPx = canvas.height;
             var doc = new JsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
             var pageW = doc.internal.pageSize.getWidth();
             var pageH = doc.internal.pageSize.getHeight();
@@ -5411,8 +5401,8 @@ function _sylvaHasMixedStackCategories(paneId) {
             }
 
             var y = 0, first = true;
-            while (y < contentBottomPx - 0.5) {
-                var maxY = Math.min(y + pageContentPx, contentBottomPx);
+            while (y < canvas.height) {
+                var maxY = Math.min(y + pageContentPx, canvas.height);
                 // 🛠️ BUG FİX: Önceki sürüm sayfayı SABİT piksel yüksekliğinde
                 // kesiyordu — bu, bir tablo satırının üst yarısını bir
                 // sayfada, alt yarısını bir sonraki sayfada bırakabiliyordu
@@ -10187,18 +10177,6 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
         function isEnvUrbanFullyStaticAnalysis(name) {
             return _ENV_URBAN_FULLY_STATIC_ANALYSES.indexOf(name) !== -1;
         }
-        // 🛠️ BUG FİX: Bu fonksiyonlar bir kapanış (closure) içinde tanımlı
-        // olduğu için window'a (global scope'a) hiç eklenmemişti. Hava Durumu
-        // paneli (bkz. _wxIsDateless, farklı bir IIFE içinde) bunlara
-        // "typeof isLulcAnalysis === 'function'" ile erişmeye çalışıyordu —
-        // bu her zaman false dönüyordu, bu yüzden TOPO/LULC/Bina Ayak İzi/
-        // tam-statik Çevresel-Kentsel analizlerde "bugün" yerine yanlışlıkla
-        // eskiden kalmış (stale) bir tarih inputu değeri kullanılıyordu.
-        // Artık global olarak da erişilebilirler.
-        window.isLulcAnalysis = isLulcAnalysis;
-        window.isTopoAnalysis = isTopoAnalysis;
-        window.isBuildingFootprintAnalysis = isBuildingFootprintAnalysis;
-        window.isEnvUrbanFullyStaticAnalysis = isEnvUrbanFullyStaticAnalysis;
 
         // ===========================================================
         // 🆕 ☁️ Bulut Oranı Önem Filtresi — hangi analizlerde "Bulutluluk
