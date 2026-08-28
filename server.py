@@ -69,6 +69,55 @@ def _sylva_safe_filename(text, allow_dots=True):
     return cleaned.strip('_. ')
 
 
+
+# 🆕 Toplu indirme (raster/vektör) sırasında bazı katmanlar başarısız olursa
+# ZIP'e eklenen hata raporu dosyasının adı/başlığı/açıklaması — eskiden HER
+# ZAMAN sabit Türkçe idi ("INDIRILEMEYEN_KATMANLAR.txt"). Artık istek
+# gövdesinde gönderilen 'lang' alanına göre (frontend'in aktif analiz ekranı
+# diliyle aynı) üretilir; desteklenmeyen/gönderilmeyen dillerde İngilizce'ye
+# düşülür. Frontend tarafındaki index.html içindeki SYLVA_TRANSLATIONS'daki
+# vdl_undownloadable_* anahtarlarıyla birebir eşleşir.
+_UNDOWNLOADABLE_REPORT_I18N = {
+    'en': ('UNDOWNLOADED_LAYERS', 'SylvaGIS — UNDOWNLOADED LAYERS', 'The failed layers are listed below; the other successful layers are preserved in the ZIP.'),
+    'tr': ('INDIRILEMEYEN_KATMANLAR', 'SylvaGIS — İNDİRİLEMEYEN KATMANLAR', 'Başarısız katmanlar aşağıdadır; diğer başarılı katmanlar ZIP içinde korunmuştur.'),
+    'uz': ('YUKLAB_OLINMAGAN_QATLAMLAR', 'SylvaGIS — Yuklab olinmagan qatlamlar', 'Muvaffaqiyatsiz qatlamlar quyida keltirilgan; boshqa muvaffaqiyatli qatlamlar ZIP ichida saqlangan.'),
+    'el': ('ΕΠΙΠΕΔΑ_ΠΟΥ_ΔΕΝ_ΛΗΦΘΗΚΑΝ', 'SylvaGIS — Επίπεδα που δεν λήφθηκαν', 'Τα επίπεδα που απέτυχαν αναφέρονται παρακάτω· τα υπόλοιπα επιτυχημένα επίπεδα διατηρούνται εντός του ZIP.'),
+    'bg': ('НЕИЗТЕГЛЕНИ_СЛОЕВЕ', 'SylvaGIS — Неизтеглени слоеве', 'Неуспешните слоеве са изброени по-долу; останалите успешни слоеве са запазени в ZIP архива.'),
+    'az': ('ENDIRILMEYEN_QATLAR', 'SylvaGIS — Endirilməyən qatlar', 'Uğursuz qatlar aşağıda göstərilib; digər uğurlu qatlar ZIP daxilində saxlanılıb.'),
+    'hu': ('LE_NEM_TOLTHETO_RETEGEK', 'SylvaGIS — Le nem tölthető rétegek', 'Az alábbiakban a sikertelen rétegek láthatók; a többi sikeres réteg megmaradt a ZIP-ben.'),
+    'kk': ('ЖҮКТЕЛМЕГЕН_ҚАБАТТАР', 'SylvaGIS — Жүктелмеген қабаттар', 'Сәтсіз қабаттар төменде көрсетілген; басқа сәтті қабаттар ZIP ішінде сақталған.'),
+    'de': ('NICHT_HERUNTERGELADENE_EBENEN', 'SylvaGIS — Nicht heruntergeladene Ebenen', 'Die fehlgeschlagenen Ebenen sind unten aufgeführt; die übrigen erfolgreichen Ebenen bleiben im ZIP erhalten.'),
+    'fr': ('COUCHES_NON_TELECHARGEES', 'SylvaGIS — Couches non téléchargées', 'Les couches en échec sont listées ci-dessous ; les autres couches réussies sont conservées dans le ZIP.'),
+    'es': ('CAPAS_NO_DESCARGADAS', 'SylvaGIS — Capas no descargadas', 'Las capas fallidas se muestran a continuación; las demás capas exitosas se conservan en el ZIP.'),
+    'pt': ('CAMADAS_NAO_BAIXADAS', 'SylvaGIS — Camadas não baixadas', 'As camadas com falha estão listadas abaixo; as demais camadas bem-sucedidas foram mantidas no ZIP.'),
+    'ar': ('الطبقات_غير_المحملة', 'SylvaGIS — الطبقات غير المحملة', 'الطبقات الفاشلة مدرجة أدناه؛ تم الاحتفاظ بالطبقات الناجحة الأخرى داخل ملف ZIP.'),
+    'fa': ('لایه‌های_دانلود_نشده', 'SylvaGIS — لایه‌های دانلود نشده', 'لایه‌های ناموفق در زیر فهرست شده‌اند؛ سایر لایه‌های موفق در فایل ZIP حفظ شده‌اند.'),
+    'zh': ('未能下载的图层', 'SylvaGIS — 未能下载的图层', '失败的图层列于下方；其他成功的图层已保留在 ZIP 中。'),
+    'ja': ('ダウンロードできなかったレイヤー', 'SylvaGIS — ダウンロードできなかったレイヤー', '失敗したレイヤーは以下に一覧表示されています。他の成功したレイヤーはZIP内に保持されています。'),
+    'ko': ('다운로드되지_않은_레이어', 'SylvaGIS — 다운로드되지 않은 레이어', '실패한 레이어는 아래에 나열되어 있습니다. 다른 성공한 레이어는 ZIP 내에 보존되었습니다.'),
+    'hi': ('डाउनलोड_न_हुई_परतें', 'SylvaGIS — डाउनलोड न हुई परतें', 'असफल परतें नीचे सूचीबद्ध हैं; अन्य सफल परतें ZIP के अंदर सुरक्षित रखी गई हैं।'),
+    'id': ('LAPISAN_TIDAK_TERUNDUH', 'SylvaGIS — Lapisan tidak terunduh', 'Lapisan yang gagal tercantum di bawah ini; lapisan lain yang berhasil tetap tersimpan di dalam ZIP.'),
+    'ru': ('НЕЗАГРУЖЕННЫЕ_СЛОИ', 'SylvaGIS — Незагруженные слои', 'Неудавшиеся слои перечислены ниже; остальные успешные слои сохранены внутри ZIP.'),
+    'th': ('เลเยอร์ที่ดาวน์โหลดไม่สำเร็จ', 'SylvaGIS — เลเยอร์ที่ดาวน์โหลดไม่สำเร็จ', 'เลเยอร์ที่ล้มเหลวแสดงอยู่ด้านล่าง ส่วนเลเยอร์ที่สำเร็จอื่น ๆ ยังคงอยู่ในไฟล์ ZIP'),
+    'bn': ('ডাউনলোড_না_হওয়া_লেয়ার', 'SylvaGIS — ডাউনলোড না হওয়া লেয়ার', 'ব্যর্থ লেয়ারগুলি নিচে তালিকাভুক্ত করা হয়েছে; অন্যান্য সফল লেয়ারগুলি ZIP-এ সংরক্ষিত রয়েছে।'),
+    'vi': ('LOP_KHONG_TAI_XUONG_DUOC', 'SylvaGIS — Lớp không tải xuống được', 'Các lớp không thành công được liệt kê bên dưới; các lớp thành công khác vẫn được giữ trong tệp ZIP.'),
+    'ur': ('ڈاؤن_لوڈ_نہ_ہونے_والی_تہیں', 'SylvaGIS — ڈاؤن لوڈ نہ ہونے والی تہیں', 'ناکام تہیں ذیل میں درج ہیں؛ باقی کامیاب تہیں ZIP کے اندر محفوظ ہیں۔'),
+    'pl': ('NIEPOBRANE_WARSTWY', 'SylvaGIS — Niepobrane warstwy', 'Nieudane warstwy są wymienione poniżej; pozostałe pomyślne warstwy zostały zachowane w pliku ZIP.'),
+    'ms': ('LAPISAN_TIDAK_DIMUAT_TURUN', 'SylvaGIS — Lapisan tidak dimuat turun', 'Lapisan yang gagal disenaraikan di bawah; lapisan lain yang berjaya kekal disimpan dalam ZIP.'),
+    'ky': ('ЖҮКТӨЛБӨГӨН_КАТМАРЛАР', 'SylvaGIS — Жүктөлбөгөн катмарлар', 'Ишке ашпаган катмарлар төмөндө көрсөтүлгөн; башка ийгиликтүү катмарлар ZIP ичинде сакталды.'),
+    'mn': ('ТАТАГДААГҮЙ_ДАВХАРГУУД', 'SylvaGIS — Татагдаагүй давхаргууд', 'Амжилтгүй болсон давхаргууд доор жагсаагдсан; бусад амжилттай давхаргууд ZIP дотор хадгалагдсан.'),
+    'ka': ('ჩამოუტვირთავი_ფენები', 'SylvaGIS — ჩამოუტვირთავი ფენები', 'წარუმატებელი ფენები ჩამოთვლილია ქვემოთ; დანარჩენი წარმატებული ფენები შენარჩუნებულია ZIP-ში.'),
+    'it': ('LIVELLI_NON_SCARICATI', 'SylvaGIS — Livelli non scaricati', "I livelli non riusciti sono elencati di seguito; gli altri livelli riusciti sono conservati all'interno dello ZIP."),
+}
+
+
+def _undownloadable_report_texts(lang):
+    """(dosya_adi_uzantisiz, baslik, aciklama) döndürür; bilinmeyen/eksik dil
+    için İngilizce'ye düşer."""
+    key = str(lang or 'en').strip().lower()
+    return _UNDOWNLOADABLE_REPORT_I18N.get(key) or _UNDOWNLOADABLE_REPORT_I18N['en']
+
+
 def _content_disposition(filename):
     """Verilen (uzantılı) dosya adından RFC 6266 uyumlu bir Content-Disposition
     header DEĞERİ üretir.
@@ -11173,9 +11222,10 @@ def vector_download_batch():
             except Exception as ex:
                 errors.append((str(item.get('filename') or f'Katman {pos}'),str(ex)))
         if errors:
-            lines=['SylvaGIS — İNDİRİLEMEYEN KATMANLAR','', 'Başarısız katmanlar aşağıdadır; başarılı katmanlar ZIP içinde korunmuştur.','']
+            _report_name,_report_title,_report_intro=_undownloadable_report_texts(req.get('lang'))
+            lines=[_report_title,'', _report_intro,'']
             lines.extend(f'- {name}: {err}' for name,err in errors)
-            z.writestr('INDIRILEMEYEN_KATMANLAR.txt','\n'.join(lines).encode('utf-8'))
+            z.writestr(f'{_report_name}.txt','\n'.join(lines).encode('utf-8'))
         if legends: z.writestr('LEJANTLAR.txt','\n'.join(legends).encode('utf-8'))
     if not used:
         return jsonify({'success':False,'error':'Hiçbir katman üretilemedi.'}),400
@@ -11338,12 +11388,11 @@ def download_geotiff_batch():
                 else:
                     out_zip.writestr(base_r + '.tif', body)
             if errors:
+                _report_name,_report_title,_report_intro=_undownloadable_report_texts(req_data.get('lang'))
                 out_zip.writestr(
-                    'INDIRILEMEYEN_KATMANLAR.txt',
-                    'Aşağıdaki katman(lar) bu ZIP\'e dahil edilemedi:\n\n' +
-                    '\n'.join('- {}: {}'.format(b, e) for b, e in errors) +
-                    '\n\nDiğer tüm katmanlar bu ZIP içinde sorunsuz şekilde yer alıyor. '
-                    'Başarısız katman(lar)ı tekrar indirmeyi deneyebilirsiniz.'
+                    f'{_report_name}.txt',
+                    _report_title + '\n\n' + _report_intro + '\n\n' +
+                    '\n'.join('- {}: {}'.format(b, e) for b, e in errors)
                 )
         result = zip_buf.getvalue()
         response = Response(result, mimetype='application/zip')
