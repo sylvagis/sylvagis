@@ -3919,7 +3919,12 @@ _GEMINI_SYSTEM_INSTRUCTION = (
     "BİRDEN FAZLA veri seti verilebilir — her biri bir analiz adı, sınıflandırma "
     "lejantı (sınıf adları, değer aralıkları) ve yüzde (%) dağılımından oluşur; "
     "ayrıca varsa bir bina/çatı tespiti özeti (toplam bina sayısı, toplam çatı "
-    "alanı) verilebilir.\n\n"
+    "alanı) verilebilir. Bazen ayrıca kullanıcının o an ekranında gördüğü "
+    "harita/lejant görüntüsünün bir anlık görüntüsü (ekran görüntüsü) de "
+    "verilebilir — bu ham uydu/GEE verisi değil, tarayıcı ekran görüntüsüdür; "
+    "renk dağılımı/mekansal desen hakkında GENEL, yaklaşık, betimsel gözlemler "
+    "için kullanılabilir, kesin piksel-düzeyinde bir ölçüm kaynağı olarak "
+    "KULLANILAMAZ.\n\n"
     "GÖREVİN: Yalnızca sana verilen bu verilere dayanarak, kullanıcının sorusunu "
     "Türkçe, kısa ve nesnel şekilde yanıtlamak. Basit sorulara (hangi sınıf en "
     "yüksek/düşük yüzdeye sahip, bir sınıfın değer aralığı nedir, toplam alan/bina "
@@ -3962,11 +3967,20 @@ def gemini_data_qa():
     eski tekli "classes"/"percentages"/"analysis_name"/"area_ha" alanları da
     hâlâ kabul edilir (tek elemanlı bir "datasets" listesine dönüştürülür).
 
+    🆕 Faz 72: İsteğe bağlı olarak bir harita/lejant ekran görüntüsü (base64)
+    de kabul edilir — kullanıcı panelde "Harita görüntüsünü de ekle" kutusunu
+    işaretlerse gönderilir. Gemini'nin çok modlu (multimodal) girdisine bir
+    inlineData parçası olarak eklenir; asistan bu görüntüyü de dikkate alarak
+    renk/mekansal desen hakkında betimsel gözlemler yapabilir (yine de resmi
+    risk değerlendirmesi/tavsiye yasağı aynen geçerlidir).
+
     Body (yeni format): {
         "question": str,
         "datasets": [{"analysis_name": str, "classes": [{"name","min","max"}],
                        "percentages": [float, ...], "area_ha": float|null}, ...],
-        "building": {"buildingCount": int, "totalAreaM2": float, "dataset": str} | null
+        "building": {"buildingCount": int, "totalAreaM2": float, "dataset": str} | null,
+        "image_base64": str | null,   # data: öneki OLMADAN ham base64 (≤ ~4.5 MB)
+        "image_mime": "image/jpeg" | "image/png" | "image/webp"  # varsayılan image/jpeg
     }
     Body (eski format, hâlâ desteklenir): {"question": str, "analysis_name": str,
         "classes": [...], "percentages": [...], "area_ha": float|null}
@@ -3977,6 +3991,21 @@ def gemini_data_qa():
         question = str(data.get('question') or '').strip()
         datasets = data.get('datasets')
         building = data.get('building') or None
+        # 🆕 Faz 72: isteğe bağlı harita/lejant ekran görüntüsü (base64) — asistan
+        # artık yalnızca sayısal % verilerini değil, ekrandaki renk/mekansal
+        # dağılımı da (yaklaşık, betimsel olarak) yorumlayabilir. Boyut/tür
+        # doğrulaması aşağıda, kota kontrolünden ÖNCE yapılır (kötüye kullanım/
+        # aşırı büyük istek engeli).
+        image_base64 = data.get('image_base64')
+        image_mime = str(data.get('image_mime') or 'image/jpeg').strip().lower()
+        _ALLOWED_IMAGE_MIMES = ('image/jpeg', 'image/png', 'image/webp')
+        if image_base64 is not None:
+            if not isinstance(image_base64, str) or not image_base64:
+                image_base64 = None
+            elif image_mime not in _ALLOWED_IMAGE_MIMES:
+                image_base64 = None
+            elif len(image_base64) > 6_000_000:  # ~4.5 MB ham veri — makul bir üst sınır
+                return jsonify({'success': False, 'error': 'Görüntü çok büyük — lütfen görüntü olmadan tekrar deneyin.'})
 
         # Geriye dönük uyumluluk: eski tekli-veri-seti formatı gönderildiyse
         # tek elemanlı bir listeye çevir.
@@ -4073,17 +4102,34 @@ def gemini_data_qa():
             data_summary_blocks.append('\n'.join(b_lines))
 
         data_summary = '\n\n'.join(data_summary_blocks)
+        if image_base64:
+            data_summary = (data_summary + '\n\n') if data_summary else ''
+            data_summary += (
+                'NOT: Ayrıca ekteki görüntü, kullanıcının o an ekranında gördüğü '
+                'harita/lejant anlık görüntüsüdür (tarayıcı ekran görüntüsü — ham '
+                'uydu/GEE verisi değil). Bu görüntüyü de dikkate alarak renk '
+                'dağılımı/mekansal desenler hakkında GENEL, betimsel gözlemler '
+                'ekleyebilirsin; yine de resmi bir risk değerlendirmesi yapma.'
+            )
         user_prompt = data_summary + '\n\nSoru: ' + question
+
+        # 🆕 Faz 72: görüntü verildiyse, metin parçasına ek olarak bir
+        # inlineData (base64) parçası da isteğe eklenir — Gemini'nin çok
+        # modlu (multimodal) girdi biçimi budur.
+        gemini_parts = [{'text': user_prompt}]
+        if image_base64:
+            gemini_parts.append({'inlineData': {'mimeType': image_mime, 'data': image_base64}})
 
         gemini_url = GEMINI_API_URL_TMPL.format(model=GEMINI_MODEL, key=GEMINI_API_KEY)
         gemini_body = {
-            'contents': [{'parts': [{'text': user_prompt}]}],
+            'contents': [{'parts': gemini_parts}],
             'systemInstruction': {'parts': [{'text': _GEMINI_SYSTEM_INSTRUCTION}]},
             'generationConfig': {'temperature': 0.2, 'maxOutputTokens': 400},
         }
 
         try:
-            resp = requests.post(gemini_url, json=gemini_body, timeout=20)
+            # Görüntü içeren istekler daha uzun sürebilir; zaman aşımı buna göre uzatılır.
+            resp = requests.post(gemini_url, json=gemini_body, timeout=(35 if image_base64 else 20))
         except Exception as _net_err:
             return jsonify({'success': False, 'error': 'Gemini API\'ye ulaşılamadı: ' + str(_net_err)})
 
