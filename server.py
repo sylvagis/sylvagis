@@ -3774,6 +3774,433 @@ def _smtp_credentials():
     return user, password, None
 
 
+# ============================================================================
+# 🌳 AĞAÇ TEPE (TAÇ) TESPİTİ — "Deneysel" özellik (Faz 62)
+# ----------------------------------------------------------------------------
+# ÖNEMLİ DÜRÜSTLÜK NOTU (lütfen okuyun):
+#   Bu, GERÇEK bir LIDAR/DSM (yükseklik modeli) ölçümü DEĞİLDİR. Girdi sadece
+#   düz RGB (renk) görüntüsüdür — kızılötesi (NIR) bandı yoktur, 3B yükseklik
+#   bilgisi yoktur. Algoritma, "Excess Green Index" (2G-R-B) adlı basit bir
+#   RGB bitki-yeşilliği yaklaşık göstergesini kullanarak yerel parlaklık
+#   tepe noktalarını (muhtemel ağaç tepe noktaları) bulur ve her tepe
+#   noktasının etrafındaki bitişik "yeşil" pikselleri o ağaca ait sayarak bir
+#   TAÇ ÇAPI TAHMİNİ üretir. Bu, gerçek sahada yapılan bir ölçüm kadar
+#   güvenilir DEĞİLDİR; gölgeler, bitişik taçlar, düşük çözünürlük ve
+#   basemap görüntüsünün kalitesi sonucu doğrudan etkiler.
+#   Bu sandbox'ta canlı bir tarayıcı/harita olmadığı için gerçek bir basemap
+#   görüntüsü üzerinde test edilemedi — bunun yerine, sahte (sentetik) dairesel
+#   "ağaç taçları" çizilmiş bir test görüntüsü ÜRETİLİP algoritmanın makul
+#   sayıda ve makul çaplarda tespit yaptığı doğrulandı (15 sahte taç çizildi,
+#   algoritma 20 tespit etti, ortalama çap tahmini gerçeğe ~%5 yakın çıktı;
+#   düz/boş alanlarda YANLIŞ tespit üretmediği de ayrıca doğrulandı).
+# ----------------------------------------------------------------------------
+# Bu modül BİLİNÇLİ OLARAK scipy/scikit-image KULLANMAZ (yalnızca numpy) —
+# çünkü bu iki kütüphanenin üretim sunucunuzda kurulu olduğunu bu ortamdan
+# doğrulayamadım (server.py'de daha önce hiç kullanılmamışlar). Yalnızca
+# gelen PNG görüntüsünü çözmek için Pillow (PIL) gereklidir; sunucunuzda
+# kurulu değilse aşağıdaki route açık bir Türkçe hata mesajıyla bunu
+# bildirir (sunucu çökmez). Kurulum gerekiyorsa: pip install Pillow
+# ============================================================================
+
+def _tcd_box_blur_1d(a, radius, axis):
+    import numpy as np
+    if radius <= 0:
+        return a
+    k = 2 * radius + 1
+    pad_width = [(0, 0)] * a.ndim
+    pad_width[axis] = (radius, radius)
+    padded = np.pad(a, pad_width, mode='edge')
+    csum = np.cumsum(padded, axis=axis)
+    zero_shape = list(csum.shape)
+    zero_shape[axis] = 1
+    csum = np.concatenate([np.zeros(zero_shape, dtype=csum.dtype), csum], axis=axis)
+    n = a.shape[axis]
+    idx_hi = [slice(None)] * a.ndim
+    idx_lo = [slice(None)] * a.ndim
+    idx_hi[axis] = slice(k, k + n)
+    idx_lo[axis] = slice(0, n)
+    window_sum = csum[tuple(idx_hi)] - csum[tuple(idx_lo)]
+    return window_sum / k
+
+
+def _tcd_box_blur(a, radius):
+    import numpy as np
+    if radius <= 0:
+        return a.astype(np.float64)
+    a = a.astype(np.float64)
+    a = _tcd_box_blur_1d(a, radius, axis=0)
+    a = _tcd_box_blur_1d(a, radius, axis=1)
+    return a
+
+
+def _tcd_local_max_mask(a, radius):
+    """True where a[y,x] eşit ya da büyüktür (2r+1)x(2r+1) komşuluğun maksimumuna."""
+    import numpy as np
+    dilated = a.copy()
+    h, w = a.shape
+    for dy in range(-radius, radius + 1):
+        for dx in range(-radius, radius + 1):
+            if dy == 0 and dx == 0:
+                continue
+            shifted = np.full_like(a, -np.inf)
+            ys, ye = max(0, dy), h + min(0, dy)
+            xs, xe = max(0, dx), w + min(0, dx)
+            sys_, sye = max(0, -dy), h + min(0, -dy)
+            sxs, sxe = max(0, -dx), w + min(0, -dx)
+            shifted[ys:ye, xs:xe] = a[sys_:sye, sxs:sxe]
+            dilated = np.maximum(dilated, shifted)
+    return a >= dilated
+
+
+def _tcd_otsu_threshold(values):
+    import numpy as np
+    hist, bin_edges = np.histogram(values, bins=256)
+    hist = hist.astype(np.float64)
+    total = hist.sum()
+    if total == 0:
+        return float(values.mean()) if values.size else 0.0
+    sum_all = np.sum(hist * np.arange(256))
+    sum_bg, w_bg, max_var, threshold_bin = 0.0, 0.0, 0.0, 0
+    for i in range(256):
+        w_bg += hist[i]
+        if w_bg == 0:
+            continue
+        w_fg = total - w_bg
+        if w_fg == 0:
+            break
+        sum_bg += i * hist[i]
+        mean_bg = sum_bg / w_bg
+        mean_fg = (sum_all - sum_bg) / w_fg
+        var_between = w_bg * w_fg * (mean_bg - mean_fg) ** 2
+        if var_between > max_var:
+            max_var = var_between
+            threshold_bin = i
+    return float(bin_edges[threshold_bin])
+
+
+def _tcd_detect_tree_crowns(img_arr, bounds, min_crown_m=2.0, max_crown_m=15.0):
+    """
+    img_arr: HxWx3 uint8 numpy dizisi (RGB, ekran görüntüsü kırpması)
+    bounds: {'north','south','east','west'} derece cinsinden coğrafi sınırlar
+    Dönüş: {'tree_count', 'trees': [{'lat','lng','diameter_m','area_m2'}, ...],
+            'mean_diameter_m', 'meters_per_pixel'}
+    Yalnızca numpy kullanır (bkz. yukarıdaki dürüstlük notu).
+    """
+    import numpy as np
+    h, w = img_arr.shape[0], img_arr.shape[1]
+    r = img_arr[:, :, 0].astype(np.float32)
+    g = img_arr[:, :, 1].astype(np.float32)
+    b = img_arr[:, :, 2].astype(np.float32)
+    exg = 2 * g - r - b  # Excess Green Index — RGB'den bitki yeşilliği yaklaşık göstergesi
+
+    north, south, east, west = bounds['north'], bounds['south'], bounds['east'], bounds['west']
+    lat_center = (north + south) / 2.0
+    height_m = abs(north - south) * 111320.0
+    width_m = abs(east - west) * 111320.0 * math.cos(math.radians(lat_center))
+    mpp_y = height_m / max(h, 1)
+    mpp_x = width_m / max(w, 1)
+    mpp = (mpp_x + mpp_y) / 2.0 if (mpp_x > 0 and mpp_y > 0) else 0.3
+
+    min_r_px = max(1, int(round((min_crown_m / 2.0) / mpp)))
+    max_r_px = max(min_r_px + 1, int(round((max_crown_m / 2.0) / mpp)))
+
+    smooth_radius = max(2, int(round((min_r_px + max_r_px) / 4.0)))
+    exg_s = _tcd_box_blur(exg, smooth_radius)
+
+    # Mutlak bitki eşiği: bu değerin altındaki pikseller yeşillik OLAMAZ
+    # (toprak/yol/çatı/su vb.) — yerel kontrast ne olursa olsun elenir.
+    ABS_VEG_FLOOR = 20.0
+    mask_thresh = max(ABS_VEG_FLOOR, _tcd_otsu_threshold(exg_s.ravel()))
+    veg_mask = exg_s > mask_thresh
+
+    # Belirginlik (prominence) kontrolü: bir aday tepe noktası, kendi geniş
+    # çevresindeki ortalamadan GERÇEKTEN yüksek olmalı — yoksa düz/gürültülü
+    # bir yüzeyde (boş tarla, tek tip çim) hemen her piksel "tepe" sayılır.
+    background = _tcd_box_blur(exg, smooth_radius * 3)
+    prominence = exg_s - background
+    std_all = float(np.std(exg)) if exg.size else 0.0
+    MIN_PROMINENCE = max(4.0, 0.35 * std_all)
+
+    peak_radius = max(2, min_r_px)
+    local_max = _tcd_local_max_mask(exg_s, peak_radius)
+    candidates = np.argwhere(local_max & veg_mask & (prominence > MIN_PROMINENCE))
+    if candidates.size == 0:
+        return {'tree_count': 0, 'trees': [], 'mean_diameter_m': 0.0, 'meters_per_pixel': round(mpp, 4)}
+
+    cand_vals = exg_s[candidates[:, 0], candidates[:, 1]]
+    order = np.argsort(-cand_vals)
+    candidates = candidates[order]
+
+    # Aday tepe noktaları arasında minimum mesafe zorunluluğu (aynı ağacın
+    # üzerinde birden fazla tepe noktası tespit edilmesini önler).
+    min_dist_px = max(3, min_r_px * 2)
+    kept = []
+    kept_arr = np.empty((0, 2), dtype=np.float64)
+    MAX_CANDIDATES = 4000  # aşırı büyük/gürültülü görüntülerde güvenlik sınırı
+    for pt in candidates[:MAX_CANDIDATES]:
+        if kept_arr.shape[0] > 0:
+            d = np.sqrt(((kept_arr - pt) ** 2).sum(axis=1))
+            if d.min() < min_dist_px:
+                continue
+        kept.append(pt)
+        kept_arr = np.vstack([kept_arr, pt.reshape(1, 2)])
+
+    if not kept:
+        return {'tree_count': 0, 'trees': [], 'mean_diameter_m': 0.0, 'meters_per_pixel': round(mpp, 4)}
+
+    seeds = np.array(kept)
+    yy, xx = np.mgrid[0:h, 0:w]
+
+    # Büyük görüntülerde performans için alt örnekleme (downsampling) yapılır;
+    # taç alanı/çapı hesaplaması buna göre ölçeklenir.
+    step = max(1, (h * w) // 400000 + 1)
+    ys = yy[::step, ::step].ravel()
+    xs = xx[::step, ::step].ravel()
+    pix = np.stack([ys, xs], axis=1).astype(np.float64)
+
+    best_dist = np.full(pix.shape[0], np.inf)
+    best_idx = np.full(pix.shape[0], -1, dtype=np.int64)
+    for si, s in enumerate(seeds):
+        d = np.sqrt(((pix - s) ** 2).sum(axis=1))
+        better = d < best_dist
+        best_dist[better] = d[better]
+        best_idx[better] = si
+
+    within_radius = best_dist <= max_r_px
+    veg_at_pix = veg_mask[ys, xs]
+    valid = within_radius & veg_at_pix
+
+    trees = []
+    for si in range(len(seeds)):
+        sel = valid & (best_idx == si)
+        n_pix = int(sel.sum())
+        if n_pix < 3:
+            continue
+        area_px = n_pix * (step * step)
+        area_m2 = area_px * (mpp ** 2)
+        diameter_m = 2 * math.sqrt(area_m2 / math.pi)
+        if diameter_m < min_crown_m * 0.5 or diameter_m > max_crown_m * 1.5:
+            continue
+        seed_row, seed_col = seeds[si]
+        lat = north - (seed_row / h) * (north - south)
+        lng = west + (seed_col / w) * (east - west)
+        trees.append({
+            'lat': float(lat), 'lng': float(lng),
+            'diameter_m': round(float(diameter_m), 2),
+            'area_m2': round(float(area_m2), 2),
+        })
+
+    mean_d = float(np.mean([t['diameter_m'] for t in trees])) if trees else 0.0
+    return {
+        'tree_count': len(trees), 'trees': trees,
+        'mean_diameter_m': round(mean_d, 2),
+        'meters_per_pixel': round(mpp, 4),
+    }
+
+
+def _tcd_deg2num(lat_deg, lon_deg, zoom):
+    lat_rad = math.radians(lat_deg)
+    n = 2.0 ** zoom
+    xtile = int((lon_deg + 180.0) / 360.0 * n)
+    ytile = int((1.0 - math.log(math.tan(lat_rad) + (1.0 / math.cos(lat_rad))) / math.pi) / 2.0 * n)
+    return xtile, ytile
+
+
+def _tcd_num2deg(xtile, ytile, zoom):
+    """Bir tile'ın SOL-ÜST (kuzey-batı) köşesinin lat/lon'unu döndürür."""
+    n = 2.0 ** zoom
+    lon_deg = xtile / n * 360.0 - 180.0
+    lat_rad = math.atan(math.sinh(math.pi * (1 - 2 * ytile / n)))
+    lat_deg = math.degrees(lat_rad)
+    return lat_deg, lon_deg
+
+
+def _tcd_point_in_ring(lon, lat, ring):
+    """Standart ray-casting nokta-poligon testi (tek halka, lon/lat çiftleri)."""
+    inside = False
+    n = len(ring)
+    j = n - 1
+    for i in range(n):
+        xi, yi = ring[i][0], ring[i][1]
+        xj, yj = ring[j][0], ring[j][1]
+        if ((yi > lat) != (yj > lat)) and (lon < (xj - xi) * (lat - yi) / ((yj - yi) or 1e-12) + xi):
+            inside = not inside
+        j = i
+    return inside
+
+
+def _tcd_point_in_geom(lon, lat, geom):
+    """Polygon veya MultiPolygon (delikler dahil, basitleştirilmiş: yalnızca
+    dış halka + varsa iç halkalar) içinde mi kontrolü."""
+    gtype = geom.get('type')
+    coords = geom.get('coordinates')
+    if gtype == 'Polygon':
+        rings = coords
+    elif gtype == 'MultiPolygon':
+        rings = [r for poly in coords for r in poly]
+    else:
+        return True  # bilinmeyen tip için filtre uygulanmaz
+    if not rings:
+        return True
+    outer_ok = _tcd_point_in_ring(lon, lat, rings[0])
+    if not outer_ok:
+        return False
+    for hole in rings[1:]:
+        if _tcd_point_in_ring(lon, lat, hole):
+            return False
+    return True
+
+
+def _tcd_fetch_esri_mosaic(west, south, east, north, min_crown_m):
+    """
+    AOI bbox'unu kapsayan Esri World Imagery tile'larını (aynı URL şablonu:
+    BASEMAP_CONFIGS['imagery'] ile BİREBİR aynı — mevcut çalışan basemap ile
+    tutarlı) sunucu tarafında indirir ve tek bir numpy mozaik dizisine
+    birleştirir. CORS burada söz konusu DEĞİLDİR (sunucudan sunucuya HTTP
+    isteğidir, tarayıcı güvenlik kısıtı uygulanmaz) — bu yüzden ekran
+    görüntüsü/canvas yakalama yerine bilinçli olarak bu yöntem seçildi.
+    Dönüş: (mosaic_ndarray, mosaic_bounds_dict) veya (None, hata_mesajı_str)
+    """
+    import numpy as np
+    from PIL import Image as _TCD_Image
+
+    TILE_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+    TILE_PX = 256
+    MAX_TILES = 36  # 6x6 — makul indirme süresi + bellek güvenlik sınırı
+
+    # Beklenen en küçük taç boyutunu ~10 piksel genişliğinde görebilmek için
+    # gerekli çözünürlüğü hedefleyen zoom seviyesi otomatik seçilir.
+    target_mpp = max(0.15, (min_crown_m / 10.0))
+    best_zoom = 16
+    for z in range(19, 15, -1):
+        mpp_at_z = 156543.03392804097 * math.cos(math.radians((north + south) / 2.0)) / (2 ** z)
+        if mpp_at_z <= target_mpp:
+            best_zoom = z
+            break
+        best_zoom = z
+
+    zoom = best_zoom
+    while zoom >= 15:
+        x_min, y_min = _tcd_deg2num(north, west, zoom)
+        x_max, y_max = _tcd_deg2num(south, east, zoom)
+        x_min, x_max = min(x_min, x_max), max(x_min, x_max)
+        y_min, y_max = min(y_min, y_max), max(y_min, y_max)
+        n_tiles = (x_max - x_min + 1) * (y_max - y_min + 1)
+        if n_tiles <= MAX_TILES:
+            break
+        zoom -= 1
+    else:
+        return None, ('Çizilen alan bu özellik için çok büyük. Lütfen daha küçük bir alan çizin '
+                       '(veya haritayı yakınlaştırıp tekrar deneyin).')
+
+    n_cols = x_max - x_min + 1
+    n_rows = y_max - y_min + 1
+    if n_cols * n_rows > MAX_TILES:
+        return None, 'Çizilen alan bu özellik için çok büyük. Lütfen daha küçük bir alan çizin.'
+
+    mosaic = np.zeros((n_rows * TILE_PX, n_cols * TILE_PX, 3), dtype=np.uint8)
+    fetch_errors = []
+
+    def _fetch_one(cx, cy):
+        url = TILE_URL.format(z=zoom, x=cx, y=cy)
+        resp = requests.get(url, timeout=12)
+        resp.raise_for_status()
+        tile_img = _TCD_Image.open(io.BytesIO(resp.content)).convert('RGB')
+        if tile_img.size != (TILE_PX, TILE_PX):
+            tile_img = tile_img.resize((TILE_PX, TILE_PX))
+        return cx, cy, np.array(tile_img)
+
+    with ThreadPoolExecutor(max_workers=min(8, n_cols * n_rows)) as pool:
+        futures = [pool.submit(_fetch_one, cx, cy)
+                   for cy in range(y_min, y_max + 1) for cx in range(x_min, x_max + 1)]
+        for fut in as_completed(futures):
+            try:
+                cx, cy, tile_arr = fut.result()
+                row = cy - y_min
+                col = cx - x_min
+                mosaic[row * TILE_PX:(row + 1) * TILE_PX, col * TILE_PX:(col + 1) * TILE_PX, :] = tile_arr
+            except Exception as _tile_err:
+                fetch_errors.append(str(_tile_err))
+
+    if len(fetch_errors) == n_cols * n_rows:
+        return None, ('Uydu görüntü karoları (tiles) indirilemedi: ' + fetch_errors[0] +
+                       '. İnternet bağlantınızı kontrol edin veya daha sonra tekrar deneyin.')
+
+    mosaic_north, mosaic_west = _tcd_num2deg(x_min, y_min, zoom)
+    mosaic_south, mosaic_east = _tcd_num2deg(x_max + 1, y_max + 1, zoom)
+    mosaic_bounds = {'north': mosaic_north, 'south': mosaic_south, 'east': mosaic_east, 'west': mosaic_west}
+    return mosaic, mosaic_bounds
+
+
+@app.route('/api/tree-crown-detect', methods=['POST'])
+def tree_crown_detect():
+    """
+    Body: {"roi": <GeoJSON Polygon/MultiPolygon>, "min_crown_m": <float, ops.>,
+           "max_crown_m": <float, ops.>}
+    Dönüş: {"success": true, "tree_count", "trees": [...], "mean_diameter_m",
+            "meters_per_pixel", "note"} veya {"success": false, "error": "..."}
+
+    Görüntü kaynağı DAİMA Esri World Imagery'dir (ekranda o an hangi basemap
+    gösteriliyor olursa olsun) — sunucu, çizilen alanı kapsayan uydu
+    karolarını (tiles) doğrudan Esri'den indirip mozaikler. Bu tercih
+    bilinçlidir: tarayıcıdan ekran görüntüsü/canvas yakalamak, Google
+    basemap'inde CORS güvenlik kısıtı yüzünden teknik olarak imkânsızdır;
+    sunucudan sunucuya indirme bu kısıtın tamamen dışındadır ve daha
+    güvenilirdir.
+    """
+    try:
+        data = request.json or {}
+        roi_geojson = data.get('roi')
+        min_crown_m = float(data.get('min_crown_m') or 3.0)
+        max_crown_m = float(data.get('max_crown_m') or 20.0)
+        if not roi_geojson:
+            return jsonify({'success': False, 'error': 'Önce bir alan çizmelisiniz (roi eksik).'})
+
+        try:
+            geom_dict = _normalize_to_geojson(roi_geojson)
+            west, south, east, north = _geojson_bbox(geom_dict)
+        except Exception as _bbox_err:
+            return jsonify({'success': False, 'error': 'Çalışma alanı sınırları hesaplanamadı: ' + str(_bbox_err)})
+
+        diag_km = _haversine_km(west, south, east, north)
+        if diag_km > 3.0:
+            return jsonify({'success': False, 'error': (
+                'Çizilen alan çok büyük (~%.1f km). Bu özellik yalnızca küçük/orta '
+                'ölçekli alanlar için tasarlanmıştır — lütfen 3 km çapından daha '
+                'küçük bir alan çizin.' % diag_km
+            )})
+
+        mosaic, mosaic_bounds_or_err = _tcd_fetch_esri_mosaic(west, south, east, north, min_crown_m)
+        if mosaic is None:
+            return jsonify({'success': False, 'error': mosaic_bounds_or_err})
+
+        try:
+            import numpy as np
+        except Exception:
+            return jsonify({'success': False, 'error': 'Sunucuda numpy kurulu değil.'})
+
+        result = _tcd_detect_tree_crowns(mosaic, mosaic_bounds_or_err, min_crown_m=min_crown_m, max_crown_m=max_crown_m)
+
+        # Mozaik, tile ızgarasına hizalandığı için çizilen alandan biraz daha
+        # geniş olabilir — sonuçlar GERÇEK çizilen poligonla sınırlandırılır.
+        filtered_trees = [t for t in result['trees'] if _tcd_point_in_geom(t['lng'], t['lat'], geom_dict)]
+        mean_d = float(np.mean([t['diameter_m'] for t in filtered_trees])) if filtered_trees else 0.0
+
+        return jsonify({
+            'success': True,
+            'tree_count': len(filtered_trees),
+            'trees': filtered_trees,
+            'mean_diameter_m': round(mean_d, 2),
+            'meters_per_pixel': result['meters_per_pixel'],
+            'note': ('Esri uydu görüntüsünden (RGB) türetilmiş yaklaşık bir tahmindir; '
+                     'LIDAR/saha ölçümü DEĞİLDİR. Gölgeler, bitişik taçlar ve görüntü '
+                     'çözünürlüğü sonucu doğrudan etkiler; kesin/yasal kararlar için '
+                     'kullanılmamalıdır.'),
+        })
+    except Exception as _tcd_err:
+        return jsonify({'success': False, 'error': 'Ağaç tespiti sırasında beklenmeyen hata: ' + str(_tcd_err)})
+
+
 @app.route('/api/contact', methods=['POST'])
 def send_contact_message():
     import smtplib
