@@ -3774,6 +3774,245 @@ def _smtp_credentials():
     return user, password, None
 
 
+# ============================================================================
+# 🔎 GEMİNİ TABANLI VERİ SORU-CEVAP MOTORU — "Deneysel" (Faz 65)
+# ----------------------------------------------------------------------------
+# KAPSAM (BİLİNÇLİ OLARAK DAR TUTULDU — kullanıcı isteği):
+#   Bu motor SADECE ekranda o an gösterilen sınıflandırılmış analizin (lejant
+#   sınıfları + % dağılımı) verisini okuyup bununla ilgili soruları yanıtlar.
+#   RİSK DEĞERLENDİRMESİ, TAVSİYE veya YORUM ÜRETMEZ (örn. "bu alan
+#   risklidir", "şu tür ağaç dikilmeli" gibi ifadeler VERİLMEMESİ için sistem
+#   talimatında açıkça yasaklanmıştır). Bu, prompt tabanlı bir kısıtlamadır —
+#   %100 garanti değildir (küçük/ücretsiz modeller talimatı bazen tam
+#   uygulamayabilir), bu yüzden kullanıcıya arayüzde de bunun deneysel
+#   olduğu ayrıca belirtilir.
+#
+# API ANAHTARI:
+#   GEMINI_API_KEY artık kod içine YAZILMIYOR — bir ortam değişkeninden
+#   (environment variable) okunuyor. Neden: bu anahtar gerçek/canlı bir
+#   anahtar hâline geldiğinde, kodun içine sabit metin olarak yazılıp
+#   GitHub'a gönderilmesi, GitHub'ın "Secret scanning" koruması tarafından
+#   yakalanır ve anahtar sızıntı riski oluşturur (repo'yu görebilen HERKES
+#   — ileride repo public olursa TÜM İNTERNET — anahtarı okuyabilir).
+#   Ortam değişkeni kullanmak hem bu riski ortadan kaldırır, hem de
+#   anahtarın kod incelemesi sırasında görülmemesi isteğinizi de karşılar
+#   (anahtarı sadece Cloud Run konsolunda/komutunda tanımlıyorsunuz, koda
+#   hiç girmiyor). Aşağıdaki 'AAAA...' sadece bir YEDEK (fallback) değerdir
+#   — GEMINI_API_KEY ortam değişkeni tanımlı değilse kullanılır ve sistem
+#   "henüz kurulmadı" mesajı verir; sunucu çökmez.
+#
+#   KURULUM (Google Cloud Run):
+#   1) Google AI Studio'dan (aistudio.google.com/apikey) ücretsiz Gemini
+#      API anahtarınızı alın (veya zaten aldıysanız elinizdeki anahtarı
+#      kullanın).
+#   2) Cloud Run konsolunda servisinizi açın → "Sürümü Düzenle ve Dağıt"
+#      (Edit & Deploy New Revision) → "Değişkenler ve Gizli Bilgiler"
+#      (Variables & Secrets) sekmesi → "Değişken Ekle" (Add Variable) →
+#      Ad: GEMINI_API_KEY, Değer: kendi anahtarınız → Dağıt (Deploy).
+#      (Komut satırından da yapılabilir: gcloud run services update
+#      SERVIS_ADINIZ --update-env-vars GEMINI_API_KEY=kendi_anahtariniz)
+#   3) server.py dosyasının kendisine artık HİÇBİR anahtar yazmanıza gerek
+#      yok — bu dosyayı GitHub'a bu hâliyle güvenle yükleyebilirsiniz.
+#
+#   ⚠️ ÖNEMLİ: Daha önce gerçek anahtarınızı bu dosyanın içine yazıp
+#   GitHub'a göndermeyi denediyseniz (Secret Scanning uyarısı bu yüzden
+#   çıktı), o anahtarı GÜVENLİ SAYMAYIN — aistudio.google.com/apikey
+#   üzerinden o anahtarı silip yenisini oluşturmanızı öneririm, sonra yeni
+#   anahtarı yukarıdaki adımlarla ortam değişkeni olarak tanımlayın.
+#
+# MODEL:
+#   gemini-3.5-flash-lite kullanılıyor (kullanıcının kendi Gemini hesabında
+#   gördüğü "3.5 Flash-Lite" seçeneğiyle aynı) — ücretsiz katmanda en yüksek
+#   günlük istek kotasına sahip model olduğu için seçildi. Google model
+#   isimlerini sık değiştiriyor; bu sandbox'ta CANLI olarak doğrulayamadım,
+#   ileride "model bulunamadı" hatası alırsanız GEMINI_MODEL sabitini
+#   aistudio.google.com üzerinde gördüğünüz güncel model adıyla güncelleyin.
+#
+# GÜNLÜK KOTA KORUMASI (ÇOK ÖNEMLİ — herkese açık + limitli istediniz):
+#   Gemini'nin ücretsiz günlük istek kotası (RPD) SİZİN PROJENİZE aittir,
+#   tek tek ziyaretçiye değil — yani sitenizdeki TÜM ziyaretçilerin
+#   sorularının TOPLAMI bu kotaya sayılır. Bu yüzden burada İKİ katmanlı bir
+#   koruma var: (1) günlük TOPLAM istek sayacı (GEMINI_DAILY_LIMIT) — bu
+#   dolarsa hiç kimse soru soramaz, Gemini'ye hiç istek gitmez; (2) IP başına
+#   günlük sınır (GEMINI_PER_IP_DAILY_LIMIT) — tek bir ziyaretçinin günün
+#   tüm kotasını tüketmesini engeller. Sayaç basit bir JSON dosyasında
+#   tutulur (tek-process sunucular için yeterlidir); birden fazla worker
+#   process ile (örn. gunicorn -w 4) çalıştırıyorsanız bu sayaç TAM olarak
+#   atomik olmayabilir (her worker kendi belleğinde de bir kilit tutuyor,
+#   ama dosya yazımı yine de yarış durumuna açık olabilir) — üretimde
+#   yüksek trafik olursa gerçek bir veritabanı/Redis sayaç daha sağlam olur.
+# ============================================================================
+
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA')  # Cloud Run'da GEMINI_API_KEY ortam değişkenini tanımlayın
+GEMINI_MODEL = 'gemini-3.5-flash-lite'
+GEMINI_API_URL_TMPL = 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}'
+
+GEMINI_DAILY_LIMIT = 900          # projenizin gerçek RPD'sine göre ayarlayın (aistudio.google.com/rate-limit)
+GEMINI_PER_IP_DAILY_LIMIT = 15    # tek ziyaretçinin tüketebileceği azami günlük soru sayısı
+GEMINI_QUOTA_FILE = os.path.join(tempfile.gettempdir(), 'sylvagis_gemini_quota.json')
+_gemini_quota_lock = threading.Lock()
+
+
+def _gemini_pacific_today_str():
+    """Gemini'nin RPD kotası Pasifik gece yarısında sıfırlanır. tzdata mevcut
+    değilse (bazı minimal sunucu ortamlarında olabilir) sabit UTC-8'e düşer
+    — bu durumda yaz saati (DST) farkı 1 saatlik bir sapma yaratabilir, kritik
+    değildir (sadece sayaç sıfırlama anı ~1 saat kayabilir)."""
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.datetime.now(ZoneInfo('America/Los_Angeles')).strftime('%Y-%m-%d')
+    except Exception:
+        return (datetime.datetime.utcnow() - datetime.timedelta(hours=8)).strftime('%Y-%m-%d')
+
+
+def _gemini_check_and_increment_quota(client_ip):
+    """Kotayı kontrol eder; müsaitse sayaçları ARTIRIR ve (True, None) döner.
+    Kota dolmuşsa hiçbir şeyi artırmadan (False, hata_mesajı) döner."""
+    with _gemini_quota_lock:
+        today = _gemini_pacific_today_str()
+        state = {'date': today, 'total': 0, 'by_ip': {}}
+        try:
+            if os.path.exists(GEMINI_QUOTA_FILE):
+                with open(GEMINI_QUOTA_FILE, 'r', encoding='utf-8') as f:
+                    loaded = json.load(f)
+                if loaded.get('date') == today:
+                    state = loaded
+        except Exception:
+            pass  # bozuk/okunamayan dosya → sıfırdan başla (fail-open değil, sadece sayaç sıfırlanır)
+
+        if state['total'] >= GEMINI_DAILY_LIMIT:
+            return False, ('Bugünkü toplam AI soru kotamız doldu (ücretsiz Gemini planı günlük '
+                            'sınırı). Lütfen yarın (Pasifik saatiyle gece yarısından sonra) tekrar deneyin.')
+
+        ip_count = state['by_ip'].get(client_ip, 0)
+        if ip_count >= GEMINI_PER_IP_DAILY_LIMIT:
+            return False, ('Bugün için soru sorma sınırınıza ulaştınız (kişi başına günlük limit). '
+                            'Lütfen yarın tekrar deneyin.')
+
+        state['total'] += 1
+        state['by_ip'][client_ip] = ip_count + 1
+        try:
+            with open(GEMINI_QUOTA_FILE, 'w', encoding='utf-8') as f:
+                json.dump(state, f)
+        except Exception:
+            pass  # diske yazılamasa bile bu istek için kotayı geçirmeye devam et
+
+        return True, None
+
+
+_GEMINI_SYSTEM_INSTRUCTION = (
+    "Sen SylvaGIS uygulamasında, kullanıcıya SADECE verilen veriyi açıklayan bir "
+    "veri okuma asistanısın. Sana bir analiz adı, sınıflandırma lejantı (sınıf "
+    "adları, değer aralıkları, renkler) ve her sınıfın alan yüzdesi (%) verilecek. "
+    "GÖREVİN: yalnızca bu verilere dayanarak kullanıcının sorusunu Türkçe, kısa ve "
+    "net şekilde yanıtlamak (örn. hangi sınıf en yüksek/düşük yüzdeye sahip, "
+    "belirli bir sınıfın değer aralığı nedir, toplam alan kaç hektar gibi).\n\n"
+    "KESİNLİKLE YAPMAMAN GEREKENLER:\n"
+    "- Risk değerlendirmesi yapma (örn. 'bu alan sel riski taşıyor' DEME).\n"
+    "- Tavsiye/öneri verme (örn. 'şu türde ağaç dikilmeli' DEME).\n"
+    "- Verilmeyen konularda (hava durumu, toprak yapısı, hukuki durum vb.) yorum "
+    "yapma — sadece sana verilen lejant/% verisiyle sınırlı kal.\n"
+    "- Eğer soru risk/tavsiye/veri dışı bir konu istiyorsa, KİBARCA şunu söyle: "
+    "'Bu asistan yalnızca ekrandaki lejant ve yüzde verilerini açıklayabilir; risk "
+    "değerlendirmesi veya tavsiye veremez.' ve başka bir şey ekleme.\n"
+    "Yanıtların 120 kelimeyi geçmesin."
+)
+
+
+@app.route('/api/gemini-data-qa', methods=['POST'])
+def gemini_data_qa():
+    """
+    Body: {"question": str, "analysis_name": str, "classes": [{"name","min","max","color"}],
+           "percentages": [float, ...], "area_ha": float|null}
+    Dönüş: {"success": true, "answer": str} veya {"success": false, "error": str}
+    """
+    try:
+        data = request.json or {}
+        question = str(data.get('question') or '').strip()
+        classes = data.get('classes') or []
+        percentages = data.get('percentages') or []
+        analysis_name = str(data.get('analysis_name') or 'Bilinmeyen')
+        area_ha = data.get('area_ha')
+
+        if not question:
+            return jsonify({'success': False, 'error': 'Soru boş olamaz.'})
+        if len(question) > 500:
+            return jsonify({'success': False, 'error': 'Soru çok uzun (en fazla 500 karakter).'})
+        if not classes or not percentages or len(classes) != len(percentages):
+            return jsonify({'success': False, 'error': 'Önce sınıflandırılmış bir analiz çalıştırın (lejant/% verisi eksik).'})
+
+        if not GEMINI_API_KEY or GEMINI_API_KEY.strip('A') == '' or len(GEMINI_API_KEY) < 20:
+            return jsonify({'success': False, 'error': (
+                'Sunucuda henüz geçerli bir Gemini API anahtarı tanımlanmamış '
+                '(server.py içindeki GEMINI_API_KEY yer tutucu durumda). Lütfen '
+                'aistudio.google.com/apikey üzerinden bir anahtar alıp bu sabiti güncelleyin.'
+            )})
+
+        client_ip = (request.headers.get('X-Forwarded-For', '').split(',')[0].strip() or request.remote_addr or 'unknown')
+        ok, quota_err = _gemini_check_and_increment_quota(client_ip)
+        if not ok:
+            return jsonify({'success': False, 'error': quota_err})
+
+        data_summary_lines = ['Analiz: ' + analysis_name]
+        if area_ha is not None:
+            try:
+                data_summary_lines.append('Toplam alan: %.2f hektar' % float(area_ha))
+            except Exception:
+                pass
+        data_summary_lines.append('Sınıflar (ad — değer aralığı — yüzde):')
+        for c, p in zip(classes, percentages):
+            name = str(c.get('name') or '?')
+            cmin = c.get('min')
+            cmax = c.get('max')
+            rng = ('%s - %s' % (cmin, cmax)) if (cmin is not None and cmax is not None) else '—'
+            try:
+                pct_str = '%.1f%%' % float(p)
+            except Exception:
+                pct_str = str(p)
+            data_summary_lines.append('- %s (%s): %s' % (name, rng, pct_str))
+        data_summary = '\n'.join(data_summary_lines)
+
+        user_prompt = data_summary + '\n\nSoru: ' + question
+
+        gemini_url = GEMINI_API_URL_TMPL.format(model=GEMINI_MODEL, key=GEMINI_API_KEY)
+        gemini_body = {
+            'contents': [{'parts': [{'text': user_prompt}]}],
+            'systemInstruction': {'parts': [{'text': _GEMINI_SYSTEM_INSTRUCTION}]},
+            'generationConfig': {'temperature': 0.2, 'maxOutputTokens': 400},
+        }
+
+        try:
+            resp = requests.post(gemini_url, json=gemini_body, timeout=20)
+        except Exception as _net_err:
+            return jsonify({'success': False, 'error': 'Gemini API\'ye ulaşılamadı: ' + str(_net_err)})
+
+        if resp.status_code != 200:
+            err_detail = ''
+            try:
+                err_detail = (resp.json().get('error') or {}).get('message', '')
+            except Exception:
+                err_detail = resp.text[:300]
+            return jsonify({'success': False, 'error': (
+                'Gemini API hatası (HTTP %d): %s' % (resp.status_code, err_detail)
+            )})
+
+        try:
+            resp_json = resp.json()
+            candidates = resp_json.get('candidates') or []
+            if not candidates:
+                return jsonify({'success': False, 'error': 'Gemini yanıt üretmedi (boş yanıt) — soruyu farklı bir şekilde tekrar deneyin.'})
+            parts = (candidates[0].get('content') or {}).get('parts') or []
+            answer_text = ''.join(p.get('text', '') for p in parts).strip()
+            if not answer_text:
+                return jsonify({'success': False, 'error': 'Gemini yanıt üretmedi (boş yanıt) — soruyu farklı bir şekilde tekrar deneyin.'})
+        except Exception as _parse_err:
+            return jsonify({'success': False, 'error': 'Gemini yanıtı çözümlenemedi: ' + str(_parse_err)})
+
+        return jsonify({'success': True, 'answer': answer_text})
+    except Exception as _gqa_err:
+        return jsonify({'success': False, 'error': 'Beklenmeyen hata: ' + str(_gqa_err)})
+
+
 @app.route('/api/contact', methods=['POST'])
 def send_contact_message():
     import smtplib
