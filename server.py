@@ -3900,52 +3900,127 @@ def _gemini_check_and_increment_quota(client_ip):
         return True, None
 
 
+# 🆕 Faz 69: Kapsam GENİŞLETİLDİ — artık asistan, BİRDEN FAZLA veri setini
+# (ör. arazi örtüsü/kullanım, yükseklik/eğim/bakı sınıflandırması, NDVI,
+# bina/çatı tespiti) birbiriyle İLİŞKİLENDİREREK betimsel/tanımlayıcı
+# gözlemler yapabiliyor (ör. "600-1200m aralığında orman sınıfının payı
+# yüksek görünüyor"). BUNA RAĞMEN resmi risk/tehlike değerlendirmesi ve
+# tavsiye/talimat vermesi KESİNLİKLE yasak — aradaki fark: "dik eğimli
+# ormanlık alanlar erozyonu azaltmaya yardımcı olabilir" gibi GENEL,
+# betimsel bir gözlem SERBEST; "bu alan erozyon riski taşıyor, önlem
+# alınmalı" gibi bir RİSK VERDİSİ veya EYLEM ÇAĞRISI YASAK. Bu ayrım
+# %100 garanti edilemez (küçük/ücretsiz modeller talimatı bazen tam
+# uygulamayabilir) — bu yüzden arayüzde kullanıcıya yanıtların doğruluğunu
+# kendisinin kontrol etmesi gerektiği ayrıca hatırlatılıyor.
 _GEMINI_SYSTEM_INSTRUCTION = (
-    "Sen SylvaGIS uygulamasında, kullanıcıya SADECE verilen veriyi açıklayan bir "
-    "veri okuma asistanısın. Sana bir analiz adı, sınıflandırma lejantı (sınıf "
-    "adları, değer aralıkları, renkler) ve her sınıfın alan yüzdesi (%) verilecek. "
-    "GÖREVİN: yalnızca bu verilere dayanarak kullanıcının sorusunu Türkçe, kısa ve "
-    "net şekilde yanıtlamak (örn. hangi sınıf en yüksek/düşük yüzdeye sahip, "
-    "belirli bir sınıfın değer aralığı nedir, toplam alan kaç hektar gibi).\n\n"
-    "KESİNLİKLE YAPMAMAN GEREKENLER:\n"
-    "- Risk değerlendirmesi yapma (örn. 'bu alan sel riski taşıyor' DEME).\n"
-    "- Tavsiye/öneri verme (örn. 'şu türde ağaç dikilmeli' DEME).\n"
-    "- Verilmeyen konularda (hava durumu, toprak yapısı, hukuki durum vb.) yorum "
-    "yapma — sadece sana verilen lejant/% verisiyle sınırlı kal.\n"
-    "- Eğer soru risk/tavsiye/veri dışı bir konu istiyorsa, KİBARCA şunu söyle: "
-    "'Bu asistan yalnızca ekrandaki lejant ve yüzde verilerini açıklayabilir; risk "
-    "değerlendirmesi veya tavsiye veremez.' ve başka bir şey ekleme.\n"
-    "Yanıtların 120 kelimeyi geçmesin."
+    "Sen SylvaGIS uygulamasında, kullanıcıya verilen sayısal analiz verilerini "
+    "(arazi örtüsü/kullanım sınıfları, yükseklik/eğim/bakı sınıflandırması, NDVI, "
+    "bina/çatı tespiti gibi) okuyup açıklayan bir veri yorumlama asistanısın. Sana "
+    "BİRDEN FAZLA veri seti verilebilir — her biri bir analiz adı, sınıflandırma "
+    "lejantı (sınıf adları, değer aralıkları) ve yüzde (%) dağılımından oluşur; "
+    "ayrıca varsa bir bina/çatı tespiti özeti (toplam bina sayısı, toplam çatı "
+    "alanı) verilebilir.\n\n"
+    "GÖREVİN: Yalnızca sana verilen bu verilere dayanarak, kullanıcının sorusunu "
+    "Türkçe, kısa ve nesnel şekilde yanıtlamak. Basit sorulara (hangi sınıf en "
+    "yüksek/düşük yüzdeye sahip, bir sınıfın değer aralığı nedir, toplam alan/bina "
+    "sayısı kaç) ek olarak, BİRDEN FAZLA veri seti verildiğinde bunları BİRBİRİYLE "
+    "İLİŞKİLENDİREREK betimsel gözlemler de yapabilirsin — örneğin bir "
+    "yükseklik/eğim sınıflandırmasıyla bir arazi örtüsü sınıflandırmasını "
+    "karşılaştırıp '600-1200m aralığında orman sınıfının payı yüksek görünüyor' "
+    "gibi, ya da 'dik eğimli (örn. %60) ve ormanlık alanlar genellikle toprak "
+    "erozyonunu azaltmaya yardımcı olan bir işlev görür' gibi GENEL, tanımlayıcı "
+    "gözlemler paylaşabilirsin.\n\n"
+    "ÖNEMLİ SINIRLAR (bunlara KESİNLİKLE uy):\n"
+    "- Bu bir KESİN mekansal çakıştırma (overlay) analizi DEĞİLDİR — sana ayrı ayrı "
+    "özet istatistikler veriliyor, piksel piksel çakıştırılmış ortak bir tablo "
+    "verilmiyor. İlişkilendirmelerini her zaman 'görünüyor', 'muhtemelen', "
+    "'genellikle' gibi TEMKİNLİ bir dille ifade et, kesinlik iddia etme.\n"
+    "- RESMİ bir RİSK/TEHLİKE DEĞERLENDİRMESİ yapma — 'bu alan YÜKSEK RİSKLİDİR', "
+    "'sel riski taşıyor', 'acil müdahale gerekir' gibi risk skoru/uyarı/alarm "
+    "niteliğinde ifadeler KULLANMA.\n"
+    "- TAVSİYE/ÖNERİ/TALİMAT verme — 'şunu yapmalısınız', 'öneririm', 'tavsiye "
+    "ederim', 'şu tür ağaç dikilmeli', 'tedbir alınmalı' gibi kullanıcıya eylem "
+    "söyleyen ifadeler KULLANMA. Genel ekolojik/coğrafi bir işlevi betimsel olarak "
+    "tanımlayabilirsin ('...erozyonu azaltmaya yardımcı olabilir') ama bunu bir "
+    "eylem çağrısına DÖNÜŞTÜRME.\n"
+    "- Sana verilmeyen konularda (hava durumu, toprak yapısı, hukuki durum, "
+    "mülkiyet vb.) yorum yapma — sadece sana verilen veri setleriyle sınırlı kal.\n"
+    "- Eğer soru resmi bir risk değerlendirmesi veya somut bir tavsiye/talimat "
+    "istiyorsa, KİBARCA şunu söyle: 'Bu asistan yalnızca ekrandaki verileri "
+    "betimsel olarak açıklayabilir; resmi bir risk değerlendirmesi veya tavsiye "
+    "veremez.' ve başka bir şey ekleme.\n"
+    "Yanıtların 150 kelimeyi geçmesin."
 )
 
 
 @app.route('/api/gemini-data-qa', methods=['POST'])
 def gemini_data_qa():
     """
-    Body: {"question": str, "analysis_name": str, "classes": [{"name","min","max","color"}],
-           "percentages": [float, ...], "area_ha": float|null}
+    🆕 Faz 69: Artık BİRDEN FAZLA veri seti kabul ediyor (ör. arazi örtüsü +
+    yükseklik/eğim sınıflandırması aynı anda), asistan bunları
+    ilişkilendirerek betimsel yorum yapabiliyor. Geriye dönük uyumluluk için
+    eski tekli "classes"/"percentages"/"analysis_name"/"area_ha" alanları da
+    hâlâ kabul edilir (tek elemanlı bir "datasets" listesine dönüştürülür).
+
+    Body (yeni format): {
+        "question": str,
+        "datasets": [{"analysis_name": str, "classes": [{"name","min","max"}],
+                       "percentages": [float, ...], "area_ha": float|null}, ...],
+        "building": {"buildingCount": int, "totalAreaM2": float, "dataset": str} | null
+    }
+    Body (eski format, hâlâ desteklenir): {"question": str, "analysis_name": str,
+        "classes": [...], "percentages": [...], "area_ha": float|null}
     Dönüş: {"success": true, "answer": str} veya {"success": false, "error": str}
     """
     try:
         data = request.json or {}
         question = str(data.get('question') or '').strip()
-        classes = data.get('classes') or []
-        percentages = data.get('percentages') or []
-        analysis_name = str(data.get('analysis_name') or 'Bilinmeyen')
-        area_ha = data.get('area_ha')
+        datasets = data.get('datasets')
+        building = data.get('building') or None
+
+        # Geriye dönük uyumluluk: eski tekli-veri-seti formatı gönderildiyse
+        # tek elemanlı bir listeye çevir.
+        if not datasets:
+            legacy_classes = data.get('classes') or []
+            legacy_pct = data.get('percentages') or []
+            if legacy_classes and legacy_pct:
+                datasets = [{
+                    'analysis_name': data.get('analysis_name') or 'Bilinmeyen',
+                    'classes': legacy_classes,
+                    'percentages': legacy_pct,
+                    'area_ha': data.get('area_ha'),
+                }]
+        datasets = datasets or []
 
         if not question:
             return jsonify({'success': False, 'error': 'Soru boş olamaz.'})
         if len(question) > 500:
             return jsonify({'success': False, 'error': 'Soru çok uzun (en fazla 500 karakter).'})
-        if not classes or not percentages or len(classes) != len(percentages):
+
+        # En az bir geçerli veri seti VEYA bina/çatı verisi gerekli.
+        valid_datasets = []
+        for ds in datasets:
+            if not isinstance(ds, dict):
+                continue
+            ds_classes = ds.get('classes') or []
+            ds_pct = ds.get('percentages') or []
+            if ds_classes and ds_pct and len(ds_classes) == len(ds_pct):
+                valid_datasets.append(ds)
+        has_building = bool(building and (building.get('buildingCount') or building.get('totalAreaM2')))
+
+        if not valid_datasets and not has_building:
             return jsonify({'success': False, 'error': 'Önce sınıflandırılmış bir analiz çalıştırın (lejant/% verisi eksik).'})
+
+        # En fazla 6 veri seti — hem istem (prompt) boyutunu makul tutmak
+        # hem de kullanıcının kotasını gereksiz büyük isteklerle tüketmemek için.
+        valid_datasets = valid_datasets[:6]
 
         if not GEMINI_API_KEY or GEMINI_API_KEY.strip('A') == '' or len(GEMINI_API_KEY) < 20:
             return jsonify({'success': False, 'error': (
                 'Sunucuda henüz geçerli bir Gemini API anahtarı tanımlanmamış '
-                '(server.py içindeki GEMINI_API_KEY yer tutucu durumda). Lütfen '
-                'aistudio.google.com/apikey üzerinden bir anahtar alıp bu sabiti güncelleyin.'
+                '(GEMINI_API_KEY ortam değişkeni ayarlanmamış). Lütfen '
+                'aistudio.google.com/apikey üzerinden bir anahtar alıp Cloud Run '
+                'servisinizde GEMINI_API_KEY ortam değişkeni olarak tanımlayın.'
             )})
 
         client_ip = (request.headers.get('X-Forwarded-For', '').split(',')[0].strip() or request.remote_addr or 'unknown')
@@ -3953,25 +4028,51 @@ def gemini_data_qa():
         if not ok:
             return jsonify({'success': False, 'error': quota_err})
 
-        data_summary_lines = ['Analiz: ' + analysis_name]
-        if area_ha is not None:
-            try:
-                data_summary_lines.append('Toplam alan: %.2f hektar' % float(area_ha))
-            except Exception:
-                pass
-        data_summary_lines.append('Sınıflar (ad — değer aralığı — yüzde):')
-        for c, p in zip(classes, percentages):
-            name = str(c.get('name') or '?')
-            cmin = c.get('min')
-            cmax = c.get('max')
-            rng = ('%s - %s' % (cmin, cmax)) if (cmin is not None and cmax is not None) else '—'
-            try:
-                pct_str = '%.1f%%' % float(p)
-            except Exception:
-                pct_str = str(p)
-            data_summary_lines.append('- %s (%s): %s' % (name, rng, pct_str))
-        data_summary = '\n'.join(data_summary_lines)
+        data_summary_blocks = []
+        for idx, ds in enumerate(valid_datasets, start=1):
+            ds_name = str(ds.get('analysis_name') or ('Veri seti %d' % idx))
+            ds_classes = ds.get('classes') or []
+            ds_pct = ds.get('percentages') or []
+            ds_area = ds.get('area_ha')
+            lines = ['Veri seti %d — %s' % (idx, ds_name)]
+            if ds_area is not None:
+                try:
+                    lines.append('Toplam alan: %.2f hektar' % float(ds_area))
+                except Exception:
+                    pass
+            lines.append('Sınıflar (ad — değer aralığı — yüzde):')
+            for c, p in zip(ds_classes, ds_pct):
+                name = str((c or {}).get('name') or '?')
+                cmin = (c or {}).get('min')
+                cmax = (c or {}).get('max')
+                rng = ('%s - %s' % (cmin, cmax)) if (cmin is not None and cmax is not None) else '—'
+                try:
+                    pct_str = '%.1f%%' % float(p)
+                except Exception:
+                    pct_str = str(p)
+                lines.append('- %s (%s): %s' % (name, rng, pct_str))
+            data_summary_blocks.append('\n'.join(lines))
 
+        if has_building:
+            b_lines = ['Bina/Çatı Tespiti:']
+            b_count = building.get('buildingCount')
+            b_area = building.get('totalAreaM2')
+            b_dataset = building.get('dataset')
+            if b_count is not None:
+                try:
+                    b_lines.append('Toplam bina/çatı sayısı: %d' % int(b_count))
+                except Exception:
+                    pass
+            if b_area is not None:
+                try:
+                    b_lines.append('Toplam çatı alanı: %.2f m²' % float(b_area))
+                except Exception:
+                    pass
+            if b_dataset:
+                b_lines.append('Kaynak veri kümesi: %s' % str(b_dataset))
+            data_summary_blocks.append('\n'.join(b_lines))
+
+        data_summary = '\n\n'.join(data_summary_blocks)
         user_prompt = data_summary + '\n\nSoru: ' + question
 
         gemini_url = GEMINI_API_URL_TMPL.format(model=GEMINI_MODEL, key=GEMINI_API_KEY)
