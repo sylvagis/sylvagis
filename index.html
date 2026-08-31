@@ -4004,6 +4004,49 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                 </div>
             </details>
 
+            <!-- 🆕 Faz 62: Ağaç Tepe (Taç) Tespiti — "Deneysel" özellik.
+                 ÖNEMLİ: Bu bir LIDAR/saha ölçümü DEĞİLDİR — Esri uydu (RGB)
+                 görüntüsünden türetilmiş yaklaşık bir görsel tahmindir (bkz.
+                 server.py /api/tree-crown-detect üzerindeki ayrıntılı not).
+                 Görüntü kaynağı EKRANDAKİ basemap DEĞİL, sunucunun ayrıca
+                 indirdiği Esri World Imagery karolarıdır — bu sayede ekranda
+                 hangi basemap seçili olursa olsun (Google dahil) çalışır. -->
+            <details class="main-module-details" id="tree-crown-details">
+                <summary><span data-i18n="sec_tree_crown">🌳 Ağaç Tepe Tespiti (Deneysel)</span></summary>
+                <div class="details-content">
+                    <div data-i18n="desc_tree_crown" style="font-size:0.68rem;color:#64748b;margin-bottom:6px;">
+                        Önce bir alan çizin (Poligon/Dikdörtgen). Alan içindeki ağaç tepe
+                        noktaları, Esri uydu görüntüsündeki yeşillik/parlaklık desenine
+                        bakılarak otomatik tespit edilir ve her biri için tahmini taç çapı
+                        hesaplanır. <b>Bu, LIDAR ölçümü değildir</b> — RGB görüntüden
+                        türetilmiş yaklaşık bir tahmindir; gölgeler, bitişik taçlar ve
+                        görüntü çözünürlüğünden etkilenir, kesin/yasal kararlar için
+                        kullanılmamalıdır. En iyi sonuç için çizilen alanın çapı 3 km'den
+                        küçük olmalıdır.
+                    </div>
+                    <div style="display:flex; gap:8px; margin-bottom:8px;">
+                        <div style="flex:1;">
+                            <label for="tcd-min-crown" style="font-size:0.72rem;color:#334155;" data-i18n="tcd_min_crown_lbl">Min. taç çapı (m)</label>
+                            <input type="number" id="tcd-min-crown" value="3" min="0.5" max="50" step="0.5"
+                                style="width:100%;padding:5px 6px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.8rem;">
+                        </div>
+                        <div style="flex:1;">
+                            <label for="tcd-max-crown" style="font-size:0.72rem;color:#334155;" data-i18n="tcd_max_crown_lbl">Maks. taç çapı (m)</label>
+                            <input type="number" id="tcd-max-crown" value="20" min="1" max="80" step="0.5"
+                                style="width:100%;padding:5px 6px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.8rem;">
+                        </div>
+                    </div>
+                    <button type="button" id="btn-tree-crown-detect" class="btn-primary" style="background-color:#16a34a;" onclick="sylvaRunTreeCrownDetect()" data-i18n="tcd_run_btn">🌳 Ağaç Tepelerini Tespit Et</button>
+                    <div id="tree-crown-status" style="display:none; font-size:0.78rem; border-radius:5px; padding:8px; margin-top:8px; word-break:break-word;"></div>
+                    <div id="tree-crown-results" style="display:none; margin-top:8px;">
+                        <div id="tree-crown-summary" style="font-size:0.8rem;font-weight:600;color:#166534;margin-bottom:6px;"></div>
+                        <div id="tree-crown-list" style="max-height:180px;overflow-y:auto;font-size:0.72rem;border:1px solid #dcfce7;border-radius:5px;"></div>
+                        <button type="button" id="btn-tree-crown-csv" class="btn-primary" style="background-color:#0f766e;margin-top:6px;font-size:0.75rem;padding:6px 10px;" onclick="sylvaDownloadTreeCrownCsv()" data-i18n="tcd_csv_btn">📥 Sonuçları İndir (CSV)</button>
+                        <button type="button" id="btn-tree-crown-clear" class="btn-primary" style="background-color:#94a3b8;margin-top:6px;font-size:0.75rem;padding:6px 10px;" onclick="sylvaClearTreeCrownResults()" data-i18n="tcd_clear_btn">🗑️ Sonuçları Temizle</button>
+                    </div>
+                </div>
+            </details>
+
             <details class="main-module-details" id="land-use-analysis-details">
                 <summary><span data-i18n="sec_land_use">🏘️ Arazi Kullanımı</span></summary>
                 <div class="details-content">
@@ -27861,6 +27904,21 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Satellite Data and Analyses',
     sec_land_use: '🏘️ Land Use',
     sec_topo: '🏔️ Topographic Analyses',
+    sec_tree_crown: '🌳 Tree Crown Detection (Experimental)',
+    desc_tree_crown: 'First draw an area (Polygon/Rectangle). Tree tops within the area are automatically detected from Esri satellite imagery based on greenness/brightness patterns, and an estimated crown diameter is computed for each. This is NOT a LIDAR measurement — it is an approximate estimate derived from RGB imagery; affected by shadows, adjacent crowns and image resolution, and should not be used for critical/legal decisions. For best results, the drawn area should be under 3 km across.',
+    tcd_min_crown_lbl: 'Min. crown diameter (m)',
+    tcd_max_crown_lbl: 'Max. crown diameter (m)',
+    tcd_run_btn: '🌳 Detect Tree Crowns',
+    tcd_csv_btn: '📥 Download Results (CSV)',
+    tcd_clear_btn: '🗑️ Clear Results',
+    tcd_err_no_roi: 'First draw an area (Polygon or Rectangle).',
+    tcd_err_bad_range: 'Max crown diameter must be greater than min crown diameter.',
+    tcd_running: '⏳ Downloading Esri satellite imagery and detecting tree crowns... (may take a few seconds)',
+    tcd_err_generic: 'Tree detection failed.',
+    tcd_err_network: 'Could not reach the server: ',
+    tcd_summary_trees: 'trees detected',
+    tcd_summary_mean: 'avg. crown diameter',
+    tcd_no_trees: 'No trees detected in this area.',
     avail_analyses: 'Available Analyses', sensor_hint: '(select a sensor first)',
     lc2l2_label: 'Landsat Collection 2 Level-2 (Surface Reflectance / Thermal)',
     lc2l1_label: 'Landsat Collection 2 Level-1 (TOA Reflectance)',
@@ -29968,6 +30026,21 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Uydu Verileri ve Analizler',
     sec_land_use: '🏘️ Arazi Kullanımı',
     sec_topo: '🏔️ Topografik Analizler',
+    sec_tree_crown: '🌳 Ağaç Tepe Tespiti (Deneysel)',
+    desc_tree_crown: 'Önce bir alan çizin (Poligon/Dikdörtgen). Alan içindeki ağaç tepe noktaları, Esri uydu görüntüsündeki yeşillik/parlaklık desenine bakılarak otomatik tespit edilir ve her biri için tahmini taç çapı hesaplanır. Bu, LIDAR ölçümü değildir — RGB görüntüden türetilmiş yaklaşık bir tahmindir; gölgeler, bitişik taçlar ve görüntü çözünürlüğünden etkilenir, kesin/yasal kararlar için kullanılmamalıdır. En iyi sonuç için çizilen alanın çapı 3 km\'den küçük olmalıdır.',
+    tcd_min_crown_lbl: 'Min. taç çapı (m)',
+    tcd_max_crown_lbl: 'Maks. taç çapı (m)',
+    tcd_run_btn: '🌳 Ağaç Tepelerini Tespit Et',
+    tcd_csv_btn: '📥 Sonuçları İndir (CSV)',
+    tcd_clear_btn: '🗑️ Sonuçları Temizle',
+    tcd_err_no_roi: 'Önce bir alan çizin (Poligon veya Dikdörtgen).',
+    tcd_err_bad_range: 'Maks. taç çapı, min. taç çapından büyük olmalıdır.',
+    tcd_running: '⏳ Esri uydu görüntüsü indiriliyor ve ağaç tepeleri tespit ediliyor... (birkaç saniye sürebilir)',
+    tcd_err_generic: 'Ağaç tespiti başarısız oldu.',
+    tcd_err_network: 'Sunucuya ulaşılamadı: ',
+    tcd_summary_trees: 'ağaç tespit edildi',
+    tcd_summary_mean: 'ort. taç çapı',
+    tcd_no_trees: 'Bu alanda ağaç tespit edilemedi.',
     avail_analyses: 'Kullanılabilir Analizler', sensor_hint: '(önce bir sensör seçin)',
     lc2l2_label: 'Landsat Collection 2 Level-2 (Yüzey Yansıma / Termal)',
     lc2l1_label: 'Landsat Collection 2 Level-1 (Tepe Yansıma)',
@@ -53810,6 +53883,140 @@ refresh();
             if (g) p.roi = g;
         }
         return p;
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // 🌳 AĞAÇ TEPE (TAÇ) TESPİTİ — Faz 62, "Deneysel" özellik.
+    // Görüntü kaynağı sunucu tarafında Esri World Imagery'dir (ekrandaki
+    // basemap ne olursa olsun) — bkz. server.py /api/tree-crown-detect
+    // üzerindeki ayrıntılı dürüstlük notu. Bu, LIDAR/saha ölçümü DEĞİLDİR.
+    // ════════════════════════════════════════════════════════════════════
+    window._sylvaTreeCrownLayer = null;
+    window._sylvaTreeCrownLastResults = null;
+
+    function _tcdStatusEl() { return document.getElementById('tree-crown-status'); }
+    function _tcdShowStatus(msg, kind) {
+        var el = _tcdStatusEl();
+        if (!el) return;
+        el.style.display = 'block';
+        el.textContent = msg;
+        el.style.background = (kind === 'error') ? '#fee2e2' : (kind === 'ok' ? '#dcfce7' : '#f1f5f9');
+        el.style.color = (kind === 'error') ? '#991b1b' : (kind === 'ok' ? '#166534' : '#334155');
+    }
+    function _tcdHideStatus() {
+        var el = _tcdStatusEl();
+        if (el) { el.style.display = 'none'; el.textContent = ''; }
+    }
+
+    window.sylvaClearTreeCrownResults = function () {
+        try {
+            if (window._sylvaTreeCrownLayer) {
+                [map, (typeof map2 !== 'undefined' ? map2 : null)].forEach(function (m) {
+                    if (m && m.hasLayer && m.hasLayer(window._sylvaTreeCrownLayer)) m.removeLayer(window._sylvaTreeCrownLayer);
+                });
+            }
+        } catch (e) {}
+        window._sylvaTreeCrownLayer = null;
+        window._sylvaTreeCrownLastResults = null;
+        var resultsEl = document.getElementById('tree-crown-results');
+        if (resultsEl) resultsEl.style.display = 'none';
+        _tcdHideStatus();
+    };
+
+    window.sylvaDownloadTreeCrownCsv = function () {
+        var res = window._sylvaTreeCrownLastResults;
+        if (!res || !res.trees || !res.trees.length) return;
+        var rows = ['lat,lng,diameter_m,area_m2'];
+        res.trees.forEach(function (t) {
+            rows.push([t.lat, t.lng, t.diameter_m, t.area_m2].join(','));
+        });
+        var blob = new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'agac_tepe_tespiti.csv';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    };
+
+    window.sylvaRunTreeCrownDetect = function () {
+        var pane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+        var roi = _sylvaCurrentWorkspaceGeometry(pane);
+        var _t = (typeof t === 'function') ? t : function (k, f) { return f || k; };
+        if (!roi) {
+            _tcdShowStatus(_t('tcd_err_no_roi', 'Önce bir alan çizin (Poligon veya Dikdörtgen).'), 'error');
+            return;
+        }
+        var minCrown = parseFloat(document.getElementById('tcd-min-crown').value) || 3.0;
+        var maxCrown = parseFloat(document.getElementById('tcd-max-crown').value) || 20.0;
+        if (maxCrown <= minCrown) {
+            _tcdShowStatus(_t('tcd_err_bad_range', 'Maks. taç çapı, min. taç çapından büyük olmalıdır.'), 'error');
+            return;
+        }
+
+        window.sylvaClearTreeCrownResults();
+        _tcdShowStatus(_t('tcd_running', '⏳ Esri uydu görüntüsü indiriliyor ve ağaç tepeleri tespit ediliyor... (birkaç saniye sürebilir)'), 'info');
+        var btn = document.getElementById('btn-tree-crown-detect');
+        if (btn) btn.disabled = true;
+
+        fetch(API_BASE + '/api/tree-crown-detect', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ roi: roi, min_crown_m: minCrown, max_crown_m: maxCrown })
+        })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (btn) btn.disabled = false;
+                if (!data || !data.success) {
+                    _tcdShowStatus('⚠️ ' + ((data && data.error) || _t('tcd_err_generic', 'Ağaç tespiti başarısız oldu.')), 'error');
+                    return;
+                }
+                window._sylvaTreeCrownLastResults = data;
+                _tcdHideStatus();
+                _tcdRenderResults(data, pane);
+            })
+            .catch(function (err) {
+                if (btn) btn.disabled = false;
+                _tcdShowStatus('⚠️ ' + _t('tcd_err_network', 'Sunucuya ulaşılamadı: ') + (err && err.message ? err.message : String(err)), 'error');
+            });
+    };
+
+    function _tcdRenderResults(data, pane) {
+        var _t = (typeof t === 'function') ? t : function (k, f) { return f || k; };
+        var resultsEl = document.getElementById('tree-crown-results');
+        var summaryEl = document.getElementById('tree-crown-summary');
+        var listEl = document.getElementById('tree-crown-list');
+        if (!resultsEl || !summaryEl || !listEl) return;
+
+        summaryEl.textContent = '🌳 ' + data.tree_count + ' ' + _t('tcd_summary_trees', 'ağaç tespit edildi') +
+            ' — ' + _t('tcd_summary_mean', 'ort. taç çapı') + ': ' + data.mean_diameter_m + ' m';
+
+        var rowsHtml = data.trees.map(function (tr, i) {
+            return '<div style="display:flex;justify-content:space-between;padding:3px 6px;' +
+                (i % 2 === 0 ? 'background:#f8fafc;' : '') + '">' +
+                '<span>#' + (i + 1) + '</span>' +
+                '<span>' + tr.diameter_m + ' m</span>' +
+                '<span style="color:#94a3b8;">' + tr.lat.toFixed(5) + ', ' + tr.lng.toFixed(5) + '</span>' +
+                '</div>';
+        }).join('');
+        listEl.innerHTML = rowsHtml || ('<div style="padding:6px;color:#94a3b8;">' + _t('tcd_no_trees', 'Bu alanda ağaç tespit edilemedi.') + '</div>');
+        resultsEl.style.display = 'block';
+
+        // Haritada işaretle: her ağaç için tahmini gerçek taç yarıçapında bir daire.
+        try {
+            var targetMap = (pane === 'map2' && typeof map2 !== 'undefined' && map2) ? map2 : map;
+            var group = L.layerGroup();
+            data.trees.forEach(function (tr) {
+                L.circle([tr.lat, tr.lng], {
+                    radius: Math.max(0.3, tr.diameter_m / 2),
+                    color: '#16a34a', weight: 1.5, fillColor: '#22c55e', fillOpacity: 0.35
+                }).bindTooltip((tr.diameter_m + ' m'), { direction: 'top', opacity: 0.85 }).addTo(group);
+            });
+            group.addTo(targetMap);
+            window._sylvaTreeCrownLayer = group;
+        } catch (e) {}
     }
 
     function rasterEntries(pane) {
