@@ -3282,7 +3282,7 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
             <!-- AI Veri Asistanı (Faz 66) — yuvarlak tuş, Rehber'in solunda -->
             <button type="button" id="mnc-gemini-btn"
                 onclick="sylvaToggleGeminiPanel()"
-                title="AI Veri Asistanı (Deneysel)" data-i18n-title="gqa_nav_title" aria-label="AI Veri Asistanı"
+                title="AI Veri Asistanı" data-i18n-title="gqa_nav_title" aria-label="AI Veri Asistanı"
                 style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0;border:1px solid #cbd5e1;border-radius:50%;background:#f8fafc;color:#1e3a8a;font-size:0.85rem;cursor:pointer;">
                 🤖
             </button>
@@ -3317,7 +3317,7 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
             </div>
         </div>
         <div class="nav-buttons">
-            <button type="button" class="nav-btn nav-ai-btn" id="nav-gemini-btn" onclick="sylvaToggleGeminiPanel()" title="AI Veri Asistanı (Deneysel)" data-i18n-title="gqa_nav_title" aria-label="AI Veri Asistanı">🤖</button>
+            <button type="button" class="nav-btn nav-ai-btn" id="nav-gemini-btn" onclick="sylvaToggleGeminiPanel()" title="AI Veri Asistanı" data-i18n-title="gqa_nav_title" aria-label="AI Veri Asistanı">🤖</button>
             <button class="nav-btn" id="nav-guide-btn" data-i18n="nav_guide">❓ Rehber</button>
 
             <!-- Dil Seçimi — özel dropdown (her tarayıcıda bayrak görünür) -->
@@ -3455,7 +3455,7 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
         <!-- AI Veri Asistanı (Faz 66) — yuvarlak tuş, Rehber'in solunda -->
         <button type="button" class="mqb-icon-btn" id="mqb-gemini-btn"
             onclick="sylvaToggleGeminiPanel()"
-            title="AI Veri Asistanı (Deneysel)" data-i18n-title="gqa_nav_title" aria-label="AI Veri Asistanı"
+            title="AI Veri Asistanı" data-i18n-title="gqa_nav_title" aria-label="AI Veri Asistanı"
             style="border-radius:50%;width:34px;height:34px;padding:0;display:flex;align-items:center;justify-content:center;">
             🤖
         </button>
@@ -13397,18 +13397,33 @@ function selectRamp(name) {
         };
         function _sylvaLayerFriendlyName(analysisName) {
             var _nameText = String(analysisName || '');
-            // Topografik katmanlarda teknik TOPO_* kodu hiçbir zaman kullanıcıya
-            // gösterilmez. Stack anahtarındaki ::suffix de başlığa taşınmaz.
-            if (/^TOPO(?:_|$)/i.test(_nameText)) {
-                var _topoBase = _nameText.split('::')[0];
-                return _sylvaAnalysisDisplayTitle(_topoBase);
-            }
+            // 🛠️ BUG FİX: Sıra ÖNCE önceden hesaplanmış TAM eşleşmeli
+            // (_thisLayerKey — stack modunda "__t<zaman damgası>" sonekini de
+            // İÇEREN) override sözlüğüne bakar. Eskiden TOPO_* regex kontrolü
+            // bundan ÖNCE çalışıyordu; bu yüzden stack modunda üst üste birden
+            // fazla topografik katman (ör. DEM+Eğim+Bakı) eklendiğinde her
+            // katmanın anahtarına eklenen "__t<zaman damgası>" soneki hiç
+            // temizlenmeden _sylvaAnalysisDisplayTitle()'a gidiyor, eşleşme
+            // bulunamayınca ham teknik kod ("TOPO_ASPECT__T1788198060487" gibi)
+            // olduğu gibi ekrana yansıyordu — bkz. "Üstte Gösterilecek Katman"
+            // kutusu. Artık önce TAM anahtarla eşleşen (zaten temiz) önceden
+            // hesaplanmış isim aranıyor; yalnızca öyle bir kayıt YOKSA aşağıdaki
+            // TOPO/LULC geriye dönük mantığa düşülüyor.
             if (window._sylvaLayerFriendlyNames && window._sylvaLayerFriendlyNames[analysisName]) {
                 return window._sylvaLayerFriendlyNames[analysisName];
             }
-            var _friendly = _LULC_SWITCH_TITLES[analysisName] || analysisName;
+            // Topografik katmanlarda teknik TOPO_* kodu hiçbir zaman kullanıcıya
+            // gösterilmez. Stack anahtarındaki ::suffix de başlığa taşınmaz.
+            if (/^TOPO(?:_|$)/i.test(_nameText)) {
+                var _topoBase = _nameText.split('::')[0].split('__t')[0];
+                return _sylvaAnalysisDisplayTitle(_topoBase);
+            }
+            // Stack modu soneki ("__t<zaman damgası>") varsa LULC eşleşmesi
+            // ondan önce, temiz taban ad üzerinden yapılır.
+            var _nameBase = _nameText.split('__t')[0];
+            var _friendly = _LULC_SWITCH_TITLES[_nameBase] || _nameBase;
             // LULC veri setlerinde tarih aralığı gösterilmez; bunlar sabit arazi örtüsü katmanlarıdır.
-            if (isLulcAnalysis(analysisName)) {
+            if (isLulcAnalysis(_nameBase)) {
                 _friendly = _friendly.replace(/\s*\([^)]*\d{4}[^)]*\)/g, '');
                 _friendly = _friendly.replace(/\s*\d{4}\s*[-–]\s*\d{4}/g, '');
             }
@@ -13424,13 +13439,18 @@ function selectRamp(name) {
         // _sylvaLayerBaseNames) saklanır.
         function _sylvaLayerBaseName(analysisName) {
             var _nameText = String(analysisName || '');
-            if (/^TOPO(?:_|$)/i.test(_nameText)) {
-                return _sylvaAnalysisDisplayTitle(_nameText.split('::')[0]);
-            }
+            // 🛠️ BUG FİX: bkz. _sylvaLayerFriendlyName() üzerindeki aynı not —
+            // TAM eşleşmeli önceden hesaplanmış taban ad ÖNCE aranır, TOPO_*
+            // regex fallback'i yalnızca kayıt yoksa devreye girer (ve varsa
+            // "__t<zaman damgası>" sonekini de temizler).
             if (window._sylvaLayerBaseNames && window._sylvaLayerBaseNames[analysisName]) {
                 return window._sylvaLayerBaseNames[analysisName];
             }
-            return _LULC_SWITCH_TITLES[analysisName] || analysisName;
+            if (/^TOPO(?:_|$)/i.test(_nameText)) {
+                return _sylvaAnalysisDisplayTitle(_nameText.split('::')[0].split('__t')[0]);
+            }
+            var _baseNameNoSuffix = _nameText.split('__t')[0];
+            return _LULC_SWITCH_TITLES[_baseNameNoSuffix] || _baseNameNoSuffix;
         }
         window._sylvaLayerBaseName = _sylvaLayerBaseName;
 
@@ -15792,9 +15812,17 @@ function selectRamp(name) {
                         : (_LULC_SWITCH_TITLES[meta.analysisName] || meta.analysisName);
                     // 🆕 Uydu tabanlı indeks analizlerinde (NDVI/NDWI vb.) tarih
                     // yerine uydu görüntüsü veri seti adı (ör. "Sentinel-2")
-                    // gösterilir; diğer analizlerde (LULC/TOPO/Çevresel vb.)
-                    // eskisi gibi tarih aralığı gösterilmeye devam eder.
-                    var _layerSuffixLabel = isEnvUrbanAnalysis(meta.analysisName) ? '' : (isSatelliteIndexAnalysis(meta.analysisName) ? _stackSatLabel : _stackDateLabel);
+                    // gösterilir; diğer analizlerde (TOPO/Çevresel vb.) eskisi
+                    // gibi tarih aralığı gösterilmeye devam eder.
+                    // 🛠️ BUG FİX: LULC (ör. ESA WorldCover) sabit/statik bir
+                    // arazi örtüsü veri setidir, tarih filtresi UYGULANMAZ
+                    // (bkz. isLulcAnalysis kullanılan diğer muafiyetler) —
+                    // önceden bu satır LULC'yi atlamıyordu, bu yüzden paylaşılan
+                    // #date-start/#date-end alanlarında BAŞKA bir analizden
+                    // (ör. bir uydu görüntüsü) kalan tarih değerleri, "Üstte
+                    // Gösterilecek Katman" kutusunda ESA WorldCover'ın yanında
+                    // yanlışlıkla gösteriliyordu.
+                    var _layerSuffixLabel = (isEnvUrbanAnalysis(meta.analysisName) || isLulcAnalysis(meta.analysisName)) ? '' : (isSatelliteIndexAnalysis(meta.analysisName) ? _stackSatLabel : _stackDateLabel);
                     window._sylvaLayerFriendlyNames[_thisLayerKey] = _baseLayerLabel + _layerSuffixLabel;
                     window._sylvaLayerBaseNames = window._sylvaLayerBaseNames || {};
                     window._sylvaLayerBaseNames[_thisLayerKey] = _baseLayerLabel;
@@ -28072,8 +28100,8 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Satellite Data and Analyses',
     sec_land_use: '🏘️ Land Use',
     sec_topo: '🏔️ Topographic Analyses',
-    gqa_title: '🔎 Ask a Question About This Data (Experimental)',
-    gqa_nav_title: 'AI Data Assistant (Experimental)',
+    gqa_title: '🔎 Ask a Question About This Data',
+    gqa_nav_title: 'AI Data Assistant',
     gqa_desc: 'Can read and describe the legend/percentage data on screen (e.g. land cover, elevation/slope/aspect, building/roof detection) and, when more than one dataset is available, relate them to each other (e.g. "forest cover looks higher between 600-1200m"). Does NOT give a formal risk assessment or advice. Runs on a free Gemini quota — may be unavailable if the quota is exhausted.',
     gqa_verify_note: '⚠️ Answers are not a precise spatial analysis — they are based on separate summary statistics. Please verify accuracy yourself.',
     gqa_placeholder: 'E.g: Which class has the largest percentage?',
@@ -28620,8 +28648,8 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: "🌍 Sun’iy yo‘ldosh ma’lumotlari va tahlillar",
     sec_land_use: '🏘️ Yer resurslaridan foydalanish',
     sec_topo: '🏔️ Topografik tahlillar',
-    gqa_title: '🔎 Ushbu maʼlumot haqida savol bering (Sinov rejimi)',
-    gqa_nav_title: 'AI Maʼlumot Yordamchisi (Sinov rejimi)',
+    gqa_title: '🔎 Ushbu maʼlumot haqida savol bering',
+    gqa_nav_title: 'AI Maʼlumot Yordamchisi',
     gqa_desc: 'Faqat hozir ekranda koʻrsatilgan legend/foiz maʼlumotlariga oid savollarga javob beriladi (masalan, "eng yuqori foizga qaysi sinf ega?"). Xavf bahosi yoki tavsiya BERMAYDI. Bepul Gemini kvotasi bilan ishlaydi — kvota tugasa, javob berilmasligi mumkin.',
     gqa_placeholder: 'Masalan: Eng katta foizga ega sinf qaysi?',
     gqa_ask_btn: 'Soʻrash',
@@ -29148,8 +29176,8 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Δορυφορικά δεδομένα και αναλύσεις',
     sec_land_use: '🏘️ Χρήση Γης',
     sec_topo: '🏔️ Τοπογραφικές Αναλύσεις',
-    gqa_title: '🔎 Ρωτήστε κάτι για αυτά τα δεδομένα (Πειραματικό)',
-    gqa_nav_title: 'Βοηθός Δεδομένων AI (Πειραματικό)',
+    gqa_title: '🔎 Ρωτήστε κάτι για αυτά τα δεδομένα',
+    gqa_nav_title: 'Βοηθός Δεδομένων AI',
     gqa_desc: 'Απαντώνται μόνο ερωτήσεις σχετικά με τα δεδομένα υπομνήματος/ποσοστού που εμφανίζονται αυτή τη στιγμή στην οθόνη (π.χ. "ποια κατηγορία έχει το υψηλότερο ποσοστό;"). ΔΕΝ παρέχει εκτίμηση κινδύνου ή συμβουλές. Λειτουργεί με δωρεάν ποσόστωση Gemini — ενδέχεται να μην είναι διαθέσιμο αν εξαντληθεί η ποσόστωση.',
     gqa_placeholder: 'Π.χ.: Ποια κατηγορία έχει το μεγαλύτερο ποσοστό;',
     gqa_ask_btn: 'Ρώτα',
@@ -29682,8 +29710,8 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Сателитни данни и анализи',
     sec_land_use: '🏘️ Земно покритие',
     sec_topo: '🏔️ Топографски анализи',
-    gqa_title: '🔎 Задайте въпрос за тези данни (Експериментално)',
-    gqa_nav_title: 'AI Асистент за данни (Експериментално)',
+    gqa_title: '🔎 Задайте въпрос за тези данни',
+    gqa_nav_title: 'AI Асистент за данни',
     gqa_desc: 'Отговаря се само на въпроси относно легендата/процентните данни, показани в момента на екрана (напр. "кой клас има най-висок процент?"). НЕ дава оценка на риска или съвети. Работи с безплатна квота на Gemini — може да не е достъпно, ако квотата се изчерпи.',
     gqa_placeholder: 'Напр.: Кой клас има най-голям процент?',
     gqa_ask_btn: 'Попитай',
@@ -30216,8 +30244,8 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Uydu Verileri ve Analizler',
     sec_land_use: '🏘️ Arazi Kullanımı',
     sec_topo: '🏔️ Topografik Analizler',
-    gqa_title: '🔎 Bu Veri Hakkında Soru Sor (Deneysel)',
-    gqa_nav_title: 'AI Veri Asistanı (Deneysel)',
+    gqa_title: '🔎 Bu Veri Hakkında Soru Sor',
+    gqa_nav_title: 'AI Veri Asistanı',
     gqa_desc: 'Ekrandaki lejant/% verilerini (ör. arazi örtüsü, yükseklik/eğim/bakı, bina/çatı tespiti) okuyup betimsel yorum yapabilir; birden fazla veri varsa bunları ilişkilendirebilir (ör. "600-1200m arasında orman payı yüksek görünüyor"). Resmi risk değerlendirmesi veya tavsiye VERMEZ. Ücretsiz Gemini kotası ile çalışır — kota dolarsa yanıt verilemeyebilir.',
     gqa_verify_note: '⚠️ Yanıtlar kesin bir mekansal analiz değildir, ayrı özet istatistiklere dayanır — lütfen doğruluğunu kendiniz kontrol edin.',
     gqa_placeholder: 'Örn: En büyük yüzdeye sahip sınıf hangisi?',
@@ -30757,8 +30785,8 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Peyk Məlumatları və Təhlillər',
     sec_land_use: '🏘️ Torpaqdan İstifadə',
     sec_topo: '🏔️ Topoqrafik Təhlillər',
-    gqa_title: '🔎 Bu Məlumat Haqqında Sual Verin (Sınaq)',
-    gqa_nav_title: 'AI Məlumat Köməkçisi (Sınaq)',
+    gqa_title: '🔎 Bu Məlumat Haqqında Sual Verin',
+    gqa_nav_title: 'AI Məlumat Köməkçisi',
     gqa_desc: 'Yalnız ekranda hazırda göstərilən lejand/faiz məlumatları ilə bağlı suallara cavab verilir (məs., "ən yüksək faizə hansı sinif malikdir?"). Risk qiymətləndirməsi və ya tövsiyə VERMİR. Pulsuz Gemini kvotası ilə işləyir — kvota bitərsə, cavab verilə bilməz.',
     gqa_placeholder: 'Məs.: Ən böyük faizə malik sinif hansıdır?',
     gqa_ask_btn: 'Soruş',
@@ -31287,8 +31315,8 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Műholdas adatok és elemzések',
     sec_land_use: '🏘️ Területhasználat',
     sec_topo: '🏔️ Topográfiai Elemzések',
-    gqa_title: '🔎 Kérdezzen erről az adatról (Kísérleti)',
-    gqa_nav_title: 'AI Adatasszisztens (Kísérleti)',
+    gqa_title: '🔎 Kérdezzen erről az adatról',
+    gqa_nav_title: 'AI Adatasszisztens',
     gqa_desc: 'Csak a képernyőn jelenleg megjelenített jelmagyarázat/százalék adatokra vonatkozó kérdésekre válaszol (pl. "melyik osztálynak van a legmagasabb százaléka?"). NEM ad kockázatértékelést vagy tanácsot. Ingyenes Gemini kvótával működik — ha a kvóta elfogy, előfordulhat, hogy nem elérhető.',
     gqa_placeholder: 'Pl.: Melyik osztálynak van a legnagyobb százaléka?',
     gqa_ask_btn: 'Kérdezés',
@@ -31816,8 +31844,8 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Жерсерік деректері және талдаулар',
     sec_land_use: '🏘️ Жер пайдалану',
     sec_topo: '🏔️ Топографиялық талдаулар',
-    gqa_title: '🔎 Осы деректер туралы сұрақ қойыңыз (Эксперименттік)',
-    gqa_nav_title: 'AI Деректер Көмекшісі (Эксперименттік)',
+    gqa_title: '🔎 Осы деректер туралы сұрақ қойыңыз',
+    gqa_nav_title: 'AI Деректер Көмекшісі',
     gqa_desc: 'Тек экранда қазір көрсетілген легенда/пайыздық деректерге қатысты сұрақтарға жауап беріледі (мысалы, "ең жоғары пайызға қандай класс ие?"). Тәуекелді бағалау немесе кеңес БЕРМЕЙДІ. Тегін Gemini квотасымен жұмыс істейді — квота таусылса, қолжетімсіз болуы мүмкін.',
     gqa_placeholder: 'Мыс.: Ең үлкен пайызға қандай класс ие?',
     gqa_ask_btn: 'Сұрау',
@@ -32329,8 +32357,8 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Satellitendaten und Analysen',
     sec_land_use: '🏘️ Landnutzung',
     sec_topo: '🏔️ Topografische Analysen',
-    gqa_title: '🔎 Stellen Sie eine Frage zu diesen Daten (Experimentell)',
-    gqa_nav_title: 'KI-Datenassistent (Experimentell)',
+    gqa_title: '🔎 Stellen Sie eine Frage zu diesen Daten',
+    gqa_nav_title: 'KI-Datenassistent',
     gqa_desc: 'Es werden nur Fragen zu den aktuell angezeigten Legenden-/Prozentdaten beantwortet (z. B. "welche Klasse hat den höchsten Prozentsatz?"). Gibt KEINE Risikobewertung oder Empfehlung ab. Läuft mit kostenlosem Gemini-Kontingent — bei Erschöpfung möglicherweise nicht verfügbar.',
     gqa_placeholder: 'Z. B.: Welche Klasse hat den größten Prozentsatz?',
     gqa_ask_btn: 'Fragen',
@@ -32864,8 +32892,8 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Données et analyses satellitaires',
     sec_land_use: '🏘️ Occupation du sol',
     sec_topo: '🏔️ Analyses topographiques',
-    gqa_title: '🔎 Posez une question sur ces données (Expérimental)',
-    gqa_nav_title: 'Assistant de données IA (Expérimental)',
+    gqa_title: '🔎 Posez une question sur ces données',
+    gqa_nav_title: 'Assistant de données IA',
     gqa_desc: 'Seules les questions sur les données de légende/pourcentage actuellement affichées à l\'écran reçoivent une réponse (ex. "quelle classe a le pourcentage le plus élevé ?"). Ne donne PAS d\'évaluation des risques ni de conseils. Fonctionne avec un quota Gemini gratuit — peut être indisponible si le quota est épuisé.',
     gqa_placeholder: 'Ex. : Quelle classe a le plus grand pourcentage ?',
     gqa_ask_btn: 'Demander',
@@ -33399,8 +33427,8 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Datos y análisis satelitales',
     sec_land_use: '🏘️ Uso del suelo',
     sec_topo: '🏔️ Análisis topográficos',
-    gqa_title: '🔎 Haga una pregunta sobre estos datos (Experimental)',
-    gqa_nav_title: 'Asistente de Datos IA (Experimental)',
+    gqa_title: '🔎 Haga una pregunta sobre estos datos',
+    gqa_nav_title: 'Asistente de Datos IA',
     gqa_desc: 'Solo se responden preguntas sobre los datos de leyenda/porcentaje mostrados actualmente en la pantalla (p. ej., "¿qué clase tiene el porcentaje más alto?"). NO proporciona evaluación de riesgos ni consejos. Funciona con una cuota gratuita de Gemini — puede no estar disponible si se agota la cuota.',
     gqa_placeholder: 'Ej.: ¿Qué clase tiene el mayor porcentaje?',
     gqa_ask_btn: 'Preguntar',
@@ -33934,8 +33962,8 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Dados e análises de satélite',
     sec_land_use: '🏘️ Uso do solo',
     sec_topo: '🏔️ Análises topográficas',
-    gqa_title: '🔎 Faça uma pergunta sobre estes dados (Experimental)',
-    gqa_nav_title: 'Assistente de Dados IA (Experimental)',
+    gqa_title: '🔎 Faça uma pergunta sobre estes dados',
+    gqa_nav_title: 'Assistente de Dados IA',
     gqa_desc: 'Somente perguntas sobre os dados de legenda/porcentagem atualmente exibidos na tela são respondidas (ex.: "qual classe tem a maior porcentagem?"). NÃO fornece avaliação de risco ou aconselhamento. Funciona com uma cota gratuita do Gemini — pode ficar indisponível se a cota se esgotar.',
     gqa_placeholder: 'Ex.: Qual classe tem a maior porcentagem?',
     gqa_ask_btn: 'Perguntar',
@@ -34469,8 +34497,8 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 بيانات وتحليلات الأقمار الصناعية',
     sec_land_use: '🏘️ استخدام الأراضي',
     sec_topo: '🏔️ التحليلات الطبوغرافية',
-    gqa_title: '🔎 اطرح سؤالاً حول هذه البيانات (تجريبي)',
-    gqa_nav_title: 'مساعد بيانات الذكاء الاصطناعي (تجريبي)',
+    gqa_title: '🔎 اطرح سؤالاً حول هذه البيانات',
+    gqa_nav_title: 'مساعد بيانات الذكاء الاصطناعي',
     gqa_desc: 'يتم الرد فقط على الأسئلة المتعلقة ببيانات المفتاح/النسبة المئوية المعروضة حالياً على الشاشة (مثل "أي فئة لديها أعلى نسبة مئوية؟"). لا يقدم تقييماً للمخاطر أو نصيحة. يعمل بحصة Gemini المجانية — قد يصبح غير متاح إذا نفدت الحصة.',
     gqa_placeholder: 'مثال: أي فئة لديها أكبر نسبة مئوية؟',
     gqa_ask_btn: 'اسأل',
@@ -35004,8 +35032,8 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 داده‌ها و تحلیل‌های ماهواره‌ای',
     sec_land_use: '🏘️ کاربری اراضی',
     sec_topo: '🏔️ تحلیل‌های توپوگرافی',
-    gqa_title: '🔎 درباره این داده سؤال بپرسید (آزمایشی)',
-    gqa_nav_title: 'دستیار داده هوش مصنوعی (آزمایشی)',
+    gqa_title: '🔎 درباره این داده سؤال بپرسید',
+    gqa_nav_title: 'دستیار داده هوش مصنوعی',
     gqa_desc: 'فقط به سؤالات مربوط به داده‌های راهنما/درصد که در حال حاضر روی صفحه نمایش داده می‌شوند پاسخ داده می‌شود (مثلاً "کدام کلاس بیشترین درصد را دارد؟"). ارزیابی ریسک یا توصیه ارائه نمی‌دهد. با سهمیه رایگان Gemini کار می‌کند — در صورت اتمام سهمیه ممکن است در دسترس نباشد.',
     gqa_placeholder: 'مثال: کدام کلاس بیشترین درصد را دارد؟',
     gqa_ask_btn: 'بپرس',
@@ -35539,8 +35567,8 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 卫星数据与分析',
     sec_land_use: '🏘️ 土地利用',
     sec_topo: '🏔️ 地形分析',
-    gqa_title: '🔎 就此数据提问（实验性）',
-    gqa_nav_title: 'AI 数据助手（实验性）',
+    gqa_title: '🔎 就此数据提问',
+    gqa_nav_title: 'AI 数据助手',
     gqa_desc: '仅回答与当前屏幕上显示的图例/百分比数据相关的问题（例如"哪个类别的百分比最高？"）。不提供风险评估或建议。使用免费的 Gemini 配额运行——配额用尽后可能无法使用。',
     gqa_placeholder: '例如：哪个类别的百分比最大？',
     gqa_ask_btn: '提问',
@@ -36074,8 +36102,8 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 衛星データと分析',
     sec_land_use: '🏘️ 土地利用',
     sec_topo: '🏔️ 地形解析',
-    gqa_title: '🔎 このデータについて質問する（実験的機能）',
-    gqa_nav_title: 'AIデータアシスタント（実験的機能）',
+    gqa_title: '🔎 このデータについて質問する',
+    gqa_nav_title: 'AIデータアシスタント',
     gqa_desc: '現在画面に表示されている凡例・パーセンテージデータに関する質問にのみ回答します（例:「最も高い割合のクラスはどれですか？」）。リスク評価やアドバイスは提供しません。無料のGeminiクォータで動作します — クォータを使い切ると利用できない場合があります。',
     gqa_placeholder: '例: 最も割合の大きいクラスはどれですか?',
     gqa_ask_btn: '質問する',
@@ -36609,8 +36637,8 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 위성 데이터 및 분석',
     sec_land_use: '🏘️ 토지 이용',
     sec_topo: '🏔️ 지형 분석',
-    gqa_title: '🔎 이 데이터에 대해 질문하기 (실험적 기능)',
-    gqa_nav_title: 'AI 데이터 도우미 (실험적 기능)',
+    gqa_title: '🔎 이 데이터에 대해 질문하기',
+    gqa_nav_title: 'AI 데이터 도우미',
     gqa_desc: '현재 화면에 표시된 범례/백분율 데이터에 관한 질문에만 답변합니다 (예: "어떤 클래스의 비율이 가장 높나요?"). 위험 평가나 조언은 제공하지 않습니다. 무료 Gemini 할당량으로 작동하며 — 할당량이 소진되면 사용할 수 없을 수 있습니다.',
     gqa_placeholder: '예: 어떤 클래스의 비율이 가장 큰가요?',
     gqa_ask_btn: '질문하기',
@@ -37144,8 +37172,8 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 उपग्रह डेटा और विश्लेषण',
     sec_land_use: '🏘️ भूमि उपयोग',
     sec_topo: '🏔️ स्थलाकृतिक विश्लेषण',
-    gqa_title: '🔎 इस डेटा के बारे में प्रश्न पूछें (प्रायोगिक)',
-    gqa_nav_title: 'एआई डेटा सहायक (प्रायोगिक)',
+    gqa_title: '🔎 इस डेटा के बारे में प्रश्न पूछें',
+    gqa_nav_title: 'एआई डेटा सहायक',
     gqa_desc: 'केवल स्क्रीन पर वर्तमान में दिखाए गए लेजेंड/प्रतिशत डेटा से संबंधित प्रश्नों के उत्तर दिए जाते हैं (जैसे "किस वर्ग का प्रतिशत सबसे अधिक है?")। यह जोखिम आकलन या सलाह नहीं देता। यह मुफ़्त Gemini कोटा पर चलता है — कोटा समाप्त होने पर उपलब्ध नहीं हो सकता।',
     gqa_placeholder: 'उदा.: सबसे बड़े प्रतिशत वाला वर्ग कौन सा है?',
     gqa_ask_btn: 'पूछें',
@@ -37679,8 +37707,8 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Data dan Analisis Satelit',
     sec_land_use: '🏘️ Penggunaan Lahan',
     sec_topo: '🏔️ Analisis Topografi',
-    gqa_title: '🔎 Ajukan Pertanyaan Tentang Data Ini (Eksperimental)',
-    gqa_nav_title: 'Asisten Data AI (Eksperimental)',
+    gqa_title: '🔎 Ajukan Pertanyaan Tentang Data Ini',
+    gqa_nav_title: 'Asisten Data AI',
     gqa_desc: 'Hanya pertanyaan tentang data legenda/persentase yang saat ini ditampilkan di layar yang akan dijawab (mis. "kelas mana yang memiliki persentase tertinggi?"). TIDAK memberikan penilaian risiko atau saran. Berjalan dengan kuota Gemini gratis — mungkin tidak tersedia jika kuota habis.',
     gqa_placeholder: 'Cth: Kelas mana yang memiliki persentase terbesar?',
     gqa_ask_btn: 'Tanya',
@@ -38230,8 +38258,8 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Спутниковые данные и анализы',
     sec_land_use: '🏘️ Землепользование',
     sec_topo: '🏔️ Топографические анализы',
-    gqa_title: '🔎 Задайте вопрос об этих данных (Экспериментально)',
-    gqa_nav_title: 'ИИ-помощник по данным (Экспериментально)',
+    gqa_title: '🔎 Задайте вопрос об этих данных',
+    gqa_nav_title: 'ИИ-помощник по данным',
     gqa_desc: 'Отвечает только на вопросы о данных легенды/процентов, отображаемых в данный момент на экране (например, "какой класс имеет наибольший процент?"). НЕ даёт оценку риска или рекомендации. Работает на бесплатной квоте Gemini — может быть недоступен при исчерпании квоты.',
     gqa_placeholder: 'Напр.: Какой класс имеет наибольший процент?',
     gqa_ask_btn: 'Спросить',
@@ -38763,8 +38791,8 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 ข้อมูลและการวิเคราะห์ดาวเทียม',
     sec_land_use: '🏘️ การใช้ที่ดิน',
     sec_topo: '🏔️ การวิเคราะห์ภูมิประเทศ',
-    gqa_title: '🔎 ถามคำถามเกี่ยวกับข้อมูลนี้ (ทดลอง)',
-    gqa_nav_title: 'ผู้ช่วยข้อมูล AI (ทดลอง)',
+    gqa_title: '🔎 ถามคำถามเกี่ยวกับข้อมูลนี้',
+    gqa_nav_title: 'ผู้ช่วยข้อมูล AI',
     gqa_desc: 'ตอบเฉพาะคำถามเกี่ยวกับข้อมูลตำนาน/เปอร์เซ็นต์ที่แสดงอยู่บนหน้าจอในขณะนี้เท่านั้น (เช่น "คลาสใดมีเปอร์เซ็นต์สูงสุด?") ไม่ให้การประเมินความเสี่ยงหรือคำแนะนำ ทำงานด้วยโควตา Gemini ฟรี — อาจใช้งานไม่ได้หากโควตาหมด',
     gqa_placeholder: 'เช่น: คลาสใดมีเปอร์เซ็นต์มากที่สุด?',
     gqa_ask_btn: 'ถาม',
@@ -39292,8 +39320,8 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 স্যাটেলাইট ডেটা ও বিশ্লেষণ',
     sec_land_use: '🏘️ ভূমি ব্যবহার',
     sec_topo: '🏔️ ভূসংস্থানিক বিশ্লেষণ',
-    gqa_title: '🔎 এই ডেটা সম্পর্কে প্রশ্ন করুন (পরীক্ষামূলক)',
-    gqa_nav_title: 'এআই ডেটা সহায়ক (পরীক্ষামূলক)',
+    gqa_title: '🔎 এই ডেটা সম্পর্কে প্রশ্ন করুন',
+    gqa_nav_title: 'এআই ডেটা সহায়ক',
     gqa_desc: 'শুধুমাত্র স্ক্রিনে বর্তমানে প্রদর্শিত লেজেন্ড/শতাংশ ডেটা সম্পর্কিত প্রশ্নের উত্তর দেওয়া হয় (যেমন "কোন শ্রেণীর শতাংশ সবচেয়ে বেশি?")। এটি ঝুঁকি মূল্যায়ন বা পরামর্শ দেয় না। এটি বিনামূল্যে Gemini কোটায় চলে — কোটা শেষ হলে উপলব্ধ নাও হতে পারে।',
     gqa_placeholder: 'যেমন: সবচেয়ে বড় শতাংশযুক্ত শ্রেণী কোনটি?',
     gqa_ask_btn: 'জিজ্ঞাসা করুন',
@@ -39810,8 +39838,8 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Dữ liệu và phân tích vệ tinh',
     sec_land_use: '🏘️ Sử dụng đất',
     sec_topo: '🏔️ Phân tích địa hình',
-    gqa_title: '🔎 Đặt câu hỏi về dữ liệu này (Thử nghiệm)',
-    gqa_nav_title: 'Trợ lý Dữ liệu AI (Thử nghiệm)',
+    gqa_title: '🔎 Đặt câu hỏi về dữ liệu này',
+    gqa_nav_title: 'Trợ lý Dữ liệu AI',
     gqa_desc: 'Chỉ trả lời các câu hỏi liên quan đến dữ liệu chú giải/phần trăm hiện đang hiển thị trên màn hình (ví dụ: "lớp nào có phần trăm cao nhất?"). KHÔNG đưa ra đánh giá rủi ro hoặc lời khuyên. Hoạt động với hạn ngạch Gemini miễn phí — có thể không khả dụng nếu hết hạn ngạch.',
     gqa_placeholder: 'VD: Lớp nào có phần trăm lớn nhất?',
     gqa_ask_btn: 'Hỏi',
@@ -40364,8 +40392,8 @@ var SYLVA_TRANSLATIONS = {
     sec_land_use: '🏘️ زمین کا استعمال',
     desc_land_use: 'Google Earth Engine کی موجودہ زمینی احاطہ درجہ بندی — NDVI/NDWI کی طرح آپ کے AOI پر براہ راست کام کرتی ہے۔',
     sec_topo: '🏔️ ٹوپوگرافک تجزیہ',
-    gqa_title: '🔎 اس ڈیٹا کے بارے میں سوال پوچھیں (تجرباتی)',
-    gqa_nav_title: 'AI ڈیٹا اسسٹنٹ (تجرباتی)',
+    gqa_title: '🔎 اس ڈیٹا کے بارے میں سوال پوچھیں',
+    gqa_nav_title: 'AI ڈیٹا اسسٹنٹ',
     gqa_desc: 'صرف اسکرین پر فی الحال دکھائے گئے لیجنڈ/فیصد ڈیٹا سے متعلق سوالات کے جواب دیے جاتے ہیں (مثلاً "کس کلاس کا فیصد سب سے زیادہ ہے؟")۔ یہ خطرے کی تشخیص یا مشورہ نہیں دیتا۔ یہ مفت Gemini کوٹے پر چلتا ہے — کوٹہ ختم ہونے پر دستیاب نہیں ہو سکتا۔',
     gqa_placeholder: 'مثلاً: سب سے بڑے فیصد والی کلاس کون سی ہے؟',
     gqa_ask_btn: 'پوچھیں',
@@ -40902,8 +40930,8 @@ var SYLVA_TRANSLATIONS = {
     sec_land_use: '🏘️ Użytkowanie gruntów',
     desc_land_use: 'Aktualne klasyfikacje pokrycia terenu z Google Earth Engine — działa bezpośrednio na obszarze AOI jak NDVI/NDWI.',
     sec_topo: '🏔️ Analizy topograficzne',
-    gqa_title: '🔎 Zadaj pytanie dotyczące tych danych (Eksperymentalne)',
-    gqa_nav_title: 'Asystent danych AI (Eksperymentalny)',
+    gqa_title: '🔎 Zadaj pytanie dotyczące tych danych',
+    gqa_nav_title: 'Asystent danych AI',
     gqa_desc: 'Odpowiadane są tylko pytania dotyczące danych legendy/procentowych aktualnie wyświetlanych na ekranie (np. "która klasa ma najwyższy procent?"). NIE podaje oceny ryzyka ani porad. Działa na darmowym limicie Gemini — może być niedostępny po wyczerpaniu limitu.',
     gqa_placeholder: 'Np.: Która klasa ma największy procent?',
     gqa_ask_btn: 'Zapytaj',
@@ -41427,8 +41455,8 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Data dan Analisis Satelit',
     sec_land_use: '🏘️ Penggunaan Tanah',
     sec_topo: '🏔️ Analisis Topografi',
-    gqa_title: '🔎 Tanya Soalan Tentang Data Ini (Eksperimen)',
-    gqa_nav_title: 'Pembantu Data AI (Eksperimen)',
+    gqa_title: '🔎 Tanya Soalan Tentang Data Ini',
+    gqa_nav_title: 'Pembantu Data AI',
     gqa_desc: 'Hanya soalan mengenai data legenda/peratusan yang dipaparkan pada skrin ketika ini akan dijawab (cth. "kelas mana mempunyai peratusan tertinggi?"). TIDAK memberikan penilaian risiko atau nasihat. Berjalan dengan kuota Gemini percuma — mungkin tidak tersedia jika kuota habis.',
     gqa_placeholder: 'Cth: Kelas mana mempunyai peratusan terbesar?',
     gqa_ask_btn: 'Tanya',
@@ -41960,8 +41988,8 @@ var SYLVA_TRANSLATIONS = {
       sec_satellite_analysis: '🌍 Спутник маалыматтары жана талдоолор',
       sec_land_use: '🏘️ Жер пайдалануу',
       sec_topo: '🏔️ Топографиялык талдоолор',
-      gqa_title: '🔎 Бул маалымат жөнүндө суроо бериңиз (Сынак)',
-      gqa_nav_title: 'AI Маалымат Жардамчысы (Сынак)',
+      gqa_title: '🔎 Бул маалымат жөнүндө суроо бериңиз',
+      gqa_nav_title: 'AI Маалымат Жардамчысы',
       gqa_desc: 'Азыр экранда көрсөтүлгөн легенда/пайыз маалыматтарына гана байланыштуу суроолорго жооп берилет (мисалы, "кайсы класстын пайызы эң жогору?"). Тобокелдикти баалоо же кеңеш БЕРБЕЙТ. Акысыз Gemini квотасы менен иштейт — квота түгөнсө, жеткиликсиз болушу мүмкүн.',
       gqa_placeholder: 'Мис.: Эң чоң пайызга кайсы класс ээ?',
       gqa_ask_btn: 'Сура',
@@ -42465,8 +42493,8 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Хиймэл дагуулын өгөгдөл ба шинжилгээ',
     sec_land_use: '🏘️ Газрын ашиглалт',
     sec_topo: '🏔️ Топографийн шинжилгээ',
-    gqa_title: '🔎 Энэ өгөгдлийн талаар асуулт асуух (Туршилтын)',
-    gqa_nav_title: 'AI Өгөгдлийн Туслах (Туршилтын)',
+    gqa_title: '🔎 Энэ өгөгдлийн талаар асуулт асуух',
+    gqa_nav_title: 'AI Өгөгдлийн Туслах',
     gqa_desc: 'Зөвхөн дэлгэц дээр одоо харагдаж буй домог/хувийн өгөгдөлтэй холбоотой асуултад хариулна (жишээ нь "аль анги хамгийн өндөр хувьтай вэ?"). Эрсдэлийн үнэлгээ, зөвлөмж ӨГӨХГҮЙ. Үнэгүй Gemini квотоор ажилладаг — квот дуусвал ашиглах боломжгүй байж болзошгүй.',
     gqa_placeholder: 'Жишээ нь: Хамгийн их хувьтай анги аль вэ?',
     gqa_ask_btn: 'Асуух',
@@ -42960,8 +42988,8 @@ var SYLVA_TRANSLATIONS = {
       sec_satellite_analysis: '🌍 სატელიტური მონაცემები და ანალიზი',
       sec_land_use: '🏘️ მიწათსარგებლობა',
       sec_topo: '🏔️ ტოპოგრაფიული ანალიზი',
-      gqa_title: '🔎 დასვით შეკითხვა ამ მონაცემების შესახებ (ექსპერიმენტული)',
-      gqa_nav_title: 'AI მონაცემთა ასისტენტი (ექსპერიმენტული)',
+      gqa_title: '🔎 დასვით შეკითხვა ამ მონაცემების შესახებ',
+      gqa_nav_title: 'AI მონაცემთა ასისტენტი',
       gqa_desc: 'პასუხი გაიცემა მხოლოდ ეკრანზე ამჟამად ნაჩვენები ლეგენდის/პროცენტული მონაცემების შესახებ კითხვებზე (მაგ. "რომელ კლასს აქვს ყველაზე მაღალი პროცენტი?"). არ იძლევა რისკის შეფასებას ან რჩევას. მუშაობს უფასო Gemini კვოტით — კვოტის ამოწურვის შემთხვევაში შეიძლება მიუწვდომელი იყოს.',
       gqa_placeholder: 'მაგ.: რომელ კლასს აქვს ყველაზე დიდი პროცენტი?',
       gqa_ask_btn: 'კითხვა',
@@ -43472,8 +43500,8 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Dati e analisi satellitari',
     sec_land_use: '🏘️ Uso del Suolo',
     sec_topo: '🏔️ Analisi Topografiche',
-    gqa_title: '🔎 Fai una domanda su questi dati (Sperimentale)',
-    gqa_nav_title: 'Assistente Dati IA (Sperimentale)',
+    gqa_title: '🔎 Fai una domanda su questi dati',
+    gqa_nav_title: 'Assistente Dati IA',
     gqa_desc: 'Vengono risposte solo domande relative ai dati di legenda/percentuale attualmente visualizzati sullo schermo (es. "quale classe ha la percentuale più alta?"). NON fornisce valutazioni di rischio o consigli. Funziona con una quota Gemini gratuita — potrebbe non essere disponibile se la quota è esaurita.',
     gqa_placeholder: 'Es.: Quale classe ha la percentuale maggiore?',
     gqa_ask_btn: 'Chiedi',
@@ -49198,7 +49226,7 @@ document.addEventListener('DOMContentLoaded',function(){
 <div id="gemini-ai-panel" style="display:none; position:fixed; top:64px; right:16px; width:320px; max-width:calc(100vw - 24px); max-height:70vh; background:#fff; border:1px solid #cbd5e1; border-radius:12px; box-shadow:0 10px 40px rgba(0,0,0,0.18); z-index:9998; flex-direction:column; overflow:hidden;">
     <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 12px; background:#1e3a8a; color:#fff; flex:0 0 auto;">
         <div style="font-size:0.82rem; font-weight:700; display:flex; align-items:center; gap:6px;">
-            <span>🤖</span><span data-i18n="gqa_title">Bu Veri Hakkında Soru Sor (Deneysel)</span>
+            <span>🤖</span><span data-i18n="gqa_title">Bu Veri Hakkında Soru Sor</span>
         </div>
         <button type="button" onclick="sylvaToggleGeminiPanel()" aria-label="Kapat" title="Kapat" style="background:none;border:none;color:#fff;font-size:1rem;cursor:pointer;line-height:1;padding:2px 4px;">✕</button>
     </div>
