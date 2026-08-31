@@ -20345,13 +20345,44 @@ function selectRamp(name) {
             wrap.innerHTML = currentChartType === 'bar' ? buildBarChartSVG(data) : buildPieChartSVG(data);
             if (tableWrap) tableWrap.innerHTML = buildStatsTableHTML(data);
 
-            // 🆕 Faz 65/66: Gemini veri soru-cevap paneli artık ekranda HER ZAMAN
-            // erişilebilir (üst çubuktaki 🤖 yuvarlak tuş ile açılıp kapanır),
-            // "Veri Grafikleri" kutusuna bağımlı değil. Burada sadece: yeni bir
-            // analiz geldiğinde önceki soru/cevabı temizliyoruz ve panel açıksa
-            // "veri mevcut" durumunu tazeliyoruz (eski analize ait yanıtın
-            // yanlışlıkla ekranda kalması önlenir).
+            // 🆕 Faz 65/66/69: Gemini veri soru-cevap paneli artık ekranda HER
+            // ZAMAN erişilebilir (üst çubuktaki 🤖 yuvarlak tuş ile açılıp
+            // kapanır), "Veri Grafikleri" kutusuna bağımlı değil. Faz 69 ile
+            // birlikte: bu pane'de o oturum boyunca çalıştırılan TÜM
+            // sınıflandırılmış analizler (ör. arazi örtüsü + yükseklik/eğim/
+            // bakı sınıflandırması) bir geçmiş listesinde (analiz adına göre
+            // tekilleştirilerek) tutuluyor — böylece asistan, tek bir analiz
+            // değil BİRDEN FAZLA veri setini birbiriyle ilişkilendirerek
+            // yorum yapabiliyor (bkz. sylvaAskGeminiDataQuestion).
             window._sylvaGqaLastPane = paneId || (typeof _sylvaActivePaneId === 'function' ? _sylvaActivePaneId() : 'map');
+            (function () {
+                var hasClasses = !!(data && data.classes && data.classes.length && data.percentages);
+                if (!hasClasses) return;
+                window._sylvaGqaLayerHistoryByPane = window._sylvaGqaLayerHistoryByPane || { map: [], map2: [] };
+                var pane = window._sylvaGqaLastPane;
+                if (!window._sylvaGqaLayerHistoryByPane[pane]) window._sylvaGqaLayerHistoryByPane[pane] = [];
+                var hist = window._sylvaGqaLayerHistoryByPane[pane];
+                var payloadMeta = (window._lastAnalyzePayloadByPane && window._lastAnalyzePayloadByPane[pane]) || {};
+                var analysisName = payloadMeta.analysisName || data.title || 'Bilinmeyen';
+                var entry = {
+                    analysisName: analysisName,
+                    classes: data.classes.map(function (c) { return { name: c.name, min: c.min, max: c.max }; }),
+                    percentages: data.percentages,
+                    areaHa: (data.areaHa === undefined ? null : data.areaHa),
+                    ts: Date.now()
+                };
+                // Aynı analiz adıyla eski bir kayıt varsa güncelle (tekilleştirme),
+                // yoksa listeye ekle. En eski kayıt, en fazla 6 kayıt sınırı
+                // aşılırsa listeden çıkarılır (bkz. sylvaAskGeminiDataQuestion'daki
+                // istem/prompt boyutu ve kota koruması notu).
+                var replaced = false;
+                for (var hi = 0; hi < hist.length; hi++) {
+                    if (hist[hi].analysisName === analysisName) { hist[hi] = entry; replaced = true; break; }
+                }
+                if (!replaced) hist.push(entry);
+                while (hist.length > 6) hist.shift();
+            })();
+
             var qaAnswer = document.getElementById('gqa-answer');
             var qaStatus = document.getElementById('gqa-status');
             var qaQ = document.getElementById('gqa-question');
@@ -20367,6 +20398,53 @@ function selectRamp(name) {
         // soru yanıtlar. Risk değerlendirmesi/tavsiye VERMEZ — bkz.
         // server.py /api/gemini-data-qa üzerindeki kapsamlandırma notu.
         // ════════════════════════════════════════════════════════════════
+        // 🆕 Faz 69: Bu pane için "asistana gönderilecek veri setleri" listesini
+        // toplar — oturum boyunca çalıştırılmış TÜM sınıflandırılmış analizler
+        // (geçmiş listesi, bkz. renderStatsChart) + varsa mevcut/güncel grafik
+        // (henüz geçmişe eklenmemiş olabilir, ör. panel ilk kez o analizle
+        // açıldıysa) + varsa bina/çatı tespiti özeti. Aynı analiz adının
+        // birden fazla kez görünmesini engeller.
+        function _sylvaGqaCollectDatasets(pane) {
+            var out = [];
+            var seen = {};
+            function addEntry(analysisName, classes, percentages, areaHa) {
+                if (!classes || !classes.length || !percentages || !percentages.length) return;
+                var key = String(analysisName || 'Bilinmeyen');
+                if (seen[key]) return;
+                seen[key] = true;
+                out.push({
+                    analysis_name: key,
+                    classes: classes.map(function (c) { return { name: c.name, min: c.min, max: c.max }; }),
+                    percentages: percentages,
+                    area_ha: (areaHa === undefined ? null : areaHa)
+                });
+            }
+            var hist = (window._sylvaGqaLayerHistoryByPane && window._sylvaGqaLayerHistoryByPane[pane]) || [];
+            for (var i = 0; i < hist.length; i++) {
+                addEntry(hist[i].analysisName, hist[i].classes, hist[i].percentages, hist[i].areaHa);
+            }
+            if (typeof lastChartData !== 'undefined' && lastChartData && lastChartData.classes && lastChartData.classes.length) {
+                var payloadMeta = (window._lastAnalyzePayloadByPane && window._lastAnalyzePayloadByPane[pane]) || {};
+                var curName = payloadMeta.analysisName || lastChartData.title || 'Bilinmeyen';
+                addEntry(curName, lastChartData.classes, lastChartData.percentages, lastChartData.areaHa);
+            }
+            return out;
+        }
+
+        function _sylvaGqaCollectBuilding(pane) {
+            var bd = window._sylvaBuildingDataByPane && window._sylvaBuildingDataByPane[pane];
+            if (!bd) return null;
+            var count = Number(bd.buildingCount);
+            var area = Number(bd.totalAreaM2);
+            if (!isFinite(count) && !isFinite(area)) return null;
+            if ((!isFinite(count) || count <= 0) && (!isFinite(area) || area <= 0)) return null;
+            return {
+                buildingCount: isFinite(count) ? count : null,
+                totalAreaM2: isFinite(area) ? area : null,
+                dataset: bd.dataset || null
+            };
+        }
+
         window.sylvaAskGeminiDataQuestion = function () {
             var _t = (typeof t === 'function') ? t : function (k, f) { return f || k; };
             var qInput = document.getElementById('gqa-question');
@@ -20377,16 +20455,17 @@ function selectRamp(name) {
 
             var question = (qInput.value || '').trim();
             if (!question) return;
-            if (!lastChartData || !lastChartData.classes || !lastChartData.classes.length) {
+
+            var pane = window._sylvaGqaLastPane || (typeof _sylvaActivePaneId === 'function' ? _sylvaActivePaneId() : 'map');
+            var datasets = _sylvaGqaCollectDatasets(pane);
+            var building = _sylvaGqaCollectBuilding(pane);
+
+            if (!datasets.length && !building) {
                 statusEl.style.display = 'block';
                 statusEl.style.background = '#fee2e2'; statusEl.style.color = '#991b1b';
                 statusEl.textContent = _t('gqa_err_no_data', 'Önce sınıflandırılmış bir analiz çalıştırın (lejant/% verisi olmalı).');
                 return;
             }
-
-            var pane = window._sylvaGqaLastPane || (typeof _sylvaActivePaneId === 'function' ? _sylvaActivePaneId() : 'map');
-            var payloadMeta = (window._lastAnalyzePayloadByPane && window._lastAnalyzePayloadByPane[pane]) || {};
-            var analysisName = payloadMeta.analysisName || (lastChartData.title) || 'Bilinmeyen';
 
             answerEl.style.display = 'none';
             statusEl.style.display = 'block';
@@ -20399,10 +20478,8 @@ function selectRamp(name) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     question: question,
-                    analysis_name: analysisName,
-                    classes: lastChartData.classes.map(function (c) { return { name: c.name, min: c.min, max: c.max, color: c.color }; }),
-                    percentages: lastChartData.percentages,
-                    area_ha: (lastChartData.areaHa === undefined ? null : lastChartData.areaHa)
+                    datasets: datasets,
+                    building: building
                 })
             })
                 .then(function (r) { return r.json(); })
@@ -20436,7 +20513,9 @@ function selectRamp(name) {
         window.sylvaRefreshGeminiPanelState = function () {
             var hint = document.getElementById('gqa-nodata-hint');
             var formRow = document.getElementById('gqa-form-row');
-            var hasData = !!(typeof lastChartData !== 'undefined' && lastChartData && lastChartData.classes && lastChartData.classes.length && lastChartData.percentages);
+            var pane = window._sylvaGqaLastPane || (typeof _sylvaActivePaneId === 'function' ? _sylvaActivePaneId() : 'map');
+            var hasData = (typeof _sylvaGqaCollectDatasets === 'function' && _sylvaGqaCollectDatasets(pane).length > 0) ||
+                (typeof _sylvaGqaCollectBuilding === 'function' && !!_sylvaGqaCollectBuilding(pane));
             if (hint) hint.style.display = hasData ? 'none' : 'block';
             if (formRow) formRow.style.display = hasData ? 'flex' : 'none';
         };
@@ -27995,7 +28074,8 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Topographic Analyses',
     gqa_title: '🔎 Ask a Question About This Data (Experimental)',
     gqa_nav_title: 'AI Data Assistant (Experimental)',
-    gqa_desc: 'Only questions about the currently displayed legend/percentage data are answered (e.g. "which class has the highest percentage?"). Does NOT give risk assessment or advice. Runs on a free Gemini quota — may be unavailable if the quota is exhausted.',
+    gqa_desc: 'Can read and describe the legend/percentage data on screen (e.g. land cover, elevation/slope/aspect, building/roof detection) and, when more than one dataset is available, relate them to each other (e.g. "forest cover looks higher between 600-1200m"). Does NOT give a formal risk assessment or advice. Runs on a free Gemini quota — may be unavailable if the quota is exhausted.',
+    gqa_verify_note: '⚠️ Answers are not a precise spatial analysis — they are based on separate summary statistics. Please verify accuracy yourself.',
     gqa_placeholder: 'E.g: Which class has the largest percentage?',
     gqa_ask_btn: 'Ask',
     gqa_err_no_data: 'First run a classified analysis (legend/percentage data required).',
@@ -30138,7 +30218,8 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Topografik Analizler',
     gqa_title: '🔎 Bu Veri Hakkında Soru Sor (Deneysel)',
     gqa_nav_title: 'AI Veri Asistanı (Deneysel)',
-    gqa_desc: 'Yalnızca ekranda görüntülenen lejant/% verisiyle ilgili sorular yanıtlanır (örn. "en yüksek yüzde hangi sınıfa ait?"). Risk değerlendirmesi veya tavsiye VERMEZ. Ücretsiz Gemini kotası ile çalışır — kota dolarsa yanıt verilemeyebilir.',
+    gqa_desc: 'Ekrandaki lejant/% verilerini (ör. arazi örtüsü, yükseklik/eğim/bakı, bina/çatı tespiti) okuyup betimsel yorum yapabilir; birden fazla veri varsa bunları ilişkilendirebilir (ör. "600-1200m arasında orman payı yüksek görünüyor"). Resmi risk değerlendirmesi veya tavsiye VERMEZ. Ücretsiz Gemini kotası ile çalışır — kota dolarsa yanıt verilemeyebilir.',
+    gqa_verify_note: '⚠️ Yanıtlar kesin bir mekansal analiz değildir, ayrı özet istatistiklere dayanır — lütfen doğruluğunu kendiniz kontrol edin.',
     gqa_placeholder: 'Örn: En büyük yüzdeye sahip sınıf hangisi?',
     gqa_ask_btn: 'Sor',
     gqa_err_no_data: 'Önce sınıflandırılmış bir analiz çalıştırın (lejant/% verisi olmalı).',
@@ -49122,11 +49203,16 @@ document.addEventListener('DOMContentLoaded',function(){
         <button type="button" onclick="sylvaToggleGeminiPanel()" aria-label="Kapat" title="Kapat" style="background:none;border:none;color:#fff;font-size:1rem;cursor:pointer;line-height:1;padding:2px 4px;">✕</button>
     </div>
     <div style="padding:10px 12px; overflow-y:auto;">
-        <div data-i18n="gqa_desc" style="font-size:0.68rem;color:#64748b;margin-bottom:8px;">
-            Yalnızca ekrandaki lejant/% verisiyle ilgili sorular yanıtlanır (örn.
-            "en yüksek yüzde hangi sınıfa ait?"). Risk değerlendirmesi veya
-            tavsiye VERMEZ. Ücretsiz Gemini kotası ile çalışır — kota dolarsa
-            yanıt verilemeyebilir.
+        <div data-i18n="gqa_desc" style="font-size:0.68rem;color:#64748b;margin-bottom:6px;">
+            Ekrandaki lejant/% verilerini (ör. arazi örtüsü, yükseklik/eğim/bakı,
+            bina/çatı tespiti) okuyup betimsel yorum yapabilir; birden fazla veri
+            varsa bunları ilişkilendirebilir (ör. "600-1200m arasında orman payı
+            yüksek görünüyor"). Resmi risk değerlendirmesi veya tavsiye VERMEZ.
+            Ücretsiz Gemini kotası ile çalışır — kota dolarsa yanıt verilemeyebilir.
+        </div>
+        <div data-i18n="gqa_verify_note" style="font-size:0.66rem;color:#92400e;margin-bottom:8px;">
+            ⚠️ Yanıtlar kesin bir mekansal analiz değildir, ayrı özet istatistiklere
+            dayanır — lütfen doğruluğunu kendiniz kontrol edin.
         </div>
         <div id="gqa-nodata-hint" style="display:block; font-size:0.72rem; background:#fffbeb; border:1px solid #fde68a; color:#92400e; border-radius:6px; padding:8px; margin-bottom:8px;" data-i18n="gqa_err_no_data">
             Önce sınıflandırılmış bir analiz çalıştırın (lejant/% verisi olmalı).
