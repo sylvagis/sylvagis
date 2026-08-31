@@ -3920,21 +3920,26 @@ _GEMINI_SYSTEM_INSTRUCTION = (
     "lejantı (sınıf adları, değer aralıkları) ve yüzde (%) dağılımından oluşur; "
     "ayrıca varsa bir bina/çatı tespiti özeti (toplam bina sayısı, toplam çatı "
     "alanı) verilebilir. Bazen ayrıca kullanıcının o an ekranında gördüğü "
-    "harita/lejant görüntüsünün bir anlık görüntüsü (ekran görüntüsü) de "
-    "verilebilir — bu ham uydu/GEE verisi değil, tarayıcı ekran görüntüsüdür; "
-    "renk dağılımı/mekansal desen hakkında GENEL, yaklaşık, betimsel gözlemler "
-    "için kullanılabilir, kesin piksel-düzeyinde bir ölçüm kaynağı olarak "
-    "KULLANILAMAZ.\n\n"
-    "GÖREVİN: Yalnızca sana verilen bu verilere dayanarak, kullanıcının sorusunu "
-    "Türkçe, kısa ve nesnel şekilde yanıtlamak. Basit sorulara (hangi sınıf en "
-    "yüksek/düşük yüzdeye sahip, bir sınıfın değer aralığı nedir, toplam alan/bina "
-    "sayısı kaç) ek olarak, BİRDEN FAZLA veri seti verildiğinde bunları BİRBİRİYLE "
-    "İLİŞKİLENDİREREK betimsel gözlemler de yapabilirsin — örneğin bir "
-    "yükseklik/eğim sınıflandırmasıyla bir arazi örtüsü sınıflandırmasını "
-    "karşılaştırıp '600-1200m aralığında orman sınıfının payı yüksek görünüyor' "
-    "gibi, ya da 'dik eğimli (örn. %60) ve ormanlık alanlar genellikle toprak "
-    "erozyonunu azaltmaya yardımcı olan bir işlev görür' gibi GENEL, tanımlayıcı "
-    "gözlemler paylaşabilirsin.\n\n"
+    "harita/lejant görüntülerinin BİRDEN FAZLA anlık görüntüsü (ekran "
+    "görüntüsü — genellikle her biri farklı bir analize ait, etiketiyle "
+    "belirtilmiş) de verilebilir — bunlar ham uydu/GEE verisi değil, tarayıcı "
+    "ekran görüntüleridir; renk dağılımı/mekansal desen hakkında GENEL, "
+    "yaklaşık, betimsel gözlemler için kullanılabilir, kesin piksel-düzeyinde "
+    "bir ölçüm kaynağı olarak KULLANILAMAZ.\n\n"
+    "GÖREVİN: Sana verilen bu verilere dayanarak, kullanıcının sorusunu Türkçe "
+    "ve nesnel şekilde yanıtlamak — kullanıcı DETAYLI BİR RAPOR istiyor, KISA "
+    "(1-2 cümlelik/paragraflık) yüzeysel yanıtlar YETERSİZDİR. Şu yapıyı "
+    "izle: (1) sana verilen HER BİR veri seti için AYRI bir paragrafta o "
+    "setin öne çıkan noktalarını (en yüksek/düşük yüzdeli sınıflar, dikkat "
+    "çeken değer aralıkları, varsa ilgili görüntüdeki renk/mekansal desen) "
+    "açıkla; (2) BİRDEN FAZLA veri seti varsa, bunları BİRBİRİYLE "
+    "İLİŞKİLENDİREN ayrı bir paragraf yaz — örneğin bir yükseklik/eğim "
+    "sınıflandırmasıyla bir arazi örtüsü sınıflandırmasını karşılaştırıp "
+    "'600-1200m aralığında orman sınıfının payı yüksek görünüyor' gibi, ya da "
+    "'dik eğimli (örn. %60) ve ormanlık alanlar genellikle toprak erozyonunu "
+    "azaltmaya yardımcı olan bir işlev görür' gibi GENEL, tanımlayıcı "
+    "gözlemler paylaş; (3) en sonda kısa bir GENEL ÖZET paragrafı ekle. "
+    "Kullanıcının asıl sorusunu da bu yapı içinde açıkça yanıtla.\n\n"
     "ÖNEMLİ SINIRLAR (bunlara KESİNLİKLE uy):\n"
     "- Bu bir KESİN mekansal çakıştırma (overlay) analizi DEĞİLDİR — sana ayrı ayrı "
     "özet istatistikler veriliyor, piksel piksel çakıştırılmış ortak bir tablo "
@@ -3954,7 +3959,10 @@ _GEMINI_SYSTEM_INSTRUCTION = (
     "istiyorsa, KİBARCA şunu söyle: 'Bu asistan yalnızca ekrandaki verileri "
     "betimsel olarak açıklayabilir; resmi bir risk değerlendirmesi veya tavsiye "
     "veremez.' ve başka bir şey ekleme.\n"
-    "Yanıtların 150 kelimeyi geçmesin."
+    "Yanıtın toplamda en az 3-4 paragraf olsun (veri seti sayısına göre daha "
+    "da uzun olabilir); yine de sana verilmeyen konularda uydurma bilgi ekleyerek "
+    "yapay şekilde uzatma — yalnızca sana verilen verilere dayanarak, doğal "
+    "şekilde detaylandır."
 )
 
 
@@ -3979,8 +3987,9 @@ def gemini_data_qa():
         "datasets": [{"analysis_name": str, "classes": [{"name","min","max"}],
                        "percentages": [float, ...], "area_ha": float|null}, ...],
         "building": {"buildingCount": int, "totalAreaM2": float, "dataset": str} | null,
-        "image_base64": str | null,   # data: öneki OLMADAN ham base64 (≤ ~4.5 MB)
-        "image_mime": "image/jpeg" | "image/png" | "image/webp"  # varsayılan image/jpeg
+        "image_base64": str | null,   # (geriye dönük uyumlu, TEKİL) data: öneki OLMADAN ham base64 (≤ ~4.5 MB)
+        "image_mime": "image/jpeg" | "image/png" | "image/webp",  # varsayılan image/jpeg
+        "images": [{"analysis_name": str|null, "base64": str, "mime": str}, ...]  # 🆕 Faz 73: BİRDEN FAZLA görüntü (en fazla 4 kullanılır)
     }
     Body (eski format, hâlâ desteklenir): {"question": str, "analysis_name": str,
         "classes": [...], "percentages": [...], "area_ha": float|null}
@@ -4006,6 +4015,37 @@ def gemini_data_qa():
                 image_base64 = None
             elif len(image_base64) > 6_000_000:  # ~4.5 MB ham veri — makul bir üst sınır
                 return jsonify({'success': False, 'error': 'Görüntü çok büyük — lütfen görüntü olmadan tekrar deneyin.'})
+
+        # 🆕 Faz 73: BİRDEN FAZLA görüntü — ör. ekranda istiflenmiş HER
+        # sınıflandırılmış analizin kendisine özel, izole edilmiş ekran
+        # görüntüsü (frontend her katmanı sırayla tek başına görünür kılıp
+        # yakalıyor). Bu liste OTOMATİK/best-effort üretildiği için, hatalı
+        # veya aşırı büyük TEKİL öğeler isteği reddetmez — sessizce listeden
+        # çıkarılır. (Yukarıdaki tekil "image_base64" alanı geriye dönük
+        # uyumluluk için hâlâ katı doğrulamayla korunuyor.)
+        raw_images = data.get('images')
+        valid_images = []
+        if isinstance(raw_images, list):
+            for im in raw_images[:6]:
+                if not isinstance(im, dict):
+                    continue
+                im_b64 = im.get('base64')
+                im_mime = str(im.get('mime') or 'image/jpeg').strip().lower()
+                im_name = im.get('analysis_name')
+                if not isinstance(im_b64, str) or not im_b64:
+                    continue
+                if im_mime not in _ALLOWED_IMAGE_MIMES:
+                    continue
+                if len(im_b64) > 6_000_000:
+                    continue
+                valid_images.append({
+                    'base64': im_b64, 'mime': im_mime,
+                    'analysis_name': (str(im_name) if im_name else None),
+                })
+        if image_base64:
+            valid_images.append({'base64': image_base64, 'mime': image_mime, 'analysis_name': None})
+        # En fazla 4 görüntü — istek/kota boyutunu makul tutmak için.
+        valid_images = valid_images[:4]
 
         # Geriye dönük uyumluluk: eski tekli-veri-seti formatı gönderildiyse
         # tek elemanlı bir listeye çevir.
@@ -4102,34 +4142,42 @@ def gemini_data_qa():
             data_summary_blocks.append('\n'.join(b_lines))
 
         data_summary = '\n\n'.join(data_summary_blocks)
-        if image_base64:
+        if valid_images:
             data_summary = (data_summary + '\n\n') if data_summary else ''
             data_summary += (
-                'NOT: Ayrıca ekteki görüntü, kullanıcının o an ekranında gördüğü '
-                'harita/lejant anlık görüntüsüdür (tarayıcı ekran görüntüsü — ham '
-                'uydu/GEE verisi değil). Bu görüntüyü de dikkate alarak renk '
-                'dağılımı/mekansal desenler hakkında GENEL, betimsel gözlemler '
+                'NOT: Ayrıca aşağıda %d adet ekran görüntüsü var — bunlar '
+                'kullanıcının o an ekranında gördüğü harita/lejant anlık '
+                'görüntüleridir (tarayıcı ekran görüntüsü — ham uydu/GEE verisi '
+                'DEĞİL), her biri kendi etiketiyle hangi analize ait olduğu '
+                'belirtilmiştir. Bu görüntüleri de dikkate alarak renk dağılımı/'
+                'mekansal desenler hakkında GENEL, betimsel gözlemler '
                 'ekleyebilirsin; yine de resmi bir risk değerlendirmesi yapma.'
-            )
+            ) % len(valid_images)
         user_prompt = data_summary + '\n\nSoru: ' + question
 
-        # 🆕 Faz 72: görüntü verildiyse, metin parçasına ek olarak bir
-        # inlineData (base64) parçası da isteğe eklenir — Gemini'nin çok
-        # modlu (multimodal) girdi biçimi budur.
+        # 🆕 Faz 72/73: görüntü(ler) verildiyse, metin parçasına ek olarak her
+        # biri için bir etiket metni + bir inlineData (base64) parçası daha
+        # eklenir — Gemini'nin çok modlu (multimodal) girdi biçimi budur.
         gemini_parts = [{'text': user_prompt}]
-        if image_base64:
-            gemini_parts.append({'inlineData': {'mimeType': image_mime, 'data': image_base64}})
+        for _im in valid_images:
+            _im_label = _im['analysis_name'] or 'Genel Harita Görünümü'
+            gemini_parts.append({'text': "Aşağıdaki görüntü '%s' analizine ait harita/lejant ekran görüntüsüdür:" % _im_label})
+            gemini_parts.append({'inlineData': {'mimeType': _im['mime'], 'data': _im['base64']}})
 
         gemini_url = GEMINI_API_URL_TMPL.format(model=GEMINI_MODEL, key=GEMINI_API_KEY)
         gemini_body = {
             'contents': [{'parts': gemini_parts}],
             'systemInstruction': {'parts': [{'text': _GEMINI_SYSTEM_INSTRUCTION}]},
-            'generationConfig': {'temperature': 0.2, 'maxOutputTokens': 400},
+            # 🆕 Faz 73: kullanıcı KISA (1-2 paragraf) değil DETAYLI bir rapor
+            # istedi — token sınırı buna göre artırıldı (bkz. sistem talimatındaki
+            # "150 kelime" sınırının kaldırılması).
+            'generationConfig': {'temperature': 0.2, 'maxOutputTokens': 2048},
         }
 
         try:
-            # Görüntü içeren istekler daha uzun sürebilir; zaman aşımı buna göre uzatılır.
-            resp = requests.post(gemini_url, json=gemini_body, timeout=(35 if image_base64 else 20))
+            # Görüntü sayısı arttıkça istek daha uzun sürebilir; zaman aşımı buna göre uzatılır.
+            _gqa_timeout = 20 + (5 * len(valid_images)) if valid_images else 20
+            resp = requests.post(gemini_url, json=gemini_body, timeout=min(_gqa_timeout, 50))
         except Exception as _net_err:
             return jsonify({'success': False, 'error': 'Gemini API\'ye ulaşılamadı: ' + str(_net_err)})
 
