@@ -552,6 +552,12 @@ tr.class-highlight-active {
         .nav-buttons { display: flex; flex-wrap: wrap; gap: 15px; align-items: center; justify-content: flex-end; }
         .nav-btn { background-color: #f8fafc; border: 1px solid #cbd5e1; padding: 8px 15px; border-radius: 5px; cursor: pointer; font-weight: 600; color: #1e3a8a; transition: 0.2s; outline: none; }
         .nav-btn:hover { background-color: #1e3a8a; color: #ffffff; }
+        /* 🆕 Faz 66: Gemini AI paneli yuvarlak tuşu — "❓ Rehber" tuşunun solunda,
+           navbar'da her zaman görünür. Giriş kontrolü genel blocker() tarafından
+           yönetilir (bu tuş whitelist'te değil, o yüzden giriş yapılmadan
+           tıklanırsa otomatik olarak "giriş yapın" uyarısı çıkar). */
+        .nav-ai-btn { width: 34px; height: 34px; padding: 0 !important; border-radius: 50% !important; display: inline-flex; align-items: center; justify-content: center; font-size: 1rem; flex-shrink: 0; }
+        .nav-ai-btn:hover { background-color: #1e3a8a; color: #ffffff; }
 
         /* Ana İçerik Alanı */
         .main-container { display: flex; flex: 1; min-height: 0; overflow: hidden; }
@@ -1927,6 +1933,7 @@ tr.class-highlight-active {
             }
             #lang-toggle-btn { min-width: 60px !important; font-size: 0.7rem !important; }
             #nav-guide-btn { padding: 4px 7px !important; font-size: 0.7rem !important; }
+            #nav-gemini-btn { width: 28px !important; height: 28px !important; font-size: 0.85rem !important; }
             /* Harita: mobilde ruler olmadan tam alan */
             .ruler-container, .map-wrapper, #map-wrapper-inner,
             .ruler-map-row { width: 100% !important; }
@@ -3272,6 +3279,13 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
 
         <!-- Mobil navbar kontroller: dil + rehber + kullanıcı (≤640px) -->
         <div id="mobile-nav-controls" style="display:none;align-items:center;gap:6px;margin-left:auto;">
+            <!-- AI Veri Asistanı (Faz 66) — yuvarlak tuş, Rehber'in solunda -->
+            <button type="button" id="mnc-gemini-btn"
+                onclick="sylvaToggleGeminiPanel()"
+                title="AI Veri Asistanı (Deneysel)" data-i18n-title="gqa_nav_title" aria-label="AI Veri Asistanı"
+                style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0;border:1px solid #cbd5e1;border-radius:50%;background:#f8fafc;color:#1e3a8a;font-size:0.85rem;cursor:pointer;">
+                🤖
+            </button>
             <!-- Rehber butonu -->
             <button type="button" id="mnc-guide-btn"
                 onclick="var g=document.getElementById('nav-guide-btn');if(g)g.click();"
@@ -3303,6 +3317,7 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
             </div>
         </div>
         <div class="nav-buttons">
+            <button type="button" class="nav-btn nav-ai-btn" id="nav-gemini-btn" onclick="sylvaToggleGeminiPanel()" title="AI Veri Asistanı (Deneysel)" data-i18n-title="gqa_nav_title" aria-label="AI Veri Asistanı">🤖</button>
             <button class="nav-btn" id="nav-guide-btn" data-i18n="nav_guide">❓ Rehber</button>
 
             <!-- Dil Seçimi — özel dropdown (her tarayıcıda bayrak görünür) -->
@@ -3437,6 +3452,13 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
             <div class="lang-opt" data-val="mn" data-flag="🇲🇳" data-label="Монгол">🇲🇳 Монгол</div>
             <div class="lang-opt" data-val="ka" data-flag="🇬🇪" data-label="ქართული">🇬🇪 ქართული</div>
         </div>
+        <!-- AI Veri Asistanı (Faz 66) — yuvarlak tuş, Rehber'in solunda -->
+        <button type="button" class="mqb-icon-btn" id="mqb-gemini-btn"
+            onclick="sylvaToggleGeminiPanel()"
+            title="AI Veri Asistanı (Deneysel)" data-i18n-title="gqa_nav_title" aria-label="AI Veri Asistanı"
+            style="border-radius:50%;width:34px;height:34px;padding:0;display:flex;align-items:center;justify-content:center;">
+            🤖
+        </button>
         <!-- Rehber -->
         <button type="button" class="mqb-icon-btn" id="mqb-guide-btn"
             onclick="document.getElementById('nav-guide-btn') && document.getElementById('nav-guide-btn').click()">
@@ -6032,6 +6054,7 @@ function _sylvaHasMixedStackCategories(paneId) {
                     <button type="button" onclick="downloadCSV()" class="btn-tool" style="flex:1; font-size:0.78rem;" data-i18n="btn_csv">📥 CSV İndir</button>
                     <button type="button" onclick="downloadPDF()" class="btn-tool" style="flex:1; font-size:0.78rem;" data-i18n="btn_pdf">📄 PDF İndir</button>
                 </div>
+
             </div>
             </div><!-- /data-charts-body -->
             </div><!-- /data-charts-section -->
@@ -20321,7 +20344,116 @@ function selectRamp(name) {
             wrap.className = '';
             wrap.innerHTML = currentChartType === 'bar' ? buildBarChartSVG(data) : buildPieChartSVG(data);
             if (tableWrap) tableWrap.innerHTML = buildStatsTableHTML(data);
+
+            // 🆕 Faz 65/66: Gemini veri soru-cevap paneli artık ekranda HER ZAMAN
+            // erişilebilir (üst çubuktaki 🤖 yuvarlak tuş ile açılıp kapanır),
+            // "Veri Grafikleri" kutusuna bağımlı değil. Burada sadece: yeni bir
+            // analiz geldiğinde önceki soru/cevabı temizliyoruz ve panel açıksa
+            // "veri mevcut" durumunu tazeliyoruz (eski analize ait yanıtın
+            // yanlışlıkla ekranda kalması önlenir).
+            window._sylvaGqaLastPane = paneId || (typeof _sylvaActivePaneId === 'function' ? _sylvaActivePaneId() : 'map');
+            var qaAnswer = document.getElementById('gqa-answer');
+            var qaStatus = document.getElementById('gqa-status');
+            var qaQ = document.getElementById('gqa-question');
+            if (qaAnswer) { qaAnswer.style.display = 'none'; qaAnswer.textContent = ''; }
+            if (qaStatus) { qaStatus.style.display = 'none'; qaStatus.textContent = ''; }
+            if (qaQ) qaQ.value = '';
+            if (typeof window.sylvaRefreshGeminiPanelState === 'function') window.sylvaRefreshGeminiPanelState();
         }
+
+        // ════════════════════════════════════════════════════════════════
+        // 🔎 Faz 65: Gemini tabanlı VERİ SORU-CEVAP motoru — "Deneysel".
+        // Yalnızca lastChartData (lejant sınıfları + % dağılımı) hakkında
+        // soru yanıtlar. Risk değerlendirmesi/tavsiye VERMEZ — bkz.
+        // server.py /api/gemini-data-qa üzerindeki kapsamlandırma notu.
+        // ════════════════════════════════════════════════════════════════
+        window.sylvaAskGeminiDataQuestion = function () {
+            var _t = (typeof t === 'function') ? t : function (k, f) { return f || k; };
+            var qInput = document.getElementById('gqa-question');
+            var answerEl = document.getElementById('gqa-answer');
+            var statusEl = document.getElementById('gqa-status');
+            var askBtn = document.getElementById('btn-gqa-ask');
+            if (!qInput || !answerEl || !statusEl) return;
+
+            var question = (qInput.value || '').trim();
+            if (!question) return;
+            if (!lastChartData || !lastChartData.classes || !lastChartData.classes.length) {
+                statusEl.style.display = 'block';
+                statusEl.style.background = '#fee2e2'; statusEl.style.color = '#991b1b';
+                statusEl.textContent = _t('gqa_err_no_data', 'Önce sınıflandırılmış bir analiz çalıştırın (lejant/% verisi olmalı).');
+                return;
+            }
+
+            var pane = window._sylvaGqaLastPane || (typeof _sylvaActivePaneId === 'function' ? _sylvaActivePaneId() : 'map');
+            var payloadMeta = (window._lastAnalyzePayloadByPane && window._lastAnalyzePayloadByPane[pane]) || {};
+            var analysisName = payloadMeta.analysisName || (lastChartData.title) || 'Bilinmeyen';
+
+            answerEl.style.display = 'none';
+            statusEl.style.display = 'block';
+            statusEl.style.background = '#f1f5f9'; statusEl.style.color = '#334155';
+            statusEl.textContent = _t('gqa_running', '⏳ Yanıt hazırlanıyor...');
+            if (askBtn) askBtn.disabled = true;
+
+            fetch(API_BASE + '/api/gemini-data-qa', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    question: question,
+                    analysis_name: analysisName,
+                    classes: lastChartData.classes.map(function (c) { return { name: c.name, min: c.min, max: c.max, color: c.color }; }),
+                    percentages: lastChartData.percentages,
+                    area_ha: (lastChartData.areaHa === undefined ? null : lastChartData.areaHa)
+                })
+            })
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                    if (askBtn) askBtn.disabled = false;
+                    if (!data || !data.success) {
+                        statusEl.style.background = '#fee2e2'; statusEl.style.color = '#991b1b';
+                        statusEl.textContent = '⚠️ ' + ((data && data.error) || _t('gqa_err_generic', 'Yanıt alınamadı.'));
+                        return;
+                    }
+                    statusEl.style.display = 'none';
+                    answerEl.style.display = 'block';
+                    answerEl.textContent = data.answer;
+                })
+                .catch(function (err) {
+                    if (askBtn) askBtn.disabled = false;
+                    statusEl.style.background = '#fee2e2'; statusEl.style.color = '#991b1b';
+                    statusEl.textContent = '⚠️ ' + _t('gqa_err_network', 'Sunucuya ulaşılamadı: ') + (err && err.message ? err.message : String(err));
+                });
+        };
+
+        // ════════════════════════════════════════════════════════════════
+        // 🆕 Faz 66: Gemini paneli artık ekranda HER ZAMAN erişilebilir bir
+        // yuvarlak tuşla (üst çubuk, "❓ Rehber" tuşunun solunda) açılıp
+        // kapanıyor — ilk ekran açıldığında da, herhangi bir analiz
+        // çalışırken/çalışmazken de tuş görünür kalır. Giriş yapılmamışsa
+        // tuşa tıklama, uygulamanın genel "kullanıcı girişi" engelleyicisi
+        // (bkz. blocker()/hasValidSession()) tarafından otomatik olarak
+        // yakalanıp standart "lütfen giriş yapın" uyarısını gösterir —
+        // burada ayrıca bir kontrol yapmaya gerek yok.
+        window.sylvaRefreshGeminiPanelState = function () {
+            var hint = document.getElementById('gqa-nodata-hint');
+            var formRow = document.getElementById('gqa-form-row');
+            var hasData = !!(typeof lastChartData !== 'undefined' && lastChartData && lastChartData.classes && lastChartData.classes.length && lastChartData.percentages);
+            if (hint) hint.style.display = hasData ? 'none' : 'block';
+            if (formRow) formRow.style.display = hasData ? 'flex' : 'none';
+        };
+
+        window.sylvaToggleGeminiPanel = function () {
+            var panel = document.getElementById('gemini-ai-panel');
+            if (!panel) return;
+            var opening = (panel.style.display === 'none' || !panel.style.display);
+            panel.style.display = opening ? 'flex' : 'none';
+            if (opening) {
+                window.sylvaRefreshGeminiPanelState();
+                setTimeout(function () {
+                    var qInput = document.getElementById('gqa-question');
+                    if (qInput && qInput.offsetParent !== null) qInput.focus();
+                }, 50);
+            }
+        };
 
         document.addEventListener('DOMContentLoaded', function () {
             var btnChartBar = document.getElementById('btn-chart-bar');
@@ -27861,6 +27993,15 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Satellite Data and Analyses',
     sec_land_use: '🏘️ Land Use',
     sec_topo: '🏔️ Topographic Analyses',
+    gqa_title: '🔎 Ask a Question About This Data (Experimental)',
+    gqa_nav_title: 'AI Data Assistant (Experimental)',
+    gqa_desc: 'Only questions about the currently displayed legend/percentage data are answered (e.g. "which class has the highest percentage?"). Does NOT give risk assessment or advice. Runs on a free Gemini quota — may be unavailable if the quota is exhausted.',
+    gqa_placeholder: 'E.g: Which class has the largest percentage?',
+    gqa_ask_btn: 'Ask',
+    gqa_err_no_data: 'First run a classified analysis (legend/percentage data required).',
+    gqa_running: '⏳ Preparing answer...',
+    gqa_err_generic: 'Could not get an answer.',
+    gqa_err_network: 'Could not reach the server: ',
     avail_analyses: 'Available Analyses', sensor_hint: '(select a sensor first)',
     lc2l2_label: 'Landsat Collection 2 Level-2 (Surface Reflectance / Thermal)',
     lc2l1_label: 'Landsat Collection 2 Level-1 (TOA Reflectance)',
@@ -29968,6 +30109,15 @@ var SYLVA_TRANSLATIONS = {
     sec_satellite_analysis: '🌍 Uydu Verileri ve Analizler',
     sec_land_use: '🏘️ Arazi Kullanımı',
     sec_topo: '🏔️ Topografik Analizler',
+    gqa_title: '🔎 Bu Veri Hakkında Soru Sor (Deneysel)',
+    gqa_nav_title: 'AI Veri Asistanı (Deneysel)',
+    gqa_desc: 'Yalnızca ekranda görüntülenen lejant/% verisiyle ilgili sorular yanıtlanır (örn. "en yüksek yüzde hangi sınıfa ait?"). Risk değerlendirmesi veya tavsiye VERMEZ. Ücretsiz Gemini kotası ile çalışır — kota dolarsa yanıt verilemeyebilir.',
+    gqa_placeholder: 'Örn: En büyük yüzdeye sahip sınıf hangisi?',
+    gqa_ask_btn: 'Sor',
+    gqa_err_no_data: 'Önce sınıflandırılmış bir analiz çalıştırın (lejant/% verisi olmalı).',
+    gqa_running: '⏳ Yanıt hazırlanıyor...',
+    gqa_err_generic: 'Yanıt alınamadı.',
+    gqa_err_network: 'Sunucuya ulaşılamadı: ',
     avail_analyses: 'Kullanılabilir Analizler', sensor_hint: '(önce bir sensör seçin)',
     lc2l2_label: 'Landsat Collection 2 Level-2 (Yüzey Yansıma / Termal)',
     lc2l1_label: 'Landsat Collection 2 Level-1 (Tepe Yansıma)',
@@ -48701,6 +48851,44 @@ document.addEventListener('DOMContentLoaded',function(){
     document.addEventListener('change', blocker, true);
 })();
 </script>
+
+<!-- ============================================================
+     SylvaGIS — Gemini AI Veri Soru-Cevap Paneli (Faz 65/66)
+     Üst çubuktaki 🤖 yuvarlak tuşla açılıp kapanır. Ekranda HER ZAMAN
+     erişilebilir — ilk açılışta da, herhangi bir analiz sırasında/
+     olmadan da tuş görünürdür. Giriş yapılmamışsa tıklama, genel
+     "kullanıcı girişi" engelleyicisi (blocker()/hasValidSession())
+     tarafından otomatik yakalanıp standart giriş uyarısını gösterir.
+     Risk değerlendirmesi/tavsiye VERMEZ — bkz. server.py
+     /api/gemini-data-qa üzerindeki dürüstlük notu.
+     ============================================================ -->
+<div id="gemini-ai-panel" style="display:none; position:fixed; top:64px; right:16px; width:320px; max-width:calc(100vw - 24px); max-height:70vh; background:#fff; border:1px solid #cbd5e1; border-radius:12px; box-shadow:0 10px 40px rgba(0,0,0,0.18); z-index:9998; flex-direction:column; overflow:hidden;">
+    <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 12px; background:#1e3a8a; color:#fff; flex:0 0 auto;">
+        <div style="font-size:0.82rem; font-weight:700; display:flex; align-items:center; gap:6px;">
+            <span>🤖</span><span data-i18n="gqa_title">Bu Veri Hakkında Soru Sor (Deneysel)</span>
+        </div>
+        <button type="button" onclick="sylvaToggleGeminiPanel()" aria-label="Kapat" title="Kapat" style="background:none;border:none;color:#fff;font-size:1rem;cursor:pointer;line-height:1;padding:2px 4px;">✕</button>
+    </div>
+    <div style="padding:10px 12px; overflow-y:auto;">
+        <div data-i18n="gqa_desc" style="font-size:0.68rem;color:#64748b;margin-bottom:8px;">
+            Yalnızca ekrandaki lejant/% verisiyle ilgili sorular yanıtlanır (örn.
+            "en yüksek yüzde hangi sınıfa ait?"). Risk değerlendirmesi veya
+            tavsiye VERMEZ. Ücretsiz Gemini kotası ile çalışır — kota dolarsa
+            yanıt verilemeyebilir.
+        </div>
+        <div id="gqa-nodata-hint" style="display:block; font-size:0.72rem; background:#fffbeb; border:1px solid #fde68a; color:#92400e; border-radius:6px; padding:8px; margin-bottom:8px;" data-i18n="gqa_err_no_data">
+            Önce sınıflandırılmış bir analiz çalıştırın (lejant/% verisi olmalı).
+        </div>
+        <div id="gqa-form-row" style="display:none; gap:5px;">
+            <input type="text" id="gqa-question" data-i18n-placeholder="gqa_placeholder" placeholder="Örn: En büyük yüzdeye sahip sınıf hangisi?"
+                style="flex:1;padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.78rem;"
+                onkeydown="if(event.key==='Enter'){event.preventDefault();sylvaAskGeminiDataQuestion();}">
+            <button type="button" id="btn-gqa-ask" class="btn-tool" style="flex:0 0 auto;font-size:0.78rem;" onclick="sylvaAskGeminiDataQuestion()" data-i18n="gqa_ask_btn">Sor</button>
+        </div>
+        <div id="gqa-answer" style="display:none; margin-top:6px; font-size:0.76rem; background:#f0f9ff; border:1px solid #bae6fd; border-radius:5px; padding:8px; color:#0c4a6e; white-space:pre-wrap;"></div>
+        <div id="gqa-status" style="display:none; margin-top:6px; font-size:0.72rem; border-radius:5px; padding:6px; word-break:break-word;"></div>
+    </div>
+</div>
 
 <!-- ============================================================
      SylvaGIS — Guide Overlay Screen
