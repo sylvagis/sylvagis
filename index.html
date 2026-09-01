@@ -21191,22 +21191,52 @@ function selectRamp(name) {
         // güvenilir); tüm denemeler tükenirse onError callback'i ile
         // kullanıcıya görünür bir uyarı verilir (artık sessiz atlanmaz).
         function _sylvaGqaDownloadPdfBlob(doc, filename) {
+            // Analiz Robotu PDF indirme: Blob + güvenli kullanıcı tetikleme.
+            // Bazı tarayıcılarda async canvas üretiminden sonra doc.save()
+            // sessizce engellenebildiği için önce Blob, ardından anchor/iframe
+            // ve son çare olarak jsPDF save() kullanılır.
             try {
                 var blob = doc.output('blob');
+                if (!blob || !blob.size) throw new Error('PDF blob oluşturulamadı.');
+
+                if (navigator && typeof navigator.msSaveOrOpenBlob === 'function') {
+                    navigator.msSaveOrOpenBlob(blob, filename);
+                    return true;
+                }
+
                 var url = URL.createObjectURL(blob);
                 var a = document.createElement('a');
                 a.href = url;
-                a.download = filename;
-                a.style.display = 'none';
+                a.download = filename || 'SylvaGIS_Rapor.pdf';
+                a.rel = 'noopener';
+                a.style.position = 'fixed';
+                a.style.left = '-9999px';
                 document.body.appendChild(a);
-                a.click();
+
+                // Chrome/Edge/Firefox için programatik indirme.
+                try { a.click(); } catch (eClick) {
+                    // click() bazı ortamlarda engellenirse iframe fallback.
+                    var frame = document.createElement('iframe');
+                    frame.style.display = 'none';
+                    frame.src = url;
+                    document.body.appendChild(frame);
+                    setTimeout(function () {
+                        try { document.body.removeChild(frame); } catch (eFrameRm) {}
+                    }, 3000);
+                }
+
                 setTimeout(function () {
                     try { document.body.removeChild(a); } catch (eRm) {}
                     try { URL.revokeObjectURL(url); } catch (eRv) {}
-                }, 1000);
+                }, 3000);
                 return true;
             } catch (eBlobSave) {
-                try { doc.save(filename); return true; } catch (eDirectSave) { return false; }
+                console.error('[Sylva] Blob PDF indirme hatası:', eBlobSave);
+                try { doc.save(filename); return true; }
+                catch (eDirectSave) {
+                    console.error('[Sylva] jsPDF save() hatası:', eDirectSave);
+                    return false;
+                }
             }
         }
 
@@ -21318,8 +21348,16 @@ function selectRamp(name) {
                 reportEl.innerHTML = html;
                 document.body.appendChild(reportEl);
 
+                // Çok uzun AI yanıtlarında html2canvas'ın tarayıcı canvas
+                // yüksekliği sınırına takılmasını önle. Normal raporlarda 2x,
+                // uzun raporlarda güvenli şekilde daha düşük ölçek kullanılır.
                 var SCALE = 2;
                 var reportRect = reportEl.getBoundingClientRect();
+                var estimatedHeight = Math.ceil(reportRect.height * SCALE);
+                var MAX_CANVAS_HEIGHT = 28000;
+                if (estimatedHeight > MAX_CANVAS_HEIGHT) {
+                    SCALE = Math.max(0.75, MAX_CANVAS_HEIGHT / Math.max(1, reportRect.height));
+                }
                 var rowBoundaries = [];
                 Array.prototype.forEach.call(reportEl.querySelectorAll('.pdf-row'), function (rowEl) {
                     var r = rowEl.getBoundingClientRect();
