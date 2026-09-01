@@ -5498,6 +5498,29 @@ function _sylvaHasMixedStackCategories(paneId) {
     // (bir satırın yarısı bir sayfada, diğer yarısı sonraki sayfada kalmaz —
     // sığmayan satır doğrudan bir sonraki sayfadan başlar), (3) her sayfanın
     // sağ üst köşesine SylvaGIS logosu sabit olarak basılıyor.
+
+    // 🛡️ BOŞ SAYFA FİXİ: PDF'e eklenecek canvas diliminde gerçek içerik
+    // yoksa sayfa oluşturulmaz. Beyaz arka planlı raporlarda boş padding
+    // dilimlerini güvenli biçimde tespit etmek için küçük bir önizleme taranır.
+    window._sylvaCanvasHasContent = function (canvasEl) {
+        try {
+            var probe = document.createElement('canvas');
+            var pw = 80, ph = 80;
+            probe.width = pw; probe.height = ph;
+            var pctx = probe.getContext('2d', { willReadFrequently: true });
+            pctx.fillStyle = '#ffffff';
+            pctx.fillRect(0, 0, pw, ph);
+            pctx.drawImage(canvasEl, 0, 0, pw, ph);
+            var data = pctx.getImageData(0, 0, pw, ph).data;
+            for (var pi = 0; pi < data.length; pi += 4) {
+                if (data[pi] < 245 || data[pi + 1] < 245 || data[pi + 2] < 245) return true;
+            }
+        } catch (eProbe) {
+            return true;
+        }
+        return false;
+    };
+
     function _wxBuildPdf(paneId, filenameBase) {
         var st = STATE[paneId === 'map2' ? 'map2' : 'map'];
         var _t = (typeof t === 'function') ? t : function (k, f) { return f || k; };
@@ -5644,10 +5667,14 @@ function _sylvaHasMixedStackCategories(paneId) {
                 var sliceCanvas = document.createElement('canvas');
                 sliceCanvas.width = canvas.width; sliceCanvas.height = Math.max(1, Math.round(sliceH));
                 sliceCanvas.getContext('2d').drawImage(canvas, 0, y, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
-                if (!first) doc.addPage();
-                doc.addImage(sliceCanvas.toDataURL('image/jpeg', 0.92), 'JPEG', marginSide, marginTop, imgW, sliceH * pxToPt);
-                stampLogo();
-                y = cutY; first = false;
+                // Boş dilimi tamamen at; böylece PDF'de boş sayfa oluşmaz.
+                if (window._sylvaCanvasHasContent(sliceCanvas)) {
+                    if (!first) doc.addPage();
+                    doc.addImage(sliceCanvas.toDataURL('image/jpeg', 0.92), 'JPEG', marginSide, marginTop, imgW, sliceH * pxToPt);
+                    stampLogo();
+                    first = false;
+                }
+                y = cutY;
             }
             var fname = (filenameBase || 'SylvaGIS_Weather') + '.pdf';
             doc.save(fname);
@@ -19845,10 +19872,13 @@ function selectRamp(name) {
                     sliceCanvas.width = canvas.width;
                     sliceCanvas.height = Math.max(1, Math.round(sliceH));
                     sliceCanvas.getContext('2d').drawImage(canvas, 0, y, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
-                    if (!first) doc.addPage();
-                    doc.addImage(sliceCanvas.toDataURL('image/jpeg', 0.92), 'JPEG', margin, margin, imgW, sliceH * pxToPt);
+                    // Boş dilimi tamamen at; böylece PDF'de boş sayfa oluşmaz.
+                    if (window._sylvaCanvasHasContent(sliceCanvas)) {
+                        if (!first) doc.addPage();
+                        doc.addImage(sliceCanvas.toDataURL('image/jpeg', 0.92), 'JPEG', margin, margin, imgW, sliceH * pxToPt);
+                        first = false;
+                    }
                     y += sliceH;
-                    first = false;
                 }
                 doc.save('SylvaGIS_' + t('file_analiz_raporu') + '.pdf');
                 playSylvaChime('download');
@@ -20237,7 +20267,7 @@ function selectRamp(name) {
                 var ci = Math.round(t * (palette.length - 1));
                 bins.push({
                     color: palette[ci],
-                    name:  bMin.toFixed(2) + ' – ' + bMax.toFixed(2),
+                    name:  _sylvaLocalizedContinuousClassName(meta && meta.analysisName, i) || (bMin.toFixed(2) + ' – ' + bMax.toFixed(2)),
                     min:   bMin.toFixed(2),
                     max:   bMax.toFixed(2),
                     count: count
@@ -20685,6 +20715,25 @@ function selectRamp(name) {
             }
         };
 
+        // PDF/istatistik lejantları için sürekli topografik verilerde
+        // sayısal aralıkların kendisini sınıf adı olarak kullanma. Eğim gibi
+        // sürekli analizlerde ekran lejantında sınıf adı ayrıca gösterilebildiği
+        // için rapor da aynı şekilde isimli sınıfları taşır. `t()` kullanıldığı
+        // için aktif uygulama dili ne olursa olsun adlar yerelleştirilir.
+        function _sylvaLocalizedContinuousClassName(analysisName, index) {
+            var n = String(analysisName || '').toUpperCase();
+            var i = Number(index) + 1;
+            var label = '';
+            try {
+                if (n === 'TOPO_SLOPE') {
+                    var slopeWord = (typeof t === 'function') ? t('topo_slope_label', 'Slope') : 'Slope';
+                    var classWord = (typeof t === 'function') ? t('col_class', 'Class') : 'Class';
+                    label = slopeWord + ' ' + classWord + ' ' + i;
+                }
+            } catch (e) {}
+            return label || null;
+        }
+
         function buildStatsTableHTML(data) {
             var unit = _sylvaStatsAreaUnit;
             var unitLabel = _sylvaAreaUnitLabel(unit);
@@ -20904,7 +20953,7 @@ function selectRamp(name) {
                                 if (!isNaN(_hv)) count += _hv;
                             }
                         }
-                        bins.push({ min: bMin.toFixed(2), max: bMax.toFixed(2), name: bMin.toFixed(2) + ' – ' + bMax.toFixed(2), count: count });
+                        bins.push({ min: bMin.toFixed(2), max: bMax.toFixed(2), name: _sylvaLocalizedContinuousClassName(analysisName, bi) || (bMin.toFixed(2) + ' – ' + bMax.toFixed(2)), count: count });
                     }
                     var totalBins = bins.reduce(function (s, b) { return s + b.count; }, 0);
                     if (totalBins > 0) {
@@ -20941,6 +20990,51 @@ function selectRamp(name) {
         function _sylvaGqaCollectDatasets(pane) {
             var out = [];
             var seen = {};
+            // PDF'deki sınıf adları HER ZAMAN ekranda görünen/uygulanan lejant
+            // adlarıyla aynı olmalı. Özellikle kullanıcı sınıf adını elle
+            // "skbgskgs" gibi değiştirdiyse, rapor otomatik "Slope Class 1"
+            // üretmemeli; ekrandaki metni birebir taşımalıdır.
+            function _sylvaGqaExactLegendNames(analysisName, currentClasses) {
+                var names = null;
+                try {
+                    var wanted = String(analysisName || '').trim().toUpperCase();
+                    var ia = (window._sylvaIndexAnalysisStates && window._sylvaIndexAnalysisStates[pane]) || {};
+                    var ex = (window._sylvaLayerExportSymbologyByPane && window._sylvaLayerExportSymbologyByPane[pane]) || {};
+                    Object.keys(ia).forEach(function(layerKey) {
+                        if (names) return;
+                        var st = ia[layerKey];
+                        if (!st || !st.meta) return;
+                        var nm = String(st.meta.analysisName || '').trim().toUpperCase();
+                        if (nm !== wanted) return;
+                        var saved = ex[layerKey];
+                        if (saved && Array.isArray(saved.breaks) && saved.breaks.length === currentClasses.length) {
+                            var candidate = saved.breaks.map(function(b) { return String(b.label == null ? '' : b.label).trim(); });
+                            if (candidate.length === currentClasses.length && candidate.every(function(x){ return !!x; })) names = candidate;
+                        }
+                    });
+                } catch (eExactSaved) {}
+
+                // Aktif katmanda kullanıcı henüz/halen editör satırlarını
+                // gösteriyorsa DOM'daki isimleri doğrudan kullan. Bu, raporun
+                // ekrandaki isimle birebir eşleşmesini garanti eder.
+                if (!names) {
+                    try {
+                        var activePane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
+                        var activeKey = window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[activePane];
+                        var activeState = window._sylvaIndexAnalysisStates && window._sylvaIndexAnalysisStates[activePane] &&
+                            activeKey ? window._sylvaIndexAnalysisStates[activePane][activeKey] : null;
+                        var activeName = activeState && activeState.meta ? String(activeState.meta.analysisName || '').trim().toUpperCase() : '';
+                        if (activePane === pane && activeName === wanted && typeof _sylvaReadClassificationRowsForPane === 'function') {
+                            var rows = _sylvaReadClassificationRowsForPane(pane) || [];
+                            if (rows.length === currentClasses.length && rows.every(function(r){ return r && String(r.name || '').trim(); })) {
+                                names = rows.map(function(r){ return String(r.name).trim(); });
+                            }
+                        }
+                    } catch (eExactDom) {}
+                }
+                return names;
+            }
+
             function addEntry(analysisName, classes, percentages, areaHa) {
                 if (!classes || !classes.length || !percentages || !percentages.length) return;
                 // 🛠️ Faz 78: bir katmanın GERÇEK adı hiçbir kaynaktan (meta,
@@ -20955,9 +21049,19 @@ function selectRamp(name) {
                 var key = _sylvaGqaFriendlyDatasetName(String(analysisName));
                 if (seen[key]) return;
                 seen[key] = true;
+                var _exactNames = _sylvaGqaExactLegendNames(analysisName, classes);
+                var _reportClasses = classes.map(function (c, idx) {
+                    return {
+                        // Kullanıcının ekranda verdiği isim varsa BİREBİR onu
+                        // kullan; aksi halde mevcut kaynak adını değiştirme.
+                        name: (_exactNames && _exactNames[idx]) ? _exactNames[idx] : c.name,
+                        min: c.min,
+                        max: c.max
+                    };
+                });
                 out.push({
                     analysis_name: key,
-                    classes: classes.map(function (c) { return { name: c.name, min: c.min, max: c.max }; }),
+                    classes: _reportClasses,
                     percentages: percentages,
                     area_ha: (areaHa === undefined ? null : areaHa)
                 });
@@ -21462,10 +21566,14 @@ function selectRamp(name) {
                         var sliceCanvas = document.createElement('canvas');
                         sliceCanvas.width = canvas.width; sliceCanvas.height = Math.max(1, Math.round(sliceH));
                         sliceCanvas.getContext('2d').drawImage(canvas, 0, y, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
-                        if (!first) doc.addPage();
-                        doc.addImage(sliceCanvas.toDataURL('image/jpeg', 0.92), 'JPEG', marginSide, marginTop, imgW, sliceH * pxToPt);
-                        stampLogo();
-                        y = cutY; first = false;
+                        // Boş dilimi tamamen at; böylece PDF'de boş sayfa oluşmaz.
+                        if (window._sylvaCanvasHasContent(sliceCanvas)) {
+                            if (!first) doc.addPage();
+                            doc.addImage(sliceCanvas.toDataURL('image/jpeg', 0.92), 'JPEG', marginSide, marginTop, imgW, sliceH * pxToPt);
+                            stampLogo();
+                            first = false;
+                        }
+                        y = cutY;
                     }
 
                     // 🆕 Faz 77: sayfa numaraları — her sayfanın ALT ORTASINA
