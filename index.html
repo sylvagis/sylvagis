@@ -2726,7 +2726,8 @@ tr.class-highlight-active {
             border: none !important;
             overflow: visible !important;
         }
-        #mqb-lang-toggle, #mqb-guide-btn, #mqb-login-btn, #mqb-user-profile-btn {
+        #mqb-lang-toggle, #mqb-guide-btn, #mqb-login-btn, #mqb-user-profile-btn,
+        #mqb-gemini-btn {
             display: none !important;
         }
         #mobile-nav-controls {
@@ -20648,7 +20649,16 @@ function selectRamp(name) {
             var seen = {};
             function addEntry(analysisName, classes, percentages, areaHa) {
                 if (!classes || !classes.length || !percentages || !percentages.length) return;
-                var key = _sylvaGqaFriendlyDatasetName(String(analysisName || 'Bilinmeyen'));
+                // 🛠️ Faz 78: bir katmanın GERÇEK adı hiçbir kaynaktan (meta,
+                // katman anahtarı, grafik başlığı) belirlenemediğinde, kod
+                // içindeki üç ayrı yerde son çare olarak düz "Bilinmeyen"
+                // metni kullanılıyordu. Kullanıcı, raporun sonunda ne
+                // olduğu belli olmayan böyle bir "Bilinmeyen" bloğunun
+                // KAFA KARIŞTIRICI ve gereksiz olduğunu bildirdi — artık
+                // ismi gerçekten hiç belirlenemeyen (yalnızca bu literal
+                // yedek değere düşen) veri setleri rapora HİÇ eklenmiyor.
+                if (!analysisName || String(analysisName).trim() === 'Bilinmeyen') return;
+                var key = _sylvaGqaFriendlyDatasetName(String(analysisName));
                 if (seen[key]) return;
                 seen[key] = true;
                 out.push({
@@ -20855,29 +20865,153 @@ function selectRamp(name) {
         // Logo yüklemesi asenkron olduğu için fonksiyonun tamamı bir
         // Promise'e taşındı; logo bulunamazsa (ör. henüz DOM'a yüklenmemişse)
         // rapor yine de logosuz olarak sorunsuz üretilir.
+        // 🛠️ BUG FİX (Faz 78 — Korece/Çince/Arapça vb. Latin-olmayan dillerde
+        // PDF'te metin GÖRÜNMÜYORDU, yalnızca sayılar/parantezler kalıyordu):
+        // Kök neden — PDF'e gömülü tek font (Liberation Serif) yalnızca
+        // Latin alfabesi (+ Türkçe genişletilmiş karakterler) içeriyor;
+        // Hangul/Kanji/Hanzi/Arapça/Devanagari/Bengalce/Tay/Gürcüce gibi
+        // TAMAMEN FARKLI yazı sistemlerinin glif(harf)lerini HİÇ İÇERMİYOR
+        // — jsPDF bu karakterleri sessizce ATLIYORDU (boşluk bırakıyordu).
+        // ÇÖZÜM: Bu fonksiyon artık AYNI yöntemi kullanıyor — Hava Durumu
+        // PDF raporunda (_wxBuildPdf) zaten başarıyla kullanılan, TARAYICININ
+        // KENDİ Unicode font desteğinden yararlanan html2canvas tabanlı
+        // yaklaşım: rapor önce gizli bir HTML bloğu olarak (tarayıcının
+        // sistem fontlarıyla, hangi dil/alfabe olursa olsun) oluşturuluyor,
+        // sonra bu blok bir GÖRÜNTÜYE (raster) dönüştürülüp PDF'e resim
+        // olarak gömülüyor — böylece TÜM 30 dil (RTL diller dahil) artık
+        // gerçekten doğru render ediliyor. Sayfa kesimi, önceki Hava Durumu
+        // PDF'inde kanıtlanmış "satır sınırından kes" (rowBoundaries)
+        // yöntemiyle yapılıyor — bir tablo satırı veya paragraf iki sayfaya
+        // bölünmez.
         function _sylvaGqaBuildAndDownloadReportPDF(question, answerText, datasets, building) {
             try {
                 var jspdfLib = window.jspdf || window.jsPDF;
                 if (!jspdfLib) return;
+                if (typeof html2canvas === 'undefined') return;
                 var _t = (typeof t === 'function') ? t : function (k, f) { return f || k; };
+                var _lang = (typeof window._sylvaLang === 'string' && window._sylvaLang) ? window._sylvaLang : 'tr';
+                var isRTL = !!(typeof SYLVA_RTL !== 'undefined' && SYLVA_RTL[_lang]);
+                var _esc = (typeof escapeHtml === 'function') ? escapeHtml : function (s) {
+                    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                };
+
+                var _unknownLbl = _t('gqa_pdf_unknown', 'Bilinmeyen');
+                var _totalAreaLbl = _t('gqa_pdf_total_area', 'Toplam alan:');
+                var _classLbl = _t('gqa_pdf_class', 'Sınıf');
+                var _rangeLbl = _t('gqa_pdf_range', 'Aralık');
+                var _pctLbl = _t('gqa_pdf_percentage', 'Yüzde (%)');
+
+                // ── Gizli HTML raporu inşa ediliyor ──────────────────────
+                var reportEl = document.createElement('div');
+                reportEl.style.cssText = 'position:fixed;left:-100000px;top:0;background:#ffffff;padding:22px;' +
+                    'width:760px;box-sizing:border-box;' +
+                    'font-family:Arial,"Segoe UI","Noto Sans","Noto Sans KR","Noto Sans SC","Noto Sans TC",' +
+                    '"Noto Sans JP","Noto Sans Arabic","Noto Sans Hebrew","Noto Sans Thai","Noto Sans Bengali",' +
+                    '"Noto Sans Devanagari","Noto Sans Georgian",sans-serif;' +
+                    'direction:' + (isRTL ? 'rtl' : 'ltr') + ';color:#0f172a;';
+
+                var _dateLocale = _lang;
+                var _createdStr;
+                try { _createdStr = new Date().toLocaleString(_dateLocale); } catch (eLoc) { _createdStr = new Date().toLocaleString(); }
+
+                var html = '';
+                html += '<div class="pdf-row" style="font-size:28px;font-weight:700;margin-bottom:6px;">' + _esc(_t('gqa_pdf_title', 'SylvaGIS — AI Veri Raporu')) + '</div>';
+                html += '<div class="pdf-row" style="font-size:12px;color:#64748b;margin-bottom:16px;">' + _esc(_t('gqa_pdf_created', 'Oluşturulma:')) + ' ' + _esc(_createdStr) + '</div>';
+
+                if (question) {
+                    html += '<div class="pdf-row" style="margin-bottom:14px;">' +
+                        '<div style="font-size:17px;font-weight:700;margin-bottom:4px;">' + _esc(_t('gqa_pdf_question', 'Soru:')) + '</div>' +
+                        '<div style="font-size:16px;line-height:1.5;">' + _esc(question) + '</div>' +
+                        '</div>';
+                }
+
+                html += '<div class="pdf-row" style="font-size:21px;font-weight:700;margin:10px 0 10px;">' + _esc(_t('gqa_pdf_report', 'Rapor')) + '</div>';
+                // AI yanıtı paragraf paragraf ayrılıyor — her paragraf kendi
+                // "satır" birimi olarak işaretlenir, böylece sayfa kesimi
+                // mümkün olduğunca paragraf sınırlarında olur (bkz. weather
+                // PDF'inde kanıtlanmış rowBoundaries yöntemi).
+                var _paragraphs = String(answerText || '').split(/\n+/).filter(function (p) { return p.trim().length > 0; });
+                if (!_paragraphs.length) _paragraphs = [''];
+                _paragraphs.forEach(function (p) {
+                    html += '<div class="pdf-row" style="font-size:16px;line-height:1.6;margin-bottom:12px;white-space:pre-wrap;">' + _esc(p) + '</div>';
+                });
+
+                if (datasets && datasets.length) {
+                    html += '<div class="pdf-row" style="font-size:21px;font-weight:700;margin:14px 0 12px;">' + _esc(_t('gqa_pdf_datasets', 'Veri Setleri (Sınıflar ve Yüzdeler)')) + '</div>';
+                    datasets.forEach(function (ds) {
+                        var headerTxt = ds.analysis_name || _unknownLbl;
+                        if (ds.area_ha !== undefined && ds.area_ha !== null && !isNaN(Number(ds.area_ha))) {
+                            headerTxt += '  —  ' + _totalAreaLbl + ' ' + Number(ds.area_ha).toFixed(2) + ' ha';
+                        }
+                        html += '<div class="pdf-row" style="font-size:17px;font-weight:700;margin:10px 0 6px;">' + _esc(headerTxt) + '</div>';
+                        html += '<table class="pdf-table" style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:10px;">' +
+                            '<colgroup><col style="width:52%;"><col style="width:28%;"><col style="width:20%;"></colgroup>' +
+                            '<thead><tr class="pdf-row">' +
+                            '<th style="text-align:' + (isRTL ? 'right' : 'left') + ';font-size:16px;font-weight:700;padding:6px 6px;border-bottom:1.5px solid #334155;">' + _esc(_classLbl) + '</th>' +
+                            '<th style="text-align:' + (isRTL ? 'right' : 'left') + ';font-size:16px;font-weight:700;padding:6px 6px;border-bottom:1.5px solid #334155;">' + _esc(_rangeLbl) + '</th>' +
+                            '<th style="text-align:' + (isRTL ? 'right' : 'left') + ';font-size:16px;font-weight:700;padding:6px 6px;border-bottom:1.5px solid #334155;">' + _esc(_pctLbl) + '</th>' +
+                            '</tr></thead><tbody>';
+                        var classes = ds.classes || [];
+                        var pct = ds.percentages || [];
+                        for (var i = 0; i < classes.length; i++) {
+                            var c = classes[i] || {};
+                            var name = String(c.name || '?');
+                            var rng = (c.min !== undefined && c.max !== undefined) ? (c.min + ' – ' + c.max) : '—';
+                            var pv = (pct[i] !== undefined && !isNaN(Number(pct[i]))) ? (Number(pct[i]).toFixed(1) + '%') : '—';
+                            html += '<tr class="pdf-row">' +
+                                '<td style="padding:5px 6px;border-bottom:1px solid #e2e8f0;">' + _esc(name) + '</td>' +
+                                '<td style="padding:5px 6px;border-bottom:1px solid #e2e8f0;">' + _esc(rng) + '</td>' +
+                                '<td style="padding:5px 6px;border-bottom:1px solid #e2e8f0;">' + _esc(pv) + '</td>' +
+                                '</tr>';
+                        }
+                        html += '</tbody></table>';
+                    });
+                }
+
+                if (building) {
+                    html += '<div class="pdf-row" style="font-size:17px;font-weight:700;margin:14px 0 6px;">' + _esc(_t('gqa_pdf_building_section', 'Bina / Çatı Tespiti')) + '</div>';
+                    if (building.buildingCount !== undefined && building.buildingCount !== null) {
+                        html += '<div class="pdf-row" style="font-size:16px;margin-bottom:4px;">' + _esc(_t('gqa_pdf_building_count', 'Toplam bina/çatı sayısı:')) + ' ' + _esc(building.buildingCount) + '</div>';
+                    }
+                    if (building.totalAreaM2 !== undefined && building.totalAreaM2 !== null && !isNaN(Number(building.totalAreaM2))) {
+                        html += '<div class="pdf-row" style="font-size:16px;margin-bottom:4px;">' + _esc(_t('gqa_pdf_building_area', 'Toplam çatı alanı:')) + ' ' + _esc(Number(building.totalAreaM2).toFixed(2)) + ' m²</div>';
+                    }
+                }
+
+                reportEl.innerHTML = html;
+                document.body.appendChild(reportEl);
+
+                var SCALE = 2;
+                var reportRect = reportEl.getBoundingClientRect();
+                var rowBoundaries = [];
+                Array.prototype.forEach.call(reportEl.querySelectorAll('.pdf-row'), function (rowEl) {
+                    var r = rowEl.getBoundingClientRect();
+                    rowBoundaries.push({
+                        top: (r.top - reportRect.top) * SCALE,
+                        bottom: (r.bottom - reportRect.top) * SCALE
+                    });
+                });
+
                 var _logoPromise = (typeof window._wxLoadLogoAsset === 'function') ? window._wxLoadLogoAsset() : Promise.resolve(null);
 
-                _logoPromise.then(function (logo) {
+                Promise.all([
+                    html2canvas(reportEl, { backgroundColor: '#ffffff', scale: SCALE, useCORS: true }),
+                    _logoPromise
+                ]).then(function (results) {
+                    var canvas = results[0], logo = results[1];
+                    if (document.body.contains(reportEl)) document.body.removeChild(reportEl);
+
                     var JsPDF = jspdfLib.jsPDF || jspdfLib;
                     var doc = new JsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
-                    var _hasTurkishFont = _sylvaPdfRegisterTurkishFont(doc);
-                    var FONT = _hasTurkishFont ? 'LiberationSerif' : 'times';
-
                     var pageW = doc.internal.pageSize.getWidth();
                     var pageH = doc.internal.pageSize.getHeight();
-                    // "Ekrana yaslı" (kenardan kenara) görünüm için dar kenar boşluğu.
-                    var margin = 26;
-                    var contentW = pageW - margin * 2;
-                    // Logoya yer açmak için üst kenar boşluğu diğerlerinden geniş.
-                    var marginTop = logo ? 52 : margin;
-                    var y = marginTop;
+                    var marginSide = 26;
+                    var marginTop = logo ? 50 : 26;
+                    var marginBottom = 30; // sayfa numarası için biraz yer bırak
+                    var imgW = pageW - marginSide * 2;
+                    var pxToPt = imgW / canvas.width;
+                    var pageContentPx = (pageH - marginTop - marginBottom) / pxToPt;
 
-                    // Logo boyutu: en fazla 26pt yükseklik, 90pt genişlik — oran korunur.
                     var logoDrawH = 0, logoDrawW = 0;
                     if (logo) {
                         logoDrawH = 26;
@@ -20886,136 +21020,39 @@ function selectRamp(name) {
                     }
                     function stampLogo() {
                         if (!logo) return;
-                        try { doc.addImage(logo.url, 'PNG', pageW - margin - logoDrawW, 10, logoDrawW, logoDrawH); } catch (eLogo) {}
-                    }
-                    stampLogo(); // ilk sayfa
-
-                    function ensureSpace(need) {
-                        if (y + need > pageH - margin) {
-                            doc.addPage();
-                            stampLogo(); // 🆕 HER sayfanın sağ üst köşesine logo
-                            y = marginTop;
-                        }
-                    }
-                    function setStyle(weight, size, colorGray) {
-                        doc.setFont(FONT, weight);
-                        doc.setFontSize(size);
-                        if (colorGray === undefined) { doc.setTextColor(0); }
-                        else { doc.setTextColor(colorGray); }
+                        try { doc.addImage(logo.url, 'PNG', pageW - marginSide - logoDrawW, 10, logoDrawW, logoDrawH); } catch (eLogo) {}
                     }
 
-                    var _dateLocale = (typeof window._sylvaLang === 'string' && window._sylvaLang) ? window._sylvaLang : 'tr';
-
-                    // ── Başlık (büyük) ──────────────────────────────────────
-                    setStyle('bold', 22);
-                    doc.text(_t('gqa_pdf_title', 'SylvaGIS — AI Veri Raporu'), margin, y);
-                    y += 28;
-
-                    setStyle('normal', 10, 100);
-                    var _createdStr;
-                    try { _createdStr = new Date().toLocaleString(_dateLocale); } catch (eLoc) { _createdStr = new Date().toLocaleString(); }
-                    doc.text(_t('gqa_pdf_created', 'Oluşturulma:') + ' ' + _createdStr, margin, y);
-                    y += 22;
-
-                    if (question) {
-                        setStyle('bold', 13);
-                        ensureSpace(18); doc.text(_t('gqa_pdf_question', 'Soru:'), margin, y); y += 18;
-                        setStyle('normal', 12);
-                        doc.splitTextToSize(question, contentW).forEach(function (line) {
-                            ensureSpace(17); doc.text(line, margin, y); y += 17;
-                        });
-                        y += 8;
-                    }
-
-                    // ── "Rapor" bölüm başlığı (büyük) ───────────────────────
-                    setStyle('bold', 16);
-                    ensureSpace(24); doc.text(_t('gqa_pdf_report', 'Rapor'), margin, y); y += 24;
-                    setStyle('normal', 12);
-                    doc.splitTextToSize(answerText || '', contentW).forEach(function (line) {
-                        ensureSpace(17); doc.text(line, margin, y); y += 17;
-                    });
-                    y += 20;
-
-                    // ── "Veri Setleri" bölüm başlığı (büyük) ────────────────
-                    setStyle('bold', 16);
-                    ensureSpace(26); doc.text(_t('gqa_pdf_datasets', 'Veri Setleri (Sınıflar ve Yüzdeler)'), margin, y); y += 26;
-
-                    // Tablo sütun genişlikleri — geniş sayfa genişliğine ("ekrana
-                    // yaslı" dar kenar boşluğu) göre orantılı olarak dağıtılmış.
-                    var col1X = margin;
-                    var col2X = margin + Math.round(contentW * 0.52);
-                    var col3X = margin + Math.round(contentW * 0.80);
-
-                    var _unknownLbl = _t('gqa_pdf_unknown', 'Bilinmeyen');
-                    var _totalAreaLbl = _t('gqa_pdf_total_area', 'Toplam alan:');
-                    var _classLbl = _t('gqa_pdf_class', 'Sınıf');
-                    var _rangeLbl = _t('gqa_pdf_range', 'Aralık');
-                    var _pctLbl = _t('gqa_pdf_percentage', 'Yüzde (%)');
-
-                    (datasets || []).forEach(function (ds) {
-                        ensureSpace(22);
-                        setStyle('bold', 13.5);
-                        var header = ds.analysis_name || _unknownLbl;
-                        if (ds.area_ha !== undefined && ds.area_ha !== null && !isNaN(Number(ds.area_ha))) {
-                            header += '  —  ' + _totalAreaLbl + ' ' + Number(ds.area_ha).toFixed(2) + ' ha';
+                    var y = 0, first = true;
+                    while (y < canvas.height) {
+                        var maxY = Math.min(y + pageContentPx, canvas.height);
+                        var cutY = maxY;
+                        for (var i = 0; i < rowBoundaries.length; i++) {
+                            var rb = rowBoundaries[i];
+                            if (rb.top >= y && rb.bottom <= maxY + 0.5) cutY = rb.bottom;
+                            if (rb.top >= maxY) break;
                         }
-                        doc.text(header, margin, y); y += 18;
-
-                        // Tablo başlığı — büyük/belirgin (kullanıcı talebi: "lejant
-                        // başlıkları büyük olsun").
-                        setStyle('bold', 12);
-                        ensureSpace(16);
-                        doc.text(_classLbl, col1X, y);
-                        doc.text(_rangeLbl, col2X, y);
-                        doc.text(_pctLbl, col3X, y);
-                        y += 8;
-                        doc.setLineWidth(0.75);
-                        doc.line(margin, y, margin + contentW, y);
-                        y += 12;
-
-                        setStyle('normal', 11);
-                        var classes = ds.classes || [];
-                        var pct = ds.percentages || [];
-                        var _nameMaxChars = Math.max(20, Math.floor((col2X - col1X) / 5.6));
-                        for (var i = 0; i < classes.length; i++) {
-                            ensureSpace(15);
-                            var c = classes[i] || {};
-                            var name = String(c.name || '?');
-                            var rng = (c.min !== undefined && c.max !== undefined) ? (c.min + ' – ' + c.max) : '—';
-                            var pv = (pct[i] !== undefined && !isNaN(Number(pct[i]))) ? (Number(pct[i]).toFixed(1) + '%') : '—';
-                            doc.text(name.length > _nameMaxChars ? (name.slice(0, _nameMaxChars) + '…') : name, col1X, y);
-                            doc.text(String(rng), col2X, y);
-                            doc.text(pv, col3X, y);
-                            y += 15;
-                        }
-                        y += 14;
-                    });
-
-                    if (building) {
-                        ensureSpace(20);
-                        setStyle('bold', 13.5);
-                        doc.text(_t('gqa_pdf_building_section', 'Bina / Çatı Tespiti'), margin, y); y += 18;
-                        setStyle('normal', 12);
-                        if (building.buildingCount !== undefined && building.buildingCount !== null) {
-                            ensureSpace(16);
-                            doc.text(_t('gqa_pdf_building_count', 'Toplam bina/çatı sayısı:') + ' ' + building.buildingCount, margin, y); y += 16;
-                        }
-                        if (building.totalAreaM2 !== undefined && building.totalAreaM2 !== null && !isNaN(Number(building.totalAreaM2))) {
-                            ensureSpace(16);
-                            doc.text(_t('gqa_pdf_building_area', 'Toplam çatı alanı:') + ' ' + Number(building.totalAreaM2).toFixed(2) + ' m²', margin, y); y += 16;
-                        }
+                        if (cutY <= y) cutY = maxY; // tek "satır" tüm sayfadan uzunsa çaresiz kes
+                        var sliceH = cutY - y;
+                        var sliceCanvas = document.createElement('canvas');
+                        sliceCanvas.width = canvas.width; sliceCanvas.height = sliceH;
+                        sliceCanvas.getContext('2d').drawImage(canvas, 0, y, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
+                        if (!first) doc.addPage();
+                        doc.addImage(sliceCanvas.toDataURL('image/png'), 'PNG', marginSide, marginTop, imgW, sliceH * pxToPt);
+                        stampLogo();
+                        y = cutY; first = false;
                     }
 
                     // 🆕 Faz 77: sayfa numaraları — her sayfanın ALT ORTASINA
-                    // "1", "2", "3"... basılıyor. Toplam sayfa sayısı belge
-                    // tamamen yazıldıktan SONRA belli olduğu için, bu adım
-                    // tüm içerik/tablo/logo işlemleri bittikten sonra, kaydetmeden
-                    // hemen önce TÜM sayfalar üzerinde ayrı bir geçişte yapılıyor.
+                    // "1", "2", "3"... basılıyor. Bu adım TÜM sayfalar
+                    // eklendikten sonra, kaydetmeden hemen önce yapılıyor.
                     try {
                         var _totalPages = doc.internal.getNumberOfPages();
                         for (var _pn = 1; _pn <= _totalPages; _pn++) {
                             doc.setPage(_pn);
-                            setStyle('normal', 9, 130);
+                            doc.setFont('helvetica', 'normal');
+                            doc.setFontSize(9);
+                            doc.setTextColor(130);
                             doc.text(String(_pn), pageW / 2, pageH - 14, { align: 'center' });
                         }
                     } catch (ePageNum) {}
@@ -21023,6 +21060,7 @@ function selectRamp(name) {
                     var _filenameWord = _t('gqa_pdf_filename_word', 'Rapor');
                     doc.save('SylvaGIS_' + _filenameWord + '.pdf');
                 }).catch(function (ePdfInner) {
+                    if (document.body.contains(reportEl)) document.body.removeChild(reportEl);
                     console.error('[Sylva] AI raporu PDF olarak indirilemedi:', ePdfInner);
                 });
             } catch (ePdf) {
@@ -29257,7 +29295,7 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Topografik tahlillar',
     gqa_title: '🔎 Ushbu maʼlumot haqida savol bering',
     gqa_nav_title: 'AI Maʼlumot Yordamchisi',
-    gqa_desc: 'Faqat hozir ekranda koʻrsatilgan legend/foiz maʼlumotlariga oid savollarga javob beriladi (masalan, "eng yuqori foizga qaysi sinf ega?"). Xavf bahosi yoki tavsiya BERMAYDI. Gemini infratuzilmasidan foydalanadi.',
+    gqa_desc: 'Ekrandagi legend/foiz maʼlumotlarini oʻqib tavsiflab bera oladi; birdan ortiq maʼlumotlar toʻplami mavjud boʻlsa (shu seansda ishga tushirilgan barcha maʼlumotlar toʻplamlari eslab qolinadi), ularni birlashtirib BATAFSIL umumiy hisobot yozadi — savol soʻralgandan soʻng hisobotning PDF nusxasi (barcha sinf/foiz qiymatlari bilan) avtomatik yuklab olinadi. Rasmiy xavf bahosi yoki tavsiya BERMAYDI. Gemini infratuzilmasidan foydalanadi.',
     gqa_pdf_title: 'SylvaGIS — Sun\'iy intellekt hisobot',
     gqa_pdf_created: 'Yaratildi:',
     gqa_pdf_question: 'Savol:',
@@ -29800,7 +29838,7 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Τοπογραφικές Αναλύσεις',
     gqa_title: '🔎 Ρωτήστε κάτι για αυτά τα δεδομένα',
     gqa_nav_title: 'Βοηθός Δεδομένων AI',
-    gqa_desc: 'Απαντώνται μόνο ερωτήσεις σχετικά με τα δεδομένα υπομνήματος/ποσοστού που εμφανίζονται αυτή τη στιγμή στην οθόνη (π.χ. "ποια κατηγορία έχει το υψηλότερο ποσοστό;"). ΔΕΝ παρέχει εκτίμηση κινδύνου ή συμβουλές. Χρησιμοποιεί την υποδομή Gemini.',
+    gqa_desc: 'Μπορεί να διαβάσει και να περιγράψει τα δεδομένα υπομνήματος/ποσοστού στην οθόνη· όταν υπάρχουν περισσότερα από ένα σύνολα δεδομένων (όλα τα σύνολα δεδομένων που εκτελέστηκαν σε αυτή τη συνεδρία διατηρούνται στη μνήμη), συντάσσει μια ΛΕΠΤΟΜΕΡΗ συνδυασμένη αναφορά που τα συσχετίζει — ένα PDF της αναφοράς (με όλες τις τιμές κλάσης/ποσοστού) κατεβαίνει αυτόματα αφού κάνετε την ερώτηση. ΔΕΝ παρέχει επίσημη εκτίμηση κινδύνου ή συμβουλές. Χρησιμοποιεί την υποδομή Gemini.',
     gqa_pdf_title: 'SylvaGIS — Αναφορά Δεδομένων AI',
     gqa_pdf_created: 'Δημιουργήθηκε:',
     gqa_pdf_question: 'Ερώτηση:',
@@ -30349,7 +30387,7 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Топографски анализи',
     gqa_title: '🔎 Задайте въпрос за тези данни',
     gqa_nav_title: 'AI Асистент за данни',
-    gqa_desc: 'Отговаря се само на въпроси относно легендата/процентните данни, показани в момента на екрана (напр. "кой клас има най-висок процент?"). НЕ дава оценка на риска или съвети. Използва инфраструктурата на Gemini.',
+    gqa_desc: 'Може да чете и описва данните за легендата/процентите на екрана; когато е наличен повече от един набор от данни (всички набори от данни, изпълнени в тази сесия, се запомнят), той съставя ПОДРОБЕН обединен доклад, който ги свързва помежду им — PDF версия на доклада (с всички стойности на класове/проценти) се изтегля автоматично след като зададете въпрос. НЕ предоставя официална оценка на риска или съвет. Използва инфраструктурата на Gemini.',
     gqa_pdf_title: 'SylvaGIS — AI Доклад за данни',
     gqa_pdf_created: 'Създадено:',
     gqa_pdf_question: 'Въпрос:',
@@ -31455,7 +31493,7 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Topoqrafik Təhlillər',
     gqa_title: '🔎 Bu Məlumat Haqqında Sual Verin',
     gqa_nav_title: 'AI Məlumat Köməkçisi',
-    gqa_desc: 'Yalnız ekranda hazırda göstərilən lejand/faiz məlumatları ilə bağlı suallara cavab verilir (məs., "ən yüksək faizə hansı sinif malikdir?"). Risk qiymətləndirməsi və ya tövsiyə VERMİR. Gemini infrastrukturundan istifadə olunur.',
+    gqa_desc: 'Ekrandakı lejand/faiz məlumatlarını oxuyub təsvir edə bilər; birdən çox məlumat dəsti mövcud olduqda (bu sessiyada işə salınan bütün məlumat dəstləri yadda saxlanılır), onları birləşdirərək ƏTRAFLI ümumi hesabat yazır — sual verildikdən sonra hesabatın PDF versiyası (bütün sinif/faiz dəyərləri ilə birlikdə) avtomatik endirilir. Rəsmi risk qiymətləndirməsi və ya tövsiyə VERMİR. Gemini infrastrukturundan istifadə olunur.',
     gqa_pdf_title: 'SylvaGIS — Süni intellekt hesabatı',
     gqa_pdf_created: 'Yaradıldı:',
     gqa_pdf_question: 'Sual:',
@@ -32000,7 +32038,7 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Topográfiai Elemzések',
     gqa_title: '🔎 Kérdezzen erről az adatról',
     gqa_nav_title: 'AI Adatasszisztens',
-    gqa_desc: 'Csak a képernyőn jelenleg megjelenített jelmagyarázat/százalék adatokra vonatkozó kérdésekre válaszol (pl. "melyik osztálynak van a legmagasabb százaléka?"). NEM ad kockázatértékelést vagy tanácsot. A Gemini infrastruktúráját használja.',
+    gqa_desc: 'Képes elolvasni és leírni a képernyőn lévő jelmagyarázat/százalék adatokat; ha egynél több adatkészlet érhető el (az ebben a munkamenetben futtatott összes adatkészlet megjegyzésre kerül), RÉSZLETES összesített jelentést készít, amely összekapcsolja őket — a jelentés PDF verziója (az összes osztály/százalék értékkel) automatikusan letöltődik a kérdés feltevése után. NEM ad hivatalos kockázatértékelést vagy tanácsot. A Gemini infrastruktúráját használja.',
     gqa_pdf_title: 'SylvaGIS — MI Adatjelentés',
     gqa_pdf_created: 'Létrehozva:',
     gqa_pdf_question: 'Kérdés:',
@@ -32544,7 +32582,7 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Топографиялық талдаулар',
     gqa_title: '🔎 Осы деректер туралы сұрақ қойыңыз',
     gqa_nav_title: 'AI Деректер Көмекшісі',
-    gqa_desc: 'Тек экранда қазір көрсетілген легенда/пайыздық деректерге қатысты сұрақтарға жауап беріледі (мысалы, "ең жоғары пайызға қандай класс ие?"). Тәуекелді бағалау немесе кеңес БЕРМЕЙДІ. Gemini инфрақұрылымы қолданылады.',
+    gqa_desc: 'Экрандағы легенда/пайыздық деректерді оқып, сипаттай алады; бірнеше деректер жиынтығы қолжетімді болғанда (осы сессияда іске қосылған барлық деректер жиынтықтары есте сақталады), оларды біріктіріп ЕГЖЕЙ-ТЕГЖЕЙЛІ жиынтық есеп жазады — сұрақ қойылғаннан кейін есептің PDF нұсқасы (барлық класс/пайыз мәндерімен бірге) автоматты түрде жүктеледі. Ресми тәуекел бағасын немесе кеңес БЕРМЕЙДІ. Gemini инфрақұрылымы қолданылады.',
     gqa_pdf_title: 'SylvaGIS — ЖИ деректер есебі',
     gqa_pdf_created: 'Құрылды:',
     gqa_pdf_question: 'Сұрақ:',
@@ -33072,7 +33110,7 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Topografische Analysen',
     gqa_title: '🔎 Stellen Sie eine Frage zu diesen Daten',
     gqa_nav_title: 'KI-Datenassistent',
-    gqa_desc: 'Es werden nur Fragen zu den aktuell angezeigten Legenden-/Prozentdaten beantwortet (z. B. "welche Klasse hat den höchsten Prozentsatz?"). Gibt KEINE Risikobewertung oder Empfehlung ab. Nutzt die Gemini-Infrastruktur.',
+    gqa_desc: 'Kann die auf dem Bildschirm angezeigten Legenden-/Prozentdaten lesen und beschreiben; wenn mehr als ein Datensatz verfügbar ist (alle in dieser Sitzung ausgeführten Datensätze werden gespeichert), erstellt es einen DETAILLIERTEN kombinierten Bericht, der sie zueinander in Beziehung setzt — ein PDF des Berichts (mit allen Klassen-/Prozentwerten) wird nach Ihrer Frage automatisch heruntergeladen. Gibt KEINE offizielle Risikobewertung oder Empfehlung ab. Nutzt die Gemini-Infrastruktur.',
     gqa_pdf_title: 'SylvaGIS — KI-Datenbericht',
     gqa_pdf_created: 'Erstellt:',
     gqa_pdf_question: 'Frage:',
@@ -33622,7 +33660,7 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Analyses topographiques',
     gqa_title: '🔎 Posez une question sur ces données',
     gqa_nav_title: 'Assistant de données IA',
-    gqa_desc: 'Seules les questions sur les données de légende/pourcentage actuellement affichées à l\'écran reçoivent une réponse (ex. "quelle classe a le pourcentage le plus élevé ?"). Ne donne PAS d\'évaluation des risques ni de conseils. Utilise l\'infrastructure Gemini.',
+    gqa_desc: 'Peut lire et décrire les données de légende/pourcentage affichées à l\'écran ; lorsque plusieurs jeux de données sont disponibles (tous les jeux de données exécutés au cours de cette session sont mémorisés), il rédige un rapport combiné DÉTAILLÉ qui les met en relation — un PDF du rapport (avec toutes les valeurs de classe/pourcentage) se télécharge automatiquement après votre question. Ne fournit PAS d\'évaluation des risques officielle ni de conseils. Utilise l\'infrastructure Gemini.',
     gqa_pdf_title: 'SylvaGIS — Rapport de données IA',
     gqa_pdf_created: 'Créé le :',
     gqa_pdf_question: 'Question :',
@@ -34172,7 +34210,7 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Análisis topográficos',
     gqa_title: '🔎 Haga una pregunta sobre estos datos',
     gqa_nav_title: 'Asistente de Datos IA',
-    gqa_desc: 'Solo se responden preguntas sobre los datos de leyenda/porcentaje mostrados actualmente en la pantalla (p. ej., "¿qué clase tiene el porcentaje más alto?"). NO proporciona evaluación de riesgos ni consejos. Utiliza la infraestructura de Gemini.',
+    gqa_desc: 'Puede leer y describir los datos de leyenda/porcentaje en pantalla; cuando hay más de un conjunto de datos disponible (se recuerdan todos los conjuntos de datos ejecutados en esta sesión), redacta un informe combinado DETALLADO que los relaciona entre sí — un PDF del informe (con todos los valores de clase/porcentaje) se descarga automáticamente después de preguntar. NO proporciona una evaluación de riesgos oficial ni asesoramiento. Utiliza la infraestructura de Gemini.',
     gqa_pdf_title: 'SylvaGIS — Informe de datos IA',
     gqa_pdf_created: 'Creado:',
     gqa_pdf_question: 'Pregunta:',
@@ -34722,7 +34760,7 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Análises topográficas',
     gqa_title: '🔎 Faça uma pergunta sobre estes dados',
     gqa_nav_title: 'Assistente de Dados IA',
-    gqa_desc: 'Somente perguntas sobre os dados de legenda/porcentagem atualmente exibidos na tela são respondidas (ex.: "qual classe tem a maior porcentagem?"). NÃO fornece avaliação de risco ou aconselhamento. Utiliza a infraestrutura do Gemini.',
+    gqa_desc: 'Pode ler e descrever os dados de legenda/porcentagem exibidos na tela; quando mais de um conjunto de dados está disponível (todos os conjuntos de dados executados nesta sessão são lembrados), ele escreve um relatório combinado DETALHADO que os relaciona entre si — um PDF do relatório (com todos os valores de classe/porcentagem) é baixado automaticamente após você perguntar. NÃO fornece uma avaliação de risco oficial ou aconselhamento. Utiliza a infraestrutura do Gemini.',
     gqa_pdf_title: 'SylvaGIS — Relatório de Dados IA',
     gqa_pdf_created: 'Criado em:',
     gqa_pdf_question: 'Pergunta:',
@@ -35272,7 +35310,7 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ التحليلات الطبوغرافية',
     gqa_title: '🔎 اطرح سؤالاً حول هذه البيانات',
     gqa_nav_title: 'مساعد بيانات الذكاء الاصطناعي',
-    gqa_desc: 'يتم الرد فقط على الأسئلة المتعلقة ببيانات المفتاح/النسبة المئوية المعروضة حالياً على الشاشة (مثل "أي فئة لديها أعلى نسبة مئوية؟"). لا يقدم تقييماً للمخاطر أو نصيحة. يستخدم بنية Gemini التحتية.',
+    gqa_desc: 'يمكنه قراءة ووصف بيانات المفتاح/النسبة المئوية المعروضة على الشاشة؛ عند توفر أكثر من مجموعة بيانات واحدة (يتم تذكر جميع مجموعات البيانات التي تم تشغيلها في هذه الجلسة)، فإنه يكتب تقريراً مجمعاً مفصلاً يربط بينها — يتم تنزيل نسخة PDF من التقرير (مع جميع قيم الفئات/النسب المئوية) تلقائياً بعد طرح السؤال. لا يقدم تقييماً رسمياً للمخاطر أو نصيحة. يستخدم بنية Gemini التحتية.',
     gqa_pdf_title: 'SylvaGIS — تقرير بيانات الذكاء الاصطناعي',
     gqa_pdf_created: 'تاريخ الإنشاء:',
     gqa_pdf_question: 'السؤال:',
@@ -35822,7 +35860,7 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ تحلیل‌های توپوگرافی',
     gqa_title: '🔎 درباره این داده سؤال بپرسید',
     gqa_nav_title: 'دستیار داده هوش مصنوعی',
-    gqa_desc: 'فقط به سؤالات مربوط به داده‌های راهنما/درصد که در حال حاضر روی صفحه نمایش داده می‌شوند پاسخ داده می‌شود (مثلاً "کدام کلاس بیشترین درصد را دارد؟"). ارزیابی ریسک یا توصیه ارائه نمی‌دهد. از زیرساخت Gemini استفاده می‌کند.',
+    gqa_desc: 'می‌تواند داده‌های راهنما/درصد روی صفحه را بخواند و توصیف کند؛ هنگامی که بیش از یک مجموعه داده در دسترس باشد (تمام مجموعه داده‌های اجرا شده در این نشست به خاطر سپرده می‌شوند)، یک گزارش ترکیبی مفصل می‌نویسد که آن‌ها را به هم مرتبط می‌کند — نسخه PDF گزارش (همراه با تمام مقادیر کلاس/درصد) پس از پرسیدن سؤال به‌طور خودکار دانلود می‌شود. ارزیابی رسمی ریسک یا توصیه ارائه نمی‌دهد. از زیرساخت Gemini استفاده می‌کند.',
     gqa_pdf_title: 'SylvaGIS — گزارش داده هوش مصنوعی',
     gqa_pdf_created: 'ایجاد شده:',
     gqa_pdf_question: 'سؤال:',
@@ -36372,7 +36410,7 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ 地形分析',
     gqa_title: '🔎 就此数据提问',
     gqa_nav_title: 'AI 数据助手',
-    gqa_desc: '仅回答与当前屏幕上显示的图例/百分比数据相关的问题（例如"哪个类别的百分比最高？"）。不提供风险评估或建议。使用 Gemini 基础设施运行。',
+    gqa_desc: '能够读取并描述屏幕上的图例/百分比数据；当有多个数据集可用时（本次会话中运行的所有数据集都会被记住），它会撰写一份详细的综合报告，将它们相互关联——提问后，报告的 PDF 版本（包含所有类别/百分比值）会自动下载。不提供正式的风险评估或建议。使用 Gemini 基础设施运行。',
     gqa_pdf_title: 'SylvaGIS — AI 数据报告',
     gqa_pdf_created: '创建时间：',
     gqa_pdf_question: '问题：',
@@ -36922,7 +36960,7 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ 地形解析',
     gqa_title: '🔎 このデータについて質問する',
     gqa_nav_title: 'AIデータアシスタント',
-    gqa_desc: '現在画面に表示されている凡例・パーセンテージデータに関する質問にのみ回答します（例:「最も高い割合のクラスはどれですか？」）。リスク評価やアドバイスは提供しません。Geminiインフラストラクチャを使用しています。',
+    gqa_desc: '画面上の凡例・パーセンテージデータを読み取り、説明できます。複数のデータセットが利用可能な場合（このセッションで実行されたすべてのデータセットが記憶されます）、それらを関連付けた詳細な統合レポートを作成します。質問後、レポートのPDF版（すべてのクラス・パーセンテージ値を含む）が自動的にダウンロードされます。正式なリスク評価やアドバイスは提供しません。Geminiインフラストラクチャを使用しています。',
     gqa_pdf_title: 'SylvaGIS — AIデータレポート',
     gqa_pdf_created: '作成日時：',
     gqa_pdf_question: '質問：',
@@ -37472,7 +37510,7 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ 지형 분석',
     gqa_title: '🔎 이 데이터에 대해 질문하기',
     gqa_nav_title: 'AI 데이터 도우미',
-    gqa_desc: '현재 화면에 표시된 범례/백분율 데이터에 관한 질문에만 답변합니다 (예: "어떤 클래스의 비율이 가장 높나요?"). 위험 평가나 조언은 제공하지 않습니다. Gemini 인프라를 사용합니다.',
+    gqa_desc: '화면에 표시된 범례/백분율 데이터를 읽고 설명할 수 있습니다. 둘 이상의 데이터 세트가 있는 경우(이 세션에서 실행된 모든 데이터 세트가 기억됨), 이를 서로 연결하는 상세한 통합 보고서를 작성합니다 — 질문 후 보고서의 PDF(모든 클래스/백분율 값 포함)가 자동으로 다운로드됩니다. 공식적인 위험 평가나 조언은 제공하지 않습니다. Gemini 인프라를 사용합니다.',
     gqa_pdf_title: 'SylvaGIS — AI 데이터 보고서',
     gqa_pdf_created: '생성일:',
     gqa_pdf_question: '질문:',
@@ -38022,7 +38060,7 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ स्थलाकृतिक विश्लेषण',
     gqa_title: '🔎 इस डेटा के बारे में प्रश्न पूछें',
     gqa_nav_title: 'एआई डेटा सहायक',
-    gqa_desc: 'केवल स्क्रीन पर वर्तमान में दिखाए गए लेजेंड/प्रतिशत डेटा से संबंधित प्रश्नों के उत्तर दिए जाते हैं (जैसे "किस वर्ग का प्रतिशत सबसे अधिक है?")। यह जोखिम आकलन या सलाह नहीं देता। यह Gemini इंफ्रास्ट्रक्चर का उपयोग करता है।',
+    gqa_desc: 'स्क्रीन पर मौजूद लेजेंड/प्रतिशत डेटा को पढ़ और वर्णित कर सकता है; जब एक से अधिक डेटा सेट उपलब्ध हों (इस सत्र में चलाए गए सभी डेटा सेट याद रखे जाते हैं), तो यह उन्हें आपस में जोड़ते हुए एक विस्तृत संयुक्त रिपोर्ट लिखता है — प्रश्न पूछने के बाद रिपोर्ट की PDF (सभी वर्ग/प्रतिशत मानों सहित) स्वतः डाउनलोड हो जाती है। यह कोई औपचारिक जोखिम आकलन या सलाह नहीं देता। यह Gemini इंफ्रास्ट्रक्चर का उपयोग करता है।',
     gqa_pdf_title: 'SylvaGIS — एआई डेटा रिपोर्ट',
     gqa_pdf_created: 'बनाया गया:',
     gqa_pdf_question: 'प्रश्न:',
@@ -38572,7 +38610,7 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Analisis Topografi',
     gqa_title: '🔎 Ajukan Pertanyaan Tentang Data Ini',
     gqa_nav_title: 'Asisten Data AI',
-    gqa_desc: 'Hanya pertanyaan tentang data legenda/persentase yang saat ini ditampilkan di layar yang akan dijawab (mis. "kelas mana yang memiliki persentase tertinggi?"). TIDAK memberikan penilaian risiko atau saran. Menggunakan infrastruktur Gemini.',
+    gqa_desc: 'Dapat membaca dan menjelaskan data legenda/persentase di layar; ketika lebih dari satu set data tersedia (semua set data yang dijalankan dalam sesi ini akan diingat), sistem menulis laporan gabungan yang RINCI yang mengaitkannya satu sama lain — PDF laporan (dengan semua nilai kelas/persentase) diunduh secara otomatis setelah Anda bertanya. TIDAK memberikan penilaian risiko resmi atau saran. Menggunakan infrastruktur Gemini.',
     gqa_pdf_title: 'SylvaGIS — Laporan Data AI',
     gqa_pdf_created: 'Dibuat:',
     gqa_pdf_question: 'Pertanyaan:',
@@ -39138,7 +39176,7 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Топографические анализы',
     gqa_title: '🔎 Задайте вопрос об этих данных',
     gqa_nav_title: 'ИИ-помощник по данным',
-    gqa_desc: 'Отвечает только на вопросы о данных легенды/процентов, отображаемых в данный момент на экране (например, "какой класс имеет наибольший процент?"). НЕ даёт оценку риска или рекомендации. Использует инфраструктуру Gemini.',
+    gqa_desc: 'Может читать и описывать данные легенды/процентов на экране; при наличии более одного набора данных (все наборы данных, запущенные в этой сессии, запоминаются), он составляет ПОДРОБНЫЙ объединённый отчёт, связывающий их между собой — PDF-версия отчёта (со всеми значениями классов/процентов) автоматически скачивается после вашего вопроса. НЕ даёт официальную оценку риска или рекомендации. Использует инфраструктуру Gemini.',
     gqa_pdf_title: 'SylvaGIS — Отчёт по данным ИИ',
     gqa_pdf_created: 'Создано:',
     gqa_pdf_question: 'Вопрос:',
@@ -39686,7 +39724,7 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ การวิเคราะห์ภูมิประเทศ',
     gqa_title: '🔎 ถามคำถามเกี่ยวกับข้อมูลนี้',
     gqa_nav_title: 'ผู้ช่วยข้อมูล AI',
-    gqa_desc: 'ตอบเฉพาะคำถามเกี่ยวกับข้อมูลตำนาน/เปอร์เซ็นต์ที่แสดงอยู่บนหน้าจอในขณะนี้เท่านั้น (เช่น "คลาสใดมีเปอร์เซ็นต์สูงสุด?") ไม่ให้การประเมินความเสี่ยงหรือคำแนะนำ ใช้โครงสร้างพื้นฐานของ Gemini',
+    gqa_desc: 'สามารถอ่านและอธิบายข้อมูลตำนาน/เปอร์เซ็นต์บนหน้าจอได้ เมื่อมีชุดข้อมูลมากกว่าหนึ่งชุด (ชุดข้อมูลทั้งหมดที่รันในเซสชันนี้จะถูกจดจำไว้) ระบบจะเขียนรายงานรวมโดยละเอียดที่เชื่อมโยงข้อมูลเหล่านั้นเข้าด้วยกัน — ไฟล์ PDF ของรายงาน (พร้อมค่าคลาส/เปอร์เซ็นต์ทั้งหมด) จะถูกดาวน์โหลดโดยอัตโนมัติหลังจากที่คุณถาม ไม่ได้ให้การประเมินความเสี่ยงอย่างเป็นทางการหรือคำแนะนำ ใช้โครงสร้างพื้นฐานของ Gemini',
     gqa_pdf_title: 'SylvaGIS — รายงานข้อมูล AI',
     gqa_pdf_created: 'สร้างเมื่อ:',
     gqa_pdf_question: 'คำถาม:',
@@ -40230,7 +40268,7 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ ভূসংস্থানিক বিশ্লেষণ',
     gqa_title: '🔎 এই ডেটা সম্পর্কে প্রশ্ন করুন',
     gqa_nav_title: 'এআই ডেটা সহায়ক',
-    gqa_desc: 'শুধুমাত্র স্ক্রিনে বর্তমানে প্রদর্শিত লেজেন্ড/শতাংশ ডেটা সম্পর্কিত প্রশ্নের উত্তর দেওয়া হয় (যেমন "কোন শ্রেণীর শতাংশ সবচেয়ে বেশি?")। এটি ঝুঁকি মূল্যায়ন বা পরামর্শ দেয় না। এটি Gemini অবকাঠামো ব্যবহার করে।',
+    gqa_desc: 'স্ক্রিনে থাকা লেজেন্ড/শতাংশ ডেটা পড়ে বর্ণনা করতে পারে; একাধিক ডেটাসেট উপলব্ধ থাকলে (এই সেশনে চালানো সমস্ত ডেটাসেট মনে রাখা হয়), এটি সেগুলোকে পরস্পর সম্পর্কিত করে একটি বিস্তারিত সম্মিলিত প্রতিবেদন লেখে — প্রশ্ন করার পর প্রতিবেদনের PDF সংস্করণ (সমস্ত শ্রেণী/শতাংশ মান সহ) স্বয়ংক্রিয়ভাবে ডাউনলোড হয়। এটি কোনো আনুষ্ঠানিক ঝুঁকি মূল্যায়ন বা পরামর্শ দেয় না। এটি Gemini অবকাঠামো ব্যবহার করে।',
     gqa_pdf_title: 'SylvaGIS — এআই ডেটা রিপোর্ট',
     gqa_pdf_created: 'তৈরি হয়েছে:',
     gqa_pdf_question: 'প্রশ্ন:',
@@ -40763,7 +40801,7 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Phân tích địa hình',
     gqa_title: '🔎 Đặt câu hỏi về dữ liệu này',
     gqa_nav_title: 'Trợ lý Dữ liệu AI',
-    gqa_desc: 'Chỉ trả lời các câu hỏi liên quan đến dữ liệu chú giải/phần trăm hiện đang hiển thị trên màn hình (ví dụ: "lớp nào có phần trăm cao nhất?"). KHÔNG đưa ra đánh giá rủi ro hoặc lời khuyên. Sử dụng hạ tầng Gemini.',
+    gqa_desc: 'Có thể đọc và mô tả dữ liệu chú giải/phần trăm trên màn hình; khi có nhiều hơn một bộ dữ liệu (tất cả các bộ dữ liệu đã chạy trong phiên này đều được ghi nhớ), hệ thống sẽ viết một báo cáo tổng hợp CHI TIẾT liên kết chúng với nhau — bản PDF của báo cáo (kèm tất cả giá trị lớp/phần trăm) sẽ tự động tải xuống sau khi bạn đặt câu hỏi. KHÔNG đưa ra đánh giá rủi ro chính thức hoặc lời khuyên. Sử dụng hạ tầng Gemini.',
     gqa_pdf_title: 'SylvaGIS — Báo cáo dữ liệu AI',
     gqa_pdf_created: 'Tạo lúc:',
     gqa_pdf_question: 'Câu hỏi:',
@@ -41332,7 +41370,7 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ ٹوپوگرافک تجزیہ',
     gqa_title: '🔎 اس ڈیٹا کے بارے میں سوال پوچھیں',
     gqa_nav_title: 'AI ڈیٹا اسسٹنٹ',
-    gqa_desc: 'صرف اسکرین پر فی الحال دکھائے گئے لیجنڈ/فیصد ڈیٹا سے متعلق سوالات کے جواب دیے جاتے ہیں (مثلاً "کس کلاس کا فیصد سب سے زیادہ ہے؟")۔ یہ خطرے کی تشخیص یا مشورہ نہیں دیتا۔ یہ Gemini انفراسٹرکچر استعمال کرتا ہے۔',
+    gqa_desc: 'اسکرین پر موجود لیجنڈ/فیصد ڈیٹا کو پڑھ اور بیان کر سکتا ہے؛ جب ایک سے زیادہ ڈیٹا سیٹس دستیاب ہوں (اس سیشن میں چلائے گئے تمام ڈیٹا سیٹس یاد رکھے جاتے ہیں)، تو یہ انہیں آپس میں جوڑتے ہوئے ایک تفصیلی مشترکہ رپورٹ لکھتا ہے — سوال پوچھنے کے بعد رپورٹ کا PDF ورژن (تمام کلاس/فیصد اقدار کے ساتھ) خودکار طور پر ڈاؤن لوڈ ہو جاتا ہے۔ یہ کوئی باضابطہ خطرے کی تشخیص یا مشورہ نہیں دیتا۔ یہ Gemini انفراسٹرکچر استعمال کرتا ہے۔',
     gqa_pdf_title: 'SylvaGIS — اے آئی ڈیٹا رپورٹ',
     gqa_pdf_created: 'تخلیق کردہ:',
     gqa_pdf_question: 'سوال:',
@@ -41885,7 +41923,7 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Analizy topograficzne',
     gqa_title: '🔎 Zadaj pytanie dotyczące tych danych',
     gqa_nav_title: 'Asystent danych AI',
-    gqa_desc: 'Odpowiadane są tylko pytania dotyczące danych legendy/procentowych aktualnie wyświetlanych na ekranie (np. "która klasa ma najwyższy procent?"). NIE podaje oceny ryzyka ani porad. Wykorzystuje infrastrukturę Gemini.',
+    gqa_desc: 'Potrafi odczytać i opisać dane legendy/procentowe widoczne na ekranie; gdy dostępny jest więcej niż jeden zestaw danych (wszystkie zestawy danych uruchomione w tej sesji są zapamiętywane), tworzy SZCZEGÓŁOWY połączony raport, który je ze sobą łączy — plik PDF raportu (ze wszystkimi wartościami klas/procentów) pobiera się automatycznie po zadaniu pytania. NIE podaje formalnej oceny ryzyka ani porad. Wykorzystuje infrastrukturę Gemini.',
     gqa_pdf_title: 'SylvaGIS — Raport danych AI',
     gqa_pdf_created: 'Utworzono:',
     gqa_pdf_question: 'Pytanie:',
@@ -42425,7 +42463,7 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Analisis Topografi',
     gqa_title: '🔎 Tanya Soalan Tentang Data Ini',
     gqa_nav_title: 'Pembantu Data AI',
-    gqa_desc: 'Hanya soalan mengenai data legenda/peratusan yang dipaparkan pada skrin ketika ini akan dijawab (cth. "kelas mana mempunyai peratusan tertinggi?"). TIDAK memberikan penilaian risiko atau nasihat. Menggunakan infrastruktur Gemini.',
+    gqa_desc: 'Boleh membaca dan menghuraikan data legenda/peratusan pada skrin; apabila lebih daripada satu set data tersedia (semua set data yang dijalankan dalam sesi ini akan diingati), ia menulis laporan gabungan TERPERINCI yang mengaitkan antara satu sama lain — PDF laporan (dengan semua nilai kelas/peratusan) dimuat turun secara automatik selepas anda bertanya. TIDAK memberikan penilaian risiko rasmi atau nasihat. Menggunakan infrastruktur Gemini.',
     gqa_pdf_title: 'SylvaGIS — Laporan Data AI',
     gqa_pdf_created: 'Dicipta:',
     gqa_pdf_question: 'Soalan:',
@@ -42973,7 +43011,7 @@ var SYLVA_TRANSLATIONS = {
       sec_topo: '🏔️ Топографиялык талдоолор',
       gqa_title: '🔎 Бул маалымат жөнүндө суроо бериңиз',
       gqa_nav_title: 'AI Маалымат Жардамчысы',
-      gqa_desc: 'Азыр экранда көрсөтүлгөн легенда/пайыз маалыматтарына гана байланыштуу суроолорго жооп берилет (мисалы, "кайсы класстын пайызы эң жогору?"). Тобокелдикти баалоо же кеңеш БЕРБЕЙТ. Gemini инфраструктурасы колдонулат.',
+      gqa_desc: 'Экрандагы легенда/пайыз маалыматтарын окуп, сүрөттөй алат; бирден köp маалымат топтому болгондо (бул сессияда иштетилген бардык маалымат топтомдору эсте сакталат), аларды бири-бирине байланыштырып КЕҢИРИ жалпы отчет жазат — суроо берилгенден кийин отчеттун PDF версиясы (бардык класс/пайыз баалуулуктары менен) автоматтык түрдө жүктөлөт. Расмий тобокелдикти баалоо же кеңеш БЕРБЕЙТ. Gemini инфраструктурасы колдонулат.',
       gqa_pdf_title: 'SylvaGIS — ЖИ маалымат отчету',
       gqa_pdf_created: 'Түзүлдү:',
       gqa_pdf_question: 'Суроо:',
@@ -43493,7 +43531,7 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Топографийн шинжилгээ',
     gqa_title: '🔎 Энэ өгөгдлийн талаар асуулт асуух',
     gqa_nav_title: 'AI Өгөгдлийн Туслах',
-    gqa_desc: 'Зөвхөн дэлгэц дээр одоо харагдаж буй домог/хувийн өгөгдөлтэй холбоотой асуултад хариулна (жишээ нь "аль анги хамгийн өндөр хувьтай вэ?"). Эрсдэлийн үнэлгээ, зөвлөмж ӨГӨХГҮЙ. Gemini дэд бүтцийг ашигладаг.',
+    gqa_desc: 'Дэлгэц дээрх домог/хувийн өгөгдлийг унших, тайлбарлах чадвартай; нэгээс олон өгөгдлийн багц байгаа тохиолдолд (энэ сесс дэх ажилласан бүх өгөгдлийн багц санагдана), тэдгээрийг хооронд нь холбосон дэлгэрэнгүй нэгдсэн тайлан бичдэг — асуулт асуусны дараа тайлангийн PDF хувилбар (бүх ангилал/хувийн утгуудын хамт) автоматаар татагдана. Албан ёсны эрсдэлийн үнэлгээ, зөвлөмж ӨГӨХГҮЙ. Gemini дэд бүтцийг ашигладаг.',
     gqa_pdf_title: 'SylvaGIS — Хиймэл оюуны тайлан',
     gqa_pdf_created: 'Үүсгэсэн:',
     gqa_pdf_question: 'Асуулт:',
@@ -44003,7 +44041,7 @@ var SYLVA_TRANSLATIONS = {
       sec_topo: '🏔️ ტოპოგრაფიული ანალიზი',
       gqa_title: '🔎 დასვით შეკითხვა ამ მონაცემების შესახებ',
       gqa_nav_title: 'AI მონაცემთა ასისტენტი',
-      gqa_desc: 'პასუხი გაიცემა მხოლოდ ეკრანზე ამჟამად ნაჩვენები ლეგენდის/პროცენტული მონაცემების შესახებ კითხვებზე (მაგ. "რომელ კლასს აქვს ყველაზე მაღალი პროცენტი?"). არ იძლევა რისკის შეფასებას ან რჩევას. იყენებს Gemini ინფრასტრუქტურას.',
+      gqa_desc: 'შეუძლია წაიკითხოს და აღწეროს ეკრანზე ნაჩვენები ლეგენდის/პროცენტული მონაცემები; როდესაც ერთზე მეტი მონაცემთა ნაკრებია ხელმისაწვდომი (ამ სესიაში გაშვებული ყველა მონაცემთა ნაკრები ინახება), ის წერს დეტალურ გაერთიანებულ ანგარიშს, რომელიც მათ ერთმანეთთან აკავშირებს — კითხვის დასმის შემდეგ ანგარიშის PDF ვერსია (ყველა კლასის/პროცენტის მნიშვნელობით) ავტომატურად ჩამოიტვირთება. არ იძლევა ოფიციალურ რისკის შეფასებას ან რჩევას. იყენებს Gemini ინფრასტრუქტურას.',
       gqa_pdf_title: 'SylvaGIS — AI მონაცემთა ანგარიში',
       gqa_pdf_created: 'შექმნილია:',
       gqa_pdf_question: 'კითხვა:',
@@ -44530,7 +44568,7 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Analisi Topografiche',
     gqa_title: '🔎 Fai una domanda su questi dati',
     gqa_nav_title: 'Assistente Dati IA',
-    gqa_desc: 'Vengono risposte solo domande relative ai dati di legenda/percentuale attualmente visualizzati sullo schermo (es. "quale classe ha la percentuale più alta?"). NON fornisce valutazioni di rischio o consigli. Utilizza l\'infrastruttura Gemini.',
+    gqa_desc: 'Può leggere e descrivere i dati di legenda/percentuale visualizzati sullo schermo; quando è disponibile più di un set di dati (tutti i set di dati eseguiti in questa sessione vengono memorizzati), scrive un rapporto combinato DETTAGLIATO che li mette in relazione tra loro — un PDF del rapporto (con tutti i valori di classe/percentuale) viene scaricato automaticamente dopo la domanda. NON fornisce una valutazione del rischio ufficiale o consigli. Utilizza l\'infrastruttura Gemini.',
     gqa_pdf_title: 'SylvaGIS — Rapporto dati IA',
     gqa_pdf_created: 'Creato:',
     gqa_pdf_question: 'Domanda:',
@@ -47293,6 +47331,7 @@ document.addEventListener('DOMContentLoaded',function(){
         tr: { next:'İleri ›', finish:'Bitir ✓', stepOf:'Adım {n} / {total}', steps: {
             userLogin:{title:'👤 Kullanıcı Girişi', desc:'Kullanıcı girişi ve oturum çıkışı bu bölümden yapılır.'},
             language:{title:'🌐 Dil Seçimi', desc:'Uygulama dilini bu menüden değiştirebilirsiniz. Mevcut dil seçeneklerini keşfedin.'},
+            aiAssistant:{title:'🤖 AI Veri Asistanı', desc:'Ekrandaki analiz sonuçları hakkında soru sorabileceğiniz yapay zeka asistanına bu düğmeden ulaşabilirsiniz. Birden fazla veri seti varsa bunları birleştirip detaylı bir rapor hazırlar ve PDF olarak indirir.'},
             linkedIn:{title:'LinkedIn', desc:'SylvaGIS resmî LinkedIn hesabına bu bölümden ulaşabilirsiniz.'},
               instagram:{title:'Instagram', desc:'SylvaGIS resmî Instagram hesabına buradan ulaşabilirsiniz.'},
             contactUs:{title:'📄 İletişim', desc:'Bilgi, görüş ve önerilerinizi bu bölümden bize iletebilirsiniz.'},            sylvaCv:{title:'SylvaGIS Belgeleri', desc:'SylvaGIS bölümünde iki PDF mevcuttur. Biri platform hakkında bilgi sunarken, diğeri uydu görüntüleri ve analizler hakkında ayrıntı vermektedir.'},
@@ -47325,6 +47364,7 @@ document.addEventListener('DOMContentLoaded',function(){
         az: { next:'İrəli ›', finish:'Bitir ✓', stepOf:'Addım {n} / {total}', steps: {
             userLogin:{title:'👤 İstifadəçi Girişi', desc:'İstifadəçi girişi və oturumu bağlama bu bölmədən edilir.'},
             language:{title:'🌐 Dil Seçimi', desc:'Tətbiq dilini bu menyudan dəyişə bilərsiniz. Mövcud dil seçimlərini araştırın.'},
+            aiAssistant:{title:'🤖 AI Məlumat Köməkçisi', desc:'Ekrandakı təhlil nəticələri haqqında sual verə biləcəyiniz süni intellekt köməkçisinə bu düymədən çata bilərsiniz. Birdən çox məlumat dəsti varsa, onları birləşdirib ətraflı hesabat hazırlayır və PDF olaraq endirir.'},
             linkedIn:{title:'LinkedIn', desc:'SylvaGIS rəsmi LinkedIn hesabına bu bölmədən çata bilərsiniz.'},
               instagram:{title:'Instagram', desc:'SylvaGIS rəsmi Instagram hesabına bu bölmədən çata bilərsiniz.'},
             contactUs:{title:'📄 Əlaqə', desc:'Məlumat, fikir və təkliflərinizi bu bölmədən bizə göndərə bilərsiniz.'},            sylvaCv:{title:'SylvaGIS Sənədləri', desc:'SylvaGIS bölməsində iki PDF mövcuddur. Biri platforma haqqında məlumat verərkən, digəri peyk görüntüləri və analizlər haqqında ətraflı məlumat verir.'},
@@ -47357,6 +47397,7 @@ document.addEventListener('DOMContentLoaded',function(){
         en: { next:'Next ›', finish:'Finish ✓', stepOf:'Step {n} of {total}', steps: {
             userLogin:{title:'👤 User Login', desc:'Log in and log out from this section.'},
             language:{title:'🌐 Language', desc:'Change the application language from this menu. Explore the available language options.'},
+            aiAssistant:{title:'🤖 AI Data Assistant', desc:'Access the AI assistant from this button to ask questions about the analysis results on screen. When more than one dataset is available, it combines them into a detailed report and downloads it as a PDF.'},
             linkedIn:{title:'LinkedIn', desc:'Visit the official SylvaGIS LinkedIn page from here.'},
               instagram:{title:'Instagram', desc:'Visit the official SylvaGIS Instagram account from here.'},
             contactUs:{title:'📄 Contact', desc:'Send us your questions, feedback and suggestions from here.'},            sylvaCv:{title:'SylvaGIS Documents', desc:'In the SylvaGIS section, there are two PDFs available. One provides information about the platform, while the other gives details about satellite imagery and analyses.'},
@@ -47389,6 +47430,7 @@ document.addEventListener('DOMContentLoaded',function(){
         de: { next:'Weiter ›', finish:'Fertig ✓', stepOf:'Schritt {n} von {total}', steps: {
             userLogin:{title:'👤 Anmelden', desc:'Anmelden und Abmelden erfolgt hier.'},
             language:{title:'🌐 Sprache', desc:'Ändern Sie die Anwendungssprache in diesem Menü.'},
+            aiAssistant:{title:'🤖 KI-Datenassistent', desc:'Über diese Schaltfläche erreichen Sie den KI-Assistenten, dem Sie Fragen zu den aktuellen Analyseergebnissen stellen können. Bei mehreren Datensätzen erstellt er einen detaillierten kombinierten Bericht und lädt ihn als PDF herunter.'},
             linkedIn:{title:'LinkedIn', desc:'Besuchen Sie die offizielle SylvaGIS-LinkedIn-Seite hier.'},
               instagram:{title:'Instagram', desc:'Besuchen Sie den offiziellen Instagram-Account von SylvaGIS hier.'},
             contactUs:{title:'📄 Kontakt', desc:'Senden Sie hier Ihre Fragen, Rückmeldungen und Vorschläge.'},            sylvaCv:{title:'SylvaGIS Dokumente', desc:'Im SylvaGIS-Bereich stehen zwei PDFs zur Verfügung. Eines informiert über die Plattform, das andere liefert Details zu Satellitenbildern und Analysen.'},
@@ -47421,6 +47463,7 @@ document.addEventListener('DOMContentLoaded',function(){
         fr: { next:'Suivant ›', finish:'Terminer ✓', stepOf:'Étape {n} sur {total}', steps: {
             userLogin:{title:'👤 Connexion', desc:'Connectez-vous ou déconnectez-vous ici.'},
             language:{title:'🌐 Langue', desc:"Changez la langue de l'application depuis ce menu."},
+            aiAssistant:{title:'🤖 Assistant de données IA', desc:"Accédez à l'assistant IA depuis ce bouton pour poser des questions sur les résultats d'analyse affichés à l'écran. S'il y a plusieurs jeux de données, il les combine en un rapport détaillé téléchargé automatiquement en PDF."},
             linkedIn:{title:'LinkedIn', desc:'Accédez à la page LinkedIn officielle de SylvaGIS ici.'},
               instagram:{title:'Instagram', desc:'Accédez au compte Instagram officiel de SylvaGIS ici.'},
             contactUs:{title:'📄 Contact', desc:'Envoyez-nous vos questions, commentaires et suggestions ici.'},            sylvaCv:{title:'Documents SylvaGIS', desc:'Dans la section SylvaGIS, deux PDF sont disponibles. L\'un fournit des informations sur la plateforme, tandis que l\'autre donne des détails sur l\'imagerie satellitaire et les analyses.'},
@@ -47453,6 +47496,7 @@ document.addEventListener('DOMContentLoaded',function(){
         es: { next:'Siguiente ›', finish:'Finalizar ✓', stepOf:'Paso {n} de {total}', steps: {
             userLogin:{title:'👤 Iniciar sesión', desc:'Inicie sesión y cierre sesión desde esta sección.'},
             language:{title:'🌐 Idioma', desc:'Cambie el idioma de la aplicación desde este menú.'},
+            aiAssistant:{title:'🤖 Asistente de Datos IA', desc:'Accede al asistente de IA desde este botón para hacer preguntas sobre los resultados del análisis en pantalla. Si hay varios conjuntos de datos, los combina en un informe detallado que se descarga como PDF.'},
             linkedIn:{title:'LinkedIn', desc:'Visita la página oficial de LinkedIn de SylvaGIS desde aquí.'},
               instagram:{title:'Instagram', desc:'Visita el perfil oficial de SylvaGIS en Instagram desde aquí.'},
             contactUs:{title:'📄 Contacto', desc:'Envíenos sus preguntas, comentarios y sugerencias desde aquí.'},            sylvaCv:{title:'Documentos SylvaGIS', desc:'En la sección SylvaGIS hay dos PDFs disponibles. Uno proporciona información sobre la plataforma, mientras que el otro ofrece detalles sobre imágenes satelitales y análisis.'},
@@ -47485,6 +47529,7 @@ document.addEventListener('DOMContentLoaded',function(){
         pt: { next:'Seguinte ›', finish:'Concluir ✓', stepOf:'Passo {n} de {total}', steps: {
             userLogin:{title:'👤 Iniciar sessão', desc:'Inicie e termine sessão a partir desta secção.'},
             language:{title:'🌐 Idioma', desc:'Mude o idioma da aplicação a partir deste menu. Explore as opções de idioma disponíveis.'},
+            aiAssistant:{title:'🤖 Assistente de Dados IA', desc:'Acesse o assistente de IA a partir deste botão para fazer perguntas sobre os resultados da análise exibidos na tela. Quando há mais de um conjunto de dados, ele os combina em um relatório detalhado e baixa automaticamente em PDF.'},
             linkedIn:{title:'LinkedIn', desc:'Visite a página oficial do SylvaGIS no LinkedIn a partir daqui.'},
               instagram:{title:'Instagram', desc:'Visite o perfil oficial do SylvaGIS no Instagram a partir daqui.'},
             contactUs:{title:'📄 Contacto', desc:'Envie-nos as suas dúvidas, comentários e sugestões a partir daqui.'},            sylvaCv:{title:'Documentos SylvaGIS', desc:'Na secção SylvaGIS estão disponíveis dois PDFs. Um fornece informações sobre a plataforma, enquanto o outro dá detalhes sobre imagens de satélite e análises.'},
@@ -47517,6 +47562,7 @@ document.addEventListener('DOMContentLoaded',function(){
         ar: { next:'التالي ›', finish:'إنهاء ✓', stepOf:'الخطوة {n} من {total}', steps: {
             userLogin:{title:'👤 تسجيل الدخول', desc:'تسجيل الدخول والخروج يتم من هنا.'},
             language:{title:'🌐 اللغة', desc:'يمكنك تغيير لغة التطبيق من هذه القائمة.'},
+            aiAssistant:{title:'🤖 مساعد البيانات الذكي', desc:'يمكنك الوصول إلى المساعد الذكي من هذا الزر لطرح أسئلة حول نتائج التحليل المعروضة على الشاشة. عند توفر أكثر من مجموعة بيانات، يقوم بدمجها في تقرير مفصل ويقوم بتنزيله كملف PDF.'},
             linkedIn:{title:'LinkedIn', desc:'زوروا الصفحة الرسمية لـ SylvaGIS على LinkedIn من هنا.'},
               instagram:{title:'Instagram', desc:'تفضّل بزيارة حساب SylvaGIS الرسمي على Instagram من هنا.'},
             contactUs:{title:'📄 اتصل بنا', desc:'أرسل لنا أسئلتك وملاحظاتك واقتراحاتك من هنا.'},            sylvaCv:{title:'وثائق SylvaGIS', desc:'في قسم SylvaGIS يتوفر ملفان PDF. أحدهما يقدم معلومات عن المنصة، بينما يقدم الآخر تفاصيل حول صور الأقمار الاصطناعية والتحليلات.'},
@@ -47549,6 +47595,7 @@ document.addEventListener('DOMContentLoaded',function(){
         fa: { next:'بعدی ›', finish:'پایان ✓', stepOf:'مرحله {n} از {total}', steps: {
             userLogin:{title:'👤 ورود کاربر', desc:'ورود و خروج از حساب از این بخش انجام می‌شود.'},
             language:{title:'🌐 زبان', desc:'زبان برنامه را از این منو تغییر دهید.'},
+            aiAssistant:{title:'🤖 دستیار هوشمند داده', desc:'از این دکمه می‌توانید به دستیار هوش مصنوعی دسترسی پیدا کنید تا درباره نتایج تحلیل روی صفحه سؤال بپرسید. در صورت وجود چند مجموعه داده، آن‌ها را در یک گزارش تفصیلی ترکیب کرده و به‌صورت PDF دانلود می‌کند.'},
             linkedIn:{title:'LinkedIn', desc:'از اینجا به صفحه رسمی لینکدین SylvaGIS دسترسی پیدا کنید.'},
               instagram:{title:'Instagram', desc:'از اینجا به حساب رسمی اینستاگرام SylvaGIS دسترسی پیدا کنید.'},
             contactUs:{title:'📄 تماس با ما', desc:'سوالات، نظرات و پیشنهادات خود را از اینجا برای ما ارسال کنید.'},            sylvaCv:{title:'اسناد SylvaGIS', desc:'در بخش SylvaGIS دو فایل PDF موجود است. یکی اطلاعاتی درباره پلتفرم ارائه می‌دهد و دیگری جزئیاتی درباره تصاویر ماهواره‌ای و تحلیل‌ها.'},
@@ -47581,6 +47628,7 @@ document.addEventListener('DOMContentLoaded',function(){
         zh: { next:'下一步 ›', finish:'完成 ✓', stepOf:'第 {n} / {total} 步', steps: {
             userLogin:{title:'👤 用户登录', desc:'在此部分登录或退出账户。'},
             language:{title:'🌐 语言', desc:'从此菜单更改应用程序语言。'},
+            aiAssistant:{title:'🤖 AI 数据助手', desc:'通过此按钮访问 AI 助手，可就屏幕上的分析结果提问。如果有多个数据集，它会将它们合并为一份详细报告并自动下载为 PDF。'},
             linkedIn:{title:'LinkedIn', desc:'从这里访问 SylvaGIS 的官方 LinkedIn 页面。'},
               instagram:{title:'Instagram', desc:'从这里访问 SylvaGIS 的官方 Instagram 账户。'},
             contactUs:{title:'📄 联系我们', desc:'从这里向我们发送您的问题、反馈和建议。'},            sylvaCv:{title:'SylvaGIS 文档', desc:'在 SylvaGIS 部分提供了两份 PDF。一份介绍平台信息，另一份提供卫星图像和分析的详细内容。'},
@@ -47613,6 +47661,7 @@ document.addEventListener('DOMContentLoaded',function(){
         ja: { next:'次へ ›', finish:'完了 ✓', stepOf:'ステップ {n} / {total}', steps: {
             userLogin:{title:'👤 ログイン', desc:'このセクションからログイン・ログアウトできます。'},
             language:{title:'🌐 言語', desc:'このメニューからアプリの言語を変更できます。'},
+            aiAssistant:{title:'🤖 AIデータアシスタント', desc:'このボタンからAIアシスタントにアクセスし、画面上の分析結果について質問できます。複数のデータセットがある場合は、それらを統合した詳細なレポートを作成し、PDFとして自動的にダウンロードします。'},
             linkedIn:{title:'LinkedIn', desc:'こちらから SylvaGIS の公式 LinkedIn ページをご覧いただけます。'},
               instagram:{title:'Instagram', desc:'こちらから SylvaGIS の公式 Instagram アカウントをご覧いただけます。'},
             contactUs:{title:'📄 お問い合わせ', desc:'ご質問、フィードバック、ご提案はこちらから送信してください。'},            sylvaCv:{title:'SylvaGIS ドキュメント', desc:'SylvaGIS セクションには 2 つの PDF が用意されています。1 つはプラットフォームの情報を提供し、もう 1 つは衛星画像と分析の詳細を説明します。'},
@@ -47645,6 +47694,7 @@ document.addEventListener('DOMContentLoaded',function(){
         ko: { next:'다음 ›', finish:'완료 ✓', stepOf:'{n} / {total} 단계', steps: {
             userLogin:{title:'👤 사용자 로그인', desc:'이 섹션에서 로그인 및 로그아웃합니다.'},
             language:{title:'🌐 언어', desc:'이 메뉴에서 애플리케이션 언어를 변경합니다.'},
+            aiAssistant:{title:'🤖 AI 데이터 도우미', desc:'이 버튼을 통해 화면의 분석 결과에 대해 질문할 수 있는 AI 도우미에 접근할 수 있습니다. 여러 데이터 세트가 있는 경우 이를 결합하여 상세한 보고서를 작성하고 PDF로 자동 다운로드합니다.'},
             linkedIn:{title:'LinkedIn', desc:'이 섹션에서 SylvaGIS 공식 LinkedIn 페이지를 방문하세요.'},
               instagram:{title:'Instagram', desc:'이 섹션에서 SylvaGIS 공식 Instagram 계정을 방문하세요.'},
             contactUs:{title:'📄 문의하기', desc:'질문, 피드백, 제안을 여기서 보내주세요.'},            sylvaCv:{title:'SylvaGIS 문서', desc:'SylvaGIS 섹션에는 두 개의 PDF가 있습니다. 하나는 플랫폼에 대한 정보를 제공하고, 다른 하나는 위성 이미지 및 분석에 대한 세부 정보를 제공합니다.'},
@@ -47677,6 +47727,7 @@ document.addEventListener('DOMContentLoaded',function(){
         hi: { next:'आगे ›', finish:'समाप्त ✓', stepOf:'चरण {n} / {total}', steps: {
             userLogin:{title:'👤 उपयोगकर्ता लॉगिन', desc:'यहाँ से लॉगिन और लॉगआउट करें।'},
             language:{title:'🌐 भाषा', desc:'इस मेनू से एप्लिकेशन की भाषा बदलें।'},
+            aiAssistant:{title:'🤖 एआई डेटा सहायक', desc:'इस बटन से एआई सहायक तक पहुँचें और स्क्रीन पर मौजूद विश्लेषण परिणामों के बारे में प्रश्न पूछें। यदि एक से अधिक डेटा सेट उपलब्ध हों, तो यह उन्हें मिलाकर एक विस्तृत रिपोर्ट तैयार करता है और उसे PDF के रूप में डाउनलोड करता है।'},
             linkedIn:{title:'LinkedIn', desc:'यहाँ से SylvaGIS के आधिकारिक LinkedIn पेज पर जाएँ।'},
               instagram:{title:'Instagram', desc:'यहाँ से SylvaGIS के आधिकारिक Instagram खाते पर जाएँ।'},
             contactUs:{title:'📄 संपर्क करें', desc:'यहाँ से अपने प्रश्न, सुझाव और विचार हमें भेजें।'},            sylvaCv:{title:'SylvaGIS दस्तावेज़', desc:'SylvaGIS अनुभाग में दो PDF उपलब्ध हैं। एक प्लेटफ़ॉर्म के बारे में जानकारी प्रदान करता है, जबकि दूसरा उपग्रह छवियों और विश्लेषणों के बारे में विवरण देता है।'},
@@ -47709,6 +47760,7 @@ document.addEventListener('DOMContentLoaded',function(){
         id: { next:'Lanjut ›', finish:'Selesai ✓', stepOf:'Langkah {n} dari {total}', steps: {
             userLogin:{title:'👤 Masuk', desc:'Login dan logout dilakukan dari bagian ini.'},
             language:{title:'🌐 Bahasa', desc:'Ubah bahasa aplikasi dari menu ini.'},
+            aiAssistant:{title:'🤖 Asisten Data AI', desc:'Akses asisten AI dari tombol ini untuk mengajukan pertanyaan tentang hasil analisis di layar. Jika ada lebih dari satu set data, asisten akan menggabungkannya menjadi laporan rinci dan mengunduhnya sebagai PDF.'},
             linkedIn:{title:'LinkedIn', desc:'Kunjungi halaman LinkedIn resmi SylvaGIS dari sini.'},
               instagram:{title:'Instagram', desc:'Kunjungi akun Instagram resmi SylvaGIS dari sini.'},
             contactUs:{title:'📄 Kontak', desc:'Kirimkan pertanyaan, masukan, dan saran Anda dari sini.'},            sylvaCv:{title:'Dokumen SylvaGIS', desc:'Di bagian SylvaGIS tersedia dua PDF. Satu memberikan informasi tentang platform, sementara yang lain memberikan detail tentang citra satelit dan analisis.'},
@@ -47741,6 +47793,7 @@ document.addEventListener('DOMContentLoaded',function(){
         ru: { next:'Далее ›', finish:'Завершить ✓', stepOf:'Шаг {n} из {total}', steps: {
             userLogin:{title:'👤 Вход пользователя', desc:'Вход и выход из системы выполняются в этом разделе.'},
             language:{title:'🌐 Язык', desc:'Измените язык приложения в этом меню. Ознакомьтесь с доступными вариантами языка.'},
+            aiAssistant:{title:'🤖 ИИ-помощник по данным', desc:'Откройте ИИ-помощника с помощью этой кнопки, чтобы задавать вопросы о результатах анализа на экране. Если доступно несколько наборов данных, он объединяет их в подробный отчёт и автоматически скачивает его в формате PDF.'},
             linkedIn:{title:'LinkedIn', desc:'Посетите официальную страницу SylvaGIS в LinkedIn отсюда.'},
               instagram:{title:'Instagram', desc:'Посетите официальный аккаунт SylvaGIS в Instagram отсюда.'},
             contactUs:{title:'📄 Контакты', desc:'Отправьте нам ваши вопросы, отзывы и предложения отсюда.'},            sylvaCv:{title:'Документы SylvaGIS', desc:'В разделе SylvaGIS доступны два PDF. Один содержит информацию о платформе, а другой — подробности о спутниковых снимках и анализах.'},
@@ -47773,6 +47826,7 @@ document.addEventListener('DOMContentLoaded',function(){
         th: { next:'ถัดไป ›', finish:'เสร็จสิ้น ✓', stepOf:'ขั้นตอน {n} / {total}', steps: {
             userLogin:{title:'👤 เข้าสู่ระบบ', desc:'เข้าสู่ระบบและออกจากระบบได้จากส่วนนี้'},
             language:{title:'🌐 ภาษา', desc:'เปลี่ยนภาษาของแอปพลิเคชันจากเมนูนี้ สำรวจตัวเลือกภาษาที่มีอยู่'},
+            aiAssistant:{title:'🤖 ผู้ช่วยข้อมูล AI', desc:'เข้าถึงผู้ช่วย AI จากปุ่มนี้เพื่อถามคำถามเกี่ยวกับผลการวิเคราะห์บนหน้าจอ หากมีชุดข้อมูลมากกว่าหนึ่งชุด ระบบจะรวมเข้าด้วยกันเป็นรายงานโดยละเอียดและดาวน์โหลดเป็น PDF โดยอัตโนมัติ'},
             linkedIn:{title:'LinkedIn', desc:'เยี่ยมชมหน้า LinkedIn ทางการของ SylvaGIS ได้จากที่นี่'},
               instagram:{title:'Instagram', desc:'เยี่ยมชมบัญชี Instagram ทางการของ SylvaGIS ได้จากที่นี่'},
             contactUs:{title:'📄 ติดต่อ', desc:'ส่งคำถาม ความคิดเห็น และข้อเสนอแนะของคุณได้จากที่นี่'},            sylvaCv:{title:'เอกสาร SylvaGIS', desc:'ในส่วน SylvaGIS มี PDF สองฉบับ ฉบับหนึ่งให้ข้อมูลเกี่ยวกับแพลตฟอร์ม ส่วนอีกฉบับให้รายละเอียดเกี่ยวกับภาพถ่ายดาวเทียมและการวิเคราะห์'},
@@ -47805,6 +47859,7 @@ document.addEventListener('DOMContentLoaded',function(){
         bn: { next:'পরবর্তী ›', finish:'সম্পন্ন ✓', stepOf:'ধাপ {n} / {total}', steps: {
             userLogin:{title:'👤 ব্যবহারকারী লগইন', desc:'এই অংশ থেকে লগইন এবং লগআউট করুন।'},
             language:{title:'🌐 ভাষা', desc:'এই মেনু থেকে অ্যাপ্লিকেশনের ভাষা পরিবর্তন করুন। উপলব্ধ ভাষার বিকল্পগুলো দেখুন।'},
+            aiAssistant:{title:'🤖 এআই ডেটা সহকারী', desc:'স্ক্রিনে থাকা বিশ্লেষণ ফলাফল সম্পর্কে প্রশ্ন করতে এই বোতাম থেকে এআই সহকারীতে প্রবেশ করুন। একাধিক ডেটাসেট থাকলে সেগুলো একত্র করে একটি বিস্তারিত প্রতিবেদন তৈরি করে এবং স্বয়ংক্রিয়ভাবে PDF হিসেবে ডাউনলোড করে।'},
             linkedIn:{title:'LinkedIn', desc:'এখান থেকে SylvaGIS-এর অফিসিয়াল LinkedIn পেজ দেখুন।'},
               instagram:{title:'Instagram', desc:'এখান থেকে SylvaGIS-এর অফিসিয়াল Instagram অ্যাকাউন্ট দেখুন।'},
             contactUs:{title:'📄 যোগাযোগ', desc:'এখান থেকে আমাদের কাছে আপনার প্রশ্ন, মতামত ও পরামর্শ পাঠান।'},            sylvaCv:{title:'SylvaGIS নথি', desc:'SylvaGIS বিভাগে দুটি PDF পাওয়া যায়। একটি প্ল্যাটফর্ম সম্পর্কে তথ্য দেয়, অন্যটি স্যাটেলাইট চিত্র ও বিশ্লেষণ সম্পর্কে বিস্তারিত দেয়।'},
@@ -47837,6 +47892,7 @@ document.addEventListener('DOMContentLoaded',function(){
         vi: { next:'Tiếp theo ›', finish:'Hoàn tất ✓', stepOf:'Bước {n} / {total}', steps: {
             userLogin:{title:'👤 Đăng nhập', desc:'Đăng nhập và đăng xuất được thực hiện từ phần này.'},
             language:{title:'🌐 Ngôn ngữ', desc:'Thay đổi ngôn ngữ ứng dụng từ menu này. Khám phá các tùy chọn ngôn ngữ hiện có.'},
+            aiAssistant:{title:'🤖 Trợ lý Dữ liệu AI', desc:'Truy cập trợ lý AI từ nút này để đặt câu hỏi về kết quả phân tích trên màn hình. Nếu có nhiều bộ dữ liệu, trợ lý sẽ kết hợp chúng thành một báo cáo chi tiết và tự động tải xuống dưới dạng PDF.'},
             linkedIn:{title:'LinkedIn', desc:'Truy cập trang LinkedIn chính thức của SylvaGIS từ đây.'},
               instagram:{title:'Instagram', desc:'Truy cập tài khoản Instagram chính thức của SylvaGIS từ đây.'},
             contactUs:{title:'📄 Liên hệ', desc:'Gửi câu hỏi, phản hồi và góp ý của bạn cho chúng tôi từ đây.'},            sylvaCv:{title:'Tài liệu SylvaGIS', desc:'Trong phần SylvaGIS có hai tệp PDF. Một tệp cung cấp thông tin về nền tảng, còn tệp kia cung cấp thông tin chi tiết về hình ảnh vệ tinh và phân tích.'},
@@ -47869,6 +47925,7 @@ document.addEventListener('DOMContentLoaded',function(){
         ur: { next:'اگلا ›', finish:'مکمل ✓', stepOf:'مرحلہ {n} از {total}', steps: {
             userLogin:{title:'👤 لاگ ان', desc:'لاگ ان اور لاگ آؤٹ یہاں سے کیا جاتا ہے۔'},
             language:{title:'🌐 زبان', desc:'اس مینو سے ایپلیکیشن کی زبان تبدیل کریں۔'},
+            aiAssistant:{title:'🤖 اے آئی ڈیٹا اسسٹنٹ', desc:'اس بٹن سے اے آئی اسسٹنٹ تک رسائی حاصل کریں تاکہ اسکرین پر موجود تجزیہ نتائج کے بارے میں سوالات پوچھ سکیں۔ اگر ایک سے زیادہ ڈیٹا سیٹس موجود ہوں تو یہ انہیں ملا کر ایک تفصیلی رپورٹ تیار کرتا ہے اور اسے PDF کے طور پر خودکار طریقے سے ڈاؤن لوڈ کرتا ہے۔'},
             linkedIn:{title:'LinkedIn', desc:'یہاں سے SylvaGIS کا سرکاری LinkedIn صفحہ دیکھیں۔'},
               instagram:{title:'Instagram', desc:'یہاں سے SylvaGIS کا سرکاری Instagram اکاؤنٹ دیکھیں۔'},
             contactUs:{title:'📄 رابطہ کریں', desc:'اپنے سوالات، مشورے اور تجاویز یہاں سے بھیجیں۔'},            sylvaCv:{title:'SylvaGIS دستاویزات', desc:'SylvaGIS حصے میں دو PDF دستیاب ہیں۔ ایک پلیٹ فارم کے بارے میں معلومات فراہم کرتا ہے جبکہ دوسرا سیٹلائٹ تصاویر اور تجزیوں کی تفصیل دیتا ہے۔'},
@@ -47901,6 +47958,7 @@ document.addEventListener('DOMContentLoaded',function(){
         pl: { next:'Dalej ›', finish:'Zakończ ✓', stepOf:'Krok {n} z {total}', steps: {
             userLogin:{title:'👤 Logowanie', desc:'Logowanie i wylogowywanie odbywa się w tej sekcji.'},
             language:{title:'🌐 Język', desc:'Zmień język aplikacji w tym menu. Odkryj dostępne opcje językowe.'},
+            aiAssistant:{title:'🤖 Asystent Danych AI', desc:'Za pomocą tego przycisku uzyskaj dostęp do asystenta AI, aby zadawać pytania dotyczące wyników analizy widocznych na ekranie. Jeśli dostępny jest więcej niż jeden zestaw danych, asystent łączy je w szczegółowy raport i automatycznie pobiera go jako plik PDF.'},
             linkedIn:{title:'LinkedIn', desc:'Odwiedź oficjalną stronę SylvaGIS na LinkedIn stąd.'},
               instagram:{title:'Instagram', desc:'Odwiedź oficjalne konto SylvaGIS na Instagramie stąd.'},
             contactUs:{title:'📄 Kontakt', desc:'Wyślij nam swoje pytania, opinie i sugestie stąd.'},            sylvaCv:{title:'Dokumenty SylvaGIS', desc:'W sekcji SylvaGIS dostępne są dwa pliki PDF. Jeden zawiera informacje o platformie, a drugi szczegóły dotyczące zobrazowań satelitarnych i analiz.'},
@@ -47933,6 +47991,7 @@ document.addEventListener('DOMContentLoaded',function(){
         ms: { next:'Seterusnya ›', finish:'Selesai ✓', stepOf:'Langkah {n} daripada {total}', steps: {
             userLogin:{title:'👤 Log Masuk Pengguna', desc:'Log masuk dan log keluar dilakukan dari bahagian ini.'},
             language:{title:'🌐 Pemilihan Bahasa', desc:'Tukar bahasa aplikasi daripada menu ini. Terokai pilihan bahasa yang tersedia.'},
+            aiAssistant:{title:'🤖 Pembantu Data AI', desc:'Akses pembantu AI daripada butang ini untuk bertanya soalan mengenai hasil analisis pada skrin. Jika terdapat lebih daripada satu set data, ia akan menggabungkannya menjadi laporan terperinci dan memuat turunnya sebagai PDF secara automatik.'},
             linkedIn:{title:'LinkedIn', desc:'Lawati laman LinkedIn rasmi SylvaGIS dari sini.'},
               instagram:{title:'Instagram', desc:'Lawati akaun Instagram rasmi SylvaGIS dari sini.'},
             contactUs:{title:'📄 Hubungi Kami', desc:'Hantarkan soalan, maklum balas dan cadangan anda kepada kami dari sini.'},            sylvaCv:{title:'Dokumen SylvaGIS', desc:'Dalam bahagian SylvaGIS terdapat dua PDF. Satu memberikan maklumat tentang platform, manakala satu lagi memberikan butiran tentang imej satelit dan analisis.'},
@@ -47965,6 +48024,7 @@ document.addEventListener('DOMContentLoaded',function(){
         el: { next:'Επόμενο ›', finish:'Τέλος ✓', stepOf:'Βήμα {n} από {total}', steps: {
             userLogin:{title:'👤 Σύνδεση Χρήστη', desc:'Η σύνδεση και η αποσύνδεση χρήστη γίνονται από αυτή την ενότητα.'},
             language:{title:'🌐 Γλώσσα', desc:'Αλλάξτε τη γλώσσα της εφαρμογής από αυτό το μενού. Εξερευνήστε τις διαθέσιμες επιλογές γλώσσας.'},
+            aiAssistant:{title:'🤖 Βοηθός Δεδομένων AI', desc:'Αποκτήστε πρόσβαση στον βοηθό AI από αυτό το κουμπί για να κάνετε ερωτήσεις σχετικά με τα αποτελέσματα ανάλυσης στην οθόνη. Εάν υπάρχουν περισσότερα από ένα σύνολα δεδομένων, τα συνδυάζει σε μια λεπτομερή αναφορά και την κατεβάζει αυτόματα ως PDF.'},
             linkedIn:{title:'LinkedIn', desc:'Επισκεφθείτε την επίσημη σελίδα LinkedIn του SylvaGIS από εδώ.'},
               instagram:{title:'Instagram', desc:'Επισκεφθείτε τον επίσημο λογαριασμό Instagram του SylvaGIS από εδώ.'},
             contactUs:{title:'📄 Επικοινωνία', desc:'Στείλτε μας τις ερωτήσεις, τα σχόλια και τις προτάσεις σας από εδώ.'},            sylvaCv:{title:'Έγγραφα SylvaGIS', desc:'Στην ενότητα SylvaGIS υπάρχουν δύο PDF. Το ένα παρέχει πληροφορίες για την πλατφόρμα, ενώ το άλλο δίνει λεπτομέρειες για δορυφορικές εικόνες και αναλύσεις.'},
@@ -47997,6 +48057,7 @@ document.addEventListener('DOMContentLoaded',function(){
         bg: { next:'Напред ›', finish:'Край ✓', stepOf:'Стъпка {n} от {total}', steps: {
             userLogin:{title:'👤 Вход на потребител', desc:'Влизането и излизането от системата се извършват от тази секция.'},
             language:{title:'🌐 Език', desc:'Сменете езика на приложението от това меню. Разгледайте наличните езикови опции.'},
+            aiAssistant:{title:'🤖 AI Помощник за данни', desc:'Отворете AI помощника от този бутон, за да задавате въпроси относно резултатите от анализа на екрана. Ако има повече от един набор от данни, той ги обединява в подробен доклад и го изтегля автоматично като PDF.'},
             linkedIn:{title:'LinkedIn', desc:'Посетете официалната LinkedIn страница на SylvaGIS оттук.'},
               instagram:{title:'Instagram', desc:'Посетете официалния Instagram акаунт на SylvaGIS оттук.'},
             contactUs:{title:'📄 Контакти', desc:'Изпратете ни вашите въпроси, отзиви и предложения оттук.'},            sylvaCv:{title:'Документи SylvaGIS', desc:'В раздела SylvaGIS са налични два PDF. Единият предоставя информация за платформата, а другият дава подробности за сателитни снимки и анализи.'},
@@ -48029,6 +48090,7 @@ document.addEventListener('DOMContentLoaded',function(){
         kk: { next:'Келесі ›', finish:'Аяқтау ✓', stepOf:'{n} / {total} қадам', steps: {
             userLogin:{title:'👤 Жүйеге кіру', desc:'Кіру және шығу осы бөлімнен жүзеге асырылады.'},
             language:{title:'🌐 Тіл', desc:'Қолданба тілін осы мәзірден өзгертуге болады.'},
+            aiAssistant:{title:'🤖 AI Деректер көмекшісі', desc:'Экрандағы талдау нәтижелері туралы сұрақтар қою үшін осы түйме арқылы AI көмекшісіне кіріңіз. Бірнеше деректер жиынтығы болса, оларды біріктіріп егжей-тегжейлі есеп жасайды және оны PDF түрінде автоматты түрде жүктейді.'},
             linkedIn:{title:'LinkedIn', desc:'SylvaGIS-тің ресми LinkedIn бетіне осы жерден кіруге болады.'},
               instagram:{title:'Instagram', desc:'SylvaGIS-тің ресми Instagram бетіне осы жерден кіруге болады.'},
             contactUs:{title:'📄 Байланыс', desc:'Сұрақтарыңызды, пікірлеріңіз бен ұсыныстарыңызды осы жерден жіберіңіз.'},            sylvaCv:{title:'SylvaGIS Құжаттары', desc:'SylvaGIS бөлімінде екі PDF қол жетімді. Бірі платформа туралы ақпарат береді, екіншісі жерсерік суреттері мен талдаулар туралы мәліметтер береді.'},
@@ -48061,6 +48123,7 @@ document.addEventListener('DOMContentLoaded',function(){
         hu: { next:'Következő ›', finish:'Befejezés ✓', stepOf:'{n}. lépés / {total}', steps: {
             userLogin:{title:'👤 Felhasználói Bejelentkezés', desc:'A bejelentkezés és kijelentkezés ebben a szekcióban végezhető el.'},
             language:{title:'🌐 Nyelv', desc:'Az alkalmazás nyelvét ebből a menüből módosíthatja. Nézze át az elérhető nyelvi lehetőségeket.'},
+            aiAssistant:{title:'🤖 AI Adatasszisztens', desc:'Ezzel a gombbal érheti el az AI asszisztenst, amelynek kérdéseket tehet fel a képernyőn megjelenő elemzési eredményekről. Ha több adatkészlet is elérhető, ezeket egyesítve részletes jelentést készít, és automatikusan PDF formátumban tölti le.'},
             linkedIn:{title:'LinkedIn', desc:'Innen érheti el a SylvaGIS hivatalos LinkedIn oldalát.'},
               instagram:{title:'Instagram', desc:'Innen érheti el a SylvaGIS hivatalos Instagram fiókját.'},
             contactUs:{title:'📄 Kapcsolat', desc:'Innen küldheti el nekünk kérdéseit, visszajelzéseit és javaslatait.'},            sylvaCv:{title:'SylvaGIS Dokumentumok', desc:'A SylvaGIS szekcióban két PDF érhető el. Az egyik a platformról nyújt információt, a másik a műholdképekről és elemzésekről ad részleteket.'},
@@ -48093,6 +48156,7 @@ document.addEventListener('DOMContentLoaded',function(){
         uz: { next:'Keyingi ›', finish:'Tugatish ✓', stepOf:'{n} / {total}-qadam', steps: {
             userLogin:{title:'👤 Foydalanuvchi kirishi', desc:'Kirish va chiqish shu boʻlimdan amalga oshiriladi.'},
             language:{title:'🌐 Til', desc:'Ilova tilini shu menyudan oʻzgartirishingiz mumkin. Mavjud til variantlarini koʻrib chiqing.'},
+            aiAssistant:{title:'🤖 AI Maʼlumot Yordamchisi', desc:'Ushbu tugma orqali ekrandagi tahlil natijalari boʻyicha savollar berishingiz mumkin boʻlgan AI yordamchisiga kirishingiz mumkin. Bir nechta maʼlumotlar toʻplami mavjud boʻlsa, ularni birlashtirib batafsil hisobot tayyorlaydi va uni PDF sifatida avtomatik yuklab oladi.'},
             linkedIn:{title:'LinkedIn', desc:'SylvaGIS-ning rasmiy LinkedIn sahifasiga shu yerdan tashrif buyuring.'},
               instagram:{title:'Instagram', desc:'SylvaGIS-ning rasmiy Instagram sahifasiga shu yerdan tashrif buyuring.'},
             contactUs:{title:'📄 Aloqa', desc:'Savol, fikr-mulohaza va takliflaringizni shu yerdan bizga yuborishingiz mumkin.'},            sylvaCv:{title:'SylvaGIS Hujjatlari', desc:'SylvaGIS bo\'limida ikkita PDF mavjud. Biri platforma haqida ma\'lumot beradi, ikkinchisi esa sun\'iy yo\'ldosh tasvirlari va tahlillar haqida batafsil ma\'lumot beradi.'},
@@ -48125,6 +48189,7 @@ document.addEventListener('DOMContentLoaded',function(){
         ky: { next:'Кийинки ›', finish:'Аяктоо ✓', stepOf:'{n} / {total}-кадам', steps: {
               userLogin:{title:'👤 Колдонуучу кирүүсү', desc:'Кирүү жана чыгуу бул бөлүмдөн жүзөгө ашырылат.'},
               language:{title:'🌐 Тил', desc:'Колдонмо тилин бул менюдан өзгөртө аласыз.'},
+              aiAssistant:{title:'🤖 AI Дайындар жардамчысы', desc:'Экрандагы талдоо жыйынтыктары боюнча суроолорду бере турган AI жардамчысына бул баскыч аркылуу кириңиз. Бир нече дайындар топтому болсо, аларды бириктирип кеңири отчет даярдайт жана аны PDF түрүндө автоматтык түрдө жүктөйт.'},
               linkedIn:{title:'LinkedIn', desc:'SylvaGIS нын расмий LinkedIn баракчасы.'},
               instagram:{title:'Instagram', desc:'SylvaGIS нын расмий Instagram баракчасы.'},
               contactUs:{title:'📄 Байланыш', desc:'Суроолоруңузду жана пикирлериңизди бизге жөнөтүңүз.'},
@@ -48158,6 +48223,7 @@ document.addEventListener('DOMContentLoaded',function(){
         mn: { next:'Дараах ›', finish:'Дуусгах ✓', stepOf:'{n} / {total}-р алхам', steps: {
               userLogin:{title:'👤 Хэрэглэгч нэвтрэх', desc:'Нэвтрэх болон гарах үйлдлийг энэ хэсгээс гүйцэтгэнэ.'},
               language:{title:'🌐 Хэл', desc:'Аппын хэлийг энэ цэснээс өөрчилж болно.'},
+              aiAssistant:{title:'🤖 AI Мэдээллийн туслах', desc:'Дэлгэц дээрх дүн шинжилгээний үр дүнгийн талаар асуулт асуух AI туслахад энэ товчлуураар хандаарай. Хэрэв нэгээс олон өгөгдлийн багц байвал тэдгээрийг нэгтгэн дэлгэрэнгүй тайлан бэлтгэж, PDF хэлбэрээр автоматаар татаж авдаг.'},
               linkedIn:{title:'LinkedIn', desc:'SylvaGIS-ийн албан ёсны LinkedIn хуудас.'},
               instagram:{title:'Instagram', desc:'SylvaGIS-ийн албан ёсны Instagram хуудас.'},
               contactUs:{title:'📄 Холбоо барих', desc:'Асуулт, санал хүсэлтээ бидэнд энд явуулна уу.'},              sylvaCv:{title:'SylvaGIS Баримт бичгүүд', desc:'SylvaGIS хэсэгт хоёр PDF байна. Нэг нь платформын тухай мэдээлэл өгдөг бол нөгөө нь хиймэл дагуулын зураг болон дүн шинжилгээний дэлгэрэнгүйг өгдөг.'},
@@ -48190,6 +48256,7 @@ document.addEventListener('DOMContentLoaded',function(){
         ka: { next:'შემდეგი ›', finish:'დასრულება ✓', stepOf:'ნაბიჯი {n} / {total}', steps: {
               userLogin:{title:'👤 შესვლა', desc:'შესვლა და გასვლა ამ განყოფილებიდან ხდება.'},
               language:{title:'🌐 ენა', desc:'განაცხადის ენა ამ მენიუდან შეგიძლიათ შეცვალოთ.'},
+              aiAssistant:{title:'🤖 AI მონაცემთა ასისტენტი', desc:'ამ ღილაკიდან შეგიძლიათ მიაწვდოთ AI ასისტენტს კითხვები ეკრანზე გამოსახული ანალიზის შედეგების შესახებ. თუ ერთზე მეტი მონაცემთა ნაკრებია ხელმისაწვდომი, ის აერთიანებს მათ დეტალურ ანგარიშად და ავტომატურად ჩამოტვირთავს PDF ფორმატში.'},
               linkedIn:{title:'LinkedIn', desc:'SylvaGIS-ის ოფიციალური LinkedIn გვერდი.'},
               instagram:{title:'Instagram', desc:'SylvaGIS-ის ოფიციალური Instagram გვერდი.'},
               contactUs:{title:'📄 კონტაქტი', desc:'კითხვები, შენიშვნები და წინადადებები გამოგვიგზავნეთ აქ.'},              sylvaCv:{title:'SylvaGIS დოკუმენტები', desc:'SylvaGIS სექციაში ორი PDF-ია ხელმისაწვდომი. ერთი პლატფორმის შესახებ ინფორმაციას გვაწვდის, მეორე კი თანამგზავრულ სურათებსა და ანალიზებს ეხება.'},
@@ -48222,6 +48289,7 @@ document.addEventListener('DOMContentLoaded',function(){
         it: { next:'Avanti ›', finish:'Fine ✓', stepOf:'Passaggio {n} di {total}', steps: {
             userLogin:{title:'👤 Accesso Utente', desc:"L'accesso e la disconnessione utente avvengono da questa sezione."},
             language:{title:'🌐 Lingua', desc:"Cambia la lingua dell'applicazione da questo menu. Esplora le opzioni di lingua disponibili."},
+            aiAssistant:{title:'🤖 Assistente Dati IA', desc:"Accedi all'assistente IA da questo pulsante per porre domande sui risultati dell'analisi visualizzati sullo schermo. Se sono disponibili più set di dati, li combina in un rapporto dettagliato e lo scarica automaticamente in PDF."},
             linkedIn:{title:'LinkedIn', desc:'Visita la pagina LinkedIn ufficiale di SylvaGIS da qui.'},
               instagram:{title:'Instagram', desc:'Visita il profilo Instagram ufficiale di SylvaGIS da qui.'},
             contactUs:{title:'📄 Contatto', desc:'Inviaci le tue domande, feedback e suggerimenti da qui.'},            sylvaCv:{title:'Documenti SylvaGIS', desc:'Nella sezione SylvaGIS sono disponibili due PDF. Uno fornisce informazioni sulla piattaforma, mentre l\'altro dà dettagli sulle immagini satellitari e le analisi.'},
@@ -48277,7 +48345,13 @@ document.addEventListener('DOMContentLoaded',function(){
           // Step 1 — Language selector
           { id: 'language', sel: ['#lang-dropdown-wrapper'] },
 
-          // Step 2 — LinkedIn
+          // Step 2 — AI Data Assistant (robot button). Only ONE robot icon
+          // is ever visible at a time (desktop nav vs. mobile nav-controls
+          // variant, selected automatically by the tour based on which one
+          // is actually rendered at the current breakpoint).
+          { id: 'aiAssistant', sel: ['#nav-gemini-btn', '#mnc-gemini-btn'] },
+
+          // Step 3 — LinkedIn
           { id: 'linkedIn', sel: ['#btn-linkedin'],
             before: function () {
                 var m = document.getElementById('lang-menu');
