@@ -2198,7 +2198,7 @@ def _roi_center_lonlat(roi_coords):
 # için bu sabit eklendi. Her yeni pakette bu sayı artırılmalı; canlı
 # /api/ping yanıtında bu sayı görünüyorsa o paketin TÜM kod değişiklikleri
 # kesinlikle yayındadır.
-SYLVA_SYMBOLOGY_PAKET = 87
+SYLVA_SYMBOLOGY_PAKET = 88
 
 LULC_CLASS_DEFS = {
     'LULC': [  # Google Dynamic World V1 — label 0..8
@@ -8007,21 +8007,69 @@ def _rgb_scene_metadata(data, roi, image, ds):
 # en az bulutlu GERÇEK sahne (Image ID + tarih + bulutluluk) bulunup
 # 'gallery' dizisinde döndürülür — istemci bunu üstteki uydu görüntü
 # galerisine yazar ve kullanıcı o periyotlar arasında geçiş yapabilir.
-def _sylva_period_ranges(start_year, end_year, period):
-    """Başlangıç/bitiş yılı ve periyot tipine göre (label, startDate, endDate)
-    üçlülerinden oluşan sıralı bir liste üretir. 'endDate' üst sınır HARİÇ
-    (GEE filterDate ile uyumlu — bir sonraki periyodun ilk günü)."""
+def _sylva_period_ranges(start_year, end_year, period, months=None):
+    """Başlangıç/bitiş yılı, periyot tipi VE (varsa) seçili aylara göre
+    (label, startDate, endDate) üçlülerinden oluşan sıralı bir liste üretir.
+    'endDate' üst sınır HARİÇ (GEE filterDate ile uyumlu — bir sonraki
+    periyodun/ayın ilk günü).
+
+    months: 1-12 arası tam sayı listesi (bkz. _parse_months_param) ya da
+    None/boş — None/boş HER ZAMAN "tüm aylar dahil, ay filtresi yok" demektir.
+
+    🛠️ BUG FİX (Paket 88 — "2020-2022 aralığı + Mayıs+Haziran seçince veri
+    2020-21-21 mayıs 2022 haziran gibi karışık/tutarsız geliyor, sadece 1 ay
+    (Haziran) seçince normal geliyor"): KÖK NEDEN — period='yearly' HER
+    ZAMAN yıl başına TEK bir Ocak-Ocak aralığı üretiyordu; seçili aylar bu
+    geniş aralığın İÇİNDE yalnızca bir OR filtresi (_calendar_month_filter)
+    olarak uygulanıyordu. Kullanıcı Mayıs+Haziran'ı BİRLİKTE seçtiğinde o
+    yılın Mayıs VE Haziran görüntüleri tek bir ortalamada / tek bir "en az
+    bulutlu sahne"de birbirine karışıyordu (yıl başına TEK nokta/sahne,
+    hangi ayın kazandığı belirsiz); yalnızca 1 ay seçildiğinde bu karışma
+    hiç sorun yaratmıyordu (zaten tek aday ay vardı) — kullanıcının "sadece
+    Haziran yaptığımda normal" gözlemiyle birebir örtüşüyor.
+    ÇÖZÜM: period='yearly' + BİRDEN FAZLA belirli ay seçiliyse (months
+    doluysa VE tüm 12 ayı kapsamıyorsa — 12'si de seçiliyse zaten "tüm
+    aylar" ile eşdeğerdir), yıl başına TEK aralık yerine her (yıl, ay)
+    kombinasyonu için AYRI bir aralık üretilir. Etiket formatı 'monthly'
+    periyoduyla BİREBİR AYNI ('YYYY-MM') kullanılır — bu format zaten bu
+    fonksiyonun 'monthly' dalında üretiliyordu ve istemci tarafında (grafik/
+    galeri) salt bir görüntü etiketi olarak kullanılıyor (hiçbir yerde sayı
+    olarak ayrıştırılmıyor) — bu yüzden istemci tarafında EK bir değişiklik
+    gerekmez, her (yıl, ay) kendi noktası/galerisi olarak görünür ve kendi
+    bulut oranı eşiğine AYRI AYRI tabi olur (bkz. çağrı noktasındaki
+    _sylva_least_cloud_scene(..., months=...) ve build_result_image'a
+    aktarılan startDate/endDate — ikisi de zaten bu dar aralığı kullanır).
+    Ay filtresi yoksa (None/boş = tüm aylar) davranış ESKİSİYLE BİREBİR
+    AYNI kalır: yıl başına tek nokta, geriye dönük tam uyumluluk korunur.
+    """
     ranges = []
     if period == 'monthly':
         for y in range(start_year, end_year + 1):
             for m in range(1, 13):
+                # Ay filtresi varsa ('Aylık' periyodu yeniden etkinleştirilirse
+                # diye) burada da saygı gösterilir — seçilmeyen aylar hiç
+                # üretilmez (önceden bu dal ay filtresini tamamen yok sayardı).
+                if months and m not in months:
+                    continue
                 start = '%04d-%02d-01' % (y, m)
                 if m == 12:
                     end = '%04d-01-01' % (y + 1)
                 else:
                     end = '%04d-%02d-01' % (y, m + 1)
                 ranges.append(('%04d-%02d' % (y, m), start, end))
-    else:  # 'yearly'
+    elif months and len(months) < 12:
+        # 'yearly' + tüm 12 ayı KAPSAMAYAN belirli bir ay seçimi: yıl başına
+        # tek blend yerine (yıl, ay) başına AYRI aralık — bkz. yukarıdaki
+        # BUG FİX notu.
+        for y in range(start_year, end_year + 1):
+            for m in months:
+                start = '%04d-%02d-01' % (y, m)
+                if m == 12:
+                    end = '%04d-01-01' % (y + 1)
+                else:
+                    end = '%04d-%02d-01' % (y, m + 1)
+                ranges.append(('%04d-%02d' % (y, m), start, end))
+    else:  # 'yearly', ay filtresi yok/tüm 12 ay seçili — ESKİ davranış
         for y in range(start_year, end_year + 1):
             ranges.append((str(y), '%04d-01-01' % y, '%04d-01-01' % (y + 1)))
     return ranges
@@ -8140,7 +8188,7 @@ def timeseries():
         if end_year <= start_year:
             return jsonify({'success': False, 'error': 'Bitiş yılı başlangıç yılından büyük olmalı.'}), 400
 
-        ranges = _sylva_period_ranges(start_year, end_year, period)
+        ranges = _sylva_period_ranges(start_year, end_year, period, months=months)
         # Güvenlik sınırı: çok uzun aralık + aylık periyot GEE'ye çok
         # sayıda ardışık istek anlamına gelir (timeout/limit riski).
         MAX_PERIODS = 240
@@ -9212,6 +9260,38 @@ def download_geotiff():
                         _ll_by_code2[int(_ll.get('code'))] = _ll
                     except Exception:
                         continue
+
+            # 🛠️ PAKET 88 — MEVCUT kodların da dili düzeltilir (yalnızca
+            # EKSİK kodlar değil): kullanıcının GERÇEK bildirdiği "lejant
+            # türkçe iniyor ama veriyi ingilizce indirdim" sorunu bu satırlar
+            # eklenmeden ÖNCE hâlâ çözülmemişti — çünkü Faz 54'ün DOM doldurma
+            # bloğu #class-rows-container'ı HER ZAMAN (aktif arayüz dili ne
+            # olursa olsun) sunucunun sırayla eşleşen ham/Türkçe sınıf
+            # adlarıyla dolduruyor, ve bu isimler index.html'in exportVisualFor()
+            # fonksiyonu tarafından doğrudan requested_breaks[i].label olarak
+            # buraya taşınıyordu. Az yukarıdaki (satır ~9176) ilk düzeltme
+            # yalnızca requested_breaks TAMAMEN boş/None geldiğinde devreye
+            # giriyordu; hemen aşağıdaki (Paket 85) döngü de yalnızca TAMAMEN
+            # EKSİK kodları tamamlıyordu — DOM'dan zaten dolu gelen (pratikte
+            # neredeyse HER ZAMAN TÜM) kodların etiketi hiçbir zaman
+            # düzeltilmiyordu. index.html tarafında da (Paket 88) FOREST_LOSS/
+            # URBAN_GROWTH için legendLabels artık `breaks` dolu gelse BİLE
+            # koşulsuz doğru dilde gönderiliyor (bkz. exportVisualFor() —
+            # TOPO_ASPECT ile aynı desen); burada da o alanın MEVCUT kodlar
+            # için de gerçekten kullanılması gerekiyordu.
+            if _ll_by_code2:
+                for _br_existing in requested_breaks:
+                    try:
+                        _br_code = int(round(float(_br_existing.get('min'))))
+                    except (TypeError, ValueError):
+                        continue
+                    _ll3 = _ll_by_code2.get(_br_code)
+                    if _ll3:
+                        if str(_ll3.get('label') or '').strip():
+                            _br_existing['label'] = str(_ll3.get('label')).strip()
+                        if str(_ll3.get('color') or '').strip():
+                            _br_existing['color'] = str(_ll3.get('color')).strip()
+
             for _ref in _native_export_breaks[_fam_key]:
                 _rc = int(_ref['min'])
                 if _rc in _have_codes:
@@ -9237,6 +9317,44 @@ def download_geotiff():
         # sınıf kodları aynen korunur. Bu, ArcMap'in deniz piksellerini
         # NoData sanıp göstermemesi için özellikle zorunludur.
         if lulc_index == 'LULC':
+            export_image = final_display.toByte().unmask(255).rename('value')
+            nodata_value = 255
+        # 🛠️ PAKET 88 (kullanıcının GERÇEK FOREST_LOSS dosyasında doğrulandı
+        # — "Orman (Değişmeyen)" Paket 85'in kod-tamamlama düzeltmesinden
+        # SONRA bile hâlâ kayıp): yukarıdaki LULC (Dynamic World) dalı
+        # export_image'i AÇIKÇA .toByte()'a çeviriyor ve ONDAN SONRA
+        # .unmask(255) uyguluyor — ama FOREST_LOSS/URBAN_GROWTH bu adımı
+        # HİÇ yapmıyordu; final_display (GEE'nin ee.Image(0).where(...)
+        # zincirinden gelen, tipi AÇIKÇA belirtilmemiş — muhtemelen Byte'tan
+        # (0-255) DAHA DAR imzalı bir tam sayı türü) DOĞRUDAN kullanılıyordu.
+        # Dosyanın başındaki (satır ~9028) "Could not open the specified
+        # file" notu ZATEN bu TAM sınıfı ("nodata value görüntünün
+        # PixelType'ının geçerli aralığı DIŞINDaysa GEE bunu otomatik
+        # genişletmez") uyarıyordu ve bu yalnızca LULC için düzeltilmişti;
+        # FOREST_LOSS/URBAN_GROWTH aynı riski hâlâ taşıyordu. nodata_value
+        # burada zaten 255'tir (bkz. yukarıdaki _NATIVE_CATEGORICAL_ZERO_
+        # IS_REAL_CLASS bloğu) — ama export_image Byte'a çevrilmeden
+        # .unmask(255) çağrılırsa (bu satırdan SONRAKİ genel
+        # _download_band_geotiff_bytes_impl adımında), 255 görüntünün dar
+        # türünün GEÇERLİ ARALIĞI DIŞINDA kalabilir; bu da GEE/GDAL'ın
+        # nodata etiketini/piksel değerlerini öngörülemez biçimde
+        # bozmasına yol açabilir — kullanıcının dosyasında GÖZLEMLENEN
+        # "Değişmeyen (piksel değeri 0) sessizce kayboluyor, kalan 2 sınıf
+        # doğru kodlanıyor" deseniyle TUTARLI. ÇÖZÜM: LULC ile BİREBİR AYNI
+        # kalıp — cls zaten yalnızca 0/1/2 taşıdığından (Byte aralığına
+        # SORUNSUZ sığar) .toByte() veri kaybına yol AÇMAZ, sadece türü
+        # GEE'nin/GDAL'ın 255'i güvenle NoData olarak yazacağı/okuyacağı
+        # Byte'a sabitler.
+        # DÜRÜSTLÜK NOTU: Bu ortamda canlı GEE erişimi olmadığından,
+        # export_image'in GEE tarafında GERÇEKTEN hangi tam sayı türünde
+        # olduğunu (ve bu düzeltmenin sorunu birebir bu mekanizmayla mı
+        # çözdüğünü) doğrudan çalıştırıp doğrulayamadım — bu, LULC'de
+        # KANITLANMIŞ AYNI düzeltmeyi FOREST_LOSS/URBAN_GROWTH'a tutarlı
+        # şekilde uygulayan, yüksek güvenli ama sandbox'ta uçtan uca
+        # doğrulanamamış bir düzeltmedir. Lütfen deploy sonrası GERÇEK bir
+        # FOREST_LOSS indirmesiyle "Orman (Değişmeyen)" sınıfının artık
+        # geldiğini teyit edin.
+        elif str(lulc_index or '').upper() in _NATIVE_CATEGORICAL_ZERO_IS_REAL_CLASS:
             export_image = final_display.toByte().unmask(255).rename('value')
             nodata_value = 255
         # 🛠️ BUG FİX (indirilen TÜM rasterlerin RGB olarak inmesi): önceden
@@ -10360,98 +10478,140 @@ def download_raw_bands():
         # indirmesinde kullanıyoruz.
         aoi_geom_4326 = _call_with_retry(lambda: roi.getInfo()) if scope == 'clip' else None
 
-        zip_entries, errors = [], []
-        for band_name in requested_bands:
+        # 🛠️ PAKET 88 — ÇOKLU BANT İNDİRME PARALELLEŞTİRİLDİ:
+        # ESKİDEN bu döngü tamamen SIRALI (sequential) çalışıyordu — her
+        # bandın (1) GEE'den çözünürlük/CRS sorgusu (2 ayrı getInfo() ağ
+        # çağrısı), (2) GERÇEK GeoTIFF indirmesi, (3) indirme SONRASI CRS
+        # garantisi/true-clip/istatistik damgalama/piramit ekleme gibi
+        # rasterio/GDAL işlemleri TAMAMEN bitmeden bir SONRAKİ bant hiç
+        # başlamıyordu. Kullanıcı 2 bant seçtiğinde toplam süre bir sınırın
+        # (muhtemelen Cloud Run'ın kendi istek zaman aşımı ya da gunicorn
+        # worker zaman aşımı — ikisi de bu kod dosyasının DIŞINDA, dağıtım
+        # ayarlarında tanımlıdır, bkz. dosya sonundaki gunicorn notu) altında
+        # kalıyor, 3+ bantta ise toplam süre bu sınırı aşıp isteğin TAMAMI
+        # (kısmi hata olarak DEĞİL, bağlantı kesilerek) başarısız oluyordu —
+        # kullanıcının bildirdiği "2 bant iniyor, 3+ bantta zip indirilemedi"
+        # belirtisiyle birebir örtüşüyor.
+        #
+        # ÇÖZÜM: bant başına iş BİR FONKSİYONA taşındı ve sınırlı sayıda
+        # thread ile PARALEL çalıştırılıyor. ÖNEMLİ GÜVENLİK NOTU — bu, GEE'ye
+        # aynı anda birden fazla export isteği gitmesine ASLA izin vermez:
+        # gerçek indirme çağrısı zaten _download_band_geotiff_bytes() içinde
+        # _GEE_EXPORT_LOCK ile process genelinde TEK kuyruğa alınmış durumda
+        # (bkz. o kilidin tanımı, dosya başı — "Earth Engine Restricted Mode
+        # altında aynı anda yapılan export istekleri 429 concurrency hatası
+        # verebilir") — yani bu değişiklikten SONRA da GEE'ye asla eşzamanlı
+        # export isteği gitmiyor, 429 riski eklenmiyor. Kazanç, kilidin
+        # DIŞINDA kalan adımlardan gelir: bir bant GEE kilidini tutup indirme
+        # beklerken, kilidi daha önce bırakmış başka bir bant kendi son
+        # işleme adımlarını (CRS garantisi/true-clip/istatistik/piramit) veya
+        # bir sonraki bandın getInfo() sorgularını PARALEL sürdürebilir —
+        # önceden bu tamamen imkânsızdı, her şey uçtan uca sıralıydı.
+        def _download_one_raw_band(band_name):
             info = band_catalog[band_name]
+            band_img = image.select([band_name])
+
+            # Orijinal (native) çözünürlük ve CRS — resampling YAPILMAZ.
+            proj = band_img.projection()
             try:
-                band_img = image.select([band_name])
+                native_scale = proj.nominalScale().getInfo() or info['resolution']
+            except Exception:
+                native_scale = info['resolution']
+            try:
+                native_crs = proj.crs().getInfo() or 'EPSG:4326'
+            except Exception:
+                native_crs = 'EPSG:4326'
 
-                # Orijinal (native) çözünürlük ve CRS — resampling YAPILMAZ.
-                proj = band_img.projection()
+            # ÖNEMLİ: clip() öncesi görüntüyü kendi orijinal (native)
+            # CRS/çözünürlüğüne açıkça reproject() ediyoruz. Sentinel-2
+            # bantları GEE'de zaten somut (sabit) bir varsayılan projeksiyona
+            # sahip olduğu için clip() tek başına yeterliydi; ancak Landsat
+            # Collection 2 bantlarının varsayılan projeksiyonu dışa aktarım
+            # sırasında belirsiz/"unbounded" kalabiliyor ve bu durumda
+            # clip() maskesi somut bir piksel ızgarasına oturmadığından GEE
+            # AOI dışındaki alanları da (gereksiz çevre verisiyle birlikte)
+            # dışa aktarabiliyordu. reproject() + clip() sırası, Sentinel
+            # ve Landsat için AYNI, tutarlı ve gerçek AOI kırpma davranışını
+            # garanti eder.
+            export_img = band_img.reproject(crs=native_crs, scale=native_scale).clip(roi) if scope == 'clip' else band_img
+
+            base_name = sensor_tag + '_' + level_tag + '_' + date_label + '_' + band_name + '_' + str(native_scale) + 'm'
+            if scope == 'clip' and safe_aoi:
+                base_name += '_' + safe_aoi
+            base_name = _sylva_safe_filename(base_name)
+
+            # 'clip' kapsamında AOI dışında kalan pikseller GERÇEK bir
+            # NoData değeri olarak yazılır — bu olmadan GEE, maskeyi
+            # NoData etiketi olmadan dolgu değeriyle yazar ve dosya CBS
+            # yazılımında düz bir dikdörtgen (bounding box) gibi görünür.
+            #
+            # 🛠️ KÖK NEDEN DÜZELTMESİ: sentinel olarak eskiden 0
+            # kullanılıyordu, ama ham bant değerleri (reflectance,
+            # DN vb.) çoğunlukla 0'ı GERÇEK bir değer olarak içerebilir
+            # (ör. su/gölge pikselleri, karanlık yüzeyler). Bu da
+            # GERÇEK veri içeren pikselleri GIS yazılımında yanlışlıkla
+            # boş gösteriyordu. -9999, bu bantların hiçbirinde
+            # gerçekten oluşamayacak standart bir NoData sentinelidir.
+            nodata_value = -9999 if scope == 'clip' else None
+
+            # 🛠️ BUG FİX (ArcMap "Could not open the specified file" —
+            # Ham Veri/Bantlar indirmelerinde): Sentinel-2/Landsat
+            # bantları Earth Engine kataloğunda İŞARETSİZ (UInt16,
+            # [0, 65535]) tam sayı tipindedir ve burada hiçbir açık tip
+            # dönüşümü (toByte/toShort/toInt) uygulanmıyordu. Google'ın
+            # resmi "Exporting images" rehberi açıkça uyarıyor: "the
+            # nodata value should be inside the valid range for the
+            # image's PixelType" — yani GEE, formatOptions.noData
+            # değerini görüntünün tipine UYACAK şekilde otomatik
+            # genişletmez/korumaz. -9999, UInt16'nın temsil edebileceği
+            # [0, 65535] aralığının TAMAMEN dışında olduğundan, indirilen
+            # dosyanın piksel tipi (UInt16) ile NoData etiketi (-9999)
+            # birbiriyle TUTARSIZ hale gelebiliyor — ArcMap'in dosyayı
+            # hiç açamamasıyla birebir eşleşen bir belirti.
+            #
+            # ÇÖZÜM (Google'ın kendi önerdiği yöntem — aynı rehber:
+            # "You can also set the image's PixelType by casting the
+            # data to a specific type using image methods toShort() or
+            # toInt()"): NoData sentinel'i BİLEREK 0'a ÇEKİLMİYOR — bu,
+            # yukarıdaki KÖK NEDEN DÜZELTMESİ notunda açıklanan (gerçek
+            # 0 DN değerli su/gölge piksellerinin yanlışlıkla boş
+            # görünmesi) sorununu GERİ GETİRİRDİ. Bunun yerine görüntü,
+            # -9999'u sorunsuz temsil edebilecek işaretli/geniş bir tipe
+            # (Int32) açıkça dönüştürülüyor — UInt16'nın tüm [0, 65535]
+            # aralığı hiçbir veri kaybı olmadan Int32'ye sığar, üstüne
+            # -9999 da artık geçerli bir değer olur. Yalnızca NoData
+            # gerçekten kullanılacaksa (clip kapsamında) uygulanır;
+            # 'full' kapsamında (nodata yok, unmask() hiç çağrılmıyor)
+            # bantlar hâlâ doğal UInt16 tipinde, değiştirilmeden iner.
+            if nodata_value is not None:
+                export_img = export_img.toInt()
+
+            tif_bytes = _download_band_geotiff_bytes(
+                export_img, export_region, native_scale, native_crs, base_name,
+                nodata_value=nodata_value, aoi_geom_4326=aoi_geom_4326,
+                fallback_region_geom=roi.bounds(maxError=100)
+            )
+            return base_name + '.tif', tif_bytes
+
+        zip_entries_by_band, errors = {}, []
+        _max_band_workers = min(4, len(requested_bands))
+        with ThreadPoolExecutor(max_workers=_max_band_workers) as _band_pool:
+            _band_future_map = {
+                _band_pool.submit(_download_one_raw_band, bn): bn
+                for bn in requested_bands
+            }
+            for _band_future in as_completed(_band_future_map):
+                _bn = _band_future_map[_band_future]
                 try:
-                    native_scale = proj.nominalScale().getInfo() or info['resolution']
-                except Exception:
-                    native_scale = info['resolution']
-                try:
-                    native_crs = proj.crs().getInfo() or 'EPSG:4326'
-                except Exception:
-                    native_crs = 'EPSG:4326'
+                    zip_entries_by_band[_bn] = _band_future.result()
+                except Exception as be:
+                    traceback.print_exc()
+                    msg = str(be).strip() or '{} (mesajsız hata — sunucu konsoluna bakın)'.format(type(be).__name__)
+                    errors.append(_bn + ': ' + msg)
 
-                # ÖNEMLİ: clip() öncesi görüntüyü kendi orijinal (native)
-                # CRS/çözünürlüğüne açıkça reproject() ediyoruz. Sentinel-2
-                # bantları GEE'de zaten somut (sabit) bir varsayılan projeksiyona
-                # sahip olduğu için clip() tek başına yeterliydi; ancak Landsat
-                # Collection 2 bantlarının varsayılan projeksiyonu dışa aktarım
-                # sırasında belirsiz/"unbounded" kalabiliyor ve bu durumda
-                # clip() maskesi somut bir piksel ızgarasına oturmadığından GEE
-                # AOI dışındaki alanları da (gereksiz çevre verisiyle birlikte)
-                # dışa aktarabiliyordu. reproject() + clip() sırası, Sentinel
-                # ve Landsat için AYNI, tutarlı ve gerçek AOI kırpma davranışını
-                # garanti eder.
-                export_img = band_img.reproject(crs=native_crs, scale=native_scale).clip(roi) if scope == 'clip' else band_img
-
-                base_name = sensor_tag + '_' + level_tag + '_' + date_label + '_' + band_name + '_' + str(native_scale) + 'm'
-                if scope == 'clip' and safe_aoi:
-                    base_name += '_' + safe_aoi
-                base_name = _sylva_safe_filename(base_name)
-
-                # 'clip' kapsamında AOI dışında kalan pikseller GERÇEK bir
-                # NoData değeri olarak yazılır — bu olmadan GEE, maskeyi
-                # NoData etiketi olmadan dolgu değeriyle yazar ve dosya CBS
-                # yazılımında düz bir dikdörtgen (bounding box) gibi görünür.
-                #
-                # 🛠️ KÖK NEDEN DÜZELTMESİ: sentinel olarak eskiden 0
-                # kullanılıyordu, ama ham bant değerleri (reflectance,
-                # DN vb.) çoğunlukla 0'ı GERÇEK bir değer olarak içerebilir
-                # (ör. su/gölge pikselleri, karanlık yüzeyler). Bu da
-                # GERÇEK veri içeren pikselleri GIS yazılımında yanlışlıkla
-                # boş gösteriyordu. -9999, bu bantların hiçbirinde
-                # gerçekten oluşamayacak standart bir NoData sentinelidir.
-                nodata_value = -9999 if scope == 'clip' else None
-
-                # 🛠️ BUG FİX (ArcMap "Could not open the specified file" —
-                # Ham Veri/Bantlar indirmelerinde): Sentinel-2/Landsat
-                # bantları Earth Engine kataloğunda İŞARETSİZ (UInt16,
-                # [0, 65535]) tam sayı tipindedir ve burada hiçbir açık tip
-                # dönüşümü (toByte/toShort/toInt) uygulanmıyordu. Google'ın
-                # resmi "Exporting images" rehberi açıkça uyarıyor: "the
-                # nodata value should be inside the valid range for the
-                # image's PixelType" — yani GEE, formatOptions.noData
-                # değerini görüntünün tipine UYACAK şekilde otomatik
-                # genişletmez/korumaz. -9999, UInt16'nın temsil edebileceği
-                # [0, 65535] aralığının TAMAMEN dışında olduğundan, indirilen
-                # dosyanın piksel tipi (UInt16) ile NoData etiketi (-9999)
-                # birbiriyle TUTARSIZ hale gelebiliyor — ArcMap'in dosyayı
-                # hiç açamamasıyla birebir eşleşen bir belirti.
-                #
-                # ÇÖZÜM (Google'ın kendi önerdiği yöntem — aynı rehber:
-                # "You can also set the image's PixelType by casting the
-                # data to a specific type using image methods toShort() or
-                # toInt()"): NoData sentinel'i BİLEREK 0'a ÇEKİLMİYOR — bu,
-                # yukarıdaki KÖK NEDEN DÜZELTMESİ notunda açıklanan (gerçek
-                # 0 DN değerli su/gölge piksellerinin yanlışlıkla boş
-                # görünmesi) sorununu GERİ GETİRİRDİ. Bunun yerine görüntü,
-                # -9999'u sorunsuz temsil edebilecek işaretli/geniş bir tipe
-                # (Int32) açıkça dönüştürülüyor — UInt16'nın tüm [0, 65535]
-                # aralığı hiçbir veri kaybı olmadan Int32'ye sığar, üstüne
-                # -9999 da artık geçerli bir değer olur. Yalnızca NoData
-                # gerçekten kullanılacaksa (clip kapsamında) uygulanır;
-                # 'full' kapsamında (nodata yok, unmask() hiç çağrılmıyor)
-                # bantlar hâlâ doğal UInt16 tipinde, değiştirilmeden iner.
-                if nodata_value is not None:
-                    export_img = export_img.toInt()
-
-                tif_bytes = _download_band_geotiff_bytes(
-                    export_img, export_region, native_scale, native_crs, base_name,
-                    nodata_value=nodata_value, aoi_geom_4326=aoi_geom_4326,
-                    fallback_region_geom=roi.bounds(maxError=100)
-                )
-                zip_entries.append((base_name + '.tif', tif_bytes))
-
-            except Exception as be:
-                traceback.print_exc()
-                msg = str(be).strip() or '{} (mesajsız hata — sunucu konsoluna bakın)'.format(type(be).__name__)
-                errors.append(band_name + ': ' + msg)
+        # Kullanıcının seçtiği bant SIRASI korunur (paralel tamamlanma sırası
+        # değişken olabilir) — ZIP içeriği öncekiyle birebir aynı sırada.
+        zip_entries = [zip_entries_by_band[bn] for bn in requested_bands if bn in zip_entries_by_band]
 
         if not zip_entries:
             return jsonify({'success': False, 'error': 'Hiçbir bant dışa aktarılamadı. ' + '; '.join(errors)})
