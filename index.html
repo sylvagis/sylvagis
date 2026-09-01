@@ -20804,7 +20804,7 @@ function selectRamp(name) {
                 var analysisName = payloadMeta.analysisName || data.title || 'Bilinmeyen';
                 var entry = {
                     analysisName: analysisName,
-                    classes: data.classes.map(function (c) { return { name: c.name, min: c.min, max: c.max }; }),
+                    classes: data.classes.map(function (c) { return { name: c.name, min: c.min, max: c.max, displayRange: c.displayRange }; }),
                     percentages: data.percentages,
                     areaHa: (data.areaHa === undefined ? null : data.areaHa),
                     ts: Date.now()
@@ -20994,45 +20994,177 @@ function selectRamp(name) {
             // adlarıyla aynı olmalı. Özellikle kullanıcı sınıf adını elle
             // "skbgskgs" gibi değiştirdiyse, rapor otomatik "Slope Class 1"
             // üretmemeli; ekrandaki metni birebir taşımalıdır.
-            function _sylvaGqaExactLegendNames(analysisName, currentClasses) {
-                var names = null;
-                try {
-                    var wanted = String(analysisName || '').trim().toUpperCase();
-                    var ia = (window._sylvaIndexAnalysisStates && window._sylvaIndexAnalysisStates[pane]) || {};
-                    var ex = (window._sylvaLayerExportSymbologyByPane && window._sylvaLayerExportSymbologyByPane[pane]) || {};
-                    Object.keys(ia).forEach(function(layerKey) {
-                        if (names) return;
-                        var st = ia[layerKey];
-                        if (!st || !st.meta) return;
-                        var nm = String(st.meta.analysisName || '').trim().toUpperCase();
-                        if (nm !== wanted) return;
-                        var saved = ex[layerKey];
-                        if (saved && Array.isArray(saved.breaks) && saved.breaks.length === currentClasses.length) {
-                            var candidate = saved.breaks.map(function(b) { return String(b.label == null ? '' : b.label).trim(); });
-                            if (candidate.length === currentClasses.length && candidate.every(function(x){ return !!x; })) names = candidate;
-                        }
-                    });
-                } catch (eExactSaved) {}
+            // PDF için LEJANTIN TEK KAYNAĞI: ekranda uygulanmış sınıflandırma.
+            // Böylece ekranda 4 sınıf varsa PDF de 4 sınıf; ekranda
+            // "Class 1 (0 - 13.75)" varsa PDF de Class 1 + 0 - 13.75 olur.
+            // PDF kendi başına 7 yeni bin üretmez ve sınıf adını/range'ini
+            // "Slope Class 1" gibi yeniden yazmaz.
+            function _sylvaGqaExactLegendClassification(analysisName) {
+                var wanted = String(analysisName || '').trim().toUpperCase();
+                if (!wanted) return null;
 
-                // Aktif katmanda kullanıcı henüz/halen editör satırlarını
-                // gösteriyorsa DOM'daki isimleri doğrudan kullan. Bu, raporun
-                // ekrandaki isimle birebir eşleşmesini garanti eder.
-                if (!names) {
+                // PDF'nin sınıf adı/aralığı için TEK KAYNAK haritada gerçekten
+                // gösterilen lejanttır. Editörün varsayılan "Class 1/2/3..."
+                // değerlerini yeniden üretmek yerine, lejant HTML'sindeki
+                // metni birebir okuyoruz. Böylece kullanıcı üçüncü sınıfa
+                // "hfvjb", "skbgskgs" veya başka bir şey yazdıysa PDF'de de
+                // tam olarak aynı isim görünür.
+                function _parseLegendRowsFromHTML(html) {
+                    if (!html || typeof DOMParser === 'undefined') return null;
                     try {
-                        var activePane = (typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map';
-                        var activeKey = window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[activePane];
-                        var activeState = window._sylvaIndexAnalysisStates && window._sylvaIndexAnalysisStates[activePane] &&
-                            activeKey ? window._sylvaIndexAnalysisStates[activePane][activeKey] : null;
-                        var activeName = activeState && activeState.meta ? String(activeState.meta.analysisName || '').trim().toUpperCase() : '';
-                        if (activePane === pane && activeName === wanted && typeof _sylvaReadClassificationRowsForPane === 'function') {
-                            var rows = _sylvaReadClassificationRowsForPane(pane) || [];
-                            if (rows.length === currentClasses.length && rows.every(function(r){ return r && String(r.name || '').trim(); })) {
-                                names = rows.map(function(r){ return String(r.name).trim(); });
+                        var doc = new DOMParser().parseFromString(String(html), 'text/html');
+                        var rowEls = doc.querySelectorAll('.sylva-legend-row');
+                        if (!rowEls || !rowEls.length) return null;
+                        var rows = [];
+                        Array.prototype.forEach.call(rowEls, function(rowEl) {
+                            var labelEl = rowEl.querySelector('span:last-child');
+                            var fullText = String(labelEl ? labelEl.textContent : rowEl.textContent || '').trim();
+                            if (!fullText) return;
+
+                            // renderDynamicLegend şu biçimi üretir:
+                            // "Kullanıcının Adı (min - max)". Sondaki parantez
+                            // aralık olarak ayrılır; isim kısmı olduğu gibi korunur.
+                            var m = fullText.match(/\s*\(([^()]*)\)\s*$/);
+                            var label = m ? fullText.slice(0, m.index).trim() : fullText;
+                            var rangeText = m ? m[1].trim() : '';
+                            var nums = rangeText.match(/[+-]?(?:\d+(?:[.,]\d+)?|[.,]\d+)/g) || [];
+                            var min = nums.length >= 2 ? Number(String(nums[0]).replace(',', '.')) : null;
+                            var max = nums.length >= 2 ? Number(String(nums[1]).replace(',', '.')) : null;
+
+                            var swatch = rowEl.querySelector('span[style*="background"]');
+                            var color = swatch ? (swatch.style.background || swatch.style.backgroundColor || '#999999') : '#999999';
+                            rows.push({
+                                min: (typeof min === 'number' && isFinite(min) && typeof max === 'number' && isFinite(max) ? Math.min(min, max) : null),
+                                max: (typeof min === 'number' && isFinite(min) && typeof max === 'number' && isFinite(max) ? Math.max(min, max) : null),
+                                name: label,
+                                displayRange: rangeText,
+                                color: color
+                            });
+                        });
+                        return rows.length ? rows : null;
+                    } catch (eParseLegend) { return null; }
+                }
+
+                function _findExactVisibleLegendHTML() {
+                    var paneKey = (typeof pane === 'string' && pane === 'map2') ? 'map2' : 'map';
+                    var topKey = window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[paneKey];
+                    var snaps = window._sylvaLayerLegendSnapshotByPane && window._sylvaLayerLegendSnapshotByPane[paneKey];
+                    var states = window._sylvaIndexAnalysisStates && window._sylvaIndexAnalysisStates[paneKey];
+
+                    // 1) Önce aktif/üst katmanın katmana özel snapshot'ı.
+                    if (topKey && snaps && snaps[topKey] && snaps[topKey].html) {
+                        return snaps[topKey].html;
+                    }
+
+                    // 2) Aynı analize ait başka bir katman snapshot'ı (zaman
+                    // serisi veya katman geçişi senaryoları).
+                    if (snaps && states) {
+                        var keys = Object.keys(states);
+                        for (var si = 0; si < keys.length; si++) {
+                            var st = states[keys[si]];
+                            var nm = st && st.meta ? st.meta.analysisName : '';
+                            if (String(nm || '').trim().toUpperCase() === wanted && snaps[keys[si]] && snaps[keys[si]].html) {
+                                return snaps[keys[si]].html;
                             }
                         }
-                    } catch (eExactDom) {}
+                    }
+
+                    // 3) Son çare: o an ekranda gerçekten görünen lejant.
+                    var box = document.getElementById(paneKey === 'map2' ? 'map2-legend-box' : 'map-legend-box');
+                    if (box && box.innerHTML) return box.innerHTML;
+                    return null;
                 }
-                return names;
+
+                // Haritadaki gerçek lejant satırları bulunduysa bunu doğrudan
+                // rapora aktar. Böylece sınıf sayısı, adları, aralıkları ve
+                // renkleri PDF tarafında yeniden icat edilmez.
+                try {
+                    var exactHTML = _findExactVisibleLegendHTML();
+                    var legendRows = _parseLegendRowsFromHTML(exactHTML);
+                    if (legendRows && legendRows.length) {
+                        var ia0 = (window._sylvaIndexAnalysisStates && window._sylvaIndexAnalysisStates[pane]) || {};
+                        var top0 = window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[pane];
+                        var st0 = top0 && ia0[top0];
+
+                        // Bazı sabit/tematik lejantlarda ekranda yalnızca sınıf
+                        // adı vardır (ör. LULC/Aspect), aralık ayrıca yazılmaz.
+                        // Bu durumda isim ve renk YİNE doğrudan ekrandaki lejanttan
+                        // alınır; min/max yalnızca aynı sıradaki analiz state'inden
+                        // tamamlanır. Böylece isim hiçbir zaman yeniden üretilmez.
+                        if (legendRows.some(function(r){ return typeof r.min !== 'number' || !isFinite(r.min) || typeof r.max !== 'number' || !isFinite(r.max); }) && st0 && st0.data) {
+                            var sourceClasses = st0.classRows || (st0.data && st0.data.classes) || [];
+                            legendRows.forEach(function(r, idx){
+                                var src = sourceClasses[idx];
+                                if (src) {
+                                    if ((typeof r.min !== 'number' || !isFinite(r.min)) && isFinite(Number(src.min))) r.min = Number(src.min);
+                                    if ((typeof r.max !== 'number' || !isFinite(r.max)) && isFinite(Number(src.max))) r.max = Number(src.max);
+                                    if (!r.displayRange && isFinite(r.min) && isFinite(r.max)) r.displayRange = String(src.min) + ' - ' + String(src.max);
+                                }
+                            });
+                        }
+
+                        var validLegendRows = legendRows.filter(function(r){ return typeof r.min === 'number' && isFinite(r.min) && typeof r.max === 'number' && isFinite(r.max) && r.name; });
+                        if (validLegendRows.length === legendRows.length) {
+                            var exactPct = null;
+                            // Yüzdeleri mevcut analiz istatistiğinden al; sınıf
+                            // sınırları aynı olduğundan her yüzde aynı satıra aittir.
+                            try {
+                                if (st0 && st0.data && st0.data.stats && typeof computeClassPercentagesFromHistogram === 'function') {
+                                    exactPct = computeClassPercentagesFromHistogram(validLegendRows, st0.data.stats.value);
+                                }
+                            } catch (eLegendPct) { exactPct = null; }
+
+                            // Snapshot'ta yüzde bulunmuyorsa aşağıdaki normal state
+                            // yüzdeleri daha sonra addEntry tarafından fallback olur.
+                            return { classes: validLegendRows, percentages: exactPct };
+                        }
+                    }
+                } catch (eVisibleLegend) {}
+
+                // 4) Ekrandaki lejant bulunamazsa, katmana özel editör state'i
+                // yalnızca yedek olarak kullanılır. Bu yol da kullanıcı isimlerini
+                // korur; otomatik "Slope Class N" üretmez.
+                function build(rows, hist, fallbackPct) {
+                    if (!Array.isArray(rows) || !rows.length) return null;
+                    var classes = rows.map(function(r) {
+                        var min = Number(r.min), max = Number(r.max);
+                        if (!isFinite(min) || !isFinite(max)) return null;
+                        return {
+                            min: Math.min(min, max),
+                            max: Math.max(min, max),
+                            name: String(r.name == null ? '' : r.name).trim(),
+                            displayRange: String(r.displayRange == null ? '' : r.displayRange),
+                            color: String(r.color || '#999999')
+                        };
+                    });
+                    if (classes.some(function(c){ return !c || !c.name; })) return null;
+                    var percentages = null;
+                    if (hist && typeof computeClassPercentagesFromHistogram === 'function') {
+                        try { percentages = computeClassPercentagesFromHistogram(classes, hist); } catch (ePct) { percentages = null; }
+                    }
+                    if (!percentages && Array.isArray(fallbackPct) && fallbackPct.length === classes.length) percentages = fallbackPct.slice();
+                    return { classes: classes, percentages: percentages };
+                }
+
+                try {
+                    var store = (window._sylvaEditorStateByPane && window._sylvaEditorStateByPane[pane]) || {};
+                    var topKey2 = window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[pane];
+                    var candidates = [];
+                    if (topKey2 && store[topKey2]) candidates.push(store[topKey2]);
+                    Object.keys(store).forEach(function(k){ if (!topKey2 || k !== topKey2) candidates.push(store[k]); });
+                    for (var si2 = 0; si2 < candidates.length; si2++) {
+                        var st2 = candidates[si2];
+                        var nm2 = st2 && st2.meta ? st2.meta.analysisName : (st2 ? st2.analysisName : '');
+                        if (String(nm2 || '').trim().toUpperCase() !== wanted) continue;
+                        if (st2 && st2.classificationType === 'classified' && Array.isArray(st2.classRows) && st2.classRows.length) {
+                            var hist3 = st2.data && st2.data.stats ? st2.data.stats.value : null;
+                            var exact2 = build(st2.classRows, hist3, st2.percentages);
+                            if (exact2) return exact2;
+                        }
+                    }
+                } catch (eExactState) {}
+
+                return null;
             }
 
             function addEntry(analysisName, classes, percentages, areaHa) {
@@ -21049,20 +21181,19 @@ function selectRamp(name) {
                 var key = _sylvaGqaFriendlyDatasetName(String(analysisName));
                 if (seen[key]) return;
                 seen[key] = true;
-                var _exactNames = _sylvaGqaExactLegendNames(analysisName, classes);
-                var _reportClasses = classes.map(function (c, idx) {
-                    return {
-                        // Kullanıcının ekranda verdiği isim varsa BİREBİR onu
-                        // kullan; aksi halde mevcut kaynak adını değiştirme.
-                        name: (_exactNames && _exactNames[idx]) ? _exactNames[idx] : c.name,
-                        min: c.min,
-                        max: c.max
-                    };
+                // Ekranda uygulanmış bir sınıflandırma varsa HAM histogramdan
+                // yeniden 7 sınıf üretmek yerine doğrudan o sınıflandırmayı
+                // kullan. Böylece isim + min/max + sınıf sayısı + yüzde hesabı
+                // haritadaki lejant ile birebir aynı olur.
+                var _exactLegend = _sylvaGqaExactLegendClassification(analysisName);
+                var _reportClasses = _exactLegend ? _exactLegend.classes : classes.map(function (c) {
+                    return { name: c.name, min: c.min, max: c.max };
                 });
+                var _reportPercentages = (_exactLegend && _exactLegend.percentages) ? _exactLegend.percentages : percentages;
                 out.push({
                     analysis_name: key,
                     classes: _reportClasses,
-                    percentages: percentages,
+                    percentages: _reportPercentages,
                     area_ha: (areaHa === undefined ? null : areaHa)
                 });
             }
@@ -21433,7 +21564,7 @@ function selectRamp(name) {
                         for (var i = 0; i < classes.length; i++) {
                             var c = classes[i] || {};
                             var name = String(c.name || '?');
-                            var rng = (c.min !== undefined && c.max !== undefined) ? (c.min + ' – ' + c.max) : '—';
+                            var rng = c.displayRange ? String(c.displayRange) : ((c.min !== undefined && c.max !== undefined) ? (c.min + ' – ' + c.max) : '—');
                             var pv = (pct[i] !== undefined && !isNaN(Number(pct[i]))) ? (Number(pct[i]).toFixed(1) + '%') : '—';
                             html += '<tr class="pdf-row">' +
                                 '<td style="padding:5px 6px;border-bottom:1px solid #e2e8f0;">' + _esc(name) + '</td>' +
