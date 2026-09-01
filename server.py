@@ -2185,6 +2185,21 @@ def _roi_center_lonlat(roi_coords):
 # ArcMap/QGIS'in otomatik okuyacağı bir Raster Attribute Table (RAT)
 # sidecar (.tif.aux.xml) ve klasik bir .clr renk dosyası üretmek için
 # kullanılır. Bkz. _build_lulc_symbology_zip() ve /api/download-geotiff.
+
+# 🛠️ PAKET 87 — DEPLOYMENT PARMAK İZİ (bu oturumda TEKRAR TEKRAR yaşanan
+# bir karışıklığı çözmek için eklendi): kullanıcı birden fazla kez "en
+# son güncel siteden indirdim" dediği halde, paylaştığı gerçek indirme
+# dosyaları MD5 karşılaştırmasıyla saatler/paketler ÖNCESİNE ait olduğu
+# kanıtlandı — yani sorun kodda değil, gönderilen server.py'nin CANLI
+# Cloud Run servisine gerçekten deploy edilmemiş/yayına alınmamış
+# olmasındaydı. Bunu her seferinde tam bir analiz+indirme döngüsüyle
+# (dakikalar sürebilir) doğrulamak yerine, TARAYICIDA TEK BİR ADRESE
+# gidilerek (https://<servisiniz>/api/ping) anında kontrol edilebilmesi
+# için bu sabit eklendi. Her yeni pakette bu sayı artırılmalı; canlı
+# /api/ping yanıtında bu sayı görünüyorsa o paketin TÜM kod değişiklikleri
+# kesinlikle yayındadır.
+SYLVA_SYMBOLOGY_PAKET = 87
+
 LULC_CLASS_DEFS = {
     'LULC': [  # Google Dynamic World V1 — label 0..8
         {'code': 0, 'label': 'Water',              'color': '#419BDF'},
@@ -2611,6 +2626,36 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
     gösterdiği (örn. sıralama, tekrarlanan isim görünümü) doğrudan
     gözlerimle teyit edilemedi — gerçek ArcMap'te test edip onaylamanız
     rica olunur.
+
+    Paket 86 (kullanıcının GERÇEK ESA WorldCover dosyasında doğrudan
+    doğrulandı — "bazı verilerde lejant isimlendirmeleri ve renkleri
+    farklı yanlış geliyor... isim başka renkler kaymış"): aşağıdaki
+    "ARDIŞIK kodlara yeniden numaralandırma" (dense-remap) adımı — Paket
+    79'da SADECE embed_colormap=True iken ColorMap'in gereksiz yere 256
+    girişe zıplamasını önlemek için eklenmişti — kodu, AOI'de GERÇEKTEN
+    bulunan sınıflara göre HER İNDİRMEDE FARKLI şekilde yeniden
+    numaralandırıyordu. Örnek (kullanıcının kendi dosyasından): ESA
+    WorldCover'ın sabit kodu 8 = "Su Kütlesi"dir (bkz. LULC_CLASS_DEFS);
+    ama o AOI'de kod 7 = "Kar/Buz" hiç bulunmadığından (0 piksel), dense-
+    remap Su Kütlesi'ni kod 7'ye KAYDIRDI. Etiket+renk+piksel HER ZAMAN
+    birlikte taşındığından dosyanın kendi İÇİNDE bir tutarsızlık yoktu
+    (kod 7 o dosyada her zaman "Su Kütlesi" anlamına geliyordu), ama
+    kodun MUTLAK/standart anlamı AOI'den AOI'ye KAYIYORDU — kullanıcının
+    "kaymış" tarifi tam olarak budur. KÖK NEDEN: bu yeniden numaralandırma
+    yalnızca embed_colormap=True'nun ColorMap boyutu için gerekliydi;
+    Paket 84 embed_colormap'i KALICI olarak False yaptığından (artık hiç
+    gömülü ColorMap yok), bu numaralandırmanın orijinal gerekçesi ortadan
+    kalktı. ÇÖZÜM: embed_colormap=False iken dense-remap ARTIK
+    UYGULANMIYOR — kodlar, çağıranın (ör. _build_lulc_symbology_zip)
+    zaten sunucudaki SABİT LULC_CLASS_DEFS ile birebir eşleşen haliyle
+    korunuyor. Bedel: _choose_nbits() artık bazı AOI'lerde birkaç bit
+    daha büyük seçilebilir (ör. CORINE'de o AOI'de sadece 18 sınıf olsa
+    bile teorik üst sınır 44 olduğundan nbits=5 yerine 6 olabilir) —
+    dosya boyutuna göz ardı edilebilir düzeyde bir etkisi var, gömülü
+    ColorMap olmadığından lejant/kutu sayısını HİÇ etkilemiyor.
+    embed_colormap=True kullanan (şu an hiçbir çağıran kullanmıyor, ama
+    ileride gerekirse diye korunan) yol için dense-remap AYNEN korunuyor
+    — o yolda ColorMap boyutu hâlâ önemli.
     """
     import numpy as np
     from rasterio.io import MemoryFile
@@ -2648,7 +2693,14 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
     # ekrandaki lejantla eşleşen 1..44 sıralı iç kod) tutarlı bir yaklaşım;
     # Dynamic World gibi kodları zaten ardışık (1..9) olan ailelerde bu
     # adım hiçbir şeyi değiştirmez (remap == kimlik dönüşümü).
-    if real_codes and real_codes != list(range(1, len(real_codes) + 1)):
+    # 🛠️ PAKET 86: dense-remap SADECE embed_colormap=True iken uygulanır
+    # (bkz. yukarıdaki Paket 86 docstring notu — kullanıcının GERÇEK ESA
+    # dosyasında "Su Kütlesi" kodunun AOI'ye göre 8'den 7'ye kaymasıyla
+    # kanıtlandı). embed_colormap=False iken (Paket 84'ten beri TÜM
+    # çağıranlarda geçerli durum) kodlar dokunulmadan, çağıranın zaten
+    # sunucudaki SABİT tanımlarla (LULC_CLASS_DEFS vb.) eşleşen halinde
+    # bırakılır — böylece aynı sınıf HER indirmede AYNI kodu taşır.
+    if embed_colormap and real_codes and real_codes != list(range(1, len(real_codes) + 1)):
         _dense_map = {old: new for new, old in enumerate(real_codes, start=1)}
         _lut = np.zeros(int(real_codes[-1]) + 1, dtype=byte_band.dtype)
         for _old, _new in _dense_map.items():
@@ -3611,6 +3663,10 @@ def ping():
         'tileSessionMode': 'stateless-signed-token',
         'rebuiltUrlCacheSize': rebuilt_url_cache_size,
         'cachedTiles': cached_tiles,
+        # 🛠️ PAKET 87: canlı deploy'un GERÇEKTEN hangi paketi çalıştırdığını
+        # tek bir tarayıcı isteğiyle (analiz/indirme yapmadan) doğrulamak
+        # için. Bu sayı SYLVA_SYMBOLOGY_PAKET sabitiyle birebir aynıdır.
+        'symbologyPaket': SYLVA_SYMBOLOGY_PAKET,
     })
 
 
