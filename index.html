@@ -709,8 +709,22 @@ tr.class-highlight-active {
         /* Harita Tuvali (artık gerçek Leaflet haritası) */
         .map-wrapper { flex: 1; min-width: 0; position: relative; }
         #map-wrapper-inner { flex: 1; min-width: 0; position: relative; }
-        .map-panes-row { display: flex; flex: 1; min-width: 0; min-height: 0; }
-        .ruler-container { flex: 1; min-width: 0; overflow: hidden; }
+        /* 🛠️ BUG FİX (Faz 85 — "çift ekranda Ekran 2'de sol tarafta beyaz
+           ince çizgi oluyor"): Bu satır (.map-panes-row), Ekran 1 (.ruler-
+           container) ile Ekran 2'yi (.sylva-map2-wrapper) yan yana tutan
+           flex satırı. Aralarındaki 2px mavi çizgi (.sylva-map2-wrapper'ın
+           border-left'i) dışında, tarayıcının flex genişliklerini alt-piksel
+           hassasiyetinde yuvarlaması (özellikle yüksek DPI/zoom oranlarında)
+           bazen iki panel arasında saç teli kalınlığında bir boşluk
+           bırakabiliyor — bu boşluktan ALTTAKİ sayfa zemini (body arka
+           planı #f4f6f9, neredeyse beyaz) sızıp ince "beyaz" bir çizgi
+           gibi görünüyordu. ÇÖZÜM: yukarıdaki karo-arası boşluk düzeltmesinde
+           (#map/#map2 .leaflet-tile-pane) zaten kullanılan AYNI nötr tonu
+           (#cfd8dc) bu satırın arka planına da veriyoruz — olası bir alt-
+           piksel boşluğu artık göz alıcı beyaz yerine haritayla uyumlu,
+           fark edilmeyen bir tonda kalıyor. */
+        .map-panes-row { display: flex; flex: 1; min-width: 0; min-height: 0; background-color: #cfd8dc; }
+        .ruler-container { flex: 1; min-width: 0; overflow: hidden; background-color: #cfd8dc; }
         .ruler-map-row { flex: 1; min-height: 0; overflow: hidden; }
         /* 🛠️ BUG FİX (Faz 59 — "basemap sınırı hep gri çizgi ile sınır
            olsun"): Harita alanı ile altındaki sabit çubuk (mobil araç
@@ -739,7 +753,25 @@ tr.class-highlight-active {
            yapabilen bir harita paneli. Varsayılan: gizli (display:none),
            "Çift Ekran" butonuyla açılıp kapanır.
            ═══════════════════════════════════════════════════════════ */
-        .sylva-map2-wrapper { flex: 1; min-width: 0; min-height: 0; position: relative; border-left: 2px solid #1e3a8a; }
+        /* 🛠️ BUG FİX (Faz 86 — "hâlâ Ekran 2'de sol tarafta beyaz ince
+           çizgi var", Faz 85'teki .map-panes-row zemin rengi denemesi
+           yetmedi): `border-left` bir kutunun DÜZEN (layout) hesabının
+           parçasıdır — flex düzeninde iki panel arasında olası bir alt-
+           piksel yuvarlama farkı, kenarlığın TAM olarak nerede
+           boyandığını da etkileyip kenarlığın kendisinde ince, düzensiz
+           bir aralık bırakabilir. Bunun yerine (veya buna EK olarak)
+           `box-shadow` kullanıyoruz — bu, düzen hesabı BİTTİKTEN SONRA,
+           doğrudan elemanın nihai kenarı üzerine boyanır; düzen
+           kutusunun bir parçası olmadığından alt-piksel yuvarlamasından
+           etkilenmez ve altındaki HERHANGİ bir boşluğu da örter. Ayrıca
+           sarmalayıcının kendisine de (olası bir boşluk hâlâ sayfa
+           zeminini değil bu zemini görsün diye) aynı nötr ton verildi. */
+        .sylva-map2-wrapper {
+            flex: 1; min-width: 0; min-height: 0; position: relative;
+            border-left: 2px solid #1e3a8a;
+            box-shadow: -2px 0 0 0 #1e3a8a;
+            background-color: #cfd8dc;
+        }
         .sylva-map2-wrapper { flex-direction: column; }
         /* Faz 59: Ekran 2 için de Ekran 1 ile aynı kalıcı gri sınır çizgisi. */
         #map2 { width: 100%; height: 100%; background-color: #e5e7eb; z-index: 1; box-sizing: border-box; border-bottom: 2px solid #b0bac6; }
@@ -782,6 +814,10 @@ tr.class-highlight-active {
                tutarlılık — Ekran 2'nin içeriği kendi ayrılan alanının
                dışına taşmasın diye. */
             overflow: hidden;
+            /* Faz 86: dış sarmalayıcı (.sylva-map2-wrapper) ile aynı nötr
+               zemin — olası bir alt-piksel boşluğu bu katmanda da beyaz
+               yerine bu tonu görsün. */
+            background-color: #cfd8dc;
         }
         .map2-ruler-top-row {
             display: flex; flex-direction: row; height: 22px; flex-shrink: 0;
@@ -811,7 +847,20 @@ tr.class-highlight-active {
            kapsayan dış kutunun kenarına göre hesaplanıyordu — kontroller haritanın
            gerçek kenarından 22px daha içeri kaymış görünüyordu. Cetvel genişliği
            (22px) telafi edilerek Ekran 1 ile birebir aynı görsel hizaya getirildi. */
-        .map2-left-mid { top: 92px !important; right: 61px !important; left: auto; transform: translateX(50%); }
+        /* 🛠️ BUG FİX (Faz 87 — "Ekran 2'nin kuzey oku kaymış, Ekran 1'deki
+           gibi aynı hizada olsun"): Yukarıdaki 22px'lik telafi (cetvel
+           şeridi için) SADECE cetvel GÖRÜNÜRKEN gerekli — ama Paket 70/71
+           ile cetvel artık varsayılan olarak KAPALI geliyor (kullanıcı
+           isteğiyle). Bu telafi cetvel kapalıyken de HER ZAMAN
+           uygulandığından, cetvel kapalı (yeni varsayılan) durumda Ekran
+           2'nin kuzey oku / galeri / yan tuş sütunu artık Ekran 1'e göre
+           GEREKSİZ yere kaymış görünüyordu — işte bildirdiğiniz kayma
+           buydu. Çözüm: varsayılan (cetvel kapalı) değerler artık Ekran
+           1'le BİREBİR AYNI; 22px'lik telafi yalnızca cetvel GERÇEKTEN
+           açıkken (body.sylva-rulers-on, bkz. _sylvaApplyRulerVisibility)
+           devreye giriyor. */
+        .map2-left-mid { top: 70px !important; right: 37.5px !important; left: auto; transform: translateX(50%); }
+        body.sylva-rulers-on .map2-left-mid { top: 92px !important; right: 61px !important; }
         /* İkinci harita da ana harita ile aynı yardımcı kontrolleri taşır. */
         .map2-overlay { position: absolute; z-index: 500; pointer-events: none; }
         /* İkinci haritadaki kontroller ana haritanın ortak ölçü ve
@@ -896,8 +945,10 @@ tr.class-highlight-active {
    yerinde tutar; 38.5px değeri ok genişliğinin (45px) yarısı kadar geriye
    çekilerek alttaki yan tuşlarla (right:61px, merkez ortalı) aynı eksende
    hizalanacak şekilde hesaplandı: 38.5 + 45/2 = 61. */
-.map2-top-right { top: 37px; right: 38.5px; z-index: 600; }
-        #map2-gallery { top: 37px; right: 69px; }
+.map2-top-right { top: 15px; right: 15px; z-index: 600; }
+        body.sylva-rulers-on .map2-top-right { top: 37px; right: 38.5px; }
+        #map2-gallery { top: 15px; right: 15px; }
+        body.sylva-rulers-on #map2-gallery { top: 37px; right: 69px; }
         .map-control-box { background: rgba(255, 255, 255, 0.95); padding: 10px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); display: flex; align-items: center; gap: 10px; pointer-events: auto; }
 
         /* Belirgin Kuzey Oku */
@@ -2750,6 +2801,93 @@ tr.class-highlight-active {
     }
 
     /* ═══════════════════════════════════════════════════════════════
+       🆕 Faz 82 — "ekranı küçültünce en altta koordinat X/Y/Z
+       görünmüyor, sayfa tam görünmüyor": Alt araç çubuğu (Veri /
+       Analiz / Harita Düzeni / Çıktı) eskiden dar ekranlarda EN ALTTA
+       yatay bir sıra olarak duruyordu (footer'la birlikte 102px'lik
+       bir şerit kaplıyordu) — bu da alttaki X/Y/Z koordinat kutusuna
+       ve harita içeriğine gereğinden fazla az yer bırakıyordu, özellikle
+       kısa (dar) pencerelerde sayfa tam görünmüyordu.
+       ÇÖZÜM (kullanıcı isteği): bu 4 kutu artık haritanın SOLUNDA,
+       dikey bir şerit olarak duruyor — alt kenar neredeyse tamamen
+       boşalıyor (yalnızca footer, ~40px kalıyor). Kutuya tıklandığında
+       AÇILAN panel (#mobile-drawer) zaten SOLDAN kayarak tam yüksekliğe
+       BÜYÜYEN bir "pano" idi — bu davranış hiç değişmedi, yalnızca onu
+       TETİKLEYEN 4 kutunun KONUMU değişti.
+       Not: Çift ekran modunda (body.sylva-dual-screen-on) eski davranış
+       (alt yatay çubuk) AYNEN korunuyor — o modun kendi ayrı boşluk
+       mantığıyla (_sylvaSyncDualScreenBottomClearance) çakışmaması için.
+       ═══════════════════════════════════════════════════════════════ */
+    @media (max-width: 640px) {
+        body:not(.sylva-dual-screen-on) #mobile-toolbar {
+            flex-direction: column !important;
+            top: 60px !important;
+            bottom: 44px !important;
+            left: 0 !important;
+            right: auto !important;
+            width: 58px !important;
+            height: auto !important;
+            border-top: none !important;
+            border-right: 2px solid #b0bac6 !important;
+            box-shadow: 2px 0 12px rgba(0,0,0,0.08) !important;
+            padding: 6px 4px !important;
+            gap: 5px !important;
+            overflow-y: auto !important;
+            align-items: stretch !important;
+        }
+        body:not(.sylva-dual-screen-on) .mobile-tool-quick-btn {
+            flex: 0 0 auto !important;
+            width: 100% !important;
+            padding: 6px 2px !important;
+            font-size: 0.56rem !important;
+            line-height: 1.15 !important;
+            white-space: normal !important;
+            word-break: break-word !important;
+        }
+        body:not(.sylva-dual-screen-on) .mobile-tool-quick-btn .mtqb-icon {
+            font-size: 1.05rem !important;
+        }
+        /* Harita artık soldan da rayın genişliği kadar boşluk bırakır,
+           böylece içerik (ve X/Y/Z koordinat kutusu) rayın ALTINDA/
+           ARKASINDA kalmaz. */
+        body:not(.sylva-dual-screen-on) .ruler-map-row {
+            padding-left: 58px !important;
+            box-sizing: border-box !important;
+        }
+    }
+    @media (max-height: 500px) and (orientation: landscape) {
+        body:not(.sylva-dual-screen-on) #mobile-toolbar {
+            flex-direction: column !important;
+            top: 50px !important;
+            bottom: 44px !important;
+            left: 0 !important;
+            right: auto !important;
+            width: 54px !important;
+            height: auto !important;
+            border-top: none !important;
+            border-right: 2px solid #b0bac6 !important;
+            box-shadow: 2px 0 12px rgba(0,0,0,0.08) !important;
+            padding: 5px 3px !important;
+            gap: 4px !important;
+            overflow-y: auto !important;
+            align-items: stretch !important;
+        }
+        body:not(.sylva-dual-screen-on) .mobile-tool-quick-btn {
+            flex: 0 0 auto !important;
+            width: 100% !important;
+            padding: 4px 2px !important;
+            font-size: 0.52rem !important;
+            line-height: 1.1 !important;
+            white-space: normal !important;
+            word-break: break-word !important;
+        }
+        body:not(.sylva-dual-screen-on) .ruler-map-row {
+            padding-left: 54px !important;
+            box-sizing: border-box !important;
+        }
+    }
+
+    /* ═══════════════════════════════════════════════════════════════
        🖥️🖥️ ÇİFT EKRAN — MOBİL/TABLET DÜZELTMESİ
        Sorun: tek-ekran modu için "#mobile-toolbar" (Veri/Analiz/Harita
        Düzeni/Çıktı) payı olarak eklenen alt boşluk (padding-bottom),
@@ -3093,11 +3231,33 @@ tr.class-highlight-active {
     <style id="sylva-left-panel-scroll-fix">
         /* Keep Workspace & Data Selection constrained to the app height. */
         .main-container { min-height: 0; }
+        /* 🛠️ BUG FİX (Faz 84 — "sol sütunun daraltma oku aşağı kayınca
+           kayboluyor, sağdaki gibi sabit değil"): Bu kural eskiden kaydırma
+           (scroll) alanını DOĞRUDAN .sidebar-left.panel'e (overflow-y:auto)
+           veriyordu. Ama daraltma oku (.left-collapse-btn) da bu AYNI
+           elemanın İÇİNDE, position:absolute olarak duruyor — yani kutunun
+           kendisi kaydıkça ok da onunla birlikte yukarı kayıp görünüm
+           alanının dışına çıkıyordu. Sağ panelde ise kaydırma DOĞRUDAN
+           .sidebar-right'a değil, İÇERİDEKİ .panel-content sarmalayıcısına
+           veriliyor; .right-collapse-btn ise .sidebar-right'ın (kaymayan)
+           doğrudan çocuğu olduğundan hep sabit kalıyordu. Çözüm: aynı
+           deseni sol panelde de uyguluyoruz — kaydırma artık
+           .sidebar-left.panel'in KENDİSİNDE değil, İÇERİDEKİ
+           .left-panel-content sarmalayıcısında; .left-collapse-btn (ve
+           .left-collapsed-label) artık kaymayan .sidebar-left.panel'in
+           doğrudan çocuğu olarak sabit kalıyor — tıpkı sağdaki gibi. */
         .sidebar-left.panel {
             height: 100%;
             min-height: 0;
             box-sizing: border-box;
-            overflow-y: auto !important;
+            overflow: hidden !important;
+            position: relative;
+        }
+        .sidebar-left.panel > .left-panel-content {
+            height: 100%;
+            min-height: 0;
+            box-sizing: border-box;
+            overflow-y: auto;
             overflow-x: hidden;
             overscroll-behavior: contain;
             scrollbar-gutter: stable;
@@ -3107,7 +3267,12 @@ tr.class-highlight-active {
             height: auto;
             max-height: none;
             min-height: 0;
-            overflow-y: visible !important;
+            overflow: visible !important;
+        }
+        #mobile-drawer-content .sidebar-left.panel > .left-panel-content,
+        #mobile-tab-workspace .sidebar-left.panel > .left-panel-content {
+            height: auto;
+            overflow-y: visible;
         }
     </style>
 <style id="sylva-final-ui-parity-fix-20260820">
@@ -5308,6 +5473,23 @@ function _sylvaHasMixedStackCategories(paneId) {
     }
     window._wxLoadLogoAsset = _wxLoadLogoAsset;
 
+    // 🆕 Faz 80: AI Veri Asistanı (Gemini) raporunun, kullanıcı Uydu
+    // Görüntüsü/Uydu Analizi/Zaman Serisi gibi TARİHLİ analizleri
+    // kullanıyorsa (ve "🌦️ Hava Durumu" kutusu işaretliyse) bu analizlerin
+    // tarihine bağlı 30 günlük hava durumu verisini de yoruma dahil
+    // edebilmesi için dışa açık bir erişim noktası — STATE bu IIFE'ye özel
+    // olduğundan (window'a bağlı değil), başka bir <script> bloğundaki
+    // sylvaAskGeminiDataQuestion() buraya doğrudan erişemiyordu.
+    // Yalnızca hava durumu takibi GERÇEKTEN AKTİFSE ve veri VARSA bir dizi
+    // döner — aksi halde null (raporun "hava durumu kullanılmıyorsa dahil
+    // etme" kuralı burada, kaynağında uygulanıyor).
+    window._sylvaGetWeatherSummaryDays = function (paneId) {
+        var key = (paneId === 'map2') ? 'map2' : 'map';
+        var st = STATE[key];
+        if (!st || !st.active || !st.days || !st.days.length) return null;
+        return st.days;
+    };
+
     // PDF: downloadPDF() ile AYNI yöntem (html2canvas ile TARAYICININ KENDİ
     // Unicode fontuyla görsele dönüştürüp jsPDF'e PNG olarak gömme — RTL ve
     // Latin-olmayan diller dahil TÜM diller sorunsuz görünsün diye).
@@ -5416,6 +5598,20 @@ function _sylvaHasMixedStackCategories(paneId) {
             var pxToPt = imgW / canvas.width;
             var pageContentPx = (pageH - marginTop - marginBottom) / pxToPt;
 
+            // 🛠️ BOŞ SON SAYFA FİX'İ: canvas'ın toplam yüksekliği, gizli
+            // gizli div'in ALT PADDING'ini de içeriyor (gerçek içerik burada
+            // bitiyor, ama canvas biraz daha uzun). Eskiden döngü doğrudan
+            // canvas.height'e kadar dönüyordu — bu, son satırdan sonra kalan
+            // birkaç pikselik boş padding şeridi için bile FAZLADAN, TAMAMEN
+            // BOŞ bir sayfa oluşturuyordu. Artık döngü yalnızca en son satırın
+            // BİTTİĞİ noktaya kadar gidiyor; geri kalan boş padding hiçbir
+            // zaman kendi sayfasını almıyor.
+            var contentBottomPx = canvas.height;
+            if (rowBoundaries.length) {
+                var lastRowBottom = Math.ceil(rowBoundaries[rowBoundaries.length - 1].bottom);
+                if (lastRowBottom > 0 && lastRowBottom < contentBottomPx) contentBottomPx = lastRowBottom;
+            }
+
             // Logo boyutu: en fazla 26pt yükseklik, 90pt genişlik — oranı korunur.
             var logoDrawH = 0, logoDrawW = 0;
             if (logo) {
@@ -5429,8 +5625,8 @@ function _sylvaHasMixedStackCategories(paneId) {
             }
 
             var y = 0, first = true;
-            while (y < canvas.height) {
-                var maxY = Math.min(y + pageContentPx, canvas.height);
+            while (y < contentBottomPx) {
+                var maxY = Math.min(y + pageContentPx, contentBottomPx);
                 // 🛠️ BUG FİX: Önceki sürüm sayfayı SABİT piksel yüksekliğinde
                 // kesiyordu — bu, bir tablo satırının üst yarısını bir
                 // sayfada, alt yarısını bir sonraki sayfada bırakabiliyordu
@@ -5613,7 +5809,7 @@ function _sylvaHasMixedStackCategories(paneId) {
     </label>
 
     <label class="option-item">
-        <input type="checkbox" id="toggle-rulers" checked>
+        <input type="checkbox" id="toggle-rulers">
         <span data-i18n="ruler_lbl">Cetvel</span>
     </label>
 
@@ -5788,7 +5984,7 @@ function _sylvaHasMixedStackCategories(paneId) {
 <!-- ===== CLASSIFIED MOD AYARLARI ===== -->
 <div id="classified-settings" class="control-group" style="display:none; flex-direction:column; gap:8px;">
     <label style="font-size:0.75rem; color:#94a3b8; margin-bottom:0;" data-i18n="legend_title_lbl">Lejant Başlığı</label>
-    <input type="text" id="classified-title" value="Sınıflandırılmış Veri"
+    <input type="text" id="classified-title" value=""
         style="width:100%; padding:6px; border:1px solid #cbd5e1; border-radius:4px; font-size:0.85rem; margin-bottom:2px;">
     <div style="display:flex; align-items:center; justify-content:space-between;">
         <label style="font-weight: bold; font-size: 0.9rem; color: #333;" data-i18n="class_range">Sınıflandırma Aralığı</label>
@@ -8130,6 +8326,10 @@ function _sylvaHasMixedStackCategories(paneId) {
 
             document.body.classList.toggle('sylva-dual-screen-on', active);
             if (panesRow) panesRow.classList.toggle('sylva-single-pane-map2', singlePaneIsMap2);
+            // 🆕 Faz 82.1: çift ekran açılıp/kapanınca alt araç çubuğunun
+            // sol-ray / alt-çubuk durumu da (dual-screen'de HER ZAMAN eski
+            // alt-çubuk) hemen yeniden değerlendirilsin — resize beklemeden.
+            if (typeof window._sylvaApplyMobileToolbarRail === 'function') window._sylvaApplyMobileToolbarRail();
 
             // 🔄 Çalışma Alanları senkronizasyon kutusu her zaman görünür.
             // Çift ekran açıkken etkinleşir; tek ekrana dönüşte yalnızca
@@ -8346,11 +8546,20 @@ function _sylvaHasMixedStackCategories(paneId) {
                 // render edilen yüksekliğine göre belirleniyor. Faz 61'in
                 // asıl endişesini (ölçüm ilk anda eksik/gecikmeli gelirse
                 // pay kısa kalabilir) gidermek için ölçülen değer hiçbir
-                // zaman uzun süredir güvenilir olan 102px tabanının ALTINA
+                // zaman uzun süredir güvenilir olan bir tabanın ALTINA
                 // düşürülmez — yalnızca gerekirse (metin/tuş daha uzun
                 // render edildiyse) ARTIRILIR, böylece pay ne fazla (boşluk)
                 // ne eksik (üstüne binme) kalır.
-                var _sylvaMobileFloor = (window.innerWidth <= 640) ? 102 : 0;
+                // 🛠️ BUG FİX (Faz 82 — "koordinat X/Y/Z görünmüyor, sayfa
+                // tam görünmüyor"): #mobile-toolbar (4 tuş: Veri/Analiz/
+                // Harita Düzeni/Çıktı) artık dar ekranlarda EN ALTTA yatay
+                // bir sıra değil, haritanın SOLUNDA dikey bir ray (bkz.
+                // yukarıdaki yeni CSS bloğu) — yani alt kenarda artık
+                // yalnızca footer (~40px) kalıyor, toolbar'ın 62px'lik payı
+                // GEREKMİYOR. Eski taban (102 = toolbar 62 + footer 40)
+                // artık YANLIŞ FAZLA bir boşluk bırakıyordu; taban footer'ı
+                // (+küçük güvenlik payı) yansıtacak şekilde düşürüldü.
+                var _sylvaMobileFloor = (window.innerWidth <= 640) ? 44 : 0;
                 // 🛠️ BUG FİX (Faz 58 — "tam ekranda hâlâ boşluk var"): Bu
                 // ölçüm önceden yalnızca GEOMETRİYE (elemanın alt kenarı
                 // görünüm alanının altına yakın mı) bakıyordu — footer
@@ -9723,7 +9932,15 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
     // toggleSideButtons global fonksiyon olarak tanımlandı (aşağıda)
 
     // 7. Cetvel — yatay ve dikey cetveli gizle/göster
-    document.getElementById('toggle-rulers').addEventListener('change', function() {
+    // 🆕 Faz 81: kullanıcı isteğiyle cetvel artık İLK AÇILIŞTA kapalı geliyor
+    // (kutu işaretsiz) — isteyen kullanıcı kendisi işaretleyip açıyor. Aynı
+    // gösterme/gizleme mantığı hem checkbox değiştiğinde HEM DE sayfa
+    // yüklenirken (başlangıç durumunu kutunun (artık varsayılan olarak
+    // işaretsiz) gerçek durumuyla eşleştirmek için) bir kez çalıştırılıyor —
+    // bu yüzden ortak bir fonksiyona çıkarıldı.
+    function _sylvaApplyRulerVisibility() {
+        var cb = document.getElementById('toggle-rulers');
+        if (!cb) return;
         var topRow = document.querySelector('.ruler-top-row');
         var rulerV = document.getElementById('ruler-v');
         var rulerCorner = document.getElementById('ruler-corner');
@@ -9731,7 +9948,13 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
         var map2RulerH = document.getElementById('map2-ruler-h');
         var map2RulerV = document.getElementById('map2-ruler-v');
         var map2RulerCorner = document.getElementById('map2-ruler-corner');
-        var show = this.checked;
+        var show = cb.checked;
+        // 🆕 Faz 87: Ekran 2'nin kuzey oku/galeri/yan tuş sütununun cetvel
+        // şeridi için ne kadar ekstra pay bırakması gerektiğini (bkz.
+        // yukarıdaki .map2-top-right / #map2-gallery / .map2-left-mid CSS
+        // kuralları) artık bu class belirliyor — cetvel açıkken pay var,
+        // kapalıyken (yeni varsayılan) Ekran 1 ile birebir aynı hizada.
+        document.body.classList.toggle('sylva-rulers-on', show);
         // NOT: .ruler-top-row için "display: flex !important" tanımlı bir
         // CSS kuralı var; düz style.display ataması bunu geçemez ve üstteki
         // cetvel kapatılsa bile görünür kalırdı. setProperty(...,'important')
@@ -9748,7 +9971,103 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
             }
             if (typeof window._updateMap2Ruler === 'function') window._updateMap2Ruler();
         }, 50);
-    });
+    }
+    document.getElementById('toggle-rulers').addEventListener('change', _sylvaApplyRulerVisibility);
+    // Sayfa ilk yüklendiğinde de kutunun (artık varsayılan işaretsiz) gerçek
+    // durumunu haritaya uygula — aksi halde cetvel CSS'te varsayılan görünür
+    // kalır ve kutuyla ekran arasında bir uyumsuzluk oluşurdu.
+    _sylvaApplyRulerVisibility();
+
+    // ═══════════════════════════════════════════════════════════════
+    // 🆕 Faz 82.1 — Alt araç çubuğunun (Veri/Analiz/Harita Düzeni/Çıktı)
+    // sol dikey raya dönüşmesi yukarıda YENİ eklenen CSS kurallarıyla
+    // yapılıyordu; ama bu dosyada #mobile-toolbar için ONLARCA çakışan/
+    // tekrarlı @media kuralı olduğundan (bkz. yukarıdaki uzun liste),
+    // yalnızca CSS'e güvenmek risklidir — bu yüzden AYNI sonuç burada
+    // JS ile de DOĞRUDAN (inline stil, en yüksek öncelik — herhangi bir
+    // CSS özgüllüğünü/sırasını geçersiz kılar) UYGULANIYOR. Sonuç artık
+    // CSS kaskadının nasıl yorumlandığından bağımsız olarak GARANTİ.
+    // ═══════════════════════════════════════════════════════════════
+    function _sylvaApplyMobileToolbarRail() {
+        try {
+            var toolbar = document.getElementById('mobile-toolbar');
+            if (!toolbar) return;
+            var dual = !!(document.body && document.body.classList.contains('sylva-dual-screen-on'));
+            var isLandscapeShort = false;
+            try { isLandscapeShort = window.matchMedia('(max-height: 500px) and (orientation: landscape)').matches; } catch (e2) {}
+            var isNarrow = window.innerWidth <= 640;
+            var rail = !dual && (isNarrow || isLandscapeShort);
+            var btns = toolbar.querySelectorAll('.mobile-tool-quick-btn');
+            var icons = toolbar.querySelectorAll('.mtqb-icon');
+            var rows = document.querySelectorAll('.ruler-map-row');
+            if (rail) {
+                var railW = isNarrow ? '58px' : '54px';
+                var topOff = isNarrow ? '60px' : '50px';
+                toolbar.style.setProperty('flex-direction', 'column', 'important');
+                toolbar.style.setProperty('top', topOff, 'important');
+                toolbar.style.setProperty('bottom', '44px', 'important');
+                toolbar.style.setProperty('left', '0', 'important');
+                toolbar.style.setProperty('right', 'auto', 'important');
+                toolbar.style.setProperty('width', railW, 'important');
+                toolbar.style.setProperty('height', 'auto', 'important');
+                toolbar.style.setProperty('border-top', 'none', 'important');
+                toolbar.style.setProperty('border-right', '2px solid #b0bac6', 'important');
+                toolbar.style.setProperty('box-shadow', '2px 0 12px rgba(0,0,0,0.08)', 'important');
+                toolbar.style.setProperty('padding', (isNarrow ? '6px 4px' : '5px 3px'), 'important');
+                toolbar.style.setProperty('gap', (isNarrow ? '5px' : '4px'), 'important');
+                toolbar.style.setProperty('overflow-y', 'auto', 'important');
+                toolbar.style.setProperty('align-items', 'stretch', 'important');
+                btns.forEach(function (b) {
+                    b.style.setProperty('flex', '0 0 auto', 'important');
+                    b.style.setProperty('width', '100%', 'important');
+                    b.style.setProperty('padding', (isNarrow ? '6px 2px' : '4px 2px'), 'important');
+                    b.style.setProperty('font-size', (isNarrow ? '0.56rem' : '0.52rem'), 'important');
+                    b.style.setProperty('line-height', '1.15', 'important');
+                    b.style.setProperty('white-space', 'normal', 'important');
+                    b.style.setProperty('word-break', 'break-word', 'important');
+                });
+                icons.forEach(function (ic) {
+                    ic.style.setProperty('font-size', '1.05rem', 'important');
+                });
+                rows.forEach(function (r) {
+                    r.style.setProperty('padding-left', railW, 'important');
+                    r.style.setProperty('box-sizing', 'border-box', 'important');
+                });
+            } else {
+                toolbar.style.removeProperty('flex-direction');
+                toolbar.style.removeProperty('top');
+                toolbar.style.removeProperty('bottom');
+                toolbar.style.removeProperty('left');
+                toolbar.style.removeProperty('right');
+                toolbar.style.removeProperty('width');
+                toolbar.style.removeProperty('height');
+                toolbar.style.removeProperty('border-top');
+                toolbar.style.removeProperty('border-right');
+                toolbar.style.removeProperty('box-shadow');
+                toolbar.style.removeProperty('padding');
+                toolbar.style.removeProperty('gap');
+                toolbar.style.removeProperty('overflow-y');
+                toolbar.style.removeProperty('align-items');
+                btns.forEach(function (b) {
+                    b.style.removeProperty('flex');
+                    b.style.removeProperty('width');
+                    b.style.removeProperty('padding');
+                    b.style.removeProperty('font-size');
+                    b.style.removeProperty('line-height');
+                    b.style.removeProperty('white-space');
+                    b.style.removeProperty('word-break');
+                });
+                icons.forEach(function (ic) { ic.style.removeProperty('font-size'); });
+                rows.forEach(function (r) {
+                    r.style.removeProperty('padding-left');
+                });
+            }
+        } catch (e) {}
+    }
+    window._sylvaApplyMobileToolbarRail = _sylvaApplyMobileToolbarRail;
+    _sylvaApplyMobileToolbarRail();
+    window.addEventListener('resize', _sylvaApplyMobileToolbarRail);
+    window.addEventListener('orientationchange', function () { setTimeout(_sylvaApplyMobileToolbarRail, 200); });
 
 
     // ─── 8. UTM Grid ────────────────────────────────────────────────────────
@@ -21012,6 +21331,20 @@ function selectRamp(name) {
                     var pxToPt = imgW / canvas.width;
                     var pageContentPx = (pageH - marginTop - marginBottom) / pxToPt;
 
+                    // 🛠️ BOŞ SON SAYFA FİX'İ: gizli div'in alt padding'i
+                    // canvas'ın toplam yüksekliğine dahil oluyor, ama bu
+                    // padding'in içinde GERÇEK içerik yok. Eskiden döngü
+                    // doğrudan canvas.height'e kadar sürdüğü için, son
+                    // satırdan sonra kalan bu boş şerit bile kendi başına
+                    // FAZLADAN, TAMAMEN BOŞ bir sayfa oluşturuyordu. Artık
+                    // döngü yalnızca en son "satırın" (pdf-row) bittiği
+                    // noktaya kadar gidiyor.
+                    var contentBottomPx = canvas.height;
+                    if (rowBoundaries.length) {
+                        var lastRowBottom = Math.ceil(rowBoundaries[rowBoundaries.length - 1].bottom);
+                        if (lastRowBottom > 0 && lastRowBottom < contentBottomPx) contentBottomPx = lastRowBottom;
+                    }
+
                     var logoDrawH = 0, logoDrawW = 0;
                     if (logo) {
                         logoDrawH = 26;
@@ -21024,8 +21357,8 @@ function selectRamp(name) {
                     }
 
                     var y = 0, first = true;
-                    while (y < canvas.height) {
-                        var maxY = Math.min(y + pageContentPx, canvas.height);
+                    while (y < contentBottomPx) {
+                        var maxY = Math.min(y + pageContentPx, contentBottomPx);
                         var cutY = maxY;
                         for (var i = 0; i < rowBoundaries.length; i++) {
                             var rb = rowBoundaries[i];
@@ -21122,6 +21455,17 @@ function selectRamp(name) {
                     body.images = images.map(function (im) {
                         return { analysis_name: im.analysisName || null, base64: im.base64, mime: im.mime };
                     });
+                }
+                // 🆕 Faz 80: Uydu Görüntüsü/Uydu Analizi/Zaman Serisi gibi
+                // TARİHLİ analizler kullanılıyorsa VE "🌦️ Hava Durumu" kutusu
+                // işaretliyse, o analizlerin tarihine bağlı 30 günlük hava
+                // durumu verisi de eklenir — böylece asistan "son günlerde
+                // bölge kuru kalmış / yağış almış" gibi daha bilimsel bir
+                // bağlamla yorum yapabilir. Veri yoksa (kutu işaretli değilse
+                // veya henüz veri gelmediyse) hiçbir şey eklenmez.
+                var _wxDays = (typeof window._sylvaGetWeatherSummaryDays === 'function') ? window._sylvaGetWeatherSummaryDays(pane) : null;
+                if (_wxDays && _wxDays.length) {
+                    body.weather_days = _wxDays;
                 }
                 return fetch(API_BASE + '/api/gemini-data-qa', {
                     method: 'POST',
@@ -28890,6 +29234,8 @@ var SYLVA_TRANSLATIONS = {
     export_format_label: '📁 Output Format',
     export_quality_label: '🔍 Output Quality',
     export_wysiwyg_note: 'Map is exported exactly as seen on screen (WYSIWYG).',
+    export_dualscreen_title: 'Dual Screen Output',
+    export_dualscreen_desc: 'Exports both screens side by side in a single file, each with its own north arrow, scale bar, legend, and logo.',
     q_screen: 'Screen', q_high: 'High', q_pro: 'Professional', q_print: 'Print',
     export_pdf_size_label: '📐 Paper Size',
     pdf_size_a4l: 'A4 Landscape (297 × 210 mm)', pdf_size_a4p: 'A4 Portrait (210 × 297 mm)',
@@ -29445,6 +29791,8 @@ var SYLVA_TRANSLATIONS = {
     export_format_label: '📁 Chiqish formati',
     export_quality_label: '🔍 Chiqish sifati',
     export_wysiwyg_note: 'Xarita ekranda koʻrinishi bilan aynan bir xil eksport qilinadi (WYSIWYG).',
+    export_dualscreen_title: 'Ikki ekran chiqishi',
+    export_dualscreen_desc: 'Ikkala ekranni ham, har birining o‘z shimol o‘qi, masshtabi, legendasi va logotipi bilan yonma-yon bitta faylda eksport qiladi.',
     q_screen: 'Ekran', q_high: 'Yuqori', q_pro: 'Professional', q_print: 'Chop etish',
     export_pdf_size_label: '📐 Qogʻoz oʻlchami',
     pdf_size_a4l: 'A4 Albom (297 × 210 mm)', pdf_size_a4p: 'A4 Kitob (210 × 297 mm)',
@@ -29988,6 +30336,8 @@ var SYLVA_TRANSLATIONS = {
     export_format_label: '📁 Μορφή Εξόδου',
     export_quality_label: '🔍 Ποιότητα Εξόδου',
     export_wysiwyg_note: 'Ο χάρτης εξάγεται ακριβώς όπως φαίνεται στην οθόνη (WYSIWYG).',
+    export_dualscreen_title: 'Έξοδος διπλής οθόνης',
+    export_dualscreen_desc: 'Εξάγει και τις δύο οθόνες δίπλα-δίπλα σε ένα ενιαίο αρχείο, η καθεμία με το δικό της βέλος βορρά, κλίμακα, υπόμνημα και λογότυπο.',
     q_screen: 'Οθόνη', q_high: 'Υψηλή', q_pro: 'Επαγγελματική', q_print: 'Εκτύπωση',
     export_pdf_size_label: '📐 Μέγεθος Χαρτιού',
     pdf_size_a4l: 'A4 Οριζόντιο (297 × 210 mm)', pdf_size_a4p: 'A4 Κατακόρυφο (210 × 297 mm)',
@@ -30537,6 +30887,8 @@ var SYLVA_TRANSLATIONS = {
     export_format_label: '📁 Формат на извеждане',
     export_quality_label: '🔍 Качество на извеждане',
     export_wysiwyg_note: 'Картата се експортира точно както се показва на екрана (WYSIWYG).',
+    export_dualscreen_title: 'Изход с два екрана',
+    export_dualscreen_desc: 'Експортира и двата екрана един до друг в един файл, всеки със собствена стрелка на север, мащаб, легенда и лого.',
     q_screen: 'Екран', q_high: 'Високо', q_pro: 'Професионално', q_print: 'Печат',
     export_pdf_size_label: '📐 Размер на хартията',
     pdf_size_a4l: 'A4 Пейзаж (297 × 210 мм)', pdf_size_a4p: 'A4 Портрет (210 × 297 мм)',
@@ -31095,6 +31447,8 @@ var SYLVA_TRANSLATIONS = {
     export_format_label: '📁 Çıktı Formatı',
     export_quality_label: '🔍 Çıktı Kalitesi',
     export_wysiwyg_note: 'Harita ekrandaki boyut ve görünümüyle birebir dışa aktarılır (WYSIWYG).',
+    export_dualscreen_title: 'Çift Ekran Çıktısı',
+    export_dualscreen_desc: 'İki ekranı da; kendi kuzey oku, ölçek, lejant ve logosuyla yan yana tek dosyada dışa aktarır.',
     q_screen: 'Ekran', q_high: 'Yüksek', q_pro: 'Profesyonel', q_print: 'Baskı',
     export_pdf_size_label: '📐 Kağıt Boyutu',
     pdf_size_a4l: 'A4 Yatay (297 × 210 mm)', pdf_size_a4p: 'A4 Dikey (210 × 297 mm)',
@@ -31643,6 +31997,8 @@ var SYLVA_TRANSLATIONS = {
     export_format_label: '📁 Çıxış Formatı',
     export_quality_label: '🔍 Çıxış Keyfiyyəti',
     export_wysiwyg_note: 'Xəritə ekrandaki ölçü və görünüşü ilə eyni şəkildə xaricə ötürülür (WYSIWYG).',
+    export_dualscreen_title: 'İki Ekran Çıxışı',
+    export_dualscreen_desc: 'Hər iki ekranı, öz şimal oxu, miqyası, leqendi və loqosu ilə yan-yana tək faylda ixrac edir.',
     q_screen: 'Ekran', q_high: 'Yüksək', q_pro: 'Peşəkar', q_print: 'Çap',
     export_pdf_size_label: '📐 Kağız Ölçüsü',
     pdf_size_a4l: 'A4 Üfüqi (297 × 210 mm)', pdf_size_a4p: 'A4 Şaquli (210 × 297 mm)',
@@ -32188,6 +32544,8 @@ var SYLVA_TRANSLATIONS = {
     export_format_label: '📁 Kimeneti Formátum',
     export_quality_label: '🔍 Kimeneti Minőség',
     export_wysiwyg_note: 'A térkép a képernyőn látható mérettel és megjelenéssel azonos módon kerül exportálásra (WYSIWYG).',
+    export_dualscreen_title: 'Kettős Képernyős Kimenet',
+    export_dualscreen_desc: 'Mindkét képernyőt egymás mellett, egyetlen fájlban exportálja, mindegyiket a saját északi nyilával, méretarányával, jelmagyarázatával és logójával.',
     q_screen: 'Képernyő', q_high: 'Magas', q_pro: 'Professzionális', q_print: 'Nyomtatás',
     export_pdf_size_label: '📐 Papírméret',
     pdf_size_a4l: 'A4 Fekvő (297 × 210 mm)', pdf_size_a4p: 'A4 Álló (210 × 297 mm)',
@@ -32732,6 +33090,8 @@ var SYLVA_TRANSLATIONS = {
     export_format_label: '📁 Шығыс форматы',
     export_quality_label: '🔍 Шығыс сапасы',
     export_wysiwyg_note: 'Карта экранда көрсетілгендей экспортталады (WYSIWYG).',
+    export_dualscreen_title: 'Қос экран шығысы',
+    export_dualscreen_desc: 'Екі экранды да, әрқайсысының өз солтүстік көрсеткіші, масштабы, легендасы және логотипімен қатар бір файлға экспорттайды.',
     q_screen: 'Экран', q_high: 'Жоғары', q_pro: 'Кәсіби', q_print: 'Басып шығару',
     export_pdf_size_label: '📐 Қағаз өлшемі',
     pdf_size_a4l: 'A4 Көлденең (297 × 210 мм)', pdf_size_a4p: 'A4 Тік (210 × 297 мм)',
@@ -33272,6 +33632,8 @@ var SYLVA_TRANSLATIONS = {
     export_format_label: '📁 Ausgabeformat',
     export_quality_label: '🔍 Ausgabequalität',
     export_wysiwyg_note: 'Die Karte wird genau so exportiert, wie sie auf dem Bildschirm zu sehen ist (WYSIWYG).',
+    export_dualscreen_title: 'Doppelbildschirm-Export',
+    export_dualscreen_desc: 'Exportiert beide Bildschirme nebeneinander in einer einzigen Datei, jeweils mit eigenem Nordpfeil, Maßstab, Legende und Logo.',
     q_screen: 'Bildschirm', q_high: 'Hoch', q_pro: 'Professionell', q_print: 'Druck',
     export_pdf_size_label: '📐 Papierformat',
     pdf_size_a4l: 'A4 Querformat (297 × 210 mm)', pdf_size_a4p: 'A4 Hochformat (210 × 297 mm)',
@@ -33822,6 +34184,8 @@ var SYLVA_TRANSLATIONS = {
     export_format_label: '📁 Format de sortie',
     export_quality_label: '🔍 Qualité de sortie',
     export_wysiwyg_note: 'La carte est exportée exactement telle qu\'elle apparaît à l\'écran (WYSIWYG).',
+    export_dualscreen_title: 'Export à double écran',
+    export_dualscreen_desc: 'Exporte les deux écrans côte à côte dans un seul fichier, chacun avec sa propre flèche du nord, son échelle, sa légende et son logo.',
     q_screen: 'Écran', q_high: 'Élevée', q_pro: 'Professionnelle', q_print: 'Impression',
     export_pdf_size_label: '📐 Taille du papier',
     pdf_size_a4l: 'A4 Paysage (297 × 210 mm)', pdf_size_a4p: 'A4 Portrait (210 × 297 mm)',
@@ -34372,6 +34736,8 @@ var SYLVA_TRANSLATIONS = {
     export_format_label: '📁 Formato de salida',
     export_quality_label: '🔍 Calidad de salida',
     export_wysiwyg_note: 'El mapa se exporta exactamente como se ve en pantalla (WYSIWYG).',
+    export_dualscreen_title: 'Salida de doble pantalla',
+    export_dualscreen_desc: 'Exporta ambas pantallas una junto a la otra en un solo archivo, cada una con su propia flecha norte, escala, leyenda y logotipo.',
     q_screen: 'Pantalla', q_high: 'Alta', q_pro: 'Profesional', q_print: 'Impresión',
     export_pdf_size_label: '📐 Tamaño de papel',
     pdf_size_a4l: 'A4 Horizontal (297 × 210 mm)', pdf_size_a4p: 'A4 Vertical (210 × 297 mm)',
@@ -34922,6 +35288,8 @@ var SYLVA_TRANSLATIONS = {
     export_format_label: '📁 Formato de saída',
     export_quality_label: '🔍 Qualidade de saída',
     export_wysiwyg_note: 'O mapa é exportado exatamente como aparece no ecrã (WYSIWYG).',
+    export_dualscreen_title: 'Saída de ecrã duplo',
+    export_dualscreen_desc: 'Exporta os dois ecrãs lado a lado num único ficheiro, cada um com a sua própria seta norte, escala, legenda e logótipo.',
     q_screen: 'Ecrã', q_high: 'Alta', q_pro: 'Profissional', q_print: 'Impressão',
     export_pdf_size_label: '📐 Tamanho do papel',
     pdf_size_a4l: 'A4 Horizontal (297 × 210 mm)', pdf_size_a4p: 'A4 Vertical (210 × 297 mm)',
@@ -35472,6 +35840,8 @@ var SYLVA_TRANSLATIONS = {
     export_format_label: '📁 صيغة الإخراج',
     export_quality_label: '🔍 جودة الإخراج',
     export_wysiwyg_note: 'يتم تصدير الخريطة بالضبط كما تظهر على الشاشة (WYSIWYG).',
+    export_dualscreen_title: 'إخراج الشاشة المزدوجة',
+    export_dualscreen_desc: 'يُصدّر كلتا الشاشتين جنبًا إلى جنب في ملف واحد، لكل منهما سهم الشمال والمقياس والمفتاح والشعار الخاص بها.',
     q_screen: 'شاشة', q_high: 'عالية', q_pro: 'احترافية', q_print: 'طباعة',
     export_pdf_size_label: '📐 حجم الورق',
     pdf_size_a4l: 'A4 أفقي (297 × 210 مم)', pdf_size_a4p: 'A4 عمودي (210 × 297 مم)',
@@ -36022,6 +36392,8 @@ var SYLVA_TRANSLATIONS = {
     export_format_label: '📁 قالب خروجی',
     export_quality_label: '🔍 کیفیت خروجی',
     export_wysiwyg_note: 'نقشه دقیقاً همان‌طور که روی صفحه‌نمایش دیده می‌شود خروجی گرفته می‌شود (WYSIWYG).',
+    export_dualscreen_title: 'خروجی دو صفحه‌نمایش',
+    export_dualscreen_desc: 'هر دو صفحه را کنار هم در یک فایل خروجی می‌گیرد؛ هرکدام با فلش شمال، مقیاس، راهنما و آرم مخصوص به خود.',
     q_screen: 'صفحه نمایش', q_high: 'بالا', q_pro: 'حرفه‌ای', q_print: 'چاپ',
     export_pdf_size_label: '📐 اندازه کاغذ',
     pdf_size_a4l: 'A4 افقی (297 × 210 میلی‌متر)', pdf_size_a4p: 'A4 عمودی (210 × 297 میلی‌متر)',
@@ -36572,6 +36944,8 @@ var SYLVA_TRANSLATIONS = {
     export_format_label: '📁 输出格式',
     export_quality_label: '🔍 输出质量',
     export_wysiwyg_note: '地图将与屏幕显示完全一致地导出（WYSIWYG）。',
+    export_dualscreen_title: '双屏输出',
+    export_dualscreen_desc: '将两个屏幕并排导出到同一个文件中，每个屏幕都带有各自的指北针、比例尺、图例和标志。',
     q_screen: '屏幕', q_high: '高', q_pro: '专业', q_print: '打印',
     export_pdf_size_label: '📐 纸张尺寸',
     pdf_size_a4l: 'A4 横向 (297 × 210 mm)', pdf_size_a4p: 'A4 纵向 (210 × 297 mm)',
@@ -37122,6 +37496,8 @@ var SYLVA_TRANSLATIONS = {
     export_format_label: '📁 出力形式',
     export_quality_label: '🔍 出力品質',
     export_wysiwyg_note: '地図は画面に表示されているとおりにエクスポートされます（WYSIWYG）。',
+    export_dualscreen_title: 'デュアルスクリーン出力',
+    export_dualscreen_desc: '両方の画面を、それぞれ独自の方位記号・縮尺・凡例・ロゴ付きで、1つのファイルに並べて書き出します。',
     q_screen: '画面', q_high: '高', q_pro: 'プロフェッショナル', q_print: '印刷',
     export_pdf_size_label: '📐 用紙サイズ',
     pdf_size_a4l: 'A4 横向き (297 × 210 mm)', pdf_size_a4p: 'A4 縦向き (210 × 297 mm)',
@@ -37672,6 +38048,8 @@ var SYLVA_TRANSLATIONS = {
     export_format_label: '📁 출력 형식',
     export_quality_label: '🔍 출력 품질',
     export_wysiwyg_note: '지도는 화면에 보이는 그대로 내보내집니다（WYSIWYG）。',
+    export_dualscreen_title: '듀얼 스크린 출력',
+    export_dualscreen_desc: '두 화면을 각각 고유한 방위 표시, 축척, 범례, 로고와 함께 하나의 파일에 나란히 내보냅니다.',
     q_screen: '화면', q_high: '높음', q_pro: '전문가용', q_print: '인쇄',
     export_pdf_size_label: '📐 용지 크기',
     pdf_size_a4l: 'A4 가로 (297 × 210 mm)', pdf_size_a4p: 'A4 세로 (210 × 297 mm)',
@@ -38183,6 +38561,8 @@ var SYLVA_TRANSLATIONS = {
     export_format_label: '📁 आउटपुट प्रारूप',
     export_quality_label: '🔍 आउटपुट गुणवत्ता',
     export_wysiwyg_note: 'मानचित्र को स्क्रीन पर दिखाई देने वाले रूप में ही निर्यात किया जाता है (WYSIWYG)।',
+    export_dualscreen_title: 'डुअल स्क्रीन आउटपुट',
+    export_dualscreen_desc: 'दोनों स्क्रीन को एक ही फ़ाइल में साथ-साथ निर्यात करता है, प्रत्येक का अपना उत्तर तीर, स्केल, लेजेंड और लोगो होता है।',
     q_screen: 'स्क्रीन', q_high: 'उच्च', q_pro: 'व्यावसायिक', q_print: 'प्रिंट',
     export_pdf_size_label: '📐 कागज़ का आकार',
     pdf_size_a4l: 'A4 लैंडस्केप (297 × 210 mm)', pdf_size_a4p: 'A4 पोर्ट्रेट (210 × 297 mm)',
@@ -38733,6 +39113,8 @@ var SYLVA_TRANSLATIONS = {
     export_format_label: '📁 Format Output',
     export_quality_label: '🔍 Kualitas Output',
     export_wysiwyg_note: 'Peta diekspor persis seperti yang terlihat di layar (WYSIWYG).',
+    export_dualscreen_title: 'Keluaran Layar Ganda',
+    export_dualscreen_desc: 'Mengekspor kedua layar berdampingan dalam satu file, masing-masing dengan panah utara, skala, legenda, dan logo sendiri.',
     q_screen: 'Layar', q_high: 'Tinggi', q_pro: 'Profesional', q_print: 'Cetak',
     export_pdf_size_label: '📐 Ukuran Kertas',
     pdf_size_a4l: 'A4 Lanskap (297 × 210 mm)', pdf_size_a4p: 'A4 Potret (210 × 297 mm)',
@@ -39326,6 +39708,8 @@ var SYLVA_TRANSLATIONS = {
     export_format_label: '📁 Формат вывода',
     export_quality_label: '🔍 Качество вывода',
     export_wysiwyg_note: 'Карта экспортируется точно так же, как отображается на экране (WYSIWYG).',
+    export_dualscreen_title: 'Вывод с двух экранов',
+    export_dualscreen_desc: 'Экспортирует оба экрана рядом в одном файле, каждый со своей стрелкой севера, масштабом, легендой и логотипом.',
     q_screen: 'Экран', q_high: 'Высокое', q_pro: 'Профессиональное', q_print: 'Печать',
     export_pdf_size_label: '📐 Размер бумаги',
     pdf_size_a4l: 'A4 Альбомная (297 × 210 мм)', pdf_size_a4p: 'A4 Книжная (210 × 297 мм)',
@@ -39875,6 +40259,8 @@ var SYLVA_TRANSLATIONS = {
     export_format_label: '📁 รูปแบบผลลัพธ์',
     export_quality_label: '🔍 คุณภาพผลลัพธ์',
     export_wysiwyg_note: 'แผนที่จะถูกส่งออกตามที่เห็นบนหน้าจอ (WYSIWYG)',
+    export_dualscreen_title: 'เอาต์พุตสองหน้าจอ',
+    export_dualscreen_desc: 'ส่งออกทั้งสองหน้าจอเรียงข้างกันในไฟล์เดียว โดยแต่ละหน้าจอมีลูกศรทิศเหนือ มาตราส่วน คำอธิบายสัญลักษณ์ และโลโก้เป็นของตัวเอง',
     q_screen: 'หน้าจอ', q_high: 'สูง', q_pro: 'มืออาชีพ', q_print: 'พิมพ์',
     export_pdf_size_label: '📐 ขนาดกระดาษ',
     pdf_size_a4l: 'A4 แนวนอน (297 × 210 มม.)', pdf_size_a4p: 'A4 แนวตั้ง (210 × 297 มม.)',
@@ -40418,6 +40804,8 @@ var SYLVA_TRANSLATIONS = {
     export_format_label: '📁 আউটপুট ফরম্যাট',
     export_quality_label: '🔍 আউটপুট মান',
     export_wysiwyg_note: 'মানচিত্র স্ক্রিনে দেখা যাওয়া অবিকল রূপে রপ্তানি হবে (WYSIWYG)।',
+    export_dualscreen_title: 'ডুয়াল স্ক্রিন আউটপুট',
+    export_dualscreen_desc: 'উভয় স্ক্রিনকে একটি ফাইলে পাশাপাশি এক্সপোর্ট করে, প্রতিটির নিজস্ব উত্তর তীর, স্কেল, লেজেন্ড এবং লোগো সহ।',
     q_screen: 'স্ক্রিন', q_high: 'উচ্চ', q_pro: 'পেশাদার', q_print: 'মুদ্রণ',
     export_pdf_size_label: '📐 কাগজের আকার',
     pdf_size_a4l: 'A4 ল্যান্ডস্কেপ (297 × 210 মিমি)', pdf_size_a4p: 'A4 পোর্ট্রেট (210 × 297 মিমি)',
@@ -40924,6 +41312,8 @@ var SYLVA_TRANSLATIONS = {
     export_format_label: '📁 Định dạng đầu ra',
     export_quality_label: '🔍 Chất lượng đầu ra',
     export_wysiwyg_note: 'Bản đồ được xuất chính xác như những gì hiển thị trên màn hình (WYSIWYG).',
+    export_dualscreen_title: 'Xuất Hai Màn Hình',
+    export_dualscreen_desc: 'Xuất cả hai màn hình cạnh nhau trong một tệp duy nhất, mỗi màn hình có mũi tên hướng bắc, tỷ lệ, chú giải và logo riêng.',
     q_screen: 'Màn hình', q_high: 'Cao', q_pro: 'Chuyên nghiệp', q_print: 'In ấn',
     export_pdf_size_label: '📐 Khổ giấy',
     pdf_size_a4l: 'A4 Ngang (297 × 210 mm)', pdf_size_a4p: 'A4 Dọc (210 × 297 mm)',
@@ -41564,6 +41954,8 @@ var SYLVA_TRANSLATIONS = {
     export_format_label: '📁 آؤٹ پٹ فارمیٹ',
     export_quality_label: '🔍 آؤٹ پٹ معیار',
     export_wysiwyg_note: 'نقشہ بالکل ویسے ہی برآمد ہوگا جیسا اسکرین پر نظر آ رہا ہے (WYSIWYG)۔',
+    export_dualscreen_title: 'ڈوئل اسکرین آؤٹ پٹ',
+    export_dualscreen_desc: 'دونوں اسکرینز کو ایک ہی فائل میں ساتھ ساتھ ایکسپورٹ کرتا ہے، ہر ایک کا اپنا شمالی تیر، پیمانہ، لیجنڈ اور لوگو ہوتا ہے۔',
     q_screen: 'اسکرین', q_high: 'اعلیٰ', q_pro: 'پیشہ ورانہ', q_print: 'پرنٹ',
     export_pdf_size_label: '📐 کاغذ کا سائز',
     pdf_size_a4l: 'A4 افقی (297 × 210 mm)', pdf_size_a4p: 'A4 عمودی (210 × 297 mm)',
@@ -42074,6 +42466,8 @@ var SYLVA_TRANSLATIONS = {
     export_format_label: '📁 Format wyjściowy',
     export_quality_label: '🔍 Jakość wyjściowa',
     export_wysiwyg_note: 'Mapa eksportowana dokładnie tak, jak widać na ekranie (WYSIWYG).',
+    export_dualscreen_title: 'Eksport z dwóch ekranów',
+    export_dualscreen_desc: 'Eksportuje oba ekrany obok siebie do jednego pliku, każdy z własną strzałką północy, skalą, legendą i logo.',
     q_screen: 'Ekran', q_high: 'Wysoka', q_pro: 'Profesjonalna', q_print: 'Druk',
     export_pdf_size_label: '📐 Rozmiar papieru',
     pdf_size_a4l: 'A4 poziomo (297 × 210 mm)', pdf_size_a4p: 'A4 pionowo (210 × 297 mm)',
@@ -42613,6 +43007,8 @@ var SYLVA_TRANSLATIONS = {
     export_format_label: '📁 Format Output',
     export_quality_label: '🔍 Kualiti Output',
     export_wysiwyg_note: 'Peta dieksport sama seperti yang dipaparkan pada skrin (WYSIWYG).',
+    export_dualscreen_title: 'Output Skrin Berkembar',
+    export_dualscreen_desc: 'Mengeksport kedua-dua skrin bersebelahan dalam satu fail, masing-masing dengan anak panah utara, skala, legenda dan logo sendiri.',
     q_screen: 'Skrin', q_high: 'Tinggi', q_pro: 'Profesional', q_print: 'Cetak',
     export_pdf_size_label: '📐 Saiz Kertas',
     pdf_size_a4l: 'A4 Melintang (297 × 210 mm)', pdf_size_a4p: 'A4 Menegak (210 × 297 mm)',
@@ -43161,6 +43557,8 @@ var SYLVA_TRANSLATIONS = {
       export_format_label: '📁 Чыгаруу форматы',
       export_quality_label: '🔍 Чыгаруу сапаты',
       export_wysiwyg_note: 'Карта экранда көрүнгөндөй экспортталат (WYSIWYG).',
+      export_dualscreen_title: 'Кош экран чыгышы',
+      export_dualscreen_desc: 'Эки экранды тең, ар бирин өз түндүк жебеси, масштабы, легендасы жана логотиби менен бир файлга катар-катар экспорттойт.',
       q_screen: 'Экран', q_high: 'Жогорку', q_pro: 'Кесипкөй', q_print: 'Басып чыгаруу',
       export_pdf_size_label: '📐 Кагаз өлчөмү',
       pdf_size_a4l: 'A4 Горизонталдык (297 × 210 мм)', pdf_size_a4p: 'A4 Вертикалдык (210 × 297 мм)',
@@ -43674,6 +44072,8 @@ var SYLVA_TRANSLATIONS = {
     export_map_title: '🖨️ Газрын зураг экспортлох',
     export_format_label: '📁 Гаралтын формат', export_quality_label: '🔍 Гаралтын чанар',
     export_wysiwyg_note: 'Газрын зураг дэлгэц дээр харагдаж байгаагаар экспортлогдоно (WYSIWYG).',
+    export_dualscreen_title: 'Хос дэлгэцийн гаралт',
+    export_dualscreen_desc: 'Хоёр дэлгэцийг хоёуланг нь өөрийн хойд зүг заагч, масштаб, тайлбар, лого-той нь ганц файлд зэрэгцүүлэн экспортолно.',
     q_screen: 'Дэлгэц', q_high: 'Өндөр', q_pro: 'Мэргэжлийн', q_print: 'Хэвлэх',
     export_pdf_size_label: '📐 Цаасны хэмжээ',
     pdf_size_a4l: 'A4 Хэвтээ (297 × 210 мм)', pdf_size_a4p: 'A4 Босоо (210 × 297 мм)',
@@ -44191,6 +44591,8 @@ var SYLVA_TRANSLATIONS = {
       export_format_label: '📁 გამოსვლის ფორმატი',
       export_quality_label: '🔍 გამოსვლის ხარისხი',
       export_wysiwyg_note: 'რუკა ექსპორტდება ისე, როგორც ეკრანზე ჩანს (WYSIWYG).',
+      export_dualscreen_title: 'ორეკრანიანი გამოტანა',
+      export_dualscreen_desc: 'ორივე ეკრანს ერთმანეთის გვერდით, ერთ ფაილში გაქვთ, თითოეულს საკუთარი ჩრდილოეთის ისრით, მასშტაბით, ლეგენდით და ლოგოთი.',
       q_screen: 'ეკრანი', q_high: 'მაღალი', q_pro: 'პროფესიონალური', q_print: 'ბეჭდვა',
       export_pdf_size_label: '📐 ქაღალდის ფორმატი',
       pdf_size_a4l: 'A4 ჰორიზონტალური (297 × 210 მმ)', pdf_size_a4p: 'A4 ვერტიკალური (210 × 297 მმ)',
@@ -44719,6 +45121,8 @@ var SYLVA_TRANSLATIONS = {
     export_format_label: '📁 Formato Output',
     export_quality_label: '🔍 Qualità Output',
     export_wysiwyg_note: 'La mappa viene esportata esattamente come visualizzata sullo schermo (WYSIWYG).',
+    export_dualscreen_title: 'Output a doppio schermo',
+    export_dualscreen_desc: 'Esporta entrambi gli schermi affiancati in un unico file, ciascuno con la propria freccia del nord, scala, legenda e logo.',
     q_screen: 'Schermo', q_high: 'Alta', q_pro: 'Professionale', q_print: 'Stampa',
     export_pdf_size_label: '📐 Formato Carta',
     pdf_size_a4l: 'A4 Orizzontale (297 × 210 mm)', pdf_size_a4p: 'A4 Verticale (210 × 297 mm)',
@@ -46468,26 +46872,26 @@ function applySylvaLang(lang) {
     }
   } catch(e) {}
 
-  // Stretched title placeholder
+  // 🛠️ BUG FİX (Faz 84 — "daha analiz yokken lejant kısmında örnek
+  // isimlendirme (NDVI Analizi vb.) yazıyor, bu yazı silinsin, tamamen
+  // boş olsun"): Bu iki alan (Stretched ve Classified lejant başlığı)
+  // eskiden henüz hiçbir analiz çalışmamışken bile "NDVI Analizi" /
+  // "Sınıflandırılmış Veri" gibi örnek bir metni İPUCU (placeholder)
+  // VEYA (Classified için) doğrudan DOLU DEĞER olarak gösteriyordu.
+  // Artık kullanıcı kendi başlığını yazana ya da gerçek bir analiz
+  // çalışıp GERÇEK adını buraya yazana kadar bu alanlar tamamen boş
+  // kalıyor — hiçbir örnek/ipucu metni yok.
   var stEl = document.getElementById('stretched-title');
   if (stEl && !stEl._userEdited) {
-    var ndviTitles = { en:'NDVI Analysis', tr:'NDVI Analizi', de:'NDVI-Analyse',
-      fr:'Analyse NDVI', es:'Análisis NDVI', ar:'تحليل NDVI', fa:'تحلیل NDVI',
-      zh:'NDVI 分析', ja:'NDVI 解析', ko:'NDVI 분석', hi:'NDVI विश्लेषण', id:'Analisis NDVI', ru:'Анализ NDVI', th:'การวิเคราะห์ NDVI', bn:'NDVI বিশ্লেষণ', vi:'Phân tích NDVI', ur:'NDVI تجزیہ', pl:'Analiza NDVI', ms:'Analisis NDVI', el:'Ανάλυση NDVI' };
-    stEl.placeholder = ndviTitles[lang] || 'NDVI Analysis';
+    stEl.placeholder = '';
   }
-
-  // Classified title default value + value (kullanıcı el değmediyse)
   var clEl = document.getElementById('classified-title');
   if (clEl && !clEl._userEdited) {
-    var clTitles = { en:'Classified Data', tr:'Sınıflandırılmış Veri', de:'Klassifizierte Daten',
-      fr:'Données classifiées', es:'Datos clasificados', ar:'بيانات مصنفة', fa:'داده‌های طبقه‌بندی‌شده',
-      zh:'分类数据', ja:'分類データ', ko:'분류 데이터', hi:'वर्गीकृत डेटा', id:'Data Terklasifikasi', ru:'Классифицированные данные', th:'ข้อมูลที่จำแนกประเภท', bn:'শ্রেণীবদ্ধ ডেটা', vi:'Dữ liệu phân loại', ur:'درجہ بند ڈیٹا', pl:'Dane sklasyfikowane', ms:'Data Terklasifikasi', el:'Ταξινομημένα Δεδομένα' };
-    var clTitle = clTitles[lang] || 'Classified Data';
-    clEl.placeholder = clTitle;
-    // Analiz çalıştırılmışsa başlık değerine dokunma; sadece placeholder güncelle
+    clEl.placeholder = '';
+    // Analiz çalıştırılmışsa başlık değerine dokunma; yalnızca analiz
+    // HENÜZ yokken alanı boş tut.
     if (typeof _lastAnalyzeMeta === 'undefined' || !_lastAnalyzeMeta) {
-      clEl.value = clTitle;
+      clEl.value = '';
     }
   }
 
