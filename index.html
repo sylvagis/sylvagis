@@ -28129,7 +28129,21 @@ function renderRawBandsGroups() {
     container.style.display = 'flex';
     if (actionsBar) actionsBar.style.display = 'flex';
     if (aoiWrap) aoiWrap.style.display = 'block';
-    if (scopeWrap) scopeWrap.style.display = 'block';
+    // 🛠️ BUG FİX (kullanıcı isteği — "İndirme Kapsamı 🗂️ Clip (AOI sınırları
+    // içinde) yazısını tüm dillerden kaldır"): scope seçimi zaten yalnızca
+    // 'clip' ile SABİTLENMİŞ durumda (bkz. downloadRawBands() içindeki
+    // "scope = 'clip'" satırı, tek seçenek olduğundan kullanıcıya gösterilecek
+    // bir SEÇİM yok) — bu blok artık HİÇ görünür yapılmıyor (scopeWrap kendi
+    // varsayılan/inline "display:none" durumunda kalır). DOM düğümünün
+    // kendisi (ve içindeki "clip" radio input'u) BİLEREK silinmedi — yalnızca
+    // görünürlüğü kaldırıldı; syncRawBandsScopeWithViewMode() ve diğer kodlar
+    // bu radio'nun VARLIĞINA güveniyor, görünürlüğüne değil. 30 dilin
+    // TAMAMINDAKİ download_scope_lbl/scope_clip çeviri anahtarları da bu
+    // yüzden silinmedi (başka hiçbir yerde kullanılmıyorlar ama silmek
+    // riske değmeyecek kadar küçük bir kazanç); kesinlikle FARKLI bir anahtar
+    // olan res_scope_clip'e (indirme SONRASI durum mesajında kullanılır,
+    // bkz. renderRawDlStatus()) hiç dokunulmadı.
+    if (scopeWrap) scopeWrap.style.display = 'none';
     if (downloadBtn) downloadBtn.style.display = 'block';
     // Kapsam radyolarını mevcut Çalışma Alanı/Görüntü Alanı moduna kilitle
     syncRawBandsScopeWithViewMode();
@@ -55902,6 +55916,35 @@ refresh();
                 });
             } else {
                 legendLabels = _aCurrent.map(function(label, i){ return { code:i+1, label:label, color:_aBaseColors[i] }; });
+            }
+        }
+        // 🛠️ BUG FİX (Paket 88 — "lejant türkçe inmiş ama veriyi ingilizce
+        // indirdim, 30 dil desteğini tüm verilere sağla"): KÖK NEDEN —
+        // FOREST_LOSS/URBAN_GROWTH (ve BUILDING_FOOTPRINT) için ekrandaki
+        // #class-rows-container DOM'u her zaman sunucunun kendi Türkçe yedek
+        // sınıf adlarıyla dolduruluyor (bkz. bu dosyadaki "Faz 54" DOM
+        // doldurma bloğu — kod sırasını sunucuyla eşleştirmek için BİLEREK
+        // ham/Türkçe adlar yazar) ve daha yukarıdaki DOM-okuma bloğu bu ham
+        // Türkçe adları doğrudan `breaks`'e taşıyordu. `breaks` bu yüzden
+        // ZATEN dolu geldiğinden, hemen yukarıdaki `_nativeEnvClasses`
+        // bloğu ("breaks BOŞSA doğru dili kullan") hiç devreye giremiyordu
+        // — Bakı (TOPO_ASPECT) için daha önce çözülen sorunun BİREBİR AYNISI.
+        // ÇÖZÜM: TOPO_ASPECT ile AYNI desen — `breaks` dolu olsa BİLE (DOM'dan
+        // Türkçe gelmiş olsa bile) bu native-sıralı aileler için `legendLabels`
+        // KOŞULSUZ olarak sylvaLocalizedNativeClasses()'in (zaten 30 dilli,
+        // ekrandaki lejantın kendisinin kullandığı doğru kaynak) çevirisinden
+        // yeniden kurulur; sunucu (Paket 85'ten beri) native-sıralı sınıflar
+        // için etiket KAYNAĞI olarak önce `legendLabels`i kullanır (bkz.
+        // server.py requested_legend_labels) — yani `breaks`'in kendisi
+        // (min/max/renk) DOM'dan geldiği gibi korunur, yalnızca İNDİRİLEN
+        // dosyaya yazılan GÖRÜNEN İSİM düzeltilir.
+        if (['FOREST_LOSS', 'URBAN_GROWTH', 'BUILDING_FOOTPRINT'].indexOf(String(_exportIndex || '').toUpperCase()) !== -1) {
+            var _nativeSeqLocalized = sylvaLocalizedNativeClasses(_exportIndex);
+            if (_nativeSeqLocalized && _nativeSeqLocalized.length) {
+                legendLabels = _nativeSeqLocalized.map(function(c){
+                    var code = (c.code !== undefined) ? c.code : c.min;
+                    return { code: Number(code), label: String(c.label || ''), color: '#' + String(c.color || '').replace(/^#/, '') };
+                });
             }
         }
         return { min:min, max:max, palette:colors, mode: (breaks && breaks.length) ? 'classified' : 'bar', breaks: breaks, legendLabels: legendLabels };
