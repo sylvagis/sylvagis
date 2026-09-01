@@ -2386,27 +2386,27 @@ def _choose_nbits(n_needed):
     doğru çalıştığı doğrulanmıştı — bu yüzden 1'den 8'e TÜM değerler
     denenmeye başlanmıştı.
 
-    🛠️ PAKET 82 — (1,2,4,8) BAYT-HİZALI BEYAZ LİSTEYE GERİ DÖNÜLDÜ: Paket
-    79-81 arası doğrulamalarımın TAMAMI yalnızca GDAL/rasterio'nun KENDİ
-    round-trip okumasıyla yapıldı (bu ortamda canlı ArcMap YOK) — yani
-    "NBITS=3/5/6/7 çalışıyor" iddiası hiçbir zaman ArcMap'in kendi TIFF
-    okuyucusuna karşı doğrulanmadı. Kullanıcı, Paket 81 sonrası GERÇEK
-    ArcMap'te hâlâ çok sayıda BOŞ/BEYAZ kutu bildirdi — bu sayı, kodun
-    ürettiği (gerçek sınıf + dolgu) toplamla eşleşmiyor; yani ArcMap'in
-    klasik/yerli TIFF okuyucusunun, bayt-hizalı OLMAYAN (3/5/6/7 bit gibi
-    "tek sayı" paket) derinlikleri GDAL ile aynı şekilde yorumlamıyor
-    olması ihtimali var — bu, eski/klasik TIFF okuyucularda bilinen, sık
-    rastlanan bir uyumluluk sınırıdır (1/2/4/8 bit her zaman evrensel
-    desteklenir; 3/5/6/7 bit çok daha nadir ve bazı okuyucularda hiç
-    desteklenmez). KESİN kanıtlanmış değil (bu ortamda ArcMap'e erişimim
-    yok) ama en güvenli, geriye dönüşü olmayan hiçbir riski OLMAYAN adım
-    budur: sadece evrensel desteklenen (1, 2, 4, 8) derinliklerine geri
-    dönülüyor. Bunun maliyeti sadece biraz daha fazla "dolgu" girişi
-    olması (ör. 5 sınıf artık nbits=3/8-giriş yerine nbits=4/16-giriş
-    kullanır) — ama Paket 81'in "dolgu = gerçek sınıfın kopyası" fixi
-    sayesinde bu dolgu girişleri YİNE DE boş/beyaz değil, gerçek isim ve
-    renk taşıyor; sadece sayıca biraz daha fazla olabilir."""
-    for nb in (1, 2, 4, 8):
+    🛠️ PAKET 82 (DENENDİ, SONRA GERİ ALINDI — bkz. Paket 84 notu aşağıda):
+    bir ara (1,2,4,8) bayt-hizalı beyaz listeye geri dönülmüştü — teorisi
+    ArcMap'in bayt-hizalı OLMAYAN (3/5/6/7 bit) derinlikleri yanlış
+    okuyabileceğiydi. Ancak bu KANITLANAMADI ve kullanıcının GERÇEK
+    CORINE dosyasında YENİ, DAHA KÖTÜ bir yan etki doğrudan doğrulandı:
+    18 gerçek sınıf (19 gerekli giriş) için (1,2,4,8) listesinde 16'dan
+    sonraki tek seçenek 256 olduğundan, tablo DOĞRUDAN 256'ya sıçrıyor —
+    237 dolgu girişi (Paket 81'in "kopya" mantığıyla) aynı ~18 sınıfı ~13
+    kez baştan tekrarlıyordu. Bu, orijinal "boş kutu" şikayetinden DAHA
+    KAFA KARIŞTIRICI bir görünüme yol açtı.
+
+    🛠️ PAKET 84 — bu fonksiyon artık PRATİKTE DEVRE DIŞI: TÜM çağıranlar
+    embed_colormap=False kullandığı için (bkz. _build_lulc_symbology_zip'
+    teki Paket 84 notu) bu fonksiyon hiçbir zaman çağrılmıyor — gömülü
+    ColorMap tamamen terk edildi, dolayısıyla "kaç bit" sorusu artık
+    anlamsız. Yine de olası gelecekte embed_colormap=True ile tekrar
+    kullanılırsa DAHA DOĞRU davransın diye, 1'den 8'e TÜM değerleri deneyen
+    Paket 79 mantığına geri alındı (Paket 82'nin bayt-hizalı kısıtı,
+    kanıtlanmamış bir riski önlemeye çalışırken KANITLANMIŞ bir 256-giriş
+    patlaması riski yaratıyordu — net olarak daha kötü bir takas)."""
+    for nb in range(1, 9):
         if n_needed <= (1 << nb):
             return nb
     return 8
@@ -2929,19 +2929,29 @@ def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name, legend_labels=No
     out = np.where(valid, rounded + shift, 0)
     out = np.clip(out, 0, 255).astype(np.uint8)
 
-    # 🛠️ PAKET 81 — embed_colormap=True'YA GERİ DÖNÜLDÜ (kullanıcının netleşen
-    # talebi: "kendi renk ve isimleri insin, boşluk kalmasın kutularda" — yani
-    # HEM otomatik renk/isim HEM sıfır boş kutu). Paket 80'de gömülü ColorMap
-    # tamamen kaldırılmıştı (renk hiç gelmiyordu); şimdi ColorMap GERİ
-    # geliyor, AMA artık dolgu/kullanılmayan indeksler BOŞ bırakılmıyor —
-    # gerçek bir sınıfın isim+renginin birebir kopyasıyla dolduruluyor (bkz.
-    # _build_symbology_files_from_classes() içindeki "legend_info" bloğu ve
-    # fonksiyonun Paket 81 docstring notu). Piksel verisi bu dolgu
-    # indekslerini hiçbir zaman taşımadığından bu salt kozmetik bir değişiklik
-    # — veri doğruluğu etkilenmez. Sonuç: ArcMap'te artık hiçbir kutu boş/
-    # beyaz/isimsiz görünmüyor; sınıf sayısı 2'nin kuvveti değilse (nadiren)
-    # bir sınıf ismi lejantta iki kez görünebilir, ama BOŞ kutu YOK.
-    return _build_symbology_files_from_classes(out, profile, shifted_info, safe_name, embed_colormap=True)
+    # 🛠️ PAKET 84 — embed_colormap=False'A KESİN/KALICI OLARAK DÖNÜLDÜ.
+    # Geçmiş: Paket 81, dolgu indekslerini boş bırakmak yerine gerçek bir
+    # sınıfın kopyasıyla dolduruyordu (küçük sınıf sayılarında — 4-9 gibi —
+    # sorunsuz görünüyordu). Ama kullanıcının GERÇEK CORINE dosyasında
+    # doğrudan doğrulandı: 18 gerçek sınıf + NoData = 19 gerekli giriş,
+    # Paket 82'nin bayt-hizalı (1,2,4,8 bit) kısıtı yüzünden bir sonraki
+    # izinli boyuta değil DOĞRUDAN 256'ya atlıyordu — yani 237 dolgu girişi,
+    # 18 sınıfı ~13 kez baştan tekrarlıyordu. Kullanıcı bunu ekran
+    # görüntüsüyle bildirdi: "verinin tüm lejantı inmesin, çalışma alanı
+    # sınırları içinde kalan verinin lejantı insin" — yani orta/büyük sınıf
+    # sayılı ailelerde (CORINE gibi) "dolgu = kopya" yaklaşımı, ÇÖZÜM değil,
+    # YENİ bir kafa karıştırıcı görünüm sorunu yaratıyor. TIFF ColorMap'in
+    # 2'nin-kuvveti zorunluluğu MATEMATİKSEL bir kısıt olduğundan (kaldırılamaz),
+    # "otomatik renk/isim" ile "kesinlikle sadece gerçek sınıflar, sıfır
+    # fazlalık" AYNI ANDA sağlanamıyor — kullanıcının en son ve en net talebi
+    # ikincisini önceliklendiriyor. ÇÖZÜM: embed_colormap=False — dosyaya
+    # HİÇBİR renk tablosu gömülmüyor, bu da hem "boş kutu" hem "tekrarlayan
+    # kopya kutu" olasılığını KÖKÜNDEN ortadan kaldırıyor (gömülü palet yok
+    # ki dolgu/kopya girişi olsun) — indirilen raster SADECE AOI'de gerçekten
+    # bulunan sınıf değerlerini taşır. Renk/isim isteyen kullanıcı için VAT/
+    # RAT/.clr sidecar'ları (ve daha önce gönderilen "Unique Values > Add All
+    # Values" rehberi) hâlâ mevcut — birkaç tıkla, EKSİKSİZ/FAZLASIZ.
+    return _build_symbology_files_from_classes(out, profile, shifted_info, safe_name, embed_colormap=False)
 
 
 def _build_native_categorical_symbology_zip(tif_bytes, breaks, safe_name, nodata_value=None):
@@ -3079,11 +3089,12 @@ def _build_native_categorical_symbology_zip(tif_bytes, breaks, safe_name, nodata
     out = np.where(valid, rounded + shift, 0)
     out = np.clip(out, 0, 255).astype(np.uint8)
 
-    # 🛠️ PAKET 81 — embed_colormap=True (bkz. _build_lulc_symbology_zip'teki
-    # AYNI Paket 81 notu): FOREST_LOSS/URBAN_GROWTH indirmelerinde de artık
-    # ColorMap otomatik geliyor VE dolgu indeksleri gerçek bir sınıfın
-    # kopyasıyla dolduruluyor — boş/beyaz kutu yok, veri değişmiyor.
-    return _build_symbology_files_from_classes(out, profile, shifted_info, safe_name, embed_colormap=True)
+    # 🛠️ PAKET 84 — embed_colormap=False'A KESİN/KALICI OLARAK DÖNÜLDÜ (bkz.
+    # _build_lulc_symbology_zip'teki AYNI Paket 84 notu — kullanıcının gerçek
+    # CORINE dosyasında doğrulanan "dolgu=kopya" sınıf-tekrarı sorunu):
+    # FOREST_LOSS/URBAN_GROWTH indirmelerinde de artık hiçbir renk tablosu
+    # gömülmüyor — sadece AOI'de gerçekten bulunan sınıf değerleri iniyor.
+    return _build_symbology_files_from_classes(out, profile, shifted_info, safe_name, embed_colormap=False)
 
 
 def _build_rgb_symbology_zip(tif_bytes, safe_name):
@@ -3574,11 +3585,11 @@ def _build_classified_symbology_zip(tif_bytes, vis, safe_name, breaks=None, n_cl
     if not code_info:
         return None
 
-    # 🛠️ PAKET 81 — embed_colormap=True (bkz. _build_lulc_symbology_zip'teki
-    # AYNI Paket 81 notu): genel TOPO/spektral-indeks kullanıcı-sınıflandırma
-    # indirmelerinde de ColorMap otomatik geliyor, dolgu indeksleri gerçek
-    # bir sınıfın kopyasıyla dolduruluyor — boş/beyaz kutu yok.
-    return _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name, embed_colormap=True)
+    # 🛠️ PAKET 84 — embed_colormap=False'A KESİN/KALICI OLARAK DÖNÜLDÜ (bkz.
+    # _build_lulc_symbology_zip'teki AYNI Paket 84 notu): genel TOPO/
+    # spektral-indeks kullanıcı-sınıflandırma indirmelerinde de artık hiçbir
+    # renk tablosu gömülmüyor — sadece AOI'de gerçekten bulunan değerler iniyor.
+    return _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name, embed_colormap=False)
 
 
 @app.route('/api/ping', methods=['GET'])
@@ -9083,6 +9094,85 @@ def download_geotiff():
                             _br['label'] = str(_ll.get('label')).strip()
                         if str(_ll.get('color') or '').strip():
                             _br['color'] = str(_ll.get('color')).strip()
+
+        # 🛠️ PAKET 85 — SUNUCU TARAFI SAVUNMA KATMANI (kullanıcının GERÇEK
+        # indirdiği bir "Orman Kaybı/Kazanımı" dosyası doğrudan bu ortamda
+        # incelenerek doğrulandı — bkz. _build_native_categorical_symbology_zip
+        # docstring'indeki Faz 52/Paket 83 notları, bu AYNI ailenin DEVAMI):
+        # istemciden (index.html — exportVisualFor()) 'classified' modda gelen
+        # requested_breaks dizisi, FOREST_LOSS/URBAN_GROWTH için "Orman
+        # (Değişmeyen)"/"Değişmeyen" (kod 0) satırını İÇERMEDEN sunucuya
+        # ulaşabiliyor (istemci tarafında bu breaks dizisi, katmanın hangi
+        # anda hangi DOM/state kaynağından — persistentExportSymbology /
+        # classRows / aktif DOM okuma / classBreaks — beslendiğine bağlı
+        # olarak DÖRT farklı koddan biri tarafından dolduruluyor; index.html
+        # tarafında bu semptom için daha önce iki ayrı düzeltme yapılmış
+        # olsa da — Faz 42 ve Faz 54, bkz. o dosyadaki ilgili notlar —
+        # dördüncü bir yol üzerinden yine eksik gelebiliyor).
+        #
+        # Bu eksik olduğunda _build_native_categorical_symbology_zip()
+        # içindeki 0'ı NoData'dan ayırma kayması (shift=1) HİÇ TETİKLENMİYOR
+        # (çünkü code_info'da 0 anahtarı hiç yok), ve piksel değeri 0 olan —
+        # o AOI'nin genellikle EN YAYGIN sınıfı olan — "Değişmeyen" verisi,
+        # _build_symbology_files_from_classes()'ın çıktı GeoTIFF'i için HER
+        # ZAMAN sabit nodata=0 kullanmasıyla çakışıyor. Kullanıcının
+        # paylaştığı gerçek dosyada bu doğrudan doğrulandı: piksel verisi
+        # dosyada FİZİKSEL OLARAK hâlâ vardı (1.148.059 piksel — o AOI'nin
+        # ezici çoğunluğu) ama ArcMap NoData/şeffaf saydığı için HİÇ
+        # görünmüyordu — kullanıcının bildirdiği "Orman (Değişmeyen) koyu
+        # yeşil veri rasterin içinde ArcMap'te görünmüyor" birebir budur;
+        # RAT'taki "VALUE=1 → Orman Kaybı" (Değişmeyen değil) ve "VALUE=3 →
+        # Orman Kaybı'nın kopyası" mizle de bu teşhisi doğruluyor (shift=0
+        # olduğunda geriye kalan 2 gerçek sınıf 1,2'ye yoğun-yeniden-
+        # numaralandırılıyor, Paket 81'in dolgu mekanizması da 3. bir
+        # kopya ekliyor).
+        #
+        # ÇÖZÜM: istemciye güvenmek yerine, sunucu KENDİ bildiği güvenilir
+        # sınıf listesiyle (yukarıdaki _native_export_breaks — GEE
+        # kodlamasıyla birebir eşleşen, kod DEĞİŞMEYEN referans) karşılaştırıp
+        # EKSİK OLAN kodları (özellikle kod 0) otomatik TAMAMLIYORUZ.
+        # İstemcinin GERÇEKTEN gönderdiği renk/isim (ve varsa 30-dilli
+        # requested_legend_labels çevirisi) korunur; yalnızca TAMAMEN eksik
+        # olan kodlar, sunucunun bilinen doğru rengi/ismiyle eklenir. Böylece
+        # istemci hangi dört yoldan hangi alt kümeyi gönderirse göndersin,
+        # indirilen rasterda "Değişmeyen" ASLA sessizce kaybolmaz.
+        if requested_breaks and str(lulc_index or '').upper() in _native_export_breaks:
+            _fam_key = str(lulc_index or '').upper()
+            _have_codes = set()
+            for _b in requested_breaks:
+                try:
+                    _bmin = int(round(float(_b.get('min'))))
+                    _bmax = int(round(float(_b.get('max'))))
+                except (TypeError, ValueError):
+                    continue
+                if _bmin == _bmax:
+                    _have_codes.add(_bmin)
+            _ll_by_code2 = {}
+            if isinstance(requested_legend_labels, list):
+                for _ll in requested_legend_labels:
+                    if not isinstance(_ll, dict):
+                        continue
+                    try:
+                        _ll_by_code2[int(_ll.get('code'))] = _ll
+                    except Exception:
+                        continue
+            for _ref in _native_export_breaks[_fam_key]:
+                _rc = int(_ref['min'])
+                if _rc in _have_codes:
+                    continue
+                _missing_entry = dict(_ref)
+                _ll2 = _ll_by_code2.get(_rc)
+                if _ll2:
+                    if str(_ll2.get('label') or '').strip():
+                        _missing_entry['label'] = str(_ll2.get('label')).strip()
+                    if str(_ll2.get('color') or '').strip():
+                        _missing_entry['color'] = str(_ll2.get('color')).strip()
+                requested_breaks.append(_missing_entry)
+                print('[SylvaGIS] ⚠️ Paket 85: {} indirmesinde istemciden eksik '
+                      'gelen kod {} sınıfı ("{}") sunucu tarafından '
+                      'tamamlandı.'.format(_fam_key, _rc, _missing_entry.get('label')))
+            requested_breaks.sort(key=lambda b: float(b.get('min', 0)))
+
         is_true_color_rgb = (lulc_index == 'RGB') and not is_env_urban_raster
         export_image = final_display
 
@@ -9167,15 +9257,20 @@ def download_geotiff():
             # sınıflandırılmış (0/1/2 gibi sabit kodlu) rasterlar artık
             # CORINE/ESA/MODIS/Dynamic World ile BİREBİR AYNI yolu
             # (_build_native_categorical_symbology_zip) kullanır.
-            # 🛠️ PAKET 81 — bu fonksiyon (ve LULC ailesi dahil TÜM sınıflandırılmış
-            # raster üreten fonksiyonlar) artık embed_colormap=True kullanıyor:
-            # kullanıcının netleşen talebi üzerine ("kendi renk ve isimleri
-            # insin, boşluk kalmasın kutularda") ColorMap otomatik geliyor,
-            # AMA artık TIFF ColorMap'in 2'nin-kuvveti boyut zorunluluğundan
-            # doğan dolgu/kullanılmayan indeksler BOŞ bırakılmıyor — gerçek bir
-            # sınıfın isim+renginin kopyasıyla dolduruluyor (bkz.
-            # _build_symbology_files_from_classes()'teki "legend_info" bloğu).
-            # Piksel verisi değişmediğinden bu salt kozmetik bir çözüm.
+            # 🛠️ PAKET 84 — bu fonksiyon (ve LULC ailesi dahil TÜM sınıflandırılmış
+            # raster üreten fonksiyonlar) artık KESİN/KALICI olarak
+            # embed_colormap=False kullanıyor (bkz. _build_lulc_symbology_zip'
+            # teki Paket 84 notu): Paket 81'in "dolgu = gerçek sınıfın kopyası"
+            # yaklaşımı, kullanıcının gerçek CORINE dosyasında 18 sınıflı bir
+            # AOI'de 256 girişlik tabloya sıçrayıp aynı ~18 sınıfı ~13 kez baştan
+            # tekrarladığı doğrulandı — kullanıcı bunu "verinin tüm lejantı
+            # inmesin" diye net biçimde reddetti. TIFF ColorMap'in 2'nin-kuvveti
+            # zorunluluğu kaldırılamayan matematiksel bir kısıt olduğundan,
+            # "otomatik renk" ile "sıfır fazlalık kutu" AYNI ANDA sağlanamıyor;
+            # kullanıcının en son talebi ikinciyi önceliklendiriyor. Artık hiçbir
+            # renk tablosu gömülmüyor — raster SADECE AOI'de gerçekten bulunan
+            # sınıf değerlerini taşır; renk/isim isteyenler için VAT/RAT/.clr +
+            # "Unique Values" rehberi hâlâ mevcut.
             try:
                 # Faz 52: dosyadan GERİ OKUNAN nodata etiketine güvenmek yerine,
                 # GEE'ye GERÇEKTEN gönderilen NoData değeri (255) burada da
@@ -9206,10 +9301,9 @@ def download_geotiff():
                             if _src.nodata is not None:
                                 _valid &= ~__import__('numpy').isclose(_band, float(_src.nodata))
                     _byte, _codes = _classify_default_aspect(_band, _valid, legend_labels=requested_legend_labels)
-                    # Paket 81: embed_colormap=True — Bakı (Aspect) indirmelerinde
-                    # de ColorMap otomatik geliyor, dolgu indeksleri gerçek bir
-                    # sınıfın kopyasıyla dolduruluyor (bkz. Paket 81 notu).
-                    sym_files = _build_symbology_files_from_classes(_byte, _profile, _codes, safe_name, embed_colormap=True)
+                    # Paket 84: embed_colormap=False — Bakı (Aspect) indirmelerinde
+                    # de artık hiçbir renk tablosu gömülmüyor (bkz. Paket 84 notu).
+                    sym_files = _build_symbology_files_from_classes(_byte, _profile, _codes, safe_name, embed_colormap=False)
                 except Exception as aspect_err:
                     traceback.print_exc()
                     sym_files = None
@@ -9225,11 +9319,10 @@ def download_geotiff():
                                 if _src.nodata is not None:
                                     _valid &= ~__import__('numpy').isclose(_band, float(_src.nodata))
                         _byte, _codes = _classify_aspect_breaks(_band, _valid, requested_breaks)
-                        # Paket 81: embed_colormap=True — kullanıcı tanımlı Bakı
-                        # (Aspect) sınır (breaks) indirmelerinde de ColorMap
-                        # otomatik geliyor, dolgu indeksleri gerçek bir sınıfın
-                        # kopyasıyla dolduruluyor.
-                        sym_files = _build_symbology_files_from_classes(_byte, _profile, _codes, safe_name, embed_colormap=True)
+                        # Paket 84: embed_colormap=False — kullanıcı tanımlı Bakı
+                        # (Aspect) sınır (breaks) indirmelerinde de artık hiçbir
+                        # renk tablosu gömülmüyor.
+                        sym_files = _build_symbology_files_from_classes(_byte, _profile, _codes, safe_name, embed_colormap=False)
                     else:
                         sym_files = _build_classified_symbology_zip(
                             tif_bytes, vis, safe_name, breaks=requested_breaks)
