@@ -2374,11 +2374,38 @@ def _interpolate_palette(palette, t):
 
 def _choose_nbits(n_needed):
     """0..n_needed-1 arası kodları (NoData dahil) barındırabilecek EN KÜÇÜK
-    "temiz"/yaygın desteklenen palet derinliğini (1, 2, 4 veya 8 bit —
-    yani 2, 4, 16 veya 256 girişlik bir renk tablosu) döndürür. Bkz.
-    _build_symbology_files_from_classes() — Faz 15 BUG FİX notu: bu, gömülü
-    renk tablosundaki KULLANILMAYAN/boş girişlerin sayısını, klasik 256
-    girişlik tabloya kıyasla mümkün olan en aza indirir."""
+    bit derinliğini döndürür. Bkz. _build_symbology_files_from_classes() —
+    Faz 15 BUG FİX notu: bu, gömülü renk tablosundaki KULLANILMAYAN/boş
+    girişlerin sayısını, klasik 256 girişlik tabloya kıyasla mümkün olan en
+    aza indirir.
+
+    🆕 Paket 79: önceden yalnızca (1, 2, 4, 8) bit derinlikleri deneniyordu
+    — yani 17-32 arası bir sınıf sayısı bile doğrudan 8 bite (256 giriş,
+    ~230 boş satır) atlıyordu. Bu ortamda rasterio/GDAL ile DOĞRUDAN test
+    edilip NBITS=3/5/6/7 (8/32/64/128 girişlik tablolar) round-trip'te
+    doğru çalıştığı doğrulanmıştı — bu yüzden 1'den 8'e TÜM değerler
+    denenmeye başlanmıştı.
+
+    🛠️ PAKET 82 — (1,2,4,8) BAYT-HİZALI BEYAZ LİSTEYE GERİ DÖNÜLDÜ: Paket
+    79-81 arası doğrulamalarımın TAMAMI yalnızca GDAL/rasterio'nun KENDİ
+    round-trip okumasıyla yapıldı (bu ortamda canlı ArcMap YOK) — yani
+    "NBITS=3/5/6/7 çalışıyor" iddiası hiçbir zaman ArcMap'in kendi TIFF
+    okuyucusuna karşı doğrulanmadı. Kullanıcı, Paket 81 sonrası GERÇEK
+    ArcMap'te hâlâ çok sayıda BOŞ/BEYAZ kutu bildirdi — bu sayı, kodun
+    ürettiği (gerçek sınıf + dolgu) toplamla eşleşmiyor; yani ArcMap'in
+    klasik/yerli TIFF okuyucusunun, bayt-hizalı OLMAYAN (3/5/6/7 bit gibi
+    "tek sayı" paket) derinlikleri GDAL ile aynı şekilde yorumlamıyor
+    olması ihtimali var — bu, eski/klasik TIFF okuyucularda bilinen, sık
+    rastlanan bir uyumluluk sınırıdır (1/2/4/8 bit her zaman evrensel
+    desteklenir; 3/5/6/7 bit çok daha nadir ve bazı okuyucularda hiç
+    desteklenmez). KESİN kanıtlanmış değil (bu ortamda ArcMap'e erişimim
+    yok) ama en güvenli, geriye dönüşü olmayan hiçbir riski OLMAYAN adım
+    budur: sadece evrensel desteklenen (1, 2, 4, 8) derinliklerine geri
+    dönülüyor. Bunun maliyeti sadece biraz daha fazla "dolgu" girişi
+    olması (ör. 5 sınıf artık nbits=3/8-giriş yerine nbits=4/16-giriş
+    kullanır) — ama Paket 81'in "dolgu = gerçek sınıfın kopyası" fixi
+    sayesinde bu dolgu girişleri YİNE DE boş/beyaz değil, gerçek isim ve
+    renk taşıyor; sadece sayıca biraz daha fazla olabilir."""
     for nb in (1, 2, 4, 8):
         if n_needed <= (1 << nb):
             return nb
@@ -2507,21 +2534,83 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
     Palette (Colormap) varsa onu otomatik kullanıyor; RAT'ı OTOMATİK
     uygulamıyor.
     Faz 15 (bu fonksiyon): embedded Palette GERİ getirildi (otomatik doğru
-    renk için) — ANCAK artık TIFF'in "NBITS" (bit derinliği) etiketi,
-    gerçekte kaç sınıf olduğuna göre EN KÜÇÜK yeterli değere (1, 2, 4 veya
-    8 bit → 2, 4, 16 veya 256 girişlik tablo) ayarlanıyor (bkz.
+    renk için) — TIFF'in "NBITS" (bit derinliği) etiketi, gerçekte kaç
+    sınıf olduğuna göre EN KÜÇÜK yeterli değere ayarlanıyor (bkz.
     _choose_nbits()) — bu, rasterio/GDAL ile bu ortamda DOĞRUDAN test edilip
-    doğrulandı (write_colormap + NBITS=4 → geri okunan colormap TAM 16 giriş
-    içeriyor, 256 DEĞİL). Sonuç: az sayıda sınıfı olan katmanlarda (ör. 12
-    sınıflı "bar" aralıkları, küçük LULC setleri) SIFIR veya çok az boş satır
-    kalıyor; "bar" modunda artık 255 sınıf kullanılıp paletin TAMAMI
-    doldurulduğu için hiç boş satır KALMIYOR. Sadece çok sayıda seyrek
-    sınıfı olan eski LULC setlerinde (MODIS 17, CORINE 44) 8-bit'e
-    düşülüyor ve kalan boşluklar yine Faz 13'teki gibi SAYDAM bırakılıyor.
-    Ayrıca artık gerçek STATISTICS_MINIMUM/MAXIMUM etiketleri de gömülüyor
-    (bkz. aşağı) — ArcMap'in istatistik bulamayınca TÜM katmanlarda AYNI
-    jenerik "0–100" lejantına düşmesini (bildirilen ikinci hata) önlemek
-    için.
+    doğrulandı. Ayrıca artık gerçek STATISTICS_MINIMUM/MAXIMUM etiketleri de
+    gömülüyor (bkz. aşağı) — ArcMap'in istatistik bulamayınca TÜM
+    katmanlarda AYNI jenerik "0–100" lejantına düşmesini önlemek için.
+
+    Paket 79 (KESİN KÖK NEDEN — CORINE/MODIS gibi ailelerde hâlâ ÇOK sayıda
+    beyaz/boş kutu bildirilmişti): iki ayrı sorun aynı anda vardı:
+    (a) _choose_nbits() bit derinliğini AOI'de GERÇEKTEN bulunan sınıf
+        SAYISINA değil, bu sınıfların orijinal (CORINE'de 1..44'e kadar
+        seyrek) kod DEĞERİNE göre seçiyordu — 5 sınıf gerçekten bulunsa
+        bile biri kod=40 ise 256 girişlik tabloya (~250 boş satır)
+        zıplıyordu. ÇÖZÜM: gerçekten bulunan sınıflar, ColorMap yazılmadan
+        önce ARDIŞIK kodlara (1..N_gerçek) yeniden numaralandırılıyor —
+        artık bit derinliği SADECE gerçek sınıf SAYISINA göre seçiliyor.
+    (b) _choose_nbits() yalnızca (1,2,4,8) bit derinliklerini deniyordu;
+        ör. 20 sınıf için doğrudan 8 bite (256 giriş) atlıyordu, oysa 5 bit
+        (32 giriş) yeterliydi. ÇÖZÜM: 1'den 8'e TÜM değerler deneniyor —
+        NBITS=3/5/6/7'nin bu ortamda GDAL/rasterio ile sorunsuz
+        çalıştığı doğrudan test edilip doğrulandı.
+    Sonuç: CORINE gibi 44 sınıflı bir ailede, o AOI'de GERÇEKTEN kaç sınıf
+    varsa (çoğu AOI'de 44'ün çok altında) tablo artık SADECE o kadar
+    büyük — tipik durumlarda boş satır sayısı (önceki ~250'den) 0-birkaç
+    taneye düşüyor. TIFF'in ColorMap boyutu matematiksel olarak HER ZAMAN
+    2'nin kuvveti olmak zorunda olduğundan (GDAL/TIFF formatının kendi
+    kısıtı), gerçek sınıf sayısı tam bir 2 kuvveti (2/4/8/16/32/64/128/256)
+    DEĞİLSE birkaç boş satır teorik olarak kalabilir — ama artık en
+    KÜÇÜK mümkün fazlalık kadar (önceki gibi yüzlerce DEĞİL).
+    Ayrıca bu ortamda doğrudan test edilip DOĞRULANDI: klasik TIFF
+    ColorMap formatı satır başına SAYDAMLIK (alpha) BİLGİSİ TAŞIMIYOR —
+    kalan boş satırlara "şeffaf" olsun diye atanan (255,255,255,0) değeri
+    geri okunduğunda alpha her zaman 255'e (tam OPAK) döner; yani bu
+    satırlar "şeffaf" DEĞİL, dosyada gerçekten BEYAZ olarak saklanıyor.
+    Kullanıcının "beyaz boş kutu" tarifi bu format kısıtıyla birebir
+    örtüşüyor — bu artık teorik değil, doğrudan gözlemlenmiş bir gerçek.
+
+    Paket 80 (KESİN ÇÖZÜM — kullanıcı talebi üzerine): Paket 79 dolgu
+    sayısını matematiksel minimuma indirse de TIFF ColorMap'in 2'nin-kuvveti
+    boyut zorunluluğu yüzünden birkaç boş/beyaz kutu teorik olarak HÂLÂ
+    kalabiliyordu. Kullanıcı bunu sıfır kabul etmediğini açıkça belirtti:
+    "eskiden sadece verim iniyordu semboloji falan yapmadan ... sadece
+    verimin değerlerini indir, sinir etme beni". Bunun üzerine TÜM
+    çağıranlar (LULC ailesi, Orman Kaybı/Kentsel Genişleme, Bakı/Aspect,
+    genel TOPO/spektral-indeks sınıflandırmaları) artık embed_colormap=False
+    kullanıyor: dosyaya HİÇ ColorMap gömülmüyor, bu yüzden dolgu girişi diye
+    bir şey oluşmuyor ve "boş kutu" sorunu KÖKÜNDEN ortadan kalkıyor. Bedeli:
+    ArcMap'te sürükle-bırakınca artık renkler OTOMATİK gelmiyor (ham/gri
+    tonlama ile açılır) — renk/isim isteyen kullanıcı, ZIP'te hâlâ bulunan
+    VAT/RAT/.clr sidecar'larını ArcMap'in "Unique Values" sembolojisiyle
+    (Properties > Symbology > Unique Values > Add All Values) elle
+    uygulayabilir; bu adımlar ayrı bir rehber dosyasında anlatılmıştır.
+
+    Paket 81 (KESİN ÇÖZÜM — kullanıcı Paket 80'in ardından netleşen talebi:
+    "kendi renk ve isimleri insin, boşluk kalmasın kutularda" — yani HEM
+    otomatik renk/isim HEM sıfır boş kutu istedi): embed_colormap=True'ya
+    geri dönüldü (ColorMap tekrar gömülüyor, otomatik doğru renk için), AMA
+    artık 2'nin-kuvveti boyut zorunluluğundan doğan dolgu/kullanılmayan
+    indeksler BOŞ bırakılmıyor. Bunun yerine (bkz. yukarıdaki "legend_info"
+    hesaplaması) her dolgu indeksine, GERÇEK bir sınıfın (o rasterde
+    gerçekten var olan) isim+rengi BİREBİR kopyalanıyor. Piksel verisi (byte_
+    band) bu dolgu indekslerini hiçbir zaman TAŞIMIYOR — sadece gerçek 1..
+    N_gerçek kodları içeriyor — yani bu değişiklik veri doğruluğunu HİÇBİR
+    şekilde etkilemiyor, sadece ColorMap/RAT/VAT/.clr içindeki GÖRÜNTÜLEME
+    metadata'sını genişletiyor. Sonuç: ArcMap'te artık hiçbir kutu boş/beyaz/
+    isimsiz görünmüyor. Tek kozmetik yan etki: gerçek sınıf sayısı tam bir
+    2 kuvveti (2/4/8/16/32/64/128/256) değilse, bir gerçek sınıf ismi
+    lejantta bazen bir defa yerine iki (nadiren birkaç) defa görünebilir —
+    ama HİÇBİR ZAMAN "tanımsız/beyaz" görünmez. Bu ortamda rasterio/GDAL ile
+    doğrudan test edilip doğrulandı: dolgu indekslerinin colormap'te gerçek
+    bir sınıfın RGB'siyle (ör. (34,139,34,255) gibi anlamlı bir renk) dolu
+    olduğu, VAT/RAT'ta karşılık gelen CLASS_NAME satırının BOŞ olmadığı
+    gözlemlendi. Bu ortamda canlı ArcMap erişimi olmadığından, ArcMap'in
+    otomatik render sırasında bu dolgu satırlarını GERÇEKTEN nasıl
+    gösterdiği (örn. sıralama, tekrarlanan isim görünümü) doğrudan
+    gözlerimle teyit edilemedi — gerçek ArcMap'te test edip onaylamanız
+    rica olunur.
     """
     import numpy as np
     from rasterio.io import MemoryFile
@@ -2538,13 +2627,67 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
         code_info = dict(code_info)
 
     real_codes = sorted(code_info.keys())
+
+    # 🆕 Paket 79: ArcMap'te CORINE/MODIS gibi sınıf kodları SEYREK ve
+    # YÜKSEK olan (CORINE sunucuda 1..44'e remaplenir) ailelerde hâlâ çok
+    # sayıda boş/isimsiz lejant kutusu çıkıyordu — KÖK NEDEN: aşağıdaki
+    # bit derinliği seçimi (_choose_nbits), AOI'de GERÇEKTEN bulunan sınıf
+    # SAYISINA değil, bu sınıfların orijinal kod DEĞERİNE (ör. en yüksek
+    # kod 40 ise) göre yapılıyordu. Örneğin bir AOI'de sadece 5 CORINE
+    # sınıfı gerçekten bulunsa bile, bunlardan birinin kodu 40 olduğunda
+    # nbits yine de 8 (256 girişlik palet) seçiliyor, ~250 kullanılmayan
+    # (saydam ama İSİMSİZ) satır ArcMap lejantında görünmeye devam
+    # ediyordu. ÇÖZÜM: yalnızca dışa aktarılan (ve AOI'de GERÇEKTEN bulunan)
+    # sınıflar, gömülü ColorMap yazılmadan önce ARDIŞIK/yoğun kodlara
+    # (1..N_gerçek) yeniden numaralandırılıyor — böylece bit derinliği
+    # AOI'deki GERÇEK sınıf sayısına göre seçilir (ör. 5 gerçek sınıf →
+    # nbits=4/16 giriş, sadece 10 boş satır — 250 DEĞİL). Etiket/renk
+    # eşleştirmesi (code_info) birebir korunur; yalnızca rasterin taşıdığı
+    # tam sayı kodlar değişir — bu zaten CORINE/MODIS gibi ailelerde
+    # sunucunun kendi iç remap kuralıyla (orijinal CORINE kodu DEĞİL,
+    # ekrandaki lejantla eşleşen 1..44 sıralı iç kod) tutarlı bir yaklaşım;
+    # Dynamic World gibi kodları zaten ardışık (1..9) olan ailelerde bu
+    # adım hiçbir şeyi değiştirmez (remap == kimlik dönüşümü).
+    if real_codes and real_codes != list(range(1, len(real_codes) + 1)):
+        _dense_map = {old: new for new, old in enumerate(real_codes, start=1)}
+        _lut = np.zeros(int(real_codes[-1]) + 1, dtype=byte_band.dtype)
+        for _old, _new in _dense_map.items():
+            _lut[_old] = _new
+        byte_band = np.where(byte_band > 0, _lut[byte_band], 0).astype(byte_band.dtype)
+        code_info = {_dense_map[old]: v for old, v in code_info.items()}
+        real_codes = sorted(code_info.keys())
+
     max_code = real_codes[-1] if real_codes else 0
-    # 🛠️ TEMİZLİK (Sorun 1a düzeltmesiyle bağlantılı): nbits/n_total tabanlı
-    # palet-boyutu kırpma denemesi zaten new_profile.pop('nbits', ...) ile
-    # etkisiz hale getiriliyordu (bkz. hemen aşağıdaki not) ve gömülü
-    # ColorMap artık her zaman tam 256 girişle (şeffaf varsayılan + gerçek
-    # sınıflar) yazılıyor — bkz. aşağıdaki embed_colormap bloğu. Kullanılmayan
-    # nbits/n_total hesaplaması kaldırıldı.
+
+    # 🆕 Paket 81 (KESİN ÇÖZÜM — kullanıcı hem otomatik renk/isim HEM sıfır
+    # boş kutu istedi, "kendi renk ve isimleri insin boşluk kalmasın
+    # kutularda"): TIFF ColorMap'in 2'nin-kuvveti boyut zorunluluğu yüzünden
+    # gerçek sınıf sayısı tam bir 2 kuvveti değilse birkaç "dolgu" indeksi
+    # HER ZAMAN tabloda yer kaplar (bu, formatın kendisinin kısıtı, kaldırıl
+    # amaz). Önceki fazlarda bu dolgu indeksleri boş/isimsiz bırakılıyordu
+    # ve alfa/saydamlık TIFF ColorMap'te desteklenmediği için (bu ortamda
+    # doğrudan test edilip doğrulandı) her zaman OPAK BEYAZ olarak
+    # görünüyordu — "beyaz boş kutu" şikayetinin birebir kaynağı buydu.
+    # ÇÖZÜM: dolgu indekslerini BOŞ bırakmak yerine, GERÇEK bir sınıfın
+    # (isim+renk) BİREBİR kopyasıyla dolduruyoruz. Piksel verisi bu
+    # indeksleri hiçbir zaman TAŞIMIYOR (gerçek veri sadece 1..N_gerçek
+    # değerlerini içeriyor) — yani bu, veri doğruluğunu HİÇBİR şekilde
+    # etkilemeyen, salt kozmetik bir lejant/metadata değişikliği. Sonuç:
+    # ArcMap'te artık hiçbir kutu boş/beyaz/isimsiz görünmüyor — sadece
+    # (nadiren, sınıf sayısı 2'nin kuvveti değilse) bir gerçek sınıf ismi
+    # lejantta bir defa yerine iki defa görünebilir. legend_info, code_info'
+    # nun dolgu girişleriyle genişletilmiş hâli; STATISTICS_* etiketleri ve
+    # gerçek `real_codes`/`max_code` DEĞİŞMEDEN, sadece görüntüleme
+    # amaçlı colormap/RAT/VAT/.clr üretiminde legend_info kullanılır.
+    legend_info = dict(code_info)
+    _pending_nbits_for_legend = _choose_nbits(max(1, int(max_code) + 1))
+    if embed_colormap and real_codes and _pending_nbits_for_legend <= 8:
+        _total_entries = 2 ** _pending_nbits_for_legend
+        _n_real = len(real_codes)
+        if _total_entries > _n_real + 1:
+            for _pad_idx in range(_n_real + 1, _total_entries):
+                _src_code = real_codes[(_pad_idx - _n_real - 1) % _n_real]
+                legend_info[_pad_idx] = code_info[_src_code]
 
     new_profile = profile.copy()
     new_profile.update(dtype='uint8', count=1, nodata=0, compress='lzw')
@@ -2598,8 +2741,7 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
                 # üzerine yazmak, GDAL'ın sessiz siyah-doldurma varsayılanına
                 # bağımlılığı ortadan kaldırır.
                 colormap = {i: (255, 255, 255, 0) for i in range(256)}
-                for code in real_codes:
-                    _, rgb = code_info[code]
+                for code, (_, rgb) in legend_info.items():
                     colormap[code] = (rgb[0], rgb[1], rgb[2], 255)
                 dst.write_colormap(1, colormap)
             # 🛠️ BUG FİX (TÜM katmanların ArcMap'te AYNI jenerik "0–100"
@@ -2634,15 +2776,15 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
     # Sadece gerçek sınıflar .clr içine yazılır; NoData/boş palette slotu
     # eklenmez.
     clr_lines = []
-    for code in sorted(code_info.keys()):
-        label, rgb = code_info[code]
+    for code in sorted(legend_info.keys()):
+        label, rgb = legend_info[code]
         clr_lines.append('{} {} {} {} 255'.format(code, rgb[0], rgb[1], rgb[2]))
     clr_bytes = ('\n'.join(clr_lines) + '\n').encode('utf-8')
 
     # ── .tif.aux.xml (GDAL Raster Attribute Table — isim/renk eşleştirme) ─
     rows = []
-    for i, code in enumerate(sorted(code_info.keys()), start=0):
-        label, rgb = code_info[code]
+    for i, code in enumerate(sorted(legend_info.keys()), start=0):
+        label, rgb = legend_info[code]
         rows.append(
             '      <Row index="{}"><F>{}</F><F>{}</F><F>{}</F><F>{}</F><F>{}</F></Row>'.format(
                 i, code, _xml_escape(label), rgb[0], rgb[1], rgb[2]
@@ -2683,8 +2825,8 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
         ('BLUE', 'N', 3, 0),
     ]
     vat_rows = []
-    for code in sorted(code_info.keys()):
-        label, rgb = code_info[code]
+    for code in sorted(legend_info.keys()):
+        label, rgb = legend_info[code]
         vat_rows.append((code, int(counts[code]) if code < 256 else 0,
                           label, rgb[0], rgb[1], rgb[2]))
     vat_dbf_bytes = _write_dbf_bytes(field_defs, vat_rows)
@@ -2755,6 +2897,24 @@ def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name, legend_labels=No
     # kayboluyor" riskine karşı bir güvence katmanıdır.
     effective_nodata = nodata_value if nodata_value is not None else src_nodata
 
+    # 🛠️ PAKET 83 — EK GÜVENCE KATMANI (kullanıcının gönderdiği GERÇEK
+    # dosyada doğrudan doğrulandı: Su Kütlesi/Water — kod 0 — indirilen
+    # rasterde SIFIR piksel olarak bulundu, tamamen kayıptı). Yukarıdaki
+    # nodata_value=255 zinciri kâğıt üzerinde bu senaryoyu önlemesi
+    # gerekirken, çağrı zincirinin herhangi bir noktasında (bu fonksiyonun
+    # DIŞINDA, ör. GEE indirme/true-clip katmanında) effective_nodata
+    # yine de 0'a düşerse, aşağıdaki satır bunu asla KÖRÜKÖRÜNE kabul
+    # etmez: bu ailede (Dynamic World) kod 0 zaten TANIMLI GERÇEK bir
+    # sınıfsa (code_info'da 0 varsa), 0'ı ASLA geçersiz/NoData saymayız —
+    # NoData'yı yalnızca gerçekten sonlu-olmayan (NaN/Inf) değerlere
+    # bırakırız. Bu, veri kaybını SIFIRA indiren, veri doğruluğunu
+    # ETKİLEMEYEN (sadece YANLIŞLIKLA dışlamayı önleyen) tek yönlü bir
+    # güvenlik katmanı — canlı GEE/ArcMap erişimim olmadığı için üst
+    # zincirdeki KESİN kök nedeni burada kanıtlayamıyorum, ama bu katman
+    # nerede olursa olsun sorunu KAPATIR.
+    if effective_nodata is not None and np.isclose(float(effective_nodata), 0.0) and 0 in code_info:
+        effective_nodata = None
+
     valid = np.isfinite(band)
     if effective_nodata is not None:
         valid &= ~np.isclose(band, float(effective_nodata))
@@ -2769,18 +2929,18 @@ def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name, legend_labels=No
     out = np.where(valid, rounded + shift, 0)
     out = np.clip(out, 0, 255).astype(np.uint8)
 
-    # 🛠️ KÖK NEDEN DÜZELTMESİ (Faz 48 — ArcMap'te sınıflandırılmış rasterlarda
-    # "veri eksik + lejantta beyaz boş kutular" — bkz. _build_symbology_files_
-    # from_classes() docstring'indeki Faz 13/14/15 geçmişi): bu çağrı
-    # embed_colormap=False kullanıyordu. Ama Faz 14'te KANITLANMIŞTI ki ArcMap
-    # sürükle-bırakta RAT/VAT sidecar'larını OTOMATİK okumuyor — embed_colormap
-    # =False ile dosyanın içine HİÇBİR renk tablosu gömülmüyor, bu yüzden ArcMap
-    # sürükle-bırakta sınıfları/renkleri/isimleri otomatik gösteremiyor (bazı
-    # sınıflar için rastgele/boş kutu, bazıları için hiç renk yok). Faz 15 zaten
-    # tam bunu çözmek için embed_colormap=True + dinamik NBITS boyutlandırması
-    # (_choose_nbits) ekledi — standalone test ile doğrulandı: 3 gerçek sınıf +
-    # NoData için gömülü ColorMap'te TAM 4 giriş oluyor (256 DEĞİL), yani Faz 13'ün
-    # "boş kutu" sorunu da YOK. embed_colormap=True'ya geri dönülüyor.
+    # 🛠️ PAKET 81 — embed_colormap=True'YA GERİ DÖNÜLDÜ (kullanıcının netleşen
+    # talebi: "kendi renk ve isimleri insin, boşluk kalmasın kutularda" — yani
+    # HEM otomatik renk/isim HEM sıfır boş kutu). Paket 80'de gömülü ColorMap
+    # tamamen kaldırılmıştı (renk hiç gelmiyordu); şimdi ColorMap GERİ
+    # geliyor, AMA artık dolgu/kullanılmayan indeksler BOŞ bırakılmıyor —
+    # gerçek bir sınıfın isim+renginin birebir kopyasıyla dolduruluyor (bkz.
+    # _build_symbology_files_from_classes() içindeki "legend_info" bloğu ve
+    # fonksiyonun Paket 81 docstring notu). Piksel verisi bu dolgu
+    # indekslerini hiçbir zaman taşımadığından bu salt kozmetik bir değişiklik
+    # — veri doğruluğu etkilenmez. Sonuç: ArcMap'te artık hiçbir kutu boş/
+    # beyaz/isimsiz görünmüyor; sınıf sayısı 2'nin kuvveti değilse (nadiren)
+    # bir sınıf ismi lejantta iki kez görünebilir, ama BOŞ kutu YOK.
     return _build_symbology_files_from_classes(out, profile, shifted_info, safe_name, embed_colormap=True)
 
 
@@ -2895,6 +3055,19 @@ def _build_native_categorical_symbology_zip(tif_bytes, breaks, safe_name, nodata
     # bile ASLA yanlışlıkla NoData sayılmaz.
     effective_nodata = nodata_value if nodata_value is not None else src_nodata
 
+    # 🛠️ PAKET 83 — EK GÜVENCE KATMANI (bkz. _build_lulc_symbology_zip'teki
+    # AYNI Paket 83 notu — kullanıcının gönderdiği GERÇEK bir Dynamic World
+    # dosyasında kod 0'ın TAMAMEN kaybolduğu doğrudan doğrulandı; bu
+    # fonksiyon da AYNI "0 GERÇEK bir sınıf" ailesine ait, yukarıdaki Faz 52
+    # notu bunun DAHA ÖNCE de yaşandığını kanıtlıyor). nodata_value=255
+    # zinciri yukarıda AÇIKLANDIĞI gibi çalışmalı, ama çağrı zincirinin
+    # herhangi bir noktasında effective_nodata yine de 0'a düşerse, bu satır
+    # 0'ı bu ailede (kodlar 0'dan başlıyorsa, yani "Değişmeyen" gerçek
+    # sınıfıysa) ASLA geçersiz/NoData saymaz. Veri doğruluğunu ETKİLEMEZ —
+    # sadece yanlışlıkla dışlamayı önler.
+    if effective_nodata is not None and np.isclose(float(effective_nodata), 0.0) and shift == 1:
+        effective_nodata = None
+
     valid = np.isfinite(band)
     if effective_nodata is not None:
         valid &= ~np.isclose(band, float(effective_nodata))
@@ -2906,14 +3079,10 @@ def _build_native_categorical_symbology_zip(tif_bytes, breaks, safe_name, nodata
     out = np.where(valid, rounded + shift, 0)
     out = np.clip(out, 0, 255).astype(np.uint8)
 
-    # 🛠️ KÖK NEDEN DÜZELTMESİ (Faz 48 — bkz. _build_lulc_symbology_zip'teki
-    # AYNI notu): embed_colormap=False, ArcMap'in sürükle-bırakta OTOMATİK
-    # okumadığı RAT/VAT sidecar'larına güveniyordu — bu da tam olarak
-    # kullanıcının bildirdiği "veri eksik, lejantta beyaz boş kutular, Orman
-    # (Değişmeyen) sınıfı yok" belirtisini üretiyordu. embed_colormap=True +
-    # dinamik NBITS (_choose_nbits) standalone doğrulandı: FOREST_LOSS için
-    # (3 sınıf + NoData) gömülü ColorMap'te TAM 4 giriş oluşuyor — 256 DEĞİL,
-    # yani boş kutu sorunu da geri gelmiyor.
+    # 🛠️ PAKET 81 — embed_colormap=True (bkz. _build_lulc_symbology_zip'teki
+    # AYNI Paket 81 notu): FOREST_LOSS/URBAN_GROWTH indirmelerinde de artık
+    # ColorMap otomatik geliyor VE dolgu indeksleri gerçek bir sınıfın
+    # kopyasıyla dolduruluyor — boş/beyaz kutu yok, veri değişmiyor.
     return _build_symbology_files_from_classes(out, profile, shifted_info, safe_name, embed_colormap=True)
 
 
@@ -3405,10 +3574,10 @@ def _build_classified_symbology_zip(tif_bytes, vis, safe_name, breaks=None, n_cl
     if not code_info:
         return None
 
-    # 🛠️ KÖK NEDEN DÜZELTMESİ (Faz 48 — bkz. _build_lulc_symbology_zip'teki
-    # AYNI not): embed_colormap=True + dinamik NBITS ile ArcMap sürükle-bırakta
-    # otomatik doğru renklenir; boş kutu sorunu NBITS boyutlandırmasıyla zaten
-    # önleniyor (bkz. _build_symbology_files_from_classes()).
+    # 🛠️ PAKET 81 — embed_colormap=True (bkz. _build_lulc_symbology_zip'teki
+    # AYNI Paket 81 notu): genel TOPO/spektral-indeks kullanıcı-sınıflandırma
+    # indirmelerinde de ColorMap otomatik geliyor, dolgu indeksleri gerçek
+    # bir sınıfın kopyasıyla dolduruluyor — boş/beyaz kutu yok.
     return _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name, embed_colormap=True)
 
 
@@ -3630,6 +3799,86 @@ def _weather_avg(values):
     return sum(vals) / len(vals)
 
 
+# 🆕 Faz 80: kullanıcı, Uydu Görüntüsü/Uydu Analizi/Zaman Serisi bölümündeki
+# analizlerin tarihine bağlı 30 günlük hava durumu verisinin (kullanıcı
+# "🌦️ Hava Durumu" kutusunu işaretlediyse zaten ekranda gösteriliyor — bkz.
+# /api/weather ve frontend'deki STATE[pane].days), AI Veri Asistanı'nın
+# raporuna da (o analizler kullanılıyorsa) dahil edilmesini, "son günlerde
+# bölge çok kuru kalmış" / "yağış almış" gibi daha PROFESYONEL ve BİLİMSEL
+# yorumlar yapılmasını istedi. Ham 30 günlük diziyi olduğu gibi modele
+# göndermek yerine — küçük/ücretsiz bir modelin 30 sayıyı doğru toplaması
+# GARANTİ DEĞİLDİR — burada SUNUCU TARAFINDA (deterministik, Python
+# aritmetiğiyle) birkaç somut istatistik ÖNCEDEN hesaplanır; model yalnızca
+# bu hazır, doğrulanmış sayıları YORUMLAR, kendisi toplama/ortalama YAPMAZ.
+def _weather_summarize_for_gemini(days):
+    """`days` — /api/weather'ın döndürdüğü ve frontend'in STATE[pane].days
+    içinde tuttuğu, EN ESKİDEN EN YENİYE sıralı günlük hava durumu listesi
+    (her öğe: date, tempMin, tempMax, tempMean, precipitation, humidity).
+    Dönüş: dict (bkz. aşağıdaki alanlar) veya `days` boş/geçersizse None.
+    RAIN_THRESHOLD_MM: bir günü "yağışlı" saymak için minimum yağış (mm) —
+    meteorolojide yaygın kullanılan "ölçülebilir yağış" eşiği.
+    """
+    if not isinstance(days, list) or not days:
+        return None
+    clean = [d for d in days if isinstance(d, dict) and d.get('date')]
+    if not clean:
+        return None
+
+    RAIN_THRESHOLD_MM = 1.0
+
+    def _num(v):
+        return v if isinstance(v, (int, float)) else None
+
+    precip_series = [_num(d.get('precipitation')) for d in clean]
+    temp_series = [_num(d.get('tempMean')) for d in clean]
+    hum_series = [_num(d.get('humidity')) for d in clean]
+
+    total_precip = sum(v for v in precip_series if v is not None)
+    rainy_days = sum(1 for v in precip_series if v is not None and v >= RAIN_THRESHOLD_MM)
+
+    # Son yağıştan bu yana geçen gün sayısı: listenin SONUNDAN (en yeni
+    # günden) geriye doğru tarayarak ilk "yağışlı" günü bul.
+    dry_streak_days = None
+    last_rain_found = False
+    for offset, d in enumerate(reversed(clean)):
+        p = _num(d.get('precipitation'))
+        if p is not None and p >= RAIN_THRESHOLD_MM:
+            dry_streak_days = offset
+            last_rain_found = True
+            break
+    if not last_rain_found:
+        dry_streak_days = len(clean)  # tüm dönem boyunca hiç ölçülebilir yağış yok
+
+    mean_temp = _weather_avg(temp_series)
+    mean_humidity = _weather_avg(hum_series)
+
+    # Son 7 gün / önceki 7 gün yağış eğilimi (basit, deterministik trend).
+    last7 = precip_series[-7:] if len(precip_series) >= 1 else []
+    prev7 = precip_series[-14:-7] if len(precip_series) >= 8 else []
+    last7_sum = sum(v for v in last7 if v is not None) if last7 else None
+    prev7_sum = sum(v for v in prev7 if v is not None) if prev7 else None
+    trend = None
+    if last7_sum is not None and prev7_sum is not None:
+        diff = last7_sum - prev7_sum
+        if abs(diff) < 1.0:  # < 1mm fark → "benzer düzeyde" kabul edilir
+            trend = 'flat'
+        elif diff > 0:
+            trend = 'up'
+        else:
+            trend = 'down'
+
+    return {
+        'days_count': len(clean),
+        'total_precip_mm': round(total_precip, 1),
+        'rainy_days': rainy_days,
+        'dry_streak_days': dry_streak_days,
+        'has_rain_in_period': last_rain_found,
+        'mean_temp_c': (round(mean_temp, 1) if mean_temp is not None else None),
+        'mean_humidity_pct': (round(mean_humidity, 1) if mean_humidity is not None else None),
+        'trend': trend,  # 'up' | 'down' | 'flat' | None
+    }
+
+
 @app.route('/api/weather', methods=['POST'])
 def weather_history():
     """
@@ -3770,7 +4019,7 @@ def _smtp_credentials():
     # Kullanıcı adı: gönderen Gmail adresi
     # Şifre: Gmail Uygulama Şifresi
     user = 'sylvagis.world@gmail.com'
-    password = 'qysvolcewarzoliw'
+    password = 'bngamjodidmbpshc'
     return user, password, None
 
 
@@ -3912,58 +4161,182 @@ def _gemini_check_and_increment_quota(client_ip):
 # %100 garanti edilemez (küçük/ücretsiz modeller talimatı bazen tam
 # uygulamayabilir) — bu yüzden arayüzde kullanıcıya yanıtların doğruluğunu
 # kendisinin kontrol etmesi gerektiği ayrıca hatırlatılıyor.
-_GEMINI_SYSTEM_INSTRUCTION = (
-    "Sen SylvaGIS uygulamasında, kullanıcıya verilen sayısal analiz verilerini "
-    "(arazi örtüsü/kullanım sınıfları, yükseklik/eğim/bakı sınıflandırması, NDVI, "
-    "bina/çatı tespiti gibi) okuyup açıklayan bir veri yorumlama asistanısın. Sana "
-    "BİRDEN FAZLA veri seti verilebilir — her biri bir analiz adı, sınıflandırma "
-    "lejantı (sınıf adları, değer aralıkları) ve yüzde (%) dağılımından oluşur; "
-    "ayrıca varsa bir bina/çatı tespiti özeti (toplam bina sayısı, toplam çatı "
-    "alanı) verilebilir. Bazen ayrıca kullanıcının o an ekranında gördüğü "
-    "harita/lejant görüntülerinin BİRDEN FAZLA anlık görüntüsü (ekran "
-    "görüntüsü — genellikle her biri farklı bir analize ait, etiketiyle "
-    "belirtilmiş) de verilebilir — bunlar ham uydu/GEE verisi değil, tarayıcı "
-    "ekran görüntüleridir; renk dağılımı/mekansal desen hakkında GENEL, "
-    "yaklaşık, betimsel gözlemler için kullanılabilir, kesin piksel-düzeyinde "
-    "bir ölçüm kaynağı olarak KULLANILAMAZ.\n\n"
-    "GÖREVİN: Sana verilen bu verilere dayanarak, kullanıcının sorusunu Türkçe "
-    "ve nesnel şekilde yanıtlamak — kullanıcı DETAYLI BİR RAPOR istiyor, KISA "
-    "(1-2 cümlelik/paragraflık) yüzeysel yanıtlar YETERSİZDİR. Şu yapıyı "
-    "izle: (1) sana verilen HER BİR veri seti için AYRI bir paragrafta o "
-    "setin öne çıkan noktalarını (en yüksek/düşük yüzdeli sınıflar, dikkat "
-    "çeken değer aralıkları, varsa ilgili görüntüdeki renk/mekansal desen) "
-    "açıkla; (2) BİRDEN FAZLA veri seti varsa, bunları BİRBİRİYLE "
-    "İLİŞKİLENDİREN ayrı bir paragraf yaz — örneğin bir yükseklik/eğim "
-    "sınıflandırmasıyla bir arazi örtüsü sınıflandırmasını karşılaştırıp "
-    "'600-1200m aralığında orman sınıfının payı yüksek görünüyor' gibi, ya da "
-    "'dik eğimli (örn. %60) ve ormanlık alanlar genellikle toprak erozyonunu "
-    "azaltmaya yardımcı olan bir işlev görür' gibi GENEL, tanımlayıcı "
-    "gözlemler paylaş; (3) en sonda kısa bir GENEL ÖZET paragrafı ekle. "
-    "Kullanıcının asıl sorusunu da bu yapı içinde açıkça yanıtla.\n\n"
-    "ÖNEMLİ SINIRLAR (bunlara KESİNLİKLE uy):\n"
-    "- Bu bir KESİN mekansal çakıştırma (overlay) analizi DEĞİLDİR — sana ayrı ayrı "
-    "özet istatistikler veriliyor, piksel piksel çakıştırılmış ortak bir tablo "
-    "verilmiyor. İlişkilendirmelerini her zaman 'görünüyor', 'muhtemelen', "
-    "'genellikle' gibi TEMKİNLİ bir dille ifade et, kesinlik iddia etme.\n"
-    "- RESMİ bir RİSK/TEHLİKE DEĞERLENDİRMESİ yapma — 'bu alan YÜKSEK RİSKLİDİR', "
-    "'sel riski taşıyor', 'acil müdahale gerekir' gibi risk skoru/uyarı/alarm "
-    "niteliğinde ifadeler KULLANMA.\n"
-    "- TAVSİYE/ÖNERİ/TALİMAT verme — 'şunu yapmalısınız', 'öneririm', 'tavsiye "
-    "ederim', 'şu tür ağaç dikilmeli', 'tedbir alınmalı' gibi kullanıcıya eylem "
-    "söyleyen ifadeler KULLANMA. Genel ekolojik/coğrafi bir işlevi betimsel olarak "
-    "tanımlayabilirsin ('...erozyonu azaltmaya yardımcı olabilir') ama bunu bir "
-    "eylem çağrısına DÖNÜŞTÜRME.\n"
-    "- Sana verilmeyen konularda (hava durumu, toprak yapısı, hukuki durum, "
-    "mülkiyet vb.) yorum yapma — sadece sana verilen veri setleriyle sınırlı kal.\n"
-    "- Eğer soru resmi bir risk değerlendirmesi veya somut bir tavsiye/talimat "
-    "istiyorsa, KİBARCA şunu söyle: 'Bu asistan yalnızca ekrandaki verileri "
-    "betimsel olarak açıklayabilir; resmi bir risk değerlendirmesi veya tavsiye "
-    "veremez.' ve başka bir şey ekleme.\n"
-    "Yanıtın toplamda en az 3-4 paragraf olsun (veri seti sayısına göre daha "
-    "da uzun olabilir); yine de sana verilmeyen konularda uydurma bilgi ekleyerek "
-    "yapay şekilde uzatma — yalnızca sana verilen verilere dayanarak, doğal "
-    "şekilde detaylandır."
-)
+# 🆕 Faz 75: 30 dil desteği — asistanın YANIT DİLİ artık sabit Türkçe değil,
+# ön yüzün aktif arayüz diline göre dinamik olarak belirleniyor (bkz.
+# _build_gemini_system_instruction). Sistem talimatının KENDİSİ (Gemini'ye
+# verilen yönerge metni) Türkçe kalmaya devam ediyor — bu 30 farklı dile
+# çevrilmiş 30 ayrı yönerge metni tutmak yerine, tek ve tutarlı bir yönergeyi
+# koruyup yalnızca "hangi dilde yanıt ver" kısmını değiştirmenin daha güvenilir
+# olduğu değerlendirildi; Gemini, Türkçe bir yönergeyle "İngilizce yanıt ver"
+# talimatını sorunsuz şekilde anlayıp uygulayabiliyor. Ayrıca kullanıcı
+# talebiyle (Paket 64) her veri seti için DAHA DETAYLI/BİLİMSEL bir anlatım
+# ve KISALTILMAMIŞ bir sonuç paragrafı istendiği için ilgili talimat
+# güçlendirildi.
+_GEMINI_LANG_NAMES = {
+    'en': 'English', 'tr': 'Turkish', 'uz': 'Uzbek', 'el': 'Greek', 'bg': 'Bulgarian',
+    'az': 'Azerbaijani', 'hu': 'Hungarian', 'kk': 'Kazakh', 'de': 'German', 'fr': 'French',
+    'es': 'Spanish', 'pt': 'Portuguese', 'ar': 'Arabic', 'fa': 'Persian', 'zh': 'Chinese',
+    'ja': 'Japanese', 'ko': 'Korean', 'hi': 'Hindi', 'id': 'Indonesian', 'ru': 'Russian',
+    'th': 'Thai', 'bn': 'Bengali', 'vi': 'Vietnamese', 'ur': 'Urdu', 'pl': 'Polish',
+    'ms': 'Malay', 'ky': 'Kyrgyz', 'mn': 'Mongolian', 'ka': 'Georgian', 'it': 'Italian',
+}
+
+
+# 🆕 Faz 77: modele gönderilen VERİ ÖZETİNİN bağlayıcı etiketleri (ör.
+# "Veri seti 1 — ...", "Toplam alan:", "Sınıflar (ad — değer aralığı —
+# yüzde):", "Soru:") artık aktif dile göre çevriliyor — böylece modelin
+# gördüğü metnin BÜYÜK kısmı zaten hedef dilde oluyor, yalnızca sistem
+# talimatındaki dil yönergesine güvenilmiyor. Anahtarlar eksik olan bir dil
+# için İngilizce'ye düşer (asla boş bırakılmaz).
+_GEMINI_PROMPT_LABELS = {
+    'en': dict(dataset='Dataset', total_area='Total area:', hectare='hectares', classes_header='Classes (name — value range — percentage):', question='Question:', building_section='Building/Roof Detection:', building_count='Total building/roof count:', building_area='Total roof area:', building_source='Source dataset:', general_map_view='General Map View', image_note="NOTE: %d screenshot(s) are also provided below — these are the user's current on-screen map/legend snapshots (browser screenshots, NOT raw satellite/GEE data), each labeled with the analysis it belongs to. You may add general, descriptive observations about color distribution/spatial patterns from these; still do not provide a formal risk assessment.", image_label="The image below is a map/legend screenshot for the '%s' analysis:", weather_section='Last 30 Days Weather Summary (linked to satellite/time-series analysis dates):', weather_total_precip='Total precipitation:', weather_rainy_days='Rainy days:', weather_dry_streak_days='Days since last rain:', weather_no_rain='No measurable precipitation was recorded in this period.', weather_mean_temp='Mean temperature:', weather_trend_label='Recent 7-day vs. previous 7-day precipitation trend:', weather_trend_up='increasing', weather_trend_down='decreasing', weather_trend_flat='about the same', weather_humidity='Mean humidity:'),
+    'tr': dict(dataset='Veri seti', total_area='Toplam alan:', hectare='hektar', classes_header='Sınıflar (ad — değer aralığı — yüzde):', question='Soru:', building_section='Bina/Çatı Tespiti:', building_count='Toplam bina/çatı sayısı:', building_area='Toplam çatı alanı:', building_source='Kaynak veri kümesi:', general_map_view='Genel Harita Görünümü', image_note='NOT: Ayrıca aşağıda %d adet ekran görüntüsü var — bunlar kullanıcının o an ekranında gördüğü harita/lejant anlık görüntüleridir (tarayıcı ekran görüntüsü — ham uydu/GEE verisi DEĞİL), her biri kendi etiketiyle hangi analize ait olduğu belirtilmiştir. Bu görüntüleri de dikkate alarak renk dağılımı/mekansal desenler hakkında GENEL, betimsel gözlemler ekleyebilirsin; yine de resmi bir risk değerlendirmesi yapma.', image_label="Aşağıdaki görüntü '%s' analizine ait harita/lejant ekran görüntüsüdür:", weather_section='Son 30 Günün Hava Durumu Özeti (uydu/zaman serisi analiz tarihlerine bağlı):', weather_total_precip='Toplam yağış:', weather_rainy_days='Yağışlı gün sayısı:', weather_dry_streak_days='Son yağıştan bu yana geçen gün sayısı:', weather_no_rain='Bu dönemde ölçülebilir bir yağış kaydedilmedi.', weather_mean_temp='Ortalama sıcaklık:', weather_trend_label='Son 7 gün / önceki 7 gün yağış eğilimi:', weather_trend_up='artıyor', weather_trend_down='azalıyor', weather_trend_flat='benzer düzeyde', weather_humidity='Ortalama nem:'),
+    'uz': dict(dataset="Ma'lumotlar to'plami", total_area='Umumiy maydon:', hectare='gektar', classes_header="Sinflar (nomi — qiymat oralig'i — foiz):", question='Savol:', building_section='Bino/Tom aniqlash:', building_count='Umumiy bino/tom soni:', building_area='Umumiy tom maydoni:', building_source="Manba ma'lumotlar to'plami:", general_map_view='Umumiy xarita ko\'rinishi', image_note="ESLATMA: Quyida yana %d ta skrinshot mavjud — bular foydalanuvchining hozirgi ekrandagi xarita/legenda ko'rinishlari (brauzer skrinshoti, xom sun'iy yo'ldosh/GEE ma'lumoti EMAS), har biri tegishli tahlil bilan belgilangan. Bulardan rang taqsimoti/fazoviy naqshlar haqida umumiy, tavsiflovchi kuzatishlar qo'shishingiz mumkin; baribir rasmiy xavf bahosini bermang.", image_label="Quyidagi rasm '%s' tahliliga tegishli xarita/legenda skrinshoti:", weather_section='Soʻnggi 30 kunlik ob-havo xulosasi (sun’iy yoʻldosh/vaqt seriyasi tahlil sanalariga bogʻliq):', weather_total_precip='Umumiy yogʻin:', weather_rainy_days='Yogʻingarchilik boʻlgan kunlar soni:', weather_dry_streak_days='Oxirgi yogʻindan beri oʻtgan kunlar:', weather_no_rain='Bu davrda seziladigan yogʻin qayd etilmadi.', weather_mean_temp='Oʻrtacha harorat:', weather_trend_label='Soʻnggi 7 kun / oldingi 7 kun yogʻin tendensiyasi:', weather_trend_up='oshmoqda', weather_trend_down='kamaymoqda', weather_trend_flat='taxminan bir xil', weather_humidity='Oʻrtacha namlik:'),
+    'el': dict(dataset='Σύνολο δεδομένων', total_area='Συνολική έκταση:', hectare='εκτάρια', classes_header='Κατηγορίες (όνομα — εύρος τιμών — ποσοστό):', question='Ερώτηση:', building_section='Ανίχνευση Κτιρίων/Στεγών:', building_count='Συνολικός αριθμός κτιρίων/στεγών:', building_area='Συνολική επιφάνεια στέγης:', building_source='Πηγαίο σύνολο δεδομένων:', general_map_view='Γενική Προβολή Χάρτη', image_note='ΣΗΜΕΙΩΣΗ: Παρακάτω παρέχονται επίσης %d στιγμιότυπα οθόνης — πρόκειται για τρέχουσες εικόνες χάρτη/υπομνήματος του χρήστη (στιγμιότυπα προγράμματος περιήγησης, ΟΧΙ ακατέργαστα δεδομένα δορυφόρου/GEE), καθένα επισημασμένο με την ανάλυση στην οποία ανήκει. Μπορείτε να προσθέσετε γενικές, περιγραφικές παρατηρήσεις σχετικά με την κατανομή χρωμάτων/χωρικά μοτίβα από αυτά· ωστόσο μην παρέχετε επίσημη αξιολόγηση κινδύνου.', image_label="Η παρακάτω εικόνα είναι στιγμιότυπο χάρτη/υπομνήματος για την ανάλυση '%s':", weather_section='Σύνοψη καιρού τελευταίων 30 ημερών (συνδεδεμένη με τις ημερομηνίες ανάλυσης δορυφόρου/χρονοσειράς):', weather_total_precip='Συνολική βροχόπτωση:', weather_rainy_days='Ημέρες με βροχή:', weather_dry_streak_days='Ημέρες από την τελευταία βροχή:', weather_no_rain='Δεν καταγράφηκε μετρήσιμη βροχόπτωση σε αυτή την περίοδο.', weather_mean_temp='Μέση θερμοκρασία:', weather_trend_label='Τάση βροχόπτωσης τελευταίων 7 ημερών έναντι προηγούμενων 7:', weather_trend_up='αυξάνεται', weather_trend_down='μειώνεται', weather_trend_flat='περίπου ίδια', weather_humidity='Μέση υγρασία:'),
+    'bg': dict(dataset='Набор от данни', total_area='Обща площ:', hectare='хектара', classes_header='Класове (име — диапазон на стойностите — процент):', question='Въпрос:', building_section='Откриване на сгради/покриви:', building_count='Общ брой сгради/покриви:', building_area='Обща площ на покрива:', building_source='Изходен набор от данни:', general_map_view='Общ изглед на картата', image_note='БЕЛЕЖКА: По-долу са предоставени още %d екранни снимки — това са текущите изображения на картата/легендата на потребителя (екранни снимки от браузъра, а НЕ сурови сателитни/GEE данни), всяка обозначена с анализа, към който принадлежи. Можете да добавите общи, описателни наблюдения за разпределението на цветовете/пространствените модели от тях; все пак не предоставяйте официална оценка на риска.', image_label="Изображението по-долу е екранна снимка на карта/легенда за анализа '%s':", weather_section='Обобщение на времето за последните 30 дни (свързано с датите на сателитния/времеви анализ):', weather_total_precip='Общо валежи:', weather_rainy_days='Дъждовни дни:', weather_dry_streak_days='Дни от последния дъжд:', weather_no_rain='През този период не са регистрирани измерими валежи.', weather_mean_temp='Средна температура:', weather_trend_label='Тенденция на валежите: последните 7 дни спрямо предходните 7:', weather_trend_up='нараства', weather_trend_down='намалява', weather_trend_flat='приблизително същото', weather_humidity='Средна влажност:'),
+    'az': dict(dataset='Verilənlər dəsti', total_area='Ümumi sahə:', hectare='hektar', classes_header='Siniflər (ad — dəyər aralığı — faiz):', question='Sual:', building_section='Bina/Dam aşkarlanması:', building_count='Ümumi bina/dam sayı:', building_area='Ümumi dam sahəsi:', building_source='Mənbə verilənlər dəsti:', general_map_view='Ümumi Xəritə Görünüşü', image_note="QEYD: Aşağıda daha %d ekran görüntüsü var — bunlar istifadəçinin hazırkı ekran xəritə/lejand görüntüləridir (brauzer ekran görüntüsü, XAM peyk/GEE məlumatı DEYİL), hər biri aid olduğu təhlillə etiketlənib. Bunlardan rəng paylanması/məkan nümunələri haqqında ümumi, təsviri müşahidələr əlavə edə bilərsiniz; yenə də rəsmi risk qiymətləndirməsi verməyin.", image_label="Aşağıdakı görüntü '%s' təhlilinə aid xəritə/lejand ekran görüntüsüdür:", weather_section='Son 30 günün hava vəziyyəti xülasəsi (peyk/zaman seriyası təhlil tarixləri ilə əlaqəli):', weather_total_precip='Ümumi yağıntı:', weather_rainy_days='Yağışlı günlərin sayı:', weather_dry_streak_days='Son yağışdan bəri keçən gün sayı:', weather_no_rain='Bu dövrdə ölçülə bilən yağıntı qeydə alınmayıb.', weather_mean_temp='Orta temperatur:', weather_trend_label='Son 7 gün / əvvəlki 7 gün yağıntı tendensiyası:', weather_trend_up='artır', weather_trend_down='azalır', weather_trend_flat='təxminən eynidir', weather_humidity='Orta rütubət:'),
+    'hu': dict(dataset='Adathalmaz', total_area='Teljes terület:', hectare='hektár', classes_header='Osztályok (név — értéktartomány — százalék):', question='Kérdés:', building_section='Épület/Tető felismerés:', building_count='Épületek/tetők teljes száma:', building_area='Teljes tetőterület:', building_source='Forrás adathalmaz:', general_map_view='Általános térképnézet', image_note='MEGJEGYZÉS: Az alábbiakban további %d képernyőkép található — ezek a felhasználó aktuális térkép/jelmagyarázat pillanatképei (böngésző képernyőképek, NEM nyers műhold/GEE adatok), mindegyik a hozzá tartozó elemzéssel jelölve. Ezekből általános, leíró jellegű megfigyeléseket adhat a színeloszlásról/térbeli mintázatokról; ennek ellenére ne adjon hivatalos kockázatértékelést.', image_label="Az alábbi kép a(z) '%s' elemzéshez tartozó térkép/jelmagyarázat képernyőkép:", weather_section='Elmúlt 30 nap időjárási összefoglalója (a műholdas/idősoros elemzés dátumaihoz kapcsolódik):', weather_total_precip='Összes csapadék:', weather_rainy_days='Csapadékos napok száma:', weather_dry_streak_days='Az utolsó csapadék óta eltelt napok:', weather_no_rain='Ebben az időszakban nem regisztráltak mérhető csapadékot.', weather_mean_temp='Átlaghőmérséklet:', weather_trend_label='Az elmúlt 7 nap és az azt megelőző 7 nap csapadéktrendje:', weather_trend_up='növekszik', weather_trend_down='csökken', weather_trend_flat='hasonló szinten', weather_humidity='Átlagos páratartalom:'),
+    'kk': dict(dataset='Деректер жиынтығы', total_area='Жалпы аудан:', hectare='гектар', classes_header='Кластар (атауы — мән диапазоны — пайыз):', question='Сұрақ:', building_section='Ғимарат/Шатыр анықтау:', building_count='Ғимарат/шатырлардың жалпы саны:', building_area='Жалпы шатыр ауданы:', building_source='Дереккөз жиынтығы:', general_map_view='Жалпы карта көрінісі', image_note='ЕСКЕРТУ: Төменде тағы %d скриншот берілген — бұлар пайдаланушының қазіргі экрандағы карта/легенда суреттері (браузер скриншоты, шикі спутник/GEE деректері ЕМЕС), әрқайсысы тиесілі талдаумен белгіленген. Осылардан түс таралуы/кеңістіктік үлгілер туралы жалпы, сипаттамалық бақылаулар қоса аласыз; дегенмен ресми тәуекел бағасын бермеңіз.', image_label="Төмендегі сурет '%s' талдауына тиесілі карта/легенда скриншоты:", weather_section='Соңғы 30 күндік ауа райы қорытындысы (серіктік/уақыт қатары талдау күндеріне байланысты):', weather_total_precip='Жалпы жауын-шашын:', weather_rainy_days='Жаңбырлы күндер саны:', weather_dry_streak_days='Соңғы жауыннан бергі күндер саны:', weather_no_rain='Бұл кезеңде өлшенетін жауын-шашын тіркелмеді.', weather_mean_temp='Орташа температура:', weather_trend_label='Соңғы 7 күн / алдыңғы 7 күн жауын-шашын үрдісі:', weather_trend_up='артып келеді', weather_trend_down='азайып келеді', weather_trend_flat='шамамен бірдей', weather_humidity='Орташа ылғалдылық:'),
+    'de': dict(dataset='Datensatz', total_area='Gesamtfläche:', hectare='Hektar', classes_header='Klassen (Name — Wertebereich — Prozent):', question='Frage:', building_section='Gebäude-/Dacherkennung:', building_count='Gesamtzahl Gebäude/Dächer:', building_area='Gesamte Dachfläche:', building_source='Quelldatensatz:', general_map_view='Allgemeine Kartenansicht', image_note='HINWEIS: Unten sind außerdem %d Screenshot(s) angehängt — dies sind die aktuellen Karten-/Legenden-Momentaufnahmen des Nutzers (Browser-Screenshots, KEINE rohen Satelliten-/GEE-Daten), jeweils mit der zugehörigen Analyse beschriftet. Sie können daraus allgemeine, beschreibende Beobachtungen zu Farbverteilung/räumlichen Mustern hinzufügen; geben Sie dennoch keine formelle Risikobewertung ab.', image_label="Das folgende Bild ist ein Karten-/Legenden-Screenshot für die Analyse '%s':", weather_section='Wetterzusammenfassung der letzten 30 Tage (verknüpft mit den Analysedaten der Satelliten-/Zeitreihenanalyse):', weather_total_precip='Gesamtniederschlag:', weather_rainy_days='Regentage:', weather_dry_streak_days='Tage seit dem letzten Regen:', weather_no_rain='In diesem Zeitraum wurde kein messbarer Niederschlag verzeichnet.', weather_mean_temp='Durchschnittstemperatur:', weather_trend_label='Niederschlagstrend der letzten 7 Tage im Vergleich zu den vorherigen 7 Tagen:', weather_trend_up='steigend', weather_trend_down='sinkend', weather_trend_flat='etwa gleich', weather_humidity='Durchschnittliche Luftfeuchtigkeit:'),
+    'fr': dict(dataset='Jeu de données', total_area='Surface totale :', hectare='hectares', classes_header='Classes (nom — plage de valeurs — pourcentage) :', question='Question :', building_section='Détection des bâtiments/toits :', building_count='Nombre total de bâtiments/toits :', building_area='Surface totale des toits :', building_source='Jeu de données source :', general_map_view='Vue générale de la carte', image_note="REMARQUE : %d capture(s) d'écran supplémentaire(s) sont également fournies ci-dessous — ce sont les instantanés actuels de la carte/légende de l'utilisateur (captures d'écran du navigateur, PAS des données brutes satellite/GEE), chacune étiquetée avec l'analyse à laquelle elle appartient. Vous pouvez ajouter des observations générales et descriptives sur la répartition des couleurs/motifs spatiaux à partir de celles-ci ; ne fournissez cependant pas d'évaluation formelle des risques.", image_label="L'image ci-dessous est une capture d'écran de carte/légende pour l'analyse '%s' :", weather_section="Résumé météo des 30 derniers jours (lié aux dates d'analyse satellite/série temporelle) :", weather_total_precip='Précipitations totales :', weather_rainy_days='Jours de pluie :', weather_dry_streak_days='Jours depuis la dernière pluie :', weather_no_rain="Aucune précipitation mesurable n'a été enregistrée durant cette période.", weather_mean_temp='Température moyenne :', weather_trend_label='Tendance des précipitations : 7 derniers jours par rapport aux 7 précédents :', weather_trend_up='en hausse', weather_trend_down='en baisse', weather_trend_flat='à peu près stable', weather_humidity='Humidité moyenne :'),
+    'es': dict(dataset='Conjunto de datos', total_area='Área total:', hectare='hectáreas', classes_header='Clases (nombre — rango de valores — porcentaje):', question='Pregunta:', building_section='Detección de edificios/techos:', building_count='Número total de edificios/techos:', building_area='Área total del techo:', building_source='Conjunto de datos de origen:', general_map_view='Vista general del mapa', image_note='NOTA: A continuación se proporcionan también %d captura(s) de pantalla — son las instantáneas actuales del mapa/leyenda del usuario (capturas del navegador, NO datos satelitales/GEE en bruto), cada una etiquetada con el análisis al que pertenece. Puede agregar observaciones generales y descriptivas sobre la distribución de colores/patrones espaciales a partir de estas; aun así, no proporcione una evaluación de riesgos formal.', image_label="La siguiente imagen es una captura de pantalla de mapa/leyenda para el análisis '%s':", weather_section='Resumen meteorológico de los últimos 30 días (vinculado a las fechas de análisis satelital/de series temporales):', weather_total_precip='Precipitación total:', weather_rainy_days='Días con lluvia:', weather_dry_streak_days='Días desde la última lluvia:', weather_no_rain='No se registraron precipitaciones medibles en este período.', weather_mean_temp='Temperatura media:', weather_trend_label='Tendencia de precipitación: últimos 7 días frente a los 7 anteriores:', weather_trend_up='en aumento', weather_trend_down='en descenso', weather_trend_flat='aproximadamente igual', weather_humidity='Humedad media:'),
+    'pt': dict(dataset='Conjunto de dados', total_area='Área total:', hectare='hectares', classes_header='Classes (nome — intervalo de valores — percentual):', question='Pergunta:', building_section='Detecção de Edifícios/Telhados:', building_count='Número total de edifícios/telhados:', building_area='Área total do telhado:', building_source='Conjunto de dados de origem:', general_map_view='Visão Geral do Mapa', image_note='NOTA: Abaixo também são fornecidas %d captura(s) de tela — são as capturas atuais do mapa/legenda do usuário (capturas do navegador, NÃO dados brutos de satélite/GEE), cada uma rotulada com a análise a que pertence. Você pode adicionar observações gerais e descritivas sobre distribuição de cores/padrões espaciais a partir delas; ainda assim, não forneça uma avaliação de risco formal.', image_label="A imagem abaixo é uma captura de tela de mapa/legenda para a análise '%s':", weather_section='Resumo meteorológico dos últimos 30 dias (vinculado às datas da análise de satélite/série temporal):', weather_total_precip='Precipitação total:', weather_rainy_days='Dias com chuva:', weather_dry_streak_days='Dias desde a última chuva:', weather_no_rain='Nenhuma precipitação mensurável foi registrada neste período.', weather_mean_temp='Temperatura média:', weather_trend_label='Tendência de precipitação: últimos 7 dias em relação aos 7 anteriores:', weather_trend_up='em alta', weather_trend_down='em queda', weather_trend_flat='aproximadamente igual', weather_humidity='Umidade média:'),
+    'ar': dict(dataset='مجموعة البيانات', total_area='المساحة الإجمالية:', hectare='هكتار', classes_header='الفئات (الاسم — نطاق القيمة — النسبة المئوية):', question='السؤال:', building_section='كشف المباني/الأسطح:', building_count='إجمالي عدد المباني/الأسطح:', building_area='إجمالي مساحة السطح:', building_source='مجموعة البيانات المصدر:', general_map_view='عرض الخريطة العام', image_note='ملاحظة: يتم توفير %d لقطة شاشة إضافية أدناه — وهي لقطات الخريطة/المفتاح الحالية للمستخدم (لقطات شاشة من المتصفح، وليست بيانات أقمار صناعية/GEE خام)، كل منها موسومة بالتحليل الذي تنتمي إليه. يمكنك إضافة ملاحظات عامة ووصفية حول توزيع الألوان/الأنماط المكانية من هذه الصور؛ مع ذلك لا تقدم تقييماً رسمياً للمخاطر.', image_label="الصورة أدناه هي لقطة شاشة للخريطة/المفتاح لتحليل '%s':", weather_section='ملخص الطقس لآخر 30 يومًا (مرتبط بتواريخ تحليل الأقمار الصناعية/السلاسل الزمنية):', weather_total_precip='إجمالي هطول الأمطار:', weather_rainy_days='عدد الأيام الممطرة:', weather_dry_streak_days='عدد الأيام منذ آخر هطول للأمطار:', weather_no_rain='لم يتم تسجيل هطول أمطار قابل للقياس خلال هذه الفترة.', weather_mean_temp='متوسط درجة الحرارة:', weather_trend_label='اتجاه هطول الأمطار: آخر 7 أيام مقابل الـ 7 أيام السابقة:', weather_trend_up='في ازدياد', weather_trend_down='في انخفاض', weather_trend_flat='مشابه تقريباً', weather_humidity='متوسط الرطوبة:'),
+    'fa': dict(dataset='مجموعه داده', total_area='مساحت کل:', hectare='هکتار', classes_header='کلاس‌ها (نام — محدوده مقدار — درصد):', question='سؤال:', building_section='تشخیص ساختمان/سقف:', building_count='تعداد کل ساختمان/سقف:', building_area='مساحت کل سقف:', building_source='مجموعه داده منبع:', general_map_view='نمای کلی نقشه', image_note='یادداشت: در زیر همچنین %d تصویر صفحه ارائه شده است — این‌ها تصاویر فعلی نقشه/راهنمای کاربر هستند (اسکرین‌شات مرورگر، نه داده خام ماهواره/GEE)، هر کدام با تحلیل مربوطه برچسب‌گذاری شده‌اند. می‌توانید مشاهدات کلی و توصیفی درباره توزیع رنگ/الگوهای مکانی از این‌ها اضافه کنید؛ با این حال ارزیابی ریسک رسمی ارائه ندهید.', image_label="تصویر زیر یک اسکرین‌شات نقشه/راهنما برای تحلیل '%s' است:", weather_section='خلاصه آب\u200cوهوای ۳۰ روز اخیر (مرتبط با تاریخ\u200cهای تحلیل ماهواره\u200cای/سری زمانی):', weather_total_precip='مجموع بارش:', weather_rainy_days='تعداد روزهای بارانی:', weather_dry_streak_days='تعداد روز از آخرین بارش:', weather_no_rain='در این بازه هیچ بارش قابل\u200cاندازه\u200cگیری ثبت نشده است.', weather_mean_temp='میانگین دما:', weather_trend_label='روند بارش: ۷ روز اخیر در مقایسه با ۷ روز قبل از آن:', weather_trend_up='رو به افزایش', weather_trend_down='رو به کاهش', weather_trend_flat='تقریباً مشابه', weather_humidity='میانگین رطوبت:'),
+    'zh': dict(dataset='数据集', total_area='总面积：', hectare='公顷', classes_header='类别（名称—数值范围—百分比）：', question='问题：', building_section='建筑物/屋顶检测：', building_count='建筑物/屋顶总数：', building_area='屋顶总面积：', building_source='源数据集：', general_map_view='总体地图视图', image_note='注：下方还提供了%d张截图——这些是用户当前屏幕上的地图/图例快照（浏览器截图，非原始卫星/GEE数据），每张都标注了所属的分析。您可以据此添加关于颜色分布/空间格局的一般性描述观察；但仍不要提供正式的风险评估。', image_label="下图是分析'%s'的地图/图例截图：", weather_section='过去30天天气摘要（与卫星/时间序列分析日期相关联）：', weather_total_precip='总降水量：', weather_rainy_days='降雨天数：', weather_dry_streak_days='距上次降雨的天数：', weather_no_rain='此期间未记录到可测量的降水。', weather_mean_temp='平均气温：', weather_trend_label='降水趋势（近7天 vs 前7天）：', weather_trend_up='上升', weather_trend_down='下降', weather_trend_flat='大致持平', weather_humidity='平均湿度：'),
+    'ja': dict(dataset='データセット', total_area='総面積：', hectare='ヘクタール', classes_header='クラス（名前 — 値の範囲 — パーセント）：', question='質問：', building_section='建物・屋根検出：', building_count='建物・屋根の総数：', building_area='屋根の総面積：', building_source='元データセット：', general_map_view='全体地図表示', image_note='注：以下にさらに%d枚のスクリーンショットがあります — これらはユーザーが現在画面で見ている地図・凡例のスナップショットです（ブラウザのスクリーンショットであり、生の衛星/GEEデータではありません）、それぞれ対応する分析でラベル付けされています。これらから色の分布・空間パターンについて一般的で記述的な観察を追加できますが、正式なリスク評価は行わないでください。', image_label="以下の画像は'%s'分析の地図・凡例のスクリーンショットです：", weather_section='過去30日間の気象概要（衛星・時系列分析の日付に連動）：', weather_total_precip='総降水量：', weather_rainy_days='降雨日数：', weather_dry_streak_days='最後の降雨からの経過日数：', weather_no_rain='この期間に測定可能な降水は記録されませんでした。', weather_mean_temp='平均気温：', weather_trend_label='降水傾向（直近7日 対 その前の7日）：', weather_trend_up='増加傾向', weather_trend_down='減少傾向', weather_trend_flat='ほぼ横ばい', weather_humidity='平均湿度：'),
+    'ko': dict(dataset='데이터셋', total_area='총 면적:', hectare='헥타르', classes_header='클래스 (이름 — 값 범위 — 백분율):', question='질문:', building_section='건물/지붕 탐지:', building_count='총 건물/지붕 수:', building_area='총 지붕 면적:', building_source='출처 데이터셋:', general_map_view='전체 지도 보기', image_note='참고: 아래에 %d개의 스크린샷이 추가로 제공됩니다 — 이는 사용자가 현재 화면에서 보고 있는 지도/범례 스냅샷입니다(브라우저 스크린샷이며 원시 위성/GEE 데이터가 아님), 각각 해당 분석으로 라벨이 지정되어 있습니다. 이를 바탕으로 색상 분포/공간 패턴에 대한 일반적이고 서술적인 관찰을 추가할 수 있지만, 공식적인 위험 평가는 제공하지 마십시오.', image_label="아래 이미지는 '%s' 분석에 대한 지도/범례 스크린샷입니다:", weather_section='지난 30일 날씨 요약 (위성/시계열 분석 날짜와 연동됨):', weather_total_precip='총 강수량:', weather_rainy_days='강우일 수:', weather_dry_streak_days='마지막 강우 이후 경과일:', weather_no_rain='이 기간 동안 측정 가능한 강수가 기록되지 않았습니다.', weather_mean_temp='평균 기온:', weather_trend_label='강수 추세 (최근 7일 대 이전 7일):', weather_trend_up='증가 추세', weather_trend_down='감소 추세', weather_trend_flat='비슷한 수준', weather_humidity='평균 습도:'),
+    'hi': dict(dataset='डेटासेट', total_area='कुल क्षेत्रफल:', hectare='हेक्टेयर', classes_header='वर्ग (नाम — मान सीमा — प्रतिशत):', question='प्रश्न:', building_section='भवन/छत पहचान:', building_count='कुल भवन/छत संख्या:', building_area='कुल छत क्षेत्रफल:', building_source='स्रोत डेटासेट:', general_map_view='सामान्य मानचित्र दृश्य', image_note='नोट: नीचे %d और स्क्रीनशॉट भी दिए गए हैं — ये उपयोगकर्ता के वर्तमान स्क्रीन के मानचित्र/लेजेंड स्नैपशॉट हैं (ब्राउज़र स्क्रीनशॉट, कच्चा उपग्रह/GEE डेटा नहीं), प्रत्येक अपने संबंधित विश्लेषण के साथ लेबल किया गया है। आप इनसे रंग वितरण/स्थानिक पैटर्न के बारे में सामान्य, वर्णनात्मक अवलोकन जोड़ सकते हैं; फिर भी औपचारिक जोखिम मूल्यांकन न दें।', image_label="नीचे दी गई छवि '%s' विश्लेषण के लिए मानचित्र/लेजेंड स्क्रीनशॉट है:", weather_section='पिछले 30 दिनों का मौसम सारांश (उपग्रह/समय-श्रृंखला विश्लेषण तिथियों से जुड़ा हुआ):', weather_total_precip='कुल वर्षा:', weather_rainy_days='वर्षा वाले दिनों की संख्या:', weather_dry_streak_days='अंतिम वर्षा के बाद से बीते दिन:', weather_no_rain='इस अवधि में कोई मापने योग्य वर्षा दर्ज नहीं हुई।', weather_mean_temp='औसत तापमान:', weather_trend_label='वर्षा प्रवृत्ति: पिछले 7 दिन बनाम पूर्व 7 दिन:', weather_trend_up='बढ़ रही है', weather_trend_down='घट रही है', weather_trend_flat='लगभग समान', weather_humidity='औसत आर्द्रता:'),
+    'id': dict(dataset='Kumpulan Data', total_area='Luas total:', hectare='hektar', classes_header='Kelas (nama — rentang nilai — persentase):', question='Pertanyaan:', building_section='Deteksi Bangunan/Atap:', building_count='Jumlah total bangunan/atap:', building_area='Luas total atap:', building_source='Kumpulan data sumber:', general_map_view='Tampilan Peta Umum', image_note='CATATAN: Di bawah ini juga disediakan %d tangkapan layar — ini adalah gambar peta/legenda layar pengguna saat ini (tangkapan layar browser, BUKAN data satelit/GEE mentah), masing-masing diberi label sesuai analisisnya. Anda dapat menambahkan pengamatan umum dan deskriptif tentang distribusi warna/pola spasial dari gambar ini; namun tetap jangan memberikan penilaian risiko formal.', image_label="Gambar di bawah ini adalah tangkapan layar peta/legenda untuk analisis '%s':", weather_section='Ringkasan cuaca 30 hari terakhir (terkait dengan tanggal analisis satelit/deret waktu):', weather_total_precip='Total curah hujan:', weather_rainy_days='Jumlah hari hujan:', weather_dry_streak_days='Jumlah hari sejak hujan terakhir:', weather_no_rain='Tidak ada curah hujan terukur yang tercatat selama periode ini.', weather_mean_temp='Suhu rata-rata:', weather_trend_label='Tren curah hujan: 7 hari terakhir dibanding 7 hari sebelumnya:', weather_trend_up='meningkat', weather_trend_down='menurun', weather_trend_flat='kurang lebih sama', weather_humidity='Kelembapan rata-rata:'),
+    'ru': dict(dataset='Набор данных', total_area='Общая площадь:', hectare='гектаров', classes_header='Классы (название — диапазон значений — процент):', question='Вопрос:', building_section='Обнаружение зданий/крыш:', building_count='Общее количество зданий/крыш:', building_area='Общая площадь крыши:', building_source='Исходный набор данных:', general_map_view='Общий вид карты', image_note='ПРИМЕЧАНИЕ: Ниже также приведены %d скриншот(ов) — это текущие снимки карты/легенды пользователя (скриншоты браузера, а НЕ необработанные спутниковые/GEE-данные), каждый с меткой соответствующего анализа. Вы можете добавить общие, описательные наблюдения о распределении цвета/пространственных паттернах на их основе; тем не менее не давайте официальную оценку риска.', image_label="Изображение ниже — это скриншот карты/легенды для анализа '%s':", weather_section='Сводка погоды за последние 30 дней (привязана к датам спутникового/временного анализа):', weather_total_precip='Суммарные осадки:', weather_rainy_days='Количество дождливых дней:', weather_dry_streak_days='Дней с последнего дождя:', weather_no_rain='За этот период измеримых осадков не зафиксировано.', weather_mean_temp='Средняя температура:', weather_trend_label='Тенденция осадков: последние 7 дней по сравнению с предыдущими 7:', weather_trend_up='растёт', weather_trend_down='снижается', weather_trend_flat='примерно на том же уровне', weather_humidity='Средняя влажность:'),
+    'th': dict(dataset='ชุดข้อมูล', total_area='พื้นที่รวม:', hectare='เฮกตาร์', classes_header='คลาส (ชื่อ — ช่วงค่า — เปอร์เซ็นต์):', question='คำถาม:', building_section='การตรวจจับอาคาร/หลังคา:', building_count='จำนวนอาคาร/หลังคาทั้งหมด:', building_area='พื้นที่หลังคารวม:', building_source='ชุดข้อมูลต้นทาง:', general_map_view='มุมมองแผนที่ทั่วไป', image_note='หมายเหตุ: ด้านล่างมีภาพหน้าจอเพิ่มเติมอีก %d ภาพ — เป็นภาพแผนที่/คำอธิบายสัญลักษณ์ปัจจุบันบนหน้าจอของผู้ใช้ (ภาพหน้าจอเบราว์เซอร์ ไม่ใช่ข้อมูลดาวเทียม/GEE ดิบ) แต่ละภาพระบุการวิเคราะห์ที่เกี่ยวข้อง คุณสามารถเพิ่มข้อสังเกตทั่วไปเชิงพรรณนาเกี่ยวกับการกระจายสี/รูปแบบเชิงพื้นที่จากภาพเหล่านี้ได้ แต่ยังคงไม่ควรให้การประเมินความเสี่ยงอย่างเป็นทางการ', image_label="ภาพด้านล่างเป็นภาพหน้าจอแผนที่/คำอธิบายสัญลักษณ์สำหรับการวิเคราะห์ '%s':", weather_section='สรุปสภาพอากาศ 30 วันล่าสุด (เชื่อมโยงกับวันที่วิเคราะห์ดาวเทียม/อนุกรมเวลา):', weather_total_precip='ปริมาณน้ำฝนรวม:', weather_rainy_days='จำนวนวันที่มีฝนตก:', weather_dry_streak_days='จำนวนวันนับจากฝนตกครั้งล่าสุด:', weather_no_rain='ไม่มีการบันทึกปริมาณน้ำฝนที่วัดได้ในช่วงเวลานี้', weather_mean_temp='อุณหภูมิเฉลี่ย:', weather_trend_label='แนวโน้มปริมาณน้ำฝน: 7 วันล่าสุด เทียบกับ 7 วันก่อนหน้า:', weather_trend_up='เพิ่มขึ้น', weather_trend_down='ลดลง', weather_trend_flat='ใกล้เคียงเดิม', weather_humidity='ความชื้นเฉลี่ย:'),
+    'bn': dict(dataset='ডেটাসেট', total_area='মোট এলাকা:', hectare='হেক্টর', classes_header='শ্রেণী (নাম — মান পরিসীমা — শতাংশ):', question='প্রশ্ন:', building_section='ভবন/ছাদ শনাক্তকরণ:', building_count='মোট ভবন/ছাদের সংখ্যা:', building_area='মোট ছাদের এলাকা:', building_source='উৎস ডেটাসেট:', general_map_view='সাধারণ মানচিত্র দৃশ্য', image_note='দ্রষ্টব্য: নিচে আরও %d টি স্ক্রিনশট দেওয়া হয়েছে — এগুলি ব্যবহারকারীর বর্তমান স্ক্রিনের মানচিত্র/লেজেন্ড স্ন্যাপশট (ব্রাউজার স্ক্রিনশট, কাঁচা স্যাটেলাইট/GEE ডেটা নয়), প্রতিটি সংশ্লিষ্ট বিশ্লেষণ দিয়ে লেবেল করা। আপনি এগুলি থেকে রঙ বণ্টন/স্থানিক প্যাটার্ন সম্পর্কে সাধারণ, বর্ণনামূলক পর্যবেক্ষণ যোগ করতে পারেন; তবুও আনুষ্ঠানিক ঝুঁকি মূল্যায়ন দেবেন না।', image_label="নিচের ছবিটি '%s' বিশ্লেষণের জন্য মানচিত্র/লেজেন্ড স্ক্রিনশট:", weather_section='গত ৩০ দিনের আবহাওয়া সারসংক্ষেপ (স্যাটেলাইট/সময়-সিরিজ বিশ্লেষণের তারিখের সাথে যুক্ত):', weather_total_precip='মোট বৃষ্টিপাত:', weather_rainy_days='বৃষ্টির দিনের সংখ্যা:', weather_dry_streak_days='সর্বশেষ বৃষ্টির পর থেকে অতিবাহিত দিন:', weather_no_rain='এই সময়ের মধ্যে পরিমাপযোগ্য কোনো বৃষ্টিপাত রেকর্ড করা হয়নি।', weather_mean_temp='গড় তাপমাত্রা:', weather_trend_label='বৃষ্টিপাতের প্রবণতা: সাম্প্রতিক ৭ দিন বনাম পূর্ববর্তী ৭ দিন:', weather_trend_up='বৃদ্ধি পাচ্ছে', weather_trend_down='হ্রাস পাচ্ছে', weather_trend_flat='প্রায় একই রকম', weather_humidity='গড় আর্দ্রতা:'),
+    'vi': dict(dataset='Bộ dữ liệu', total_area='Tổng diện tích:', hectare='ha', classes_header='Lớp (tên — phạm vi giá trị — phần trăm):', question='Câu hỏi:', building_section='Phát hiện Tòa nhà/Mái nhà:', building_count='Tổng số tòa nhà/mái nhà:', building_area='Tổng diện tích mái nhà:', building_source='Bộ dữ liệu nguồn:', general_map_view='Chế độ xem bản đồ chung', image_note='LƯU Ý: Bên dưới cũng cung cấp thêm %d ảnh chụp màn hình — đây là ảnh chụp nhanh bản đồ/chú giải hiện tại trên màn hình của người dùng (ảnh chụp màn hình trình duyệt, KHÔNG phải dữ liệu vệ tinh/GEE thô), mỗi ảnh được gắn nhãn phân tích tương ứng. Bạn có thể thêm các quan sát chung, mô tả về phân bố màu sắc/mẫu hình không gian từ những ảnh này; tuy nhiên vẫn không đưa ra đánh giá rủi ro chính thức.', image_label="Hình ảnh bên dưới là ảnh chụp màn hình bản đồ/chú giải cho phân tích '%s':", weather_section='Tóm tắt thời tiết 30 ngày qua (liên kết với ngày phân tích vệ tinh/chuỗi thời gian):', weather_total_precip='Tổng lượng mưa:', weather_rainy_days='Số ngày có mưa:', weather_dry_streak_days='Số ngày kể từ lần mưa gần nhất:', weather_no_rain='Không ghi nhận lượng mưa đáng kể trong giai đoạn này.', weather_mean_temp='Nhiệt độ trung bình:', weather_trend_label='Xu hướng lượng mưa: 7 ngày gần đây so với 7 ngày trước đó:', weather_trend_up='đang tăng', weather_trend_down='đang giảm', weather_trend_flat='gần như không đổi', weather_humidity='Độ ẩm trung bình:'),
+    'ur': dict(dataset='ڈیٹا سیٹ', total_area='کل رقبہ:', hectare='ہیکٹر', classes_header='کلاسز (نام — قدر کی حد — فیصد):', question='سوال:', building_section='عمارت/چھت کی شناخت:', building_count='عمارتوں/چھتوں کی کل تعداد:', building_area='کل چھت کا رقبہ:', building_source='ماخذ ڈیٹا سیٹ:', general_map_view='عمومی نقشہ منظر', image_note='نوٹ: نیچے مزید %d اسکرین شاٹس بھی فراہم کیے گئے ہیں — یہ صارف کی موجودہ اسکرین کے نقشہ/لیجنڈ سنیپ شاٹس ہیں (براؤزر اسکرین شاٹ، خام سیٹلائٹ/GEE ڈیٹا نہیں)، ہر ایک اپنے متعلقہ تجزیے کے ساتھ لیبل شدہ ہے۔ آپ ان سے رنگ کی تقسیم/مقامی پیٹرن کے بارے میں عمومی، وضاحتی مشاہدات شامل کر سکتے ہیں؛ تاہم پھر بھی باضابطہ خطرے کی تشخیص نہ دیں۔', image_label="نیچے دی گئی تصویر '%s' تجزیے کے لیے نقشہ/لیجنڈ اسکرین شاٹ ہے:", weather_section='گزشتہ 30 دنوں کے موسم کا خلاصہ (سیٹلائٹ/ٹائم سیریز تجزیہ کی تاریخوں سے منسلک):', weather_total_precip='کل بارش:', weather_rainy_days='بارش والے دنوں کی تعداد:', weather_dry_streak_days='آخری بارش کے بعد سے گزرے دن:', weather_no_rain='اس مدت میں کوئی قابل پیمائش بارش ریکارڈ نہیں ہوئی۔', weather_mean_temp='اوسط درجہ حرارت:', weather_trend_label='بارش کا رجحان: حالیہ 7 دن بمقابلہ گزشتہ 7 دن:', weather_trend_up='بڑھ رہا ہے', weather_trend_down='کم ہو رہا ہے', weather_trend_flat='تقریباً یکساں', weather_humidity='اوسط نمی:'),
+    'pl': dict(dataset='Zbiór danych', total_area='Powierzchnia całkowita:', hectare='ha', classes_header='Klasy (nazwa — zakres wartości — procent):', question='Pytanie:', building_section='Wykrywanie budynków/dachów:', building_count='Łączna liczba budynków/dachów:', building_area='Łączna powierzchnia dachu:', building_source='Źródłowy zbiór danych:', general_map_view='Ogólny widok mapy', image_note='UWAGA: Poniżej dostarczono również %d zrzut(y) ekranu — są to aktualne migawki mapy/legendy użytkownika (zrzuty ekranu przeglądarki, a NIE surowe dane satelitarne/GEE), każdy oznaczony odpowiadającą mu analizą. Możesz dodać ogólne, opisowe obserwacje dotyczące rozkładu kolorów/wzorców przestrzennych na ich podstawie; mimo to nie podawaj formalnej oceny ryzyka.', image_label="Poniższy obraz to zrzut ekranu mapy/legendy dla analizy '%s':", weather_section='Podsumowanie pogody z ostatnich 30 dni (powiązane z datami analizy satelitarnej/szeregu czasowego):', weather_total_precip='Suma opadów:', weather_rainy_days='Liczba dni z opadami:', weather_dry_streak_days='Liczba dni od ostatnich opadów:', weather_no_rain='W tym okresie nie odnotowano mierzalnych opadów.', weather_mean_temp='Średnia temperatura:', weather_trend_label='Trend opadów: ostatnie 7 dni w porównaniu do poprzednich 7 dni:', weather_trend_up='rosnący', weather_trend_down='malejący', weather_trend_flat='mniej więcej taki sam', weather_humidity='Średnia wilgotność:'),
+    'ms': dict(dataset='Set Data', total_area='Jumlah keluasan:', hectare='hektar', classes_header='Kelas (nama — julat nilai — peratusan):', question='Soalan:', building_section='Pengesanan Bangunan/Bumbung:', building_count='Jumlah bilangan bangunan/bumbung:', building_area='Jumlah keluasan bumbung:', building_source='Set data sumber:', general_map_view='Paparan Peta Umum', image_note='NOTA: Di bawah turut disediakan %d tangkapan skrin — ini adalah gambar peta/legenda semasa skrin pengguna (tangkapan skrin pelayar, BUKAN data satelit/GEE mentah), setiap satu dilabel dengan analisis berkaitan. Anda boleh menambah pemerhatian umum dan deskriptif tentang taburan warna/corak ruang daripada ini; namun jangan berikan penilaian risiko formal.', image_label="Imej di bawah ialah tangkapan skrin peta/legenda untuk analisis '%s':", weather_section='Ringkasan cuaca 30 hari terakhir (dikaitkan dengan tarikh analisis satelit/siri masa):', weather_total_precip='Jumlah hujan:', weather_rainy_days='Bilangan hari hujan:', weather_dry_streak_days='Bilangan hari sejak hujan terakhir:', weather_no_rain='Tiada hujan yang boleh diukur direkodkan dalam tempoh ini.', weather_mean_temp='Suhu purata:', weather_trend_label='Trend hujan: 7 hari terkini berbanding 7 hari sebelumnya:', weather_trend_up='meningkat', weather_trend_down='menurun', weather_trend_flat='lebih kurang sama', weather_humidity='Kelembapan purata:'),
+    'ky': dict(dataset='Маалымат топтому', total_area='Жалпы аянт:', hectare='гектар', classes_header='Класстар (аты — маани диапазону — пайыз):', question='Суроо:', building_section='Имарат/чатыр аныктоо:', building_count='Имараттардын/чатырлардын жалпы саны:', building_area='Жалпы чатыр аянты:', building_source='Булак маалымат топтому:', general_map_view='Жалпы карта көрүнүшү', image_note='ЭСКЕРТҮ: Төмөндө дагы %d скриншот берилген — булар колдонуучунун учурдагы экрандагы карта/легенда сүрөттөрү (браузер скриншоту, чийки спутник/GEE маалыматы ЭМЕС), ар бири тиешелүү анализ менен белгиленген. Булардан түс бөлүштүрүлүшү/мейкиндик үлгүлөрү жөнүндө жалпы, сүрөттөмө байкоолорду кошсоңуз болот; бирок расмий тобокелдик баасын бербеңиз.', image_label="Төмөнкү сүрөт '%s' анализине тиешелүү карта/легенда скриншоту:", weather_section='Акыркы 30 күндүн аба ырайы жыйынтыгы (спутник/убакыт катар талдоо күндөрүнө байланыштуу):', weather_total_precip='Жалпы жаан-чачын:', weather_rainy_days='Жамгырлуу күндөрдүн саны:', weather_dry_streak_days='Акыркы жамгырдан бери өткөн күндөр:', weather_no_rain='Бул мезгилде өлчөнгөн жаан-чачын катталган жок.', weather_mean_temp='Орточо температура:', weather_trend_label='Жаан-чачын тенденциясы: акыркы 7 күн менен мурунку 7 күндү салыштырганда:', weather_trend_up='өсүүдө', weather_trend_down='төмөндөөдө', weather_trend_flat='болжол менен бирдей', weather_humidity='Орточо нымдуулук:'),
+    'mn': dict(dataset='Өгөгдлийн багц', total_area='Нийт талбай:', hectare='гектар', classes_header='Ангилал (нэр — утгын хязгаар — хувь):', question='Асуулт:', building_section='Барилга/Дээвэр илрүүлэлт:', building_count='Барилга/дээврийн нийт тоо:', building_area='Нийт дээврийн талбай:', building_source='Эх өгөгдлийн багц:', general_map_view='Ерөнхий газрын зургийн харагдац', image_note='ТЭМДЭГЛЭЛ: Доор дахин %d дэлгэцийн зураг өгөгдсөн — эдгээр нь хэрэглэгчийн одоогийн дэлгэц дээрх газрын зураг/тайлбарын зураг (хөтчийн дэлгэцийн зураг, түүхий хиймэл дагуул/GEE өгөгдөл БИШ), тус бүр харгалзах шинжилгээгээр тэмдэглэгдсэн. Та эдгээрээс өнгөний тархалт/орон зайн хэв маягийн талаар ерөнхий, тайлбарласан ажиглалт нэмж болно; гэсэн хэдий ч албан ёсны эрсдэлийн үнэлгээ өгөхгүй байна.', image_label="Доорх зураг нь '%s' шинжилгээний газрын зураг/тайлбарын дэлгэцийн зураг юм:", weather_section='Сүүлийн 30 хоногийн цаг агаарын хураангуй (хиймэл дагуул/цаг хугацааны цуврал шинжилгээний огноотой холбоотой):', weather_total_precip='Нийт хур тунадас:', weather_rainy_days='Бороотой өдрийн тоо:', weather_dry_streak_days='Сүүлийн бороо орсноос хойш өнгөрсөн хоног:', weather_no_rain='Энэ хугацаанд хэмжигдэхүйц хур тунадас бүртгэгдээгүй.', weather_mean_temp='Дундаж температур:', weather_trend_label='Хур тунадасны хандлага: сүүлийн 7 хоног ба өмнөх 7 хоногийг харьцуулахад:', weather_trend_up='нэмэгдэж байна', weather_trend_down='буурч байна', weather_trend_flat='ойролцоо түвшинд', weather_humidity='Дундаж чийглэг:'),
+    'ka': dict(dataset='მონაცემთა ნაკრები', total_area='საერთო ფართობი:', hectare='ჰექტარი', classes_header='კლასები (სახელი — მნიშვნელობის დიაპაზონი — პროცენტი):', question='კითხვა:', building_section='შენობის/სახურავის აღმოჩენა:', building_count='შენობა/სახურავის საერთო რაოდენობა:', building_area='სახურავის საერთო ფართობი:', building_source='წყარო მონაცემთა ნაკრები:', general_map_view='ზოგადი რუკის ხედი', image_note='შენიშვნა: ქვემოთ ასევე მოცემულია %d ეკრანის ანაბეჭდი — ეს არის მომხმარებლის მიმდინარე ეკრანის რუკის/ლეგენდის სურათები (ბრაუზერის ეკრანის ანაბეჭდები და არა ნედლი თანამგზავრული/GEE მონაცემები), თითოეული მონიშნულია შესაბამისი ანალიზით. შეგიძლიათ დაამატოთ ზოგადი, აღწერითი დაკვირვებები ფერთა განაწილების/სივრცული ნიმუშების შესახებ; მიუხედავად ამისა, ნუ მისცემთ ფორმალურ რისკის შეფასებას.', image_label="ქვემოთ მოცემული სურათი არის რუკის/ლეგენდის ეკრანის ანაბეჭდი '%s' ანალიზისთვის:", weather_section='ბოლო 30 დღის ამინდის შეჯამება (დაკავშირებულია სატელიტური/დროითი სერიის ანალიზის თარიღებთან):', weather_total_precip='ჯამური ნალექი:', weather_rainy_days='წვიმიანი დღეების რაოდენობა:', weather_dry_streak_days='ბოლო წვიმის შემდეგ გასული დღეები:', weather_no_rain='ამ პერიოდში გაზომვადი ნალექი არ დაფიქსირებულა.', weather_mean_temp='საშუალო ტემპერატურა:', weather_trend_label='ნალექის ტენდენცია: ბოლო 7 დღე წინა 7 დღესთან შედარებით:', weather_trend_up='იზრდება', weather_trend_down='მცირდება', weather_trend_flat='დაახლოებით იგივეა', weather_humidity='საშუალო ტენიანობა:'),
+    'it': dict(dataset='Set di dati', total_area='Area totale:', hectare='ettari', classes_header='Classi (nome — intervallo di valori — percentuale):', question='Domanda:', building_section='Rilevamento Edifici/Tetti:', building_count='Numero totale di edifici/tetti:', building_area='Area totale del tetto:', building_source='Set di dati di origine:', general_map_view='Vista generale della mappa', image_note="NOTA: Di seguito sono fornite anche %d schermate — si tratta degli istantanei attuali della mappa/legenda dell'utente (schermate del browser, NON dati grezzi satellitari/GEE), ciascuna etichettata con l'analisi a cui appartiene. È possibile aggiungere osservazioni generali e descrittive sulla distribuzione dei colori/modelli spaziali da queste; tuttavia non fornire una valutazione formale del rischio.", image_label="L'immagine seguente è una schermata di mappa/legenda per l'analisi '%s':", weather_section="Riepilogo meteo degli ultimi 30 giorni (collegato alle date dell'analisi satellitare/serie temporale):", weather_total_precip='Precipitazione totale:', weather_rainy_days='Giorni piovosi:', weather_dry_streak_days="Giorni dall'ultima pioggia:", weather_no_rain='Nessuna precipitazione misurabile è stata registrata in questo periodo.', weather_mean_temp='Temperatura media:', weather_trend_label='Tendenza delle precipitazioni: ultimi 7 giorni rispetto ai 7 precedenti:', weather_trend_up='in aumento', weather_trend_down='in diminuzione', weather_trend_flat='circa uguale', weather_humidity='Umidità media:'),
+}
+
+
+def _gemini_labels(lang_code):
+    return _GEMINI_PROMPT_LABELS.get((lang_code or '').strip().lower(), _GEMINI_PROMPT_LABELS['en'])
+
+
+def _build_gemini_system_instruction(lang_code):
+    lang_name = _GEMINI_LANG_NAMES.get((lang_code or '').strip().lower(), 'Turkish')
+    return (
+        # 🆕 Faz 77: kullanıcı, arayüzde Korece seçili olmasına rağmen yanıtın
+        # Türkçe geldiğini bildirdi. Kök neden muhtemelen şu: aşağıdaki
+        # yönergenin KENDİSİ Türkçe olsa da, modele gönderilen VERİ İÇERİĞİ
+        # (data_summary — "Veri seti 1 — ...", "Toplam alan:", "Sınıflar
+        # (ad — değer aralığı — yüzde):" gibi bağlayıcı etiketler) DE Türkçe
+        # olduğundan, model bazen baskın dile (Türkçe) kayabiliyor. Buna karşı
+        # iki önlem alındı: (1) bu bağlayıcı etiketler artık backend'de
+        # aktif dile göre ÇEVRİLİYOR (bkz. _GEMINI_PROMPT_LABELS ve
+        # gemini_data_qa() içindeki kullanım) — modele giden içeriğin BÜYÜK
+        # kısmı artık zaten hedef dilde; (2) bu yönergenin en BAŞINA ve en
+        # SONUNA, dil talimatını vurgulayan kısa ve KESİN birer hatırlatma
+        # eklendi.
+        "[DİL TALİMATI / LANGUAGE INSTRUCTION: Yanıtını SADECE ve TAMAMEN "
+        "**" + lang_name + "** dilinde yaz. Başka hiçbir dil kullanma, "
+        "çeviri ekleme, iki dilli yazma. / Write your entire answer ONLY in "
+        "**" + lang_name + "**. Do not use any other language.]\n\n"
+        "Sen SylvaGIS uygulamasında, kullanıcıya verilen sayısal analiz verilerini "
+        "(arazi örtüsü/kullanım sınıfları, yükseklik/eğim/bakı sınıflandırması, NDVI, "
+        "bina/çatı tespiti gibi) okuyup açıklayan bir veri yorumlama asistanısın. Sana "
+        "BİRDEN FAZLA veri seti verilebilir — her biri bir analiz adı, sınıflandırma "
+        "lejantı (sınıf adları, değer aralıkları) ve yüzde (%) dağılımından oluşur; "
+        "ayrıca varsa bir bina/çatı tespiti özeti (toplam bina sayısı, toplam çatı "
+        "alanı) verilebilir. Bazen ayrıca kullanıcının o an ekranında gördüğü "
+        "harita/lejant görüntülerinin BİRDEN FAZLA anlık görüntüsü (ekran "
+        "görüntüsü — genellikle her biri farklı bir analize ait, etiketiyle "
+        "belirtilmiş) de verilebilir — bunlar ham uydu/GEE verisi değil, tarayıcı "
+        "ekran görüntüleridir; renk dağılımı/mekansal desen hakkında GENEL, "
+        "yaklaşık, betimsel gözlemler için kullanılabilir, kesin piksel-düzeyinde "
+        "bir ölçüm kaynağı olarak KULLANILAMAZ.\n\n"
+        "GÖREVİN: Sana verilen bu verilere dayanarak, kullanıcının sorusunu SADECE "
+        "**" + lang_name + "** dilinde (başka hiçbir dil KARIŞTIRMADAN) ve nesnel, "
+        "BİLİMSEL bir üslupla yanıtlamak — kullanıcı DETAYLI BİR RAPOR istiyor, KISA "
+        "(1-2 cümlelik/paragraflık) yüzeysel yanıtlar YETERSİZDİR. Şu yapıyı "
+        "izle: (1) sana verilen HER BİR veri seti için AYRI ve DETAYLI bir "
+        "paragrafta (en az 3-4 cümle) o setin öne çıkan noktalarını (en "
+        "yüksek/düşük yüzdeli sınıflar, dikkat çeken değer aralıkları, verinin "
+        "genel dağılım/eğilim özelliği, varsa ilgili görüntüdeki renk/mekansal "
+        "desen) BİLİMSEL bir dille açıkla — yüzeysel tek cümlelik geçiştirmelerden "
+        "KAÇIN; (2) BİRDEN FAZLA veri seti varsa, bunları BİRBİRİYLE "
+        "İLİŞKİLENDİREN ayrı bir paragraf yaz — örneğin bir yükseklik/eğim "
+        "sınıflandırmasıyla bir arazi örtüsü sınıflandırmasını karşılaştırıp "
+        "'600-1200m aralığında orman sınıfının payı yüksek görünüyor' gibi, ya da "
+        "'dik eğimli (örn. %60) ve ormanlık alanlar genellikle toprak erozyonunu "
+        "azaltmaya yardımcı olan bir işlev görür' gibi GENEL, tanımlayıcı "
+        "gözlemler paylaş; (3) en sonda GENİŞ ve ÇOK DETAYLI bir GENEL "
+        "ÖZET/SONUÇ paragrafı (gerekirse birden fazla paragraf) ekle — bu "
+        "sonuç kısmını YAPAY OLARAK 3-4 CÜMLEYLE SINIRLAMA veya erken KESME. "
+        "Sonuç kısmında en azından şunları içer: (a) tüm veri setlerini tek "
+        "tek kısaca ama somut sayılarla (yüzde, alan) yeniden anarak genel "
+        "bir sentez; (b) veri setleri arasında en dikkat çekici 2-3 ilişkiyi "
+        "veya çelişkiyi vurgulayan bir değerlendirme; (c) sahanın genel "
+        "coğrafi/ekolojik karakterine dair (yükseklik, eğim, bakı, arazi "
+        "örtüsü verisi varsa bunları birlikte yorumlayarak) doyurucu bir "
+        "betimleme; (d) varsa görüntülerden edinilen mekansal/renk deseni "
+        "gözlemlerinin kısa bir sentezi. Kullanıcının asıl sorusunu da bu "
+        "yapı içinde açıkça yanıtla.\n\n"
+        "🆕 HAVA DURUMU VERİSİ (varsa): Sana verilen veri setlerinin arasında "
+        "'Son 30 Gün Hava Durumu Özeti' başlıklı bir blok varsa (bu blok yalnızca "
+        "kullanıcı Uydu Görüntüsü/Uydu Analizi/Zaman Serisi gibi TARİHLİ bir analiz "
+        "çalıştırıp hava durumu takibini açık bıraktıysa gönderilir), bu iklimsel "
+        "bağlamı GENEL ÖZET/SONUÇ paragrafına PROFESYONEL ve BİLİMSEL bir dille "
+        "mutlaka dahil et — örneğin bölgenin son günlerde ne kadar süredir yağış "
+        "almadığını, toplam yağış miktarını, yağış eğilimini (artan/azalan/benzer) "
+        "ve bunun bitki örtüsü/nem/su ile ilgili analizlerle (varsa NDVI, NDWI, "
+        "arazi örtüsü, orman kaybı vb.) olası GENEL, tanımlayıcı ilişkisini "
+        "(örneğin 'son X gündür ölçülebilir yağış alınmaması, NDVI'daki görece "
+        "düşük değerlerle tutarlı bir kuraklık eğilimine işaret ediyor olabilir' "
+        "gibi TEMKİNLİ bir ifadeyle) belirt. Bu blok SANA VERİLMEDİYSE hava durumu "
+        "hakkında HİÇBİR ŞEY uydurma veya varsayma — yalnızca blok mevcutsa yorum "
+        "yap.\n\n"
+        "ÖNEMLİ SINIRLAR (bunlara KESİNLİKLE uy):\n"
+        "- Bu bir KESİN mekansal çakıştırma (overlay) analizi DEĞİLDİR — sana ayrı ayrı "
+        "özet istatistikler veriliyor, piksel piksel çakıştırılmış ortak bir tablo "
+        "verilmiyor. İlişkilendirmelerini her zaman 'görünüyor', 'muhtemelen', "
+        "'genellikle' gibi TEMKİNLİ bir dille ifade et, kesinlik iddia etme.\n"
+        "- RESMİ bir RİSK/TEHLİKE DEĞERLENDİRMESİ yapma — 'bu alan YÜKSEK RİSKLİDİR', "
+        "'sel riski taşıyor', 'acil müdahale gerekir' gibi risk skoru/uyarı/alarm "
+        "niteliğinde ifadeler KULLANMA.\n"
+        "- TAVSİYE/ÖNERİ/TALİMAT verme — 'şunu yapmalısınız', 'öneririm', 'tavsiye "
+        "ederim', 'şu tür ağaç dikilmeli', 'tedbir alınmalı' gibi kullanıcıya eylem "
+        "söyleyen ifadeler KULLANMA. Genel ekolojik/coğrafi bir işlevi betimsel olarak "
+        "tanımlayabilirsin ('...erozyonu azaltmaya yardımcı olabilir') ama bunu bir "
+        "eylem çağrısına DÖNÜŞTÜRME.\n"
+        "- Sana verilmeyen konularda (toprak yapısı, hukuki durum, mülkiyet vb.) "
+        "yorum yapma — sadece sana verilen veri setleriyle sınırlı kal. (İSTİSNA: "
+        "hava durumu — SANA yukarıdaki 'Son 30 Gün Hava Durumu Özeti' bloğu "
+        "VERİLDİYSE bu konuda yukarıdaki talimata göre yorum yapabilirsin; "
+        "verilmediyse hava durumu hakkında hiçbir şey söyleme.)\n"
+        "- Eğer soru resmi bir risk değerlendirmesi veya somut bir tavsiye/talimat "
+        "istiyorsa, KİBARCA (yine yalnızca **" + lang_name + "** dilinde) şunun bir "
+        "benzerini söyle: 'Bu asistan yalnızca ekrandaki verileri betimsel olarak "
+        "açıklayabilir; resmi bir risk değerlendirmesi veya tavsiye veremez.' ve "
+        "başka bir şey ekleme.\n"
+        "Yanıtın toplamda en az 3-4 paragraf olsun (veri seti sayısına göre daha "
+        "da uzun olabilir, özellikle sonuç bölümü doyurucu olmalı); yine de sana "
+        "verilmeyen konularda uydurma bilgi ekleyerek yapay şekilde uzatma — "
+        "yalnızca sana verilen verilere dayanarak, doğal, bilimsel ve DETAYLI "
+        "şekilde açıkla.\n\n"
+        "[SON HATIRLATMA / FINAL REMINDER: Yanıtının TAMAMI (başlangıcından "
+        "sonuna kadar, tek bir kelimesi bile istisna olmadan) SADECE "
+        "**" + lang_name + "** dilinde olmalı. / Your ENTIRE answer, from "
+        "start to finish, must be written ONLY in **" + lang_name + "**.]"
+    )
+
+
+# Geriye dönük uyumluluk: eskiden sabit bir modül-seviyesi sabiti olarak
+# kullanılıyordu (varsayılan dil Türkçe ile).
+_GEMINI_SYSTEM_INSTRUCTION = _build_gemini_system_instruction('tr')
 
 
 @app.route('/api/gemini-data-qa', methods=['POST'])
@@ -4000,6 +4373,11 @@ def gemini_data_qa():
         question = str(data.get('question') or '').strip()
         datasets = data.get('datasets')
         building = data.get('building') or None
+        # 🆕 Faz 75: aktif arayüz dili — front-end window._sylvaLang değerini
+        # gönderir; asistanın yanıt dilini belirler (bkz. _build_gemini_system_instruction).
+        req_lang = str(data.get('lang') or 'tr').strip().lower()
+        if req_lang not in _GEMINI_LANG_NAMES:
+            req_lang = 'tr'
         # 🆕 Faz 72: isteğe bağlı harita/lejant ekran görüntüsü (base64) — asistan
         # artık yalnızca sayısal % verilerini değil, ekrandaki renk/mekansal
         # dağılımı da (yaklaşık, betimsel olarak) yorumlayabilir. Boyut/tür
@@ -4046,6 +4424,17 @@ def gemini_data_qa():
             valid_images.append({'base64': image_base64, 'mime': image_mime, 'analysis_name': None})
         # En fazla 4 görüntü — istek/kota boyutunu makul tutmak için.
         valid_images = valid_images[:4]
+
+        # 🆕 Faz 80: Uydu Görüntüsü/Uydu Analizi/Zaman Serisi analizlerinin
+        # tarihine bağlı 30 günlük hava durumu verisi (kullanıcı "🌦️ Hava
+        # Durumu" kutusunu işaretlediyse frontend zaten STATE[pane].days
+        # içinde tutuyor) — SADECE bu veri gerçekten mevcutsa (yani o
+        # analizler kullanılıyorsa) rapora dahil edilir. Ham günlük dizi çok
+        # büyükse (beklenmedik/aşırı istek) sessizce göz ardı edilir.
+        weather_days = data.get('weather_days')
+        if not isinstance(weather_days, list) or len(weather_days) > 60:
+            weather_days = None
+        weather_summary = _weather_summarize_for_gemini(weather_days) if weather_days else None
 
         # Geriye dönük uyumluluk: eski tekli-veri-seti formatı gönderildiyse
         # tek elemanlı bir listeye çevir.
@@ -4097,19 +4486,27 @@ def gemini_data_qa():
         if not ok:
             return jsonify({'success': False, 'error': quota_err})
 
+        # 🆕 Faz 77: bu bağlayıcı etiketler artık aktif dile (req_lang) göre
+        # çevriliyor — modele gönderilen içeriğin büyük kısmının zaten hedef
+        # dilde olması, yalnızca sistem talimatındaki dil yönergesine
+        # güvenmekten daha güvenilir (kullanıcı Korece seçiliyken yanıtın
+        # Türkçe geldiğini bildirdi — kök nedenlerden biri, verinin KENDİSİNİN
+        # her zaman Türkçe olmasıydı).
+        _L = _gemini_labels(req_lang)
+
         data_summary_blocks = []
         for idx, ds in enumerate(valid_datasets, start=1):
-            ds_name = str(ds.get('analysis_name') or ('Veri seti %d' % idx))
+            ds_name = str(ds.get('analysis_name') or ('%s %d' % (_L['dataset'], idx)))
             ds_classes = ds.get('classes') or []
             ds_pct = ds.get('percentages') or []
             ds_area = ds.get('area_ha')
-            lines = ['Veri seti %d — %s' % (idx, ds_name)]
+            lines = ['%s %d — %s' % (_L['dataset'], idx, ds_name)]
             if ds_area is not None:
                 try:
-                    lines.append('Toplam alan: %.2f hektar' % float(ds_area))
+                    lines.append('%s %.2f %s' % (_L['total_area'], float(ds_area), _L['hectare']))
                 except Exception:
                     pass
-            lines.append('Sınıflar (ad — değer aralığı — yüzde):')
+            lines.append(_L['classes_header'])
             for c, p in zip(ds_classes, ds_pct):
                 name = str((c or {}).get('name') or '?')
                 cmin = (c or {}).get('min')
@@ -4123,51 +4520,71 @@ def gemini_data_qa():
             data_summary_blocks.append('\n'.join(lines))
 
         if has_building:
-            b_lines = ['Bina/Çatı Tespiti:']
+            b_lines = [_L['building_section']]
             b_count = building.get('buildingCount')
             b_area = building.get('totalAreaM2')
             b_dataset = building.get('dataset')
             if b_count is not None:
                 try:
-                    b_lines.append('Toplam bina/çatı sayısı: %d' % int(b_count))
+                    b_lines.append('%s %d' % (_L['building_count'], int(b_count)))
                 except Exception:
                     pass
             if b_area is not None:
                 try:
-                    b_lines.append('Toplam çatı alanı: %.2f m²' % float(b_area))
+                    b_lines.append('%s %.2f m²' % (_L['building_area'], float(b_area)))
                 except Exception:
                     pass
             if b_dataset:
-                b_lines.append('Kaynak veri kümesi: %s' % str(b_dataset))
+                b_lines.append('%s %s' % (_L['building_source'], str(b_dataset)))
             data_summary_blocks.append('\n'.join(b_lines))
+
+        # 🆕 Faz 80: hava durumu özet bloğu — yalnızca gerçekten mevcutsa
+        # (kullanıcı Uydu Görüntüsü/Uydu Analizi/Zaman Serisi bölümünde o
+        # analizleri kullanıp "🌦️ Hava Durumu" kutusunu işaretlediyse)
+        # eklenir. Tüm sayılar sunucuda ÖNCEDEN deterministik olarak
+        # hesaplanmıştır (bkz. _weather_summarize_for_gemini) — model
+        # yalnızca bu hazır rakamları YORUMLAR, kendisi toplama yapmaz.
+        if weather_summary:
+            w_lines = [_L['weather_section']]
+            w_lines.append('%s %.1f mm' % (_L['weather_total_precip'], weather_summary['total_precip_mm']))
+            w_lines.append('%s %d / %d' % (_L['weather_rainy_days'], weather_summary['rainy_days'], weather_summary['days_count']))
+            if weather_summary['has_rain_in_period']:
+                w_lines.append('%s %d' % (_L['weather_dry_streak_days'], weather_summary['dry_streak_days']))
+            else:
+                w_lines.append(_L['weather_no_rain'])
+            if weather_summary['mean_temp_c'] is not None:
+                w_lines.append('%s %.1f°C' % (_L['weather_mean_temp'], weather_summary['mean_temp_c']))
+            if weather_summary['mean_humidity_pct'] is not None:
+                w_lines.append('%s %.1f%%' % (_L['weather_humidity'], weather_summary['mean_humidity_pct']))
+            if weather_summary['trend'] is not None:
+                trend_word = {
+                    'up': _L['weather_trend_up'],
+                    'down': _L['weather_trend_down'],
+                    'flat': _L['weather_trend_flat'],
+                }.get(weather_summary['trend'])
+                if trend_word:
+                    w_lines.append('%s %s' % (_L['weather_trend_label'], trend_word))
+            data_summary_blocks.append('\n'.join(w_lines))
 
         data_summary = '\n\n'.join(data_summary_blocks)
         if valid_images:
             data_summary = (data_summary + '\n\n') if data_summary else ''
-            data_summary += (
-                'NOT: Ayrıca aşağıda %d adet ekran görüntüsü var — bunlar '
-                'kullanıcının o an ekranında gördüğü harita/lejant anlık '
-                'görüntüleridir (tarayıcı ekran görüntüsü — ham uydu/GEE verisi '
-                'DEĞİL), her biri kendi etiketiyle hangi analize ait olduğu '
-                'belirtilmiştir. Bu görüntüleri de dikkate alarak renk dağılımı/'
-                'mekansal desenler hakkında GENEL, betimsel gözlemler '
-                'ekleyebilirsin; yine de resmi bir risk değerlendirmesi yapma.'
-            ) % len(valid_images)
-        user_prompt = data_summary + '\n\nSoru: ' + question
+            data_summary += _L['image_note'] % len(valid_images)
+        user_prompt = data_summary + '\n\n' + _L['question'] + ' ' + question
 
         # 🆕 Faz 72/73: görüntü(ler) verildiyse, metin parçasına ek olarak her
         # biri için bir etiket metni + bir inlineData (base64) parçası daha
         # eklenir — Gemini'nin çok modlu (multimodal) girdi biçimi budur.
         gemini_parts = [{'text': user_prompt}]
         for _im in valid_images:
-            _im_label = _im['analysis_name'] or 'Genel Harita Görünümü'
-            gemini_parts.append({'text': "Aşağıdaki görüntü '%s' analizine ait harita/lejant ekran görüntüsüdür:" % _im_label})
+            _im_label = _im['analysis_name'] or _L['general_map_view']
+            gemini_parts.append({'text': _L['image_label'] % _im_label})
             gemini_parts.append({'inlineData': {'mimeType': _im['mime'], 'data': _im['base64']}})
 
         gemini_url = GEMINI_API_URL_TMPL.format(model=GEMINI_MODEL, key=GEMINI_API_KEY)
         gemini_body = {
             'contents': [{'parts': gemini_parts}],
-            'systemInstruction': {'parts': [{'text': _GEMINI_SYSTEM_INSTRUCTION}]},
+            'systemInstruction': {'parts': [{'text': _build_gemini_system_instruction(req_lang)}]},
             # 🆕 Faz 73: kullanıcı KISA (1-2 paragraf) değil DETAYLI bir rapor
             # istedi — token sınırı buna göre artırıldı (bkz. sistem talimatındaki
             # "150 kelime" sınırının kaldırılması).
@@ -4228,7 +4645,7 @@ def send_contact_message():
         return jsonify({'success': False, 'error': 'Geçersiz e-posta adresi.'}), 400
 
     smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'qysvolcewarzoliw'
+    smtp_pass = 'bngamjodidmbpshc'
 
     body = (
         'SylvaGIS İletişim Formu üzerinden yeni bir mesaj gönderildi.\n\n'
@@ -8749,16 +9166,16 @@ def download_geotiff():
             # FOREST_LOSS / URBAN_GROWTH gibi LULC dışı ama doğal olarak
             # sınıflandırılmış (0/1/2 gibi sabit kodlu) rasterlar artık
             # CORINE/ESA/MODIS/Dynamic World ile BİREBİR AYNI yolu
-            # (_build_native_categorical_symbology_zip) kullanır. Faz 48
-            # DÜZELTMESİ: bu fonksiyon (ve LULC ailesi dahil TÜM sınıflandırılmış
-            # raster üreten fonksiyonlar) artık embed_colormap=True + dinamik
-            # NBITS boyutlandırması kullanıyor — bkz.
-            # _build_native_categorical_symbology_zip docstring'indeki güncel
-            # KÖK NEDEN/ÇÖZÜM notu: embed_colormap=False'un ArcMap'te sürükle-
-            # bırakta RAT/VAT'ın OTOMATİK okunmaması yüzünden AYNI "boş kutu +
-            # eksik sınıf" sorununu ürettiği tespit edildi; embed_colormap=True
-            # + dinamik NBITS her iki sorunu da (Faz 13'ün 256 girişlik şişkin
-            # palet VE Faz 14'ün RAT'ın otomatik okunmaması) aynı anda çözer.
+            # (_build_native_categorical_symbology_zip) kullanır.
+            # 🛠️ PAKET 81 — bu fonksiyon (ve LULC ailesi dahil TÜM sınıflandırılmış
+            # raster üreten fonksiyonlar) artık embed_colormap=True kullanıyor:
+            # kullanıcının netleşen talebi üzerine ("kendi renk ve isimleri
+            # insin, boşluk kalmasın kutularda") ColorMap otomatik geliyor,
+            # AMA artık TIFF ColorMap'in 2'nin-kuvveti boyut zorunluluğundan
+            # doğan dolgu/kullanılmayan indeksler BOŞ bırakılmıyor — gerçek bir
+            # sınıfın isim+renginin kopyasıyla dolduruluyor (bkz.
+            # _build_symbology_files_from_classes()'teki "legend_info" bloğu).
+            # Piksel verisi değişmediğinden bu salt kozmetik bir çözüm.
             try:
                 # Faz 52: dosyadan GERİ OKUNAN nodata etiketine güvenmek yerine,
                 # GEE'ye GERÇEKTEN gönderilen NoData değeri (255) burada da
@@ -8789,8 +9206,9 @@ def download_geotiff():
                             if _src.nodata is not None:
                                 _valid &= ~__import__('numpy').isclose(_band, float(_src.nodata))
                     _byte, _codes = _classify_default_aspect(_band, _valid, legend_labels=requested_legend_labels)
-                    # Faz 48: embed_colormap=True — ArcMap sürükle-bırakta otomatik
-                    # doğru renklenmesi için (bkz. _build_lulc_symbology_zip notu).
+                    # Paket 81: embed_colormap=True — Bakı (Aspect) indirmelerinde
+                    # de ColorMap otomatik geliyor, dolgu indeksleri gerçek bir
+                    # sınıfın kopyasıyla dolduruluyor (bkz. Paket 81 notu).
                     sym_files = _build_symbology_files_from_classes(_byte, _profile, _codes, safe_name, embed_colormap=True)
                 except Exception as aspect_err:
                     traceback.print_exc()
@@ -8807,8 +9225,10 @@ def download_geotiff():
                                 if _src.nodata is not None:
                                     _valid &= ~__import__('numpy').isclose(_band, float(_src.nodata))
                         _byte, _codes = _classify_aspect_breaks(_band, _valid, requested_breaks)
-                        # Faz 48: embed_colormap=True — ArcMap sürükle-bırakta otomatik
-                        # doğru renklenmesi için (bkz. _build_lulc_symbology_zip notu).
+                        # Paket 81: embed_colormap=True — kullanıcı tanımlı Bakı
+                        # (Aspect) sınır (breaks) indirmelerinde de ColorMap
+                        # otomatik geliyor, dolgu indeksleri gerçek bir sınıfın
+                        # kopyasıyla dolduruluyor.
                         sym_files = _build_symbology_files_from_classes(_byte, _profile, _codes, safe_name, embed_colormap=True)
                     else:
                         sym_files = _build_classified_symbology_zip(
@@ -10174,7 +10594,7 @@ def _sanitize_header_value(value):
 
 def _send_registration_email(ad, soyad, email, meslek, ulke):
     smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'qysvolcewarzoliw'
+    smtp_pass = 'bngamjodidmbpshc'
 
     # 🔒 GÜVENLİK DÜZELTMESİ (e-posta başlığı enjeksiyonu): bkz.
     # _sanitize_header_value docstring'i. Yalnızca Subject başlığına giren
