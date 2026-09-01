@@ -21241,7 +21241,13 @@ function selectRamp(name) {
         }
 
         function _sylvaGqaBuildAndDownloadReportPDF(question, answerText, datasets, building, onError, _retriesLeft) {
-            if (_retriesLeft === undefined) _retriesLeft = 1;
+            // 🛠️ BUG FİX: yavaş/mobil bağlantılarda jsPDF/html2canvas CDN'den
+            // henüz inmemiş olabiliyor veya ilk denemede DOM/font layout'u
+            // tam oturmamış oluyordu — eski kod yalnızca 1 kez, 800ms sonra
+            // tekrar deniyordu ki bu genelde yetersizdi ve kullanıcı doğrudan
+            // "PDF indirilemedi" hatasını görüyordu. Deneme sayısı ve bekleme
+            // süresi artırıldı.
+            if (_retriesLeft === undefined) _retriesLeft = 3;
             try {
                 var jspdfLib = window.jspdf || window.jsPDF;
                 var _t0 = (typeof t === 'function') ? t : function (k, f) { return f || k; };
@@ -21249,7 +21255,7 @@ function selectRamp(name) {
                     if (_retriesLeft > 0) {
                         setTimeout(function () {
                             _sylvaGqaBuildAndDownloadReportPDF(question, answerText, datasets, building, onError, _retriesLeft - 1);
-                        }, 800);
+                        }, 1200);
                         return;
                     }
                     if (typeof onError === 'function') onError(_t0('err_jspdf', 'jsPDF library could not be loaded.'));
@@ -21351,12 +21357,42 @@ function selectRamp(name) {
                 // Çok uzun AI yanıtlarında html2canvas'ın tarayıcı canvas
                 // yüksekliği sınırına takılmasını önle. Normal raporlarda 2x,
                 // uzun raporlarda güvenli şekilde daha düşük ölçek kullanılır.
+                // 🛠️ BUG FİX ("robotta analizi incele" → metin yanıt geliyor
+                // ama PDF hep 'PDF indirilemedi' ile başarısız oluyordu):
+                // KÖK NEDEN — bu sınır (28000px yükseklik) SCALE=2 ile
+                // birleşince (canvas genişliği 760*2=1520px) toplam canvas
+                // piksel ALANI ~42,5 milyona kadar çıkabiliyordu. Masaüstü
+                // Chrome/Firefox'ta sorun olmasa da MOBİL tarayıcılarda
+                // (iOS Safari/WKWebView, birçok Android WebView) canvas
+                // piksel alanı ~16,7 milyon pikselle SINIRLIDIR; bu sınır
+                // aşıldığında html2canvas boş/bozuk bir canvas üretir ya da
+                // jsPDF görüntüyü gömerken/blob'a çevirirken hata fırlatır —
+                // ekrandaki metin yanıtı (ayrı bir DOM elemanı) etkilenmediği
+                // için kullanıcı raporu görüyor ama PDF hiç inmiyordu. Sınır,
+                // SCALE=2 ile bile toplam alanın mobil sınırın altında
+                // kalacağı şekilde düşürüldü (1520 × 9000 ≈ 13,7M < 16,7M).
                 var SCALE = 2;
                 var reportRect = reportEl.getBoundingClientRect();
                 var estimatedHeight = Math.ceil(reportRect.height * SCALE);
-                var MAX_CANVAS_HEIGHT = 28000;
+                var MAX_CANVAS_HEIGHT = 9000;
                 if (estimatedHeight > MAX_CANVAS_HEIGHT) {
-                    SCALE = Math.max(0.75, MAX_CANVAS_HEIGHT / Math.max(1, reportRect.height));
+                    // Taban değer eskiden 0.75'ti — çok uzun raporlarda (uzun
+                    // AI yanıtı + birden fazla veri seti tablosu) bu taban
+                    // tek başına hâlâ mobil piksel-alan sınırını aşabiliyordu.
+                    // Şimdi 0.4'e düşürüldü; okunabilirlik için PDF sayfası
+                    // basımında görüntü yine de sayfa genişliğine göre
+                    // ölçeklenir (bkz. aşağıdaki pxToPt), yani metin küçülmez.
+                    SCALE = Math.max(0.4, MAX_CANVAS_HEIGHT / Math.max(1, reportRect.height));
+                }
+                // 🛡️ Son güvenlik kontrolü: taban ölçek (0.4) devreye girmiş
+                // olsa bile aşırı uzun raporlarda toplam piksel alanı hâlâ
+                // mobil sınırı (~16,7M) aşabilir — bu durumda SCALE'i alan
+                // sınırına göre yeniden hesapla (yükseklik sınırından bağımsız
+                // olarak asla aşılmasın diye).
+                var MAX_CANVAS_AREA = 13500000; // ~1520×9000'in biraz altı, güvenlik payı
+                var _estW = 760 * SCALE, _estH = reportRect.height * SCALE;
+                if (_estW * _estH > MAX_CANVAS_AREA) {
+                    SCALE = Math.sqrt(MAX_CANVAS_AREA / (760 * Math.max(1, reportRect.height)));
                 }
                 var rowBoundaries = [];
                 Array.prototype.forEach.call(reportEl.querySelectorAll('.pdf-row'), function (rowEl) {
@@ -21452,7 +21488,7 @@ function selectRamp(name) {
                         if (_retriesLeft > 0) {
                             setTimeout(function () {
                                 _sylvaGqaBuildAndDownloadReportPDF(question, answerText, datasets, building, onError, _retriesLeft - 1);
-                            }, 500);
+                            }, 900);
                             return;
                         }
                         if (typeof onError === 'function') onError(_t('gqa_pdf_download_failed', 'PDF indirilemedi.'));
@@ -21463,20 +21499,26 @@ function selectRamp(name) {
                     if (_retriesLeft > 0) {
                         setTimeout(function () {
                             _sylvaGqaBuildAndDownloadReportPDF(question, answerText, datasets, building, onError, _retriesLeft - 1);
-                        }, 800);
+                        }, 1200);
                         return;
                     }
-                    if (typeof onError === 'function') onError(_t('gqa_pdf_download_failed', 'PDF indirilemedi.'));
+                    // 🛠️ BUG FİX: tüm denemeler tükendiğinde artık yalnızca
+                    // jenerik "PDF indirilemedi" değil, varsa GERÇEK hata
+                    // mesajı da (parantez içinde) gösteriliyor — konsola
+                    // bakmadan da kullanıcı/destek ekibi nedeni görebilsin.
+                    var _detail = (ePdfInner && ePdfInner.message) ? (' (' + ePdfInner.message + ')') : '';
+                    if (typeof onError === 'function') onError(_t('gqa_pdf_download_failed', 'PDF indirilemedi.') + _detail);
                 });
             } catch (ePdf) {
                 console.error('[Sylva] AI raporu PDF olarak indirilemedi:', ePdf);
                 if (_retriesLeft > 0) {
                     setTimeout(function () {
                         _sylvaGqaBuildAndDownloadReportPDF(question, answerText, datasets, building, onError, _retriesLeft - 1);
-                    }, 800);
+                    }, 1200);
                     return;
                 }
-                if (typeof onError === 'function') onError(_t0('gqa_pdf_download_failed', 'PDF indirilemedi.'));
+                var _detail2 = (ePdf && ePdf.message) ? (' (' + ePdf.message + ')') : '';
+                if (typeof onError === 'function') onError(_t0('gqa_pdf_download_failed', 'PDF indirilemedi.') + _detail2);
             }
         }
 
