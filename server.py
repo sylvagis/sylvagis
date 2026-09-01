@@ -2374,12 +2374,21 @@ def _interpolate_palette(palette, t):
 
 def _choose_nbits(n_needed):
     """0..n_needed-1 arası kodları (NoData dahil) barındırabilecek EN KÜÇÜK
-    "temiz"/yaygın desteklenen palet derinliğini (1, 2, 4 veya 8 bit —
-    yani 2, 4, 16 veya 256 girişlik bir renk tablosu) döndürür. Bkz.
+    bit derinliğini (1'den 8'e kadar HERHANGİ bir değer — yani 2, 4, 8, 16,
+    32, 64, 128 veya 256 girişlik bir renk tablosu) döndürür. Bkz.
     _build_symbology_files_from_classes() — Faz 15 BUG FİX notu: bu, gömülü
     renk tablosundaki KULLANILMAYAN/boş girişlerin sayısını, klasik 256
-    girişlik tabloya kıyasla mümkün olan en aza indirir."""
-    for nb in (1, 2, 4, 8):
+    girişlik tabloya kıyasla mümkün olan en aza indirir.
+
+    🆕 Paket 79: önceden yalnızca (1, 2, 4, 8) bit derinlikleri deneniyordu
+    — yani 17-32 arası bir sınıf sayısı bile doğrudan 8 bite (256 giriş,
+    ~230 boş satır) atlıyordu. Bu ortamda rasterio/GDAL ile DOĞRUDAN test
+    edildi: NBITS=3/5/6/7 (8/32/64/128 girişlik tablolar) de tam beklendiği
+    gibi çalışıyor (round-trip'te colormap doğru boyutta geri okunuyor) —
+    bu yüzden artık 1'den 8'e TÜM değerler deneniyor, gereksiz büyük
+    atlamalar (ör. 20 sınıf için 256 yerine 32 girişlik tablo) ortadan
+    kalkıyor."""
+    for nb in range(1, 9):
         if n_needed <= (1 << nb):
             return nb
     return 8
@@ -2507,21 +2516,42 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
     Palette (Colormap) varsa onu otomatik kullanıyor; RAT'ı OTOMATİK
     uygulamıyor.
     Faz 15 (bu fonksiyon): embedded Palette GERİ getirildi (otomatik doğru
-    renk için) — ANCAK artık TIFF'in "NBITS" (bit derinliği) etiketi,
-    gerçekte kaç sınıf olduğuna göre EN KÜÇÜK yeterli değere (1, 2, 4 veya
-    8 bit → 2, 4, 16 veya 256 girişlik tablo) ayarlanıyor (bkz.
+    renk için) — TIFF'in "NBITS" (bit derinliği) etiketi, gerçekte kaç
+    sınıf olduğuna göre EN KÜÇÜK yeterli değere ayarlanıyor (bkz.
     _choose_nbits()) — bu, rasterio/GDAL ile bu ortamda DOĞRUDAN test edilip
-    doğrulandı (write_colormap + NBITS=4 → geri okunan colormap TAM 16 giriş
-    içeriyor, 256 DEĞİL). Sonuç: az sayıda sınıfı olan katmanlarda (ör. 12
-    sınıflı "bar" aralıkları, küçük LULC setleri) SIFIR veya çok az boş satır
-    kalıyor; "bar" modunda artık 255 sınıf kullanılıp paletin TAMAMI
-    doldurulduğu için hiç boş satır KALMIYOR. Sadece çok sayıda seyrek
-    sınıfı olan eski LULC setlerinde (MODIS 17, CORINE 44) 8-bit'e
-    düşülüyor ve kalan boşluklar yine Faz 13'teki gibi SAYDAM bırakılıyor.
-    Ayrıca artık gerçek STATISTICS_MINIMUM/MAXIMUM etiketleri de gömülüyor
-    (bkz. aşağı) — ArcMap'in istatistik bulamayınca TÜM katmanlarda AYNI
-    jenerik "0–100" lejantına düşmesini (bildirilen ikinci hata) önlemek
-    için.
+    doğrulandı. Ayrıca artık gerçek STATISTICS_MINIMUM/MAXIMUM etiketleri de
+    gömülüyor (bkz. aşağı) — ArcMap'in istatistik bulamayınca TÜM
+    katmanlarda AYNI jenerik "0–100" lejantına düşmesini önlemek için.
+
+    Paket 79 (KESİN KÖK NEDEN — CORINE/MODIS gibi ailelerde hâlâ ÇOK sayıda
+    beyaz/boş kutu bildirilmişti): iki ayrı sorun aynı anda vardı:
+    (a) _choose_nbits() bit derinliğini AOI'de GERÇEKTEN bulunan sınıf
+        SAYISINA değil, bu sınıfların orijinal (CORINE'de 1..44'e kadar
+        seyrek) kod DEĞERİNE göre seçiyordu — 5 sınıf gerçekten bulunsa
+        bile biri kod=40 ise 256 girişlik tabloya (~250 boş satır)
+        zıplıyordu. ÇÖZÜM: gerçekten bulunan sınıflar, ColorMap yazılmadan
+        önce ARDIŞIK kodlara (1..N_gerçek) yeniden numaralandırılıyor —
+        artık bit derinliği SADECE gerçek sınıf SAYISINA göre seçiliyor.
+    (b) _choose_nbits() yalnızca (1,2,4,8) bit derinliklerini deniyordu;
+        ör. 20 sınıf için doğrudan 8 bite (256 giriş) atlıyordu, oysa 5 bit
+        (32 giriş) yeterliydi. ÇÖZÜM: 1'den 8'e TÜM değerler deneniyor —
+        NBITS=3/5/6/7'nin bu ortamda GDAL/rasterio ile sorunsuz
+        çalıştığı doğrudan test edilip doğrulandı.
+    Sonuç: CORINE gibi 44 sınıflı bir ailede, o AOI'de GERÇEKTEN kaç sınıf
+    varsa (çoğu AOI'de 44'ün çok altında) tablo artık SADECE o kadar
+    büyük — tipik durumlarda boş satır sayısı (önceki ~250'den) 0-birkaç
+    taneye düşüyor. TIFF'in ColorMap boyutu matematiksel olarak HER ZAMAN
+    2'nin kuvveti olmak zorunda olduğundan (GDAL/TIFF formatının kendi
+    kısıtı), gerçek sınıf sayısı tam bir 2 kuvveti (2/4/8/16/32/64/128/256)
+    DEĞİLSE birkaç boş satır teorik olarak kalabilir — ama artık en
+    KÜÇÜK mümkün fazlalık kadar (önceki gibi yüzlerce DEĞİL).
+    Ayrıca bu ortamda doğrudan test edilip DOĞRULANDI: klasik TIFF
+    ColorMap formatı satır başına SAYDAMLIK (alpha) BİLGİSİ TAŞIMIYOR —
+    kalan boş satırlara "şeffaf" olsun diye atanan (255,255,255,0) değeri
+    geri okunduğunda alpha her zaman 255'e (tam OPAK) döner; yani bu
+    satırlar "şeffaf" DEĞİL, dosyada gerçekten BEYAZ olarak saklanıyor.
+    Kullanıcının "beyaz boş kutu" tarifi bu format kısıtıyla birebir
+    örtüşüyor — bu artık teorik değil, doğrudan gözlemlenmiş bir gerçek.
     """
     import numpy as np
     from rasterio.io import MemoryFile
@@ -2538,13 +2568,37 @@ def _build_symbology_files_from_classes(byte_band, profile, code_info, safe_name
         code_info = dict(code_info)
 
     real_codes = sorted(code_info.keys())
+
+    # 🆕 Paket 79: ArcMap'te CORINE/MODIS gibi sınıf kodları SEYREK ve
+    # YÜKSEK olan (CORINE sunucuda 1..44'e remaplenir) ailelerde hâlâ çok
+    # sayıda boş/isimsiz lejant kutusu çıkıyordu — KÖK NEDEN: aşağıdaki
+    # bit derinliği seçimi (_choose_nbits), AOI'de GERÇEKTEN bulunan sınıf
+    # SAYISINA değil, bu sınıfların orijinal kod DEĞERİNE (ör. en yüksek
+    # kod 40 ise) göre yapılıyordu. Örneğin bir AOI'de sadece 5 CORINE
+    # sınıfı gerçekten bulunsa bile, bunlardan birinin kodu 40 olduğunda
+    # nbits yine de 8 (256 girişlik palet) seçiliyor, ~250 kullanılmayan
+    # (saydam ama İSİMSİZ) satır ArcMap lejantında görünmeye devam
+    # ediyordu. ÇÖZÜM: yalnızca dışa aktarılan (ve AOI'de GERÇEKTEN bulunan)
+    # sınıflar, gömülü ColorMap yazılmadan önce ARDIŞIK/yoğun kodlara
+    # (1..N_gerçek) yeniden numaralandırılıyor — böylece bit derinliği
+    # AOI'deki GERÇEK sınıf sayısına göre seçilir (ör. 5 gerçek sınıf →
+    # nbits=4/16 giriş, sadece 10 boş satır — 250 DEĞİL). Etiket/renk
+    # eşleştirmesi (code_info) birebir korunur; yalnızca rasterin taşıdığı
+    # tam sayı kodlar değişir — bu zaten CORINE/MODIS gibi ailelerde
+    # sunucunun kendi iç remap kuralıyla (orijinal CORINE kodu DEĞİL,
+    # ekrandaki lejantla eşleşen 1..44 sıralı iç kod) tutarlı bir yaklaşım;
+    # Dynamic World gibi kodları zaten ardışık (1..9) olan ailelerde bu
+    # adım hiçbir şeyi değiştirmez (remap == kimlik dönüşümü).
+    if real_codes and real_codes != list(range(1, len(real_codes) + 1)):
+        _dense_map = {old: new for new, old in enumerate(real_codes, start=1)}
+        _lut = np.zeros(int(real_codes[-1]) + 1, dtype=byte_band.dtype)
+        for _old, _new in _dense_map.items():
+            _lut[_old] = _new
+        byte_band = np.where(byte_band > 0, _lut[byte_band], 0).astype(byte_band.dtype)
+        code_info = {_dense_map[old]: v for old, v in code_info.items()}
+        real_codes = sorted(code_info.keys())
+
     max_code = real_codes[-1] if real_codes else 0
-    # 🛠️ TEMİZLİK (Sorun 1a düzeltmesiyle bağlantılı): nbits/n_total tabanlı
-    # palet-boyutu kırpma denemesi zaten new_profile.pop('nbits', ...) ile
-    # etkisiz hale getiriliyordu (bkz. hemen aşağıdaki not) ve gömülü
-    # ColorMap artık her zaman tam 256 girişle (şeffaf varsayılan + gerçek
-    # sınıflar) yazılıyor — bkz. aşağıdaki embed_colormap bloğu. Kullanılmayan
-    # nbits/n_total hesaplaması kaldırıldı.
 
     new_profile = profile.copy()
     new_profile.update(dtype='uint8', count=1, nodata=0, compress='lzw')
