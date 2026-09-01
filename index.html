@@ -21051,13 +21051,21 @@ function selectRamp(name) {
                     var snaps = window._sylvaLayerLegendSnapshotByPane && window._sylvaLayerLegendSnapshotByPane[paneKey];
                     var states = window._sylvaIndexAnalysisStates && window._sylvaIndexAnalysisStates[paneKey];
 
-                    // 1) Önce aktif/üst katmanın katmana özel snapshot'ı.
-                    if (topKey && snaps && snaps[topKey] && snaps[topKey].html) {
+                    // 1) Önce aktif/üst katmanın snapshot'ı, ANCAK yalnızca
+                    // snapshot gerçekten istenen analize aitse kullanılır.
+                    // ÖNEMLİ: Birden fazla analiz aynı anda açıksa (ör. Slope +
+                    // ESA WorldCover), aktif/top katmanın lejantını başka bir
+                    // analizin PDF tablosuna taşımak YASAKTIR.
+                    var topState = topKey && states ? states[topKey] : null;
+                    var topStateName = topState && topState.meta ? topState.meta.analysisName : '';
+                    if (topKey && String(topStateName || '').trim().toUpperCase() === wanted &&
+                        snaps && snaps[topKey] && snaps[topKey].html) {
                         return snaps[topKey].html;
                     }
 
-                    // 2) Aynı analize ait başka bir katman snapshot'ı (zaman
-                    // serisi veya katman geçişi senaryoları).
+                    // 2) Aynı analize ait katman snapshot'ı (zaman serisi veya
+                    // katman geçişi senaryosu). Snapshot anahtarı ile ANALİZ ADI
+                    // eşleşmesi birlikte doğrulanır.
                     if (snaps && states) {
                         var keys = Object.keys(states);
                         for (var si = 0; si < keys.length; si++) {
@@ -21069,9 +21077,14 @@ function selectRamp(name) {
                         }
                     }
 
-                    // 3) Son çare: o an ekranda gerçekten görünen lejant.
-                    var box = document.getElementById(paneKey === 'map2' ? 'map2-legend-box' : 'map-legend-box');
-                    if (box && box.innerHTML) return box.innerHTML;
+                    // 3) Son çare: yalnızca ekranda görünen lejantın sahibi
+                    // gerçekten istenen analizse kullan. Aksi halde başka bir
+                    // analiz (ör. Slope) için çizilmiş lejantı ESA/NDVI/DEM vb.
+                    // raporuna KESİNLİKLE kopyalama.
+                    if (topState && String(topStateName || '').trim().toUpperCase() === wanted) {
+                        var box = document.getElementById(paneKey === 'map2' ? 'map2-legend-box' : 'map-legend-box');
+                        if (box && box.innerHTML) return box.innerHTML;
+                    }
                     return null;
                 }
 
