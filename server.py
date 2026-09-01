@@ -3933,9 +3933,69 @@ _GEMINI_LANG_NAMES = {
 }
 
 
+# 🆕 Faz 77: modele gönderilen VERİ ÖZETİNİN bağlayıcı etiketleri (ör.
+# "Veri seti 1 — ...", "Toplam alan:", "Sınıflar (ad — değer aralığı —
+# yüzde):", "Soru:") artık aktif dile göre çevriliyor — böylece modelin
+# gördüğü metnin BÜYÜK kısmı zaten hedef dilde oluyor, yalnızca sistem
+# talimatındaki dil yönergesine güvenilmiyor. Anahtarlar eksik olan bir dil
+# için İngilizce'ye düşer (asla boş bırakılmaz).
+_GEMINI_PROMPT_LABELS = {
+    'en': dict(dataset='Dataset', total_area='Total area:', hectare='hectares', classes_header='Classes (name — value range — percentage):', question='Question:', building_section='Building/Roof Detection:', building_count='Total building/roof count:', building_area='Total roof area:', building_source='Source dataset:', general_map_view='General Map View', image_note="NOTE: %d screenshot(s) are also provided below — these are the user's current on-screen map/legend snapshots (browser screenshots, NOT raw satellite/GEE data), each labeled with the analysis it belongs to. You may add general, descriptive observations about color distribution/spatial patterns from these; still do not provide a formal risk assessment.", image_label="The image below is a map/legend screenshot for the '%s' analysis:"),
+    'tr': dict(dataset='Veri seti', total_area='Toplam alan:', hectare='hektar', classes_header='Sınıflar (ad — değer aralığı — yüzde):', question='Soru:', building_section='Bina/Çatı Tespiti:', building_count='Toplam bina/çatı sayısı:', building_area='Toplam çatı alanı:', building_source='Kaynak veri kümesi:', general_map_view='Genel Harita Görünümü', image_note='NOT: Ayrıca aşağıda %d adet ekran görüntüsü var — bunlar kullanıcının o an ekranında gördüğü harita/lejant anlık görüntüleridir (tarayıcı ekran görüntüsü — ham uydu/GEE verisi DEĞİL), her biri kendi etiketiyle hangi analize ait olduğu belirtilmiştir. Bu görüntüleri de dikkate alarak renk dağılımı/mekansal desenler hakkında GENEL, betimsel gözlemler ekleyebilirsin; yine de resmi bir risk değerlendirmesi yapma.', image_label="Aşağıdaki görüntü '%s' analizine ait harita/lejant ekran görüntüsüdür:"),
+    'uz': dict(dataset="Ma'lumotlar to'plami", total_area='Umumiy maydon:', hectare='gektar', classes_header="Sinflar (nomi — qiymat oralig'i — foiz):", question='Savol:', building_section='Bino/Tom aniqlash:', building_count='Umumiy bino/tom soni:', building_area='Umumiy tom maydoni:', building_source="Manba ma'lumotlar to'plami:", general_map_view='Umumiy xarita ko\'rinishi', image_note="ESLATMA: Quyida yana %d ta skrinshot mavjud — bular foydalanuvchining hozirgi ekrandagi xarita/legenda ko'rinishlari (brauzer skrinshoti, xom sun'iy yo'ldosh/GEE ma'lumoti EMAS), har biri tegishli tahlil bilan belgilangan. Bulardan rang taqsimoti/fazoviy naqshlar haqida umumiy, tavsiflovchi kuzatishlar qo'shishingiz mumkin; baribir rasmiy xavf bahosini bermang.", image_label="Quyidagi rasm '%s' tahliliga tegishli xarita/legenda skrinshoti:"),
+    'el': dict(dataset='Σύνολο δεδομένων', total_area='Συνολική έκταση:', hectare='εκτάρια', classes_header='Κατηγορίες (όνομα — εύρος τιμών — ποσοστό):', question='Ερώτηση:', building_section='Ανίχνευση Κτιρίων/Στεγών:', building_count='Συνολικός αριθμός κτιρίων/στεγών:', building_area='Συνολική επιφάνεια στέγης:', building_source='Πηγαίο σύνολο δεδομένων:', general_map_view='Γενική Προβολή Χάρτη', image_note='ΣΗΜΕΙΩΣΗ: Παρακάτω παρέχονται επίσης %d στιγμιότυπα οθόνης — πρόκειται για τρέχουσες εικόνες χάρτη/υπομνήματος του χρήστη (στιγμιότυπα προγράμματος περιήγησης, ΟΧΙ ακατέργαστα δεδομένα δορυφόρου/GEE), καθένα επισημασμένο με την ανάλυση στην οποία ανήκει. Μπορείτε να προσθέσετε γενικές, περιγραφικές παρατηρήσεις σχετικά με την κατανομή χρωμάτων/χωρικά μοτίβα από αυτά· ωστόσο μην παρέχετε επίσημη αξιολόγηση κινδύνου.', image_label="Η παρακάτω εικόνα είναι στιγμιότυπο χάρτη/υπομνήματος για την ανάλυση '%s':"),
+    'bg': dict(dataset='Набор от данни', total_area='Обща площ:', hectare='хектара', classes_header='Класове (име — диапазон на стойностите — процент):', question='Въпрос:', building_section='Откриване на сгради/покриви:', building_count='Общ брой сгради/покриви:', building_area='Обща площ на покрива:', building_source='Изходен набор от данни:', general_map_view='Общ изглед на картата', image_note='БЕЛЕЖКА: По-долу са предоставени още %d екранни снимки — това са текущите изображения на картата/легендата на потребителя (екранни снимки от браузъра, а НЕ сурови сателитни/GEE данни), всяка обозначена с анализа, към който принадлежи. Можете да добавите общи, описателни наблюдения за разпределението на цветовете/пространствените модели от тях; все пак не предоставяйте официална оценка на риска.', image_label="Изображението по-долу е екранна снимка на карта/легенда за анализа '%s':"),
+    'az': dict(dataset='Verilənlər dəsti', total_area='Ümumi sahə:', hectare='hektar', classes_header='Siniflər (ad — dəyər aralığı — faiz):', question='Sual:', building_section='Bina/Dam aşkarlanması:', building_count='Ümumi bina/dam sayı:', building_area='Ümumi dam sahəsi:', building_source='Mənbə verilənlər dəsti:', general_map_view='Ümumi Xəritə Görünüşü', image_note="QEYD: Aşağıda daha %d ekran görüntüsü var — bunlar istifadəçinin hazırkı ekran xəritə/lejand görüntüləridir (brauzer ekran görüntüsü, XAM peyk/GEE məlumatı DEYİL), hər biri aid olduğu təhlillə etiketlənib. Bunlardan rəng paylanması/məkan nümunələri haqqında ümumi, təsviri müşahidələr əlavə edə bilərsiniz; yenə də rəsmi risk qiymətləndirməsi verməyin.", image_label="Aşağıdakı görüntü '%s' təhlilinə aid xəritə/lejand ekran görüntüsüdür:"),
+    'hu': dict(dataset='Adathalmaz', total_area='Teljes terület:', hectare='hektár', classes_header='Osztályok (név — értéktartomány — százalék):', question='Kérdés:', building_section='Épület/Tető felismerés:', building_count='Épületek/tetők teljes száma:', building_area='Teljes tetőterület:', building_source='Forrás adathalmaz:', general_map_view='Általános térképnézet', image_note='MEGJEGYZÉS: Az alábbiakban további %d képernyőkép található — ezek a felhasználó aktuális térkép/jelmagyarázat pillanatképei (böngésző képernyőképek, NEM nyers műhold/GEE adatok), mindegyik a hozzá tartozó elemzéssel jelölve. Ezekből általános, leíró jellegű megfigyeléseket adhat a színeloszlásról/térbeli mintázatokról; ennek ellenére ne adjon hivatalos kockázatértékelést.', image_label="Az alábbi kép a(z) '%s' elemzéshez tartozó térkép/jelmagyarázat képernyőkép:"),
+    'kk': dict(dataset='Деректер жиынтығы', total_area='Жалпы аудан:', hectare='гектар', classes_header='Кластар (атауы — мән диапазоны — пайыз):', question='Сұрақ:', building_section='Ғимарат/Шатыр анықтау:', building_count='Ғимарат/шатырлардың жалпы саны:', building_area='Жалпы шатыр ауданы:', building_source='Дереккөз жиынтығы:', general_map_view='Жалпы карта көрінісі', image_note='ЕСКЕРТУ: Төменде тағы %d скриншот берілген — бұлар пайдаланушының қазіргі экрандағы карта/легенда суреттері (браузер скриншоты, шикі спутник/GEE деректері ЕМЕС), әрқайсысы тиесілі талдаумен белгіленген. Осылардан түс таралуы/кеңістіктік үлгілер туралы жалпы, сипаттамалық бақылаулар қоса аласыз; дегенмен ресми тәуекел бағасын бермеңіз.', image_label="Төмендегі сурет '%s' талдауына тиесілі карта/легенда скриншоты:"),
+    'de': dict(dataset='Datensatz', total_area='Gesamtfläche:', hectare='Hektar', classes_header='Klassen (Name — Wertebereich — Prozent):', question='Frage:', building_section='Gebäude-/Dacherkennung:', building_count='Gesamtzahl Gebäude/Dächer:', building_area='Gesamte Dachfläche:', building_source='Quelldatensatz:', general_map_view='Allgemeine Kartenansicht', image_note='HINWEIS: Unten sind außerdem %d Screenshot(s) angehängt — dies sind die aktuellen Karten-/Legenden-Momentaufnahmen des Nutzers (Browser-Screenshots, KEINE rohen Satelliten-/GEE-Daten), jeweils mit der zugehörigen Analyse beschriftet. Sie können daraus allgemeine, beschreibende Beobachtungen zu Farbverteilung/räumlichen Mustern hinzufügen; geben Sie dennoch keine formelle Risikobewertung ab.', image_label="Das folgende Bild ist ein Karten-/Legenden-Screenshot für die Analyse '%s':"),
+    'fr': dict(dataset='Jeu de données', total_area='Surface totale :', hectare='hectares', classes_header='Classes (nom — plage de valeurs — pourcentage) :', question='Question :', building_section='Détection des bâtiments/toits :', building_count='Nombre total de bâtiments/toits :', building_area='Surface totale des toits :', building_source='Jeu de données source :', general_map_view='Vue générale de la carte', image_note="REMARQUE : %d capture(s) d'écran supplémentaire(s) sont également fournies ci-dessous — ce sont les instantanés actuels de la carte/légende de l'utilisateur (captures d'écran du navigateur, PAS des données brutes satellite/GEE), chacune étiquetée avec l'analyse à laquelle elle appartient. Vous pouvez ajouter des observations générales et descriptives sur la répartition des couleurs/motifs spatiaux à partir de celles-ci ; ne fournissez cependant pas d'évaluation formelle des risques.", image_label="L'image ci-dessous est une capture d'écran de carte/légende pour l'analyse '%s' :"),
+    'es': dict(dataset='Conjunto de datos', total_area='Área total:', hectare='hectáreas', classes_header='Clases (nombre — rango de valores — porcentaje):', question='Pregunta:', building_section='Detección de edificios/techos:', building_count='Número total de edificios/techos:', building_area='Área total del techo:', building_source='Conjunto de datos de origen:', general_map_view='Vista general del mapa', image_note='NOTA: A continuación se proporcionan también %d captura(s) de pantalla — son las instantáneas actuales del mapa/leyenda del usuario (capturas del navegador, NO datos satelitales/GEE en bruto), cada una etiquetada con el análisis al que pertenece. Puede agregar observaciones generales y descriptivas sobre la distribución de colores/patrones espaciales a partir de estas; aun así, no proporcione una evaluación de riesgos formal.', image_label="La siguiente imagen es una captura de pantalla de mapa/leyenda para el análisis '%s':"),
+    'pt': dict(dataset='Conjunto de dados', total_area='Área total:', hectare='hectares', classes_header='Classes (nome — intervalo de valores — percentual):', question='Pergunta:', building_section='Detecção de Edifícios/Telhados:', building_count='Número total de edifícios/telhados:', building_area='Área total do telhado:', building_source='Conjunto de dados de origem:', general_map_view='Visão Geral do Mapa', image_note='NOTA: Abaixo também são fornecidas %d captura(s) de tela — são as capturas atuais do mapa/legenda do usuário (capturas do navegador, NÃO dados brutos de satélite/GEE), cada uma rotulada com a análise a que pertence. Você pode adicionar observações gerais e descritivas sobre distribuição de cores/padrões espaciais a partir delas; ainda assim, não forneça uma avaliação de risco formal.', image_label="A imagem abaixo é uma captura de tela de mapa/legenda para a análise '%s':"),
+    'ar': dict(dataset='مجموعة البيانات', total_area='المساحة الإجمالية:', hectare='هكتار', classes_header='الفئات (الاسم — نطاق القيمة — النسبة المئوية):', question='السؤال:', building_section='كشف المباني/الأسطح:', building_count='إجمالي عدد المباني/الأسطح:', building_area='إجمالي مساحة السطح:', building_source='مجموعة البيانات المصدر:', general_map_view='عرض الخريطة العام', image_note='ملاحظة: يتم توفير %d لقطة شاشة إضافية أدناه — وهي لقطات الخريطة/المفتاح الحالية للمستخدم (لقطات شاشة من المتصفح، وليست بيانات أقمار صناعية/GEE خام)، كل منها موسومة بالتحليل الذي تنتمي إليه. يمكنك إضافة ملاحظات عامة ووصفية حول توزيع الألوان/الأنماط المكانية من هذه الصور؛ مع ذلك لا تقدم تقييماً رسمياً للمخاطر.', image_label="الصورة أدناه هي لقطة شاشة للخريطة/المفتاح لتحليل '%s':"),
+    'fa': dict(dataset='مجموعه داده', total_area='مساحت کل:', hectare='هکتار', classes_header='کلاس‌ها (نام — محدوده مقدار — درصد):', question='سؤال:', building_section='تشخیص ساختمان/سقف:', building_count='تعداد کل ساختمان/سقف:', building_area='مساحت کل سقف:', building_source='مجموعه داده منبع:', general_map_view='نمای کلی نقشه', image_note='یادداشت: در زیر همچنین %d تصویر صفحه ارائه شده است — این‌ها تصاویر فعلی نقشه/راهنمای کاربر هستند (اسکرین‌شات مرورگر، نه داده خام ماهواره/GEE)، هر کدام با تحلیل مربوطه برچسب‌گذاری شده‌اند. می‌توانید مشاهدات کلی و توصیفی درباره توزیع رنگ/الگوهای مکانی از این‌ها اضافه کنید؛ با این حال ارزیابی ریسک رسمی ارائه ندهید.', image_label="تصویر زیر یک اسکرین‌شات نقشه/راهنما برای تحلیل '%s' است:"),
+    'zh': dict(dataset='数据集', total_area='总面积：', hectare='公顷', classes_header='类别（名称—数值范围—百分比）：', question='问题：', building_section='建筑物/屋顶检测：', building_count='建筑物/屋顶总数：', building_area='屋顶总面积：', building_source='源数据集：', general_map_view='总体地图视图', image_note='注：下方还提供了%d张截图——这些是用户当前屏幕上的地图/图例快照（浏览器截图，非原始卫星/GEE数据），每张都标注了所属的分析。您可以据此添加关于颜色分布/空间格局的一般性描述观察；但仍不要提供正式的风险评估。', image_label="下图是分析'%s'的地图/图例截图："),
+    'ja': dict(dataset='データセット', total_area='総面積：', hectare='ヘクタール', classes_header='クラス（名前 — 値の範囲 — パーセント）：', question='質問：', building_section='建物・屋根検出：', building_count='建物・屋根の総数：', building_area='屋根の総面積：', building_source='元データセット：', general_map_view='全体地図表示', image_note='注：以下にさらに%d枚のスクリーンショットがあります — これらはユーザーが現在画面で見ている地図・凡例のスナップショットです（ブラウザのスクリーンショットであり、生の衛星/GEEデータではありません）、それぞれ対応する分析でラベル付けされています。これらから色の分布・空間パターンについて一般的で記述的な観察を追加できますが、正式なリスク評価は行わないでください。', image_label="以下の画像は'%s'分析の地図・凡例のスクリーンショットです："),
+    'ko': dict(dataset='데이터셋', total_area='총 면적:', hectare='헥타르', classes_header='클래스 (이름 — 값 범위 — 백분율):', question='질문:', building_section='건물/지붕 탐지:', building_count='총 건물/지붕 수:', building_area='총 지붕 면적:', building_source='출처 데이터셋:', general_map_view='전체 지도 보기', image_note='참고: 아래에 %d개의 스크린샷이 추가로 제공됩니다 — 이는 사용자가 현재 화면에서 보고 있는 지도/범례 스냅샷입니다(브라우저 스크린샷이며 원시 위성/GEE 데이터가 아님), 각각 해당 분석으로 라벨이 지정되어 있습니다. 이를 바탕으로 색상 분포/공간 패턴에 대한 일반적이고 서술적인 관찰을 추가할 수 있지만, 공식적인 위험 평가는 제공하지 마십시오.', image_label="아래 이미지는 '%s' 분석에 대한 지도/범례 스크린샷입니다:"),
+    'hi': dict(dataset='डेटासेट', total_area='कुल क्षेत्रफल:', hectare='हेक्टेयर', classes_header='वर्ग (नाम — मान सीमा — प्रतिशत):', question='प्रश्न:', building_section='भवन/छत पहचान:', building_count='कुल भवन/छत संख्या:', building_area='कुल छत क्षेत्रफल:', building_source='स्रोत डेटासेट:', general_map_view='सामान्य मानचित्र दृश्य', image_note='नोट: नीचे %d और स्क्रीनशॉट भी दिए गए हैं — ये उपयोगकर्ता के वर्तमान स्क्रीन के मानचित्र/लेजेंड स्नैपशॉट हैं (ब्राउज़र स्क्रीनशॉट, कच्चा उपग्रह/GEE डेटा नहीं), प्रत्येक अपने संबंधित विश्लेषण के साथ लेबल किया गया है। आप इनसे रंग वितरण/स्थानिक पैटर्न के बारे में सामान्य, वर्णनात्मक अवलोकन जोड़ सकते हैं; फिर भी औपचारिक जोखिम मूल्यांकन न दें।', image_label="नीचे दी गई छवि '%s' विश्लेषण के लिए मानचित्र/लेजेंड स्क्रीनशॉट है:"),
+    'id': dict(dataset='Kumpulan Data', total_area='Luas total:', hectare='hektar', classes_header='Kelas (nama — rentang nilai — persentase):', question='Pertanyaan:', building_section='Deteksi Bangunan/Atap:', building_count='Jumlah total bangunan/atap:', building_area='Luas total atap:', building_source='Kumpulan data sumber:', general_map_view='Tampilan Peta Umum', image_note='CATATAN: Di bawah ini juga disediakan %d tangkapan layar — ini adalah gambar peta/legenda layar pengguna saat ini (tangkapan layar browser, BUKAN data satelit/GEE mentah), masing-masing diberi label sesuai analisisnya. Anda dapat menambahkan pengamatan umum dan deskriptif tentang distribusi warna/pola spasial dari gambar ini; namun tetap jangan memberikan penilaian risiko formal.', image_label="Gambar di bawah ini adalah tangkapan layar peta/legenda untuk analisis '%s':"),
+    'ru': dict(dataset='Набор данных', total_area='Общая площадь:', hectare='гектаров', classes_header='Классы (название — диапазон значений — процент):', question='Вопрос:', building_section='Обнаружение зданий/крыш:', building_count='Общее количество зданий/крыш:', building_area='Общая площадь крыши:', building_source='Исходный набор данных:', general_map_view='Общий вид карты', image_note='ПРИМЕЧАНИЕ: Ниже также приведены %d скриншот(ов) — это текущие снимки карты/легенды пользователя (скриншоты браузера, а НЕ необработанные спутниковые/GEE-данные), каждый с меткой соответствующего анализа. Вы можете добавить общие, описательные наблюдения о распределении цвета/пространственных паттернах на их основе; тем не менее не давайте официальную оценку риска.', image_label="Изображение ниже — это скриншот карты/легенды для анализа '%s':"),
+    'th': dict(dataset='ชุดข้อมูล', total_area='พื้นที่รวม:', hectare='เฮกตาร์', classes_header='คลาส (ชื่อ — ช่วงค่า — เปอร์เซ็นต์):', question='คำถาม:', building_section='การตรวจจับอาคาร/หลังคา:', building_count='จำนวนอาคาร/หลังคาทั้งหมด:', building_area='พื้นที่หลังคารวม:', building_source='ชุดข้อมูลต้นทาง:', general_map_view='มุมมองแผนที่ทั่วไป', image_note='หมายเหตุ: ด้านล่างมีภาพหน้าจอเพิ่มเติมอีก %d ภาพ — เป็นภาพแผนที่/คำอธิบายสัญลักษณ์ปัจจุบันบนหน้าจอของผู้ใช้ (ภาพหน้าจอเบราว์เซอร์ ไม่ใช่ข้อมูลดาวเทียม/GEE ดิบ) แต่ละภาพระบุการวิเคราะห์ที่เกี่ยวข้อง คุณสามารถเพิ่มข้อสังเกตทั่วไปเชิงพรรณนาเกี่ยวกับการกระจายสี/รูปแบบเชิงพื้นที่จากภาพเหล่านี้ได้ แต่ยังคงไม่ควรให้การประเมินความเสี่ยงอย่างเป็นทางการ', image_label="ภาพด้านล่างเป็นภาพหน้าจอแผนที่/คำอธิบายสัญลักษณ์สำหรับการวิเคราะห์ '%s':"),
+    'bn': dict(dataset='ডেটাসেট', total_area='মোট এলাকা:', hectare='হেক্টর', classes_header='শ্রেণী (নাম — মান পরিসীমা — শতাংশ):', question='প্রশ্ন:', building_section='ভবন/ছাদ শনাক্তকরণ:', building_count='মোট ভবন/ছাদের সংখ্যা:', building_area='মোট ছাদের এলাকা:', building_source='উৎস ডেটাসেট:', general_map_view='সাধারণ মানচিত্র দৃশ্য', image_note='দ্রষ্টব্য: নিচে আরও %d টি স্ক্রিনশট দেওয়া হয়েছে — এগুলি ব্যবহারকারীর বর্তমান স্ক্রিনের মানচিত্র/লেজেন্ড স্ন্যাপশট (ব্রাউজার স্ক্রিনশট, কাঁচা স্যাটেলাইট/GEE ডেটা নয়), প্রতিটি সংশ্লিষ্ট বিশ্লেষণ দিয়ে লেবেল করা। আপনি এগুলি থেকে রঙ বণ্টন/স্থানিক প্যাটার্ন সম্পর্কে সাধারণ, বর্ণনামূলক পর্যবেক্ষণ যোগ করতে পারেন; তবুও আনুষ্ঠানিক ঝুঁকি মূল্যায়ন দেবেন না।', image_label="নিচের ছবিটি '%s' বিশ্লেষণের জন্য মানচিত্র/লেজেন্ড স্ক্রিনশট:"),
+    'vi': dict(dataset='Bộ dữ liệu', total_area='Tổng diện tích:', hectare='ha', classes_header='Lớp (tên — phạm vi giá trị — phần trăm):', question='Câu hỏi:', building_section='Phát hiện Tòa nhà/Mái nhà:', building_count='Tổng số tòa nhà/mái nhà:', building_area='Tổng diện tích mái nhà:', building_source='Bộ dữ liệu nguồn:', general_map_view='Chế độ xem bản đồ chung', image_note='LƯU Ý: Bên dưới cũng cung cấp thêm %d ảnh chụp màn hình — đây là ảnh chụp nhanh bản đồ/chú giải hiện tại trên màn hình của người dùng (ảnh chụp màn hình trình duyệt, KHÔNG phải dữ liệu vệ tinh/GEE thô), mỗi ảnh được gắn nhãn phân tích tương ứng. Bạn có thể thêm các quan sát chung, mô tả về phân bố màu sắc/mẫu hình không gian từ những ảnh này; tuy nhiên vẫn không đưa ra đánh giá rủi ro chính thức.', image_label="Hình ảnh bên dưới là ảnh chụp màn hình bản đồ/chú giải cho phân tích '%s':"),
+    'ur': dict(dataset='ڈیٹا سیٹ', total_area='کل رقبہ:', hectare='ہیکٹر', classes_header='کلاسز (نام — قدر کی حد — فیصد):', question='سوال:', building_section='عمارت/چھت کی شناخت:', building_count='عمارتوں/چھتوں کی کل تعداد:', building_area='کل چھت کا رقبہ:', building_source='ماخذ ڈیٹا سیٹ:', general_map_view='عمومی نقشہ منظر', image_note='نوٹ: نیچے مزید %d اسکرین شاٹس بھی فراہم کیے گئے ہیں — یہ صارف کی موجودہ اسکرین کے نقشہ/لیجنڈ سنیپ شاٹس ہیں (براؤزر اسکرین شاٹ، خام سیٹلائٹ/GEE ڈیٹا نہیں)، ہر ایک اپنے متعلقہ تجزیے کے ساتھ لیبل شدہ ہے۔ آپ ان سے رنگ کی تقسیم/مقامی پیٹرن کے بارے میں عمومی، وضاحتی مشاہدات شامل کر سکتے ہیں؛ تاہم پھر بھی باضابطہ خطرے کی تشخیص نہ دیں۔', image_label="نیچے دی گئی تصویر '%s' تجزیے کے لیے نقشہ/لیجنڈ اسکرین شاٹ ہے:"),
+    'pl': dict(dataset='Zbiór danych', total_area='Powierzchnia całkowita:', hectare='ha', classes_header='Klasy (nazwa — zakres wartości — procent):', question='Pytanie:', building_section='Wykrywanie budynków/dachów:', building_count='Łączna liczba budynków/dachów:', building_area='Łączna powierzchnia dachu:', building_source='Źródłowy zbiór danych:', general_map_view='Ogólny widok mapy', image_note='UWAGA: Poniżej dostarczono również %d zrzut(y) ekranu — są to aktualne migawki mapy/legendy użytkownika (zrzuty ekranu przeglądarki, a NIE surowe dane satelitarne/GEE), każdy oznaczony odpowiadającą mu analizą. Możesz dodać ogólne, opisowe obserwacje dotyczące rozkładu kolorów/wzorców przestrzennych na ich podstawie; mimo to nie podawaj formalnej oceny ryzyka.', image_label="Poniższy obraz to zrzut ekranu mapy/legendy dla analizy '%s':"),
+    'ms': dict(dataset='Set Data', total_area='Jumlah keluasan:', hectare='hektar', classes_header='Kelas (nama — julat nilai — peratusan):', question='Soalan:', building_section='Pengesanan Bangunan/Bumbung:', building_count='Jumlah bilangan bangunan/bumbung:', building_area='Jumlah keluasan bumbung:', building_source='Set data sumber:', general_map_view='Paparan Peta Umum', image_note='NOTA: Di bawah turut disediakan %d tangkapan skrin — ini adalah gambar peta/legenda semasa skrin pengguna (tangkapan skrin pelayar, BUKAN data satelit/GEE mentah), setiap satu dilabel dengan analisis berkaitan. Anda boleh menambah pemerhatian umum dan deskriptif tentang taburan warna/corak ruang daripada ini; namun jangan berikan penilaian risiko formal.', image_label="Imej di bawah ialah tangkapan skrin peta/legenda untuk analisis '%s':"),
+    'ky': dict(dataset='Маалымат топтому', total_area='Жалпы аянт:', hectare='гектар', classes_header='Класстар (аты — маани диапазону — пайыз):', question='Суроо:', building_section='Имарат/чатыр аныктоо:', building_count='Имараттардын/чатырлардын жалпы саны:', building_area='Жалпы чатыр аянты:', building_source='Булак маалымат топтому:', general_map_view='Жалпы карта көрүнүшү', image_note='ЭСКЕРТҮ: Төмөндө дагы %d скриншот берилген — булар колдонуучунун учурдагы экрандагы карта/легенда сүрөттөрү (браузер скриншоту, чийки спутник/GEE маалыматы ЭМЕС), ар бири тиешелүү анализ менен белгиленген. Булардан түс бөлүштүрүлүшү/мейкиндик үлгүлөрү жөнүндө жалпы, сүрөттөмө байкоолорду кошсоңуз болот; бирок расмий тобокелдик баасын бербеңиз.', image_label="Төмөнкү сүрөт '%s' анализине тиешелүү карта/легенда скриншоту:"),
+    'mn': dict(dataset='Өгөгдлийн багц', total_area='Нийт талбай:', hectare='гектар', classes_header='Ангилал (нэр — утгын хязгаар — хувь):', question='Асуулт:', building_section='Барилга/Дээвэр илрүүлэлт:', building_count='Барилга/дээврийн нийт тоо:', building_area='Нийт дээврийн талбай:', building_source='Эх өгөгдлийн багц:', general_map_view='Ерөнхий газрын зургийн харагдац', image_note='ТЭМДЭГЛЭЛ: Доор дахин %d дэлгэцийн зураг өгөгдсөн — эдгээр нь хэрэглэгчийн одоогийн дэлгэц дээрх газрын зураг/тайлбарын зураг (хөтчийн дэлгэцийн зураг, түүхий хиймэл дагуул/GEE өгөгдөл БИШ), тус бүр харгалзах шинжилгээгээр тэмдэглэгдсэн. Та эдгээрээс өнгөний тархалт/орон зайн хэв маягийн талаар ерөнхий, тайлбарласан ажиглалт нэмж болно; гэсэн хэдий ч албан ёсны эрсдэлийн үнэлгээ өгөхгүй байна.', image_label="Доорх зураг нь '%s' шинжилгээний газрын зураг/тайлбарын дэлгэцийн зураг юм:"),
+    'ka': dict(dataset='მონაცემთა ნაკრები', total_area='საერთო ფართობი:', hectare='ჰექტარი', classes_header='კლასები (სახელი — მნიშვნელობის დიაპაზონი — პროცენტი):', question='კითხვა:', building_section='შენობის/სახურავის აღმოჩენა:', building_count='შენობა/სახურავის საერთო რაოდენობა:', building_area='სახურავის საერთო ფართობი:', building_source='წყარო მონაცემთა ნაკრები:', general_map_view='ზოგადი რუკის ხედი', image_note='შენიშვნა: ქვემოთ ასევე მოცემულია %d ეკრანის ანაბეჭდი — ეს არის მომხმარებლის მიმდინარე ეკრანის რუკის/ლეგენდის სურათები (ბრაუზერის ეკრანის ანაბეჭდები და არა ნედლი თანამგზავრული/GEE მონაცემები), თითოეული მონიშნულია შესაბამისი ანალიზით. შეგიძლიათ დაამატოთ ზოგადი, აღწერითი დაკვირვებები ფერთა განაწილების/სივრცული ნიმუშების შესახებ; მიუხედავად ამისა, ნუ მისცემთ ფორმალურ რისკის შეფასებას.', image_label="ქვემოთ მოცემული სურათი არის რუკის/ლეგენდის ეკრანის ანაბეჭდი '%s' ანალიზისთვის:"),
+    'it': dict(dataset='Set di dati', total_area='Area totale:', hectare='ettari', classes_header='Classi (nome — intervallo di valori — percentuale):', question='Domanda:', building_section='Rilevamento Edifici/Tetti:', building_count='Numero totale di edifici/tetti:', building_area='Area totale del tetto:', building_source='Set di dati di origine:', general_map_view='Vista generale della mappa', image_note="NOTA: Di seguito sono fornite anche %d schermate — si tratta degli istantanei attuali della mappa/legenda dell'utente (schermate del browser, NON dati grezzi satellitari/GEE), ciascuna etichettata con l'analisi a cui appartiene. È possibile aggiungere osservazioni generali e descrittive sulla distribuzione dei colori/modelli spaziali da queste; tuttavia non fornire una valutazione formale del rischio.", image_label="L'immagine seguente è una schermata di mappa/legenda per l'analisi '%s':"),
+}
+
+
+def _gemini_labels(lang_code):
+    return _GEMINI_PROMPT_LABELS.get((lang_code or '').strip().lower(), _GEMINI_PROMPT_LABELS['en'])
+
+
 def _build_gemini_system_instruction(lang_code):
     lang_name = _GEMINI_LANG_NAMES.get((lang_code or '').strip().lower(), 'Turkish')
     return (
+        # 🆕 Faz 77: kullanıcı, arayüzde Korece seçili olmasına rağmen yanıtın
+        # Türkçe geldiğini bildirdi. Kök neden muhtemelen şu: aşağıdaki
+        # yönergenin KENDİSİ Türkçe olsa da, modele gönderilen VERİ İÇERİĞİ
+        # (data_summary — "Veri seti 1 — ...", "Toplam alan:", "Sınıflar
+        # (ad — değer aralığı — yüzde):" gibi bağlayıcı etiketler) DE Türkçe
+        # olduğundan, model bazen baskın dile (Türkçe) kayabiliyor. Buna karşı
+        # iki önlem alındı: (1) bu bağlayıcı etiketler artık backend'de
+        # aktif dile göre ÇEVRİLİYOR (bkz. _GEMINI_PROMPT_LABELS ve
+        # gemini_data_qa() içindeki kullanım) — modele giden içeriğin BÜYÜK
+        # kısmı artık zaten hedef dilde; (2) bu yönergenin en BAŞINA ve en
+        # SONUNA, dil talimatını vurgulayan kısa ve KESİN birer hatırlatma
+        # eklendi.
+        "[DİL TALİMATI / LANGUAGE INSTRUCTION: Yanıtını SADECE ve TAMAMEN "
+        "**" + lang_name + "** dilinde yaz. Başka hiçbir dil kullanma, "
+        "çeviri ekleme, iki dilli yazma. / Write your entire answer ONLY in "
+        "**" + lang_name + "**. Do not use any other language.]\n\n"
         "Sen SylvaGIS uygulamasında, kullanıcıya verilen sayısal analiz verilerini "
         "(arazi örtüsü/kullanım sınıfları, yükseklik/eğim/bakı sınıflandırması, NDVI, "
         "bina/çatı tespiti gibi) okuyup açıklayan bir veri yorumlama asistanısın. Sana "
@@ -3964,11 +4024,18 @@ def _build_gemini_system_instruction(lang_code):
         "'600-1200m aralığında orman sınıfının payı yüksek görünüyor' gibi, ya da "
         "'dik eğimli (örn. %60) ve ormanlık alanlar genellikle toprak erozyonunu "
         "azaltmaya yardımcı olan bir işlev görür' gibi GENEL, tanımlayıcı "
-        "gözlemler paylaş; (3) en sonda bir GENEL ÖZET/SONUÇ paragrafı ekle — bu "
-        "sonuç paragrafını YAPAY OLARAK 3-4 CÜMLEYLE SINIRLAMA veya erken "
-        "KESME; tüm veri setlerini kapsayan, gerektiği kadar uzun, doyurucu bir "
-        "kapanış yaz. Kullanıcının asıl sorusunu da bu yapı içinde açıkça "
-        "yanıtla.\n\n"
+        "gözlemler paylaş; (3) en sonda GENİŞ ve ÇOK DETAYLI bir GENEL "
+        "ÖZET/SONUÇ paragrafı (gerekirse birden fazla paragraf) ekle — bu "
+        "sonuç kısmını YAPAY OLARAK 3-4 CÜMLEYLE SINIRLAMA veya erken KESME. "
+        "Sonuç kısmında en azından şunları içer: (a) tüm veri setlerini tek "
+        "tek kısaca ama somut sayılarla (yüzde, alan) yeniden anarak genel "
+        "bir sentez; (b) veri setleri arasında en dikkat çekici 2-3 ilişkiyi "
+        "veya çelişkiyi vurgulayan bir değerlendirme; (c) sahanın genel "
+        "coğrafi/ekolojik karakterine dair (yükseklik, eğim, bakı, arazi "
+        "örtüsü verisi varsa bunları birlikte yorumlayarak) doyurucu bir "
+        "betimleme; (d) varsa görüntülerden edinilen mekansal/renk deseni "
+        "gözlemlerinin kısa bir sentezi. Kullanıcının asıl sorusunu da bu "
+        "yapı içinde açıkça yanıtla.\n\n"
         "ÖNEMLİ SINIRLAR (bunlara KESİNLİKLE uy):\n"
         "- Bu bir KESİN mekansal çakıştırma (overlay) analizi DEĞİLDİR — sana ayrı ayrı "
         "özet istatistikler veriliyor, piksel piksel çakıştırılmış ortak bir tablo "
@@ -3990,9 +4057,14 @@ def _build_gemini_system_instruction(lang_code):
         "açıklayabilir; resmi bir risk değerlendirmesi veya tavsiye veremez.' ve "
         "başka bir şey ekleme.\n"
         "Yanıtın toplamda en az 3-4 paragraf olsun (veri seti sayısına göre daha "
-        "da uzun olabilir); yine de sana verilmeyen konularda uydurma bilgi ekleyerek "
-        "yapay şekilde uzatma — yalnızca sana verilen verilere dayanarak, doğal, "
-        "bilimsel ve DETAYLI şekilde açıkla."
+        "da uzun olabilir, özellikle sonuç bölümü doyurucu olmalı); yine de sana "
+        "verilmeyen konularda uydurma bilgi ekleyerek yapay şekilde uzatma — "
+        "yalnızca sana verilen verilere dayanarak, doğal, bilimsel ve DETAYLI "
+        "şekilde açıkla.\n\n"
+        "[SON HATIRLATMA / FINAL REMINDER: Yanıtının TAMAMI (başlangıcından "
+        "sonuna kadar, tek bir kelimesi bile istisna olmadan) SADECE "
+        "**" + lang_name + "** dilinde olmalı. / Your ENTIRE answer, from "
+        "start to finish, must be written ONLY in **" + lang_name + "**.]"
     )
 
 
@@ -4137,19 +4209,27 @@ def gemini_data_qa():
         if not ok:
             return jsonify({'success': False, 'error': quota_err})
 
+        # 🆕 Faz 77: bu bağlayıcı etiketler artık aktif dile (req_lang) göre
+        # çevriliyor — modele gönderilen içeriğin büyük kısmının zaten hedef
+        # dilde olması, yalnızca sistem talimatındaki dil yönergesine
+        # güvenmekten daha güvenilir (kullanıcı Korece seçiliyken yanıtın
+        # Türkçe geldiğini bildirdi — kök nedenlerden biri, verinin KENDİSİNİN
+        # her zaman Türkçe olmasıydı).
+        _L = _gemini_labels(req_lang)
+
         data_summary_blocks = []
         for idx, ds in enumerate(valid_datasets, start=1):
-            ds_name = str(ds.get('analysis_name') or ('Veri seti %d' % idx))
+            ds_name = str(ds.get('analysis_name') or ('%s %d' % (_L['dataset'], idx)))
             ds_classes = ds.get('classes') or []
             ds_pct = ds.get('percentages') or []
             ds_area = ds.get('area_ha')
-            lines = ['Veri seti %d — %s' % (idx, ds_name)]
+            lines = ['%s %d — %s' % (_L['dataset'], idx, ds_name)]
             if ds_area is not None:
                 try:
-                    lines.append('Toplam alan: %.2f hektar' % float(ds_area))
+                    lines.append('%s %.2f %s' % (_L['total_area'], float(ds_area), _L['hectare']))
                 except Exception:
                     pass
-            lines.append('Sınıflar (ad — değer aralığı — yüzde):')
+            lines.append(_L['classes_header'])
             for c, p in zip(ds_classes, ds_pct):
                 name = str((c or {}).get('name') or '?')
                 cmin = (c or {}).get('min')
@@ -4163,45 +4243,37 @@ def gemini_data_qa():
             data_summary_blocks.append('\n'.join(lines))
 
         if has_building:
-            b_lines = ['Bina/Çatı Tespiti:']
+            b_lines = [_L['building_section']]
             b_count = building.get('buildingCount')
             b_area = building.get('totalAreaM2')
             b_dataset = building.get('dataset')
             if b_count is not None:
                 try:
-                    b_lines.append('Toplam bina/çatı sayısı: %d' % int(b_count))
+                    b_lines.append('%s %d' % (_L['building_count'], int(b_count)))
                 except Exception:
                     pass
             if b_area is not None:
                 try:
-                    b_lines.append('Toplam çatı alanı: %.2f m²' % float(b_area))
+                    b_lines.append('%s %.2f m²' % (_L['building_area'], float(b_area)))
                 except Exception:
                     pass
             if b_dataset:
-                b_lines.append('Kaynak veri kümesi: %s' % str(b_dataset))
+                b_lines.append('%s %s' % (_L['building_source'], str(b_dataset)))
             data_summary_blocks.append('\n'.join(b_lines))
 
         data_summary = '\n\n'.join(data_summary_blocks)
         if valid_images:
             data_summary = (data_summary + '\n\n') if data_summary else ''
-            data_summary += (
-                'NOT: Ayrıca aşağıda %d adet ekran görüntüsü var — bunlar '
-                'kullanıcının o an ekranında gördüğü harita/lejant anlık '
-                'görüntüleridir (tarayıcı ekran görüntüsü — ham uydu/GEE verisi '
-                'DEĞİL), her biri kendi etiketiyle hangi analize ait olduğu '
-                'belirtilmiştir. Bu görüntüleri de dikkate alarak renk dağılımı/'
-                'mekansal desenler hakkında GENEL, betimsel gözlemler '
-                'ekleyebilirsin; yine de resmi bir risk değerlendirmesi yapma.'
-            ) % len(valid_images)
-        user_prompt = data_summary + '\n\nSoru: ' + question
+            data_summary += _L['image_note'] % len(valid_images)
+        user_prompt = data_summary + '\n\n' + _L['question'] + ' ' + question
 
         # 🆕 Faz 72/73: görüntü(ler) verildiyse, metin parçasına ek olarak her
         # biri için bir etiket metni + bir inlineData (base64) parçası daha
         # eklenir — Gemini'nin çok modlu (multimodal) girdi biçimi budur.
         gemini_parts = [{'text': user_prompt}]
         for _im in valid_images:
-            _im_label = _im['analysis_name'] or 'Genel Harita Görünümü'
-            gemini_parts.append({'text': "Aşağıdaki görüntü '%s' analizine ait harita/lejant ekran görüntüsüdür:" % _im_label})
+            _im_label = _im['analysis_name'] or _L['general_map_view']
+            gemini_parts.append({'text': _L['image_label'] % _im_label})
             gemini_parts.append({'inlineData': {'mimeType': _im['mime'], 'data': _im['base64']}})
 
         gemini_url = GEMINI_API_URL_TMPL.format(model=GEMINI_MODEL, key=GEMINI_API_KEY)
