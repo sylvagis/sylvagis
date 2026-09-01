@@ -4086,7 +4086,7 @@ def _smtp_credentials():
     # Kullanıcı adı: gönderen Gmail adresi
     # Şifre: Gmail Uygulama Şifresi
     user = 'sylvagis.world@gmail.com'
-    password = 'bngamjodidmbpshc'
+    password = 'amrgxfunajwuczph'
     return user, password, None
 
 
@@ -4712,7 +4712,7 @@ def send_contact_message():
         return jsonify({'success': False, 'error': 'Geçersiz e-posta adresi.'}), 400
 
     smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'bngamjodidmbpshc'
+    smtp_pass = 'amrgxfunajwuczph'
 
     body = (
         'SylvaGIS İletişim Formu üzerinden yeni bir mesaj gönderildi.\n\n'
@@ -10903,7 +10903,7 @@ def _sanitize_header_value(value):
 
 def _send_registration_email(ad, soyad, email, meslek, ulke):
     smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'bngamjodidmbpshc'
+    smtp_pass = 'amrgxfunajwuczph'
 
     # 🔒 GÜVENLİK DÜZELTMESİ (e-posta başlığı enjeksiyonu): bkz.
     # _sanitize_header_value docstring'i. Yalnızca Subject başlığına giren
