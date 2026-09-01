@@ -5278,6 +5278,10 @@ function _sylvaHasMixedStackCategories(paneId) {
     // sayfasının sağ üst köşesine bu görsel sabit olarak basılacak. Logo
     // yüklenemezse (ör. henüz DOM'a hiç yüklenmemiş) PDF yine de sorunsuz
     // üretilir — logo yalnızca varsa eklenir.
+    // 🆕 Faz 75: bu fonksiyon başka bir <script> bloğunda (Gemini AI veri
+    // raporu PDF üreticisi) da kullanılabilsin diye window'a da atanıyor —
+    // bu blok bir IIFE içinde tanımlandığından, window'a atanmadan diğer
+    // <script> bloklarından erişilemez.
     function _wxLoadLogoAsset() {
         return new Promise(function (resolve) {
             try {
@@ -5301,6 +5305,7 @@ function _sylvaHasMixedStackCategories(paneId) {
             } catch (e) { resolve(null); }
         });
     }
+    window._wxLoadLogoAsset = _wxLoadLogoAsset;
 
     // PDF: downloadPDF() ile AYNI yöntem (html2canvas ile TARAYICININ KENDİ
     // Unicode fontuyla görsele dönüştürüp jsPDF'e PNG olarak gömme — RTL ve
@@ -19802,6 +19807,56 @@ function selectRamp(name) {
 
         }
 
+        // 🛠️ BUG FİX (Faz 76 — Bakı/Aspect lejantındaki yüzdeler toplamda 100%
+        // etmiyordu, ör. 0.0%+0.0%+...+0.2% ≈ %1,1): Kök neden — TOPO_ASPECT
+        // için server.py'de gönderilen histogram (stats.value), sunucu
+        // tarafında ÖNCEDEN 1-9 arası kodlara sınıflandırılmış bir raster
+        // DEĞİL; ham/SÜREKLİ bakı derecesidir (-1 = düz, yoksa 0–360°) —
+        // 1-9 kodları yalnızca LEJANT RENKLENDİRME/dışa aktarma amaçlı
+        // tanımlanmış aralıklardır (bkz. server.py _classify_default_aspect).
+        // Eski kod, histogramın anahtarlarını (ör. "127.34") doğrudan 1-9
+        // koduyla EŞLEŞTİRMEYE çalışıyordu — sürekli bir derece değerinin
+        // TESADÜFEN tam olarak 1,2,...,9'a eşit olması neredeyse hiç
+        // olmadığından, hemen hemen TÜM pikseller sayılmadan kalıyor, yalnızca
+        // çok küçük bir kısmı (tesadüfen tam sayı dereceye denk gelenler)
+        // yanlışlıkla bir sınıfa ekleniyordu — bu da toplamı %100'ün ÇOK
+        // altında (~%1) bırakıyordu. DÜZELTME: aşağıdaki
+        // _sylvaBinAspectHistogram(), her histogram anahtarını (ORİJİNAL
+        // metin anahtarıyla, yeniden türetilmeden okunarak) sunucudaki AYNI
+        // 9 yön aralığına (Kuzey'in 0–12.5°/327.5–360° birleşimi dahil) göre
+        // gerçekten KOVALAYARAK (binning) doğru yüzde/piksel sayımı üretir.
+        function _sylvaBinAspectHistogram(hist) {
+            // Sunucudaki _classify_default_aspect() ile BİREBİR aynı aralıklar.
+            var DIRECTION_RANGES = [
+                { lo: 0,     hi: 12.5,       code: 2 },
+                { lo: 12.5,  hi: 57.5,       code: 3 },
+                { lo: 57.5,  hi: 102.5,      code: 4 },
+                { lo: 102.5, hi: 147.5,      code: 5 },
+                { lo: 147.5, hi: 192.5,      code: 6 },
+                { lo: 192.5, hi: 237.5,      code: 7 },
+                { lo: 237.5, hi: 282.5,      code: 8 },
+                { lo: 282.5, hi: 327.5,      code: 9 },
+                { lo: 327.5, hi: 360.000001, code: 2 } // Kuzey'in ikinci parçası
+            ];
+            var counts = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0 };
+            Object.keys(hist).forEach(function (key) {
+                var v = Number(key);
+                if (isNaN(v)) return;
+                var n = Number(hist[key]) || 0; // ORİJİNAL string anahtarla okunuyor
+                if (n <= 0) return;
+                if (v < 0) { counts[1] += n; return; }
+                for (var i = 0; i < DIRECTION_RANGES.length; i++) {
+                    var r = DIRECTION_RANGES[i];
+                    if (v >= r.lo && v < r.hi) { counts[r.code] += n; return; }
+                }
+                // 360.000001'e kadar olan aralık pratikte tüm 0-360 uzayını
+                // kapsar; buraya düşen (ör. tam 360.0 gibi kenar değer) kalan
+                // pikseller de Kuzey'e (code 2) eklenir.
+                if (v >= 327.5) counts[2] += n;
+            });
+            return counts;
+        }
+
         // ── Histogram → 7 bin → bar/pie SVG grafiği ─────────────────
         // stats: sunucudan gelen tam nesne  { value: { ... } }
         function renderNativeClassifiedStatsChart(stats, meta, paneId) {
@@ -19811,11 +19866,18 @@ function selectRamp(name) {
             try { rawClasses = JSON.parse(meta.classesRaw); } catch (e) { return false; }
             if (!Array.isArray(rawClasses) || !rawClasses.length) return false;
 
+            // 🛠️ Faz 76: TOPO_ASPECT'in histogramı SÜREKLİ derece değeridir —
+            // exact-code eşleştirme yerine yön aralıklarına göre kovalanmalı.
+            var _isAspect = String((meta && meta.analysisName) || '').toUpperCase() === 'TOPO_ASPECT';
             var counts = {};
-            Object.keys(hist).forEach(function (key) {
-                var code = Number(key);
-                if (!isNaN(code)) counts[code] = (counts[code] || 0) + Number(hist[key] || 0);
-            });
+            if (_isAspect) {
+                counts = _sylvaBinAspectHistogram(hist);
+            } else {
+                Object.keys(hist).forEach(function (key) {
+                    var code = Number(key);
+                    if (!isNaN(code)) counts[code] = (counts[code] || 0) + Number(hist[key] || 0);
+                });
+            }
             var classes = rawClasses.map(function (cls, index) {
                 var code = (cls.code !== undefined) ? Number(cls.code) : ((cls.value !== undefined) ? Number(cls.value) : index);
                 return { min: code, max: code, count: counts[code] || 0,
@@ -20467,11 +20529,20 @@ function selectRamp(name) {
                 var rawClasses = null;
                 try { rawClasses = JSON.parse(meta.classesRaw); } catch (eParse) { rawClasses = null; }
                 if (Array.isArray(rawClasses) && rawClasses.length) {
+                    // 🛠️ Faz 76: TOPO_ASPECT'in histogramı SÜREKLİ derece
+                    // değeridir (exact-code eşleştirme YANLIŞ sonuç verir —
+                    // bkz. _sylvaBinAspectHistogram üstündeki açıklama) —
+                    // yön aralıklarına göre doğru kovalama kullanılır.
+                    var _isAspectDs = String(analysisName || '').toUpperCase() === 'TOPO_ASPECT';
                     var counts = {};
-                    Object.keys(hist).forEach(function (key) {
-                        var code = Number(key);
-                        if (!isNaN(code)) counts[code] = (counts[code] || 0) + Number(hist[key] || 0);
-                    });
+                    if (_isAspectDs && typeof _sylvaBinAspectHistogram === 'function') {
+                        counts = _sylvaBinAspectHistogram(hist);
+                    } else {
+                        Object.keys(hist).forEach(function (key) {
+                            var code = Number(key);
+                            if (!isNaN(code)) counts[code] = (counts[code] || 0) + Number(hist[key] || 0);
+                        });
+                    }
                     classes = rawClasses.map(function (cls, index) {
                         var code = (cls.code !== undefined) ? Number(cls.code) : ((cls.value !== undefined) ? Number(cls.value) : index);
                         return { min: code, max: code, count: (counts[code] || 0), name: cls.label || ('Class ' + (index + 1)) };
@@ -20557,12 +20628,27 @@ function selectRamp(name) {
             return { analysisName: analysisName, classes: classes, percentages: percentages, areaHa: areaHa };
         }
 
+        // Katman anahtarını (ör. "TOPO_SLOPE" veya "LULC_ESA") ekranda/raporda
+        // gösterilen TEMİZ, okunur analiz adına (ör. "Eğim (Slope)") çevirir —
+        // mevcut "Üstte Gösterilecek Katman" kutusunda kullanılan AYNI isimlendirme
+        // fonksiyonunu (_sylvaLayerBaseName) kullanır, böylece raporda asla ham
+        // "TOPO_..." kodu görünmez ve aktif arayüz diline göre otomatik çevrilir.
+        function _sylvaGqaFriendlyDatasetName(rawName) {
+            try {
+                if (typeof _sylvaLayerBaseName === 'function') {
+                    var fn = _sylvaLayerBaseName(rawName);
+                    if (fn) return fn;
+                }
+            } catch (eFriendly) {}
+            return rawName;
+        }
+
         function _sylvaGqaCollectDatasets(pane) {
             var out = [];
             var seen = {};
             function addEntry(analysisName, classes, percentages, areaHa) {
                 if (!classes || !classes.length || !percentages || !percentages.length) return;
-                var key = String(analysisName || 'Bilinmeyen');
+                var key = _sylvaGqaFriendlyDatasetName(String(analysisName || 'Bilinmeyen'));
                 if (seen[key]) return;
                 seen[key] = true;
                 out.push({
@@ -20572,17 +20658,18 @@ function selectRamp(name) {
                     area_ha: (areaHa === undefined ? null : areaHa)
                 });
             }
-            var hist = (window._sylvaGqaLayerHistoryByPane && window._sylvaGqaLayerHistoryByPane[pane]) || [];
-            for (var i = 0; i < hist.length; i++) {
-                addEntry(hist[i].analysisName, hist[i].classes, hist[i].percentages, hist[i].areaHa);
-            }
-            if (typeof lastChartData !== 'undefined' && lastChartData && lastChartData.classes && lastChartData.classes.length) {
-                var payloadMeta = (window._lastAnalyzePayloadByPane && window._lastAnalyzePayloadByPane[pane]) || {};
-                var curName = payloadMeta.analysisName || lastChartData.title || 'Bilinmeyen';
-                addEntry(curName, lastChartData.classes, lastChartData.percentages, lastChartData.areaHa);
-            }
-            // 🆕 Faz 72: aynı pane'de o an açık/istiflenmiş TÜM katmanları (henüz
-            // tek tek görüntülenmediği için geçmişe girmemiş olsalar bile) tara.
+            // 🛠️ BUG FİX (Faz 75 — bazı veri setlerinin adı "Bilinmeyen" çıkıyor,
+            // bazılarının değerleri/yüzdeleri eksik görünüyordu): eskiden önce
+            // "geçmiş"/o anki grafik verisi (kullanıcının ekrandaki sınıflandırma
+            // ayarlarına bağlı, bazen genel "Sınıf 1/2/3..." etiketli ve isimsiz
+            // kalabilen kaynak) eklenip, ham sunucu histogramından HER ZAMAN
+            // eksiksiz/doğru hesaplayan tarama SONRA ekleniyordu — tekilleştirme
+            // "ilk gelen kazanır" mantığıyla çalıştığından, DAHA GÜVENİLİR olan
+            // ikinci kaynak bazen devre dışı kalıyordu. Artık sıra tersine
+            // çevrildi: önce her zaman TAM ve doğru olan ham-histogram taraması
+            // eklenir; geçmiş/o anki grafik verisi yalnızca bu taramanın
+            // KAÇIRDIĞI (ör. bina/çatı gibi farklı bir veri tipi) ek kaynaklar
+            // için yedek olarak kullanılır.
             try {
                 var iaStates = (window._sylvaIndexAnalysisStates && window._sylvaIndexAnalysisStates[pane]) || {};
                 Object.keys(iaStates).forEach(function (layerKey) {
@@ -20596,6 +20683,16 @@ function selectRamp(name) {
                     if (computed) addEntry(computed.analysisName, computed.classes, computed.percentages, computed.areaHa);
                 });
             } catch (eScan) {}
+            var hist = (window._sylvaGqaLayerHistoryByPane && window._sylvaGqaLayerHistoryByPane[pane]) || [];
+            for (var i = 0; i < hist.length; i++) {
+                addEntry(hist[i].analysisName, hist[i].classes, hist[i].percentages, hist[i].areaHa);
+            }
+            if (typeof lastChartData !== 'undefined' && lastChartData && lastChartData.classes && lastChartData.classes.length) {
+                var payloadMeta = (window._lastAnalyzePayloadByPane && window._lastAnalyzePayloadByPane[pane]) || {};
+                var _curTopKey = (window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[pane]) || '';
+                var curName = payloadMeta.analysisName || lastChartData.title || String(_curTopKey).split('__t')[0] || 'Bilinmeyen';
+                addEntry(curName, lastChartData.classes, lastChartData.percentages, lastChartData.areaHa);
+            }
             return out;
         }
 
@@ -20748,128 +20845,172 @@ function selectRamp(name) {
         // Roman" görünümlü, ücretsiz) fontu gömülü; sayfa kenar boşlukları
         // daraltılıp ("ekrana yaslı" görünüm), gövde metni 12 punto, başlıklar
         // ve tablo başlıkları belirgin şekilde büyütüldü.
+        // 🆕 Faz 75: Rapor artık (1) her sayfanın sağ üst köşesinde SylvaGIS
+        // logosunu taşıyor (hava durumu PDF'inde zaten kullanılan
+        // _wxLoadLogoAsset() ile AYNI yöntem — nav çubuğundaki logo görselini
+        // <canvas> üzerinden data: URI'ye çevirip jsPDF'e gömüyor), (2) TÜM
+        // sabit metinler artık aktif arayüz diline göre 30 dilde t() ile
+        // okunuyor (önceden Türkçe sabitti), (3) dosya adı da aktif dile göre
+        // değişiyor ("SylvaGIS_Rapor.pdf" yerine ör. "SylvaGIS_Report.pdf").
+        // Logo yüklemesi asenkron olduğu için fonksiyonun tamamı bir
+        // Promise'e taşındı; logo bulunamazsa (ör. henüz DOM'a yüklenmemişse)
+        // rapor yine de logosuz olarak sorunsuz üretilir.
         function _sylvaGqaBuildAndDownloadReportPDF(question, answerText, datasets, building) {
             try {
                 var jspdfLib = window.jspdf || window.jsPDF;
                 if (!jspdfLib) return;
-                var JsPDF = jspdfLib.jsPDF || jspdfLib;
-                var doc = new JsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
-                var _hasTurkishFont = _sylvaPdfRegisterTurkishFont(doc);
-                var FONT = _hasTurkishFont ? 'LiberationSerif' : 'times';
+                var _t = (typeof t === 'function') ? t : function (k, f) { return f || k; };
+                var _logoPromise = (typeof window._wxLoadLogoAsset === 'function') ? window._wxLoadLogoAsset() : Promise.resolve(null);
 
-                var pageW = doc.internal.pageSize.getWidth();
-                var pageH = doc.internal.pageSize.getHeight();
-                // "Ekrana yaslı" (kenardan kenara) görünüm için dar kenar boşluğu.
-                var margin = 26;
-                var contentW = pageW - margin * 2;
-                var y = margin;
+                _logoPromise.then(function (logo) {
+                    var JsPDF = jspdfLib.jsPDF || jspdfLib;
+                    var doc = new JsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+                    var _hasTurkishFont = _sylvaPdfRegisterTurkishFont(doc);
+                    var FONT = _hasTurkishFont ? 'LiberationSerif' : 'times';
 
-                function ensureSpace(need) {
-                    if (y + need > pageH - margin) {
-                        doc.addPage();
-                        y = margin;
+                    var pageW = doc.internal.pageSize.getWidth();
+                    var pageH = doc.internal.pageSize.getHeight();
+                    // "Ekrana yaslı" (kenardan kenara) görünüm için dar kenar boşluğu.
+                    var margin = 26;
+                    var contentW = pageW - margin * 2;
+                    // Logoya yer açmak için üst kenar boşluğu diğerlerinden geniş.
+                    var marginTop = logo ? 52 : margin;
+                    var y = marginTop;
+
+                    // Logo boyutu: en fazla 26pt yükseklik, 90pt genişlik — oran korunur.
+                    var logoDrawH = 0, logoDrawW = 0;
+                    if (logo) {
+                        logoDrawH = 26;
+                        logoDrawW = logoDrawH * (logo.w / logo.h);
+                        if (logoDrawW > 90) { logoDrawW = 90; logoDrawH = logoDrawW * (logo.h / logo.w); }
                     }
-                }
-                function setStyle(weight, size, colorGray) {
-                    doc.setFont(FONT, weight);
-                    doc.setFontSize(size);
-                    if (colorGray === undefined) { doc.setTextColor(0); }
-                    else { doc.setTextColor(colorGray); }
-                }
+                    function stampLogo() {
+                        if (!logo) return;
+                        try { doc.addImage(logo.url, 'PNG', pageW - margin - logoDrawW, 10, logoDrawW, logoDrawH); } catch (eLogo) {}
+                    }
+                    stampLogo(); // ilk sayfa
 
-                // ── Başlık (büyük) ──────────────────────────────────────
-                setStyle('bold', 22);
-                doc.text('SylvaGIS — AI Veri Raporu', margin, y);
-                y += 28;
+                    function ensureSpace(need) {
+                        if (y + need > pageH - margin) {
+                            doc.addPage();
+                            stampLogo(); // 🆕 HER sayfanın sağ üst köşesine logo
+                            y = marginTop;
+                        }
+                    }
+                    function setStyle(weight, size, colorGray) {
+                        doc.setFont(FONT, weight);
+                        doc.setFontSize(size);
+                        if (colorGray === undefined) { doc.setTextColor(0); }
+                        else { doc.setTextColor(colorGray); }
+                    }
 
-                setStyle('normal', 10, 100);
-                doc.text('Oluşturulma: ' + new Date().toLocaleString('tr-TR'), margin, y);
-                y += 22;
+                    var _dateLocale = (typeof window._sylvaLang === 'string' && window._sylvaLang) ? window._sylvaLang : 'tr';
 
-                if (question) {
-                    setStyle('bold', 13);
-                    ensureSpace(18); doc.text('Soru:', margin, y); y += 18;
+                    // ── Başlık (büyük) ──────────────────────────────────────
+                    setStyle('bold', 22);
+                    doc.text(_t('gqa_pdf_title', 'SylvaGIS — AI Veri Raporu'), margin, y);
+                    y += 28;
+
+                    setStyle('normal', 10, 100);
+                    var _createdStr;
+                    try { _createdStr = new Date().toLocaleString(_dateLocale); } catch (eLoc) { _createdStr = new Date().toLocaleString(); }
+                    doc.text(_t('gqa_pdf_created', 'Oluşturulma:') + ' ' + _createdStr, margin, y);
+                    y += 22;
+
+                    if (question) {
+                        setStyle('bold', 13);
+                        ensureSpace(18); doc.text(_t('gqa_pdf_question', 'Soru:'), margin, y); y += 18;
+                        setStyle('normal', 12);
+                        doc.splitTextToSize(question, contentW).forEach(function (line) {
+                            ensureSpace(17); doc.text(line, margin, y); y += 17;
+                        });
+                        y += 8;
+                    }
+
+                    // ── "Rapor" bölüm başlığı (büyük) ───────────────────────
+                    setStyle('bold', 16);
+                    ensureSpace(24); doc.text(_t('gqa_pdf_report', 'Rapor'), margin, y); y += 24;
                     setStyle('normal', 12);
-                    doc.splitTextToSize(question, contentW).forEach(function (line) {
+                    doc.splitTextToSize(answerText || '', contentW).forEach(function (line) {
                         ensureSpace(17); doc.text(line, margin, y); y += 17;
                     });
-                    y += 8;
-                }
+                    y += 20;
 
-                // ── "Rapor" bölüm başlığı (büyük) ───────────────────────
-                setStyle('bold', 16);
-                ensureSpace(24); doc.text('Rapor', margin, y); y += 24;
-                setStyle('normal', 12);
-                doc.splitTextToSize(answerText || '', contentW).forEach(function (line) {
-                    ensureSpace(17); doc.text(line, margin, y); y += 17;
-                });
-                y += 20;
+                    // ── "Veri Setleri" bölüm başlığı (büyük) ────────────────
+                    setStyle('bold', 16);
+                    ensureSpace(26); doc.text(_t('gqa_pdf_datasets', 'Veri Setleri (Sınıflar ve Yüzdeler)'), margin, y); y += 26;
 
-                // ── "Veri Setleri" bölüm başlığı (büyük) ────────────────
-                setStyle('bold', 16);
-                ensureSpace(26); doc.text('Veri Setleri (Sınıflar ve Yüzdeler)', margin, y); y += 26;
+                    // Tablo sütun genişlikleri — geniş sayfa genişliğine ("ekrana
+                    // yaslı" dar kenar boşluğu) göre orantılı olarak dağıtılmış.
+                    var col1X = margin;
+                    var col2X = margin + Math.round(contentW * 0.52);
+                    var col3X = margin + Math.round(contentW * 0.80);
 
-                // Tablo sütun genişlikleri — geniş sayfa genişliğine ("ekrana
-                // yaslı" dar kenar boşluğu) göre orantılı olarak dağıtılmış.
-                var col1X = margin;
-                var col2X = margin + Math.round(contentW * 0.52);
-                var col3X = margin + Math.round(contentW * 0.80);
+                    var _unknownLbl = _t('gqa_pdf_unknown', 'Bilinmeyen');
+                    var _totalAreaLbl = _t('gqa_pdf_total_area', 'Toplam alan:');
+                    var _classLbl = _t('gqa_pdf_class', 'Sınıf');
+                    var _rangeLbl = _t('gqa_pdf_range', 'Aralık');
+                    var _pctLbl = _t('gqa_pdf_percentage', 'Yüzde (%)');
 
-                (datasets || []).forEach(function (ds) {
-                    ensureSpace(22);
-                    setStyle('bold', 13.5);
-                    var header = ds.analysis_name || 'Bilinmeyen';
-                    if (ds.area_ha !== undefined && ds.area_ha !== null && !isNaN(Number(ds.area_ha))) {
-                        header += '  —  Toplam alan: ' + Number(ds.area_ha).toFixed(2) + ' ha';
-                    }
-                    doc.text(header, margin, y); y += 18;
+                    (datasets || []).forEach(function (ds) {
+                        ensureSpace(22);
+                        setStyle('bold', 13.5);
+                        var header = ds.analysis_name || _unknownLbl;
+                        if (ds.area_ha !== undefined && ds.area_ha !== null && !isNaN(Number(ds.area_ha))) {
+                            header += '  —  ' + _totalAreaLbl + ' ' + Number(ds.area_ha).toFixed(2) + ' ha';
+                        }
+                        doc.text(header, margin, y); y += 18;
 
-                    // Tablo başlığı — büyük/belirgin (kullanıcı talebi: "lejant
-                    // başlıkları büyük olsun").
-                    setStyle('bold', 12);
-                    ensureSpace(16);
-                    doc.text('Sınıf', col1X, y);
-                    doc.text('Aralık', col2X, y);
-                    doc.text('Yüzde (%)', col3X, y);
-                    y += 8;
-                    doc.setLineWidth(0.75);
-                    doc.line(margin, y, margin + contentW, y);
-                    y += 12;
-
-                    setStyle('normal', 11);
-                    var classes = ds.classes || [];
-                    var pct = ds.percentages || [];
-                    var _nameMaxChars = Math.max(20, Math.floor((col2X - col1X) / 5.6));
-                    for (var i = 0; i < classes.length; i++) {
-                        ensureSpace(15);
-                        var c = classes[i] || {};
-                        var name = String(c.name || '?');
-                        var rng = (c.min !== undefined && c.max !== undefined) ? (c.min + ' – ' + c.max) : '—';
-                        var pv = (pct[i] !== undefined && !isNaN(Number(pct[i]))) ? (Number(pct[i]).toFixed(1) + '%') : '—';
-                        doc.text(name.length > _nameMaxChars ? (name.slice(0, _nameMaxChars) + '…') : name, col1X, y);
-                        doc.text(String(rng), col2X, y);
-                        doc.text(pv, col3X, y);
-                        y += 15;
-                    }
-                    y += 14;
-                });
-
-                if (building) {
-                    ensureSpace(20);
-                    setStyle('bold', 13.5);
-                    doc.text('Bina / Çatı Tespiti', margin, y); y += 18;
-                    setStyle('normal', 12);
-                    if (building.buildingCount !== undefined && building.buildingCount !== null) {
+                        // Tablo başlığı — büyük/belirgin (kullanıcı talebi: "lejant
+                        // başlıkları büyük olsun").
+                        setStyle('bold', 12);
                         ensureSpace(16);
-                        doc.text('Toplam bina/çatı sayısı: ' + building.buildingCount, margin, y); y += 16;
-                    }
-                    if (building.totalAreaM2 !== undefined && building.totalAreaM2 !== null && !isNaN(Number(building.totalAreaM2))) {
-                        ensureSpace(16);
-                        doc.text('Toplam çatı alanı: ' + Number(building.totalAreaM2).toFixed(2) + ' m²', margin, y); y += 16;
-                    }
-                }
+                        doc.text(_classLbl, col1X, y);
+                        doc.text(_rangeLbl, col2X, y);
+                        doc.text(_pctLbl, col3X, y);
+                        y += 8;
+                        doc.setLineWidth(0.75);
+                        doc.line(margin, y, margin + contentW, y);
+                        y += 12;
 
-                doc.save('SylvaGIS_Rapor.pdf');
+                        setStyle('normal', 11);
+                        var classes = ds.classes || [];
+                        var pct = ds.percentages || [];
+                        var _nameMaxChars = Math.max(20, Math.floor((col2X - col1X) / 5.6));
+                        for (var i = 0; i < classes.length; i++) {
+                            ensureSpace(15);
+                            var c = classes[i] || {};
+                            var name = String(c.name || '?');
+                            var rng = (c.min !== undefined && c.max !== undefined) ? (c.min + ' – ' + c.max) : '—';
+                            var pv = (pct[i] !== undefined && !isNaN(Number(pct[i]))) ? (Number(pct[i]).toFixed(1) + '%') : '—';
+                            doc.text(name.length > _nameMaxChars ? (name.slice(0, _nameMaxChars) + '…') : name, col1X, y);
+                            doc.text(String(rng), col2X, y);
+                            doc.text(pv, col3X, y);
+                            y += 15;
+                        }
+                        y += 14;
+                    });
+
+                    if (building) {
+                        ensureSpace(20);
+                        setStyle('bold', 13.5);
+                        doc.text(_t('gqa_pdf_building_section', 'Bina / Çatı Tespiti'), margin, y); y += 18;
+                        setStyle('normal', 12);
+                        if (building.buildingCount !== undefined && building.buildingCount !== null) {
+                            ensureSpace(16);
+                            doc.text(_t('gqa_pdf_building_count', 'Toplam bina/çatı sayısı:') + ' ' + building.buildingCount, margin, y); y += 16;
+                        }
+                        if (building.totalAreaM2 !== undefined && building.totalAreaM2 !== null && !isNaN(Number(building.totalAreaM2))) {
+                            ensureSpace(16);
+                            doc.text(_t('gqa_pdf_building_area', 'Toplam çatı alanı:') + ' ' + Number(building.totalAreaM2).toFixed(2) + ' m²', margin, y); y += 16;
+                        }
+                    }
+
+                    var _filenameWord = _t('gqa_pdf_filename_word', 'Rapor');
+                    doc.save('SylvaGIS_' + _filenameWord + '.pdf');
+                }).catch(function (ePdfInner) {
+                    console.error('[Sylva] AI raporu PDF olarak indirilemedi:', ePdfInner);
+                });
             } catch (ePdf) {
                 console.error('[Sylva] AI raporu PDF olarak indirilemedi:', ePdf);
             }
@@ -20881,7 +21022,6 @@ function selectRamp(name) {
             var answerEl = document.getElementById('gqa-answer');
             var statusEl = document.getElementById('gqa-status');
             var askBtn = document.getElementById('btn-gqa-ask');
-            var imgCb = document.getElementById('gqa-include-image');
             if (!qInput || !answerEl || !statusEl) return;
 
             var question = (qInput.value || '').trim();
@@ -20904,24 +21044,27 @@ function selectRamp(name) {
             statusEl.textContent = _t('gqa_running', '⏳ Yanıt hazırlanıyor...');
             if (askBtn) askBtn.disabled = true;
 
-            var _wantImage = !!(imgCb && imgCb.checked);
-            // 🆕 Faz 73: önce TÜM istiflenmiş katmanların izole görüntülerini
-            // yakalamayı dene; hiç sonuç gelmezse (ör. istifleme yoksa/tek
-            // katman varsa) tekil/yedek yönteme (o anki görünüm) düş.
-            var _imgPromise = _wantImage
-                ? _sylvaGqaCaptureAllLayerImages(pane).then(function (imgs) {
-                    if (imgs && imgs.length) return imgs;
-                    return _sylvaGqaCaptureMapImage(pane).then(function (single) {
-                        return single ? [{ analysisName: null, base64: single.base64, mime: single.mime }] : [];
-                    });
-                })
-                : Promise.resolve([]);
+            // 🆕 Faz 75: kullanıcı isteğiyle görsel dahil etme artık bir seçenek
+            // DEĞİL — her soruda arka planda HER ZAMAN otomatik çalışır (önceki
+            // "🖼️ ... ekle" onay kutusu tamamen kaldırıldı). Önce TÜM
+            // istiflenmiş katmanların izole görüntülerini yakalamayı dene; hiç
+            // sonuç gelmezse (ör. istifleme yoksa/tek katman varsa) tekil/yedek
+            // yönteme (o anki görünüm) düş.
+            var _imgPromise = _sylvaGqaCaptureAllLayerImages(pane).then(function (imgs) {
+                if (imgs && imgs.length) return imgs;
+                return _sylvaGqaCaptureMapImage(pane).then(function (single) {
+                    return single ? [{ analysisName: null, base64: single.base64, mime: single.mime }] : [];
+                });
+            });
 
             _imgPromise.then(function (images) {
                 var body = {
                     question: question,
                     datasets: datasets,
-                    building: building
+                    building: building,
+                    // 🆕 Faz 75: asistanın hangi dilde yanıt vereceğini backend'e
+                    // bildiriyoruz — aktif arayüz diline göre (30 dil desteklenir).
+                    lang: (typeof window._sylvaLang === 'string' && window._sylvaLang) ? window._sylvaLang : 'tr'
                 };
                 if (images && images.length) {
                     body.images = images.map(function (im) {
@@ -28536,10 +28679,24 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Topographic Analyses',
     gqa_title: '🔎 Ask a Question About This Data',
     gqa_nav_title: 'AI Data Assistant',
-    gqa_desc: 'Can read and describe the legend/percentage data on screen, and when more than one dataset is available (all datasets run in this session are remembered), it writes a detailed combined report relating them to each other — a PDF of the report (with all class/percentage values) downloads automatically after you ask. Does NOT give a formal risk assessment or advice. Runs on a free Gemini quota — may be unavailable if the quota is exhausted.',
+    gqa_desc: 'Can read and describe the legend/percentage data on screen, and when more than one dataset is available (all datasets run in this session are remembered), it writes a detailed combined report relating them to each other — a PDF of the report (with all class/percentage values) downloads automatically after you ask. Does NOT give a formal risk assessment or advice. Uses Gemini infrastructure.',
+    gqa_pdf_title: 'SylvaGIS — AI Data Report',
+    gqa_pdf_created: 'Created:',
+    gqa_pdf_question: 'Question:',
+    gqa_pdf_report: 'Report',
+    gqa_pdf_datasets: 'Datasets (Classes and Percentages)',
+    gqa_pdf_class: 'Class',
+    gqa_pdf_range: 'Range',
+    gqa_pdf_percentage: 'Percentage (%)',
+    gqa_pdf_total_area: 'Total area:',
+    gqa_pdf_building_section: 'Building / Roof Detection',
+    gqa_pdf_building_count: 'Total building/roof count:',
+    gqa_pdf_building_area: 'Total roof area:',
+    gqa_pdf_unknown: 'Unknown',
+    gqa_pdf_filename_word: 'Report',
     gqa_verify_note: '⚠️ Answers are not a precise spatial analysis — they are based on separate summary statistics. Please verify accuracy yourself.',
     gqa_include_image_label: '🖼️ Also include a screenshot of every open analysis (for visual interpretation)',
-    gqa_placeholder: 'E.g: Which class has the largest percentage?',
+    gqa_placeholder: 'Which class has the largest percentage?',
     gqa_ask_btn: 'Ask',
     gqa_err_no_data: 'First run a classified analysis (legend/percentage data required).',
     gqa_running: '⏳ Preparing answer...',
@@ -29085,8 +29242,22 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Topografik tahlillar',
     gqa_title: '🔎 Ushbu maʼlumot haqida savol bering',
     gqa_nav_title: 'AI Maʼlumot Yordamchisi',
-    gqa_desc: 'Faqat hozir ekranda koʻrsatilgan legend/foiz maʼlumotlariga oid savollarga javob beriladi (masalan, "eng yuqori foizga qaysi sinf ega?"). Xavf bahosi yoki tavsiya BERMAYDI. Bepul Gemini kvotasi bilan ishlaydi — kvota tugasa, javob berilmasligi mumkin.',
-    gqa_placeholder: 'Masalan: Eng katta foizga ega sinf qaysi?',
+    gqa_desc: 'Faqat hozir ekranda koʻrsatilgan legend/foiz maʼlumotlariga oid savollarga javob beriladi (masalan, "eng yuqori foizga qaysi sinf ega?"). Xavf bahosi yoki tavsiya BERMAYDI. Gemini infratuzilmasidan foydalanadi.',
+    gqa_pdf_title: 'SylvaGIS — Sun\'iy intellekt hisobot',
+    gqa_pdf_created: 'Yaratildi:',
+    gqa_pdf_question: 'Savol:',
+    gqa_pdf_report: 'Hisobot',
+    gqa_pdf_datasets: 'Ma\'lumotlar to\'plami (Sinflar va foizlar)',
+    gqa_pdf_class: 'Sinf',
+    gqa_pdf_range: 'Diapazon',
+    gqa_pdf_percentage: 'Foiz (%)',
+    gqa_pdf_total_area: 'Umumiy maydon:',
+    gqa_pdf_building_section: 'Bino / Tom aniqlash',
+    gqa_pdf_building_count: 'Umumiy bino/tom soni:',
+    gqa_pdf_building_area: 'Umumiy tom maydoni:',
+    gqa_pdf_unknown: 'Noma\'lum',
+    gqa_pdf_filename_word: 'Hisobot',
+    gqa_placeholder: 'Eng katta foizga ega sinf qaysi?',
     gqa_ask_btn: 'Soʻrash',
     gqa_err_no_data: 'Avval tasniflangan tahlilni ishga tushiring (legend/foiz maʼlumoti kerak).',
     gqa_running: '⏳ Javob tayyorlanmoqda...',
@@ -29613,8 +29784,22 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Τοπογραφικές Αναλύσεις',
     gqa_title: '🔎 Ρωτήστε κάτι για αυτά τα δεδομένα',
     gqa_nav_title: 'Βοηθός Δεδομένων AI',
-    gqa_desc: 'Απαντώνται μόνο ερωτήσεις σχετικά με τα δεδομένα υπομνήματος/ποσοστού που εμφανίζονται αυτή τη στιγμή στην οθόνη (π.χ. "ποια κατηγορία έχει το υψηλότερο ποσοστό;"). ΔΕΝ παρέχει εκτίμηση κινδύνου ή συμβουλές. Λειτουργεί με δωρεάν ποσόστωση Gemini — ενδέχεται να μην είναι διαθέσιμο αν εξαντληθεί η ποσόστωση.',
-    gqa_placeholder: 'Π.χ.: Ποια κατηγορία έχει το μεγαλύτερο ποσοστό;',
+    gqa_desc: 'Απαντώνται μόνο ερωτήσεις σχετικά με τα δεδομένα υπομνήματος/ποσοστού που εμφανίζονται αυτή τη στιγμή στην οθόνη (π.χ. "ποια κατηγορία έχει το υψηλότερο ποσοστό;"). ΔΕΝ παρέχει εκτίμηση κινδύνου ή συμβουλές. Χρησιμοποιεί την υποδομή Gemini.',
+    gqa_pdf_title: 'SylvaGIS — Αναφορά Δεδομένων AI',
+    gqa_pdf_created: 'Δημιουργήθηκε:',
+    gqa_pdf_question: 'Ερώτηση:',
+    gqa_pdf_report: 'Αναφορά',
+    gqa_pdf_datasets: 'Σύνολα Δεδομένων (Κατηγορίες και Ποσοστά)',
+    gqa_pdf_class: 'Κατηγορία',
+    gqa_pdf_range: 'Εύρος',
+    gqa_pdf_percentage: 'Ποσοστό (%)',
+    gqa_pdf_total_area: 'Συνολική έκταση:',
+    gqa_pdf_building_section: 'Ανίχνευση Κτιρίων / Στεγών',
+    gqa_pdf_building_count: 'Συνολικός αριθμός κτιρίων/στεγών:',
+    gqa_pdf_building_area: 'Συνολική επιφάνεια στέγης:',
+    gqa_pdf_unknown: 'Άγνωστο',
+    gqa_pdf_filename_word: 'Anafora',
+    gqa_placeholder: 'Ποια κατηγορία έχει το μεγαλύτερο ποσοστό;',
     gqa_ask_btn: 'Ρώτα',
     gqa_err_no_data: 'Εκτελέστε πρώτα μια ταξινομημένη ανάλυση (απαιτούνται δεδομένα υπομνήματος/ποσοστού).',
     gqa_running: '⏳ Προετοιμασία απάντησης...',
@@ -30147,8 +30332,22 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Топографски анализи',
     gqa_title: '🔎 Задайте въпрос за тези данни',
     gqa_nav_title: 'AI Асистент за данни',
-    gqa_desc: 'Отговаря се само на въпроси относно легендата/процентните данни, показани в момента на екрана (напр. "кой клас има най-висок процент?"). НЕ дава оценка на риска или съвети. Работи с безплатна квота на Gemini — може да не е достъпно, ако квотата се изчерпи.',
-    gqa_placeholder: 'Напр.: Кой клас има най-голям процент?',
+    gqa_desc: 'Отговаря се само на въпроси относно легендата/процентните данни, показани в момента на екрана (напр. "кой клас има най-висок процент?"). НЕ дава оценка на риска или съвети. Използва инфраструктурата на Gemini.',
+    gqa_pdf_title: 'SylvaGIS — AI Доклад за данни',
+    gqa_pdf_created: 'Създадено:',
+    gqa_pdf_question: 'Въпрос:',
+    gqa_pdf_report: 'Доклад',
+    gqa_pdf_datasets: 'Набори от данни (Класове и проценти)',
+    gqa_pdf_class: 'Клас',
+    gqa_pdf_range: 'Диапазон',
+    gqa_pdf_percentage: 'Процент (%)',
+    gqa_pdf_total_area: 'Обща площ:',
+    gqa_pdf_building_section: 'Откриване на сгради / покриви',
+    gqa_pdf_building_count: 'Общ брой сгради/покриви:',
+    gqa_pdf_building_area: 'Обща площ на покрива:',
+    gqa_pdf_unknown: 'Неизвестно',
+    gqa_pdf_filename_word: 'Doklad',
+    gqa_placeholder: 'Кой клас има най-голям процент?',
     gqa_ask_btn: 'Попитай',
     gqa_err_no_data: 'Първо стартирайте класифициран анализ (нужни са данни за легенда/проценти).',
     gqa_running: '⏳ Подготвяне на отговор...',
@@ -30681,10 +30880,24 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Topografik Analizler',
     gqa_title: '🔎 Bu Veri Hakkında Soru Sor',
     gqa_nav_title: 'AI Veri Asistanı',
-    gqa_desc: 'Ekrandaki lejant/% verilerini okuyup betimsel yorum yapabilir; birden fazla veri varsa (bu oturumda çalıştırılan TÜM veri setleri hafızada tutulur) bunları birleştirip DETAYLI genel bir rapor yazar — soru sorulduktan sonra bu raporun PDF hâli (tüm sınıf/yüzde değerleriyle birlikte) otomatik olarak iner. Resmi risk değerlendirmesi veya tavsiye VERMEZ. Ücretsiz Gemini kotası ile çalışır — kota dolarsa yanıt verilemeyebilir.',
+    gqa_desc: 'Ekrandaki lejant/% verilerini okuyup betimsel yorum yapabilir; birden fazla veri varsa bunları birleştirip DETAYLI genel bir rapor yazar — soru sorulduktan sonra bu raporun PDF hâli (tüm sınıf/yüzde değerleriyle birlikte) otomatik olarak iner. Resmi risk değerlendirmesi veya tavsiye VERMEZ. Gemini altyapısı kullanılmaktadır.',
+    gqa_pdf_title: 'SylvaGIS — Yapay Zeka Veri Raporu',
+    gqa_pdf_created: 'Oluşturulma:',
+    gqa_pdf_question: 'Soru:',
+    gqa_pdf_report: 'Rapor',
+    gqa_pdf_datasets: 'Veri Setleri (Sınıflar ve Yüzdeler)',
+    gqa_pdf_class: 'Sınıf',
+    gqa_pdf_range: 'Aralık',
+    gqa_pdf_percentage: 'Yüzde (%)',
+    gqa_pdf_total_area: 'Toplam alan:',
+    gqa_pdf_building_section: 'Bina / Çatı Tespiti',
+    gqa_pdf_building_count: 'Toplam bina/çatı sayısı:',
+    gqa_pdf_building_area: 'Toplam çatı alanı:',
+    gqa_pdf_unknown: 'Bilinmeyen',
+    gqa_pdf_filename_word: 'Rapor',
     gqa_verify_note: '⚠️ Yanıtlar kesin bir mekansal analiz değildir, ayrı özet istatistiklere dayanır — lütfen doğruluğunu kendiniz kontrol edin.',
     gqa_include_image_label: '🖼️ Açık olan TÜM analizlerin görsellerini de ekle (görsel yorum için)',
-    gqa_placeholder: 'Örn: En büyük yüzdeye sahip sınıf hangisi?',
+    gqa_placeholder: 'En büyük yüzdeye sahip sınıf hangisi?',
     gqa_ask_btn: 'Sor',
     gqa_err_no_data: 'Önce sınıflandırılmış bir analiz çalıştırın (lejant/% verisi olmalı).',
     gqa_running: '⏳ Yanıt hazırlanıyor...',
@@ -31223,8 +31436,22 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Topoqrafik Təhlillər',
     gqa_title: '🔎 Bu Məlumat Haqqında Sual Verin',
     gqa_nav_title: 'AI Məlumat Köməkçisi',
-    gqa_desc: 'Yalnız ekranda hazırda göstərilən lejand/faiz məlumatları ilə bağlı suallara cavab verilir (məs., "ən yüksək faizə hansı sinif malikdir?"). Risk qiymətləndirməsi və ya tövsiyə VERMİR. Pulsuz Gemini kvotası ilə işləyir — kvota bitərsə, cavab verilə bilməz.',
-    gqa_placeholder: 'Məs.: Ən böyük faizə malik sinif hansıdır?',
+    gqa_desc: 'Yalnız ekranda hazırda göstərilən lejand/faiz məlumatları ilə bağlı suallara cavab verilir (məs., "ən yüksək faizə hansı sinif malikdir?"). Risk qiymətləndirməsi və ya tövsiyə VERMİR. Gemini infrastrukturundan istifadə olunur.',
+    gqa_pdf_title: 'SylvaGIS — Süni intellekt hesabatı',
+    gqa_pdf_created: 'Yaradıldı:',
+    gqa_pdf_question: 'Sual:',
+    gqa_pdf_report: 'Hesabat',
+    gqa_pdf_datasets: 'Verilənlər dəsti (Siniflər və faizlər)',
+    gqa_pdf_class: 'Sinif',
+    gqa_pdf_range: 'Aralıq',
+    gqa_pdf_percentage: 'Faiz (%)',
+    gqa_pdf_total_area: 'Ümumi sahə:',
+    gqa_pdf_building_section: 'Bina / Dam aşkarlanması',
+    gqa_pdf_building_count: 'Ümumi bina/dam sayı:',
+    gqa_pdf_building_area: 'Ümumi dam sahəsi:',
+    gqa_pdf_unknown: 'Naməlum',
+    gqa_pdf_filename_word: 'Hesabat',
+    gqa_placeholder: 'Ən böyük faizə malik sinif hansıdır?',
     gqa_ask_btn: 'Soruş',
     gqa_err_no_data: 'Əvvəlcə təsnif edilmiş analiz işə salın (lejand/faiz məlumatı lazımdır).',
     gqa_running: '⏳ Cavab hazırlanır...',
@@ -31753,8 +31980,22 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Topográfiai Elemzések',
     gqa_title: '🔎 Kérdezzen erről az adatról',
     gqa_nav_title: 'AI Adatasszisztens',
-    gqa_desc: 'Csak a képernyőn jelenleg megjelenített jelmagyarázat/százalék adatokra vonatkozó kérdésekre válaszol (pl. "melyik osztálynak van a legmagasabb százaléka?"). NEM ad kockázatértékelést vagy tanácsot. Ingyenes Gemini kvótával működik — ha a kvóta elfogy, előfordulhat, hogy nem elérhető.',
-    gqa_placeholder: 'Pl.: Melyik osztálynak van a legnagyobb százaléka?',
+    gqa_desc: 'Csak a képernyőn jelenleg megjelenített jelmagyarázat/százalék adatokra vonatkozó kérdésekre válaszol (pl. "melyik osztálynak van a legmagasabb százaléka?"). NEM ad kockázatértékelést vagy tanácsot. A Gemini infrastruktúráját használja.',
+    gqa_pdf_title: 'SylvaGIS — MI Adatjelentés',
+    gqa_pdf_created: 'Létrehozva:',
+    gqa_pdf_question: 'Kérdés:',
+    gqa_pdf_report: 'Jelentés',
+    gqa_pdf_datasets: 'Adathalmazok (Osztályok és százalékok)',
+    gqa_pdf_class: 'Osztály',
+    gqa_pdf_range: 'Tartomány',
+    gqa_pdf_percentage: 'Százalék (%)',
+    gqa_pdf_total_area: 'Teljes terület:',
+    gqa_pdf_building_section: 'Épület / Tető felismerés',
+    gqa_pdf_building_count: 'Épületek/tetők teljes száma:',
+    gqa_pdf_building_area: 'Teljes tetőterület:',
+    gqa_pdf_unknown: 'Ismeretlen',
+    gqa_pdf_filename_word: 'Jelentes',
+    gqa_placeholder: 'Melyik osztálynak van a legnagyobb százaléka?',
     gqa_ask_btn: 'Kérdezés',
     gqa_err_no_data: 'Először futtasson egy osztályozott elemzést (jelmagyarázat/százalék adat szükséges).',
     gqa_running: '⏳ Válasz előkészítése...',
@@ -32282,8 +32523,22 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Топографиялық талдаулар',
     gqa_title: '🔎 Осы деректер туралы сұрақ қойыңыз',
     gqa_nav_title: 'AI Деректер Көмекшісі',
-    gqa_desc: 'Тек экранда қазір көрсетілген легенда/пайыздық деректерге қатысты сұрақтарға жауап беріледі (мысалы, "ең жоғары пайызға қандай класс ие?"). Тәуекелді бағалау немесе кеңес БЕРМЕЙДІ. Тегін Gemini квотасымен жұмыс істейді — квота таусылса, қолжетімсіз болуы мүмкін.',
-    gqa_placeholder: 'Мыс.: Ең үлкен пайызға қандай класс ие?',
+    gqa_desc: 'Тек экранда қазір көрсетілген легенда/пайыздық деректерге қатысты сұрақтарға жауап беріледі (мысалы, "ең жоғары пайызға қандай класс ие?"). Тәуекелді бағалау немесе кеңес БЕРМЕЙДІ. Gemini инфрақұрылымы қолданылады.',
+    gqa_pdf_title: 'SylvaGIS — ЖИ деректер есебі',
+    gqa_pdf_created: 'Құрылды:',
+    gqa_pdf_question: 'Сұрақ:',
+    gqa_pdf_report: 'Есеп',
+    gqa_pdf_datasets: 'Деректер жиынтығы (Кластар мен пайыздар)',
+    gqa_pdf_class: 'Класс',
+    gqa_pdf_range: 'Диапазон',
+    gqa_pdf_percentage: 'Пайыз (%)',
+    gqa_pdf_total_area: 'Жалпы аудан:',
+    gqa_pdf_building_section: 'Ғимарат / Шатыр анықтау',
+    gqa_pdf_building_count: 'Ғимарат/шатырлардың жалпы саны:',
+    gqa_pdf_building_area: 'Жалпы шатыр ауданы:',
+    gqa_pdf_unknown: 'Белгісіз',
+    gqa_pdf_filename_word: 'Esep',
+    gqa_placeholder: 'Ең үлкен пайызға қандай класс ие?',
     gqa_ask_btn: 'Сұрау',
     gqa_err_no_data: 'Алдымен сыныпталған талдауды іске қосыңыз (легенда/пайыз деректері қажет).',
     gqa_running: '⏳ Жауап дайындалуда...',
@@ -32795,8 +33050,22 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Topografische Analysen',
     gqa_title: '🔎 Stellen Sie eine Frage zu diesen Daten',
     gqa_nav_title: 'KI-Datenassistent',
-    gqa_desc: 'Es werden nur Fragen zu den aktuell angezeigten Legenden-/Prozentdaten beantwortet (z. B. "welche Klasse hat den höchsten Prozentsatz?"). Gibt KEINE Risikobewertung oder Empfehlung ab. Läuft mit kostenlosem Gemini-Kontingent — bei Erschöpfung möglicherweise nicht verfügbar.',
-    gqa_placeholder: 'Z. B.: Welche Klasse hat den größten Prozentsatz?',
+    gqa_desc: 'Es werden nur Fragen zu den aktuell angezeigten Legenden-/Prozentdaten beantwortet (z. B. "welche Klasse hat den höchsten Prozentsatz?"). Gibt KEINE Risikobewertung oder Empfehlung ab. Nutzt die Gemini-Infrastruktur.',
+    gqa_pdf_title: 'SylvaGIS — KI-Datenbericht',
+    gqa_pdf_created: 'Erstellt:',
+    gqa_pdf_question: 'Frage:',
+    gqa_pdf_report: 'Bericht',
+    gqa_pdf_datasets: 'Datensätze (Klassen und Prozentsätze)',
+    gqa_pdf_class: 'Klasse',
+    gqa_pdf_range: 'Bereich',
+    gqa_pdf_percentage: 'Prozent (%)',
+    gqa_pdf_total_area: 'Gesamtfläche:',
+    gqa_pdf_building_section: 'Gebäude-/Dacherkennung',
+    gqa_pdf_building_count: 'Gesamtzahl Gebäude/Dächer:',
+    gqa_pdf_building_area: 'Gesamte Dachfläche:',
+    gqa_pdf_unknown: 'Unbekannt',
+    gqa_pdf_filename_word: 'Bericht',
+    gqa_placeholder: 'Welche Klasse hat den größten Prozentsatz?',
     gqa_ask_btn: 'Fragen',
     gqa_err_no_data: 'Führen Sie zuerst eine klassifizierte Analyse durch (Legenden-/Prozentdaten erforderlich).',
     gqa_running: '⏳ Antwort wird vorbereitet...',
@@ -33330,8 +33599,22 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Analyses topographiques',
     gqa_title: '🔎 Posez une question sur ces données',
     gqa_nav_title: 'Assistant de données IA',
-    gqa_desc: 'Seules les questions sur les données de légende/pourcentage actuellement affichées à l\'écran reçoivent une réponse (ex. "quelle classe a le pourcentage le plus élevé ?"). Ne donne PAS d\'évaluation des risques ni de conseils. Fonctionne avec un quota Gemini gratuit — peut être indisponible si le quota est épuisé.',
-    gqa_placeholder: 'Ex. : Quelle classe a le plus grand pourcentage ?',
+    gqa_desc: 'Seules les questions sur les données de légende/pourcentage actuellement affichées à l\'écran reçoivent une réponse (ex. "quelle classe a le pourcentage le plus élevé ?"). Ne donne PAS d\'évaluation des risques ni de conseils. Utilise l\'infrastructure Gemini.',
+    gqa_pdf_title: 'SylvaGIS — Rapport de données IA',
+    gqa_pdf_created: 'Créé le :',
+    gqa_pdf_question: 'Question :',
+    gqa_pdf_report: 'Rapport',
+    gqa_pdf_datasets: 'Jeux de données (Classes et pourcentages)',
+    gqa_pdf_class: 'Classe',
+    gqa_pdf_range: 'Plage',
+    gqa_pdf_percentage: 'Pourcentage (%)',
+    gqa_pdf_total_area: 'Surface totale :',
+    gqa_pdf_building_section: 'Détection des bâtiments / toits',
+    gqa_pdf_building_count: 'Nombre total de bâtiments/toits :',
+    gqa_pdf_building_area: 'Surface totale des toits :',
+    gqa_pdf_unknown: 'Inconnu',
+    gqa_pdf_filename_word: 'Rapport',
+    gqa_placeholder: 'Quelle classe a le plus grand pourcentage ?',
     gqa_ask_btn: 'Demander',
     gqa_err_no_data: 'Exécutez d\'abord une analyse classifiée (données de légende/pourcentage requises).',
     gqa_running: '⏳ Préparation de la réponse...',
@@ -33865,8 +34148,22 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Análisis topográficos',
     gqa_title: '🔎 Haga una pregunta sobre estos datos',
     gqa_nav_title: 'Asistente de Datos IA',
-    gqa_desc: 'Solo se responden preguntas sobre los datos de leyenda/porcentaje mostrados actualmente en la pantalla (p. ej., "¿qué clase tiene el porcentaje más alto?"). NO proporciona evaluación de riesgos ni consejos. Funciona con una cuota gratuita de Gemini — puede no estar disponible si se agota la cuota.',
-    gqa_placeholder: 'Ej.: ¿Qué clase tiene el mayor porcentaje?',
+    gqa_desc: 'Solo se responden preguntas sobre los datos de leyenda/porcentaje mostrados actualmente en la pantalla (p. ej., "¿qué clase tiene el porcentaje más alto?"). NO proporciona evaluación de riesgos ni consejos. Utiliza la infraestructura de Gemini.',
+    gqa_pdf_title: 'SylvaGIS — Informe de datos IA',
+    gqa_pdf_created: 'Creado:',
+    gqa_pdf_question: 'Pregunta:',
+    gqa_pdf_report: 'Informe',
+    gqa_pdf_datasets: 'Conjuntos de datos (Clases y porcentajes)',
+    gqa_pdf_class: 'Clase',
+    gqa_pdf_range: 'Rango',
+    gqa_pdf_percentage: 'Porcentaje (%)',
+    gqa_pdf_total_area: 'Área total:',
+    gqa_pdf_building_section: 'Detección de edificios / techos',
+    gqa_pdf_building_count: 'Número total de edificios/techos:',
+    gqa_pdf_building_area: 'Área total del techo:',
+    gqa_pdf_unknown: 'Desconocido',
+    gqa_pdf_filename_word: 'Informe',
+    gqa_placeholder: '¿Qué clase tiene el mayor porcentaje?',
     gqa_ask_btn: 'Preguntar',
     gqa_err_no_data: 'Primero ejecute un análisis clasificado (se requieren datos de leyenda/porcentaje).',
     gqa_running: '⏳ Preparando respuesta...',
@@ -34400,8 +34697,22 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Análises topográficas',
     gqa_title: '🔎 Faça uma pergunta sobre estes dados',
     gqa_nav_title: 'Assistente de Dados IA',
-    gqa_desc: 'Somente perguntas sobre os dados de legenda/porcentagem atualmente exibidos na tela são respondidas (ex.: "qual classe tem a maior porcentagem?"). NÃO fornece avaliação de risco ou aconselhamento. Funciona com uma cota gratuita do Gemini — pode ficar indisponível se a cota se esgotar.',
-    gqa_placeholder: 'Ex.: Qual classe tem a maior porcentagem?',
+    gqa_desc: 'Somente perguntas sobre os dados de legenda/porcentagem atualmente exibidos na tela são respondidas (ex.: "qual classe tem a maior porcentagem?"). NÃO fornece avaliação de risco ou aconselhamento. Utiliza a infraestrutura do Gemini.',
+    gqa_pdf_title: 'SylvaGIS — Relatório de Dados IA',
+    gqa_pdf_created: 'Criado em:',
+    gqa_pdf_question: 'Pergunta:',
+    gqa_pdf_report: 'Relatório',
+    gqa_pdf_datasets: 'Conjuntos de Dados (Classes e Percentuais)',
+    gqa_pdf_class: 'Classe',
+    gqa_pdf_range: 'Intervalo',
+    gqa_pdf_percentage: 'Percentual (%)',
+    gqa_pdf_total_area: 'Área total:',
+    gqa_pdf_building_section: 'Detecção de Edifícios / Telhados',
+    gqa_pdf_building_count: 'Número total de edifícios/telhados:',
+    gqa_pdf_building_area: 'Área total do telhado:',
+    gqa_pdf_unknown: 'Desconhecido',
+    gqa_pdf_filename_word: 'Relatorio',
+    gqa_placeholder: 'Qual classe tem a maior porcentagem?',
     gqa_ask_btn: 'Perguntar',
     gqa_err_no_data: 'Primeiro execute uma análise classificada (dados de legenda/porcentagem necessários).',
     gqa_running: '⏳ Preparando resposta...',
@@ -34935,8 +35246,22 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ التحليلات الطبوغرافية',
     gqa_title: '🔎 اطرح سؤالاً حول هذه البيانات',
     gqa_nav_title: 'مساعد بيانات الذكاء الاصطناعي',
-    gqa_desc: 'يتم الرد فقط على الأسئلة المتعلقة ببيانات المفتاح/النسبة المئوية المعروضة حالياً على الشاشة (مثل "أي فئة لديها أعلى نسبة مئوية؟"). لا يقدم تقييماً للمخاطر أو نصيحة. يعمل بحصة Gemini المجانية — قد يصبح غير متاح إذا نفدت الحصة.',
-    gqa_placeholder: 'مثال: أي فئة لديها أكبر نسبة مئوية؟',
+    gqa_desc: 'يتم الرد فقط على الأسئلة المتعلقة ببيانات المفتاح/النسبة المئوية المعروضة حالياً على الشاشة (مثل "أي فئة لديها أعلى نسبة مئوية؟"). لا يقدم تقييماً للمخاطر أو نصيحة. يستخدم بنية Gemini التحتية.',
+    gqa_pdf_title: 'SylvaGIS — تقرير بيانات الذكاء الاصطناعي',
+    gqa_pdf_created: 'تاريخ الإنشاء:',
+    gqa_pdf_question: 'السؤال:',
+    gqa_pdf_report: 'التقرير',
+    gqa_pdf_datasets: 'مجموعات البيانات (الفئات والنسب المئوية)',
+    gqa_pdf_class: 'الفئة',
+    gqa_pdf_range: 'النطاق',
+    gqa_pdf_percentage: 'النسبة المئوية (%)',
+    gqa_pdf_total_area: 'المساحة الإجمالية:',
+    gqa_pdf_building_section: 'كشف المباني / الأسطح',
+    gqa_pdf_building_count: 'إجمالي عدد المباني/الأسطح:',
+    gqa_pdf_building_area: 'إجمالي مساحة السطح:',
+    gqa_pdf_unknown: 'غير معروف',
+    gqa_pdf_filename_word: 'Taqrir',
+    gqa_placeholder: 'أي فئة لديها أكبر نسبة مئوية؟',
     gqa_ask_btn: 'اسأل',
     gqa_err_no_data: 'قم أولاً بتشغيل تحليل مصنّف (بيانات المفتاح/النسبة المئوية مطلوبة).',
     gqa_running: '⏳ جارٍ تحضير الإجابة...',
@@ -35470,8 +35795,22 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ تحلیل‌های توپوگرافی',
     gqa_title: '🔎 درباره این داده سؤال بپرسید',
     gqa_nav_title: 'دستیار داده هوش مصنوعی',
-    gqa_desc: 'فقط به سؤالات مربوط به داده‌های راهنما/درصد که در حال حاضر روی صفحه نمایش داده می‌شوند پاسخ داده می‌شود (مثلاً "کدام کلاس بیشترین درصد را دارد؟"). ارزیابی ریسک یا توصیه ارائه نمی‌دهد. با سهمیه رایگان Gemini کار می‌کند — در صورت اتمام سهمیه ممکن است در دسترس نباشد.',
-    gqa_placeholder: 'مثال: کدام کلاس بیشترین درصد را دارد؟',
+    gqa_desc: 'فقط به سؤالات مربوط به داده‌های راهنما/درصد که در حال حاضر روی صفحه نمایش داده می‌شوند پاسخ داده می‌شود (مثلاً "کدام کلاس بیشترین درصد را دارد؟"). ارزیابی ریسک یا توصیه ارائه نمی‌دهد. از زیرساخت Gemini استفاده می‌کند.',
+    gqa_pdf_title: 'SylvaGIS — گزارش داده هوش مصنوعی',
+    gqa_pdf_created: 'ایجاد شده:',
+    gqa_pdf_question: 'سؤال:',
+    gqa_pdf_report: 'گزارش',
+    gqa_pdf_datasets: 'مجموعه‌های داده (کلاس‌ها و درصدها)',
+    gqa_pdf_class: 'کلاس',
+    gqa_pdf_range: 'محدوده',
+    gqa_pdf_percentage: 'درصد (%)',
+    gqa_pdf_total_area: 'مساحت کل:',
+    gqa_pdf_building_section: 'تشخیص ساختمان / سقف',
+    gqa_pdf_building_count: 'تعداد کل ساختمان/سقف:',
+    gqa_pdf_building_area: 'مساحت کل سقف:',
+    gqa_pdf_unknown: 'نامشخص',
+    gqa_pdf_filename_word: 'Gozaresh',
+    gqa_placeholder: 'کدام کلاس بیشترین درصد را دارد؟',
     gqa_ask_btn: 'بپرس',
     gqa_err_no_data: 'ابتدا یک تحلیل طبقه‌بندی‌شده اجرا کنید (داده راهنما/درصد لازم است).',
     gqa_running: '⏳ در حال آماده‌سازی پاسخ...',
@@ -36005,8 +36344,22 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ 地形分析',
     gqa_title: '🔎 就此数据提问',
     gqa_nav_title: 'AI 数据助手',
-    gqa_desc: '仅回答与当前屏幕上显示的图例/百分比数据相关的问题（例如"哪个类别的百分比最高？"）。不提供风险评估或建议。使用免费的 Gemini 配额运行——配额用尽后可能无法使用。',
-    gqa_placeholder: '例如：哪个类别的百分比最大？',
+    gqa_desc: '仅回答与当前屏幕上显示的图例/百分比数据相关的问题（例如"哪个类别的百分比最高？"）。不提供风险评估或建议。使用 Gemini 基础设施运行。',
+    gqa_pdf_title: 'SylvaGIS — AI 数据报告',
+    gqa_pdf_created: '创建时间：',
+    gqa_pdf_question: '问题：',
+    gqa_pdf_report: '报告',
+    gqa_pdf_datasets: '数据集（类别与百分比）',
+    gqa_pdf_class: '类别',
+    gqa_pdf_range: '范围',
+    gqa_pdf_percentage: '百分比 (%)',
+    gqa_pdf_total_area: '总面积：',
+    gqa_pdf_building_section: '建筑物/屋顶检测',
+    gqa_pdf_building_count: '建筑物/屋顶总数：',
+    gqa_pdf_building_area: '屋顶总面积：',
+    gqa_pdf_unknown: '未知',
+    gqa_pdf_filename_word: 'Baogao',
+    gqa_placeholder: '哪个类别的百分比最大？',
     gqa_ask_btn: '提问',
     gqa_err_no_data: '请先运行分类分析（需要图例/百分比数据）。',
     gqa_running: '⏳ 正在准备答案...',
@@ -36540,8 +36893,22 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ 地形解析',
     gqa_title: '🔎 このデータについて質問する',
     gqa_nav_title: 'AIデータアシスタント',
-    gqa_desc: '現在画面に表示されている凡例・パーセンテージデータに関する質問にのみ回答します（例:「最も高い割合のクラスはどれですか？」）。リスク評価やアドバイスは提供しません。無料のGeminiクォータで動作します — クォータを使い切ると利用できない場合があります。',
-    gqa_placeholder: '例: 最も割合の大きいクラスはどれですか?',
+    gqa_desc: '現在画面に表示されている凡例・パーセンテージデータに関する質問にのみ回答します（例:「最も高い割合のクラスはどれですか？」）。リスク評価やアドバイスは提供しません。Geminiインフラストラクチャを使用しています。',
+    gqa_pdf_title: 'SylvaGIS — AIデータレポート',
+    gqa_pdf_created: '作成日時：',
+    gqa_pdf_question: '質問：',
+    gqa_pdf_report: 'レポート',
+    gqa_pdf_datasets: 'データセット（クラスとパーセンテージ）',
+    gqa_pdf_class: 'クラス',
+    gqa_pdf_range: '範囲',
+    gqa_pdf_percentage: 'パーセント (%)',
+    gqa_pdf_total_area: '総面積：',
+    gqa_pdf_building_section: '建物・屋根検出',
+    gqa_pdf_building_count: '建物・屋根の総数：',
+    gqa_pdf_building_area: '屋根の総面積：',
+    gqa_pdf_unknown: '不明',
+    gqa_pdf_filename_word: 'Hokoku',
+    gqa_placeholder: '最も割合の大きいクラスはどれですか?',
     gqa_ask_btn: '質問する',
     gqa_err_no_data: 'まず分類済みの解析を実行してください（凡例・パーセンテージデータが必要です）。',
     gqa_running: '⏳ 回答を準備中...',
@@ -37075,8 +37442,22 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ 지형 분석',
     gqa_title: '🔎 이 데이터에 대해 질문하기',
     gqa_nav_title: 'AI 데이터 도우미',
-    gqa_desc: '현재 화면에 표시된 범례/백분율 데이터에 관한 질문에만 답변합니다 (예: "어떤 클래스의 비율이 가장 높나요?"). 위험 평가나 조언은 제공하지 않습니다. 무료 Gemini 할당량으로 작동하며 — 할당량이 소진되면 사용할 수 없을 수 있습니다.',
-    gqa_placeholder: '예: 어떤 클래스의 비율이 가장 큰가요?',
+    gqa_desc: '현재 화면에 표시된 범례/백분율 데이터에 관한 질문에만 답변합니다 (예: "어떤 클래스의 비율이 가장 높나요?"). 위험 평가나 조언은 제공하지 않습니다. Gemini 인프라를 사용합니다.',
+    gqa_pdf_title: 'SylvaGIS — AI 데이터 보고서',
+    gqa_pdf_created: '생성일:',
+    gqa_pdf_question: '질문:',
+    gqa_pdf_report: '보고서',
+    gqa_pdf_datasets: '데이터셋 (클래스 및 백분율)',
+    gqa_pdf_class: '클래스',
+    gqa_pdf_range: '범위',
+    gqa_pdf_percentage: '백분율 (%)',
+    gqa_pdf_total_area: '총 면적:',
+    gqa_pdf_building_section: '건물 / 지붕 탐지',
+    gqa_pdf_building_count: '총 건물/지붕 수:',
+    gqa_pdf_building_area: '총 지붕 면적:',
+    gqa_pdf_unknown: '알 수 없음',
+    gqa_pdf_filename_word: 'Bogoseo',
+    gqa_placeholder: '어떤 클래스의 비율이 가장 큰가요?',
     gqa_ask_btn: '질문하기',
     gqa_err_no_data: '먼저 분류된 분석을 실행하세요 (범례/백분율 데이터가 필요합니다).',
     gqa_running: '⏳ 답변 준비 중...',
@@ -37610,8 +37991,22 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ स्थलाकृतिक विश्लेषण',
     gqa_title: '🔎 इस डेटा के बारे में प्रश्न पूछें',
     gqa_nav_title: 'एआई डेटा सहायक',
-    gqa_desc: 'केवल स्क्रीन पर वर्तमान में दिखाए गए लेजेंड/प्रतिशत डेटा से संबंधित प्रश्नों के उत्तर दिए जाते हैं (जैसे "किस वर्ग का प्रतिशत सबसे अधिक है?")। यह जोखिम आकलन या सलाह नहीं देता। यह मुफ़्त Gemini कोटा पर चलता है — कोटा समाप्त होने पर उपलब्ध नहीं हो सकता।',
-    gqa_placeholder: 'उदा.: सबसे बड़े प्रतिशत वाला वर्ग कौन सा है?',
+    gqa_desc: 'केवल स्क्रीन पर वर्तमान में दिखाए गए लेजेंड/प्रतिशत डेटा से संबंधित प्रश्नों के उत्तर दिए जाते हैं (जैसे "किस वर्ग का प्रतिशत सबसे अधिक है?")। यह जोखिम आकलन या सलाह नहीं देता। यह Gemini इंफ्रास्ट्रक्चर का उपयोग करता है।',
+    gqa_pdf_title: 'SylvaGIS — एआई डेटा रिपोर्ट',
+    gqa_pdf_created: 'बनाया गया:',
+    gqa_pdf_question: 'प्रश्न:',
+    gqa_pdf_report: 'रिपोर्ट',
+    gqa_pdf_datasets: 'डेटासेट (वर्ग और प्रतिशत)',
+    gqa_pdf_class: 'वर्ग',
+    gqa_pdf_range: 'सीमा',
+    gqa_pdf_percentage: 'प्रतिशत (%)',
+    gqa_pdf_total_area: 'कुल क्षेत्रफल:',
+    gqa_pdf_building_section: 'भवन / چھت पहचान',
+    gqa_pdf_building_count: 'कुल भवन/چھت संख्या:',
+    gqa_pdf_building_area: 'कुल چھت क्षेत्रफल:',
+    gqa_pdf_unknown: 'अज्ञात',
+    gqa_pdf_filename_word: 'Report',
+    gqa_placeholder: 'सबसे बड़े प्रतिशत वाला वर्ग कौन सा है?',
     gqa_ask_btn: 'पूछें',
     gqa_err_no_data: 'पहले एक वर्गीकृत विश्लेषण चलाएँ (लेजेंड/प्रतिशत डेटा आवश्यक है)।',
     gqa_running: '⏳ उत्तर तैयार किया जा रहा है...',
@@ -38145,8 +38540,22 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Analisis Topografi',
     gqa_title: '🔎 Ajukan Pertanyaan Tentang Data Ini',
     gqa_nav_title: 'Asisten Data AI',
-    gqa_desc: 'Hanya pertanyaan tentang data legenda/persentase yang saat ini ditampilkan di layar yang akan dijawab (mis. "kelas mana yang memiliki persentase tertinggi?"). TIDAK memberikan penilaian risiko atau saran. Berjalan dengan kuota Gemini gratis — mungkin tidak tersedia jika kuota habis.',
-    gqa_placeholder: 'Cth: Kelas mana yang memiliki persentase terbesar?',
+    gqa_desc: 'Hanya pertanyaan tentang data legenda/persentase yang saat ini ditampilkan di layar yang akan dijawab (mis. "kelas mana yang memiliki persentase tertinggi?"). TIDAK memberikan penilaian risiko atau saran. Menggunakan infrastruktur Gemini.',
+    gqa_pdf_title: 'SylvaGIS — Laporan Data AI',
+    gqa_pdf_created: 'Dibuat:',
+    gqa_pdf_question: 'Pertanyaan:',
+    gqa_pdf_report: 'Laporan',
+    gqa_pdf_datasets: 'Kumpulan Data (Kelas dan Persentase)',
+    gqa_pdf_class: 'Kelas',
+    gqa_pdf_range: 'Rentang',
+    gqa_pdf_percentage: 'Persentase (%)',
+    gqa_pdf_total_area: 'Luas total:',
+    gqa_pdf_building_section: 'Deteksi Bangunan / Atap',
+    gqa_pdf_building_count: 'Jumlah total bangunan/atap:',
+    gqa_pdf_building_area: 'Luas total atap:',
+    gqa_pdf_unknown: 'Tidak diketahui',
+    gqa_pdf_filename_word: 'Laporan',
+    gqa_placeholder: 'Kelas mana yang memiliki persentase terbesar?',
     gqa_ask_btn: 'Tanya',
     gqa_err_no_data: 'Jalankan dulu analisis terklasifikasi (data legenda/persentase diperlukan).',
     gqa_running: '⏳ Menyiapkan jawaban...',
@@ -38696,8 +39105,22 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Топографические анализы',
     gqa_title: '🔎 Задайте вопрос об этих данных',
     gqa_nav_title: 'ИИ-помощник по данным',
-    gqa_desc: 'Отвечает только на вопросы о данных легенды/процентов, отображаемых в данный момент на экране (например, "какой класс имеет наибольший процент?"). НЕ даёт оценку риска или рекомендации. Работает на бесплатной квоте Gemini — может быть недоступен при исчерпании квоты.',
-    gqa_placeholder: 'Напр.: Какой класс имеет наибольший процент?',
+    gqa_desc: 'Отвечает только на вопросы о данных легенды/процентов, отображаемых в данный момент на экране (например, "какой класс имеет наибольший процент?"). НЕ даёт оценку риска или рекомендации. Использует инфраструктуру Gemini.',
+    gqa_pdf_title: 'SylvaGIS — Отчёт по данным ИИ',
+    gqa_pdf_created: 'Создано:',
+    gqa_pdf_question: 'Вопрос:',
+    gqa_pdf_report: 'Отчёт',
+    gqa_pdf_datasets: 'Наборы данных (Классы и проценты)',
+    gqa_pdf_class: 'Класс',
+    gqa_pdf_range: 'Диапазон',
+    gqa_pdf_percentage: 'Процент (%)',
+    gqa_pdf_total_area: 'Общая площадь:',
+    gqa_pdf_building_section: 'Обнаружение зданий / крыш',
+    gqa_pdf_building_count: 'Общее количество зданий/крыш:',
+    gqa_pdf_building_area: 'Общая площадь крыши:',
+    gqa_pdf_unknown: 'Неизвестно',
+    gqa_pdf_filename_word: 'Otchet',
+    gqa_placeholder: 'Какой класс имеет наибольший процент?',
     gqa_ask_btn: 'Спросить',
     gqa_err_no_data: 'Сначала запустите классифицированный анализ (нужны данные легенды/процентов).',
     gqa_running: '⏳ Подготовка ответа...',
@@ -39229,8 +39652,22 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ การวิเคราะห์ภูมิประเทศ',
     gqa_title: '🔎 ถามคำถามเกี่ยวกับข้อมูลนี้',
     gqa_nav_title: 'ผู้ช่วยข้อมูล AI',
-    gqa_desc: 'ตอบเฉพาะคำถามเกี่ยวกับข้อมูลตำนาน/เปอร์เซ็นต์ที่แสดงอยู่บนหน้าจอในขณะนี้เท่านั้น (เช่น "คลาสใดมีเปอร์เซ็นต์สูงสุด?") ไม่ให้การประเมินความเสี่ยงหรือคำแนะนำ ทำงานด้วยโควตา Gemini ฟรี — อาจใช้งานไม่ได้หากโควตาหมด',
-    gqa_placeholder: 'เช่น: คลาสใดมีเปอร์เซ็นต์มากที่สุด?',
+    gqa_desc: 'ตอบเฉพาะคำถามเกี่ยวกับข้อมูลตำนาน/เปอร์เซ็นต์ที่แสดงอยู่บนหน้าจอในขณะนี้เท่านั้น (เช่น "คลาสใดมีเปอร์เซ็นต์สูงสุด?") ไม่ให้การประเมินความเสี่ยงหรือคำแนะนำ ใช้โครงสร้างพื้นฐานของ Gemini',
+    gqa_pdf_title: 'SylvaGIS — รายงานข้อมูล AI',
+    gqa_pdf_created: 'สร้างเมื่อ:',
+    gqa_pdf_question: 'คำถาม:',
+    gqa_pdf_report: 'รายงาน',
+    gqa_pdf_datasets: 'ชุดข้อมูล (คลาสและเปอร์เซ็นต์)',
+    gqa_pdf_class: 'คลาส',
+    gqa_pdf_range: 'ช่วง',
+    gqa_pdf_percentage: 'เปอร์เซ็นต์ (%)',
+    gqa_pdf_total_area: 'พื้นที่รวม:',
+    gqa_pdf_building_section: 'การตรวจจับอาคาร / หลังคา',
+    gqa_pdf_building_count: 'จำนวนอาคาร/หลังคารวม:',
+    gqa_pdf_building_area: 'พื้นที่หลังคารวม:',
+    gqa_pdf_unknown: 'ไม่ทราบ',
+    gqa_pdf_filename_word: 'Raingan',
+    gqa_placeholder: 'คลาสใดมีเปอร์เซ็นต์มากที่สุด?',
     gqa_ask_btn: 'ถาม',
     gqa_err_no_data: 'โปรดรันการวิเคราะห์แบบจำแนกประเภทก่อน (ต้องมีข้อมูลตำนาน/เปอร์เซ็นต์)',
     gqa_running: '⏳ กำลังเตรียมคำตอบ...',
@@ -39758,8 +40195,22 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ ভূসংস্থানিক বিশ্লেষণ',
     gqa_title: '🔎 এই ডেটা সম্পর্কে প্রশ্ন করুন',
     gqa_nav_title: 'এআই ডেটা সহায়ক',
-    gqa_desc: 'শুধুমাত্র স্ক্রিনে বর্তমানে প্রদর্শিত লেজেন্ড/শতাংশ ডেটা সম্পর্কিত প্রশ্নের উত্তর দেওয়া হয় (যেমন "কোন শ্রেণীর শতাংশ সবচেয়ে বেশি?")। এটি ঝুঁকি মূল্যায়ন বা পরামর্শ দেয় না। এটি বিনামূল্যে Gemini কোটায় চলে — কোটা শেষ হলে উপলব্ধ নাও হতে পারে।',
-    gqa_placeholder: 'যেমন: সবচেয়ে বড় শতাংশযুক্ত শ্রেণী কোনটি?',
+    gqa_desc: 'শুধুমাত্র স্ক্রিনে বর্তমানে প্রদর্শিত লেজেন্ড/শতাংশ ডেটা সম্পর্কিত প্রশ্নের উত্তর দেওয়া হয় (যেমন "কোন শ্রেণীর শতাংশ সবচেয়ে বেশি?")। এটি ঝুঁকি মূল্যায়ন বা পরামর্শ দেয় না। এটি Gemini অবকাঠামো ব্যবহার করে।',
+    gqa_pdf_title: 'SylvaGIS — এআই ডেটা রিপোর্ট',
+    gqa_pdf_created: 'তৈরি হয়েছে:',
+    gqa_pdf_question: 'প্রশ্ন:',
+    gqa_pdf_report: 'রিপোর্ট',
+    gqa_pdf_datasets: 'ডেটাসেট (শ্রেণী ও শতাংশ)',
+    gqa_pdf_class: 'শ্রেণী',
+    gqa_pdf_range: 'পরিসীমা',
+    gqa_pdf_percentage: 'শতাংশ (%)',
+    gqa_pdf_total_area: 'মোট এলাকা:',
+    gqa_pdf_building_section: 'ভবন / ছাদ শনাক্তকরণ',
+    gqa_pdf_building_count: 'মোট ভবন/ছাদের সংখ্যা:',
+    gqa_pdf_building_area: 'মোট ছাদের এলাকা:',
+    gqa_pdf_unknown: 'অজানা',
+    gqa_pdf_filename_word: 'Protibedon',
+    gqa_placeholder: 'সবচেয়ে বড় শতাংশযুক্ত শ্রেণী কোনটি?',
     gqa_ask_btn: 'জিজ্ঞাসা করুন',
     gqa_err_no_data: 'প্রথমে একটি শ্রেণীবদ্ধ বিশ্লেষণ চালান (লেজেন্ড/শতাংশ ডেটা প্রয়োজন)।',
     gqa_running: '⏳ উত্তর প্রস্তুত করা হচ্ছে...',
@@ -40276,8 +40727,22 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Phân tích địa hình',
     gqa_title: '🔎 Đặt câu hỏi về dữ liệu này',
     gqa_nav_title: 'Trợ lý Dữ liệu AI',
-    gqa_desc: 'Chỉ trả lời các câu hỏi liên quan đến dữ liệu chú giải/phần trăm hiện đang hiển thị trên màn hình (ví dụ: "lớp nào có phần trăm cao nhất?"). KHÔNG đưa ra đánh giá rủi ro hoặc lời khuyên. Hoạt động với hạn ngạch Gemini miễn phí — có thể không khả dụng nếu hết hạn ngạch.',
-    gqa_placeholder: 'VD: Lớp nào có phần trăm lớn nhất?',
+    gqa_desc: 'Chỉ trả lời các câu hỏi liên quan đến dữ liệu chú giải/phần trăm hiện đang hiển thị trên màn hình (ví dụ: "lớp nào có phần trăm cao nhất?"). KHÔNG đưa ra đánh giá rủi ro hoặc lời khuyên. Sử dụng hạ tầng Gemini.',
+    gqa_pdf_title: 'SylvaGIS — Báo cáo dữ liệu AI',
+    gqa_pdf_created: 'Tạo lúc:',
+    gqa_pdf_question: 'Câu hỏi:',
+    gqa_pdf_report: 'Báo cáo',
+    gqa_pdf_datasets: 'Bộ dữ liệu (Lớp và Phần trăm)',
+    gqa_pdf_class: 'Lớp',
+    gqa_pdf_range: 'Phạm vi',
+    gqa_pdf_percentage: 'Phần trăm (%)',
+    gqa_pdf_total_area: 'Tổng diện tích:',
+    gqa_pdf_building_section: 'Phát hiện Tòa nhà / Mái nhà',
+    gqa_pdf_building_count: 'Tổng số tòa nhà/mái nhà:',
+    gqa_pdf_building_area: 'Tổng diện tích mái nhà:',
+    gqa_pdf_unknown: 'Không xác định',
+    gqa_pdf_filename_word: 'BaoCao',
+    gqa_placeholder: 'Lớp nào có phần trăm lớn nhất?',
     gqa_ask_btn: 'Hỏi',
     gqa_err_no_data: 'Trước tiên hãy chạy một phân tích đã phân loại (cần dữ liệu chú giải/phần trăm).',
     gqa_running: '⏳ Đang chuẩn bị câu trả lời...',
@@ -40830,8 +41295,22 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ ٹوپوگرافک تجزیہ',
     gqa_title: '🔎 اس ڈیٹا کے بارے میں سوال پوچھیں',
     gqa_nav_title: 'AI ڈیٹا اسسٹنٹ',
-    gqa_desc: 'صرف اسکرین پر فی الحال دکھائے گئے لیجنڈ/فیصد ڈیٹا سے متعلق سوالات کے جواب دیے جاتے ہیں (مثلاً "کس کلاس کا فیصد سب سے زیادہ ہے؟")۔ یہ خطرے کی تشخیص یا مشورہ نہیں دیتا۔ یہ مفت Gemini کوٹے پر چلتا ہے — کوٹہ ختم ہونے پر دستیاب نہیں ہو سکتا۔',
-    gqa_placeholder: 'مثلاً: سب سے بڑے فیصد والی کلاس کون سی ہے؟',
+    gqa_desc: 'صرف اسکرین پر فی الحال دکھائے گئے لیجنڈ/فیصد ڈیٹا سے متعلق سوالات کے جواب دیے جاتے ہیں (مثلاً "کس کلاس کا فیصد سب سے زیادہ ہے؟")۔ یہ خطرے کی تشخیص یا مشورہ نہیں دیتا۔ یہ Gemini انفراسٹرکچر استعمال کرتا ہے۔',
+    gqa_pdf_title: 'SylvaGIS — اے آئی ڈیٹا رپورٹ',
+    gqa_pdf_created: 'تخلیق کردہ:',
+    gqa_pdf_question: 'سوال:',
+    gqa_pdf_report: 'رپورٹ',
+    gqa_pdf_datasets: 'ڈیٹا سیٹس (کلاسز اور فیصد)',
+    gqa_pdf_class: 'کلاس',
+    gqa_pdf_range: 'رینج',
+    gqa_pdf_percentage: 'فیصد (%)',
+    gqa_pdf_total_area: 'کل رقبہ:',
+    gqa_pdf_building_section: 'عمارت / چھت کی شناخت',
+    gqa_pdf_building_count: 'عمارتوں/چھتوں کی کل تعداد:',
+    gqa_pdf_building_area: 'کل چھت کا رقبہ:',
+    gqa_pdf_unknown: 'نامعلوم',
+    gqa_pdf_filename_word: 'Report',
+    gqa_placeholder: 'سب سے بڑے فیصد والی کلاس کون سی ہے؟',
     gqa_ask_btn: 'پوچھیں',
     gqa_err_no_data: 'پہلے ایک درجہ بند تجزیہ چلائیں (لیجنڈ/فیصد ڈیٹا درکار ہے)۔',
     gqa_running: '⏳ جواب تیار کیا جا رہا ہے...',
@@ -41368,8 +41847,22 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Analizy topograficzne',
     gqa_title: '🔎 Zadaj pytanie dotyczące tych danych',
     gqa_nav_title: 'Asystent danych AI',
-    gqa_desc: 'Odpowiadane są tylko pytania dotyczące danych legendy/procentowych aktualnie wyświetlanych na ekranie (np. "która klasa ma najwyższy procent?"). NIE podaje oceny ryzyka ani porad. Działa na darmowym limicie Gemini — może być niedostępny po wyczerpaniu limitu.',
-    gqa_placeholder: 'Np.: Która klasa ma największy procent?',
+    gqa_desc: 'Odpowiadane są tylko pytania dotyczące danych legendy/procentowych aktualnie wyświetlanych na ekranie (np. "która klasa ma najwyższy procent?"). NIE podaje oceny ryzyka ani porad. Wykorzystuje infrastrukturę Gemini.',
+    gqa_pdf_title: 'SylvaGIS — Raport danych AI',
+    gqa_pdf_created: 'Utworzono:',
+    gqa_pdf_question: 'Pytanie:',
+    gqa_pdf_report: 'Raport',
+    gqa_pdf_datasets: 'Zbiory danych (Klasy i procenty)',
+    gqa_pdf_class: 'Klasa',
+    gqa_pdf_range: 'Zakres',
+    gqa_pdf_percentage: 'Procent (%)',
+    gqa_pdf_total_area: 'Powierzchnia całkowita:',
+    gqa_pdf_building_section: 'Wykrywanie budynków / dachów',
+    gqa_pdf_building_count: 'Łączna liczba budynków/dachów:',
+    gqa_pdf_building_area: 'Łączna powierzchnia dachu:',
+    gqa_pdf_unknown: 'Nieznany',
+    gqa_pdf_filename_word: 'Raport',
+    gqa_placeholder: 'Która klasa ma największy procent?',
     gqa_ask_btn: 'Zapytaj',
     gqa_err_no_data: 'Najpierw uruchom sklasyfikowaną analizę (wymagane dane legendy/procentowe).',
     gqa_running: '⏳ Przygotowywanie odpowiedzi...',
@@ -41893,8 +42386,22 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Analisis Topografi',
     gqa_title: '🔎 Tanya Soalan Tentang Data Ini',
     gqa_nav_title: 'Pembantu Data AI',
-    gqa_desc: 'Hanya soalan mengenai data legenda/peratusan yang dipaparkan pada skrin ketika ini akan dijawab (cth. "kelas mana mempunyai peratusan tertinggi?"). TIDAK memberikan penilaian risiko atau nasihat. Berjalan dengan kuota Gemini percuma — mungkin tidak tersedia jika kuota habis.',
-    gqa_placeholder: 'Cth: Kelas mana mempunyai peratusan terbesar?',
+    gqa_desc: 'Hanya soalan mengenai data legenda/peratusan yang dipaparkan pada skrin ketika ini akan dijawab (cth. "kelas mana mempunyai peratusan tertinggi?"). TIDAK memberikan penilaian risiko atau nasihat. Menggunakan infrastruktur Gemini.',
+    gqa_pdf_title: 'SylvaGIS — Laporan Data AI',
+    gqa_pdf_created: 'Dicipta:',
+    gqa_pdf_question: 'Soalan:',
+    gqa_pdf_report: 'Laporan',
+    gqa_pdf_datasets: 'Set Data (Kelas dan Peratusan)',
+    gqa_pdf_class: 'Kelas',
+    gqa_pdf_range: 'Julat',
+    gqa_pdf_percentage: 'Peratusan (%)',
+    gqa_pdf_total_area: 'Jumlah keluasan:',
+    gqa_pdf_building_section: 'Pengesanan Bangunan / Bumbung',
+    gqa_pdf_building_count: 'Jumlah bilangan bangunan/bumbung:',
+    gqa_pdf_building_area: 'Jumlah keluasan bumbung:',
+    gqa_pdf_unknown: 'Tidak diketahui',
+    gqa_pdf_filename_word: 'Laporan',
+    gqa_placeholder: 'Kelas mana mempunyai peratusan terbesar?',
     gqa_ask_btn: 'Tanya',
     gqa_err_no_data: 'Jalankan dahulu analisis terklasifikasi (data legenda/peratusan diperlukan).',
     gqa_running: '⏳ Menyediakan jawapan...',
@@ -42426,8 +42933,22 @@ var SYLVA_TRANSLATIONS = {
       sec_topo: '🏔️ Топографиялык талдоолор',
       gqa_title: '🔎 Бул маалымат жөнүндө суроо бериңиз',
       gqa_nav_title: 'AI Маалымат Жардамчысы',
-      gqa_desc: 'Азыр экранда көрсөтүлгөн легенда/пайыз маалыматтарына гана байланыштуу суроолорго жооп берилет (мисалы, "кайсы класстын пайызы эң жогору?"). Тобокелдикти баалоо же кеңеш БЕРБЕЙТ. Акысыз Gemini квотасы менен иштейт — квота түгөнсө, жеткиликсиз болушу мүмкүн.',
-      gqa_placeholder: 'Мис.: Эң чоң пайызга кайсы класс ээ?',
+      gqa_desc: 'Азыр экранда көрсөтүлгөн легенда/пайыз маалыматтарына гана байланыштуу суроолорго жооп берилет (мисалы, "кайсы класстын пайызы эң жогору?"). Тобокелдикти баалоо же кеңеш БЕРБЕЙТ. Gemini инфраструктурасы колдонулат.',
+      gqa_pdf_title: 'SylvaGIS — ЖИ маалымат отчету',
+      gqa_pdf_created: 'Түзүлдү:',
+      gqa_pdf_question: 'Суроо:',
+      gqa_pdf_report: 'Отчет',
+      gqa_pdf_datasets: 'Маалымат топтомдору (Класстар жана пайыздар)',
+      gqa_pdf_class: 'Класс',
+      gqa_pdf_range: 'Диапазон',
+      gqa_pdf_percentage: 'Пайыз (%)',
+      gqa_pdf_total_area: 'Жалпы аянт:',
+      gqa_pdf_building_section: 'Имарат / чатыр аныктоо',
+      gqa_pdf_building_count: 'Имараттардын/чатырлардын жалпы саны:',
+      gqa_pdf_building_area: 'Жалпы чатыр аянты:',
+      gqa_pdf_unknown: 'Белгисиз',
+      gqa_pdf_filename_word: 'Esep',
+      gqa_placeholder: 'Эң чоң пайызга кайсы класс ээ?',
       gqa_ask_btn: 'Сура',
       gqa_err_no_data: 'Алгач классификацияланган анализди иштетиңиз (легенда/пайыз маалыматы керек).',
       gqa_running: '⏳ Жооп даярдалууда...',
@@ -42931,8 +43452,22 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Топографийн шинжилгээ',
     gqa_title: '🔎 Энэ өгөгдлийн талаар асуулт асуух',
     gqa_nav_title: 'AI Өгөгдлийн Туслах',
-    gqa_desc: 'Зөвхөн дэлгэц дээр одоо харагдаж буй домог/хувийн өгөгдөлтэй холбоотой асуултад хариулна (жишээ нь "аль анги хамгийн өндөр хувьтай вэ?"). Эрсдэлийн үнэлгээ, зөвлөмж ӨГӨХГҮЙ. Үнэгүй Gemini квотоор ажилладаг — квот дуусвал ашиглах боломжгүй байж болзошгүй.',
-    gqa_placeholder: 'Жишээ нь: Хамгийн их хувьтай анги аль вэ?',
+    gqa_desc: 'Зөвхөн дэлгэц дээр одоо харагдаж буй домог/хувийн өгөгдөлтэй холбоотой асуултад хариулна (жишээ нь "аль анги хамгийн өндөр хувьтай вэ?"). Эрсдэлийн үнэлгээ, зөвлөмж ӨГӨХГҮЙ. Gemini дэд бүтцийг ашигладаг.',
+    gqa_pdf_title: 'SylvaGIS — Хиймэл оюуны тайлан',
+    gqa_pdf_created: 'Үүсгэсэн:',
+    gqa_pdf_question: 'Асуулт:',
+    gqa_pdf_report: 'Тайлан',
+    gqa_pdf_datasets: 'Өгөгдлийн багц (Ангилал ба хувь)',
+    gqa_pdf_class: 'Ангилал',
+    gqa_pdf_range: 'Хязгаар',
+    gqa_pdf_percentage: 'Хувь (%)',
+    gqa_pdf_total_area: 'Нийт талбай:',
+    gqa_pdf_building_section: 'Барилга / Дээвэр илрүүлэлт',
+    gqa_pdf_building_count: 'Барилга/дээврийн нийт тоо:',
+    gqa_pdf_building_area: 'Нийт дээврийн талбай:',
+    gqa_pdf_unknown: 'Тодорхойгүй',
+    gqa_pdf_filename_word: 'Tailan',
+    gqa_placeholder: 'Хамгийн их хувьтай анги аль вэ?',
     gqa_ask_btn: 'Асуух',
     gqa_err_no_data: 'Эхлээд ангилагдсан шинжилгээг ажиллуулна уу (домог/хувийн өгөгдөл шаардлагатай).',
     gqa_running: '⏳ Хариулт бэлтгэж байна...',
@@ -43426,8 +43961,22 @@ var SYLVA_TRANSLATIONS = {
       sec_topo: '🏔️ ტოპოგრაფიული ანალიზი',
       gqa_title: '🔎 დასვით შეკითხვა ამ მონაცემების შესახებ',
       gqa_nav_title: 'AI მონაცემთა ასისტენტი',
-      gqa_desc: 'პასუხი გაიცემა მხოლოდ ეკრანზე ამჟამად ნაჩვენები ლეგენდის/პროცენტული მონაცემების შესახებ კითხვებზე (მაგ. "რომელ კლასს აქვს ყველაზე მაღალი პროცენტი?"). არ იძლევა რისკის შეფასებას ან რჩევას. მუშაობს უფასო Gemini კვოტით — კვოტის ამოწურვის შემთხვევაში შეიძლება მიუწვდომელი იყოს.',
-      gqa_placeholder: 'მაგ.: რომელ კლასს აქვს ყველაზე დიდი პროცენტი?',
+      gqa_desc: 'პასუხი გაიცემა მხოლოდ ეკრანზე ამჟამად ნაჩვენები ლეგენდის/პროცენტული მონაცემების შესახებ კითხვებზე (მაგ. "რომელ კლასს აქვს ყველაზე მაღალი პროცენტი?"). არ იძლევა რისკის შეფასებას ან რჩევას. იყენებს Gemini ინფრასტრუქტურას.',
+      gqa_pdf_title: 'SylvaGIS — AI მონაცემთა ანგარიში',
+      gqa_pdf_created: 'შექმნილია:',
+      gqa_pdf_question: 'კითხვა:',
+      gqa_pdf_report: 'ანგარიში',
+      gqa_pdf_datasets: 'მონაცემთა ნაკრებები (კლასები და პროცენტები)',
+      gqa_pdf_class: 'კლასი',
+      gqa_pdf_range: 'დიაპაზონი',
+      gqa_pdf_percentage: 'პროცენტი (%)',
+      gqa_pdf_total_area: 'საერთო ფართობი:',
+      gqa_pdf_building_section: 'შენობის / სახურავის აღმოხენა',
+      gqa_pdf_building_count: 'შენობა/სახურავის საერთო რაოდენობა:',
+      gqa_pdf_building_area: 'სახურავის საერთო ფართობი:',
+      gqa_pdf_unknown: 'უცნობი',
+      gqa_pdf_filename_word: 'Angarishi',
+      gqa_placeholder: 'რომელ კლასს აქვს ყველაზე დიდი პროცენტი?',
       gqa_ask_btn: 'კითხვა',
       gqa_err_no_data: 'ჯერ გაუშვით კლასიფიცირებული ანალიზი (საჭიროა ლეგენდის/პროცენტული მონაცემები).',
       gqa_running: '⏳ პასუხი მზადდება...',
@@ -43938,8 +44487,22 @@ var SYLVA_TRANSLATIONS = {
     sec_topo: '🏔️ Analisi Topografiche',
     gqa_title: '🔎 Fai una domanda su questi dati',
     gqa_nav_title: 'Assistente Dati IA',
-    gqa_desc: 'Vengono risposte solo domande relative ai dati di legenda/percentuale attualmente visualizzati sullo schermo (es. "quale classe ha la percentuale più alta?"). NON fornisce valutazioni di rischio o consigli. Funziona con una quota Gemini gratuita — potrebbe non essere disponibile se la quota è esaurita.',
-    gqa_placeholder: 'Es.: Quale classe ha la percentuale maggiore?',
+    gqa_desc: 'Vengono risposte solo domande relative ai dati di legenda/percentuale attualmente visualizzati sullo schermo (es. "quale classe ha la percentuale più alta?"). NON fornisce valutazioni di rischio o consigli. Utilizza l\'infrastruttura Gemini.',
+    gqa_pdf_title: 'SylvaGIS — Rapporto dati IA',
+    gqa_pdf_created: 'Creato:',
+    gqa_pdf_question: 'Domanda:',
+    gqa_pdf_report: 'Rapporto',
+    gqa_pdf_datasets: 'Set di dati (Classi e percentuali)',
+    gqa_pdf_class: 'Classe',
+    gqa_pdf_range: 'Intervallo',
+    gqa_pdf_percentage: 'Percentuale (%)',
+    gqa_pdf_total_area: 'Area totale:',
+    gqa_pdf_building_section: 'Rilevamento edifici / tetti',
+    gqa_pdf_building_count: 'Numero totale di edifici/tetti:',
+    gqa_pdf_building_area: 'Area totale del tetto:',
+    gqa_pdf_unknown: 'Sconosciuto',
+    gqa_pdf_filename_word: 'Rapporto',
+    gqa_placeholder: 'Quale classe ha la percentuale maggiore?',
     gqa_ask_btn: 'Chiedi',
     gqa_err_no_data: 'Esegui prima un\'analisi classificata (sono richiesti dati di legenda/percentuale).',
     gqa_running: '⏳ Preparazione della risposta...',
@@ -49684,12 +50247,8 @@ document.addEventListener('DOMContentLoaded',function(){
             Önce sınıflandırılmış bir analiz çalıştırın (lejant/% verisi olmalı).
         </div>
         <div id="gqa-form-row" style="display:none; flex-direction:column; gap:5px;">
-            <label style="display:flex; align-items:center; gap:5px; font-size:0.68rem; color:#475569; cursor:pointer;">
-                <input type="checkbox" id="gqa-include-image" checked style="margin:0;">
-                <span data-i18n="gqa_include_image_label">🖼️ Açık olan TÜM analizlerin görsellerini de ekle (görsel yorum için)</span>
-            </label>
             <div style="display:flex; gap:5px;">
-                <input type="text" id="gqa-question" data-i18n-placeholder="gqa_placeholder" placeholder="Örn: En büyük yüzdeye sahip sınıf hangisi?"
+                <input type="text" id="gqa-question" data-i18n-placeholder="gqa_placeholder" placeholder="En büyük yüzdeye sahip sınıf hangisi?"
                     style="flex:1;padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.78rem;"
                     onkeydown="if(event.key==='Enter'){event.preventDefault();sylvaAskGeminiDataQuestion();}">
                 <button type="button" id="btn-gqa-ask" class="btn-tool" style="flex:0 0 auto;font-size:0.78rem;" onclick="sylvaAskGeminiDataQuestion()" data-i18n="gqa_ask_btn">Sor</button>
