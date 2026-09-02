@@ -2198,7 +2198,7 @@ def _roi_center_lonlat(roi_coords):
 # için bu sabit eklendi. Her yeni pakette bu sayı artırılmalı; canlı
 # /api/ping yanıtında bu sayı görünüyorsa o paketin TÜM kod değişiklikleri
 # kesinlikle yayındadır.
-SYLVA_SYMBOLOGY_PAKET = 94
+SYLVA_SYMBOLOGY_PAKET = 95
 
 LULC_CLASS_DEFS = {
     'LULC': [  # Google Dynamic World V1 — label 0..8
@@ -4070,23 +4070,27 @@ CONTACT_RECEIVER_EMAIL = 'sylvagis.world@gmail.com'
 def _smtp_credentials():
     """
     SMTP kullanıcı adı ve parolasını YALNIZCA ortam değişkenlerinden okur.
+    Parola kaynak kodda SAKLANMAZ — Cloud Run > Değişkenler ve Gizli
+    Bilgiler bölümünde SYLVA_SMTP_USER / SYLVA_SMTP_PASS olarak tanımlıdır.
 
-    ❗ ÖNEMLİ — ESKİ ŞİFREYİ İPTAL EDİN: Bu dosyanın önceki sürümünde Gmail
-    uygulama şifresi iki ayrı yerde açık metin olarak gömülüydü. Kod bir kez
-    paylaşıldığı/depoya girdiği için o şifre artık güvenli DEĞİLDİR.
-        1) myaccount.google.com/apppasswords → eski uygulama şifresini SİLİN
-        2) Yeni bir uygulama şifresi oluşturun
-        3) Sunucuda tanımlayın:
-             export SYLVA_SMTP_USER=sylvagis.world@gmail.com
-             export SYLVA_SMTP_PASS=<yeni-uygulama-şifresi>
+    🛠️ GÜVENLİK DÜZELTMESİ (2026-09-02, Paket 95): Bu fonksiyon daha önce,
+    kendi docstring'indeki talimata rağmen, gövdesinde hâlâ bir Gmail
+    Uygulama Şifresini açık metin olarak döndürüyordu (eski şifre bir kez
+    iptal edilip yenisiyle değiştirilmişti, ama o YENİ şifre de yine
+    koda gömülü bırakılmıştı). Üstelik CANLI iki çağıran
+    (send_contact_message, _send_registration_email) bu fonksiyonu hiç
+    kullanmıyor, kendi ayrı sabit kopyalarını taşıyordu. Üçü de düzeltildi;
+    artık parola SADECE ortam değişkeninden, tek bir yerden okunuyor.
 
     Dönüş: (user, password, hata_mesajı_veya_None)
     """
-    # SMTP bilgileri burada doğrudan tanımlanabilir.
-    # Kullanıcı adı: gönderen Gmail adresi
-    # Şifre: Gmail Uygulama Şifresi
-    user = 'sylvagis.world@gmail.com'
-    password = 'amrgxfunajwuczph'
+    user = os.environ.get('SYLVA_SMTP_USER', 'sylvagis.world@gmail.com')
+    password = os.environ.get('SYLVA_SMTP_PASS', '')
+    if not password:
+        return user, None, (
+            'SYLVA_SMTP_PASS ortam değişkeni tanımlı değil — Cloud Run > '
+            'Değişkenler ve Gizli Bilgiler bölümünden ekleyin.'
+        )
     return user, password, None
 
 
@@ -4711,8 +4715,10 @@ def send_contact_message():
     if not email_re.match(email):
         return jsonify({'success': False, 'error': 'Geçersiz e-posta adresi.'}), 400
 
-    smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'amrgxfunajwuczph'
+    smtp_user, smtp_pass, _smtp_err = _smtp_credentials()
+    if _smtp_err:
+        print('❌ /api/contact SMTP yapılandırma hatası:', _smtp_err)
+        return jsonify({'success': False, 'error': 'E-posta gönderim sistemi şu anda yapılandırılmamış. Lütfen daha sonra tekrar deneyin.'}), 500
 
     body = (
         'SylvaGIS İletişim Formu üzerinden yeni bir mesaj gönderildi.\n\n'
@@ -10902,8 +10908,10 @@ def _sanitize_header_value(value):
 
 
 def _send_registration_email(ad, soyad, email, meslek, ulke):
-    smtp_user = 'sylvagis.world@gmail.com'
-    smtp_pass = 'amrgxfunajwuczph'
+    smtp_user, smtp_pass, _smtp_err = _smtp_credentials()
+    if _smtp_err:
+        print('❌ _send_registration_email SMTP yapılandırma hatası:', _smtp_err)
+        raise RuntimeError('E-posta gönderim sistemi şu anda yapılandırılmamış.')
 
     # 🔒 GÜVENLİK DÜZELTMESİ (e-posta başlığı enjeksiyonu): bkz.
     # _sanitize_header_value docstring'i. Yalnızca Subject başlığına giren
