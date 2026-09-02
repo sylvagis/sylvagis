@@ -2198,7 +2198,7 @@ def _roi_center_lonlat(roi_coords):
 # için bu sabit eklendi. Her yeni pakette bu sayı artırılmalı; canlı
 # /api/ping yanıtında bu sayı görünüyorsa o paketin TÜM kod değişiklikleri
 # kesinlikle yayındadır.
-SYLVA_SYMBOLOGY_PAKET = 91
+SYLVA_SYMBOLOGY_PAKET = 94
 
 LULC_CLASS_DEFS = {
     'LULC': [  # Google Dynamic World V1 — label 0..8
