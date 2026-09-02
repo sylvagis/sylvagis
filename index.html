@@ -2941,19 +2941,13 @@ tr.class-highlight-active {
        (top/right ile) — dikey ortalama (top:50%) kullanılmadığı için
        alt-sol köşedeki logo/koordinat kutusuyla çakışma riski kalmadı;
        ayrı bir dar-ekran/çift-ekran düzeltmesine gerek yok. */
-       .sylva-swipe-divider { position: absolute; top:0; left:0; right:0; bottom:0; z-index: 9000; pointer-events: none; display: none; }
-        .sylva-swipe-divider.active { display: block; }
-        .sylva-swipe-line { position: absolute; background: #fff; box-shadow: 0 0 4px rgba(0,0,0,0.5); pointer-events: none; }
-        .sylva-swipe-divider[data-orientation="vertical"] .sylva-swipe-line { top:0; bottom:0; width:3px; margin-left:-1.5px; }
-        .sylva-swipe-divider[data-orientation="horizontal"] .sylva-swipe-line { left:0; right:0; height:3px; margin-top:-1.5px; }
-        .sylva-swipe-handle {
-            position: absolute; width: 34px; height: 34px; border-radius: 50%;
-            background: #fff; border: 2px solid #1e3a8a; box-shadow: 0 2px 6px rgba(0,0,0,0.3);
-            display: flex; align-items: center; justify-content: center;
-            cursor: grab; pointer-events: auto; font-size: 14px; color: #1e3a8a;
-            user-select: none; touch-action: none;
-        }
-        .sylva-swipe-handle:active { cursor: grabbing; }
+        /* 🛠️ TEMİZLİK: Bu blokta eskiden .sylva-swipe-divider/.sylva-swipe-line/
+           .sylva-swipe-handle adlı üçüncü (ve hiçbir JS tarafından
+           kullanılmayan/uygulanmayan) bir Katman Sıyırıcı deneme tasarımı
+           vardı. Güncel sıyırıcı (window.sylvaToggleLayerSwipeBtn) kendi
+           çizgisini id="sylva-swipe-line-<ekran>" ile satır-içi stil olarak
+           oluşturuyor, bu sınıfları hiç kullanmıyor — kod karışıklığını
+           önlemek için ölü CSS kaldırıldı. */
         /* 🆕 Konum Senkronizasyonu açıkken Ekran 2'nin lejant kutusu varsayılan
            olarak kapalı/şeffaf görünür; üstüne tıklanınca tam açılır. */
         #map2-legend-box.sylva-legend-collapsed {
@@ -3009,7 +3003,6 @@ tr.class-highlight-active {
         #btn-chart-bar.disabled-chart,
         #btn-chart-pie.disabled-chart { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
         #btn-before-after.active, #btn-before-after-map2.active { background:#1e3a8a !important; color:#fff !important; border-color:#1e3a8a !important; }
-        #before-after-divider { touch-action: none; }
 
         .ts-series-dot { cursor: pointer; }
 
@@ -4165,11 +4158,6 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
 
                     <div id="raw-bands-groups-container" style="display:none; flex-direction:column; gap:10px;"></div>
 
-                    <div id="raw-bands-actions" style="display:none; gap:6px; align-items:center;">
-                        <button type="button" id="btn-raw-bands-select-all" class="btn-tool" style="flex:1; font-size:0.72rem; padding:6px 4px;"data-i18n="raw_select_all">☑ Tüm Bantları Seç</button>
-                        <button type="button" id="btn-raw-bands-select-none" class="btn-tool" style="flex:1; font-size:0.72rem; padding:6px 4px;"data-i18n="raw_select_none">☐ Tüm Seçimi Kaldır</button>
-                    </div>
-
                     <div id="raw-bands-count-info" style="display:none; font-size:0.72rem; font-weight:600; color:#1e3a8a;">0 bands selected</div>
 
                     <div id="raw-bands-aoi-name-wrap" style="display:none;">
@@ -4775,21 +4763,6 @@ function _sylvaHasMixedStackCategories(paneId) {
                 </div>
             </div>
 
-            <!-- ══ Before/After Swipe Overlay ═════════════════════════════ -->
-            <div id="before-after-overlay" style="display:none;position:absolute;inset:0;z-index:450;pointer-events:none;">
-                <div id="before-after-divider"
-                     style="position:absolute;top:0;bottom:0;left:50%;width:3px;
-                            background:#1e3a8a;cursor:ew-resize;pointer-events:auto;
-                            z-index:451;transform:translateX(-50%);">
-                    <div style="position:absolute;top:50%;left:50%;
-                                transform:translate(-50%,-50%);background:#1e3a8a;color:#fff;
-                                padding:4px 10px;border-radius:20px;font-size:0.7rem;
-                                white-space:nowrap;pointer-events:none;user-select:none;
-                                box-shadow:0 2px 8px rgba(0,0,0,0.22);">
-                        <span data-i18n="before_after_label">◀ Öncesi | Sonrası ▶</span>
-                    </div>
-                </div>
-            </div>
             <!-- Markup SVG Overlay -->
             <svg id="markup-svg"
                  style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:400;"
@@ -14121,7 +14094,21 @@ function selectRamp(name) {
             // şeffaflık değerini geri yükler.
             if (paneId === 'map2') { window._geeLayer2 = store[layerKey]; } else { _geeLayer = store[layerKey]; }
             var _rememberedOpacity = window._sylvaLayerOpacityByPane[key][layerKey];
-            var _opacityToApply = (_rememberedOpacity != null) ? _rememberedOpacity : 1;
+            // 🛠️ EK GÜVENLİK AĞI (bkz. _sylvaApplyAutoOpacity içindeki asıl KÖK
+            // NEDEN DÜZELTMESİ notu): artık _sylvaApplyAutoOpacity() her katman
+            // eklendiğinde/güncellendiğinde bu hafıza deposunu da dolduruyor, bu
+            // yüzden normal şartlarda TOPO_CONTOUR için buraya "hafıza yok"
+            // durumuyla gelinmemeli. Yine de hafıza bir şekilde hiç oluşmamışsa
+            // (ör. ileride eklenecek başka bir katman-ekleme yolu bu adımı
+            // atlarsa), varsayılan değer artık katman türüne göre seçilir: Eş
+            // Yükselti (TOPO_CONTOUR — stack modunda "__t<zaman damgası>"
+            // sonekiyle de olsa) HER ZAMAN 0 (görünmez) varsayar, çünkü bu katman
+            // baştan GÖRÜNMEZ raster + görünür vektör ikilisi olarak tasarlanmıştır
+            // (bkz. _sylvaAutoOpacityForAnalysis). Diğer TÜM analiz türleri için
+            // (RGB, NDVI, LULC vb. — bunlar gerçekten tam görünür başlamalı)
+            // varsayılan 1 aynen korunur.
+            var _isContourLayer = /^TOPO_CONTOUR(?:__|$)/.test(String(layerKey || ''));
+            var _opacityToApply = (_rememberedOpacity != null) ? _rememberedOpacity : (_isContourLayer ? 0 : 1);
             var _paneState = _sylvaPaneState(paneId);
             _paneState.dataOpacity = _opacityToApply;
             _sylvaSetLayerOpacity(store[layerKey], _opacityToApply);
@@ -14652,7 +14639,40 @@ function selectRamp(name) {
             var opacity = _sylvaAutoOpacityForAnalysis(meta);
             var state = _sylvaPaneState(paneId);
             state.dataOpacity = opacity;
-            _sylvaSetLayerOpacity(_sylvaCurrentGeeLayer(paneId), opacity);
+            var _curLayer = _sylvaCurrentGeeLayer(paneId);
+            _sylvaSetLayerOpacity(_curLayer, opacity);
+            // 🛠️ KÖK NEDEN DÜZELTMESİ (Eş Yükselti/TOPO_CONTOUR — "25m'de vektör
+            // çizginin yanında raster basamaklı çizgi de görünüyor" hatası):
+            // Bu fonksiyon eskiden hesapladığı opaklığı SADECE pane'in o anki
+            // geçici durumuna (state.dataOpacity) yazıyordu; katmana ÖZEL kalıcı
+            // "hafıza" deposuna (window._sylvaLayerOpacityByPane[pane][layerKey])
+            // HİÇ dokunmuyordu. O depo eskiden yalnızca kullanıcı "Veri Şeffaflığı"
+            // kaydırıcısını ELİYLE hareket ettirdiğinde dolduruluyordu (bkz. o
+            // input dinleyicisindeki yazma satırı). TOPO_CONTOUR gibi otomatik
+            // olarak opacity:0 ile eklenen — ve kullanıcının varlığından bile
+            // haberi olmayan, çünkü ekranda görünen tek şey üstteki temiz VEKTÖR
+            // çizgileridir — bir katman için kullanıcı hiçbir zaman bu kaydırıcıyı
+            // hareket ettirmez; bu yüzden hafıza deposunda o katmana ait kayıt
+            // HİÇBİR ZAMAN oluşmuyordu. Kullanıcı daha sonra "Üstte Gösterilecek
+            // Katman" kutusundan başka bir katmana (ör. bir çevresel/kentsel
+            // analiz) geçip GERİ eş yükseltiye döndüğünde, _sylvaBringGeeLayerToFront()
+            // bu boş hafızayı görüp opaklığı varsayılan olarak 1'e (tam görünür)
+            // ayarlıyordu — raster basamaklı kontur çizgisi, altındaki vektör
+            // çizgilerin yanında aniden yeniden görünür hale geliyordu; AYNI
+            // fonksiyon vektör konturu da birlikte öne getirdiği için kullanıcı
+            // tam olarak "vektör çizginin yanına raster çizgisi de geliyor"
+            // görüntüsüyle karşılaşıyordu. ÇÖZÜM: otomatik hesaplanan opaklık
+            // artık BURADA, hesaplandığı anda, katmana özel hafıza deposuna da
+            // yazılır — böylece _sylvaBringGeeLayerToFront() bu katmana daha
+            // sonra döndüğünde her zaman DOĞRU (0) değeri bulur, asla varsayılan
+            // 1'e düşmez. (Ek güvenlik ağı için bkz. _sylvaBringGeeLayerToFront
+            // içindeki TOPO_CONTOUR varsayılan-0 notu.)
+            if (_curLayer && _curLayer._sylvaAnalysisKey) {
+                var _aoKey = (paneId === 'map2') ? 'map2' : 'map';
+                window._sylvaLayerOpacityByPane = window._sylvaLayerOpacityByPane || { map: {}, map2: {} };
+                window._sylvaLayerOpacityByPane[_aoKey] = window._sylvaLayerOpacityByPane[_aoKey] || {};
+                window._sylvaLayerOpacityByPane[_aoKey][_curLayer._sylvaAnalysisKey] = opacity;
+            }
             // Sadece o an AKTİF/görünen ekransa slider UI'ını da güncelle
             // (slider artık şeffaflığı gösterir: 1 - opaklık)
             if (paneId === _sylvaActivePaneId()) {
@@ -18509,6 +18529,22 @@ function selectRamp(name) {
             });
         }
 
+        // 🛠️ KÖK NEDEN DÜZELTMESİ (AOI Görsel Maskesi Hiç Uygulanmıyordu):
+        // Aşağıdaki satır, CSS clip-path'in path() fonksiyonuna verilen SVG
+        // path verisindeki her koordinatın sonuna 'px' birimi ekliyordu
+        // (ör. "M 120.0px 80.0px L..."). SVG path söz dizimi (path() içindeki
+        // tırnaklı metin, tıpkı bir <path d="..."> özniteliği gibi) BİRİMSİZ
+        // sayılar bekler — CSS uzunluk birimleri (px, %, vb.) orada GEÇERSİZDİR.
+        // Sonuç: tarayıcı bu path() değerinin TAMAMINI ayrıştırılamaz (invalid)
+        // kabul edip element.style.clipPath ataması SESSİZCE hiçbir şey
+        // yapmıyordu (ne hata ne uyarı — CSSOM'da geçersiz bir değere yapılan
+        // atama sessizce yok sayılır). Bu, bu ortamda izole bir CSS.supports()
+        // testiyle KANITLANDI: 'px' ekliyken clip-path her zaman boş kalıyor,
+        // kaldırınca doğru şekilde uygulanıyor. Yani "AOI/Çalışma Alanı dışını
+        // gizle" görsel maskesi — kodun geri kalanı (ROI çıkarma, lat/lng→piksel
+        // projeksiyon) tamamen doğru çalışsa bile — GERÇEK bir tarayıcıda HİÇBİR
+        // ZAMAN görsel olarak uygulanmıyordu. Düzeltme: koordinatlar artık
+        // birimsiz (SVG path söz dizimine uygun) yazılıyor.
         function _updateGeeLayerAoiClip(paneId) {
             paneId = (paneId === 'map2') ? 'map2' : 'map';
             var lmap = (paneId === 'map2') ? map2 : map;
@@ -18522,7 +18558,7 @@ function selectRamp(name) {
                 var pathParts = rings.map(function(ring) {
                     var pts = ring.map(function(latlng) {
                         var p = lmap.latLngToLayerPoint(latlng);
-                        return p.x.toFixed(1) + 'px ' + p.y.toFixed(1) + 'px';
+                        return p.x.toFixed(1) + ' ' + p.y.toFixed(1);
                     });
                     return 'M ' + pts.join(' L ') + ' Z';
                 });
@@ -28169,20 +28205,14 @@ function updateRawBandsSelectedCount() {
     countInfo.textContent = checked + ' / ' + total + ' ' + t('raw_bands_selected');
 }
 
-// "Tüm Bantları Seç" / "Tüm Seçimi Kaldır" düğmeleri — kullanıcı tüm
-// bantları tek seferde seçip aynı anda indirebilir.
-(function() {
-    var btnAll  = document.getElementById('btn-raw-bands-select-all');
-    var btnNone = document.getElementById('btn-raw-bands-select-none');
-    if (btnAll) btnAll.addEventListener('click', function() {
-        document.querySelectorAll('.raw-band-checkbox').forEach(function(cb) { cb.checked = true; });
-        updateRawBandsSelectedCount();
-    });
-    if (btnNone) btnNone.addEventListener('click', function() {
-        document.querySelectorAll('.raw-band-checkbox').forEach(function(cb) { cb.checked = false; });
-        updateRawBandsSelectedCount();
-    });
-})();
+// 🛠️ TEMİZLİK (kullanıcı isteği — "☑ Tüm Bantları Seç / ☐ Tüm Seçimi Kaldır
+// bu seçenekleri kaldır"): bu iki düğme ve onları haritaya bağlayan aşağıdaki
+// tıklama işleyicisi kaldırıldı (bkz. HTML tarafındaki #raw-bands-actions
+// kutusunun kaldırılması). Her bant kendi tek tek checkbox'ından hâlâ normal
+// şekilde seçilip indirilebiliyor; yalnızca "hepsini birden seç/kaldır"
+// kısayolu kaldırıldı. "X / Y bant seçildi" sayacı (updateRawBandsSelectedCount)
+// bu düğmelerden bağımsız olarak tek tek checkbox değişikliklerine de zaten
+// bağlı olduğu için dokunulmadı, çalışmaya devam ediyor.
 
 // Seçili bant(lar)ı, seçili sahne + AOI için GEE üzerinden indirir.
 // Sunucu her zaman TEK bir ZIP dosyası döner; ZIP içinde her bant kendi
@@ -29729,8 +29759,6 @@ var SYLVA_TRANSLATIONS = {
     desc_raw_bands: 'First select a scene from the Satellite Image module — this panel automatically lists ALL original bands of your selected image.',
     sec_raw_bands: '📡 Raw Data (Bands)',
     raw_no_img: '⚠️ No image selected yet.',
-    raw_select_all: '☑ Select All Bands',
-    raw_select_none: '☐ Deselect All',
     aoi_name_label: 'AOI Name (optional — added to filename)',
     download_scope_lbl: 'Download Scope',
     scope_clip: '🗂️ Clip (within AOI boundaries)',
@@ -30278,8 +30306,6 @@ var SYLVA_TRANSLATIONS = {
     desc_raw_bands: 'Avval Sputnik tasviri modulidan sahnani tanlang — bu panel tanlangan tasviringizning BARCHA original kanallarini avtomatik roʻyxatga oladi.',
     sec_raw_bands: '📡 Xom maʼlumot (Kanallar)',
     raw_no_img: '⚠️ Hali tasvir tanlanmagan.',
-    raw_select_all: '☑ Barcha kanallarni tanlash',
-    raw_select_none: '☐ Barchasini bekor qilish',
     aoi_name_label: 'AOI nomi (ixtiyoriy — fayl nomiga qoʻshiladi)',
     download_scope_lbl: 'Yuklab olish qamrovi',
     scope_clip: '🗂️ Kesish (AOI chegaralarida)',
@@ -30829,8 +30855,6 @@ var SYLVA_TRANSLATIONS = {
     desc_raw_bands: 'Επιλέξτε πρώτα μια σκηνή από την ενότητα Δορυφορικής Εικόνας — αυτός ο πίνακας παραθέτει αυτόματα ΟΛΑ τα αρχικά κανάλια της επιλεγμένης εικόνας σας.',
     sec_raw_bands: '📡 Ακατέργαστα Δεδομένα (Κανάλια)',
     raw_no_img: '⚠️ Δεν έχει επιλεγεί ακόμη εικόνα.',
-    raw_select_all: '☑ Επιλογή Όλων των Καναλιών',
-    raw_select_none: '☐ Αποεπιλογή Όλων',
     aoi_name_label: 'Όνομα AOI (προαιρετικό — προστίθεται στο όνομα αρχείου)',
     download_scope_lbl: 'Εύρος Λήψης',
     scope_clip: '🗂️ Αποκοπή (εντός ορίων AOI)',
@@ -31380,8 +31404,6 @@ var SYLVA_TRANSLATIONS = {
     desc_raw_bands: 'Първо изберете сцена в модула за сателитно изображение — този панел автоматично ще изведе ВСИЧКИ оригинални канали на избраното изображение.',
     sec_raw_bands: '📡 Първични данни (канали)',
     raw_no_img: '⚠️ Все още не е избрано изображение.',
-    raw_select_all: '☑ Избери всички канали',
-    raw_select_none: '☐ Премахни избора от всички',
     aoi_name_label: 'Име на AOI (незадължително — добавя се към името на файла)',
     download_scope_lbl: 'Обхват на изтеглянето',
     scope_clip: '🗂️ Изрязване (в границите на AOI)',
@@ -31938,8 +31960,6 @@ var SYLVA_TRANSLATIONS = {
     desc_raw_bands: 'Önce Uydu Görüntüsü modülünden bir sahne seçin — bu panel, seçtiğiniz görüntünün TÜM orijinal bantlarını otomatik olarak listeler.',
     sec_raw_bands: '📡 Ham Veri (Bantlar)',
     raw_no_img: '⚠️ Henüz bir görüntü seçilmedi.',
-    raw_select_all: '☑ Tüm Bantları Seç',
-    raw_select_none: '☐ Tüm Seçimi Kaldır',
     aoi_name_label: 'AOI Adı (opsiyonel — dosya adına eklenir)',
     download_scope_lbl: 'İndirme Kapsamı',
     scope_clip: '🗂️ Clip (AOI sınırları içinde)',
@@ -32487,8 +32507,6 @@ var SYLVA_TRANSLATIONS = {
     desc_raw_bands: 'Əvvəlcə Peyk Görüntüsü modulundan bir səhnə seçin — bu panel, seçdiyiniz görüntünün BÜTÜN orijinal zolaqlarını avtomatik olaraq siyahıya alır.',
     sec_raw_bands: '📡 Xam Məlumat (Zolaqlar)',
     raw_no_img: '⚠️ Hələ bir görüntü seçilməyib.',
-    raw_select_all: '☑ Bütün Zolaqları Seç',
-    raw_select_none: '☐ Bütün Seçimi Ləğv Et',
     aoi_name_label: 'AOI Adı (isteğe bağlı — fayl adına əlavə edilir)',
     download_scope_lbl: 'Yükləmə Əhatəsi',
     scope_clip: '🗂️ Clip (AOI sərhədləri daxilində)',
@@ -33034,8 +33052,6 @@ var SYLVA_TRANSLATIONS = {
     desc_raw_bands: 'Előbb válasszon egy felvételt a Műholdkép modulból — ez a panel automatikusan felsorolja a kiválasztott kép ÖSSZES eredeti sávját.',
     sec_raw_bands: '📡 Nyers Adat (Sávok)',
     raw_no_img: '⚠️ Még nincs kiválasztott kép.',
-    raw_select_all: '☑ Minden Sáv Kiválasztása',
-    raw_select_none: '☐ Kiválasztás Törlése',
     aoi_name_label: 'AOI Neve (opcionális — hozzáadva a fájlnévhez)',
     download_scope_lbl: 'Letöltés Hatóköre',
     scope_clip: '🗂️ Clip (AOI határain belül)',
@@ -33579,8 +33595,6 @@ var SYLVA_TRANSLATIONS = {
     desc_raw_bands: 'Алдымен Жерсерік суреті модулінен сурет таңдаңыз — бұл панель таңдалған суреттің барлық бастапқы арналарын автоматты түрде тізімдейді.',
     sec_raw_bands: '📡 Шикі деректер (Арналар)',
     raw_no_img: '⚠️ Әлі сурет таңдалмаған.',
-    raw_select_all: '☑ Барлық арналарды таңдау',
-    raw_select_none: '☐ Таңдауды алып тастау',
     aoi_name_label: 'AOI атауы (міндетті емес — файл атауына қосылады)',
     download_scope_lbl: 'Жүктеу ауқымы',
     scope_clip: '🗂️ Кесу (AOI шекарасы ішінде)',
@@ -34122,8 +34136,6 @@ var SYLVA_TRANSLATIONS = {
     desc_raw_bands: 'Wählen Sie zuerst eine Szene im Satellitenbild-Modul — dieses Panel listet automatisch ALLE Originalbänder des ausgewählten Bildes.',
     sec_raw_bands: '📡 Rohdaten (Bänder)',
     raw_no_img: '⚠️ Kein Bild ausgewählt.',
-    raw_select_all: '☑ Alle Bänder auswählen',
-    raw_select_none: '☐ Auswahl aufheben',
     aoi_name_label: 'AOI-Name (optional — wird dem Dateinamen hinzugefügt)',
     download_scope_lbl: 'Downloadbereich',
     scope_clip: '🗂️ Clip (innerhalb AOI-Grenzen)',
@@ -34674,8 +34686,6 @@ var SYLVA_TRANSLATIONS = {
     desc_raw_bands: 'Sélectionnez d\'abord une scène dans le module Image satellite — ce panneau liste automatiquement TOUTES les bandes originales de l\'image sélectionnée.',
     sec_raw_bands: '📡 Données brutes (Bandes)',
     raw_no_img: '⚠️ Aucune image sélectionnée.',
-    raw_select_all: '☑ Sélectionner toutes les bandes',
-    raw_select_none: '☐ Désélectionner tout',
     aoi_name_label: 'Nom AOI (optionnel — ajouté au nom de fichier)',
     download_scope_lbl: 'Portée du téléchargement',
     scope_clip: '🗂️ Clip (dans les limites de l\'AOI)',
@@ -35226,8 +35236,6 @@ var SYLVA_TRANSLATIONS = {
     desc_raw_bands: 'Primero seleccione una escena en el módulo Imagen satelital — este panel lista automáticamente TODAS las bandas originales de la imagen seleccionada.',
     sec_raw_bands: '📡 Datos en bruto (Bandas)',
     raw_no_img: '⚠️ Aún no se ha seleccionado ninguna imagen.',
-    raw_select_all: '☑ Seleccionar todas las bandas',
-    raw_select_none: '☐ Deseleccionar todo',
     aoi_name_label: 'Nombre AOI (opcional — se agrega al nombre del archivo)',
     download_scope_lbl: 'Alcance de descarga',
     scope_clip: '🗂️ Recortar (dentro de los límites del AOI)',
@@ -35778,8 +35786,6 @@ var SYLVA_TRANSLATIONS = {
     desc_raw_bands: 'Primeiro selecione uma cena no módulo Imagem de satélite — este painel lista automaticamente TODAS as bandas originais da imagem selecionada.',
     sec_raw_bands: '📡 Dados brutos (Bandas)',
     raw_no_img: '⚠️ Ainda não foi selecionada nenhuma imagem.',
-    raw_select_all: '☑ Selecionar todas as bandas',
-    raw_select_none: '☐ Desmarcar tudo',
     aoi_name_label: 'Nome da AOI (opcional — adicionado ao nome do ficheiro)',
     download_scope_lbl: 'Âmbito de transferência',
     scope_clip: '🗂️ Recortar (dentro dos limites da AOI)',
@@ -36330,8 +36336,6 @@ var SYLVA_TRANSLATIONS = {
     desc_raw_bands: 'حدد أولاً مشهداً من وحدة الصور الفضائية — يسرد هذا اللوح تلقائياً جميع النطاقات الأصلية للصورة المحددة.',
     sec_raw_bands: '📡 البيانات الخام (النطاقات)',
     raw_no_img: '⚠️ لم يتم تحديد صورة بعد.',
-    raw_select_all: '☑ تحديد كل النطاقات',
-    raw_select_none: '☐ إلغاء التحديد',
     aoi_name_label: 'اسم AOI (اختياري — يُضاف إلى اسم الملف)',
     download_scope_lbl: 'نطاق التنزيل',
     scope_clip: '🗂️ قص (ضمن حدود AOI)',
@@ -36882,8 +36886,6 @@ var SYLVA_TRANSLATIONS = {
     desc_raw_bands: 'ابتدا یک صحنه از ماژول تصویر ماهواره‌ای انتخاب کنید — این پانل به‌طور خودکار تمام باندهای اصلی تصویر انتخاب‌شده را فهرست می‌کند.',
     sec_raw_bands: '📡 داده‌های خام (باندها)',
     raw_no_img: '⚠️ هنوز تصویری انتخاب نشده.',
-    raw_select_all: '☑ انتخاب همه باندها',
-    raw_select_none: '☐ لغو انتخاب همه',
     aoi_name_label: 'نام AOI (اختیاری — به نام فایل اضافه می‌شود)',
     download_scope_lbl: 'محدوده دانلود',
     scope_clip: '🗂️ برش (داخل مرزهای AOI)',
@@ -37434,8 +37436,6 @@ var SYLVA_TRANSLATIONS = {
     desc_raw_bands: '请先在卫星图像模块中选择场景 — 本面板会自动列出所选图像的所有原始波段。',
     sec_raw_bands: '📡 原始数据（波段）',
     raw_no_img: '⚠️ 尚未选择图像。',
-    raw_select_all: '☑ 选择所有波段',
-    raw_select_none: '☐ 取消全选',
     aoi_name_label: 'AOI 名称（可选 — 添加到文件名）',
     download_scope_lbl: '下载范围',
     scope_clip: '🗂️ 裁剪（在 AOI 边界内）',
@@ -37986,8 +37986,6 @@ var SYLVA_TRANSLATIONS = {
     desc_raw_bands: 'まず衛星画像モジュールでシーンを選択してください — このパネルは選択した画像の全オリジナルバンドを自動的に一覧表示します。',
     sec_raw_bands: '📡 生データ（バンド）',
     raw_no_img: '⚠️ 画像が選択されていません。',
-    raw_select_all: '☑ 全バンドを選択',
-    raw_select_none: '☐ 選択を解除',
     aoi_name_label: 'AOI名（省略可 — ファイル名に追加）',
     download_scope_lbl: 'ダウンロード範囲',
     scope_clip: '🗂️ クリップ（AOI境界内）',
@@ -38538,8 +38536,6 @@ var SYLVA_TRANSLATIONS = {
     desc_raw_bands: '먼저 위성 이미지 모듈에서 장면을 선택하세요 — 이 패널은 선택한 이미지의 모든 원본 밴드를 자동으로 나열합니다.',
     sec_raw_bands: '📡 원시 데이터 (밴드)',
     raw_no_img: '⚠️ 아직 이미지가 선택되지 않았습니다.',
-    raw_select_all: '☑ 모든 밴드 선택',
-    raw_select_none: '☐ 전체 선택 해제',
     aoi_name_label: 'AOI 이름 (선택 사항 — 파일 이름에 추가)',
     download_scope_lbl: '다운로드 범위',
     scope_clip: '🗂️ 클립 (AOI 경계 내)',
@@ -39062,8 +39058,6 @@ var SYLVA_TRANSLATIONS = {
     desc_raw_bands: 'पहले उपग्रह छवि मॉड्यूल से एक दृश्य चुनें — यह पैनल स्वचालित रूप से चुनी गई छवि के सभी मूल बैंड सूचीबद्ध करता है।',
     sec_raw_bands: '📡 कच्चा डेटा (बैंड)',
     raw_no_img: '⚠️ अभी तक कोई छवि नहीं चुनी गई।',
-    raw_select_all: '☑ सभी बैंड चुनें',
-    raw_select_none: '☐ सभी का चयन हटाएं',
     aoi_name_label: 'AOI नाम (वैकल्पिक — फ़ाइल नाम में जोड़ा जाएगा)',
     download_scope_lbl: 'डाउनलोड सीमा',
     scope_clip: '🗂️ क्लिप (AOI सीमाओं के भीतर)',
@@ -39614,8 +39608,6 @@ var SYLVA_TRANSLATIONS = {
     desc_raw_bands: 'Pertama pilih adegan dari modul Citra Satelit — panel ini secara otomatis mencantumkan SEMUA band asli dari gambar yang dipilih.',
     sec_raw_bands: '📡 Data Mentah (Band)',
     raw_no_img: '⚠️ Belum ada gambar yang dipilih.',
-    raw_select_all: '☑ Pilih Semua Band',
-    raw_select_none: '☐ Batalkan Semua Pilihan',
     aoi_name_label: 'Nama AOI (opsional — ditambahkan ke nama file)',
     download_scope_lbl: 'Cakupan Unduhan',
     scope_clip: '🗂️ Clip (dalam batas AOI)',
@@ -40202,8 +40194,6 @@ var SYLVA_TRANSLATIONS = {
     desc_raw_bands: 'Сначала выберите сцену в модуле спутникового снимка — эта панель автоматически выведет ВСЕ исходные каналы выбранного изображения.',
     sec_raw_bands: '📡 Исходные данные (каналы)',
     raw_no_img: '⚠️ Изображение ещё не выбрано.',
-    raw_select_all: '☑ Выбрать все каналы',
-    raw_select_none: '☐ Снять выбор со всех',
     aoi_name_label: 'Название AOI (необязательно — добавляется к имени файла)',
     download_scope_lbl: 'Область скачивания',
     scope_clip: '🗂️ Обрезка (в границах AOI)',
@@ -40747,8 +40737,6 @@ var SYLVA_TRANSLATIONS = {
     desc_raw_bands: 'เลือกฉากจากโมดูลภาพดาวเทียมก่อน — แผงนี้จะแสดงแบนด์ดั้งเดิมทั้งหมดของภาพที่คุณเลือกโดยอัตโนมัติ',
     sec_raw_bands: '📡 ข้อมูลดิบ (แบนด์)',
     raw_no_img: '⚠️ ยังไม่ได้เลือกรูปภาพ',
-    raw_select_all: '☑ เลือกแบนด์ทั้งหมด',
-    raw_select_none: '☐ ยกเลิกการเลือกทั้งหมด',
     aoi_name_label: 'ชื่อ AOI (ไม่บังคับ — เพิ่มในชื่อไฟล์)',
     download_scope_lbl: 'ขอบเขตการดาวน์โหลด',
     scope_clip: '🗂️ Clip (ภายในขอบเขต AOI)',
@@ -41298,8 +41286,6 @@ var SYLVA_TRANSLATIONS = {
     desc_raw_bands: 'প্রথমে স্যাটেলাইট চিত্র মডিউল থেকে একটি দৃশ্য নির্বাচন করুন — এই প্যানেলটি স্বয়ংক্রিয়ভাবে আপনার নির্বাচিত ছবির সব মূল ব্যান্ড তালিকাভুক্ত করবে।',
     sec_raw_bands: '📡 কাঁচা ডেটা (ব্যান্ড)',
     raw_no_img: '⚠️ এখনো কোনো ছবি নির্বাচন করা হয়নি।',
-    raw_select_all: '☑ সব ব্যান্ড নির্বাচন করুন',
-    raw_select_none: '☐ সব নির্বাচন বাতিল করুন',
     aoi_name_label: 'AOI নাম (ঐচ্ছিক — ফাইলের নামে যোগ হবে)',
     download_scope_lbl: 'ডাউনলোড পরিধি',
     scope_clip: '🗂️ ক্লিপ (AOI সীমানার মধ্যে)',
@@ -41813,8 +41799,6 @@ var SYLVA_TRANSLATIONS = {
     desc_raw_bands: 'Trước tiên hãy chọn một cảnh từ mô-đun Ảnh vệ tinh — bảng này sẽ tự động liệt kê TẤT CẢ các kênh phổ gốc của hình ảnh đã chọn.',
     sec_raw_bands: '📡 Dữ liệu thô (Kênh phổ)',
     raw_no_img: '⚠️ Chưa có hình ảnh nào được chọn.',
-    raw_select_all: '☑ Chọn tất cả kênh phổ',
-    raw_select_none: '☐ Bỏ chọn tất cả',
     aoi_name_label: 'Tên AOI (tùy chọn — thêm vào tên tệp)',
     download_scope_lbl: 'Phạm vi tải xuống',
     scope_clip: '🗂️ Cắt (trong ranh giới AOI)',
@@ -42383,8 +42367,6 @@ var SYLVA_TRANSLATIONS = {
     gtiff_err_unknown: 'نامعلوم خرابی',
     gtiff_err_server: 'یقینی بنائیں کہ Flask سرور پورٹ 5000 پر چل رہا ہے۔',
     raw_no_img: '⚠️ ابھی تک کوئی تصویر منتخب نہیں کی گئی۔',
-    raw_select_all: '☑ تمام بینڈ منتخب کریں',
-    raw_select_none: '☐ سب کا انتخاب ختم کریں',
     aoi_name_label: 'AOI کا نام (اختیاری — فائل نام میں شامل ہوگا)',
     download_scope_lbl: 'ڈاؤن لوڈ کا دائرہ',
     scope_clip: '🗂️ تراشیں (AOI کی حدود کے اندر)',
@@ -42950,8 +42932,6 @@ var SYLVA_TRANSLATIONS = {
     desc_raw_bands: 'Najpierw wybierz scenę z modułu obrazu satelitarnego — ten panel wyświetla WSZYSTKIE oryginalne pasma wybranego obrazu.',
     sec_raw_bands: '📡 Dane surowe (pasma)',
     raw_no_img: '⚠️ Nie wybrano jeszcze obrazu.',
-    raw_select_all: '☑ Zaznacz wszystkie pasma',
-    raw_select_none: '☐ Odznacz wszystkie',
     aoi_name_label: 'Nazwa AOI (opcjonalna — dodawana do nazwy pliku)',
     download_scope_lbl: 'Zakres pobierania',
     scope_clip: '🗂️ Przytnij (w granicach AOI)',
@@ -43501,8 +43481,6 @@ var SYLVA_TRANSLATIONS = {
     desc_raw_bands: 'Pilih dahulu adegan daripada modul Imej Satelit — panel ini akan menyenaraikan secara automatik SEMUA jalur asal imej yang dipilih.',
     sec_raw_bands: '📡 Data Mentah (Jalur)',
     raw_no_img: '⚠️ Tiada imej dipilih lagi.',
-    raw_select_all: '☑ Pilih Semua Jalur',
-    raw_select_none: '☐ Nyahpilih Semua',
     aoi_name_label: 'Nama AOI (pilihan — ditambah pada nama fail)',
     download_scope_lbl: 'Skop Muat Turun',
     scope_clip: '🗂️ Pangkas (dalam sempadan AOI)',
@@ -44046,8 +44024,6 @@ var SYLVA_TRANSLATIONS = {
       desc_raw_bands: 'Адегенде Спутник сүрөтү модулунан сүрөт тандаңыз — бул панел тандалган сүрөттүн бардык баштапкы каналдарын автоматтык түрдө тизмелейт.',
       sec_raw_bands: '📡 Чийки маалымат (Каналдар)',
       raw_no_img: '⚠️ Азырынча сүрөт тандалган жок.',
-      raw_select_all: '☑ Бардык каналдарды тандоо',
-      raw_select_none: '☐ Тандоону алып салуу',
       aoi_name_label: 'AOI аты (милдеттүү эмес — файл атына кошулат)',
       download_scope_lbl: 'Жүктөө чөйрөсү',
       scope_clip: '🗂️ Кесүү (AOI чегинин ичинде)',
@@ -44560,7 +44536,6 @@ var SYLVA_TRANSLATIONS = {
     desc_raw_bands: 'Эхлээд Хиймэл дагуулын зураг модулиас зураг сонгоно уу — энэ самбар сонгосон зургийн бүх анхны зурваасуудыг автоматаар жагсаана.',
     sec_raw_bands: '📡 Хам өгөгдөл (Зурваасууд)',
     raw_no_img: '⚠️ Одоогоор зураг сонгогдоогүй байна.',
-    raw_select_all: '☑ Бүх зурваасыг сонгох', raw_select_none: '☐ Бүх сонголтыг арилгах',
     aoi_name_label: 'AOI нэр (заавал биш — файлын нэрэнд нэмэгдэнэ)',
     download_scope_lbl: 'Татаж авах хүрээ',
     scope_clip: '🗂️ Хэрчих (AOI хилийн дотор)',
@@ -45080,8 +45055,6 @@ var SYLVA_TRANSLATIONS = {
       desc_raw_bands: 'ჯერ სატელიტური გამოსახულების მოდულიდან აირჩიეთ სურათი — ეს პანელი ავტომატურად ჩამოთვლის არჩეული სურათის ყველა საწყის არხს.',
       sec_raw_bands: '📡 ნედლი მონაცემები (არხები)',
       raw_no_img: '⚠️ ამ მომენტში სურათი არ არის არჩეული.',
-      raw_select_all: '☑ ყველა არხის არჩევა',
-      raw_select_none: '☐ არჩევის გაუქმება',
       aoi_name_label: 'AOI სახელი (არასავალდებულო — ფაილის სახელს დაემატება)',
       download_scope_lbl: 'ჩამოტვირთვის ფარგლები',
       scope_clip: '🗂️ დაჭრა (AOI საზღვრის შიგნით)',
@@ -45609,8 +45582,6 @@ var SYLVA_TRANSLATIONS = {
     desc_raw_bands: "Prima seleziona una scena dal modulo Immagine Satellitare — questo pannello elenca automaticamente TUTTE le bande originali dell'immagine selezionata.",
     sec_raw_bands: '📡 Dati Grezzi (Bande)',
     raw_no_img: '⚠️ Nessuna immagine selezionata.',
-    raw_select_all: '☑ Seleziona Tutte le Bande',
-    raw_select_none: '☐ Deseleziona Tutto',
     aoi_name_label: 'Nome AOI (opzionale — aggiunto al nome file)',
     download_scope_lbl: 'Ambito Download',
     scope_clip: '🗂️ Ritaglia (entro i limiti AOI)',
@@ -54057,13 +54028,39 @@ function _buildTsStatsHtml(data, colors) {
     return any ? html : '';
 }
 
+// 🛠️ KÖK NEDEN DÜZELTMESİ (Birden Fazla Ay Seçiminde "toFixed" Hatası):
+// GEE'de bir periyot (ör. dar bir ay aralığı × belirli bir yıl) için hiç
+// geçerli sahne/piksel bulunamazsa sunucu o noktanın value'sunu null
+// döndürür — bu KASITLI ve BEKLENEN bir durumdur (bkz. yukarıdaki
+// _computeTsSeriesStats'daki "null/eksik değerler atlanır" notu — o
+// fonksiyon buna zaten karşı korumalıydı). Ama çizgi grafiği ÇİZEN asıl
+// fonksiyon (_renderLineChart, aşağıda) null değerleri hiç süzmüyordu; ham
+// p.value'yu doğrudan p.value.toFixed(4) ile bir SVG <title> metnine
+// yazmaya çalışıyordu. null.toFixed(...) JavaScript'te tam olarak
+// kullanıcının bildirdiği hatayı üretir: "TypeError: Cannot read properties
+// of null (reading 'toFixed')". Tek ay seçiminde (daha geniş/sürekli bir
+// tarih penceresi) her periyotta genellikle en az bir geçerli sahne
+// bulunduğundan null nadiren oluşuyordu; birden fazla ay seçilince her
+// periyot daha dar bir pencereye daraldığından en az bir periyotta veri
+// bulunamama ihtimali artıyor — sorun tam olarak "birden fazla ay
+// seçilince" ortaya çıkıyormuş gibi görünmesinin nedeni budur (aslında
+// kural "kaç ay" değil, "en az bir periyotta veri var mı"dır). RGB/uydu
+// görüntüsü modunda bu fonksiyon hiç çağrılmadığından (bkz. yukarıda
+// _tsRgbMode dalı) oradaki çoklu ay seçimi zaten hep sorunsuzdu.
+// ÇÖZÜM: null noktalar artık hem eksen ölçeğinden (min/maks) hem
+// nokta/araç-ipucu çiziminden güvenle DIŞLANIYOR; çizgi de bu noktalarda
+// GERÇEK bir boşluk bırakacak şekilde ayrı parçalara bölünüyor — eksik veri
+// asla komşu bir noktaya (ör. 0'mış gibi) yanlışlıkla bağlanıp yanıltmıyor.
 function _renderLineChart(data) {
     var wrap = document.getElementById('stats-chart-svg-wrap');
     if (!wrap || !data || !data.series || !data.series.length) return;
     var W=280,H=160,PL=36,PR=10,PT=14,PB=28;
     var cW=W-PL-PR, cH=H-PT-PB;
-    var allVals=[]; data.series.forEach(function(s){s.points.forEach(function(p){allVals.push(p.value);});});
-    var minV=Math.min.apply(null,allVals), maxV=Math.max.apply(null,allVals), rng=maxV-minV||1;
+    function hasVal(p){ return !!(p && p.value !== null && p.value !== undefined && !isNaN(p.value)); }
+    var allVals=[]; data.series.forEach(function(s){s.points.forEach(function(p){ if (hasVal(p)) allVals.push(p.value); });});
+    var minV = allVals.length ? Math.min.apply(null,allVals) : 0;
+    var maxV = allVals.length ? Math.max.apply(null,allVals) : 1;
+    var rng=maxV-minV||1;
     var dates=data.series[0].points.map(function(p){return p.date;}), n=dates.length;
     function xOf(i){return PL+(i/Math.max(n-1,1))*cW;}
     function yOf(v){return PT+cH-((v-minV)/rng)*cH;}
@@ -54083,9 +54080,15 @@ function _renderLineChart(data) {
     var svg='';
     data.series.forEach(function(s,si){
         var col=s.color||COLORS[si%COLORS.length];
-        var pts=s.points.map(function(p,i){return xOf(i)+','+yOf(p.value);}).join(' ');
-        svg+='<polyline points="'+pts+'" fill="none" stroke="'+col+'" stroke-width="2" stroke-linejoin="round"/>';
+        // Boş (null) noktalarda çizgiyi gerçekten kesen, ayrı <polyline>
+        // parçaları çizilir — eksik bir periyot asla komşu bir noktaya
+        // (sanki değeri 0'mış gibi) bağlanıp yanıltmaz.
+        var segment=[];
+        function flushSeg(){ if(segment.length>1) svg+='<polyline points="'+segment.join(' ')+'" fill="none" stroke="'+col+'" stroke-width="2" stroke-linejoin="round"/>'; segment=[]; }
+        s.points.forEach(function(p,i){ if(hasVal(p)) segment.push(xOf(i)+','+yOf(p.value)); else flushSeg(); });
+        flushSeg();
         s.points.forEach(function(p,i){
+            if(!hasVal(p)) return; // null nokta için daire/araç-ipucu çizilmez (toFixed hatasının kök nedeni buydu)
             svg+='<circle cx="'+xOf(i)+'" cy="'+yOf(p.value)+'" r="3" fill="'+col+'" stroke="#fff" stroke-width="1"><title>'+s.index+' '+p.date+': '+p.value.toFixed(4)+'</title></circle>';
         });
     });
@@ -54518,45 +54521,20 @@ window._tsSliderIsRgb = false;
 function onTimeSliderChange() {}
 function toggleTimeSliderPlay() {}
 /* ── 6. Before/After Swipe ──────────────────────────────────────────────── */
-var _baActive = false;
-function toggleBeforeAfterSwipe() {
-    _baActive = !_baActive;
-    var ov  = document.getElementById('before-after-overlay');
-    var btn = document.getElementById('btn-before-after');
-    if (!ov) return;
-    if (btn) btn.classList.toggle('active', _baActive);
-    ov.style.display = _baActive ? 'block' : 'none';
-    if (_baActive) { _initSwipeDrag(document.getElementById('before-after-divider')); _applySwipeClip(50); }
-    else _applySwipeClip(null);
-}
-function _applySwipeClip(pct) {
-    var mapEl = document.getElementById('map');
-    if (!mapEl) return;
-    mapEl.querySelectorAll('.leaflet-pane canvas,.leaflet-pane img').forEach(function(el){
-        el.style.clipPath = pct === null ? '' : 'inset(0 '+(100-pct)+'% 0 0)';
-    });
-    var div = document.getElementById('before-after-divider');
-    if (div && pct !== null) div.style.left = pct + '%';
-}
-function _initSwipeDrag(divider) {
-    if (!divider || divider._swipeInited) return;
-    divider._swipeInited = true;
-    var wrap = document.getElementById('map-wrapper-inner') || document.getElementById('map');
-    var dragging = false;
-    function cX(e){ return e.touches ? e.touches[0].clientX : e.clientX; }
-    function onMove(e){
-        if (!dragging || !_baActive) return;
-        var r   = wrap.getBoundingClientRect();
-        var pct = Math.max(5, Math.min(95, ((cX(e)-r.left)/r.width)*100));
-        _applySwipeClip(pct); e.preventDefault();
-    }
-    divider.addEventListener('mousedown',  function(e){ dragging=true; e.preventDefault(); });
-    divider.addEventListener('touchstart', function(){ dragging=true; }, { passive:true });
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup',   function(){ dragging=false; });
-    document.addEventListener('touchmove', onMove, { passive:false });
-    document.addEventListener('touchend',  function(){ dragging=false; });
-}
+// 🛠️ TEMİZLİK (Ölü/Eski Kod Kaldırıldı): Bu blok, Katman Sıyırıcı'nın ÇOK
+// DAHA ESKİ, artık kullanılmayan bir sürümüydü (toggleBeforeAfterSwipe /
+// _applySwipeClip / _initSwipeDrag / _baActive) — YÜZDE tabanlı kırpma
+// kullanıyordu ve tam olarak ⇔ butonunun ("Katman Sıyırıcı: basınca üst
+// katman görünmez oluyor, çizgiyi takip etmiyor" şikâyetiyle bire bir
+// örtüşen) eski/bozuk davranışını üretiyordu. Kod taraması BU fonksiyonun
+// hiçbir yerden (ne butonun onclick'i, ne başka bir olay dinleyicisi)
+// ÇAĞRILMADIĞINI doğruladı — buton artık aşağıdaki (bu dosyada ayrıca
+// bulunan, piksel-hassas ve gerçek üst katmanı doğru hedefleyen) GÜNCEL
+// window.sylvaToggleLayerSwipeBtn() sistemini kullanıyor. Yani bu blok
+// ekranda görünen bir şeyi BOZMUYORDU (hiç çalışmıyordu), ama gelecekte
+// yanlışlıkla tekrar bağlanma riskini ve kod karışıklığını önlemek için
+// tamamen kaldırıldı; ilgili ölü HTML (#before-after-overlay/-divider) ve
+// CSS kuralı da birlikte temizlendi.
 </script>
 
 <script>
@@ -56279,8 +56257,29 @@ refresh();
         // analizi olsa bile "📥 Vektör Veri İndir" penceresi "ekranda
         // vektöre aktarılabilir aktif analiz yok" diyordu. Artık ikisi de
         // gerçekten sonuç listesine ekleniyor.
+        // 🛠️ KÖK NEDEN DÜZELTMESİ (kullanıcı bildirimi — "eş yükselti yaptım,
+        // sonra başka bir çevresel/kentsel analiz çalıştırdım, ekranda sadece
+        // O var, ama vektör indirince geçmişteki eş yükselti de ZIP'e giriyor"):
+        // window._sylvaLayerAnalyzePayloadByPane[pane], bir katman İLK KEZ
+        // eklendiğinde yazılır (bkz. _sylvaRememberLayerAnalyzePayload) ve o
+        // katman DAHA SONRA başka (stack modu kapalı) bir analiz tarafından
+        // haritadan/ekrandan tamamen kaldırılsa (bkz. _sylvaAddGeeLayer'daki
+        // hideOthers temizliği) BİLE hiçbir zaman silinmez — kasıtlı olarak,
+        // çünkü ESA+CORINE+MODIS gibi AYNI toplu çalıştırmada art arda gelen
+        // sınıflandırılmış katmanların hepsinin toplu indirme kuyruğunda
+        // kalması gerekir (bkz. yukarıdaki base.forEach ve onun yorumu). Ancak
+        // bu döngü SADECE Eş Yükselti (TOPO_CONTOUR) için, o "aynı toplu
+        // çalıştırma" kavramından bağımsız olarak, hafızadaki HER TOPO_CONTOUR
+        // kaydını koşulsuz ekliyordu — haritada artık hiç görünmeyen, günler
+        // önce çalıştırılmış bir eş yükselti bile ekrandaki güncel analizle
+        // birlikte ZIP'e giriyordu. ÇÖZÜM: bu katman hâlâ EKRANDA/aktif olarak
+        // işaretli (window._sylvaLayerVisibleByPane) DEĞİLSE (yani başka bir
+        // analiz onu gizlemiş veya kullanıcı Katman Geçiş kutusundan elle
+        // kapatmışsa) artık indirme kuyruğuna hiç eklenmiyor — yalnızca hâlâ
+        // ekranda gerçekten görünen eş yükselti verisi iner.
         var byLayer = window._sylvaLayerAnalyzePayloadByPane && window._sylvaLayerAnalyzePayloadByPane[pane] || {};
         Object.keys(byLayer).forEach(function(key){
+            if (visible[key] === false) return;
             var p = _sylvaLocalizedVectorPayload(_sylvaPayloadWithDownloadGeometry(byLayer[key], pane));
             if (!p || !p.index) return;
             var idx = String(p.index).toUpperCase();
