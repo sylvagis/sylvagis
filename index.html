@@ -6774,19 +6774,18 @@ function _sylvaHasMixedStackCategories(paneId) {
                 state.dateEnd = dE ? dE.value : null;
                 state.cloudCover = cS ? cS.value : null;
 
-                // 🆕 Ekran 2'nin tarih/bulut mantığı artık her zaman Ekran 1
-                // ile birebir aynı: Ekran 1'de (id === 'map') tarih veya
-                // bulutluluk değiştirildiği anda aynı değerler doğrudan
-                // Ekran 2'nin (map2) hafızasına da yazılır. Böylece kullanıcı
-                // Ekran 2'ye geçtiğinde her zaman Ekran 1'in güncel tarih
-                // ayarlarını görür — iki ekran arasında tarih için ayrı/
-                // bağımsız bir durum kalmaz.
-                if (id === 'map') {
-                    var _map2State = _sylvaPaneState('map2');
-                    _map2State.dateStart = state.dateStart;
-                    _map2State.dateEnd = state.dateEnd;
-                    _map2State.cloudCover = state.cloudCover;
-                }
+                // 🛠️ BUG FİX (22/09/2026): Önceki kod burada Ekran 1'de
+                // (id === 'map') tarih/bulut değiştirildiğinde bu değerleri
+                // ZORLA Ekran 2'nin (map2) hafızasına da yazıyordu. Bu yüzden
+                // Ekran 2'de bağımsız bir tarih aralığı seçilse bile, analiz
+                // sırasında/panel senkronizasyonunda Ekran 1'in tarihleri
+                // devreye giriyor ve kullanıcının Ekran 2 için seçtiği tarih
+                // aralığı yok sayılıyordu (Ekran 2 = "yangın sonrası" senaryosu
+                // her zaman Ekran 1'in "yangın öncesi" tarihine göre çalışıyordu).
+                // Her ekranın tarih/bulut durumu artık TAMAMEN bağımsız tutulur;
+                // bu zorla kopyalama kaldırıldı. (Ekranları birlikte hareket
+                // ettirmek isteyenler zaten mevcut "Senkronizasyon" seçeneğini
+                // kullanabilir.)
             }
             document.addEventListener('change', function (e) {
                 if (!e.target) return;
@@ -6804,19 +6803,16 @@ function _sylvaHasMixedStackCategories(paneId) {
                 var id = _sylvaActivePaneId();
                 var state = _sylvaPaneState(id);
 
-                // 🆕 Güvenlik önlemi: Ekran 2'nin tarih/bulut alanları normalde
-                // her değişiklikte zaten Ekran 1 ile senkronize ediliyor (bkz.
-                // _captureModuleState), ama olası başka bir yoldan (ör. sayfa
-                // ilk yüklendiğinde ya da başka bir kod yolundan) Ekran 2'nin
-                // tarih durumu Ekran 1'den farklı kalmışsa, panel Ekran 2'yi
-                // her göstermeye çalıştığında bu fark burada da giderilir —
-                // Ekran 2 tarih/bulut konusunda HER ZAMAN Ekran 1'i yansıtır.
-                if (id === 'map2') {
-                    var _map1State = _sylvaPaneState('map');
-                    state.dateStart = _map1State.dateStart;
-                    state.dateEnd = _map1State.dateEnd;
-                    state.cloudCover = _map1State.cloudCover;
-                }
+                // 🛠️ BUG FİX (22/09/2026): Önceki kod burada Ekran 2'ye
+                // (id === 'map2') her geçildiğinde/panel senkronize edildiğinde
+                // Ekran 2'nin kendi dateStart/dateEnd/cloudCover değerlerini
+                // ZORLA Ekran 1'in (map) değerleriyle eziyordu. Bu, "Analizi
+                // Çalıştır" tıklanmadan hemen önce bile tetiklenebildiğinden,
+                // kullanıcı Ekran 2'de bambaşka bir tarih aralığı (ör. yangın
+                // sonrası) seçse dahi analiz isteği Ekran 1'in tarih aralığıyla
+                // gönderiliyordu — bildirilen hatanın kök nedeni buydu. Artık
+                // her ekranın tarih/bulut durumu kendi hafızasında bağımsız
+                // olarak korunur ve ekran geçişinde EZİLMEZ.
 
                 // 🛠️ BUG FİX: Sadece native input.value set etmek, görünür takvim
                 // kutusundaki metni ve iç seçim durumunu güncellemediği için Ekran
