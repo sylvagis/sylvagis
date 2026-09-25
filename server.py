@@ -184,6 +184,8 @@ def _sylva_export_type_and_source(analysis_index, satellite_key, dem_source=None
     (İstemci tarafındaki sylvaExportTypeAndSource()/…FromPayload() ile
     AYNI mantığı izler; bkz. index.html.)"""
     idx = analysis_index or ''
+    if idx in ('CARBON_SIMULATION', 'CARBON_SINK', 'CARBON_PLANTING'):
+        return 'Karbon_Fidan_Dagilimi', 'Simulasyon'
     if idx in _LULC_SOURCE_LABELS:
         return 'LULC', _LULC_SOURCE_LABELS[idx]
     if idx.startswith('TOPO'):
@@ -209,6 +211,14 @@ def _sylva_build_export_basename(analysis_index, satellite_key, area_name=None,
         parts.append(area_clean)
     parts.append(date_str or datetime.datetime.utcnow().strftime('%Y-%m-%d'))
     return '_'.join(p for p in parts if p)
+
+
+@app.route('/')
+@app.route('/index.html')
+def serve_index():
+    from flask import send_from_directory
+    root_dir = os.path.dirname(os.path.abspath(__file__))
+    return send_from_directory(root_dir, 'index.html')
 
 
 # API istemcisi JSON bekler. Flask'in varsayılan HTML 404/405 sayfaları,
@@ -5269,6 +5279,28 @@ def _collect_scenes_across_years(col, start_date, end_date, months=None,
     edt = datetime.datetime.strptime(str(end_date)[:10], '%Y-%m-%d')
     month_filter = _calendar_month_filter(months)
 
+    # 🛠️ BUG FİX (22/09/2026 — Galeri sadece 8-10 görüntü gösteriyor, seçilen
+    # tarih aralığının SONUNA kadar gelmiyor):
+    # Önceden her yıl için SABİT bir per_year_limit (ör. 8) uygulanıyor ve
+    # o yılın kesişen aralığı içinden yalnızca kronolojik olarak İLK
+    # per_year_limit kadar sahne alınıyordu. Kullanıcı tek bir takvim yılı
+    # içinde kalan (ör. 07/22/2026-09/22/2026 gibi 2 aylık) bir aralık
+    # seçtiğinde bile, o aralıktaki TÜM eşleşen sahneler yerine sadece en
+    # erken ~8 tanesi (yaklaşık ilk 1 ay) dönüyor, aralığın geri kalanı
+    # (08/22-09/22) sorgudan tamamen düşüyordu — "tüm görüntü seçenekleri
+    # gelsin" beklentisi karşılanmıyordu.
+    #
+    # ÇÖZÜM: per_year_limit artık aralıktaki yıl sayısına göre ADİL şekilde
+    # büyütülüyor: aralık kaç takvim yılına yayılıyorsa, toplam bütçe
+    # (total_limit) o kadar yıla bölünüp her yıla pay ediliyor — ama asla
+    # çağıranın verdiği per_year_limit'in altına düşmüyor (min. taban).
+    # Böylece tek yıllık (veya birkaç yıllık) aralıklarda per-year sınırı
+    # pratikte total_limit'e eşitlenir ve aralıktaki TÜM eşleşen sahneler
+    # (total_limit'e kadar) döner; çok yıllı geniş aralıklarda ise eski
+    # "her yıldan adil örnekleme" davranışı korunur.
+    num_years = max(1, edt.year - sdt.year + 1)
+    effective_per_year_limit = max(per_year_limit, -(-total_limit // num_years))  # ceil
+
     merged = None
     for year in range(sdt.year, edt.year + 1):
         year_start = datetime.datetime(year, 1, 1)
@@ -5280,7 +5312,7 @@ def _collect_scenes_across_years(col, start_date, end_date, months=None,
         yr_col = col.filterDate(clip_start.strftime('%Y-%m-%d'), clip_end.strftime('%Y-%m-%d'))
         if month_filter is not None:
             yr_col = yr_col.filter(month_filter)
-        yr_col = yr_col.sort('system:time_start').limit(per_year_limit)
+        yr_col = yr_col.sort('system:time_start').limit(effective_per_year_limit)
         merged = yr_col if merged is None else merged.merge(yr_col)
 
     if merged is None:
@@ -11029,8 +11061,8 @@ def _features_to_kml(features, name='SylvaGIS_vector'):
         gtype = geom.get('type', '')
         coords = geom.get('coordinates', [])
 
-        # Placemark adı: class_value → sınıf, yoksa class_name, yoksa numara
-        label = (props.get('class_name') or props.get('label') or
+        # Placemark adı: name → class_name → label → class_value → numara
+        label = (props.get('name') or props.get('class_name') or props.get('label') or
                  props.get('class_value') or props.get('first') or str(i))
         color_hex = (props.get('color') or 'ffffffff')
         # KML renk formatı: aabbggrr (alpha, blue, green, red)
@@ -11046,6 +11078,8 @@ def _features_to_kml(features, name='SylvaGIS_vector'):
         lines.append(f'    <name>{sax.escape(str(label))}</name>')
         if gtype == 'LineString':
             lines.append(f'    <Style><LineStyle><color>{kml_color}</color><width>3</width></LineStyle></Style>')
+        elif gtype == 'Point':
+            lines.append(f'    <Style><IconStyle><color>{kml_color}</color><scale>0.8</scale><Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle><LabelStyle><scale>0.7</scale></LabelStyle></Style>')
         else:
             lines.append(f'    <Style><PolyStyle><color>{kml_color}</color><outline>1</outline></PolyStyle></Style>')
 
@@ -11111,6 +11145,8 @@ def _features_to_shp_zip(features, name='SylvaGIS_vector'):
         w.field('CLASS_VAL', 'C', 40)
         w.field('CLASS_NAME', 'C', 80)
         w.field('COLOR', 'C', 10)
+        w.field('NAME', 'C', 80)
+        w.field('SPECIES', 'C', 50)
 
         def _flat_ring(ring):
             return [list(pt) for pt in ring]
@@ -11160,24 +11196,26 @@ def _features_to_shp_zip(features, name='SylvaGIS_vector'):
             cv   = str(props.get('class_value') or props.get('first') or props.get('label') or '')
             cn   = str(props.get('class_name') or props.get('label') or cv)
             col  = str(props.get('color') or '')
+            nm   = str(props.get('name') or '')
+            sp   = str(props.get('species') or '')
 
             if gtype == 'Polygon':
                 parts = [_ring_for_shp(r, i > 0) for i, r in enumerate(coords)]
                 w.poly(parts)
-                w.record(cv, cn, col)
+                w.record(cv, cn, col, nm, sp)
             elif gtype == 'MultiPolygon':
                 all_parts = []
                 for poly in coords:
                     all_parts.extend([_ring_for_shp(r, i > 0) for i, r in enumerate(poly)])
                 w.poly(all_parts)
-                w.record(cv, cn, col)
+                w.record(cv, cn, col, nm, sp)
             elif gtype == 'Point':
                 if coords and len(coords) >= 2:
                     w.point(coords[0], coords[1])
-                    w.record(cv, cn, col)
+                    w.record(cv, cn, col, nm, sp)
             elif gtype == 'LineString':
                 w.line([_flat_ring(coords)])
-                w.record(cv, cn, col)
+                w.record(cv, cn, col, nm, sp)
 
         w.close()
 
@@ -12117,6 +12155,53 @@ def _vectorize_analysis_payload(data, crs='EPSG:4326'):
             props['class_name']='Eş Yükselti'; props['color']=color
         return feats,[{'code':1,'label':'Eş Yükselti','color':color}]
 
+    if index in ('CARBON_SIMULATION', 'CARBON_SINK', 'CARBON_PLANTING'):
+        label = str(data.get('analysisName') or 'Karbon Fidan Dağılımı (KML)')
+        color = str(data.get('color') or '#16a34a')
+        supplied_geojson = data.get('geojson') or data.get('pointsGeoJSON')
+        if isinstance(supplied_geojson, str):
+            try:
+                supplied_geojson = json.loads(supplied_geojson)
+            except Exception:
+                supplied_geojson = None
+        feats = []
+        if isinstance(supplied_geojson, dict):
+            feats = supplied_geojson.get('features') or []
+        elif isinstance(supplied_geojson, list):
+            feats = supplied_geojson
+        if not feats:
+            feats = data.get('features') or []
+        if not feats:
+            pts = data.get('plantingPoints') or data.get('planting_points') or data.get('points') or []
+            if pts:
+                feats = [{
+                    'type': 'Feature',
+                    'geometry': {'type': 'Point', 'coordinates': [float(pt[1]), float(pt[0]), 0]},
+                    'properties': {
+                        'name': f'Fidan #{i+1}',
+                        'species': str(data.get('species') or ''),
+                        'class_name': label,
+                        'color': color
+                    }
+                } for i, pt in enumerate(pts)]
+        if feats:
+            out = []
+            for i, f in enumerate(feats, start=1):
+                if not isinstance(f, dict) or not f.get('geometry'):
+                    continue
+                nf = copy.deepcopy(f)
+                props = dict(nf.get('properties') or {})
+                props.setdefault('name', f'Fidan #{i}')
+                props.setdefault('class_name', label)
+                props.setdefault('color', color)
+                if 'species' not in props and data.get('species'):
+                    props['species'] = str(data.get('species'))
+                nf['properties'] = props
+                out.append(nf)
+            if out:
+                return out, [{'code': 1, 'label': label, 'color': color}]
+        raise ValueError('Karbon Fidan Dağılımı için aktarılabilir nokta verisi bulunamadı.')
+
     if index == 'BUILDING_FOOTPRINT':
         # Öncelik: analiz ekranında zaten başarıyla üretilmiş gerçek GeoJSON.
         # Böylece indirme aşamasında aynı bina sorgusunu ikinci kez çalıştırıp
@@ -12561,6 +12646,1413 @@ def download_geotiff_batch():
     except Exception as exc:
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(exc)}), 500
+
+
+# ════════════════════════════════════════════════════════════════
+# 🌲💨 KARBON YUTAK ALANI SİMÜLASYONU
+# AŞAMA 3 & AŞAMA 4: Bilimsel Veri Modeli, IPCC Katsayı Sözlükleri & Çözümleme Motoru
+# ════════════════════════════════════════════════════════════════
+
+# 1. Evrensel Sabitler (Universal Forestry & Carbon Constants)
+# IPCC Tier 1 Standart Karbon Fraksiyonu: 1 ton fırın kurusu biyokütle başına 0.47 ton Karbon (tC)
+CARBON_FRACTION = 0.47
+
+# Moleküler Ağırlık Oranı: CO2 (44.01 g/mol) / C (12.011 g/mol) ≈ 3.6667
+CO2_TO_C_RATIO = 44.0 / 12.0
+
+
+# 2. Ülke → İklim Bölgesi Eşleme Tablosu (Country to Climate Zone Mapping)
+# Standart IPCC iklim bölgeleri:
+# 'mediterranean', 'temperate_continental', 'temperate_oceanic', 'boreal', 'subtropical', 'tropical_wet', 'tropical_dry'
+COUNTRY_CLIMATE_MAP = {
+    # Akdeniz & Ilıman Akdeniz Kuşağı
+    'TR': 'mediterranean',  # Türkiye (Akdeniz & Karasal geçiş kuşağı)
+    'GR': 'mediterranean',
+    'IT': 'mediterranean',
+    'ES': 'mediterranean',
+    'PT': 'mediterranean',
+    'CY': 'mediterranean',
+    'AL': 'mediterranean',
+    'HR': 'mediterranean',
+
+    # Ilıman Okyanusal (Batı & Kuzeybatı Avrupa)
+    'FR': 'temperate_oceanic',
+    'GB': 'temperate_oceanic',
+    'IE': 'temperate_oceanic',
+    'NL': 'temperate_oceanic',
+    'BE': 'temperate_oceanic',
+    'DK': 'temperate_oceanic',
+    'NZ': 'temperate_oceanic',
+
+    # Ilıman Karasal (Orta/Doğu Avrupa, Kuzey Amerika & Doğu Asya)
+    'DE': 'temperate_continental',
+    'PL': 'temperate_continental',
+    'CZ': 'temperate_continental',
+    'AT': 'temperate_continental',
+    'CH': 'temperate_continental',
+    'HU': 'temperate_continental',
+    'RO': 'temperate_continental',
+    'BG': 'temperate_continental',
+    'SK': 'temperate_continental',
+    'UA': 'temperate_continental',
+    'US': 'temperate_continental',
+    'CN': 'temperate_continental',
+    'JP': 'temperate_continental',
+    'KR': 'temperate_continental',
+
+    # Boreal (Kuzey Soğuk Kuşak / Tayga)
+    'RU': 'boreal',
+    'CA': 'boreal',
+    'SE': 'boreal',
+    'FI': 'boreal',
+    'NO': 'boreal',
+    'EE': 'boreal',
+    'LV': 'boreal',
+    'LT': 'boreal',
+
+    # Subtropikal
+    'AU': 'subtropical',
+    'ZA': 'subtropical',
+    'AR': 'subtropical',
+    'CL': 'subtropical',
+    'EG': 'subtropical',
+    'IL': 'subtropical',
+    'IR': 'subtropical',
+    'IQ': 'subtropical',
+    'DZ': 'subtropical',
+    'MA': 'subtropical',
+    'TN': 'subtropical',
+
+    # Tropikal Islak / Nemli (Tropical Wet / Rainforest)
+    'BR': 'tropical_wet',
+    'ID': 'tropical_wet',
+    'MY': 'tropical_wet',
+    'CO': 'tropical_wet',
+    'PE': 'tropical_wet',
+    'CD': 'tropical_wet',
+    'CG': 'tropical_wet',
+    'VN': 'tropical_wet',
+    'TH': 'tropical_wet',
+    'PH': 'tropical_wet',
+
+    # Tropikal Kuru / Yarı Kurak (Tropical Dry / Savanna)
+    'IN': 'tropical_dry',
+    'MX': 'tropical_dry',
+    'KE': 'tropical_dry',
+    'NG': 'tropical_dry',
+    'SA': 'tropical_dry',
+    'PK': 'tropical_dry',
+    'ET': 'tropical_dry',
+    'TZ': 'tropical_dry',
+    'SD': 'tropical_dry',
+}
+DEFAULT_CLIMATE_ZONE = 'temperate_continental'
+
+
+# 3. IPCC Tier 1 & Global Wood Density Katsayıları (Species Level Defaults)
+# Parametreler:
+#   wood_density: Odun yoğunluğu (t DM / m³ yaş gövde hacmi)
+#   root_shoot_ratio: Kök/Gövde oranı (R - yer altı biyokütlesi / yer üstü biyokütlesi)
+#   bef: Biyokütle Genişletme Faktörü (BEF2 - gövde hacminden toplam yer üstü biyokütleye geçiş)
+#   default_mai: Ortalama Yıllık Hacim Artımı (Mean Annual Increment - m³/ha/yıl)
+#   group: 'conifer' (iğne yapraklı) veya 'broadleaf' (geniş yapraklı)
+CARBON_SPECIES_DEFAULTS = {
+    # 🌲 İĞNE YAPRAKLILAR (CONIFERS)
+    'pinus_brutia': {
+        'sci_name': 'Pinus brutia', 'common_tr': 'Kızılçam', 'common_en': 'Calabrian Pine',
+        'wood_density': 0.51, 'root_shoot_ratio': 0.25, 'bef': 1.35, 'default_mai': 6.5,
+        'group': 'conifer',
+        'aliases': ['pinus brutia', 'kizilcam', 'kızılçam', 'calabrian pine', 'turkish pine']
+    },
+    'pinus_nigra': {
+        'sci_name': 'Pinus nigra', 'common_tr': 'Karaçam', 'common_en': 'Anatolian Black Pine',
+        'wood_density': 0.54, 'root_shoot_ratio': 0.28, 'bef': 1.30, 'default_mai': 5.5,
+        'group': 'conifer',
+        'aliases': ['pinus nigra', 'karacam', 'karaçam', 'black pine', 'anatolian black pine', 'austrian pine']
+    },
+    'pinus_sylvestris': {
+        'sci_name': 'Pinus sylvestris', 'common_tr': 'Sarıçam', 'common_en': 'Scots Pine',
+        'wood_density': 0.49, 'root_shoot_ratio': 0.27, 'bef': 1.30, 'default_mai': 5.0,
+        'group': 'conifer',
+        'aliases': ['pinus sylvestris', 'saricam', 'sarıçam', 'scots pine', 'scotch pine']
+    },
+    'pinus_pinea': {
+        'sci_name': 'Pinus pinea', 'common_tr': 'Fıstık Çamı', 'common_en': 'Stone Pine',
+        'wood_density': 0.53, 'root_shoot_ratio': 0.26, 'bef': 1.35, 'default_mai': 4.5,
+        'group': 'conifer',
+        'aliases': ['pinus pinea', 'fistik cami', 'fıstık çamı', 'stone pine', 'umbrella pine']
+    },
+    'pinus_halepensis': {
+        'sci_name': 'Pinus halepensis', 'common_tr': 'Halep Çamı', 'common_en': 'Aleppo Pine',
+        'wood_density': 0.55, 'root_shoot_ratio': 0.26, 'bef': 1.35, 'default_mai': 4.5,
+        'group': 'conifer',
+        'aliases': ['pinus halepensis', 'halep cami', 'halep çamı', 'aleppo pine']
+    },
+    'pinus_pinaster': {
+        'sci_name': 'Pinus pinaster', 'common_tr': 'Sahil Çamı', 'common_en': 'Maritime Pine',
+        'wood_density': 0.52, 'root_shoot_ratio': 0.25, 'bef': 1.30, 'default_mai': 8.0,
+        'group': 'conifer',
+        'aliases': ['pinus pinaster', 'sahil cami', 'sahil çamı', 'maritime pine']
+    },
+    'pinus_taeda': {
+        'sci_name': 'Pinus taeda', 'common_tr': 'Loblolly Çamı', 'common_en': 'Loblolly Pine',
+        'wood_density': 0.47, 'root_shoot_ratio': 0.25, 'bef': 1.25, 'default_mai': 12.0,
+        'group': 'conifer',
+        'aliases': ['pinus taeda', 'loblolly pine', 'loblolly cami']
+    },
+    'pinus_radiata': {
+        'sci_name': 'Pinus radiata', 'common_tr': 'Radiata Çamı', 'common_en': 'Monterey Pine',
+        'wood_density': 0.45, 'root_shoot_ratio': 0.23, 'bef': 1.25, 'default_mai': 16.0,
+        'group': 'conifer',
+        'aliases': ['pinus radiata', 'monterey pine', 'radiata cami', 'radiata çamı']
+    },
+    'cedrus_libani': {
+        'sci_name': 'Cedrus libani', 'common_tr': 'Toros Sediri', 'common_en': 'Lebanon Cedar',
+        'wood_density': 0.52, 'root_shoot_ratio': 0.26, 'bef': 1.30, 'default_mai': 4.5,
+        'group': 'conifer',
+        'aliases': ['cedrus libani', 'toros sediri', 'sedir', 'lebanon cedar', 'cedar']
+    },
+    'picea_orientalis': {
+        'sci_name': 'Picea orientalis', 'common_tr': 'Doğu Ladini', 'common_en': 'Oriental Spruce',
+        'wood_density': 0.43, 'root_shoot_ratio': 0.29, 'bef': 1.35, 'default_mai': 7.5,
+        'group': 'conifer',
+        'aliases': ['picea orientalis', 'dogu ladini', 'doğu ladini', 'oriental spruce', 'caucasian spruce']
+    },
+    'picea_abies': {
+        'sci_name': 'Picea abies', 'common_tr': 'Avrupa Ladini', 'common_en': 'Norway Spruce',
+        'wood_density': 0.44, 'root_shoot_ratio': 0.29, 'bef': 1.35, 'default_mai': 8.0,
+        'group': 'conifer',
+        'aliases': ['picea abies', 'avrupa ladini', 'norway spruce', 'ladin']
+    },
+    'abies_spp': {
+        'sci_name': 'Abies spp.', 'common_tr': 'Göknarlar', 'common_en': 'Firs',
+        'wood_density': 0.42, 'root_shoot_ratio': 0.28, 'bef': 1.35, 'default_mai': 7.0,
+        'group': 'conifer',
+        'aliases': [
+            'abies spp', 'goknar', 'göknar', 'uludag goknari', 'uludağ göknarı',
+            'toros goknari', 'toros göknarı', 'dogu karadeniz goknari', 'abies bornmuelleriana',
+            'abies cilicica', 'abies nordmanniana', 'fir', 'silver fir'
+        ]
+    },
+    'cupressus_sempervirens': {
+        'sci_name': 'Cupressus sempervirens', 'common_tr': 'Akdeniz Servisi', 'common_en': 'Mediterranean Cypress',
+        'wood_density': 0.55, 'root_shoot_ratio': 0.24, 'bef': 1.30, 'default_mai': 4.0,
+        'group': 'conifer',
+        'aliases': ['cupressus sempervirens', 'akdeniz servisi', 'servi', 'mediterranean cypress', 'cypress']
+    },
+    'pseudotsuga_menziesii': {
+        'sci_name': 'Pseudotsuga menziesii', 'common_tr': 'Douglas Göknarı', 'common_en': 'Douglas Fir',
+        'wood_density': 0.45, 'root_shoot_ratio': 0.26, 'bef': 1.25, 'default_mai': 11.0,
+        'group': 'conifer',
+        'aliases': ['pseudotsuga menziesii', 'douglas fir', 'douglas goknari', 'douglas göknarı']
+    },
+
+    # 🌳 GENİŞ YAPRAKLILAR (BROADLEAVES)
+    'fagus_orientalis': {
+        'sci_name': 'Fagus orientalis', 'common_tr': 'Doğu Kayını', 'common_en': 'Oriental Beech',
+        'wood_density': 0.65, 'root_shoot_ratio': 0.23, 'bef': 1.40, 'default_mai': 6.0,
+        'group': 'broadleaf',
+        'aliases': ['fagus orientalis', 'dogu kayini', 'doğu kayını', 'kayin', 'kayın', 'oriental beech']
+    },
+    'fagus_sylvatica': {
+        'sci_name': 'Fagus sylvatica', 'common_tr': 'Avrupa Kayını', 'common_en': 'European Beech',
+        'wood_density': 0.66, 'root_shoot_ratio': 0.23, 'bef': 1.40, 'default_mai': 6.5,
+        'group': 'broadleaf',
+        'aliases': ['fagus sylvatica', 'avrupa kayini', 'avrupa kayını', 'european beech', 'beech']
+    },
+    'quercus_robur': {
+        'sci_name': 'Quercus robur / petraea', 'common_tr': 'Saplı / Sapsız Meşe', 'common_en': 'Oak (Sessile / Pedunculate)',
+        'wood_density': 0.68, 'root_shoot_ratio': 0.24, 'bef': 1.45, 'default_mai': 4.0,
+        'group': 'broadleaf',
+        'aliases': [
+            'quercus robur', 'quercus petraea', 'mese', 'meşe', 'sapli mese', 'saplı meşe',
+            'sapsiz mese', 'sapsız meşe', 'oak', 'pedunculate oak', 'sessile oak'
+        ]
+    },
+    'quercus_cerris': {
+        'sci_name': 'Quercus cerris', 'common_tr': 'Saçlı Meşe', 'common_en': 'Turkey Oak',
+        'wood_density': 0.70, 'root_shoot_ratio': 0.25, 'bef': 1.45, 'default_mai': 3.8,
+        'group': 'broadleaf',
+        'aliases': ['quercus cerris', 'sacli mese', 'saçlı meşe', 'turkey oak']
+    },
+    'castanea_sativa': {
+        'sci_name': 'Castanea sativa', 'common_tr': 'Anadolu Kestanesi', 'common_en': 'Sweet Chestnut',
+        'wood_density': 0.56, 'root_shoot_ratio': 0.24, 'bef': 1.35, 'default_mai': 6.0,
+        'group': 'broadleaf',
+        'aliases': ['castanea sativa', 'anadolu kestanesi', 'kestane', 'sweet chestnut', 'chestnut']
+    },
+    'robinia_pseudoacacia': {
+        'sci_name': 'Robinia pseudoacacia', 'common_tr': 'Yalancı Akasya', 'common_en': 'Black Locust',
+        'wood_density': 0.69, 'root_shoot_ratio': 0.22, 'bef': 1.30, 'default_mai': 7.0,
+        'group': 'broadleaf',
+        'aliases': ['robinia pseudoacacia', 'yalanci akasya', 'yalancı akasya', 'black locust', 'robinia']
+    },
+    'populus_spp': {
+        'sci_name': 'Populus spp.', 'common_tr': 'Kavak', 'common_en': 'Poplar / Aspen',
+        'wood_density': 0.41, 'root_shoot_ratio': 0.22, 'bef': 1.25, 'default_mai': 12.0,
+        'group': 'broadleaf',
+        'aliases': [
+            'populus spp', 'populus nigra', 'populus tremula', 'kavak', 'kara kavak',
+            'titrek kavak', 'poplar', 'black poplar', 'aspen', 'eurasian aspen'
+        ]
+    },
+    'eucalyptus_spp': {
+        'sci_name': 'Eucalyptus spp.', 'common_tr': 'Okaliptüs', 'common_en': 'Eucalyptus',
+        'wood_density': 0.58, 'root_shoot_ratio': 0.20, 'bef': 1.25, 'default_mai': 15.0,
+        'group': 'broadleaf',
+        'aliases': [
+            'eucalyptus spp', 'eucalyptus camaldulensis', 'eucalyptus grandis',
+            'eucalyptus globulus', 'okaliptus', 'okaliptüs', 'river red gum', 'tasmanian blue gum', 'rose gum'
+        ]
+    },
+    'tectona_grandis': {
+        'sci_name': 'Tectona grandis', 'common_tr': 'Tik Ağacı', 'common_en': 'Teak',
+        'wood_density': 0.60, 'root_shoot_ratio': 0.25, 'bef': 1.30, 'default_mai': 9.0,
+        'group': 'broadleaf',
+        'aliases': ['tectona grandis', 'tik agaci', 'tik ağacı', 'teak']
+    },
+    'acacia_spp': {
+        'sci_name': 'Acacia spp.', 'common_tr': 'Akasya (Tropikal)', 'common_en': 'Acacia / Wattle',
+        'wood_density': 0.62, 'root_shoot_ratio': 0.23, 'bef': 1.30, 'default_mai': 14.0,
+        'group': 'broadleaf',
+        'aliases': ['acacia spp', 'acacia mangium', 'acacia mearnsii', 'akasya', 'wattle']
+    },
+    'hevea_brasiliensis': {
+        'sci_name': 'Hevea brasiliensis', 'common_tr': 'Kauçuk Ağacı', 'common_en': 'Rubber Tree',
+        'wood_density': 0.56, 'root_shoot_ratio': 0.21, 'bef': 1.30, 'default_mai': 10.0,
+        'group': 'broadleaf',
+        'aliases': ['hevea brasiliensis', 'kaucuk', 'kauçuk', 'rubber tree', 'para rubber tree']
+    },
+}
+
+# Cins (Genus) Seviyesinde Bilimsel Parametreler (2. Seviye Çözümleme)
+CARBON_GENUS_DEFAULTS = {
+    'pinus': {'wood_density': 0.51, 'root_shoot_ratio': 0.26, 'bef': 1.30, 'default_mai': 6.0, 'group': 'conifer'},
+    'abies': {'wood_density': 0.42, 'root_shoot_ratio': 0.28, 'bef': 1.35, 'default_mai': 7.0, 'group': 'conifer'},
+    'picea': {'wood_density': 0.43, 'root_shoot_ratio': 0.29, 'bef': 1.35, 'default_mai': 7.5, 'group': 'conifer'},
+    'cedrus': {'wood_density': 0.52, 'root_shoot_ratio': 0.26, 'bef': 1.30, 'default_mai': 4.5, 'group': 'conifer'},
+    'cupressus': {'wood_density': 0.55, 'root_shoot_ratio': 0.24, 'bef': 1.30, 'default_mai': 4.0, 'group': 'conifer'},
+    'pseudotsuga': {'wood_density': 0.45, 'root_shoot_ratio': 0.26, 'bef': 1.25, 'default_mai': 11.0, 'group': 'conifer'},
+    'larix': {'wood_density': 0.51, 'root_shoot_ratio': 0.27, 'bef': 1.30, 'default_mai': 5.5, 'group': 'conifer'},
+    'sequoia': {'wood_density': 0.38, 'root_shoot_ratio': 0.24, 'bef': 1.20, 'default_mai': 18.0, 'group': 'conifer'},
+    'quercus': {'wood_density': 0.68, 'root_shoot_ratio': 0.24, 'bef': 1.45, 'default_mai': 4.0, 'group': 'broadleaf'},
+    'fagus': {'wood_density': 0.65, 'root_shoot_ratio': 0.23, 'bef': 1.40, 'default_mai': 6.0, 'group': 'broadleaf'},
+    'eucalyptus': {'wood_density': 0.58, 'root_shoot_ratio': 0.20, 'bef': 1.25, 'default_mai': 15.0, 'group': 'broadleaf'},
+    'populus': {'wood_density': 0.41, 'root_shoot_ratio': 0.22, 'bef': 1.25, 'default_mai': 12.0, 'group': 'broadleaf'},
+    'castanea': {'wood_density': 0.56, 'root_shoot_ratio': 0.24, 'bef': 1.35, 'default_mai': 6.0, 'group': 'broadleaf'},
+    'robinia': {'wood_density': 0.69, 'root_shoot_ratio': 0.22, 'bef': 1.30, 'default_mai': 7.0, 'group': 'broadleaf'},
+    'betula': {'wood_density': 0.55, 'root_shoot_ratio': 0.24, 'bef': 1.35, 'default_mai': 5.5, 'group': 'broadleaf'},
+    'acer': {'wood_density': 0.63, 'root_shoot_ratio': 0.23, 'bef': 1.40, 'default_mai': 4.5, 'group': 'broadleaf'},
+    'tectona': {'wood_density': 0.60, 'root_shoot_ratio': 0.25, 'bef': 1.30, 'default_mai': 9.0, 'group': 'broadleaf'},
+    'acacia': {'wood_density': 0.62, 'root_shoot_ratio': 0.23, 'bef': 1.30, 'default_mai': 14.0, 'group': 'broadleaf'},
+    'hevea': {'wood_density': 0.56, 'root_shoot_ratio': 0.21, 'bef': 1.30, 'default_mai': 10.0, 'group': 'broadleaf'},
+}
+
+# Bölgesel / İklim Bazlı IPCC Tier 1 Fallback Tablosu (3. Seviye Çözümleme)
+REGIONAL_CARBON_DEFAULTS = {
+    'mediterranean': {
+        'conifer': {'wood_density': 0.51, 'root_shoot_ratio': 0.26, 'bef': 1.32, 'default_mai': 5.5},
+        'broadleaf': {'wood_density': 0.66, 'root_shoot_ratio': 0.24, 'bef': 1.42, 'default_mai': 4.5}
+    },
+    'temperate_continental': {
+        'conifer': {'wood_density': 0.48, 'root_shoot_ratio': 0.27, 'bef': 1.30, 'default_mai': 6.0},
+        'broadleaf': {'wood_density': 0.62, 'root_shoot_ratio': 0.23, 'bef': 1.40, 'default_mai': 5.5}
+    },
+    'temperate_oceanic': {
+        'conifer': {'wood_density': 0.46, 'root_shoot_ratio': 0.26, 'bef': 1.28, 'default_mai': 8.0},
+        'broadleaf': {'wood_density': 0.60, 'root_shoot_ratio': 0.23, 'bef': 1.38, 'default_mai': 6.5}
+    },
+    'boreal': {
+        'conifer': {'wood_density': 0.45, 'root_shoot_ratio': 0.29, 'bef': 1.35, 'default_mai': 3.0},
+        'broadleaf': {'wood_density': 0.53, 'root_shoot_ratio': 0.25, 'bef': 1.40, 'default_mai': 3.5}
+    },
+    'subtropical': {
+        'conifer': {'wood_density': 0.48, 'root_shoot_ratio': 0.24, 'bef': 1.26, 'default_mai': 10.0},
+        'broadleaf': {'wood_density': 0.59, 'root_shoot_ratio': 0.21, 'bef': 1.28, 'default_mai': 12.0}
+    },
+    'tropical_wet': {
+        'conifer': {'wood_density': 0.45, 'root_shoot_ratio': 0.22, 'bef': 1.25, 'default_mai': 14.0},
+        'broadleaf': {'wood_density': 0.58, 'root_shoot_ratio': 0.20, 'bef': 1.30, 'default_mai': 12.0}
+    },
+    'tropical_dry': {
+        'conifer': {'wood_density': 0.48, 'root_shoot_ratio': 0.25, 'bef': 1.30, 'default_mai': 5.0},
+        'broadleaf': {'wood_density': 0.64, 'root_shoot_ratio': 0.24, 'bef': 1.35, 'default_mai': 6.0}
+    }
+}
+
+# Global Mutlak Fallback Değerleri
+GLOBAL_CARBON_DEFAULTS = {
+    'conifer': {'wood_density': 0.48, 'root_shoot_ratio': 0.26, 'bef': 1.30, 'default_mai': 6.0},
+    'broadleaf': {'wood_density': 0.62, 'root_shoot_ratio': 0.23, 'bef': 1.38, 'default_mai': 6.0}
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3.1 Tür Ekolojik Tolerans ve Niş Veritabanı (SPECIES_ECOLOGICAL_NICHES)
+# ─────────────────────────────────────────────────────────────────────────────
+# Her tür için sıcaklık (°C), yıllık yağış (mm), rakım (m) ve eğim (derece)
+# optimumları ve fizyolojik tolerans sınırları:
+SPECIES_ECOLOGICAL_NICHES = {
+    'pinus_brutia': {
+        'sci_name': 'Pinus brutia', 'common_tr': 'Kızılçam',
+        'temp_min': 11.0, 'temp_opt_min': 14.5, 'temp_opt_max': 20.0, 'temp_max': 24.5,
+        'precip_min': 380, 'precip_opt_min': 550, 'precip_opt_max': 1050, 'precip_max': 1600,
+        'elev_min': 0, 'elev_max': 1300, 'slope_max': 45.0,
+        'soil_preference': 'shallow_to_medium', 'drought_tolerance': 'high', 'frost_tolerance': 'low'
+    },
+    'pinus_nigra': {
+        'sci_name': 'Pinus nigra', 'common_tr': 'Karaçam',
+        'temp_min': 6.0, 'temp_opt_min': 9.0, 'temp_opt_max': 14.5, 'temp_max': 18.5,
+        'precip_min': 450, 'precip_opt_min': 600, 'precip_opt_max': 1200, 'precip_max': 1800,
+        'elev_min': 500, 'elev_max': 2050, 'slope_max': 50.0,
+        'soil_preference': 'medium_to_deep', 'drought_tolerance': 'moderate', 'frost_tolerance': 'high'
+    },
+    'pinus_sylvestris': {
+        'sci_name': 'Pinus sylvestris', 'common_tr': 'Sarıçam',
+        'temp_min': 1.0, 'temp_opt_min': 4.5, 'temp_opt_max': 11.0, 'temp_max': 15.5,
+        'precip_min': 400, 'precip_opt_min': 550, 'precip_opt_max': 1100, 'precip_max': 1600,
+        'elev_min': 900, 'elev_max': 2400, 'slope_max': 45.0,
+        'soil_preference': 'sandy_or_podzolic', 'drought_tolerance': 'moderate', 'frost_tolerance': 'very_high'
+    },
+    'pinus_pinea': {
+        'sci_name': 'Pinus pinea', 'common_tr': 'Fıstık Çamı',
+        'temp_min': 12.0, 'temp_opt_min': 14.5, 'temp_opt_max': 19.5, 'temp_max': 23.5,
+        'precip_min': 400, 'precip_opt_min': 600, 'precip_opt_max': 950, 'precip_max': 1400,
+        'elev_min': 0, 'elev_max': 750, 'slope_max': 35.0,
+        'soil_preference': 'sandy_deep', 'drought_tolerance': 'high', 'frost_tolerance': 'low'
+    },
+    'pinus_halepensis': {
+        'sci_name': 'Pinus halepensis', 'common_tr': 'Halep Çamı',
+        'temp_min': 12.0, 'temp_opt_min': 15.0, 'temp_opt_max': 21.0, 'temp_max': 25.0,
+        'precip_min': 300, 'precip_opt_min': 450, 'precip_opt_max': 800, 'precip_max': 1200,
+        'elev_min': 0, 'elev_max': 800, 'slope_max': 45.0,
+        'soil_preference': 'shallow_calcareous', 'drought_tolerance': 'very_high', 'frost_tolerance': 'low'
+    },
+    'pinus_pinaster': {
+        'sci_name': 'Pinus pinaster', 'common_tr': 'Sahil Çamı',
+        'temp_min': 11.0, 'temp_opt_min': 13.0, 'temp_opt_max': 18.0, 'temp_max': 22.0,
+        'precip_min': 600, 'precip_opt_min': 800, 'precip_opt_max': 1400, 'precip_max': 2000,
+        'elev_min': 0, 'elev_max': 1000, 'slope_max': 40.0,
+        'soil_preference': 'sandy_acidic', 'drought_tolerance': 'moderate', 'frost_tolerance': 'low'
+    },
+    'pinus_taeda': {
+        'sci_name': 'Pinus taeda', 'common_tr': 'Loblolly Çamı',
+        'temp_min': 13.0, 'temp_opt_min': 16.0, 'temp_opt_max': 21.0, 'temp_max': 25.0,
+        'precip_min': 800, 'precip_opt_min': 1050, 'precip_opt_max': 1600, 'precip_max': 2200,
+        'elev_min': 0, 'elev_max': 800, 'slope_max': 35.0,
+        'soil_preference': 'acidic_moist', 'drought_tolerance': 'moderate', 'frost_tolerance': 'moderate'
+    },
+    'pinus_radiata': {
+        'sci_name': 'Pinus radiata', 'common_tr': 'Radiata Çamı',
+        'temp_min': 10.0, 'temp_opt_min': 13.0, 'temp_opt_max': 18.0, 'temp_max': 22.0,
+        'precip_min': 600, 'precip_opt_min': 850, 'precip_opt_max': 1500, 'precip_max': 2200,
+        'elev_min': 0, 'elev_max': 1000, 'slope_max': 40.0,
+        'soil_preference': 'deep_loam', 'drought_tolerance': 'moderate', 'frost_tolerance': 'low'
+    },
+    'cedrus_libani': {
+        'sci_name': 'Cedrus libani', 'common_tr': 'Toros Sediri',
+        'temp_min': 5.5, 'temp_opt_min': 8.5, 'temp_opt_max': 14.0, 'temp_max': 18.0,
+        'precip_min': 500, 'precip_opt_min': 700, 'precip_opt_max': 1400, 'precip_max': 2000,
+        'elev_min': 800, 'elev_max': 2150, 'slope_max': 50.0,
+        'soil_preference': 'karstic_calcareous', 'drought_tolerance': 'high', 'frost_tolerance': 'high'
+    },
+    'picea_orientalis': {
+        'sci_name': 'Picea orientalis', 'common_tr': 'Doğu Ladini',
+        'temp_min': 4.0, 'temp_opt_min': 7.0, 'temp_opt_max': 12.5, 'temp_max': 16.5,
+        'precip_min': 850, 'precip_opt_min': 1150, 'precip_opt_max': 2200, 'precip_max': 3000,
+        'elev_min': 700, 'elev_max': 2300, 'slope_max': 45.0,
+        'soil_preference': 'deep_humic', 'drought_tolerance': 'low', 'frost_tolerance': 'high'
+    },
+    'picea_abies': {
+        'sci_name': 'Picea abies', 'common_tr': 'Avrupa Ladini',
+        'temp_min': 2.0, 'temp_opt_min': 5.0, 'temp_opt_max': 10.5, 'temp_max': 15.0,
+        'precip_min': 600, 'precip_opt_min': 800, 'precip_opt_max': 1600, 'precip_max': 2300,
+        'elev_min': 600, 'elev_max': 2200, 'slope_max': 45.0,
+        'soil_preference': 'moist_acidic', 'drought_tolerance': 'low', 'frost_tolerance': 'very_high'
+    },
+    'abies_spp': {
+        'sci_name': 'Abies spp.', 'common_tr': 'Göknarlar',
+        'temp_min': 4.0, 'temp_opt_min': 6.5, 'temp_opt_max': 13.0, 'temp_max': 17.5,
+        'precip_min': 650, 'precip_opt_min': 850, 'precip_opt_max': 1800, 'precip_max': 2500,
+        'elev_min': 650, 'elev_max': 2100, 'slope_max': 45.0,
+        'soil_preference': 'moist_deep', 'drought_tolerance': 'low', 'frost_tolerance': 'high'
+    },
+    'cupressus_sempervirens': {
+        'sci_name': 'Cupressus sempervirens', 'common_tr': 'Akdeniz Servisi',
+        'temp_min': 11.5, 'temp_opt_min': 14.0, 'temp_opt_max': 20.5, 'temp_max': 24.5,
+        'precip_min': 350, 'precip_opt_min': 500, 'precip_opt_max': 1050, 'precip_max': 1600,
+        'elev_min': 0, 'elev_max': 1250, 'slope_max': 50.0,
+        'soil_preference': 'shallow_calcareous', 'drought_tolerance': 'very_high', 'frost_tolerance': 'low'
+    },
+    'pseudotsuga_menziesii': {
+        'sci_name': 'Pseudotsuga menziesii', 'common_tr': 'Douglas Göknarı',
+        'temp_min': 6.5, 'temp_opt_min': 9.0, 'temp_opt_max': 14.5, 'temp_max': 19.0,
+        'precip_min': 650, 'precip_opt_min': 900, 'precip_opt_max': 1800, 'precip_max': 2600,
+        'elev_min': 100, 'elev_max': 1800, 'slope_max': 45.0,
+        'soil_preference': 'deep_well_drained', 'drought_tolerance': 'moderate', 'frost_tolerance': 'high'
+    },
+    'fagus_orientalis': {
+        'sci_name': 'Fagus orientalis', 'common_tr': 'Doğu Kayını',
+        'temp_min': 6.0, 'temp_opt_min': 8.5, 'temp_opt_max': 13.5, 'temp_max': 17.5,
+        'precip_min': 700, 'precip_opt_min': 900, 'precip_opt_max': 1800, 'precip_max': 2500,
+        'elev_min': 350, 'elev_max': 1950, 'slope_max': 45.0,
+        'soil_preference': 'deep_humic_loamy', 'drought_tolerance': 'low', 'frost_tolerance': 'high'
+    },
+    'fagus_sylvatica': {
+        'sci_name': 'Fagus sylvatica', 'common_tr': 'Avrupa Kayını',
+        'temp_min': 5.5, 'temp_opt_min': 8.0, 'temp_opt_max': 13.0, 'temp_max': 17.0,
+        'precip_min': 650, 'precip_opt_min': 850, 'precip_opt_max': 1700, 'precip_max': 2400,
+        'elev_min': 200, 'elev_max': 1800, 'slope_max': 45.0,
+        'soil_preference': 'deep_loamy', 'drought_tolerance': 'low', 'frost_tolerance': 'high'
+    },
+    'quercus_robur': {
+        'sci_name': 'Quercus robur / petraea', 'common_tr': 'Saplı / Sapsız Meşe',
+        'temp_min': 6.5, 'temp_opt_min': 9.5, 'temp_opt_max': 15.5, 'temp_max': 20.0,
+        'precip_min': 450, 'precip_opt_min': 650, 'precip_opt_max': 1150, 'precip_max': 1700,
+        'elev_min': 0, 'elev_max': 1650, 'slope_max': 45.0,
+        'soil_preference': 'deep_clay_loam', 'drought_tolerance': 'moderate', 'frost_tolerance': 'high'
+    },
+    'quercus_cerris': {
+        'sci_name': 'Quercus cerris', 'common_tr': 'Saçlı Meşe',
+        'temp_min': 7.0, 'temp_opt_min': 10.0, 'temp_opt_max': 16.0, 'temp_max': 21.0,
+        'precip_min': 420, 'precip_opt_min': 550, 'precip_opt_max': 1100, 'precip_max': 1600,
+        'elev_min': 0, 'elev_max': 1700, 'slope_max': 45.0,
+        'soil_preference': 'stony_calcareous', 'drought_tolerance': 'high', 'frost_tolerance': 'moderate'
+    },
+    'castanea_sativa': {
+        'sci_name': 'Castanea sativa', 'common_tr': 'Anadolu Kestanesi',
+        'temp_min': 8.5, 'temp_opt_min': 11.0, 'temp_opt_max': 16.0, 'temp_max': 20.5,
+        'precip_min': 600, 'precip_opt_min': 750, 'precip_opt_max': 1400, 'precip_max': 2000,
+        'elev_min': 50, 'elev_max': 1450, 'slope_max': 40.0,
+        'soil_preference': 'acidic_deep', 'drought_tolerance': 'moderate', 'frost_tolerance': 'moderate'
+    },
+    'robinia_pseudoacacia': {
+        'sci_name': 'Robinia pseudoacacia', 'common_tr': 'Yalancı Akasya',
+        'temp_min': 7.5, 'temp_opt_min': 10.5, 'temp_opt_max': 18.0, 'temp_max': 23.0,
+        'precip_min': 400, 'precip_opt_min': 550, 'precip_opt_max': 1100, 'precip_max': 1600,
+        'elev_min': 0, 'elev_max': 1400, 'slope_max': 45.0,
+        'soil_preference': 'poor_to_medium', 'drought_tolerance': 'high', 'frost_tolerance': 'moderate'
+    },
+    'populus_spp': {
+        'sci_name': 'Populus spp.', 'common_tr': 'Kavak',
+        'temp_min': 7.0, 'temp_opt_min': 11.0, 'temp_opt_max': 19.0, 'temp_max': 24.5,
+        'precip_min': 400, 'precip_opt_min': 600, 'precip_opt_max': 1200, 'precip_max': 1800,
+        'elev_min': 0, 'elev_max': 1500, 'slope_max': 25.0,
+        'soil_preference': 'alluvial_moist_deep', 'drought_tolerance': 'low', 'frost_tolerance': 'high'
+    },
+    'eucalyptus_spp': {
+        'sci_name': 'Eucalyptus spp.', 'common_tr': 'Okaliptüs',
+        'temp_min': 12.0, 'temp_opt_min': 15.5, 'temp_opt_max': 24.0, 'temp_max': 28.5,
+        'precip_min': 450, 'precip_opt_min': 700, 'precip_opt_max': 1500, 'precip_max': 2200,
+        'elev_min': 0, 'elev_max': 800, 'slope_max': 35.0,
+        'soil_preference': 'deep_moist', 'drought_tolerance': 'moderate', 'frost_tolerance': 'low'
+    },
+    'tectona_grandis': {
+        'sci_name': 'Tectona grandis', 'common_tr': 'Tik Ağacı',
+        'temp_min': 17.0, 'temp_opt_min': 21.0, 'temp_opt_max': 28.0, 'temp_max': 34.0,
+        'precip_min': 900, 'precip_opt_min': 1250, 'precip_opt_max': 2500, 'precip_max': 3500,
+        'elev_min': 0, 'elev_max': 900, 'slope_max': 35.0,
+        'soil_preference': 'deep_well_drained', 'drought_tolerance': 'moderate', 'frost_tolerance': 'none'
+    },
+    'acacia_spp': {
+        'sci_name': 'Acacia spp.', 'common_tr': 'Akasya (Tropikal)',
+        'temp_min': 14.0, 'temp_opt_min': 18.0, 'temp_opt_max': 27.0, 'temp_max': 33.0,
+        'precip_min': 500, 'precip_opt_min': 800, 'precip_opt_max': 1800, 'precip_max': 2800,
+        'elev_min': 0, 'elev_max': 1200, 'slope_max': 40.0,
+        'soil_preference': 'poor_acidic_clay', 'drought_tolerance': 'high', 'frost_tolerance': 'none'
+    },
+    'hevea_brasiliensis': {
+        'sci_name': 'Hevea brasiliensis', 'common_tr': 'Kauçuk Ağacı',
+        'temp_min': 20.0, 'temp_opt_min': 24.0, 'temp_opt_max': 30.0, 'temp_max': 35.0,
+        'precip_min': 1500, 'precip_opt_min': 1800, 'precip_opt_max': 3000, 'precip_max': 4000,
+        'elev_min': 0, 'elev_max': 600, 'slope_max': 25.0,
+        'soil_preference': 'deep_acidic_well_drained', 'drought_tolerance': 'low', 'frost_tolerance': 'none'
+    },
+    '_default_conifer': {
+        'temp_min': 5.0, 'temp_opt_min': 9.0, 'temp_opt_max': 16.0, 'temp_max': 22.0,
+        'precip_min': 450, 'precip_opt_min': 600, 'precip_opt_max': 1300, 'precip_max': 2000,
+        'elev_min': 0, 'elev_max': 2200, 'slope_max': 45.0
+    },
+    '_default_broadleaf': {
+        'temp_min': 7.0, 'temp_opt_min': 10.5, 'temp_opt_max': 17.5, 'temp_max': 23.0,
+        'precip_min': 500, 'precip_opt_min': 700, 'precip_opt_max': 1400, 'precip_max': 2000,
+        'elev_min': 0, 'elev_max': 1800, 'slope_max': 40.0
+    }
+}
+
+
+# 4. Çözümleme ve Fallback Motoru (Species Resolution & Fallback Engine)
+def _normalize_species_query(name: str) -> str:
+    """Türkçe karakterleri ve noktalama işaretlerini normalize edip küçük harfe çevirir."""
+    if not name:
+        return ''
+    tr_map = str.maketrans({
+        'ç': 'c', 'Ç': 'c', 'ğ': 'g', 'Ğ': 'g', 'ı': 'i', 'I': 'i', 'İ': 'i',
+        'ö': 'o', 'Ö': 'o', 'ş': 's', 'Ş': 's', 'ü': 'u', 'Ü': 'u',
+    })
+    s = str(name).translate(tr_map).lower()
+    s = re.sub(r'[^a-z0-9\s]', ' ', s)
+    return ' '.join(s.split())
+
+
+def resolve_species_carbon_params(species_name: str, country_code: str = 'TR') -> dict:
+    """
+    Girilen ağaç türü adı ve ülke kodu üzerinden bilimsel karbon katsayılarını çözümler.
+    3 Aşamalı Akıllı Fallback zinciri izler:
+      1. Adım: Tam veya eşanlamlı (alias) tür eşleşmesi (match_level='species')
+      2. Adım: Cins (genus) tespiti ve cins ortalaması (match_level='genus')
+      3. Adım: Ülke iklim bölgesi ve iğne/geniş yaprak bazlı bölgesel IPCC Tier 1 fallback (match_level='regional_fallback')
+    """
+    country = (country_code or 'TR').strip().upper()
+    climate_zone = COUNTRY_CLIMATE_MAP.get(country, DEFAULT_CLIMATE_ZONE)
+    norm = _normalize_species_query(species_name)
+
+    # 1. Adım: Tür Seviyesi Eşleşme (Species level match)
+    if norm:
+        # Doğrudan anahtar kontrolü
+        norm_snake = norm.replace(' ', '_')
+        if norm_snake in CARBON_SPECIES_DEFAULTS:
+            sp = dict(CARBON_SPECIES_DEFAULTS[norm_snake])
+            return {
+                'species_name': sp.get('sci_name', species_name),
+                'wood_density': sp['wood_density'],
+                'root_shoot_ratio': sp['root_shoot_ratio'],
+                'bef': sp['bef'],
+                'default_mai': sp['default_mai'],
+                'group': sp['group'],
+                'carbon_fraction': CARBON_FRACTION,
+                'co2_to_c_ratio': CO2_TO_C_RATIO,
+                'match_level': 'species',
+                'matched_key': norm_snake,
+                'country_code': country,
+                'climate_zone': climate_zone,
+                'common_tr': sp.get('common_tr', ''),
+                'common_en': sp.get('common_en', '')
+            }
+
+        # Alias tam eşleşme taraması (Exact alias match)
+        for k, sp in CARBON_SPECIES_DEFAULTS.items():
+            for alias in sp.get('aliases', []):
+                alias_norm = _normalize_species_query(alias)
+                if alias_norm == norm:
+                    return {
+                        'species_name': sp.get('sci_name', species_name),
+                        'wood_density': sp['wood_density'],
+                        'root_shoot_ratio': sp['root_shoot_ratio'],
+                        'bef': sp['bef'],
+                        'default_mai': sp['default_mai'],
+                        'group': sp['group'],
+                        'carbon_fraction': CARBON_FRACTION,
+                        'co2_to_c_ratio': CO2_TO_C_RATIO,
+                        'match_level': 'species',
+                        'matched_key': k,
+                        'country_code': country,
+                        'climate_zone': climate_zone,
+                        'common_tr': sp.get('common_tr', ''),
+                        'common_en': sp.get('common_en', '')
+                    }
+
+    # 2. Adım: Cins Seviyesi Eşleşme (Genus level match)
+    genus = None
+    if norm:
+        tokens = norm.split()
+        first_token = tokens[0] if tokens else ''
+        if first_token in CARBON_GENUS_DEFAULTS:
+            genus = first_token
+        else:
+            for g_candidate in CARBON_GENUS_DEFAULTS:
+                if g_candidate in tokens or any(t.startswith(g_candidate) for t in tokens):
+                    genus = g_candidate
+                    break
+
+    if genus and genus in CARBON_GENUS_DEFAULTS:
+        g_data = CARBON_GENUS_DEFAULTS[genus]
+        return {
+            'species_name': (species_name or genus.capitalize()).strip(),
+            'wood_density': g_data['wood_density'],
+            'root_shoot_ratio': g_data['root_shoot_ratio'],
+            'bef': g_data['bef'],
+            'default_mai': g_data['default_mai'],
+            'group': g_data['group'],
+            'carbon_fraction': CARBON_FRACTION,
+            'co2_to_c_ratio': CO2_TO_C_RATIO,
+            'match_level': 'genus',
+            'matched_key': genus,
+            'country_code': country,
+            'climate_zone': climate_zone,
+            'common_tr': genus.capitalize(),
+            'common_en': genus.capitalize()
+        }
+
+    # 2.1 Adım: Kısmi Tür Alias Eşleşmesi (örn. "Pinus brutia var. eldarica")
+    if norm:
+        for k, sp in CARBON_SPECIES_DEFAULTS.items():
+            for alias in sp.get('aliases', []):
+                alias_norm = _normalize_species_query(alias)
+                if len(alias_norm) >= 6 and (alias_norm in norm or norm in alias_norm):
+                    return {
+                        'species_name': sp.get('sci_name', species_name),
+                        'wood_density': sp['wood_density'],
+                        'root_shoot_ratio': sp['root_shoot_ratio'],
+                        'bef': sp['bef'],
+                        'default_mai': sp['default_mai'],
+                        'group': sp['group'],
+                        'carbon_fraction': CARBON_FRACTION,
+                        'co2_to_c_ratio': CO2_TO_C_RATIO,
+                        'match_level': 'species',
+                        'matched_key': k,
+                        'country_code': country,
+                        'climate_zone': climate_zone,
+                        'common_tr': sp.get('common_tr', ''),
+                        'common_en': sp.get('common_en', '')
+                    }
+
+    # 3. Adım: İklim & Bölgesel Fallback (Regional climate fallback)
+    conifer_keywords = [
+        'pinus', 'cam', 'pine', 'sedir', 'cedrus', 'cedar', 'ladin', 'picea',
+        'spruce', 'goknar', 'abies', 'fir', 'servi', 'cupressus', 'cypress',
+        'melez', 'larix', 'larch', 'conifer', 'igne'
+    ]
+    is_conifer = any(kw in norm for kw in conifer_keywords)
+    group = 'conifer' if is_conifer else 'broadleaf'
+
+    zone_data = REGIONAL_CARBON_DEFAULTS.get(climate_zone) or REGIONAL_CARBON_DEFAULTS.get(DEFAULT_CLIMATE_ZONE) or {}
+    fallback = zone_data.get(group) or GLOBAL_CARBON_DEFAULTS[group]
+
+    return {
+        'species_name': (species_name or f'Generic {group.capitalize()}').strip(),
+        'wood_density': fallback['wood_density'],
+        'root_shoot_ratio': fallback['root_shoot_ratio'],
+        'bef': fallback['bef'],
+        'default_mai': fallback['default_mai'],
+        'group': group,
+        'carbon_fraction': CARBON_FRACTION,
+        'co2_to_c_ratio': CO2_TO_C_RATIO,
+        'match_level': 'regional_fallback',
+        'matched_key': f'{climate_zone}_{group}',
+        'country_code': country,
+        'climate_zone': climate_zone,
+        'common_tr': 'Varsayılan ' + ('İğne Yapraklı' if group == 'conifer' else 'Geniş Yapraklı'),
+        'common_en': f'Default {group.capitalize()}'
+    }
+
+
+# 5. Birim Dönüşüm Yardımcı Fonksiyonları (Unit Conversion Helpers)
+def biomass_to_carbon(biomass_tonnes: float) -> float:
+    """Kuru biyokütleyi (ton) karbon stoğuna (ton C) dönüştürür. (CF = 0.47)"""
+    return float(biomass_tonnes) * CARBON_FRACTION
+
+
+def carbon_to_co2e(carbon_tonnes: float) -> float:
+    """Karbon stoğunu (ton C) CO2 eşdeğerine (ton CO2e) dönüştürür. (Çarpan: 44/12 ≈ 3.6667)"""
+    return float(carbon_tonnes) * CO2_TO_C_RATIO
+
+
+def co2e_to_carbon(co2e_tonnes: float) -> float:
+    """CO2 eşdeğerini (ton CO2e) karbon stoğuna (ton C) dönüştürür. (Bölen: 44/12)"""
+    return float(co2e_tonnes) / CO2_TO_C_RATIO
+
+
+# 6. HTTP API Endpoint (Katsayı ve Parametre Sorgulama)
+@app.route('/api/carbon-species-params', methods=['GET', 'POST'])
+def api_carbon_species_params():
+    """
+    Belirli bir ağaç türü adı ve ülke kodu için çözümlenmiş IPCC / Wood Density parametrelerini döndürür.
+    Örnek GET / POST parametreleri:
+      species: "Pinus brutia"
+      country: "TR"
+    """
+    try:
+        if request.method == 'POST':
+            req_data = request.get_json(silent=True) or {}
+            species = req_data.get('species') or req_data.get('species_name') or ''
+            country = req_data.get('country') or req_data.get('country_code') or 'TR'
+        else:
+            species = request.args.get('species') or request.args.get('species_name') or ''
+            country = request.args.get('country') or request.args.get('country_code') or 'TR'
+
+        params = resolve_species_carbon_params(species, country)
+        return jsonify({
+            'success': True,
+            'params': params
+        })
+    except Exception as exc:
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+
+# ════════════════════════════════════════════════════════════════
+# 🌲💨 KARBON YUTAK ALANI SİMÜLASYONU
+# AŞAMA 5, AŞAMA 6 & AŞAMA 7: Büyüme Motoru, Aralama Mekaniği ve Simülasyon API'si
+# ════════════════════════════════════════════════════════════════
+
+def calibrate_growth_parameters(mai: float, rotation_years: int, species_group: str = "conifer") -> dict:
+    """
+    Chapman-Richards büyüme modeli parametrelerini (V_max, k, m) kalibre eder.
+    Formül: V(t) = V_max * (1 - exp(-k * t))^m
+    İdare süresinde kümülatif hacim V(rotation) ≈ mai * rotation_years olacak şekilde türetilir.
+    """
+    mai = max(0.5, float(mai or 6.0))
+    rot = max(5, int(rotation_years or 30))
+    m = 2.8 if str(species_group).lower() == "conifer" else 2.2
+    target_vol_rot = mai * rot
+    asymptote_ratio = 1.35
+    v_max = target_vol_rot * asymptote_ratio
+    inner = max(0.001, min(0.999, 1.0 - math.pow(1.0 / asymptote_ratio, 1.0 / m)))
+    k = -math.log(inner) / float(rot)
+    return {
+        'v_max': round(v_max, 2),
+        'k': float(k),
+        'm': float(m),
+        'target_rot_vol': round(target_vol_rot, 2),
+        'mai': mai,
+        'rotation_years': rot
+    }
+
+
+def _calculate_tree_allometrics(vol_per_ha: float, n_trees_per_ha: int, age: int, max_height: float = 24.0) -> dict:
+    """
+    Standart ormancılık allometrik ilişkileri ile ortalama boy (H, m) ve göğüs çapı (DBH, cm) tahmin eder.
+    v_single = V / N
+    D ≈ sqrt(v_single / (0.000055 * H))
+    """
+    if age <= 0 or vol_per_ha <= 0.001 or n_trees_per_ha <= 0:
+        return {'dbh_cm': 0.8, 'height_m': 0.4}
+    h = 0.4 + (max_height - 0.4) * math.pow(max(0.0, 1.0 - math.exp(-0.065 * age)), 1.25)
+    v_single = max(0.0, vol_per_ha) / float(n_trees_per_ha)
+    d = math.sqrt(v_single / (0.000055 * max(1.0, h)))
+    d_clamped = max(0.8, min(140.0, d))
+    return {
+        'dbh_cm': round(d_clamped, 1),
+        'height_m': round(h, 1)
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. GEE Saha & İklim Katmanı Entegrasyonu ve Ekolojik Uygunluk (Aşama 11)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _parse_geojson_to_ee_geom(geojson_input):
+    """GeoJSON Feature, FeatureCollection, Geometry veya koordinat dizisini ee.Geometry nesnesine dönüştürür."""
+    if not geojson_input:
+        return None
+    geom = None
+    if isinstance(geojson_input, dict):
+        if geojson_input.get('type') == 'Feature':
+            geom = geojson_input.get('geometry')
+        elif geojson_input.get('type') == 'FeatureCollection':
+            features = geojson_input.get('features', [])
+            geom = features[0].get('geometry') if features else None
+        else:
+            geom = geojson_input
+    elif isinstance(geojson_input, list):
+        geom = {'type': 'Polygon', 'coordinates': geojson_input}
+
+    if not geom:
+        return None
+    try:
+        return ee.Geometry(geom)
+    except Exception as e:
+        print("[Carbon Site Analysis] ee.Geometry parse hatası:", e)
+        return None
+
+
+def _degrees_to_aspect_dir(deg):
+    """Bakı derecesini (0-360) 8 ana/ara pusula yönüne çevirir."""
+    if deg is None:
+        return {'tr': 'Düz / Belirsiz', 'en': 'Flat / Undefined', 'code': 'Flat'}
+    try:
+        d = float(deg) % 360.0
+    except (ValueError, TypeError):
+        return {'tr': 'Düz / Belirsiz', 'en': 'Flat / Undefined', 'code': 'Flat'}
+
+    dirs = [
+        (22.5, 'Kuzey (N)', 'North (N)', 'N'),
+        (67.5, 'Kuzeydoğu (NE)', 'Northeast (NE)', 'NE'),
+        (112.5, 'Doğu (E)', 'East (E)', 'E'),
+        (157.5, 'Güneydoğu (SE)', 'Southeast (SE)', 'SE'),
+        (202.5, 'Güney (S)', 'South (S)', 'S'),
+        (247.5, 'Güneybatı (SW)', 'Southwest (SW)', 'SW'),
+        (292.5, 'Batı (W)', 'West (W)', 'W'),
+        (337.5, 'Kuzeybatı (NW)', 'Northwest (NW)', 'NW'),
+        (360.0, 'Kuzey (N)', 'North (N)', 'N')
+    ]
+    for limit, tr, en, code in dirs:
+        if d < limit:
+            return {'tr': tr, 'en': en, 'code': code}
+    return {'tr': 'Kuzey (N)', 'en': 'North (N)', 'code': 'N'}
+
+
+def analyze_site_environmental_layers(geojson_input, country_code: str = 'TR') -> dict:
+    """
+    Kullanıcının çizdiği veya seçtiği poligon için GEE üzerinden topoğrafya,
+    iklim ve toprak katmanlarını (DEM, Eğim, Bakı, WorldClim Sıcaklık/Yağış, Soil SOC)
+    reduceRegion ile medyan/ortalama olarak sorgular.
+    GEE erişilemezse veya zaman aşımına uğrarsa bölgesel normallerle fallback döner.
+    """
+    country = (country_code or 'TR').strip().upper()
+    cz = COUNTRY_CLIMATE_MAP.get(country, DEFAULT_CLIMATE_ZONE)
+
+    # Bölgesel Fallback Verileri
+    fallback_defaults = {
+        'TR': {'elev': 850.0, 'slope': 14.0, 'aspect': 180.0, 'temp': 13.5, 'precip': 650.0, 'soc': 6.0},
+        'mediterranean': {'elev': 450.0, 'slope': 12.0, 'aspect': 180.0, 'temp': 16.0, 'precip': 750.0, 'soc': 5.5},
+        'temperate_continental': {'elev': 500.0, 'slope': 8.0, 'aspect': 180.0, 'temp': 10.0, 'precip': 600.0, 'soc': 7.0},
+        'temperate_oceanic': {'elev': 300.0, 'slope': 6.0, 'aspect': 180.0, 'temp': 11.5, 'precip': 900.0, 'soc': 7.5},
+        'boreal': {'elev': 350.0, 'slope': 5.0, 'aspect': 180.0, 'temp': 2.5, 'precip': 500.0, 'soc': 8.5},
+        'subtropical': {'elev': 300.0, 'slope': 8.0, 'aspect': 180.0, 'temp': 19.0, 'precip': 1100.0, 'soc': 6.0},
+        'tropical_wet': {'elev': 250.0, 'slope': 5.0, 'aspect': 180.0, 'temp': 25.0, 'precip': 2000.0, 'soc': 6.5},
+        'tropical_dry': {'elev': 350.0, 'slope': 6.0, 'aspect': 180.0, 'temp': 24.0, 'precip': 700.0, 'soc': 4.5},
+    }
+    fb = fallback_defaults.get(country) or fallback_defaults.get(cz) or fallback_defaults['mediterranean']
+
+    res = {
+        'data_source': 'regional_fallback',
+        'elevation_m': fb['elev'],
+        'slope_deg': fb['slope'],
+        'aspect_deg': fb['aspect'],
+        'aspect_dir': _degrees_to_aspect_dir(fb['aspect']),
+        'temp_c': fb['temp'],
+        'precip_mm': fb['precip'],
+        'soc_g_kg': fb['soc'],
+        'climate_zone': cz
+    }
+
+    if not geojson_input:
+        return res
+
+    try:
+        ee_geom = _parse_geojson_to_ee_geom(geojson_input)
+        if not ee_geom:
+            return res
+
+        # Topoğrafya: USGS 30m SRTM (veya Copernicus DEM fallback)
+        dem = ee.Image('USGS/SRTMGL1_003').select(['elevation'], ['elevation'])
+        slope = ee.Terrain.slope(dem).rename('slope')
+        aspect = ee.Terrain.aspect(dem).rename('aspect')
+
+        # İklim: WorldClim V1 BIO (bio01: temp * 10, bio12: precip mm)
+        climate = ee.Image('WORLDCLIM/V1/BIO').select(['bio01', 'bio12'], ['temp_raw', 'precip_annual'])
+
+        # Toprak: OpenLandMap Topsoil Organic Carbon (0cm, g/kg)
+        soc = ee.Image('OpenLandMap/SOL/SOL_ORGANIC-CARBON_USDA-6A1C_M/v02').select(['b0'], ['soc_topsoil'])
+
+        combined = dem.addBands([slope, aspect, climate, soc])
+
+        stats = combined.reduceRegion(
+            reducer=ee.Reducer.mean(),
+            geometry=ee_geom,
+            scale=90,
+            maxPixels=1e8,
+            bestEffort=True
+        ).getInfo() or {}
+
+        elev_val = stats.get('elevation')
+        slope_val = stats.get('slope')
+        aspect_val = stats.get('aspect')
+        temp_raw = stats.get('temp_raw')
+        precip_val = stats.get('precip_annual')
+        soc_val = stats.get('soc_topsoil')
+
+        if elev_val is not None:
+            res['elevation_m'] = round(float(elev_val), 1)
+        if slope_val is not None:
+            res['slope_deg'] = round(float(slope_val), 1)
+        if aspect_val is not None:
+            res['aspect_deg'] = round(float(aspect_val), 1)
+            res['aspect_dir'] = _degrees_to_aspect_dir(res['aspect_deg'])
+        if temp_raw is not None:
+            res['temp_c'] = round(float(temp_raw) / 10.0, 1)
+        if precip_val is not None:
+            res['precip_mm'] = round(float(precip_val), 1)
+        if soc_val is not None:
+            res['soc_g_kg'] = round(float(soc_val), 1)
+
+        res['data_source'] = 'gee'
+    except Exception as e:
+        print("[Carbon Site Analysis] GEE katman sorgusu hatası (fallback devrede):", e)
+
+    return res
+
+
+def calculate_site_suitability(site_conditions: dict, species_params: dict) -> dict:
+    """
+    Saha ekolojik koşulları ile türün ekolojik tolerans sınırlarını (SPECIES_ECOLOGICAL_NICHES)
+    karşılaştırarak Saha Uygunluk Katsayısını (Sf in [0.20, 1.25]) hesaplar.
+    """
+    site = site_conditions or {}
+    sp = species_params or {}
+    matched_key = sp.get('matched_key', '')
+    group = sp.get('group', 'conifer')
+    species_name = sp.get('species_name', '')
+
+    niche = SPECIES_ECOLOGICAL_NICHES.get(matched_key)
+    if not niche:
+        for k, v in SPECIES_ECOLOGICAL_NICHES.items():
+            if matched_key.startswith(k) or k in matched_key:
+                niche = v
+                break
+    if not niche:
+        niche = SPECIES_ECOLOGICAL_NICHES.get('_default_' + group, SPECIES_ECOLOGICAL_NICHES['_default_conifer'])
+
+    temp = float(site.get('temp_c', 14.0))
+    precip = float(site.get('precip_mm', 700.0))
+    elev = float(site.get('elevation_m', 500.0))
+    slope = float(site.get('slope_deg', 10.0))
+    soc = float(site.get('soc_g_kg', 5.0))
+
+    # 1. Sıcaklık Skoru (Trapezoidal üyelik fonksiyonu)
+    t_opt_min, t_opt_max = niche['temp_opt_min'], niche['temp_opt_max']
+    t_min, t_max = niche['temp_min'], niche['temp_max']
+    if t_opt_min <= temp <= t_opt_max:
+        s_temp = 1.0
+    elif temp < t_min:
+        s_temp = max(0.05, 0.40 - (t_min - temp) * 0.10)
+    elif temp < t_opt_min:
+        s_temp = 0.40 + 0.60 * (temp - t_min) / max(0.1, t_opt_min - t_min)
+    elif temp <= t_max:
+        s_temp = 1.0 - 0.60 * (temp - t_opt_max) / max(0.1, t_max - t_opt_max)
+    else:
+        s_temp = max(0.05, 0.40 - (temp - t_max) * 0.10)
+    s_temp = max(0.05, min(1.0, s_temp))
+
+    # 2. Yağış Skoru
+    p_opt_min, p_opt_max = niche['precip_opt_min'], niche['precip_opt_max']
+    p_min, p_max = niche['precip_min'], niche['precip_max']
+    if p_opt_min <= precip <= p_opt_max:
+        s_precip = 1.0
+    elif precip < p_min:
+        s_precip = max(0.05, 0.40 * (precip / max(1.0, p_min)))
+    elif precip < p_opt_min:
+        s_precip = 0.40 + 0.60 * (precip - p_min) / max(1.0, p_opt_min - p_min)
+    elif precip <= p_max:
+        s_precip = 1.0 - 0.30 * (precip - p_opt_max) / max(1.0, p_max - p_opt_max)
+    else:
+        s_precip = max(0.50, 0.70 - (precip - p_max) / 2000.0)
+    s_precip = max(0.05, min(1.0, s_precip))
+
+    # 3. Rakım Skoru
+    e_min, e_max = niche['elev_min'], niche['elev_max']
+    if e_min <= elev <= e_max:
+        s_elev = 1.0
+    elif elev < e_min:
+        s_elev = max(0.15, 1.0 - (e_min - elev) / 600.0)
+    else:
+        s_elev = max(0.15, 1.0 - (elev - e_max) / 600.0)
+    s_elev = max(0.05, min(1.0, s_elev))
+
+    # 4. Eğim Skoru
+    slope_max = niche.get('slope_max', 45.0)
+    if slope <= 20.0:
+        s_slope = 1.0
+    elif slope <= 35.0:
+        s_slope = 1.0 - 0.20 * (slope - 20.0) / 15.0
+    elif slope <= slope_max:
+        s_slope = 0.80 - 0.30 * (slope - 35.0) / max(1.0, slope_max - 35.0)
+    else:
+        s_slope = max(0.30, 0.50 - 0.20 * (slope - slope_max) / 15.0)
+    s_slope = max(0.05, min(1.0, s_slope))
+
+    # Toprak Bonusu / Cezası (SOC)
+    soc_mod = 1.0
+    if soc >= 8.0:
+        soc_mod = 1.03
+    elif soc < 3.0:
+        soc_mod = 0.97
+
+    # Ağırlıklı Geometrik Ortalama
+    geom = (s_temp ** 0.35) * (s_precip ** 0.35) * (s_elev ** 0.20) * (s_slope ** 0.10) * soc_mod
+    sf = round(max(0.20, min(1.25, geom * 1.12)), 2)
+
+    # Uyarılar & Teşhisler
+    warnings = []
+    advisories = []
+
+    if s_temp < 0.55:
+        if temp < t_opt_min:
+            warnings.append(f"Düşük sıcaklık / don riski mevcuttur (Saha: {temp}°C, Tür optimumu: {t_opt_min}-{t_opt_max}°C).")
+        else:
+            warnings.append(f"Aşırı sıcaklık ve kuraklık stresi riski mevcuttur (Saha: {temp}°C, Tür optimumu: {t_opt_min}-{t_opt_max}°C).")
+    elif s_temp >= 0.90:
+        advisories.append("Sıcaklık rejimi türün büyümesi için son derece uygundur.")
+
+    if s_precip < 0.55:
+        if precip < p_opt_min:
+            warnings.append(f"Yetersiz yağış / kuraklık riski mevcuttur (Saha: {precip} mm/yıl, Tür optimumu: {p_opt_min}-{p_opt_max} mm).")
+        else:
+            warnings.append(f"Aşırı yağış / kök bölgesi taban suyu riski mevcuttur (Saha: {precip} mm/yıl).")
+    elif s_precip >= 0.90:
+        advisories.append("Yıllık yağış miktarı türün fizyolojik ihtiyacını tam karşılamaktadır.")
+
+    if s_elev < 0.55:
+        if elev > e_max:
+            warnings.append(f"Saha rakımı ({elev} m) türün tavan yükselti sınırının ({e_max} m) üzerindedir; vejetasyon süresi kısalabilir.")
+        else:
+            warnings.append(f"Saha rakımı ({elev} m) türün taban yükselti sınırının ({e_min} m) altındadır.")
+
+    if s_slope < 0.60:
+        warnings.append(f"Yüksek eğim ({slope}°) nedeniyle toprak erozyonu ve mekanik dikim zorluğu riski bulunmaktadır.")
+
+    ecological_warning = None
+    if sf < 0.60:
+        ecological_warning = "Dikkat: Seçilen tür bu sahanın iklim/rakım koşullarına düşük uyum göstermektedir (Kuraklık/don riski yüksek)."
+        if ecological_warning not in warnings:
+            warnings.insert(0, ecological_warning)
+
+    if sf >= 0.90:
+        status = 'excellent'
+        status_tr = 'Çok Yüksek Uyum (Optimal)'
+        status_en = 'Optimal'
+    elif sf >= 0.75:
+        status = 'good'
+        status_tr = 'İyi Uyum'
+        status_en = 'Good'
+    elif sf >= 0.60:
+        status = 'moderate'
+        status_tr = 'Orta Uyum'
+        status_en = 'Moderate'
+    else:
+        status = 'poor'
+        status_tr = 'Düşük Uyum / Riskli'
+        status_en = 'Poor / High Risk'
+
+    return {
+        'site_suitability_factor': sf,
+        'suitability_score_pct': round(min(100.0, geom * 100.0), 1),
+        'status': status,
+        'status_tr': status_tr,
+        'status_en': status_en,
+        'component_scores': {
+            'temperature': round(s_temp, 2),
+            'precipitation': round(s_precip, 2),
+            'elevation': round(s_elev, 2),
+            'slope': round(s_slope, 2)
+        },
+        'warnings': warnings,
+        'advisories': advisories,
+        'ecological_warning': ecological_warning,
+        'matched_niche': {
+            'common_tr': niche.get('common_tr', ''),
+            'temp_opt_range': f"{t_opt_min} - {t_opt_max} °C",
+            'precip_opt_range': f"{p_opt_min} - {p_opt_max} mm",
+            'elev_range': f"{e_min} - {e_max} m"
+        }
+    }
+
+
+def simulate_carbon_stand(
+    area_ha: float,
+    species_params: dict,
+    spacing_x: float,
+    spacing_y: float,
+    rotation_years: int,
+    retention_rate: float = 85.0,
+    thinning_events: list = None,
+    site_suitability_factor: float = 1.0
+) -> dict:
+    """
+    Durum takipli (stateful) yıllık karbon yutak simülasyon motoru.
+    Girdi:
+      area_ha: Proje alanı (ha)
+      species_params: Çözümlenmiş tür parametreleri sözlüğü (Dw, BEF, R, MAI vb.)
+      spacing_x, spacing_y: Dikim aralığı (m)
+      rotation_years: İdare süresi (yıl)
+      retention_rate: Fidan tutma oranı (%)
+      thinning_events: Aralama olayları listesi [{'year': 15, 'percent': 20}, ...]
+      site_suitability_factor: GEE ve saha iklim katmanlarından hesaplanan ekolojik uyum katsayısı (Sf)
+    Çıktı:
+      meta, summary (baseline & managed), yearly_series (baseline & managed)
+    """
+    try:
+        area_float = float(area_ha) if area_ha is not None else 1.0
+    except (ValueError, TypeError):
+        area_float = 1.0
+    area = max(0.001, area_float)
+    sx = max(0.5, float(spacing_x or 3.0))
+    sy = max(0.5, float(spacing_y or 3.0))
+    rot = max(5, min(150, int(rotation_years or 30)))
+    ret = max(1.0, min(100.0, float(retention_rate if retention_rate is not None else 85.0)))
+
+    sp = species_params or {}
+    dw = float(sp.get('wood_density') or 0.51)
+    bef = float(sp.get('bef') or 1.35)
+    r = float(sp.get('root_shoot_ratio') or 0.25)
+    mai_base = float(sp.get('default_mai') or 6.0)
+    sf = float(site_suitability_factor if site_suitability_factor is not None else 1.0)
+    mai = max(0.5, round(mai_base * sf, 2))
+    group = sp.get('group') or 'conifer'
+    cf = float(sp.get('carbon_fraction') or CARBON_FRACTION)
+    co2_ratio = float(sp.get('co2_to_c_ratio') or CO2_TO_C_RATIO)
+
+    biomass_factor = dw * bef * (1.0 + r)
+    carbon_factor = biomass_factor * cf
+    co2_factor = carbon_factor * co2_ratio
+
+    n0_per_ha = round((10000.0 / (sx * sy)) * (ret / 100.0))
+    n0_total = round(n0_per_ha * area)
+
+    calib = calibrate_growth_parameters(mai, rot, group)
+    v_max = calib['v_max']
+    k = calib['k']
+    m = calib['m']
+
+    annual_soc_rate = 0.35
+
+    max_h = 24.0 if group == 'conifer' else 22.0
+    if mai >= 10.0:
+        max_h = 30.0
+
+    clean_thinnings = {}
+    if thinning_events and isinstance(thinning_events, list):
+        for ev in thinning_events:
+            if isinstance(ev, dict):
+                try:
+                    y = int(ev.get('year') or 0)
+                    p = float(ev.get('percent') or 0.0)
+                    if 1 <= y <= rot and 1.0 <= p <= 90.0:
+                        clean_thinnings[y] = p
+                except (ValueError, TypeError):
+                    continue
+
+    # SENARYO 1: BASELINE (Müdahalesiz / Doğa Koruma / Sıfır Aralama)
+    baseline_series = []
+    n_base = float(n0_per_ha)
+    for t in range(rot + 1):
+        v_pot = v_max * math.pow(max(0.0, 1.0 - math.exp(-k * t)), m) if t > 0 else 0.0
+        if t > 0:
+            n_base = max(n0_per_ha * 0.60, n_base * (1.0 - 0.005))
+        n_base_int = max(1, round(n_base))
+
+        c_tree_total = v_pot * carbon_factor * area
+        c_soc_total = annual_soc_rate * t * area
+        c_standing = c_tree_total + c_soc_total
+        co2_standing = c_standing * co2_ratio
+
+        dims = _calculate_tree_allometrics(v_pot, n_base_int, t, max_h)
+
+        baseline_series.append({
+            'year': t,
+            'standing_c': round(c_standing, 2),
+            'harvested_c': 0.0,
+            'standing_co2e': round(co2_standing, 2),
+            'harvested_co2e': 0.0,
+            'total_co2e': round(co2_standing, 2),
+            'trees_per_ha': n_base_int,
+            'mean_dbh_cm': dims['dbh_cm'],
+            'mean_height_m': dims['height_m'],
+            'stem_volume_m3_ha': round(v_pot, 2)
+        })
+
+    # SENARYO 2: MANAGED (Kullanıcı Tanımlı Aralamalı Silvikültür)
+    managed_series = []
+    v_curr = 0.0
+    n_curr = float(n0_per_ha)
+    cum_harvest_c = 0.0
+
+    for t in range(rot + 1):
+        v_pot = v_max * math.pow(max(0.0, 1.0 - math.exp(-k * t)), m) if t > 0 else 0.0
+        v_pot_prev = v_max * math.pow(max(0.0, 1.0 - math.exp(-k * max(0, t - 1))), m) if t > 1 else 0.0
+        delta_v_pot = max(0.0, v_pot - v_pot_prev)
+
+        if t in clean_thinnings and t > 0 and v_curr > 0.0:
+            pct = clean_thinnings[t]
+            p = pct / 100.0
+            n_removed = n_curr * p
+            n_curr = max(n0_per_ha * 0.15, n_curr - n_removed)
+
+            v_harvested_ha = min(v_curr * 0.85, v_curr * p * 0.90)
+            v_curr = max(0.0, v_curr - v_harvested_ha)
+
+            harvest_c_event = v_harvested_ha * carbon_factor * area
+            cum_harvest_c += harvest_c_event
+
+        if t > 0:
+            rel_density = min(1.0, max(0.35, n_curr / float(n0_per_ha)))
+            growth_response = 0.65 + 0.35 * rel_density
+            v_curr += delta_v_pot * growth_response
+            if t not in clean_thinnings:
+                n_curr = max(n0_per_ha * 0.30, n_curr * (1.0 - 0.003))
+
+        n_curr_int = max(1, round(n_curr))
+        c_tree_total = v_curr * carbon_factor * area
+        c_soc_total = annual_soc_rate * t * area
+        c_standing = c_tree_total + c_soc_total
+        co2_standing = c_standing * co2_ratio
+        co2_harvested = cum_harvest_c * co2_ratio
+        co2_total = co2_standing + co2_harvested
+
+        dims = _calculate_tree_allometrics(v_curr, n_curr_int, t, max_h)
+
+        managed_series.append({
+            'year': t,
+            'standing_c': round(c_standing, 2),
+            'harvested_c': round(cum_harvest_c, 2),
+            'standing_co2e': round(co2_standing, 2),
+            'harvested_co2e': round(co2_harvested, 2),
+            'total_co2e': round(co2_total, 2),
+            'trees_per_ha': n_curr_int,
+            'mean_dbh_cm': dims['dbh_cm'],
+            'mean_height_m': dims['height_m'],
+            'stem_volume_m3_ha': round(v_curr, 2)
+        })
+
+    base_final = baseline_series[-1]
+    man_final = managed_series[-1]
+
+    summary = {
+        'baseline': {
+            'total_standing_c': base_final['standing_c'],
+            'total_harvested_c': 0.0,
+            'grand_total_c': base_final['standing_c'],
+            'total_standing_co2e': base_final['standing_co2e'],
+            'total_harvested_co2e': 0.0,
+            'grand_total_co2e': base_final['total_co2e'],
+            'mean_annual_sequestration_c': round(base_final['standing_c'] / float(rot), 2),
+            'mean_annual_sequestration_co2e': round(base_final['total_co2e'] / float(rot), 2),
+            'final_standing_volume_m3_ha': base_final['stem_volume_m3_ha'],
+            'final_mean_dbh_cm': base_final['mean_dbh_cm'],
+            'final_mean_height_m': base_final['mean_height_m'],
+            'final_trees_per_ha': base_final['trees_per_ha']
+        },
+        'managed': {
+            'total_standing_c': man_final['standing_c'],
+            'total_harvested_c': man_final['harvested_c'],
+            'grand_total_c': round(man_final['standing_c'] + man_final['harvested_c'], 2),
+            'total_standing_co2e': man_final['standing_co2e'],
+            'total_harvested_co2e': man_final['harvested_co2e'],
+            'grand_total_co2e': man_final['total_co2e'],
+            'mean_annual_sequestration_c': round((man_final['standing_c'] + man_final['harvested_c']) / float(rot), 2),
+            'mean_annual_sequestration_co2e': round(man_final['total_co2e'] / float(rot), 2),
+            'final_standing_volume_m3_ha': man_final['stem_volume_m3_ha'],
+            'final_mean_dbh_cm': man_final['mean_dbh_cm'],
+            'final_mean_height_m': man_final['mean_height_m'],
+            'final_trees_per_ha': man_final['trees_per_ha']
+        }
+    }
+
+    meta = {
+        'area_ha': area,
+        'spacing_x': sx,
+        'spacing_y': sy,
+        'rotation_years': rot,
+        'retention_rate': ret,
+        'initial_trees_per_ha': n0_per_ha,
+        'initial_trees_total': n0_total,
+        'wood_density': dw,
+        'bef': bef,
+        'root_shoot_ratio': r,
+        'default_mai': mai,
+        'base_mai': mai_base,
+        'effective_mai': mai,
+        'site_suitability_factor': sf,
+        'species_group': group,
+        'carbon_fraction': cf,
+        'co2_to_c_ratio': co2_ratio,
+        'species_name': sp.get('species_name', ''),
+        'common_tr': sp.get('common_tr', ''),
+        'common_en': sp.get('common_en', ''),
+        'match_level': sp.get('match_level', 'unknown'),
+        'matched_key': sp.get('matched_key', ''),
+        'climate_zone': sp.get('climate_zone', ''),
+        'applied_thinning_events': [{'year': y, 'percent': clean_thinnings[y]} for y in sorted(clean_thinnings.keys())]
+    }
+
+    return {
+        'meta': meta,
+        'summary': summary,
+        'yearly_series': {
+            'baseline': baseline_series,
+            'managed': managed_series
+        }
+    }
+
+
+# 8. HTTP API Endpoint (Karbon Simülasyonu)
+@app.route('/api/carbon-simulation', methods=['POST'], strict_slashes=False)
+@app.route('/api/carbon-simulation/', methods=['POST'], strict_slashes=False)
+def api_carbon_simulation():
+    """
+    Karbon Yutak Alanı Simülasyonu REST API Uç Noktası.
+    POST JSON Girdisi:
+      area_ha: float (hektar)
+      species: str (örn. "Pinus brutia")
+      country: str (örn. "TR")
+      spacing_x: float (m)
+      spacing_y: float (m)
+      rotation_years: int (örn. 40)
+      retention_rate: float (örn. 85.0)
+      thinning_events: list [{'year': 15, 'percent': 25}, ...]
+      geojson: dict (GeoJSON Poligon Geometrisi - GEE Saha Analizi için opsiyonel)
+    """
+    try:
+        req_data = request.get_json(silent=True) or {}
+
+        try:
+            raw_area = req_data.get('area_ha')
+            area_ha = float(raw_area) if raw_area is not None else 10.0
+        except (ValueError, TypeError):
+            area_ha = 10.0
+
+        species_raw = str(req_data.get('species') or req_data.get('species_name') or 'Pinus brutia')
+        country = str(req_data.get('country') or req_data.get('country_code') or 'TR')
+
+        try:
+            spacing_x = max(1, int(round(float(req_data.get('spacing_x') or 3.0))))
+            spacing_y = max(1, int(round(float(req_data.get('spacing_y') or 3.0))))
+        except (ValueError, TypeError):
+            spacing_x, spacing_y = 3, 3
+
+        try:
+            rotation_years = int(req_data.get('rotation_years') or 30)
+        except (ValueError, TypeError):
+            rotation_years = 30
+
+        try:
+            raw_ret = req_data.get('retention_rate')
+            retention_rate = float(raw_ret) if raw_ret is not None else 85.0
+        except (ValueError, TypeError):
+            retention_rate = 85.0
+
+        thinning_events = req_data.get('thinning_events') or []
+        geojson_geom = req_data.get('geojson') or req_data.get('geometry')
+
+        sp_params = resolve_species_carbon_params(species_raw, country)
+
+        site_env = None
+        suitability = None
+        site_factor = 1.0
+
+        if geojson_geom:
+            site_env = analyze_site_environmental_layers(geojson_geom, country)
+            suitability = calculate_site_suitability(site_env, sp_params)
+            site_factor = float(suitability.get('site_suitability_factor') or 1.0)
+
+        sim_result = simulate_carbon_stand(
+            area_ha=area_ha,
+            species_params=sp_params,
+            spacing_x=spacing_x,
+            spacing_y=spacing_y,
+            rotation_years=rotation_years,
+            retention_rate=retention_rate,
+            thinning_events=thinning_events,
+            site_suitability_factor=site_factor
+        )
+
+        resp_payload = {
+            'success': True,
+            'meta': sim_result['meta'],
+            'summary': sim_result['summary'],
+            'yearly_series': sim_result['yearly_series']
+        }
+        if site_env is not None:
+            resp_payload['site_conditions'] = site_env
+        if suitability is not None:
+            resp_payload['suitability'] = suitability
+
+        return jsonify(resp_payload)
+    except Exception as exc:
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
 
 if __name__ == '__main__':
     # NOT: Bu blok sadece yerel (local) geliştirme/test içindir.
