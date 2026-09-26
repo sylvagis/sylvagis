@@ -1,6 +1,21 @@
 <!DOCTYPE html>
 <html lang="tr">
 <head>
+    <script id="sylva-early-language">
+    (function () {
+        var lang = 'tr';
+        try { lang = localStorage.getItem('sylvaSelectedLanguage') || localStorage.getItem('sylva_lang') || lang; } catch (e) {}
+        lang = String(lang).toLowerCase().split('-')[0];
+        window._sylvaEarlyLang = lang;
+        window._sylvaLang = lang;
+        document.documentElement.setAttribute('lang', lang);
+        document.documentElement.setAttribute('dir', /^(ar|fa|ur)$/.test(lang) ? 'rtl' : 'ltr');
+        document.documentElement.classList.add('sylva-i18n-pending');
+    })();
+    </script>
+    <style id="sylva-i18n-first-paint">
+        html.sylva-i18n-pending body { opacity: 0 !important; pointer-events: none !important; }
+    </style>
     <style id="sylva-critical-sections">
     /* Sayfa yüklenirken varsayılan olarak kapalı kalması gereken akordeon gövdeleri (FOUC / Flash of Content önleyici) */
     .sylva-sec-body,
@@ -379,9 +394,9 @@
                             var retEl = document.getElementById('carbon-retention-rate');
                             var retVal = retEl ? (parseFloat(retEl.value) || 85) : 85;
                             var effective = Math.round(density * (retVal / 100));
-                            hintEl.textContent = (typeof _carbonFormatSpacingHint === 'function')
+                            hintEl.innerHTML = (typeof _carbonFormatSpacingHint === 'function')
                                 ? _carbonFormatSpacingHint(density, r, t, retVal, effective)
-                                : ("~" + density + " fidan/ha (" + r + "x" + t + "m)" + (retVal < 100 ? " • Tutma sonrası: ~" + effective + "/ha" : ""));
+                                : ''; // Localized formatter fills this before first paint.
                         }
                     }
                 } catch (e) {
@@ -13870,6 +13885,149 @@ var _CARBON_REPORT_I18N = {
 };
 
 
+// Complete runtime terms for all 30 carbon languages; scientific values are unchanged.
+(function () {
+    var rows = {
+    "tr": ["yıl","fidan","Tutma sonrası","Efektif","Boy","Çok Yüksek Uyum","İyi Uyum","Orta Uyum","Düşük Uyum / Riskli","Duran Stok","Toplam (Hasat Dahil)","Müdahalesiz","Aralama","Yıl"],
+    "en": ["year","trees","Post-survival","Effective","Height","Optimal Suitability","Good Suitability","Moderate Suitability","Low Suitability / Risky","Standing Stock","Total (Incl. Harvest)","Baseline / Unmanaged","Thinning","Year"],
+    "ko": ["년","본","활착 후","유효","수고","최적 적합","양호한 적합성","보통 적합성","낮은 적합성 / 위험","잔존 탄소량","총량 (수확 포함)","자연 방치 (기준선)","간벌","연도"],
+    "de": ["Jahr","Bäume","Nach Anwachsen","Effektiv","Höhe","Optimale Eignung","Gute Eignung","Mäßige Eignung","Geringe Eignung / riskant","Stehender Vorrat","Gesamt (inkl. Ernte)","Referenz / Unbewirtschaftet","Durchforstung","Jahr"],
+    "fr": ["an","arbres","Après reprise","Effectif","Hauteur","Adéquation optimale","Bonne adéquation","Adéquation moyenne","Faible adéquation / risque","Stock sur pied","Total (récolte comprise)","Référence / Sans gestion","Éclaircie","Année"],
+    "es": ["año","árboles","Tras el establecimiento","Efectivos","Altura","Idoneidad óptima","Buena idoneidad","Idoneidad moderada","Baja idoneidad / riesgo","Existencias en pie","Total (incluye cosecha)","Referencia / Sin gestión","Aclareo","Año"],
+    "it": ["anno","alberi","Dopo l’attecchimento","Effettivi","Altezza","Idoneità ottimale","Buona idoneità","Idoneità moderata","Bassa idoneità / rischio","Stock in piedi","Totale (raccolta inclusa)","Riferimento / Non gestito","Diradamento","Anno"],
+    "pt": ["ano","árvores","Após o estabelecimento","Efetivas","Altura","Adequação ótima","Boa adequação","Adequação moderada","Baixa adequação / risco","Estoque em pé","Total (inclui colheita)","Referência / Sem manejo","Desbaste","Ano"],
+    "ru": ["год","деревьев","После приживания","Эффективно","Высота","Оптимальная пригодность","Хорошая пригодность","Умеренная пригодность","Низкая пригодность / риск","Запас на корню","Всего (включая заготовку)","Базовый / Без ухода","Прореживание","Год"],
+    "zh": ["年","株","成活后","有效","树高","最优适宜性","良好适宜性","中等适宜性","低适宜性 / 有风险","立木碳储量","总量（含采伐）","基线 / 无经营","间伐","年份"],
+    "ja": ["年","本","活着後","有効","樹高","最適な適性","良好な適性","中程度の適性","低い適性 / リスクあり","立木炭素蓄積","合計（収穫含む）","基準 / 無施業","間伐","年"],
+    "ar": ["سنة","شجرة","بعد الاستقرار","الفعلي","الارتفاع","ملاءمة مثالية","ملاءمة جيدة","ملاءمة متوسطة","ملاءمة منخفضة / خطر","مخزون الأشجار القائمة","الإجمالي (يشمل الحصاد)","خط الأساس / دون إدارة","التخفيف","السنة"],
+    "fa": ["سال","درخت","پس از استقرار","مؤثر","ارتفاع","سازگاری بهینه","سازگاری خوب","سازگاری متوسط","سازگاری کم / پرخطر","ذخیره سرپا","کل (با برداشت)","خط پایه / بدون مدیریت","تنک‌کردن","سال"],
+    "uz": ["yil","daraxt","Tutib qolgandan keyin","Samarali","Balandlik","Eng yuqori moslik","Yaxshi moslik","O‘rtacha moslik","Past moslik / xavfli","Tik turgan zaxira","Jami (hosil bilan)","Asosiy / Boshqarilmagan","Siyraklashtirish","Yil"],
+    "el": ["έτος","δέντρα","Μετά την εγκατάσταση","Ενεργά","Ύψος","Βέλτιστη καταλληλότητα","Καλή καταλληλότητα","Μέτρια καταλληλότητα","Χαμηλή καταλληλότητα / κίνδυνος","Ιστάμενο απόθεμα","Σύνολο (με συγκομιδή)","Αναφορά / Χωρίς διαχείριση","Αραίωση","Έτος"],
+    "bg": ["година","дървета","След прихващане","Ефективни","Височина","Оптимална пригодност","Добра пригодност","Умерена пригодност","Ниска пригодност / риск","Запас на корен","Общо (с добива)","Базов / Без стопанисване","Прореждане","Година"],
+    "az": ["il","ağac","Tutduqdan sonra","Effektiv","Hündürlük","Optimal uyğunluq","Yaxşı uyğunluq","Orta uyğunluq","Aşağı uyğunluq / riskli","Ayaqüstü ehtiyat","Cəmi (məhsul daxil)","Baza / Müdaxiləsiz","Seyrəltmə","İl"],
+    "hu": ["év","fa","Megeredés után","Tényleges","Magasság","Optimális alkalmasság","Jó alkalmasság","Mérsékelt alkalmasság","Alacsony alkalmasság / kockázatos","Lábon álló készlet","Összesen (kitermeléssel)","Alapállapot / Kezeletlen","Gyérítés","Év"],
+    "kk": ["жыл","ағаш","Жерсінгеннен кейін","Тиімді","Биіктік","Оңтайлы жарамдылық","Жақсы жарамдылық","Орташа жарамдылық","Төмен жарамдылық / қауіпті","Өсіп тұрған қор","Барлығы (кесілгенін қоса)","Бастапқы / Күтімсіз","Сирету","Жыл"],
+    "hi": ["वर्ष","पेड़","स्थापना के बाद","प्रभावी","ऊँचाई","इष्टतम उपयुक्तता","अच्छी उपयुक्तता","मध्यम उपयुक्तता","कम उपयुक्तता / जोखिम","खड़ा भंडार","कुल (कटाई सहित)","आधार / अप्रबंधित","विरलीकरण","वर्ष"],
+    "id": ["tahun","pohon","Setelah tumbuh","Efektif","Tinggi","Kesesuaian optimal","Kesesuaian baik","Kesesuaian sedang","Kesesuaian rendah / berisiko","Stok tegakan","Total (termasuk panen)","Acuan / Tanpa pengelolaan","Penjarangan","Tahun"],
+    "th": ["ปี","ต้น","หลังตั้งตัว","ที่มีผลจริง","ความสูง","ความเหมาะสมสูงสุด","ความเหมาะสมดี","ความเหมาะสมปานกลาง","ความเหมาะสมต่ำ / มีความเสี่ยง","คาร์บอนในไม้ยืนต้น","รวม (รวมการเก็บเกี่ยว)","ฐาน / ไม่มีการจัดการ","การตัดสาง","ปี"],
+    "bn": ["বছর","গাছ","প্রতিষ্ঠার পরে","কার্যকর","উচ্চতা","সর্বোত্তম উপযুক্ততা","ভালো উপযুক্ততা","মাঝারি উপযুক্ততা","কম উপযুক্ততা / ঝুঁকিপূর্ণ","দণ্ডায়মান মজুত","মোট (আহরণসহ)","ভিত্তি / অব্যবস্থাপিত","পাতলাকরণ","বছর"],
+    "vi": ["năm","cây","Sau khi bén rễ","Hiệu dụng","Chiều cao","Mức phù hợp tối ưu","Mức phù hợp tốt","Mức phù hợp trung bình","Mức phù hợp thấp / rủi ro","Trữ lượng cây đứng","Tổng (gồm khai thác)","Cơ sở / Không quản lý","Tỉa thưa","Năm"],
+    "ur": ["سال","درخت","قائم ہونے کے بعد","مؤثر","اونچائی","بہترین موزونیت","اچھی موزونیت","درمیانی موزونیت","کم موزونیت / خطرہ","کھڑا ذخیرہ","کل (کٹائی سمیت)","بنیادی / بغیر انتظام","چھدرائی","سال"],
+    "pl": ["rok","drzew","Po przyjęciu","Efektywne","Wysokość","Optymalna przydatność","Dobra przydatność","Umiarkowana przydatność","Niska przydatność / ryzyko","Zapas na pniu","Razem (z pozyskaniem)","Bazowy / Bez zabiegów","Trzebież","Rok"],
+    "ms": ["tahun","pokok","Selepas hidup","Berkesan","Ketinggian","Kesesuaian optimum","Kesesuaian baik","Kesesuaian sederhana","Kesesuaian rendah / berisiko","Stok tegakan","Jumlah (termasuk tuaian)","Asas / Tanpa pengurusan","Penjarangan","Tahun"],
+    "ky": ["жыл","дарак","Көгөргөндөн кийин","Натыйжалуу","Бийиктик","Оптималдуу ылайыктуулук","Жакшы ылайыктуулук","Орточо ылайыктуулук","Төмөн ылайыктуулук / кооптуу","Өсүп турган запас","Жалпы (кыйылганы менен)","Базалык / Кароосуз","Сейректетүү","Жыл"],
+    "mn": ["жил","мод","Дасаж ургасны дараа","Үр дүнтэй","Өндөр","Хамгийн тохиромжтой","Сайн тохиромжтой","Дунд зэргийн тохиромжтой","Тохиромж муу / эрсдэлтэй","Ургаа модны нөөц","Нийт (бэлтгэлийг оруулсан)","Суурь / Арчилгаагүй","Сийрэгжүүлэлт","Жил"],
+    "ka": ["წელი","ხე","გახარების შემდეგ","ეფექტური","სიმაღლე","ოპტიმალური შესაბამისობა","კარგი შესაბამისობა","საშუალო შესაბამისობა","დაბალი შესაბამისობა / რისკი","ზეზემდგომი მარაგი","სულ (მოსავლის ჩათვლით)","საბაზისო / მართვის გარეშე","გამოხშირვა","წელი"]
+};
+    Object.keys(rows).forEach(function (lang) {
+        var v = rows[lang], d = _CARBON_I18N[lang];
+        d.unit_year = v[0]; d.unit_mm_yr = 'mm/' + v[0]; d.unit_tco2e_yr = 'tCO2e/' + v[0];
+        d.unit_trees = v[1]; d.unit_trees_ha = v[1] + '/ha';
+        d.lbl_post_survival = v[2] + ': '; d.lbl_effective = v[3] + ': '; d.lbl_height = v[4] + ': ';
+        d.status_excellent = v[5]; d.status_good = v[6]; d.status_moderate = v[7]; d.status_poor = v[8];
+        d.carbon_standing_stock_legend = v[9]; d.carbon_total_legend = v[10];
+        d.carbon_baseline_legend = v[11]; d.carbon_thinning_legend = v[12]; d.carbon_thinning_year_label = v[13];
+    });
+})();
+
+// Native panel help text for languages whose old carbon pack contained English placeholders.
+(function () {
+    var help = {
+    "fa": ["تراکم کاشت را تغییر می‌دهد و منحنی و مجموع جذب کربن را دوباره محاسبه می‌کند.","این شبیه‌سازی از ضرایب پیش‌فرض IPCC Tier 1 و مدل Chapman-Richards برای برنامه‌ریزی اولیه استفاده می‌کند؛ جایگزین اندازه‌گیری میدانی، گواهی رسمی کربن یا گزارش موجودی ملی نیست."],
+    "uz": ["Ekish zichligini o‘zgartirib, uglerod yutilishi egri chizig‘i va jami qiymatlarini qayta hisoblaydi.","Simulyatsiya dastlabki rejalashtirish uchun IPCC Tier 1 koeffitsiyentlari va Chapman-Richards modelidan foydalanadi; dala o‘lchovlari, rasmiy uglerod sertifikati yoki milliy inventar hisobotining o‘rnini bosmaydi."],
+    "el": ["Μεταβάλλει την πυκνότητα φύτευσης και επανυπολογίζει την καμπύλη και τη συνολική δέσμευση άνθρακα.","Η προσομοίωση χρησιμοποιεί συντελεστές IPCC Tier 1 και το μοντέλο Chapman-Richards για προκαταρκτικό σχεδιασμό· δεν αντικαθιστά μετρήσεις πεδίου, επίσημη πιστοποίηση άνθρακα ή εθνικές απογραφές."],
+    "bg": ["Променя гъстотата на засаждане и преизчислява кривата и общото поглъщане на въглерод.","Симулацията използва коефициенти IPCC Tier 1 и модела Chapman-Richards за предварително планиране; не заменя теренни измервания, официално въглеродно сертифициране или национални инвентаризации."],
+    "az": ["Əkin sıxlığını dəyişərək karbon udma əyrisini və ümumi miqdarları yenidən hesablayır.","Simulyasiya ilkin planlaşdırma üçün IPCC Tier 1 əmsalları və Chapman-Richards modelindən istifadə edir; sahə ölçmələrini, rəsmi karbon sertifikatını və ya milli inventar hesabatlarını əvəz etmir."],
+    "hu": ["Módosítja az ültetési sűrűséget, és újraszámítja a szénmegkötés görbéjét és összegét.","A szimuláció IPCC Tier 1 tényezőket és Chapman-Richards modellt használ előzetes tervezéshez; nem helyettesít terepi mérést, hivatalos karbontanúsítást vagy nemzeti leltárjelentést."],
+    "kk": ["Отырғызу тығыздығын өзгертіп, көміртек сіңіру қисығы мен жалпы мөлшерін қайта есептейді.","Симуляция алдын ала жоспарлау үшін IPCC Tier 1 коэффициенттері мен Chapman-Richards моделін қолданады; далалық өлшеулерді, ресми көміртек сертификатын немесе ұлттық түгендеу есебін алмастырмайды."],
+    "hi": ["रोपण घनत्व बदलकर कार्बन अवशोषण वक्र और कुल मात्रा की पुनर्गणना करता है।","यह सिमुलेशन प्रारंभिक योजना के लिए IPCC Tier 1 कारकों और Chapman-Richards मॉडल का उपयोग करता है; यह क्षेत्रीय मापन, औपचारिक कार्बन प्रमाणन या राष्ट्रीय सूची रिपोर्टिंग का विकल्प नहीं है।"],
+    "id": ["Mengubah kepadatan tanam dan menghitung ulang kurva serta total penyerapan karbon.","Simulasi menggunakan faktor IPCC Tier 1 dan model Chapman-Richards untuk perencanaan awal; bukan pengganti pengukuran lapangan, sertifikasi karbon resmi, atau pelaporan inventaris nasional."],
+    "th": ["ปรับความหนาแน่นการปลูกและคำนวณเส้นโค้งกับยอดรวมการดูดซับคาร์บอนใหม่","การจำลองใช้ปัจจัย IPCC Tier 1 และแบบจำลอง Chapman-Richards เพื่อการวางแผนเบื้องต้น ไม่ใช้แทนการวัดภาคสนาม การรับรองคาร์บอนอย่างเป็นทางการ หรือการรายงานบัญชีระดับชาติ"],
+    "bn": ["রোপণের ঘনত্ব পরিবর্তন করে কার্বন শোষণের রেখাচিত্র ও মোট পরিমাণ পুনর্গণনা করে।","এই সিমুলেশন প্রাথমিক পরিকল্পনার জন্য IPCC Tier 1 সহগ ও Chapman-Richards মডেল ব্যবহার করে; এটি মাঠপর্যায়ের পরিমাপ, আনুষ্ঠানিক কার্বন সনদ বা জাতীয় তালিকা প্রতিবেদনের বিকল্প নয়।"],
+    "vi": ["Thay đổi mật độ trồng và tính lại đường cong cùng tổng lượng hấp thụ carbon.","Mô phỏng dùng hệ số IPCC Tier 1 và mô hình Chapman-Richards để lập kế hoạch sơ bộ; không thay thế đo đạc thực địa, chứng nhận carbon chính thức hoặc báo cáo kiểm kê quốc gia."],
+    "ur": ["پودوں کی کثافت بدل کر کاربن جذب کے منحنی خط اور کل مقدار کا دوبارہ حساب کرتا ہے۔","یہ سمیولیشن ابتدائی منصوبہ بندی کے لیے IPCC Tier 1 عوامل اور Chapman-Richards ماڈل استعمال کرتی ہے؛ یہ میدانی پیمائش، رسمی کاربن تصدیق یا قومی انوینٹری رپورٹنگ کا متبادل نہیں ہے۔"],
+    "pl": ["Zmienia gęstość sadzenia i przelicza krzywą oraz całkowite pochłanianie węgla.","Symulacja stosuje współczynniki IPCC Tier 1 i model Chapman-Richards do wstępnego planowania; nie zastępuje pomiarów terenowych, oficjalnej certyfikacji węglowej ani krajowej sprawozdawczości inwentaryzacyjnej."],
+    "ms": ["Mengubah kepadatan penanaman dan mengira semula lengkung serta jumlah penyerapan karbon.","Simulasi menggunakan faktor IPCC Tier 1 dan model Chapman-Richards untuk perancangan awal; tidak menggantikan pengukuran lapangan, pensijilan karbon rasmi atau pelaporan inventori negara."],
+    "ky": ["Отургузуу жыштыгын өзгөртүп, көмүртек сиңирүү ийри сызыгын жана жалпы көлөмүн кайра эсептейт.","Симуляция алдын ала пландоо үчүн IPCC Tier 1 коэффициенттерин жана Chapman-Richards моделин колдонот; талаа өлчөөлөрүн, расмий көмүртек сертификатын же улуттук инвентаризация отчетун алмаштырбайт."],
+    "mn": ["Тарилтын нягтралыг өөрчилж, нүүрстөрөгч шингээлтийн муруй болон нийт хэмжээг дахин тооцоолно.","Симуляци нь урьдчилсан төлөвлөлтөд IPCC Tier 1 коэффициент болон Chapman-Richards загварыг ашиглана; хээрийн хэмжилт, албан ёсны нүүрстөрөгчийн баталгаажуулалт эсвэл улсын тооллогын тайланг орлохгүй."],
+    "ka": ["ცვლის დარგვის სიმჭიდროვეს და ხელახლა ითვლის ნახშირბადის შთანთქმის მრუდსა და ჯამურ რაოდენობას.","სიმულაცია წინასწარი დაგეგმვისთვის იყენებს IPCC Tier 1 კოეფიციენტებსა და Chapman-Richards მოდელს; არ ცვლის საველე გაზომვებს, ნახშირბადის ოფიციალურ სერტიფიცირებას ან ეროვნულ ინვენტარიზაციას."]
+};
+    Object.assign(help, {"es":["Ajusta la densidad de plantación y recalcula la curva y el total de secuestro de carbono.","La simulación usa factores IPCC Tier 1 y el modelo Chapman-Richards para planificación preliminar; no sustituye mediciones de campo, certificación oficial de carbono ni inventarios nacionales."],"it":["Regola la densità di impianto e ricalcola la curva e il totale del sequestro di carbonio.","La simulazione usa fattori IPCC Tier 1 e il modello Chapman-Richards per la pianificazione preliminare; non sostituisce misure sul campo, certificazione ufficiale del carbonio o inventari nazionali."],"pt":["Ajusta a densidade de plantio e recalcula a curva e o total de sequestro de carbono.","A simulação usa fatores IPCC Tier 1 e o modelo Chapman-Richards para planejamento preliminar; não substitui medições de campo, certificação oficial de carbono ou inventários nacionais."],"ru":["Изменяет плотность посадки и пересчитывает кривую и общий объём поглощения углерода.","Симуляция использует коэффициенты IPCC Tier 1 и модель Chapman-Richards для предварительного планирования; не заменяет полевые измерения, официальную углеродную сертификацию или национальные инвентаризации."],"zh":["调整栽植密度，并重新计算碳吸收曲线与累计总量。","本模拟采用 IPCC Tier 1 默认系数和 Chapman-Richards 模型进行前期规划，不能替代实地测量、正式碳认证或国家清单报告。"],"ja":["植栽密度を調整し、炭素吸収曲線と累積量を再計算します。","このシミュレーションは初期計画のために IPCC Tier 1 係数と Chapman-Richards モデルを使用します。現地測定、正式な炭素認証、国のインベントリ報告に代わるものではありません。"],"ar":["يضبط كثافة الغرس ويعيد حساب منحنى امتصاص الكربون ومجموعه.","تستخدم المحاكاة معاملات IPCC Tier 1 ونموذج Chapman-Richards للتخطيط الأولي؛ ولا تحل محل القياسات الميدانية أو شهادات الكربون الرسمية أو تقارير الجرد الوطني."]});
+    var clear = {
+    "tr": "Temizle",
+    "en": "Clear",
+    "ko": "지우기",
+    "de": "Leeren",
+    "fr": "Effacer",
+    "es": "Limpiar",
+    "it": "Cancella",
+    "pt": "Limpar",
+    "ru": "Очистить",
+    "zh": "清除",
+    "ja": "クリア",
+    "ar": "مسح",
+    "fa": "پاک کردن",
+    "uz": "Tozalash",
+    "el": "Εκκαθάριση",
+    "bg": "Изчисти",
+    "az": "Təmizlə",
+    "hu": "Törlés",
+    "kk": "Тазалау",
+    "hi": "साफ़ करें",
+    "id": "Bersihkan",
+    "th": "ล้าง",
+    "bn": "মুছুন",
+    "vi": "Xóa",
+    "ur": "صاف کریں",
+    "pl": "Wyczyść",
+    "ms": "Kosongkan",
+    "ky": "Тазалоо",
+    "mn": "Цэвэрлэх",
+    "ka": "გასუფთავება"
+};
+    Object.keys(clear).forEach(function (lang) { _CARBON_I18N[lang].carbon_clear_btn = clear[lang]; });
+    Object.keys(help).forEach(function (lang) {
+        _CARBON_I18N[lang].carbon_density_scale_desc = help[lang][0];
+        _CARBON_I18N[lang].carbon_standard_notice = help[lang][1];
+    });
+})();
+
+(function () {
+    var notices = {
+    "tr": "Görselleştirmede {n} temsili nokta gösteriliyor.",
+    "en": "Showing {n} representative points for visualization.",
+    "ko": "시각화를 위해 대표 지점 {n}개를 표시합니다.",
+    "de": "Für die Darstellung werden {n} repräsentative Punkte gezeigt.",
+    "fr": "{n} points représentatifs sont affichés pour la visualisation.",
+    "es": "Se muestran {n} puntos representativos para la visualización.",
+    "it": "Sono mostrati {n} punti rappresentativi per la visualizzazione.",
+    "pt": "São exibidos {n} pontos representativos para visualização.",
+    "ru": "Для визуализации показано {n} репрезентативных точек.",
+    "zh": "显示 {n} 个代表性点用于可视化。",
+    "ja": "可視化のため代表点 {n} 個を表示します。",
+    "ar": "يُعرض {n} من النقاط التمثيلية للتصور.",
+    "fa": "برای نمایش، {n} نقطه نماینده نشان داده می‌شود.",
+    "uz": "Ko‘rsatish uchun {n} ta namunaviy nuqta berilgan.",
+    "el": "Εμφανίζονται {n} αντιπροσωπευτικά σημεία για οπτικοποίηση.",
+    "bg": "За визуализация са показани {n} представителни точки.",
+    "az": "Görüntüləmə üçün {n} təmsilçi nöqtə göstərilir.",
+    "hu": "A megjelenítéshez {n} reprezentatív pont látható.",
+    "kk": "Көрсету үшін {n} өкілдік нүкте берілген.",
+    "hi": "दृश्यांकन के लिए {n} प्रतिनिधि बिंदु दिखाए गए हैं।",
+    "id": "Menampilkan {n} titik representatif untuk visualisasi.",
+    "th": "แสดงจุดตัวแทน {n} จุดสำหรับการแสดงภาพ",
+    "bn": "দৃশ্যায়নের জন্য {n}টি প্রতিনিধিত্বমূলক বিন্দু দেখানো হয়েছে।",
+    "vi": "Hiển thị {n} điểm đại diện để trực quan hóa.",
+    "ur": "تصور کے لیے {n} نمائندہ نقاط دکھائے گئے ہیں۔",
+    "pl": "Do wizualizacji pokazano {n} reprezentatywnych punktów.",
+    "ms": "Memaparkan {n} titik perwakilan untuk visualisasi.",
+    "ky": "Көрсөтүү үчүн {n} өкүлчүлүктүү чекит берилди.",
+    "mn": "Дүрслэхэд {n} төлөөлөх цэгийг харуулж байна.",
+    "ka": "ვიზუალიზაციისთვის ნაჩვენებია {n} წარმომადგენლობითი წერტილი."
+};
+    Object.keys(notices).forEach(function (lang) { _CARBON_I18N[lang].sample_note = notices[lang]; });
+})();
+
 // 16-Wind Compass Aspect Map
 var _CARBON_ASPECT_NAMES = {
     N:   { en: 'North',          tr: 'Kuzey',            de: 'Norden',          fr: 'Nord',             es: 'Norte',            ru: 'Север',            zh: '北',           ja: '北',           ar: 'شمال' },
@@ -13891,16 +14049,141 @@ var _CARBON_ASPECT_NAMES = {
     Flat:{ en: 'Flat',           tr: 'Düz',              de: 'Eben',            fr: 'Plat',             es: 'Plano',            ru: 'Равнина',          zh: '平坦',         ja: '平坦地',       ar: 'مستوٍ' }
 };
 
+// Complete cardinal and intercardinal labels without using server Turkish names.
+(function () {
+    var rows = {
+    "ko": ["북","북동","동","남동","남","남서","서","북서","평지"],
+    "fa": ["شمال","شمال شرقی","شرق","جنوب شرقی","جنوب","جنوب غربی","غرب","شمال غربی","مسطح"],
+    "uz": ["Shimol","Shimoli-sharq","Sharq","Janubi-sharq","Janub","Janubi-g‘arb","G‘arb","Shimoli-g‘arb","Tekis"],
+    "el": ["Βορράς","Βορειοανατολικά","Ανατολή","Νοτιοανατολικά","Νότος","Νοτιοδυτικά","Δύση","Βορειοδυτικά","Επίπεδο"],
+    "bg": ["Север","Североизток","Изток","Югоизток","Юг","Югозапад","Запад","Северозапад","Равно"],
+    "az": ["Şimal","Şimal-şərq","Şərq","Cənub-şərq","Cənub","Cənub-qərb","Qərb","Şimal-qərb","Düz"],
+    "hu": ["Észak","Északkelet","Kelet","Délkelet","Dél","Délnyugat","Nyugat","Északnyugat","Sík"],
+    "kk": ["Солтүстік","Солтүстік-шығыс","Шығыс","Оңтүстік-шығыс","Оңтүстік","Оңтүстік-батыс","Батыс","Солтүстік-батыс","Жазық"],
+    "hi": ["उत्तर","उत्तर-पूर्व","पूर्व","दक्षिण-पूर्व","दक्षिण","दक्षिण-पश्चिम","पश्चिम","उत्तर-पश्चिम","समतल"],
+    "id": ["Utara","Timur laut","Timur","Tenggara","Selatan","Barat daya","Barat","Barat laut","Datar"],
+    "th": ["เหนือ","ตะวันออกเฉียงเหนือ","ตะวันออก","ตะวันออกเฉียงใต้","ใต้","ตะวันตกเฉียงใต้","ตะวันตก","ตะวันตกเฉียงเหนือ","ราบ"],
+    "bn": ["উত্তর","উত্তর-পূর্ব","পূর্ব","দক্ষিণ-পূর্ব","দক্ষিণ","দক্ষিণ-পশ্চিম","পশ্চিম","উত্তর-পশ্চিম","সমতল"],
+    "vi": ["Bắc","Đông Bắc","Đông","Đông Nam","Nam","Tây Nam","Tây","Tây Bắc","Bằng phẳng"],
+    "ur": ["شمال","شمال مشرق","مشرق","جنوب مشرق","جنوب","جنوب مغرب","مغرب","شمال مغرب","ہموار"],
+    "pl": ["Północ","Północny wschód","Wschód","Południowy wschód","Południe","Południowy zachód","Zachód","Północny zachód","Płasko"],
+    "ms": ["Utara","Timur laut","Timur","Tenggara","Selatan","Barat daya","Barat","Barat laut","Rata"],
+    "ky": ["Түндүк","Түндүк-чыгыш","Чыгыш","Түштүк-чыгыш","Түштүк","Түштүк-батыш","Батыш","Түндүк-батыш","Түз"],
+    "mn": ["Хойд","Зүүн хойд","Зүүн","Зүүн өмнөд","Өмнөд","Баруун өмнөд","Баруун","Баруун хойд","Тэгш"],
+    "ka": ["ჩრდილოეთი","ჩრდილო-აღმოსავლეთი","აღმოსავლეთი","სამხრეთ-აღმოსავლეთი","სამხრეთი","სამხრეთ-დასავლეთი","დასავლეთი","ჩრდილო-დასავლეთი","ბრტყელი"],
+    "it": ["Nord","Nord-est","Est","Sud-est","Sud","Sud-ovest","Ovest","Nord-ovest","Piano"],
+    "pt": ["Norte","Nordeste","Leste","Sudeste","Sul","Sudoeste","Oeste","Noroeste","Plano"]
+};
+    var codes = ['N','NE','E','SE','S','SW','W','NW','Flat'];
+    var between = {NNE:['N','NE'],ENE:['E','NE'],ESE:['E','SE'],SSE:['S','SE'],SSW:['S','SW'],WSW:['W','SW'],WNW:['W','NW'],NNW:['N','NW']};
+    Object.keys(rows).forEach(function (lang) {
+        codes.forEach(function (code,i) { _CARBON_ASPECT_NAMES[code][lang] = rows[lang][i]; });
+        Object.keys(between).forEach(function (code) {
+            _CARBON_ASPECT_NAMES[code][lang] = between[code].map(function (part) { return _CARBON_ASPECT_NAMES[part][lang]; }).join('–');
+        });
+    });
+})();
+
+// Report/KML dictionaries reuse the existing native phrases and fill previous English placeholders.
+var _CARBON_EXPORT_TERMS = {"tr":["Fidan","Tür","Enlem","Boylam","Cins","Bölgesel varsayılan","Belirsizlik","Doğal ölüm oranı"],"en":["Seedling","Species","Latitude","Longitude","Genus","Regional default","Uncertainty","Natural mortality"],"ko":["묘목","수종","위도","경도","속","지역 기본값","불확실성","자연 고사율"],"de":["Setzling","Art","Breitengrad","Längengrad","Gattung","Regionaler Standard","Unsicherheit","Natürliche Mortalität"],"fr":["Plant","Espèce","Latitude","Longitude","Genre","Valeur régionale","Incertitude","Mortalité naturelle"],"es":["Plántula","Especie","Latitud","Longitud","Género","Valor regional","Incertidumbre","Mortalidad natural"],"it":["Piantina","Specie","Latitudine","Longitudine","Genere","Valore regionale","Incertezza","Mortalità naturale"],"pt":["Muda","Espécie","Latitude","Longitude","Gênero","Padrão regional","Incerteza","Mortalidade natural"],"ru":["Саженец","Вид","Широта","Долгота","Род","Региональное значение","Неопределённость","Естественная смертность"],"zh":["幼苗","树种","纬度","经度","属","区域默认值","不确定性","自然死亡率"],"ja":["苗木","樹種","緯度","経度","属","地域標準値","不確実性","自然枯死率"],"ar":["شتلة","النوع","خط العرض","خط الطول","الجنس","القيمة الإقليمية","عدم اليقين","الوفيات الطبيعية"],"fa":["نهال","گونه","عرض جغرافیایی","طول جغرافیایی","سرده","پیش‌فرض منطقه‌ای","عدم قطعیت","مرگ‌ومیر طبیعی"],"uz":["Ko‘chat","Tur","Kenglik","Uzunlik","Turkum","Mintaqaviy standart","Noaniqlik","Tabiiy nobud bo‘lish"],"el":["Δενδρύλλιο","Είδος","Γεωγραφικό πλάτος","Γεωγραφικό μήκος","Γένος","Περιφερειακή τιμή","Αβεβαιότητα","Φυσική θνησιμότητα"],"bg":["Фиданка","Вид","Географска ширина","Географска дължина","Род","Регионална стойност","Неопределеност","Естествена смъртност"],"az":["Ting","Növ","Enlik","Uzunluq","Cins","Regional standart","Qeyri-müəyyənlik","Təbii ölüm"],"hu":["Csemete","Faj","Szélesség","Hosszúság","Nemzetség","Regionális alapérték","Bizonytalanság","Természetes mortalitás"],"kk":["Көшет","Түр","Ендік","Бойлық","Туыс","Аймақтық стандарт","Белгісіздік","Табиғи өлім"],"hi":["पौधा","प्रजाति","अक्षांश","देशांतर","वंश","क्षेत्रीय मानक","अनिश्चितता","प्राकृतिक मृत्यु दर"],"id":["Bibit","Spesies","Lintang","Bujur","Genus","Standar regional","Ketidakpastian","Kematian alami"],"th":["กล้าไม้","ชนิดพันธุ์","ละติจูด","ลองจิจูด","สกุล","ค่ามาตรฐานภูมิภาค","ความไม่แน่นอน","การตายตามธรรมชาติ"],"bn":["চারা","প্রজাতি","অক্ষাংশ","দ্রাঘিমাংশ","গণ","আঞ্চলিক মান","অনিশ্চয়তা","প্রাকৃতিক মৃত্যুহার"],"vi":["Cây con","Loài","Vĩ độ","Kinh độ","Chi","Giá trị vùng","Độ bất định","Tỷ lệ chết tự nhiên"],"ur":["پودا","نوع","عرض البلد","طول البلد","جنس","علاقائی معیار","غیر یقینی","قدرتی شرح اموات"],"pl":["Sadzonka","Gatunek","Szerokość geograficzna","Długość geograficzna","Rodzaj","Wartość regionalna","Niepewność","Śmiertelność naturalna"],"ms":["Anak pokok","Spesies","Latitud","Longitud","Genus","Piawai wilayah","Ketidakpastian","Kematian semula jadi"],"ky":["Көчөт","Түр","Кеңдик","Узундук","Уруу","Аймактык стандарт","Белгисиздик","Табигый өлүм"],"mn":["Суулгац","Зүйл","Өргөрөг","Уртраг","Төрөл","Бүсийн стандарт","Тодорхойгүй байдал","Байгалийн хорогдол"],"ka":["ნერგი","სახეობა","განედი","გრძედი","გვარი","რეგიონული სტანდარტი","გაურკვევლობა","ბუნებრივი სიკვდილიანობა"]};
+var _CARBON_REPORT_EXTRA = {"fa":["مدل‌سازی ریاضی و فرمول‌ها","پیش‌بینی رشد (دوره‌های ۵ ساله)","منابع علمی داده و تفکیک مکانی","مقدار","نماد و واحد","مقدار محاسبه‌شده","روش و منبع","لایه محیطی","اندازه‌گیری و وضعیت بوم‌شناختی","داده و ارائه‌دهنده","تفکیک مکانی","تاریخ گزارش","حجم ساقه"],"uz":["Matematik modellashtirish va formulalar","O‘sish prognozi (5 yillik davrlar)","Ilmiy ma’lumot manbalari va fazoviy aniqlik","Qiymat","Belgi va birlik","Hisoblangan qiymat","Usul va manba","Ekologik qatlam","O‘lchov va ekologik holat","Ma’lumot va ta’minotchi","Fazoviy aniqlik","Hisobot sanasi","Poya hajmi"],"el":["Μαθηματική μοντελοποίηση και τύποι","Προβλέψεις ανάπτυξης (ανά 5 έτη)","Επιστημονικές πηγές δεδομένων και χωρική ανάλυση","Τιμή","Σύμβολο και μονάδα","Υπολογισμένη τιμή","Μέθοδος και πηγή","Περιβαλλοντικό επίπεδο","Μέτρηση και οικολογική κατάσταση","Δεδομένα και πάροχος","Χωρική ανάλυση","Ημερομηνία αναφοράς","Όγκος κορμού"],"bg":["Математическо моделиране и формули","Прогнози за растежа (през 5 години)","Научни източници на данни и пространствена резолюция","Стойност","Символ и единица","Изчислена стойност","Метод и източник","Екологичен слой","Измерване и екологично състояние","Данни и доставчик","Пространствена резолюция","Дата на доклада","Обем на стъблото"],"az":["Riyazi modelləşdirmə və düsturlar","Böyümə proqnozu (5 illik dövrlər)","Elmi məlumat mənbələri və məkan ayırdetməsi","Dəyər","İşarə və vahid","Hesablanmış dəyər","Metod və mənbə","Ekoloji qat","Ölçmə və ekoloji vəziyyət","Məlumat və təminatçı","Məkan ayırdetməsi","Hesabat tarixi","Gövdə həcmi"],"hu":["Matematikai modellezés és képletek","Növekedési előrejelzés (5 éves időközök)","Tudományos adatforrások és térbeli felbontás","Érték","Jel és egység","Számított érték","Módszer és forrás","Környezeti réteg","Mérés és ökológiai állapot","Adat és szolgáltató","Térbeli felbontás","Jelentés dátuma","Törzstérfogat"],"kk":["Математикалық модельдеу және формулалар","Өсу болжамы (5 жылдық кезеңдер)","Ғылыми дерек көздері және кеңістіктік ажыратымдылық","Мән","Таңба және бірлік","Есептелген мән","Әдіс және дереккөз","Экологиялық қабат","Өлшем және экологиялық жағдай","Дерек және жеткізуші","Кеңістіктік ажыратымдылық","Есеп күні","Дің көлемі"],"hi":["गणितीय मॉडलिंग और सूत्र","वृद्धि पूर्वानुमान (5 वर्षीय अंतराल)","वैज्ञानिक डेटा स्रोत और स्थानिक विभेदन","मान","प्रतीक और इकाई","गणना किया मान","विधि और स्रोत","पर्यावरणीय परत","मापन और पारिस्थितिक स्थिति","डेटा और प्रदाता","स्थानिक विभेदन","रिपोर्ट की तिथि","तने का आयतन"],"id":["Pemodelan matematika dan rumus","Proyeksi pertumbuhan (interval 5 tahun)","Sumber data ilmiah dan resolusi spasial","Nilai","Simbol dan satuan","Nilai terhitung","Metode dan sumber","Lapisan lingkungan","Pengukuran dan kondisi ekologis","Data dan penyedia","Resolusi spasial","Tanggal laporan","Volume batang"],"th":["แบบจำลองทางคณิตศาสตร์และสูตร","การคาดการณ์การเติบโต (ช่วงละ 5 ปี)","แหล่งข้อมูลทางวิทยาศาสตร์และความละเอียดเชิงพื้นที่","ค่า","สัญลักษณ์และหน่วย","ค่าที่คำนวณได้","วิธีการและแหล่งที่มา","ชั้นข้อมูลสิ่งแวดล้อม","ค่าตรวจวัดและสถานะทางนิเวศ","ข้อมูลและผู้ให้บริการ","ความละเอียดเชิงพื้นที่","วันที่รายงาน","ปริมาตรลำต้น"],"bn":["গাণিতিক মডেলিং ও সূত্র","বৃদ্ধির পূর্বাভাস (৫ বছরের ব্যবধান)","বৈজ্ঞানিক তথ্যসূত্র ও স্থানিক রেজোলিউশন","মান","প্রতীক ও একক","গণনাকৃত মান","পদ্ধতি ও উৎস","পরিবেশগত স্তর","পরিমাপ ও পরিবেশগত অবস্থা","তথ্য ও সরবরাহকারী","স্থানিক রেজোলিউশন","প্রতিবেদনের তারিখ","কাণ্ডের আয়তন"],"vi":["Mô hình toán học và công thức","Dự báo sinh trưởng (chu kỳ 5 năm)","Nguồn dữ liệu khoa học và độ phân giải không gian","Giá trị","Ký hiệu và đơn vị","Giá trị tính toán","Phương pháp và nguồn","Lớp môi trường","Phép đo và trạng thái sinh thái","Dữ liệu và nhà cung cấp","Độ phân giải không gian","Ngày báo cáo","Thể tích thân"],"ur":["ریاضیاتی ماڈلنگ اور فارمولے","بڑھوتری کی پیش گوئی (5 سالہ وقفے)","سائنسی ڈیٹا کے ذرائع اور مکانی تفصیل","قدر","علامت اور اکائی","حساب شدہ قدر","طریقہ اور ماخذ","ماحولیاتی تہہ","پیمائش اور ماحولیاتی حالت","ڈیٹا اور فراہم کنندہ","مکانی تفصیل","رپورٹ کی تاریخ","تنے کا حجم"],"pl":["Modelowanie matematyczne i wzory","Prognozy wzrostu (co 5 lat)","Naukowe źródła danych i rozdzielczość przestrzenna","Wartość","Symbol i jednostka","Wartość obliczona","Metoda i źródło","Warstwa środowiskowa","Pomiar i stan ekologiczny","Dane i dostawca","Rozdzielczość przestrzenna","Data raportu","Objętość pnia"],"ms":["Pemodelan matematik dan formula","Unjuran pertumbuhan (selang 5 tahun)","Sumber data saintifik dan resolusi ruang","Nilai","Simbol dan unit","Nilai dikira","Kaedah dan sumber","Lapisan alam sekitar","Pengukuran dan keadaan ekologi","Data dan penyedia","Resolusi ruang","Tarikh laporan","Isipadu batang"],"ky":["Математикалык моделдөө жана формулалар","Өсүү божомолу (5 жылдык аралыктар)","Илимий маалымат булактары жана мейкиндиктик чечилиш","Маани","Белги жана бирдик","Эсептелген маани","Ыкма жана булак","Экологиялык катмар","Өлчөм жана экологиялык абал","Маалымат жана берүүчү","Мейкиндиктик чечилиш","Отчеттун датасы","Сөңгөк көлөмү"],"mn":["Математик загварчлал ба томьёо","Өсөлтийн төсөөлөл (5 жилийн зайтай)","Шинжлэх ухааны өгөгдлийн эх сурвалж ба орон зайн нарийвчлал","Утга","Тэмдэг ба нэгж","Тооцоолсон утга","Арга ба эх сурвалж","Байгаль орчны давхарга","Хэмжилт ба экологийн төлөв","Өгөгдөл ба нийлүүлэгч","Орон зайн нарийвчлал","Тайлангийн огноо","Ишний эзлэхүүн"],"ka":["მათემატიკური მოდელირება და ფორმულები","ზრდის პროგნოზი (5-წლიანი ინტერვალები)","სამეცნიერო მონაცემთა წყაროები და სივრცითი გარჩევადობა","მნიშვნელობა","სიმბოლო და ერთეული","გამოთვლილი მნიშვნელობა","მეთოდი და წყარო","გარემოს ფენა","გაზომვა და ეკოლოგიური მდგომარეობა","მონაცემები და მომწოდებელი","სივრცითი გარჩევადობა","ანგარიშის თარიღი","ღეროს მოცულობა"]};
+function _carbonPrepareReportI18n(lang) {
+    var d=_CARBON_I18N[lang] || _CARBON_I18N.en, en=_CARBON_I18N.en;
+    var r=_CARBON_REPORT_I18N[lang] || _CARBON_REPORT_I18N.en, words=_CARBON_EXPORT_TERMS[lang] || _CARBON_EXPORT_TERMS.en;
+    var ui=(typeof SYLVA_TRANSLATIONS!=='undefined' && SYLVA_TRANSLATIONS[lang]) || {};
+    var extra=_CARBON_REPORT_EXTRA[lang];
+    if(extra) {
+        var native={
+            report_title:'SylvaGIS — '+(ui.carbon_sink_sim_subtitle || r['Planting Spacing & Density']),
+            report_date:extra[11]+': ',target_country:(ui.carbon_country_label || r['Target Country & Ecozone'])+': ',ecozone:r['Target Country & Ecozone']+': ',
+            sec1:'1. '+r['Study Area']+' / '+r['Planting Spacing & Density'],
+            sec2:'2. '+r['Target Country & Ecozone']+' / '+r['Parameter / Factor'],
+            sec3:'3. '+r['GEE Topography, Climate & Soil Score'],sec4:'4. '+extra[0],
+            sec5:'5. '+r['4. Total Carbon Stock & Dynamic Balance'].replace(/^4[.]\s*/,''),
+            sec6:'6. '+extra[1],sec7:'7. '+d.carbon_thinning_legend+' / '+d.carbon_thinning_year_label,
+            sec8:'8. '+extra[2],sec9:'9. IPCC Tier 1 — '+extra[6],
+            col_param:r['Parameter / Factor'],col_value:extra[3],col_sym_unit:extra[4],col_calc_val:extra[5],
+            col_method_source:extra[6],col_geo_layer:extra[7],col_sat_status:extra[8],col_indicator:r['Parameter / Module'],
+            col_managed:d.carbon_thinning_legend,col_baseline:d.carbon_baseline_legend,col_year:d.carbon_thinning_year_label,
+            col_stem_vol:extra[12]+' (m³/ha)',col_standing_co2e:d.carbon_standing_stock_legend+' (tCO₂e)',
+            col_harvest_co2e:r['Cumulative Harvested Carbon']+' (tCO₂e)',col_total_co2e:d.carbon_total_legend+' (tCO₂e)',
+            col_dbh:'DBH (cm)',col_height:d.lbl_height.replace(/:\s*$/,'')+' (m)',col_density:d.unit_trees_ha,
+            col_interv_yr:d.carbon_thinning_year_label,col_removal_rate:ui.carbon_thinning_percent_label,
+            col_est_harvest:r['Cumulative Harvested Carbon'],col_rem_density:r['Final Stand Density'],
+            col_dataset:extra[9],col_resolution:extra[10],chart_title:r['Biomass & Carbon Yield Model']
+        };
+        Object.keys(native).forEach(function(k){if(native[k])d[k]=native[k];});
+    }
+    Object.keys(en).forEach(function(key){
+        if(d[key] && typeof en[key]==='string') { if(!r[en[key]])r[en[key]]=d[key]; r[key]=d[key]; }
+    });
+    r.kml_seedling=words[0];r.kml_species=words[1];r.kml_latitude=words[2];r.kml_longitude=words[3];
+    r.kml_id=({"tr":"Fidan No","en":"Seedling ID","ko":"묘목 번호","de":"Setzlingsnummer","fr":"Identifiant du plant","es":"Número de plántula","it":"Numero della piantina","pt":"Número da muda","ru":"Номер саженца","zh":"幼苗编号","ja":"苗木番号","ar":"رقم الشتلة","fa":"شماره نهال","uz":"Ko‘chat raqami","el":"Αριθμός δενδρυλλίου","bg":"Номер на фиданката","az":"Ting nömrəsi","hu":"Csemete azonosítója","kk":"Көшет нөмірі","hi":"पौधे का क्रमांक","id":"Nomor bibit","th":"หมายเลขกล้าไม้","bn":"চারার নম্বর","vi":"Mã cây con","ur":"پودے کا نمبر","pl":"Numer sadzonki","ms":"Nombor anak pokok","ky":"Көчөт номери","mn":"Суулгацын дугаар","ka":"ნერგის ნომერი"})[lang] || words[0];r.kml_spacing=ui.carbon_spacing_label || r['Planting Spacing & Density'];
+    r.kml_title=ui.carbon_sink_sim_subtitle || d.report_title;r.match_species=words[1];r.match_genus=words[4];r.match_regional_fallback=words[5];r.match_unknown=words[5];
+    r.uncertainty=words[6];r.mortality=words[7];
+    r['seedlings/ha']=d.unit_trees_ha;r.trees=d.unit_trees;r.decare=d.unit_decare;r['yr⁻¹']=d.unit_year+'⁻¹';
+    r['Total Cumulative Sequestered CO2e']=d.carbon_total_legend+' CO₂e';
+    r.export_error=(ui.gtiff_err_prefix || d.status_poor)+ 'PDF / KML';
+    r.math_growth='A: '+r['Asymptotic Biomass Ceiling (A)']+'; k: '+r['Chapman-Richards Growth Rate (k)']+'; p: '+r['Chapman-Richards Shape Exponent (p)']+'; t: '+d.unit_year+'.';
+    r.math_agb='V(t): '+d.col_stem_vol+'; D: '+r['Basic Wood Density (D)']+'; BEF: '+r['Biomass Expansion Factor (BEF)']+'.';
+    r.math_bgb='R: '+r['Root-to-Shoot Ratio (R)']+' (BGB/AGB).';
+    r.math_carbon='CF = 0.47: '+r['Carbon Fraction (CF)']+'; M: '+words[7]+' (0.3–0.5%/'+d.unit_year+'); H: '+d.col_removal_rate+'.';
+    r.math_co2=r['Equivalent CO₂ Conversion']+': CO₂ = 44.01 g/mol; C = 12.011 g/mol; 44/12 ≈ 3.6667.';
+    return r;
+}
+function _carbonReportText(lang,key,enText,trText) {
+    var r=_CARBON_REPORT_I18N[lang] || _CARBON_REPORT_I18N.en;
+    if(r[key])return r[key];
+    if(enText && r[enText])return r[enText];
+    if(trText && r[trText])return r[trText];
+    if(lang==='ko' && enText!==undefined)return key;
+    if(lang==='tr' && trText!==undefined)return trText;
+    return enText===undefined ? key : enText;
+}
+function _carbonTranslateAdvisory(text,lang) {
+    var d=_CARBON_I18N[lang] || _CARBON_I18N.en, r=_CARBON_REPORT_I18N[lang] || _CARBON_REPORT_I18N.en;
+    if(/Sıcaklık rejimi/.test(text))return r['Annual Mean Temp: ']+d.status_excellent;
+    if(/Yıllık yağış miktarı/.test(text))return r['Annual Mean Precip: ']+d.status_excellent;
+    return _carbonTranslateWarning(text,lang);
+}
+var _CARBON_ZONE_LABELS = {"tr":["Akdeniz","Ilıman karasal","Ilıman okyanusal","Boreal","Nemli subtropikal","Nemli tropikal","Kuru tropikal"],"en":["Mediterranean","Temperate continental","Temperate oceanic","Boreal","Humid subtropical","Tropical wet","Tropical dry"],"ko":["지중해성","온대 대륙성","온대 해양성","북방림","습윤 아열대","습윤 열대","건조 열대"],"de":["Mediterran","Gemäßigt kontinental","Gemäßigt ozeanisch","Boreal","Feucht-subtropisch","Tropisch feucht","Tropisch trocken"],"fr":["Méditerranéen","Tempéré continental","Tempéré océanique","Boréal","Subtropical humide","Tropical humide","Tropical sec"],"es":["Mediterráneo","Templado continental","Templado oceánico","Boreal","Subtropical húmedo","Tropical húmedo","Tropical seco"],"it":["Mediterraneo","Temperato continentale","Temperato oceanico","Boreale","Subtropicale umido","Tropicale umido","Tropicale secco"],"pt":["Mediterrâneo","Temperado continental","Temperado oceânico","Boreal","Subtropical úmido","Tropical úmido","Tropical seco"],"ru":["Средиземноморский","Умеренный континентальный","Умеренный океанический","Бореальный","Влажный субтропический","Влажный тропический","Сухой тропический"],"zh":["地中海型","温带大陆型","温带海洋型","北方型","湿润亚热带","湿润热带","干旱热带"],"ja":["地中海性","温帯大陸性","温帯海洋性","亜寒帯","湿潤亜熱帯","湿潤熱帯","乾燥熱帯"],"ar":["متوسطي","معتدل قاري","معتدل محيطي","شمالي بارد","شبه استوائي رطب","استوائي رطب","استوائي جاف"],"fa":["مدیترانه‌ای","معتدل قاره‌ای","معتدل اقیانوسی","سرد شمالی","نیمه‌گرمسیری مرطوب","گرمسیری مرطوب","گرمسیری خشک"],"uz":["O‘rta dengiz","Mo‘tadil kontinental","Mo‘tadil okeanik","Boreal","Nam subtropik","Nam tropik","Quruq tropik"],"el":["Μεσογειακό","Εύκρατο ηπειρωτικό","Εύκρατο ωκεάνιο","Βόρειο","Υγρό υποτροπικό","Υγρό τροπικό","Ξηρό τροπικό"],"bg":["Средиземноморски","Умерен континентален","Умерен океански","Бореален","Влажен субтропичен","Влажен тропичен","Сух тропичен"],"az":["Aralıq dənizi","Mülayim kontinental","Mülayim okeanik","Boreal","Rütubətli subtropik","Rütubətli tropik","Quru tropik"],"hu":["Mediterrán","Mérsékelt kontinentális","Mérsékelt óceáni","Boreális","Nedves szubtrópusi","Nedves trópusi","Száraz trópusi"],"kk":["Жерорта теңіздік","Қоңыржай континенттік","Қоңыржай мұхиттық","Бореалдық","Ылғалды субтропиктік","Ылғалды тропиктік","Құрғақ тропиктік"],"hi":["भूमध्यसागरीय","समशीतोष्ण महाद्वीपीय","समशीतोष्ण महासागरीय","बोरियल","आर्द्र उपोष्णकटिबंधीय","आर्द्र उष्णकटिबंधीय","शुष्क उष्णकटिबंधीय"],"id":["Mediterania","Kontinental sedang","Oseanik sedang","Boreal","Subtropis lembap","Tropis basah","Tropis kering"],"th":["เมดิเตอร์เรเนียน","อบอุ่นภาคพื้นทวีป","อบอุ่นภาคพื้นสมุทร","เขตหนาวเหนือ","กึ่งร้อนชื้น","เขตร้อนชื้น","เขตร้อนแห้ง"],"bn":["ভূমধ্যসাগরীয়","নাতিশীতোষ্ণ মহাদেশীয়","নাতিশীতোষ্ণ সামুদ্রিক","বোরিয়াল","আর্দ্র উপক্রান্তীয়","আর্দ্র ক্রান্তীয়","শুষ্ক ক্রান্তীয়"],"vi":["Địa Trung Hải","Ôn đới lục địa","Ôn đới hải dương","Hàn đới","Cận nhiệt ẩm","Nhiệt đới ẩm","Nhiệt đới khô"],"ur":["بحیرہ روم","معتدل براعظمی","معتدل سمندری","بوریل","مرطوب نیم استوائی","مرطوب استوائی","خشک استوائی"],"pl":["Śródziemnomorski","Umiarkowany kontynentalny","Umiarkowany oceaniczny","Borealny","Wilgotny podzwrotnikowy","Wilgotny tropikalny","Suchy tropikalny"],"ms":["Mediterranean","Benua sederhana","Lautan sederhana","Boreal","Subtropika lembap","Tropika basah","Tropika kering"],"ky":["Жер Ортолук деңиздик","Мелүүн континенттик","Мелүүн океандык","Бореалдык","Нымдуу субтропиктик","Нымдуу тропиктик","Кургак тропиктик"],"mn":["Газар дундын тэнгисийн","Сэрүүн эх газрын","Сэрүүн далайн","Бореал","Чийглэг субтропик","Чийглэг тропик","Хуурай тропик"],"ka":["ხმელთაშუაზღვის","ზომიერი კონტინენტური","ზომიერი ოკეანური","ბორეალური","ნოტიო სუბტროპიკული","ნოტიო ტროპიკული","მშრალი ტროპიკული"]};
+var _CARBON_TEXTURE_WORDS = {"tr":["Kil","Siltli","Kumlu","Tın","Silt","Tınlı","Kum","Killi"],"en":["Clay","Silty","Sandy","Loam","Silt","Loamy","Sand","Clay"],"ko":["식토","미사질","사질","양토","미사토","양질","사토","식양질"],"de":["Ton","Schluffiger","Sandiger","Lehm","Schluff","Lehmiger","Sand","Toniger"],"fr":["Argile","Limoneux","Sableux","Limon","Limon fin","Limoneux","Sable","Argileux"],"es":["Arcilla","Limoso","Arenoso","Franco","Limo","Franco","Arena","Arcilloso"],"it":["Argilla","Limoso","Sabbioso","Franco","Limo","Franco","Sabbia","Argilloso"],"pt":["Argila","Siltoso","Arenoso","Franco","Silte","Franco","Areia","Argiloso"],"ru":["Глина","Пылеватый","Песчаный","Суглинок","Ил","Суглинистый","Песок","Глинистый"],"zh":["黏土","粉质","砂质","壤土","粉土","壤质","砂土","黏质"],"ja":["埴土","シルト質","砂質","壌土","シルト","壌質","砂土","埴質"],"ar":["طين","غريني","رملي","طمي","غرين","طميي","رمل","طيني"],"fa":["رس","سیلتی","شنی","لوم","سیلت","لومی","شن","رسی"],"uz":["Gil","Loyqali","Qumli","Qumoq","Loyqa","Qumoqli","Qum","Gilli"],"el":["Άργιλος","Ιλυώδης","Αμμώδης","Πηλός","Ιλύς","Πηλώδης","Άμμος","Αργιλώδης"],"bg":["Глина","Праховит","Песъчлив","Суглинка","Прах","Суглинест","Пясък","Глинест"],"az":["Gil","Lilli","Qumlu","Gillicə","Lil","Gillicəli","Qum","Gilli"],"hu":["Agyag","Iszapos","Homokos","Vályog","Iszap","Vályogos","Homok","Agyagos"],"kk":["Саз","Шаңды","Құмды","Саздақ","Шаң","Саздақты","Құм","Сазды"],"hi":["चिकनी मिट्टी","गादयुक्त","बलुई","दोमट","गाद","दोमटी","रेत","चिकनी"],"id":["Liat","Berdebu","Berpasir","Lempung","Debu","Berlempung","Pasir","Berliat"],"th":["ดินเหนียว","ปนทรายแป้ง","ปนทราย","ดินร่วน","ทรายแป้ง","ปนดินร่วน","ทราย","ปนดินเหนียว"],"bn":["এঁটেল","পলিযুক্ত","বেলে","দোআঁশ","পলি","দোআঁশযুক্ত","বালি","এঁটেলযুক্ত"],"vi":["Sét","Pha bụi","Pha cát","Thịt","Bụi","Pha thịt","Cát","Pha sét"],"ur":["چکنی مٹی","گاد والی","ریتلی","میرا","گاد","میرا والی","ریت","چکنی"],"pl":["Ił","Pylasty","Piaszczysty","Glina","Pył","Gliniasty","Piasek","Ilasty"],"ms":["Liat","Berkelodak","Berpasir","Lom","Kelodak","Berlom","Pasir","Berliat"],"ky":["Чопо","Чаңдуу","Кумдуу","Чополуу топурак","Чаң","Чополуу","Кум","Чополуу"],"mn":["Шавар","Тоосорхог","Элсэрхэг","Шавранцар","Тоос","Шавранцартай","Элс","Шаварлаг"],"ka":["თიხა","ლამიანი","ქვიშიანი","თიხნარი","ლამი","თიხნარიანი","ქვიშა","თიხიანი"]};
+function _carbonLocalizedSiteValue(kind,value,lang) {
+    if(kind==='zone') {
+        var codes=['mediterranean','temperate_continental','temperate_oceanic','boreal','subtropical','tropical_wet','tropical_dry'];
+        var index=codes.indexOf(value);
+        return index<0 ? '—' : (_CARBON_ZONE_LABELS[lang] || _CARBON_ZONE_LABELS.en)[index];
+    }
+    var v=_CARBON_TEXTURE_WORDS[lang] || _CARBON_TEXTURE_WORDS.en;
+    var parts={'Clay':[0],'Silty Clay':[1,0],'Sandy Clay':[2,0],'Clay Loam':[7,3],'Silty Clay Loam':[1,7,3],'Sandy Clay Loam':[2,7,3],'Loam':[3],'Silt Loam':[1,3],'Sandy Loam':[2,3],'Silt':[4],'Loamy Sand':[5,6],'Sand':[6]};
+    return parts[value] ? parts[value].map(function(i){return v[i];}).join(/^(ja|ko|zh)$/.test(lang)?'':' ') : (value || '—');
+}
+function _carbonLocalizedLandCover(item,lang) {
+    var names={'Water':'lulc_water','Trees & Forest':'lulc_forest','Flooded Vegetation':'lulc_wetland_veg','Crops & Agriculture':'lulc_cropland','Built Area':'lulc_urban','Bare Ground':'lulc_bare','Snow / Ice':'lulc_snow','Clouds':'lbl_cloud_pct','Rangeland & Grassland':'lulc_grassland'};
+    var ui=SYLVA_TRANSLATIONS[lang] || SYLVA_TRANSLATIONS.en,key=names[item.name_en];
+    return item['name_'+lang] || (key && ui[key] && ui[key].replace(/\s*\([^)]*\)/g,'')) || item.name_en || '—';
+}
+function _carbonExportFilename(lang,format) {
+    var r=_carbonPrepareReportI18n(lang), stems={ko:'SylvaGIS_탄소_시뮬레이션_보고서',en:'SylvaGIS_Carbon_Simulation_Report',tr:'SylvaGIS_Karbon_Simulasyon_Raporu'};
+    var stem=format==='pdf' ? (stems[lang] || r.report_title.replace(/[—:]/g,'').replace(/\s+/g,'_')) : 'SylvaGIS_'+r.kml_seedling;
+    var now=new Date(),date=now.getFullYear()+String(now.getMonth()+1).padStart(2,'0')+String(now.getDate()).padStart(2,'0');
+    return stem.replace(/[<>:"/\\|?*]/g,'_')+'_'+date+'.'+format;
+}
+
 function _carbonGetLang() {
-    var l = (typeof window !== 'undefined' && window._sylvaLang) || 
-            (typeof sylvaCurrentLang !== 'undefined' ? sylvaCurrentLang : 
-            (typeof window !== 'undefined' && (window.currentLang || window._currentLang))) || 'tr';
+    var l = window._sylvaLang || window._sylvaEarlyLang;
+    if (!l) { try { l = localStorage.getItem('sylvaSelectedLanguage') || localStorage.getItem('sylva_lang'); } catch (e) {} }
     return String(l || 'tr').toLowerCase().split('-')[0];
 }
 
 function _cTxt(keyOrKo, enFallback, trFallback) {
     var lang = (typeof _carbonGetLang === 'function') ? _carbonGetLang() : 'tr';
 
+    // Semantic keys take precedence over the legacy (Korean, English, Turkish) overload.
+    if (typeof _CARBON_I18N !== 'undefined' && _CARBON_I18N.en && Object.prototype.hasOwnProperty.call(_CARBON_I18N.en, keyOrKo)) {
+        var keyed = _CARBON_I18N[lang] || _CARBON_I18N.en;
+        return keyed[keyOrKo] || _CARBON_I18N.en[keyOrKo] || enFallback || keyOrKo;
+    }
     // Case 1: Called with 3 arguments or 2 arguments with enFallback
     if (arguments.length >= 2 && enFallback !== undefined) {
         if (lang === 'ko' && keyOrKo) return keyOrKo;
@@ -13958,13 +14241,13 @@ function _carbonGetLocalizedAspect(aspObj, deg, lang) {
         var d = parseFloat(deg);
         if (!isNaN(d)) {
             var dirs = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
-            var ix = Math.round(d / 22.5) % 16;
+            var ix = Math.round(((d % 360) + 360) % 360 / 22.5) % 16;
             code = dirs[ix];
         }
     }
     if (!code) code = 'Flat';
     var entry = _CARBON_ASPECT_NAMES[code] || _CARBON_ASPECT_NAMES['Flat'];
-    return entry[l] || entry['en'] || (aspObj ? (aspObj.tr || aspObj.en || code) : code);
+    return (entry[l] || entry.en || code) + (code === 'Flat' ? '' : ' (' + code + ')');
 }
 
 function _carbonGetLocalizedSuitability(status, lang) {
@@ -13984,108 +14267,64 @@ function _carbonGetLocalizedSuitability(status, lang) {
 }
 var _getGeeStatusLabel = _carbonGetLocalizedSuitability;
 
+// Match the server's warning texts at the presentation boundary; do not change GEE or model output.
+var _CARBON_WARNING_I18N = {
+    "tr": ["Don riski mevcuttur.","Aşırı sıcaklık ve kuraklık stresi riski mevcuttur.","Yetersiz yağış ve kuraklık riski mevcuttur.","Aşırı yağış ve kök bölgesinde su basması riski mevcuttur.","Rakım üst sınırı aşılmıştır; vejetasyon süresi kısalabilir.","Rakım alt sınırın altındadır.","Dik eğim erozyon ve mekanik dikim zorluğu riski oluşturur.","Toprak organik karbonu düşüktür.","Saha","Tür optimumu / sınırı"],
+    "en": ["There is a frost risk.","There is a heat and drought stress risk.","Rainfall is insufficient; drought risk is present.","Excessive rainfall poses a root-zone waterlogging risk.","Elevation exceeds the upper limit; the growing season may shorten.","Elevation is below the lower limit.","Steep slopes pose erosion and mechanical planting risks.","Soil organic carbon is low.","Site","Species optimum / limit"],
+    "ko": ["동해 위험이 있습니다.","고온 및 가뭄 스트레스 위험이 있습니다.","강수량이 부족하여 가뭄 위험이 있습니다.","과도한 강수로 뿌리층 침수 위험이 있습니다.","해발고도가 상한을 초과하여 생육 기간이 짧아질 수 있습니다.","해발고도가 하한보다 낮습니다.","급경사로 침식 및 기계 식재의 어려움이 예상됩니다.","토양 유기탄소가 낮습니다.","현장","수종 적정 범위 / 한계"],
+    "de": ["Es besteht Frostrisiko.","Es besteht Hitze- und Trockenstressrisiko.","Der Niederschlag ist unzureichend; es besteht Dürrerisiko.","Übermäßiger Niederschlag gefährdet den Wurzelraum durch Staunässe.","Die Höhenobergrenze ist überschritten; die Vegetationszeit kann kürzer sein.","Die Höhe liegt unter der Untergrenze.","Steile Hänge bergen Erosionsrisiken und erschweren maschinelle Pflanzung.","Der organische Bodenkohlenstoff ist gering.","Standort","Artoptimum / Grenzwert"],
+    "fr": ["Il existe un risque de gel.","Il existe un risque de stress thermique et hydrique.","Les précipitations sont insuffisantes; un risque de sécheresse existe.","Les précipitations excessives risquent d’engorger la zone racinaire.","L’altitude dépasse la limite supérieure; la saison de croissance peut raccourcir.","L’altitude est inférieure à la limite basse.","La forte pente présente un risque d’érosion et complique la plantation mécanique.","Le carbone organique du sol est faible.","Site","Optimum / limite de l’espèce"],
+    "es": ["Existe riesgo de heladas.","Existe riesgo de estrés por calor y sequía.","La precipitación es insuficiente y existe riesgo de sequía.","La lluvia excesiva puede anegar la zona radicular.","La altitud supera el límite superior; el período vegetativo puede acortarse.","La altitud está por debajo del límite inferior.","La pendiente pronunciada implica erosión y dificulta la plantación mecánica.","El carbono orgánico del suelo es bajo.","Sitio","Óptimo / límite de la especie"],
+    "it": ["Esiste un rischio di gelo.","Esiste un rischio di stress termico e siccità.","Le precipitazioni sono insufficienti e vi è rischio di siccità.","Le piogge eccessive possono causare ristagno nella zona radicale.","La quota supera il limite superiore; la stagione vegetativa può accorciarsi.","La quota è sotto il limite inferiore.","La forte pendenza comporta erosione e ostacola la piantagione meccanica.","Il carbonio organico del suolo è basso.","Sito","Ottimo / limite della specie"],
+    "pt": ["Existe risco de geada.","Existe risco de estresse por calor e seca.","A precipitação é insuficiente e existe risco de seca.","A chuva excessiva pode encharcar a zona radicular.","A altitude excede o limite superior; a estação de crescimento pode encurtar.","A altitude está abaixo do limite inferior.","A declividade acentuada implica erosão e dificulta o plantio mecânico.","O carbono orgânico do solo é baixo.","Local","Ótimo / limite da espécie"],
+    "ru": ["Есть риск заморозков.","Есть риск теплового стресса и засухи.","Осадков недостаточно; есть риск засухи.","Избыток осадков грозит переувлажнением корневой зоны.","Высота превышает верхний предел; вегетационный период может сократиться.","Высота ниже нижнего предела.","Крутой склон повышает риск эрозии и затрудняет механическую посадку.","Содержание органического углерода почвы низкое.","Участок","Оптимум / предел вида"],
+    "zh": ["存在霜冻风险。","存在高温和干旱胁迫风险。","降水不足，存在干旱风险。","降水过多可能导致根区涝渍。","海拔超过上限，生长季可能缩短。","海拔低于下限。","陡坡存在侵蚀风险，并增加机械栽植难度。","土壤有机碳含量低。","样地","树种最适范围 / 界限"],
+    "ja": ["霜害のリスクがあります。","高温と干ばつによるストレスのリスクがあります。","降水量が不足し、干ばつのリスクがあります。","過剰な降水で根域の冠水リスクがあります。","標高が上限を超え、生育期間が短くなる可能性があります。","標高が下限を下回っています。","急傾斜は侵食のリスクがあり、機械植栽が困難になります。","土壌有機炭素が少ない状態です。","現地","樹種の最適範囲 / 限界"],
+    "ar": ["يوجد خطر صقيع.","يوجد خطر إجهاد حراري وجفاف.","الأمطار غير كافية ويوجد خطر جفاف.","الأمطار المفرطة تهدد منطقة الجذور بالتغدق.","يتجاوز الارتفاع الحد الأعلى وقد يقصر موسم النمو.","الارتفاع أقل من الحد الأدنى.","الانحدار الشديد يسبب خطر التعرية وصعوبة الغرس الآلي.","الكربون العضوي في التربة منخفض.","الموقع","المجال الأمثل / حد النوع"],
+    "fa": ["خطر یخبندان وجود دارد.","خطر تنش گرمایی و خشکی وجود دارد.","بارندگی ناکافی است و خطر خشکسالی وجود دارد.","بارندگی زیاد خطر غرقابی شدن ریشه را ایجاد می‌کند.","ارتفاع از حد بالایی بیشتر است و فصل رشد ممکن است کوتاه شود.","ارتفاع کمتر از حد پایینی است.","شیب زیاد خطر فرسایش و دشواری کاشت مکانیکی ایجاد می‌کند.","کربن آلی خاک کم است.","محل","دامنه بهینه / حد گونه"],
+    "uz": ["Sovuq urishi xavfi mavjud.","Issiqlik va qurg‘oqchilik stressi xavfi mavjud.","Yog‘in yetarli emas, qurg‘oqchilik xavfi mavjud.","Ortiqcha yog‘in ildiz zonasini suv bosishi xavfini tug‘diradi.","Balandlik yuqori chegaradan oshgan; o‘sish davri qisqarishi mumkin.","Balandlik pastki chegaradan past.","Tik qiyalik eroziya va mexanik ekish qiyinchiligini keltiradi.","Tuproqdagi organik uglerod kam.","Maydon","Tur optimumi / chegarasi"],
+    "el": ["Υπάρχει κίνδυνος παγετού.","Υπάρχει κίνδυνος θερμικής καταπόνησης και ξηρασίας.","Η βροχόπτωση είναι ανεπαρκής και υπάρχει κίνδυνος ξηρασίας.","Η υπερβολική βροχή προκαλεί κίνδυνο υδατοκορεσμού των ριζών.","Το υψόμετρο υπερβαίνει το άνω όριο και η περίοδος ανάπτυξης μπορεί να συντομευτεί.","Το υψόμετρο είναι κάτω από το κατώτερο όριο.","Η απότομη κλίση αυξάνει τη διάβρωση και δυσκολεύει τη μηχανική φύτευση.","Ο οργανικός άνθρακας του εδάφους είναι χαμηλός.","Θέση","Βέλτιστο / όριο είδους"],
+    "bg": ["Има риск от измръзване.","Има риск от топлинен стрес и суша.","Валежите са недостатъчни и има риск от суша.","Прекомерните валежи създават риск от преовлажняване на корените.","Височината надхвърля горната граница; вегетационният период може да се съкрати.","Височината е под долната граница.","Стръмният склон създава риск от ерозия и затруднява механичното засаждане.","Органичният въглерод в почвата е нисък.","Място","Оптимум / граница на вида"],
+    "az": ["Şaxta riski mövcuddur.","İstilik və quraqlıq stresi riski mövcuddur.","Yağıntı kifayət deyil, quraqlıq riski var.","Həddən artıq yağıntı kök zonasında su basması riski yaradır.","Hündürlük yuxarı həddi keçir; vegetasiya dövrü qısala bilər.","Hündürlük aşağı həddən azdır.","Dik yamac eroziya və mexaniki əkin çətinliyi yaradır.","Torpaqda üzvi karbon azdır.","Sahə","Növ optimumu / həddi"],
+    "hu": ["Fagyveszély áll fenn.","Hő- és aszálystressz veszélye áll fenn.","A csapadék elégtelen, aszályveszély áll fenn.","A túl sok csapadék vízzel telítheti a gyökérzónát.","A magasság meghaladja a felső határt; a tenyészidő rövidülhet.","A magasság az alsó határ alatt van.","A meredek lejtő erózióveszélyt okoz és nehezíti a gépi ültetést.","A talaj szerves széntartalma alacsony.","Terület","Fajoptimum / határ"],
+    "kk": ["Үсік қаупі бар.","Ыстық пен құрғақшылық күйзелісінің қаупі бар.","Жауын-шашын жеткіліксіз, құрғақшылық қаупі бар.","Артық жауын-шашын тамыр аймағын су басу қаупін туғызады.","Биіктік жоғарғы шектен асқан; өсу кезеңі қысқаруы мүмкін.","Биіктік төменгі шектен төмен.","Тік беткей эрозия қаупін арттырып, механикалық отырғызуды қиындатады.","Топырақтағы органикалық көміртек аз.","Учаске","Түр оптимумы / шегі"],
+    "hi": ["पाले का जोखिम है।","गर्मी और सूखे के तनाव का जोखिम है।","वर्षा अपर्याप्त है और सूखे का जोखिम है।","अत्यधिक वर्षा से जड़ क्षेत्र में जलभराव का जोखिम है।","ऊँचाई ऊपरी सीमा से अधिक है; वृद्धि अवधि घट सकती है।","ऊँचाई निचली सीमा से कम है।","तीखी ढलान से कटाव का जोखिम और यांत्रिक रोपण में कठिनाई होती है।","मिट्टी में जैविक कार्बन कम है।","स्थल","प्रजाति का इष्टतम / सीमा"],
+    "id": ["Ada risiko embun beku.","Ada risiko stres panas dan kekeringan.","Curah hujan tidak cukup dan ada risiko kekeringan.","Hujan berlebihan berisiko menggenangi zona akar.","Ketinggian melebihi batas atas; musim tumbuh dapat memendek.","Ketinggian berada di bawah batas bawah.","Lereng curam berisiko erosi dan menyulitkan penanaman mekanis.","Karbon organik tanah rendah.","Lokasi","Optimum / batas spesies"],
+    "th": ["มีความเสี่ยงจากน้ำค้างแข็ง","มีความเสี่ยงจากความร้อนและภัยแล้ง","ฝนไม่เพียงพอและมีความเสี่ยงจากภัยแล้ง","ฝนมากเกินไปเสี่ยงทำให้น้ำขังบริเวณราก","ความสูงเกินขีดจำกัดบนและฤดูเติบโตอาจสั้นลง","ความสูงต่ำกว่าขีดจำกัดล่าง","พื้นที่ลาดชันเสี่ยงต่อการกัดเซาะและปลูกด้วยเครื่องจักรได้ยาก","คาร์บอนอินทรีย์ในดินต่ำ","พื้นที่","ค่าที่เหมาะสม / ขีดจำกัดของชนิดไม้"],
+    "bn": ["তুষারপাতের ঝুঁকি রয়েছে।","তাপ ও খরার চাপের ঝুঁকি রয়েছে।","বৃষ্টিপাত অপর্যাপ্ত এবং খরার ঝুঁকি রয়েছে।","অতিরিক্ত বৃষ্টিতে শিকড় অঞ্চলে জলাবদ্ধতার ঝুঁকি রয়েছে।","উচ্চতা ঊর্ধ্বসীমা অতিক্রম করেছে; বৃদ্ধির মৌসুম ছোট হতে পারে।","উচ্চতা নিম্নসীমার নিচে।","খাড়া ঢালে ক্ষয়ের ঝুঁকি ও যান্ত্রিক রোপণে অসুবিধা হয়।","মাটিতে জৈব কার্বন কম।","স্থান","প্রজাতির সর্বোত্তম মান / সীমা"],
+    "vi": ["Có nguy cơ sương giá.","Có nguy cơ stress nhiệt và hạn hán.","Lượng mưa không đủ và có nguy cơ hạn hán.","Mưa quá nhiều gây nguy cơ úng vùng rễ.","Độ cao vượt giới hạn trên; mùa sinh trưởng có thể ngắn lại.","Độ cao thấp hơn giới hạn dưới.","Độ dốc lớn gây nguy cơ xói mòn và khó trồng bằng máy.","Hàm lượng carbon hữu cơ trong đất thấp.","Địa điểm","Mức tối ưu / giới hạn của loài"],
+    "ur": ["پالے کا خطرہ ہے۔","گرمی اور خشک سالی کے دباؤ کا خطرہ ہے۔","بارش ناکافی ہے اور خشک سالی کا خطرہ ہے۔","زیادہ بارش سے جڑوں کے حصے میں پانی بھرنے کا خطرہ ہے۔","بلندی بالائی حد سے زیادہ ہے؛ بڑھوتری کا موسم مختصر ہو سکتا ہے۔","بلندی نچلی حد سے کم ہے۔","تیز ڈھلوان کٹاؤ کا خطرہ اور مشینی شجرکاری میں دشواری پیدا کرتی ہے۔","مٹی میں نامیاتی کاربن کم ہے۔","مقام","نوع کی موزوں حد / حد"],
+    "pl": ["Występuje ryzyko mrozu.","Występuje ryzyko stresu cieplnego i suszy.","Opady są niewystarczające i występuje ryzyko suszy.","Nadmierne opady grożą podtopieniem strefy korzeniowej.","Wysokość przekracza górną granicę; okres wegetacyjny może się skrócić.","Wysokość jest poniżej dolnej granicy.","Stromy stok zwiększa ryzyko erozji i utrudnia sadzenie mechaniczne.","Zawartość węgla organicznego w glebie jest niska.","Stanowisko","Optimum / granica gatunku"],
+    "ms": ["Terdapat risiko fros.","Terdapat risiko tekanan haba dan kemarau.","Hujan tidak mencukupi dan terdapat risiko kemarau.","Hujan berlebihan berisiko menakung air di zon akar.","Ketinggian melebihi had atas; musim pertumbuhan mungkin memendek.","Ketinggian berada di bawah had bawah.","Cerun curam berisiko hakisan dan menyukarkan penanaman mekanikal.","Karbon organik tanah rendah.","Tapak","Optimum / had spesies"],
+    "ky": ["Үшүк коркунучу бар.","Ысык жана кургакчылык стресси коркунучу бар.","Жаан-чачын жетишсиз, кургакчылык коркунучу бар.","Ашыкча жаан-чачын тамыр аймагын суу каптоо коркунучун жаратат.","Бийиктик жогорку чектен ашкан; өсүү мезгили кыскарышы мүмкүн.","Бийиктик төмөнкү чектен төмөн.","Тик беткей эрозия коркунучун жаратат жана механикалык отургузууну кыйындатат.","Топуракта органикалык көмүртек аз.","Участок","Түрдүн оптимуму / чеги"],
+    "mn": ["Хярууны эрсдэл байна.","Халуун болон гангийн стрессийн эрсдэл байна.","Хур тунадас хангалтгүй, гангийн эрсдэл байна.","Хэт их хур тунадас үндэсний бүсийг усанд автуулах эрсдэлтэй.","Өндөр дээд хязгаараас давсан тул ургалтын улирал богиносож болно.","Өндөр доод хязгаараас бага байна.","Огцом налуу нь элэгдлийн эрсдэлтэй бөгөөд механик тарилтыг хүндрүүлнэ.","Хөрсний органик нүүрстөрөгч бага байна.","Талбай","Зүйлийн тохиромжит хэмжээ / хязгаар"],
+    "ka": ["არსებობს ყინვის რისკი.","არსებობს სიცხისა და გვალვის სტრესის რისკი.","ნალექი არასაკმარისია და არსებობს გვალვის რისკი.","ჭარბი ნალექი ფესვების ზონის დატბორვის რისკს ქმნის.","სიმაღლე ზედა ზღვარს აჭარბებს; ზრდის სეზონი შეიძლება შემცირდეს.","სიმაღლე ქვედა ზღვარზე ნაკლებია.","ციცაბო ფერდობი ეროზიის რისკს ქმნის და მექანიკურ დარგვას ართულებს.","ნიადაგის ორგანული ნახშირბადი დაბალია.","ნაკვეთი","სახეობის ოპტიმუმი / ზღვარი"]
+};
+function _carbonEscapeText(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; });
+}
 function _carbonTranslateWarning(w, lang) {
     if (!w) return '';
-    var l = (lang || _carbonGetLang()).toLowerCase();
+    var l = (lang || _carbonGetLang()).toLowerCase().split('-')[0];
     if (l === 'tr') return w;
-
-    var m = w.match(/Düşük sıcaklık \/ don riski mevcuttur \(Saha:\s*([0-9.-]+)\s*°C,\s*Tür optimumu:\s*([0-9.-]+)-([0-9.-]+)\s*°C\)/);
-    if (m) {
-        if (l === 'en') return 'Low temperature / frost risk detected (Site: ' + m[1] + ' °C, Species optimum: ' + m[2] + '-' + m[3] + ' °C)';
-        if (l === 'ko') return '저온 / 동해 위험 감지 (현장: ' + m[1] + ' °C, 수종 적정: ' + m[2] + '-' + m[3] + ' °C)';
-        if (l === 'de') return 'Niedrige Temperatur / Frostrisiko festgestellt (Standort: ' + m[1] + ' °C, Optimum: ' + m[2] + '-' + m[3] + ' °C)';
-        if (l === 'fr') return 'Risque de basse température / gel détecté (Site: ' + m[1] + ' °C, Optimum: ' + m[2] + '-' + m[3] + ' °C)';
-        if (l === 'es') return 'Riesgo de baja temperatura / helada detectado (Sitio: ' + m[1] + ' °C, Óptimo: ' + m[2] + '-' + m[3] + ' °C)';
-        if (l === 'ru') return 'Выявлен риск низких температур / заморозков (Участок: ' + m[1] + ' °C, Оптимум: ' + m[2] + '-' + m[3] + ' °C)';
-        if (l === 'zh') return '检测到低温/霜冻风险 (样地: ' + m[1] + ' °C, 适生适温: ' + m[2] + '-' + m[3] + ' °C)';
-        return 'Low temperature / frost risk detected (Site: ' + m[1] + ' °C, Species optimum: ' + m[2] + '-' + m[3] + ' °C)';
+    var d = _CARBON_WARNING_I18N[l] || _CARBON_WARNING_I18N.en;
+    var kind = /Düşük sıcaklık/.test(w) ? 0 : /(?:Aşırı|Yüksek) sıcaklık/.test(w) ? 1 :
+        /Yetersiz yağış/.test(w) ? 2 : /Aşırı yağış/.test(w) ? 3 :
+        /tavan yükselti|Yüksek rakım/.test(w) ? 4 : /taban yükselti|Düşük rakım/.test(w) ? 5 :
+        /(?:Yüksek|dik) eğim/.test(w) ? 6 : /Düşük toprak organik karbonu/.test(w) ? 7 : -1;
+    if (kind < 0) {
+        if (/Dikkat: Seçilen tür/.test(w)) return _CARBON_I18N[l].status_poor + '. ' + d[0] + ' ' + d[2];
+        return w; // Preserve unexpected diagnostics rather than silently dropping information.
     }
-
-    m = w.match(/Yüksek sıcaklık stresi riski \(Saha:\s*([0-9.-]+)\s*°C,\s*Tür optimumu:\s*([0-9.-]+)-([0-9.-]+)\s*°C\)/);
-    if (m) {
-        if (l === 'en') return 'High temperature stress risk (Site: ' + m[1] + ' °C, Species optimum: ' + m[2] + '-' + m[3] + ' °C)';
-        if (l === 'ko') return '고온 스트레스 위험 (현장: ' + m[1] + ' °C, 수종 적정: ' + m[2] + '-' + m[3] + ' °C)';
-        if (l === 'de') return 'Hitzestressrisiko (Standort: ' + m[1] + ' °C, Optimum: ' + m[2] + '-' + m[3] + ' °C)';
-        if (l === 'fr') return 'Risque de stress thermique élevé (Site: ' + m[1] + ' °C, Optimum: ' + m[2] + '-' + m[3] + ' °C)';
-        if (l === 'es') return 'Riesgo de estrés por alta temperatura (Sitio: ' + m[1] + ' °C, Óptimo: ' + m[2] + '-' + m[3] + ' °C)';
-        if (l === 'ru') return 'Риск высокотемпературного стресса (Участок: ' + m[1] + ' °C, Оптимум: ' + m[2] + '-' + m[3] + ' °C)';
-        if (l === 'zh') return '高温热胁迫风险 (样地: ' + m[1] + ' °C, 适生适温: ' + m[2] + '-' + m[3] + ' °C)';
-        return 'High temperature stress risk (Site: ' + m[1] + ' °C, Species optimum: ' + m[2] + '-' + m[3] + ' °C)';
-    }
-
-    m = w.match(/Yetersiz yağış \/ kuraklık riski \(Saha:\s*([0-9.-]+)\s*mm,\s*Tür optimumu:\s*([0-9.-]+)-([0-9.-]+)\s*mm\)/);
-    if (m) {
-        if (l === 'en') return 'Insufficient rainfall / drought risk (Site: ' + m[1] + ' mm, Species optimum: ' + m[2] + '-' + m[3] + ' mm)';
-        if (l === 'ko') return '강수량 부족 / 가뭄 위험 (현장: ' + m[1] + ' mm, 수종 적정: ' + m[2] + '-' + m[3] + ' mm)';
-        if (l === 'de') return 'Niederschlagsdefizit / Dürrerisiko (Standort: ' + m[1] + ' mm, Optimum: ' + m[2] + '-' + m[3] + ' mm)';
-        if (l === 'fr') return 'Précipitations insuffisantes / risque de sécheresse (Site: ' + m[1] + ' mm, Optimum: ' + m[2] + '-' + m[3] + ' mm)';
-        if (l === 'es') return 'Precipitación insuficiente / riesgo de sequía (Sitio: ' + m[1] + ' mm, Óptimo: ' + m[2] + '-' + m[3] + ' mm)';
-        if (l === 'ru') return 'Недостаток осадков / риск засухи (Участок: ' + m[1] + ' мм, Оптимум: ' + m[2] + '-' + m[3] + ' мм)';
-        if (l === 'zh') return '降水不足/干旱风险 (样地: ' + m[1] + ' mm, 适生适量: ' + m[2] + '-' + m[3] + ' mm)';
-        return 'Insufficient rainfall / drought risk (Site: ' + m[1] + ' mm, Species optimum: ' + m[2] + '-' + m[3] + ' mm)';
-    }
-
-    m = w.match(/Aşırı yağış \/ su basması riski \(Saha:\s*([0-9.-]+)\s*mm,\s*Tür optimumu:\s*([0-9.-]+)-([0-9.-]+)\s*mm\)/);
-    if (m) {
-        if (l === 'en') return 'Excessive rainfall / waterlogging risk (Site: ' + m[1] + ' mm, Species optimum: ' + m[2] + '-' + m[3] + ' mm)';
-        if (l === 'ko') return '과다 강수 / 침수 위험 (현장: ' + m[1] + ' mm, 수종 적정: ' + m[2] + '-' + m[3] + ' mm)';
-        if (l === 'de') return 'Übermäßiger Niederschlag / Staunässerisiko (Standort: ' + m[1] + ' mm, Optimum: ' + m[2] + '-' + m[3] + ' mm)';
-        if (l === 'fr') return 'Précipitations excessives / risque d\'engorgement (Site: ' + m[1] + ' mm, Optimum: ' + m[2] + '-' + m[3] + ' mm)';
-        if (l === 'es') return 'Precipitación excesiva / riesgo de anegamiento (Sitio: ' + m[1] + ' mm, Óptimo: ' + m[2] + '-' + m[3] + ' mm)';
-        if (l === 'ru') return 'Избыточные осадки / риск переувлажнения (Участок: ' + m[1] + ' мм, Оптимум: ' + m[2] + '-' + m[3] + ' мм)';
-        if (l === 'zh') return '降水过多/涝渍风险 (样地: ' + m[1] + ' mm, 适生适量: ' + m[2] + '-' + m[3] + ' mm)';
-        return 'Excessive rainfall / waterlogging risk (Site: ' + m[1] + ' mm, Species optimum: ' + m[2] + '-' + m[3] + ' mm)';
-    }
-
-    m = w.match(/Düşük rakım stresi \(Saha:\s*([0-9.-]+)\s*m,\s*Tür optimumu:\s*([0-9.-]+)-([0-9.-]+)\s*m\)/);
-    if (m) {
-        if (l === 'en') return 'Low elevation stress (Site: ' + m[1] + ' m, Species optimum: ' + m[2] + '-' + m[3] + ' m)';
-        if (l === 'ko') return '저고도 생육 스트레스 (현장: ' + m[1] + ' m, 수종 적정: ' + m[2] + '-' + m[3] + ' m)';
-        if (l === 'de') return 'Tieflagenstress (Standort: ' + m[1] + ' m, Optimum: ' + m[2] + '-' + m[3] + ' m)';
-        if (l === 'fr') return 'Stress de basse altitude (Site: ' + m[1] + ' m, Optimum: ' + m[2] + '-' + m[3] + ' m)';
-        if (l === 'es') return 'Estrés por baja altitud (Sitio: ' + m[1] + ' m, Óptimo: ' + m[2] + '-' + m[3] + ' m)';
-        if (l === 'ru') return 'Стресс низкой высоты (Участок: ' + m[1] + ' м, Оптимум: ' + m[2] + '-' + m[3] + ' м)';
-        if (l === 'zh') return '低海拔逆境 (样地: ' + m[1] + ' m, 适生适高: ' + m[2] + '-' + m[3] + ' m)';
-        return 'Low elevation stress (Site: ' + m[1] + ' m, Species optimum: ' + m[2] + '-' + m[3] + ' m)';
-    }
-
-    m = w.match(/Yüksek rakım stresi \(Saha:\s*([0-9.-]+)\s*m,\s*Tür optimumu:\s*([0-9.-]+)-([0-9.-]+)\s*m\)/);
-    if (m) {
-        if (l === 'en') return 'High elevation stress (Site: ' + m[1] + ' m, Species optimum: ' + m[2] + '-' + m[3] + ' m)';
-        if (l === 'ko') return '고고도 생육 스트레스 (현장: ' + m[1] + ' m, 수종 적정: ' + m[2] + '-' + m[3] + ' m)';
-        if (l === 'de') return 'Höhenlagenstress (Standort: ' + m[1] + ' m, Optimum: ' + m[2] + '-' + m[3] + ' m)';
-        if (l === 'fr') return 'Stress de haute altitude (Site: ' + m[1] + ' m, Optimum: ' + m[2] + '-' + m[3] + ' m)';
-        if (l === 'es') return 'Estrés por alta altitud (Sitio: ' + m[1] + ' m, Óptimo: ' + m[2] + '-' + m[3] + ' m)';
-        if (l === 'ru') return 'Стресс большой высоты (Участок: ' + m[1] + ' м, Оптимум: ' + m[2] + '-' + m[3] + ' м)';
-        if (l === 'zh') return '高海拔逆境 (样地: ' + m[1] + ' m, 适生适高: ' + m[2] + '-' + m[3] + ' m)';
-        return 'High elevation stress (Site: ' + m[1] + ' m, Species optimum: ' + m[2] + '-' + m[3] + ' m)';
-    }
-
-    m = w.match(/Aşırı dik eğim erozyon riski \(Saha:\s*([0-9.-]+)°\)/);
-    if (m) {
-        if (l === 'en') return 'Steep slope erosion risk (Site: ' + m[1] + '°)';
-        if (l === 'ko') return '급경사지 침식 위험 (현장: ' + m[1] + '°)';
-        if (l === 'de') return 'Steilhang-Erosionsrisiko (Standort: ' + m[1] + '°)';
-        if (l === 'fr') return 'Risque d\'érosion sur forte pente (Site: ' + m[1] + '°)';
-        if (l === 'es') return 'Riesgo de erosión en pendiente pronunciada (Sitio: ' + m[1] + '°)';
-        if (l === 'ru') return 'Риск эрозии на крутом склоне (Участок: ' + m[1] + '°)';
-        if (l === 'zh') return '陡坡水土流失侵蚀风险 (样地: ' + m[1] + '°)';
-        return 'Steep slope erosion risk (Site: ' + m[1] + '°)';
-    }
-
-    m = w.match(/Düşük toprak organik karbonu \(Saha:\s*([0-9.-]+)\s*g\/kg\)/);
-    if (m) {
-        if (l === 'en') return 'Low soil organic carbon (Site: ' + m[1] + ' g/kg)';
-        if (l === 'ko') return '토양 유기탄소 부족 (현장: ' + m[1] + ' g/kg)';
-        if (l === 'de') return 'Geringer organischer Bodenkohlenstoff (Standort: ' + m[1] + ' g/kg)';
-        if (l === 'fr') return 'Faible carbone organique du sol (Site: ' + m[1] + ' g/kg)';
-        if (l === 'es') return 'Bajo carbono orgánico del suelo (Sitio: ' + m[1] + ' g/kg)';
-        if (l === 'ru') return 'Низкий уровень органического углерода в почве (Участок: ' + m[1] + ' г/кг)';
-        if (l === 'zh') return '土壤有机碳偏低 (样地: ' + m[1] + ' g/kg)';
-        return 'Low soil organic carbon (Site: ' + m[1] + ' g/kg)';
-    }
-
-    return w;
+    var values = String(w).match(/-?\d+(?:[.,]\d+)?/g) || [];
+    // In a range, the separator is not a negative sign unless there are two hyphens.
+    var range = String(w).match(/Tür optimumu:\s*(-?\d+(?:[.,]\d+)?)-(-?\d+(?:[.,]\d+)?)/);
+    var unit = kind < 2 ? '°C' : kind < 4 ? 'mm' : kind < 6 ? 'm' : kind === 6 ? '°' : 'g/kg';
+    var details = values.length ? d[8] + ': ' + values[0] + ' ' + unit : '';
+    if (range) details += '; ' + d[9] + ': ' + range[1] + '–' + range[2] + ' ' + unit;
+    else if ((kind === 4 || kind === 5) && values.length > 1) details += '; ' + d[9] + ': ' + values[1] + ' m';
+    if ((kind === 2 || kind === 3) && details) details = details.replace(values[0] + ' mm', values[0] + ' ' + _CARBON_I18N[l].unit_mm_yr);
+    return d[kind] + (details ? ' (' + details + ')' : '');
 }
 
 function _carbonFormatSpacingHint(density, r, t, retVal, effective) {
@@ -14096,7 +14335,7 @@ function _carbonFormatSpacingHint(density, r, t, retVal, effective) {
     var lblPost = (dict && dict.lbl_post_survival) ? dict.lbl_post_survival : (l === 'tr' ? 'tutma sonrası: ' : (l === 'ko' ? '활착 후: ' : 'post-survival: '));
     var lblEff = (dict && dict.lbl_effective) ? dict.lbl_effective : (l === 'tr' ? 'Efektif: ' : (l === 'ko' ? '유효: ' : 'Effective: '));
 
-    return '<b>' + density + ' ' + uTreesHa + '</b> (' + r + 'm × ' + t + 'm) — ' + lblPost + '<b>%' + retVal + '</b> (' + lblEff + '<b>' + effective + ' ' + uTrees + '</b>)';
+    return '<b>' + density + ' ' + uTreesHa + '</b> (' + r + 'm × ' + t + 'm) — ' + lblPost + '<b>' + (l === 'tr' ? '%' + retVal : retVal + '%') + '</b> (' + lblEff + '<b>' + effective + ' ' + uTrees + '</b>)';
 }
 
 function _carbonExtractCentroid(geom) {
@@ -14144,76 +14383,81 @@ function _carbonAutoDetectAndSetCountry(aoiInfo) {
 }
 
 // 📄 Direct PDF Download Engine (Never opens about:blank or new tabs)
+// Export owns only an off-screen iframe; html2canvas never traverses the live map DOM.
+var _carbonPdfJob = null;
 function _carbonDownloadPDF(reportHtml, fileName) {
-    try {
-        if (typeof window !== 'undefined' && typeof window.html2pdf === 'function') {
-            var container = document.createElement('div');
-            container.id = '_carbon_pdf_export_container';
-            container.style.position = 'fixed';
-            container.style.left = '-9999px';
-            container.style.top = '0';
-            container.style.width = '794px';
-            container.style.background = '#ffffff';
-            container.innerHTML = reportHtml;
-
-            var scripts = container.querySelectorAll('script, .no-print');
-            for (var i = 0; i < scripts.length; i++) scripts[i].remove();
-            document.body.appendChild(container);
-
-            var opt = {
-                margin: [12, 15, 12, 15],
-                filename: fileName,
-                image: { type: 'jpeg', quality: 0.98 },
-                html2canvas: { scale: 2, useCORS: true, logging: false },
-                jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-                pagebreak: { mode: ['avoid-all', 'css', 'legacy'] }
+    if (_carbonPdfJob) return _carbonPdfJob;
+    var frame = document.createElement('iframe');
+    frame.id = '_carbon_pdf_iframe';
+    frame.setAttribute('aria-hidden', 'true'); frame.tabIndex = -1;
+    frame.style.cssText = 'position:fixed;left:-10000px;top:0;width:794px;height:1123px;border:0;pointer-events:none;';
+    var button = document.getElementById('btn-print-carbon-sim');
+    if (button) { button.disabled = true; button.setAttribute('aria-busy', 'true'); }
+    var timer, disposed=false;
+    function cleanup() {
+        clearTimeout(timer); disposed=true;
+        if (frame.parentNode) frame.parentNode.removeChild(frame);
+        if (button) { button.disabled = false; button.removeAttribute('aria-busy'); }
+        _carbonPdfJob = null;
+    }
+    _carbonPdfJob = new Promise(function (resolve, reject) {
+        timer = setTimeout(function () { reject(new Error('PDF export timeout')); }, 120000);
+        frame.onload = function () {
+            frame.onload = null;
+            var doc = frame.contentDocument, win = frame.contentWindow;
+            var library = doc.createElement('script');
+            var source = document.querySelector('script[src*="html2pdf.bundle"]');
+            library.src = source ? source.src : 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js';
+            library.onerror = function () { reject(new Error('PDF library unavailable')); };
+            library.onload = function () {
+                Promise.resolve(doc.fonts && doc.fonts.ready).then(function () {
+                    return Promise.all(Array.from(doc.images).map(function (img) {
+                        if (img.complete) return Promise.resolve();
+                        return new Promise(function (done) { img.onload = done; img.onerror = done; });
+                    }));
+                }).then(function () {
+                    if(disposed) throw new Error('PDF export cancelled');
+                    var logo = doc.querySelector('h1 img');
+                    var logoData = logo && logo.src;
+                    // Oversized tables can span pages; individual rows and formula cards stay intact.
+                    var maxHeight = (297 - 12 - 18) * 96 / 25.4;
+                    doc.querySelectorAll('table,.report-section,.callout-box,.notice').forEach(function (el) {
+                        if (el.getBoundingClientRect().height > maxHeight) {
+                            el.style.breakInside = 'auto'; el.style.pageBreakInside = 'auto';
+                        }
+                    });
+                    return win.html2pdf().set({
+                        margin: [12,15,18,15], filename: fileName,
+                        image: {type:'jpeg',quality:0.95},
+                        html2canvas: {scale:1.5,backgroundColor:'#ffffff',useCORS:true,logging:false},
+                        jsPDF: {unit:'mm',format:'a4',orientation:'portrait',compress:true},
+                        pagebreak: {mode:['css'],avoid:['tr','.math-card','.chart-box']}
+                    }).from(doc.body).toPdf().get('pdf').then(function (pdf) {
+                        var total=pdf.internal.getNumberOfPages(), w=pdf.internal.pageSize.getWidth(), h=pdf.internal.pageSize.getHeight();
+                        for(var page=1;page<=total;page++) {
+                            pdf.setPage(page); pdf.setFont('helvetica','normal'); pdf.setFontSize(8); pdf.setTextColor(100,116,139);
+                            var logoW=logo && logo.naturalHeight ? 3.7*logo.naturalWidth/logo.naturalHeight : 3.7;
+                            if(logoData) pdf.addImage(logoData,'PNG',15,h-10,logoW,3.7,'sylva-footer-logo');
+                            pdf.text('SylvaGIS',15+logoW+1.5,h-7.3); pdf.text(page+'/'+total,w-15,h-7.3,{align:'right'});
+                        }
+                        // Blob download uses the browser's normal download destination; no popup or print dialog.
+                        if(disposed) throw new Error('PDF export cancelled');
+                        var url = URL.createObjectURL(pdf.output('blob'));
+                        var link = document.createElement('a'); link.href=url; link.download=fileName;
+                        link.style.display='none'; document.body.appendChild(link); link.click(); link.remove();
+                        setTimeout(function(){URL.revokeObjectURL(url);},30000);
+                    });
+                }).then(resolve,reject);
             };
-
-            window.html2pdf().set(opt).from(container).save().then(function() {
-                if (container.parentNode) container.parentNode.removeChild(container);
-            }).catch(function(err) {
-                console.warn('html2pdf direct download warning, using iframe print fallback:', err);
-                if (container.parentNode) container.parentNode.removeChild(container);
-                _carbonDownloadPDFViaIframe(reportHtml, fileName);
-            });
-            return;
-        }
-    } catch (err) {
-        console.warn('html2pdf check failed, falling back to iframe:', err);
-    }
-    _carbonDownloadPDFViaIframe(reportHtml, fileName);
+            doc.head.appendChild(library);
+        };
+        frame.srcdoc = reportHtml;
+        document.body.appendChild(frame);
+    }).then(function () { cleanup(); }, function (err) { cleanup(); throw err; });
+    return _carbonPdfJob;
 }
-
-function _carbonDownloadPDFViaIframe(reportHtml, fileName) {
-    var iframe = document.getElementById('_carbon_pdf_iframe');
-    if (!iframe) {
-        iframe = document.createElement('iframe');
-        iframe.id = '_carbon_pdf_iframe';
-        iframe.style.position = 'fixed';
-        iframe.style.left = '-9999px';
-        iframe.style.top = '-9999px';
-        iframe.style.width = '0px';
-        iframe.style.height = '0px';
-        iframe.style.border = 'none';
-        document.body.appendChild(iframe);
-    }
-    var doc = iframe.contentWindow || iframe.contentDocument;
-    if (doc.document) doc = doc.document;
-    doc.open();
-    doc.write(reportHtml);
-    doc.close();
-    if (fileName && iframe.contentWindow && iframe.contentWindow.document) {
-        iframe.contentWindow.document.title = fileName.replace(/\.pdf$/i, '');
-    }
-    if (iframe.contentWindow) iframe.contentWindow.focus();
-    setTimeout(function() {
-        try {
-            if (iframe.contentWindow) iframe.contentWindow.print();
-        } catch (e) {
-            console.error('Print iframe error:', e);
-        }
-    }, 500);
-}
+// Retain the public compatibility name without a print/focus fallback.
+function _carbonDownloadPDFViaIframe(reportHtml, fileName) { return _carbonDownloadPDF(reportHtml,fileName); }
 
 // Global window attachments
 if (typeof window !== 'undefined') {
@@ -14231,6 +14475,7 @@ if (typeof window !== 'undefined') {
     window._carbonTranslateWarning = _carbonTranslateWarning;
     window.carbonSimRefreshResultsUI = function() {
         try {
+            if (typeof _carbonSimRenderThinningList === 'function') _carbonSimRenderThinningList();
             var st = (typeof _getCarbonActiveState === 'function') ? _getCarbonActiveState() : null;
             if (st && st.resultsVisible && (st.lastSimResponse || st.lastSimResult)) {
                 if (typeof _carbonRenderResultsUI === 'function') {
@@ -14781,19 +15026,59 @@ var _CARBON_SPECIES_DB = {
                     return targetMap._carbonCanvasRenderer;
                 }
 
+                window._sylvaInvalidateMapIfResized = function (targetMap) {
+                    if(!targetMap || !targetMap.getContainer || !targetMap.invalidateSize)return false;
+                    var el=targetMap.getContainer(),w=el.clientWidth,h=el.clientHeight;
+                    if(!w || !h || !el.isConnected)return false;
+                    var old=targetMap._sylvaLastCheckedSize || targetMap.getSize();
+                    targetMap._sylvaLastCheckedSize={x:w,y:h};
+                    if(old.x===w && old.y===h)return false;
+                    targetMap.invalidateSize({animate:false,pan:false,debounceMoveend:true});
+                    return true;
+                };
+                (function () {
+                    var timer=null;
+                    function resume() {
+                        if(document.hidden)return;
+                        // Respect the shared loading reference count: a report must not unlock a live GEE request.
+                        if(!(window._sylvaLoadingRefCount > 0)) {
+                            var overlay=document.getElementById('analysis-loading-overlay');
+                            if(overlay) { overlay.classList.remove('active'); overlay.style.removeProperty('display'); }
+                        }
+                        clearTimeout(timer);
+                        timer=setTimeout(function(){
+                            if(typeof map!=='undefined')window._sylvaInvalidateMapIfResized(map);
+                            if(typeof map2!=='undefined')window._sylvaInvalidateMapIfResized(map2);
+                        },150);
+                    }
+                    window.addEventListener('focus',resume);
+                    document.addEventListener('visibilitychange',resume);
+                })();
+
                 function _carbonBindMapDebouncedInvalidate(targetMap) {
                     if (!targetMap || targetMap._carbonDebounceBound) return;
                     targetMap._carbonDebounceBound = true;
-                    var timer = null;
-                    targetMap.on('zoomend moveend', function () {
+                    var container = targetMap.getContainer(), timer = null;
+                    var width = container.clientWidth, height = container.clientHeight;
+                    function resize() {
                         clearTimeout(timer);
                         timer = setTimeout(function () {
-                            try {
-                                if (targetMap && typeof targetMap.invalidateSize === 'function') {
-                                    targetMap.invalidateSize({ animate: false, pan: false });
-                                }
-                            } catch (e) {}
-                        }, 120);
+                            if (document.hidden || !container.isConnected) return;
+                            var nextWidth=container.clientWidth, nextHeight=container.clientHeight;
+                            if (!nextWidth || !nextHeight || (nextWidth===width && nextHeight===height)) return;
+                            width=nextWidth; height=nextHeight;
+                            window._sylvaInvalidateMapIfResized(targetMap);
+                        },150);
+                    }
+                    var observer = window.ResizeObserver ? new ResizeObserver(resize) : null;
+                    if(observer) observer.observe(container);
+                    window.addEventListener('resize',resize);
+                    window.addEventListener('focus',resize);
+                    document.addEventListener('visibilitychange',resize);
+                    targetMap.once('unload',function(){
+                        clearTimeout(timer); if(observer)observer.disconnect();
+                        window.removeEventListener('resize',resize);window.removeEventListener('focus',resize);
+                        document.removeEventListener('visibilitychange',resize);
                     });
                 }
 
@@ -15092,12 +15377,28 @@ var _CARBON_SPECIES_DB = {
                     Object.keys(translations).forEach(function (lang) {
                         var fallbackSrc = _CARBON_I18N.en || _CARBON_I18N.tr || {};
                         var src = _CARBON_I18N[lang] || {};
+                        var phrases = _CARBON_REPORT_I18N[lang] || {};
+                        var aliases = {carbon_site_env_title:'GEE Topography, Climate & Soil Score',carbon_site_elev:'Elevation: ',carbon_site_slope_aspect:'Slope/Aspect: ',carbon_site_temp:'Annual Mean Temp: ',carbon_site_precip:'Annual Mean Precip: ',carbon_site_soc:'Soil SOC: ',carbon_site_sf:'Site Factor (Sf): ',carbon_summary_stand_dims:'Final Mean Height',carbon_summary_annual:'Mean Annual Sequestration'};
+                        Object.keys(fallbackSrc).forEach(function (key) {
+                            if (lang !== 'en' && (!src[key] || src[key] === fallbackSrc[key])) {
+                                var nativeText = translations[lang][key] || phrases[aliases[key] || fallbackSrc[key]];
+                                if (nativeText) src[key] = nativeText.replace(/:\s*$/, '');
+                            }
+                        });
+                        if (lang !== 'en') {
+                            if (!src.carbon_summary_trees || src.carbon_summary_trees === fallbackSrc.carbon_summary_trees) src.carbon_summary_trees = src.unit_trees + ' (' + src.lbl_effective.replace(/:\s*$/, '') + ')';
+                            if (src.carbon_clear_btn === fallbackSrc.carbon_clear_btn && translations[lang].markup_clear_title) src.carbon_clear_btn = translations[lang].markup_clear_title;
+                        }
+
                         Object.keys(fallbackSrc).forEach(function (k) {
                             if (!translations[lang][k]) {
                                 translations[lang][k] = fallbackSrc[k];
                             }
                         });
                         Object.keys(src).forEach(function (k) {
+                            if (lang !== 'en' && src[k] === fallbackSrc[k] && translations[lang][k]) {
+                                src[k] = translations[lang][k];
+                            }
                             translations[lang][k] = src[k];
                         });
                         if (_CARBON_REPORT_BTN_I18N[lang]) {
@@ -15153,113 +15454,45 @@ var _CARBON_SPECIES_DB = {
                 // 📍 FİDAN GRID NOKTALARINI KML OLARAK İNDİRME FONKSİYONU
                 // ───────────────────────────────────────────────────────────
                 function _sylvaCarbonPointsToKML(points, species, sx, sy) {
-                    var placemarks = [];
-                    var curLang = window._sylvaLang || (typeof sylvaCurrentLang !== 'undefined' ? sylvaCurrentLang : 'tr');
-                    var seedlingName = (typeof window._sylvaSeedlingLabel === 'function')
-                        ? window._sylvaSeedlingLabel(curLang)
-                        : ((typeof _sylvaSeedlingLabel === 'function') ? _sylvaSeedlingLabel(curLang) : 'Fidan');
-                    var sp = species || seedlingName;
-                    sx = sx || 3; sy = sy || 3;
-                    var pts = points || [];
-                    var nowIso = new Date().toISOString();
-                    var isEn = (curLang === 'en');
-                    for (var i = 0; i < pts.length; i++) {
-                        var lat = pts[i][0];
-                        var lng = pts[i][1];
-                        var pName = (sp && sp !== seedlingName) ? (sp + ' #' + (i + 1)) : (seedlingName + ' #' + (i + 1));
-                        placemarks.push(
-                            '    <Placemark>\n' +
-                            '      <name>' + _sylvaExportXml(pName) + '</name>\n' +
-                            '      <description><![CDATA[' + (isEn ? 'Species: ' : 'Tür: ') + sp + '<br>' + (isEn ? 'Seedling ID: #' : 'Fidan No: #') + (i + 1) + '<br>' + (isEn ? 'Spacing: ' : 'Aralık: ') + sx + 'x' + sy + 'm<br>' + (isEn ? 'Latitude: ' : 'Enlem: ') + lat.toFixed(7) + '<br>' + (isEn ? 'Longitude: ' : 'Boylam: ') + lng.toFixed(7) + ']]></description>\n' +
-                            '      <ExtendedData>\n' +
-                            '        <Data name="species"><value>' + _sylvaExportXml(sp) + '</value></Data>\n' +
-                            '        <Data name="seedling_id"><value>' + (i + 1) + '</value></Data>\n' +
-                            '        <Data name="spacing"><value>' + sx + 'x' + sy + 'm</value></Data>\n' +
-                            '        <Data name="latitude"><value>' + lat.toFixed(7) + '</value></Data>\n' +
-                            '        <Data name="longitude"><value>' + lng.toFixed(7) + '</value></Data>\n' +
-                            '      </ExtendedData>\n' +
-                            '      <styleUrl>#seedlingStyle</styleUrl>\n' +
-                            '      <Point>\n' +
-                            '        <coordinates>' + lng.toFixed(7) + ',' + lat.toFixed(7) + ',0</coordinates>\n' +
-                            '      </Point>\n' +
-                            '    </Placemark>'
-                        );
+                    var lang=_carbonGetLang(), labels=_carbonPrepareReportI18n(lang), pts=points || [];
+                    var sp=species || labels.kml_seedling; sx=sx || 3; sy=sy || 3;
+                    function field(name,label,value) {
+                        return '<Data name="'+name+'"><displayName>'+_sylvaExportXml(label)+'</displayName><value>'+_sylvaExportXml(String(value))+'</value></Data>';
                     }
-                    var docDesc = isEn
-                        ? ('SylvaGIS Carbon Sink Area Simulation - ' + pts.length + ' ' + sp + ' Seedlings (' + sx + 'x' + sy + 'm) - ' + nowIso)
-                        : ('SylvaGIS Karbon Yutak Alanı Simülasyonu - ' + pts.length + ' Adet ' + sp + ' Fidanı (' + sx + 'x' + sy + 'm) - ' + nowIso);
-                    return '<?xml version="1.0" encoding="UTF-8"?>\n' +
-                        '<kml xmlns="http://www.opengis.net/kml/2.2">\n' +
-                        '  <Document>\n' +
-                        '    <name>SylvaGIS ' + _sylvaExportXml(sp + ' (' + pts.length + ' ' + seedlingName + ')') + '</name>\n' +
-                        '    <description>' + docDesc + '</description>\n' +
-                        '    <Style id="seedlingStyle">\n' +
-                        '      <IconStyle>\n' +
-                        '        <color>ff228b22</color>\n' +
-                        '        <scale>0.8</scale>\n' +
-                        '        <Icon>\n' +
-                        '          <href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href>\n' +
-                        '        </Icon>\n' +
-                        '      </IconStyle>\n' +
-                        '      <LabelStyle>\n' +
-                        '        <scale>0.7</scale>\n' +
-                        '      </LabelStyle>\n' +
-                        '    </Style>\n' +
-                        placemarks.join('\n') + '\n' +
-                        '  </Document>\n' +
-                        '</kml>';
+                    var placemarks=pts.map(function(point,i){
+                        var lat=point[0].toFixed(7),lon=point[1].toFixed(7);
+                        var description=labels.kml_species+': '+sp+'\n'+labels.kml_id+': #'+(i+1)+'\n'+labels.kml_spacing+': '+sx+' × '+sy+' m\n'+labels.kml_latitude+': '+lat+'\n'+labels.kml_longitude+': '+lon;
+                        return '<Placemark><name>'+_sylvaExportXml(labels.kml_seedling+' #'+(i+1)+' — '+sp)+'</name><description>'+_sylvaExportXml(description)+'</description><ExtendedData>'+
+                            field('species',labels.kml_species,sp)+field('seedling_id',labels.kml_id,i+1)+field('spacing',labels.kml_spacing,sx+' × '+sy+' m')+
+                            field('latitude',labels.kml_latitude,lat)+field('longitude',labels.kml_longitude,lon)+
+                            '</ExtendedData><styleUrl>#seedlingStyle</styleUrl><Point><coordinates>'+lon+','+lat+',0</coordinates></Point></Placemark>';
+                    });
+                    var title='SylvaGIS '+labels.kml_title+' — '+pts.length+' '+labels.kml_seedling+' — '+sp;
+                    return '<?xml version="1.0" encoding="UTF-8"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>'+_sylvaExportXml(title)+'</name><description>'+_sylvaExportXml(title+' ('+sx+' × '+sy+' m)')+'</description>'+
+                        '<Style id="seedlingStyle"><IconStyle><color>ff228b22</color><scale>0.8</scale><Icon><href>https://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle><LabelStyle><scale>0.7</scale></LabelStyle></Style>'+
+                        placemarks.join('')+'</Document></kml>';
                 }
                 window._sylvaCarbonPointsToKML = _sylvaCarbonPointsToKML;
 
                 window.carbonSimDownloadKML = function () {
-                    var paneId = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
-                    var st = window._carbonStateByPane && window._carbonStateByPane[paneId];
-                    if (!st || !st.plantingPoints || !st.plantingPoints.length) {
-                        var warnMsg = (typeof t === 'function')
-                            ? (t('carbon_no_points_kml') || 'İndirilecek fidan koordinat noktası bulunamadı. Lütfen önce simülasyonu çalıştırın.')
-                            : 'İndirilecek fidan koordinat noktası bulunamadı. Lütfen önce simülasyonu çalıştırın.';
-                        if (typeof sylvaAlert === 'function') {
-                            sylvaAlert(warnMsg, 'warning');
-                        } else {
-                            alert(warnMsg);
-                        }
+                    var paneId=typeof window._sylvaActivePaneId==='function' ? window._sylvaActivePaneId() : 'map';
+                    var st=window._carbonStateByPane && window._carbonStateByPane[paneId];
+                    var button=document.getElementById('btn-export-carbon-kml');
+                    if(!st || !st.plantingPoints || !st.plantingPoints.length) {
+                        if(button)button.title=_cTxt('carbon_no_points_kml');
                         return;
                     }
-
-                    var pts = st.plantingPoints;
-                    var spName = (st.species || 'Planted_Species').trim();
-                    var sx = st.spacingX || 3;
-                    var sy = st.spacingY || 3;
-                    var kmlContent = _sylvaCarbonPointsToKML(pts, spName, sx, sy);
-
-                    var curLang = window._sylvaLang || (typeof sylvaCurrentLang !== 'undefined' ? sylvaCurrentLang : 'tr');
-                    var seedLabel = (typeof window._sylvaSeedlingLabel === 'function') ? window._sylvaSeedlingLabel(curLang) : 'Seedling';
-                    var cleanSpecies = spName.replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
-                    var dateStr = new Date().toISOString().slice(0, 10);
-                    var fileName = 'SylvaGIS_' + seedLabel.replace(/\s+/g, '_') + '_' + (cleanSpecies || 'carbon') + '_' + dateStr + '.kml';
-
+                    var url;
                     try {
-                        var blob = new Blob([kmlContent], { type: 'application/vnd.google-earth.kml+xml;charset=utf-8' });
-                        var url = URL.createObjectURL(blob);
-                        var a = document.createElement('a');
-                        a.href = url;
-                        a.download = fileName;
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                        setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
-
-                        var successMsg = pts.length + ' fidan noktası KML formatında indirildi.';
-                        if (typeof sylvaAlert === 'function') {
-                            sylvaAlert(successMsg, 'success');
-                        }
-                    } catch (err) {
-                        console.error('KML indirme hatası:', err);
-                        if (typeof sylvaAlert === 'function') {
-                            sylvaAlert('KML dosyası oluşturulamadı: ' + err.message, 'error');
-                        } else {
-                            alert('KML dosyası oluşturulamadı: ' + err.message);
-                        }
+                        var content=_sylvaCarbonPointsToKML(st.plantingPoints,st.species,st.spacingX,st.spacingY);
+                        url=URL.createObjectURL(new Blob([content],{type:'application/vnd.google-earth.kml+xml;charset=utf-8'}));
+                        var link=document.createElement('a');link.href=url;link.download=_carbonExportFilename(_carbonGetLang(),'kml');
+                        link.style.display='none';document.body.appendChild(link);link.click();link.remove();
+                    } catch(err) {
+                        console.error('Carbon KML export:',err);
+                        if(button)button.title=_carbonReportText(_carbonGetLang(),'export_error');
+                    } finally {
+                        if(url)setTimeout(function(){URL.revokeObjectURL(url);},30000);
                     }
                 };
 
@@ -15309,7 +15542,7 @@ var _CARBON_SPECIES_DB = {
                     var xTicks = [0, Math.round(maxYr / 2), maxYr];
                     var xLabels = xTicks.map(function (yr) {
                         var x = xAt(yr).toFixed(1);
-                        var yrStr = isEn ? ('Yr ' + yr) : ('Yıl ' + yr);
+                        var yrStr = _cTxt('carbon_thinning_year_label') + ' ' + yr;
                         return '<text x="' + x + '" y="' + (h - 7) + '" font-size="8" fill="#94a3b8" text-anchor="middle">' + yrStr + '</text>';
                     }).join('');
 
@@ -15352,10 +15585,10 @@ var _CARBON_SPECIES_DB = {
                             '<text x="' + x + '" y="' + (padT + 8) + '" font-size="7" font-weight="bold" fill="#d97706" text-anchor="middle">%' + ev.percent + '</text>';
                     }).join('');
 
-                    var lblStanding = isEn ? 'Standing Stock' : 'Duran Stoğu';
-                    var lblTotal = isEn ? 'Total (Incl. Harvest)' : 'Toplam (Hasat Dahil)';
-                    var lblBaseline = isEn ? 'Baseline (Unmanaged)' : 'Müdahalesiz';
-                    var lblThinning = isEn ? 'Thinning' : 'Aralama';
+                    var lblStanding = _cTxt('carbon_standing_stock_legend');
+                    var lblTotal = _cTxt('carbon_total_legend');
+                    var lblBaseline = _cTxt('carbon_baseline_legend');
+                    var lblThinning = _cTxt('carbon_thinning_legend');
 
                     return '<svg viewBox="0 0 ' + w + ' ' + h + '" style="width:100%;height:auto;display:block;">' +
                         gridLines +
@@ -15402,7 +15635,7 @@ var _CARBON_SPECIES_DB = {
                     }
 
                     if (treesVal) {
-                        treesVal.textContent = (st.totalTrees || 0).toLocaleString() + (isEn ? ' (Effective: ' : ' (Efektif: ') + (st.effectiveTrees || 0).toLocaleString() + ')';
+                        treesVal.textContent = (st.totalTrees || 0).toLocaleString(curLang) + (' (' + _cTxt('lbl_effective')) + (st.effectiveTrees || 0).toLocaleString(curLang) + ')';
                     }
 
                     if (st.lastSimResponse && st.lastSimResponse.summary) {
@@ -15420,13 +15653,13 @@ var _CARBON_SPECIES_DB = {
                             totalVal.textContent = mManaged.grand_total_co2e.toFixed(1) + ' tCO2e';
                         }
                         if (annualVal) {
-                            annualVal.textContent = mManaged.mean_annual_sequestration_co2e.toFixed(2) + (isEn ? ' tCO2e/yr' : ' tCO2e/yıl');
+                            annualVal.textContent = mManaged.mean_annual_sequestration_co2e.toFixed(2) + (' ' + _cTxt('unit_tco2e_yr'));
                         }
                         if (dimsVal) {
                             var dbh = mManaged.final_mean_dbh_cm != null ? mManaged.final_mean_dbh_cm.toFixed(1) : '—';
                             var h = mManaged.final_mean_height_m != null ? mManaged.final_mean_height_m.toFixed(1) : '—';
                             var n = mManaged.final_trees_per_ha != null ? Math.round(mManaged.final_trees_per_ha) : '—';
-                            dimsVal.textContent = 'DBH: ' + dbh + ' cm | ' + (isEn ? 'Height: ' : 'Boy: ') + h + ' m (' + n + (isEn ? ' trees/ha)' : ' ağaç/ha)');
+                            dimsVal.textContent = 'DBH: ' + dbh + ' cm | ' + _cTxt('lbl_height') + h + ' m (' + n + (' ' + _cTxt('unit_trees_ha') + ')');
                         }
 
                         if (chartBox) {
@@ -15441,7 +15674,7 @@ var _CARBON_SPECIES_DB = {
                         if (standingVal) standingVal.textContent = standingT.toFixed(1) + ' tC' + (areaHa > 0 ? ' (' + result.standingFinal.toFixed(1) + ' tC/ha)' : '');
                         if (harvestedVal) harvestedVal.textContent = harvestT.toFixed(1) + ' tC' + (areaHa > 0 ? ' (' + result.harvestTotal.toFixed(1) + ' tC/ha)' : '');
                         if (totalVal) totalVal.textContent = totalT.toFixed(1) + ' tC';
-                        if (annualVal) annualVal.textContent = (totalT / (st.rotation || 30)).toFixed(2) + (isEn ? ' tC/yr' : ' tC/yıl');
+                        if (annualVal) annualVal.textContent = (totalT / (st.rotation || 30)).toFixed(2) + (' tC/' + _cTxt('unit_year'));
                         if (dimsVal) dimsVal.textContent = '—';
 
                         if (chartBox) {
@@ -15470,9 +15703,9 @@ var _CARBON_SPECIES_DB = {
                         if (siteSlopeAspect) {
                             var aspStr = '';
                             if (sc.aspect_dir) {
-                                aspStr = isEn ? (sc.aspect_dir.en || sc.aspect_dir.code) : (sc.aspect_dir.tr || sc.aspect_dir.code);
+                                aspStr = _carbonGetLocalizedAspect(sc.aspect_dir, sc.aspect_deg, curLang);
                             } else if (sc.aspect_deg != null) {
-                                aspStr = Math.round(sc.aspect_deg) + '°';
+                                aspStr = _carbonGetLocalizedAspect(null, sc.aspect_deg, curLang);
                             }
                             siteSlopeAspect.textContent = (sc.slope_deg != null ? sc.slope_deg.toFixed(1) + '°' : '—') + (aspStr ? ' (' + aspStr + ')' : '');
                         }
@@ -15480,7 +15713,7 @@ var _CARBON_SPECIES_DB = {
                             siteTemp.textContent = sc.temp_c != null ? sc.temp_c.toFixed(1) + ' °C' : '—';
                         }
                         if (sitePrecip) {
-                            sitePrecip.textContent = sc.precip_mm != null ? Math.round(sc.precip_mm) + (isEn ? ' mm/yr' : ' mm/yıl') : '—';
+                            sitePrecip.textContent = sc.precip_mm != null ? Math.round(sc.precip_mm) + (' ' + _cTxt('unit_mm_yr')) : '—';
                         }
                         if (siteSoc) {
                             siteSoc.textContent = sc.soc_g_kg != null ? sc.soc_g_kg.toFixed(1) + ' g/kg' : '—';
@@ -15492,7 +15725,7 @@ var _CARBON_SPECIES_DB = {
                         }
                         if (siteBadge) {
                             var stStatus = suit.status || 'good';
-                            var badgeText = isEn ? (suit.status_en || 'Good') : (suit.status_tr || 'İyi Uyum');
+                            var badgeText = _carbonGetLocalizedSuitability(stStatus, curLang);
                             siteBadge.textContent = badgeText;
                             if (stStatus === 'excellent') {
                                 siteBadge.style.background = '#dcfce7';
@@ -15523,7 +15756,7 @@ var _CARBON_SPECIES_DB = {
                                 siteWarnBox.style.border = isSevere ? '1px solid #fecaca' : '1px solid #fde68a';
                                 siteWarnBox.style.color = isSevere ? '#991b1b' : '#92400e';
                                 siteWarnBox.innerHTML = allWarns.map(function (w) {
-                                    return '<div style="margin:2px 0;display:flex;align-items:flex-start;gap:4px;"><span>⚠️</span><span>' + w + '</span></div>';
+                                    return '<div style="margin:2px 0;display:flex;align-items:flex-start;gap:4px;"><span>⚠️</span><span>' + _carbonEscapeText(_carbonTranslateWarning(w, curLang)) + '</span></div>';
                                 }).join('');
                                 siteWarnBox.style.display = 'block';
                             } else {
@@ -15540,9 +15773,7 @@ var _CARBON_SPECIES_DB = {
 
                     if (sampleNote) {
                         if (st.isSampled) {
-                            var noteTmpl = (typeof t === 'function')
-                                ? t('carbon_sample_note', '(Görselleştirme için temsili {n} nokta gösteriliyor)')
-                                : '(Görselleştirme için temsili {n} nokta gösteriliyor)';
+                            var noteTmpl = _cTxt('sample_note');
                             sampleNote.textContent = noteTmpl.replace('{n}', (st.renderCount || 0).toLocaleString());
                             sampleNote.style.display = 'block';
                         } else {
@@ -15919,7 +16150,11 @@ var _CARBON_SPECIES_DB = {
                 // 🖨️ RAPORLAMA VE YAZDIRMA MOTORU (AŞAMA 10 & 11) — AKADEMİK & BİLİMSEL RAPOR
                 // ───────────────────────────────────────────────────────────
                 window.carbonSimPrintReport = function () {
+                    if (_carbonPdfJob) return _carbonPdfJob;
                     var st = _getCarbonActiveState();
+                    var curLang = _carbonGetLang();
+                    _carbonPrepareReportI18n(curLang);
+                    var _cTxt = function (key,en,tr) { return _carbonReportText(curLang,key,en,tr); };
                     if (!st || !st.lastSimResponse) {
                         var warnMsg = (typeof _cTxt === 'function' && _cTxt('no_sim_to_print'))
                             ? _cTxt('no_sim_to_print')
@@ -15938,11 +16173,7 @@ var _CARBON_SPECIES_DB = {
                     var isTr = (curLang === 'tr');
                     var isEn = (curLang === 'en');
 
-                    var _cTxt = (typeof window._cTxt === 'function') ? window._cTxt : function (ko, en, tr) {
-                        if (isKo) return ko;
-                        if (isTr) return tr;
-                        return en;
-                    };
+
 
                     var reportTitle = (typeof _getCarbonReportTitle === 'function') ? _getCarbonReportTitle(curLang) : 'SylvaGIS — Carbon Simulation Report';
                     var favEl = document.getElementById('sylva-custom-favicon') || document.querySelector('link[rel*="icon"]');
@@ -15958,8 +16189,8 @@ var _CARBON_SPECIES_DB = {
 
                     var areaHa = (st.areaHa || meta.area_ha || 0).toFixed(2);
                     var areaDa = ((st.areaHa || meta.area_ha || 0) * 10).toFixed(1);
-                    var nowStr = new Date().toLocaleString(isKo ? 'ko-KR' : (isTr ? 'tr-TR' : (curLang === 'de' ? 'de-DE' : (curLang === 'fr' ? 'fr-FR' : (curLang === 'es' ? 'es-ES' : (curLang === 'ru' ? 'ru-RU' : (curLang === 'zh' ? 'zh-CN' : (curLang === 'ja' ? 'ja-JP' : (curLang === 'ar' ? 'ar-SA' : 'en-US')))))))));
-                    var chartSvg = (document.getElementById('carbon-sim-chart-box') || {}).innerHTML || '';
+                    var nowStr = new Date().toLocaleString(curLang);
+                    var chartSvg = _carbonBuildMultiLineSVG((st.lastSimResponse.yearly_series || {}).baseline, (st.lastSimResponse.yearly_series || {}).managed, st.thinningEvents);
 
                     // 1. Aralama Takvimi Satırları
                     var thinningRows = thinnings.map(function (ev) {
@@ -16048,18 +16279,16 @@ var _CARBON_SPECIES_DB = {
                     var sfPct = suit.suitability_score_pct != null ? suit.suitability_score_pct.toFixed(0) : '100';
 
                     var soilObj = sc.soil_info || {};
-                    var soilGroup = isKo ? (soilObj.group_ko || soilObj.group_en || soilObj.group_tr || '—') : (isTr ? (soilObj.group_tr || '—') : (soilObj.group_en || soilObj.group_tr || '—'));
-                    var soilTexture = isKo ? (soilObj.texture_ko || soilObj.texture_en || soilObj.texture_tr || '—') : (isTr ? (soilObj.texture_tr || '—') : (soilObj.texture_en || soilObj.texture_tr || '—'));
-                    var climateLabel = isKo ? (meta.ecozone_name_ko || meta.ecozone_name_en || meta.ecozone_name_tr || sc.climate_zone_label || (sc.climate_info && (sc.climate_info.ko || sc.climate_info.en || sc.climate_info.tr)) || sc.climate_zone || '—')
-                        : (isTr ? (meta.ecozone_name_tr || sc.climate_zone_label || (sc.climate_info && sc.climate_info.tr) || sc.climate_zone || '—')
-                        : (meta.ecozone_name_en || sc.climate_zone_label || (sc.climate_info && sc.climate_info.en) || sc.climate_zone || '—'));
+                    var soilGroup = soilObj['group_'+curLang] || (soilObj.group_en || '').replace(/\s*\([^)]*\)/g,'') || '—';
+                    var soilTexture = _carbonLocalizedSiteValue('texture',soilObj.texture_en,curLang);
+                    var climateLabel = _carbonLocalizedSiteValue('zone',meta.climate_zone || sc.detected_ecozone || sc.climate_zone,curLang);
 
                     // ESRI 10m LULC Dağılım Tablosu
                     var esriHtml = '';
                     var esriData = sc.esri_lulc || [];
                     if (esriData.length > 0) {
                         var esriRows = esriData.map(function (item) {
-                            var clsName = isKo ? (item.name_ko || item.name_en || item.name_tr) : (isTr ? item.name_tr : item.name_en);
+                            var clsName = _carbonLocalizedLandCover(item,curLang);
                             return '<tr>' +
                                 '<td style="padding:5px 8px;border:1px solid #e2e8f0;display:flex;align-items:center;gap:6px;">' +
                                 '<span style="display:inline-block;width:12px;height:12px;background:' + item.color + ';border-radius:3px;border:1px solid #cbd5e1;flex-shrink:0;"></span>' +
@@ -16082,7 +16311,7 @@ var _CARBON_SPECIES_DB = {
                     var nicheInfo = suit.matched_niche || {};
                     var optDetails = [];
                     if (nicheInfo.temp_opt_range) optDetails.push(_cTxt('최적 기온: ', 'Optimum Temp: ', 'Optimum Sıcaklık: ') + nicheInfo.temp_opt_range);
-                    if (nicheInfo.precip_opt_range) optDetails.push(_cTxt('최적 강수량: ', 'Optimum Precip: ', 'Optimum Yağış: ') + nicheInfo.precip_opt_range);
+                    if (nicheInfo.precip_opt_range) optDetails.push(_cTxt('최적 강수량: ', 'Optimum Precip: ', 'Optimum Yağış: ') + String(nicheInfo.precip_opt_range).replace(/yıl|year/g,_CARBON_I18N[curLang].unit_year));
                     if (nicheInfo.elev_range) optDetails.push(_cTxt('고도 대역: ', 'Elevation Belt: ', 'Yükselti Kuşağı: ') + nicheInfo.elev_range);
 
                     var warns = suit.warnings || [];
@@ -16095,14 +16324,14 @@ var _CARBON_SPECIES_DB = {
                             '<ul style="margin:4px 0 0 16px;padding:0;">' +
                             warns.map(function (w) {
                                 var trWarn = (typeof _carbonTranslateWarning === 'function') ? _carbonTranslateWarning(w, curLang) : w;
-                                return '<li>' + trWarn + '</li>';
+                                return '<li>' + _carbonEscapeText(trWarn) + '</li>';
                             }).join('') +
                             '</ul></div>';
                     } else if (suit.advisories && suit.advisories.length > 0) {
                         warnHtml = '<div style="margin-top:8px;padding:8px 10px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;font-size:11px;color:#166534;">' +
                             '<b>' + _cTxt('🌱 입지 생태 적합성 평가:', '🌱 Site Ecological Suitability Assessment:', '🌱 Saha Ekolojik Uygunluk Değerlendirmesi:') + '</b>' +
                             '<ul style="margin:4px 0 0 16px;padding:0;">' +
-                            suit.advisories.map(function (a) { return '<li>' + a + '</li>'; }).join('') +
+                            suit.advisories.map(function (a) { return '<li>' + _carbonEscapeText(_carbonTranslateAdvisory(a,curLang)) + '</li>'; }).join('') +
                             '</ul></div>';
                     }
 
@@ -16116,7 +16345,7 @@ var _CARBON_SPECIES_DB = {
                     var aVal = meta.asymptotic_biomass_a != null ? meta.asymptotic_biomass_a : (meta.chapman_v_max != null ? Math.round(meta.chapman_v_max * dwVal * befVal) : 260.0);
                     var cfVal = meta.carbon_fraction != null ? meta.carbon_fraction : 0.47;
                     var co2RatioVal = meta.co2_to_c_ratio != null ? meta.co2_to_c_ratio.toFixed(4) : '3.6667';
-                    var ecozoneName = (isKo ? meta.ecozone_name_ko : (isTr ? meta.ecozone_name_tr : meta.ecozone_name_en)) || climateLabel;
+                    var ecozoneName = climateLabel;
                     var countryCode = meta.country_code || st.country || 'TR';
                     var spGroup = (meta && (meta.species_group || meta.group)) || '';
                     var speciesCategoryLabel = (spGroup === 'fruit_tree')
@@ -16126,35 +16355,23 @@ var _CARBON_SPECIES_DB = {
                             : _cTxt('침엽수', 'Conifer', 'İğne Yapraklı'));
 
                     // 4. Genişletilmiş Yasal & Metodolojik Açıklama Metni (IPCC Tier 1)
-                    var extendedNotice = '';
-                    if (isKo) {
-                        extendedNotice = "<b>IPCC Tier 1 방법론 체계, 표준 상수 및 원격탐사 모델 유의사항:</b><br>1. <i>적용 범위 및 목적:</i> 본 시뮬레이션은 IPCC 2006/2019 보편 기준 Tier 1 글로벌 기본 계수와 Google Earth Engine(GEE) 공간 레이어로 보정된 채프먼-리차즈(Chapman-Richards) 비선형 임분 생장 방정식을 적용합니다. 본 결과는 사전 기술적 타당성 검토, 식재 계획 수립 및 조림 시나리오 비교를 위한 의사결정 지원용으로 설계되었습니다.<br>2. <i>상대성장 모델링 및 탄소 계수:</i> 바이오매스 산정은 기본 목재 밀도(D, ton DM/m³), 바이오매스 확장 계수(BEF), 지상부/지하부 비율(R)을 대상지의 IPCC 기후 생태대(Boreal, Temperate Oceanic/Continental, Mediterranean, Subtropical, Tropical)에 맞춰 동적으로 보정합니다. IPCC 가이드라인에 따라 건조 바이오매스 1톤당 탄소 비율은 CF = 0.47로 설정되었으며, 이산화탄소 상당량(CO₂e) 격리는 분자량 비율 44/12 ≈ 3.6667을 적용합니다.<br>3. <i>불확실성 및 현장 검증(Ground-Truthing):</i> 위성 기반 원격탐사 레이어(SRTM 30m, ESRI 10m LULC, WorldClim 1km, OpenLandMap/FAO 250m)는 미기후 차이, 묘목 유전적 계통 및 관리 작업에 따라 ±20% ~ ±30%의 고유한 불확실성을 포함합니다. 본 분석은 공식 탄소 크레딧 발행(Verra VCS / Gold Standard Tier 2/Tier 3) 또는 국가 온실가스 인벤토리 제출을 위한 현장 표준지 조사 실측치를 대체하지 않습니다.";
-                    } else if (isTr) {
-                        extendedNotice = "<b>IPCC Tier 1 Metodolojik Çerçeve, Standart Sabitler ve Uzaktan Algılama Modeli Açıklaması:</b><br>1. <i>Kapsam ve Amaç:</i> Bu simülasyon, IPCC 2006/2019 Refinement Tier 1 küresel varsayılan katsayılarını ve Google Earth Engine (GEE) uzaysal katmanlarıyla kalibre edilmiş Chapman-Richards doğrusal olmayan meşcere büyüme denklemlerini kullanır. Çalışma, ön teknik fizibilite, ağaçlandırma planlaması ve silvikültürel senaryo analizi amacıyla tasarlanmıştır.<br>2. <i>Allometrik Modelleme ve Karbon Fraksiyonu:</i> Biyokütle hesaplaması temel odun yoğunluğu (D, ton fırın kurusu/m³), Biyokütle Genişletme Faktörü (BEF) ve kök/gövde oranını (R) sahanın IPCC iklim ekozonuna (Akdeniz, Ilıman Karasal/Okyanusal, Boreal, Subtropikal, Tropikal) göre dinamik olarak modüle eder. IPCC standartlarına göre 1 ton kuru biyokütle başına karbon oranı CF = 0.47 alınmış, CO₂ eşdeğerinde 44/12 ≈ 3.6667 moleküler ağırlık katsayısı uygulanmıştır.<br>3. <i>Belirsizlik ve Doğrulama:</i> Uydu tabanlı uzaktan algılama katmanları (SRTM 30m, ESRI 10m LULC, WorldClim 1km, OpenLandMap/FAO 250m), mikroiklimsel farklılıklar, fidan genetik orijini ve arazi müdahalelerine bağlı olarak ±%20 ila ±%30 arasında belirsizlik payı taşır. Bu çalışma karar destek projeksiyonudur; ticari karbon kredisi sertifikasyonu (Verra VCS / Gold Standard Tier 2/Tier 3) ve resmi ulusal envanterler için sahada deneme alanı ölçümü (ground-truthing) yapılması zorunludur.";
-                    } else if (curLang === 'de') {
-                        extendedNotice = "<b>IPCC Tier 1 Methodischer Rahmen, Standardkonstanten und Fernerkundungsmodell-Hinweise:</b><br>1. <i>Geltungsbereich und Zweck:</i> Diese Simulation verwendet die globalen Standardkoeffizienten des IPCC 2006/2019 Refinement Tier 1 und nichtlineare Chapman-Richards-Bestandeswachstumsgleichungen, die mit Google Earth Engine (GEE)-Raumebenen kalibriert wurden. Sie dient der vorbereitenden technischen Machbarkeitsprüfung, Aufforstungsplanung und waldbaulichen Szenarienanalyse.<br>2. <i>Allometrische Modellierung & Kohlenstofffraktion:</i> Die Biomasseberechnung moduliert die Holzdichte (D, t TM/m³), den Biomasse-Expansionsfaktor (BEF) und das Wurzel-Spross-Verhältnis (R) dynamisch gemäß der bioklimatischen IPCC-Ökozone. Gemäß den IPCC-Richtlinien ist der Kohlenstoffgehalt auf CF = 0,47 t C pro Tonne Trockenbiomasse festgelegt, und die CO₂-äquivalente Sequestrierung verwendet das stöchiometrische Molekulargewichtsverhältnis 44/12 ≈ 3,6667.<br>3. <i>Unsicherheit und Validierung:</i> Satellitenbasierte Fernerkundungsschichten (SRTM 30m, ESRI 10m LULC, WorldClim 1km, OpenLandMap/FAO 250m) weisen aufgrund von Mikroklimaunterschieden, Saatgutherkünften und Eingriffen eine natürliche Unsicherheitsspanne von ±20% bis ±30% auf. Diese Projektion ersetzt keine empirischen Probeflächenmessungen vor Ort.";
-                    } else if (curLang === 'fr') {
-                        extendedNotice = "<b>Cadre méthodologique IPCC Tier 1, constantes et remarques sur la télédétection :</b><br>1. <i>Portée et objectif :</i> Cette simulation utilise les coefficients par défaut mondiaux du GIEC 2006/2019 Tier 1 et les équations non linéaires de croissance de Chapman-Richards calibrées avec Google Earth Engine (GEE). Elle est conçue pour la faisabilité technique préliminaire, la planification du reboisement et la comparaison de scénarios sylvicoles.<br>2. <i>Modélisation allométrique et fraction de carbone :</i> L'estimation de la biomasse ajuste dynamiquement la densité basale du bois (D, t MS/m³), le facteur d'expansion de biomasse (BEF) et le ratio racines/tiges (R) selon l'écozone GIEC du site. La fraction de carbone est fixée à CF = 0,47 t C/t de biomasse sèche, et la séquestration en CO₂ équivalent applique le ratio stœchiométrique 44/12 ≈ 3,6667.<br>3. <i>Incertitude et vérification sur le terrain :</i> Les couches satellitaires (SRTM 30m, ESRI 10m LULC, WorldClim 1km, OpenLandMap 250m) comportent une incertitude intrinsèque de ±20% à ±30%. Cette projection ne remplace pas les inventaires forestiers de terrain.";
-                    } else if (curLang === 'es') {
-                        extendedNotice = "<b>Marco metodológico IPCC Tier 1, constantes estándar y avisos del modelo satelital:</b><br>1. <i>Alcance y propósito:</i> Esta simulación aplica los coeficientes globales por defecto del IPCC 2006/2019 Tier 1 y ecuaciones no lineales de Chapman-Richards calibradas con capas de Google Earth Engine (GEE). Está diseñada para la prefactibilidad técnica, planificación de forestación y comparación de escenarios silvícolas.<br>2. <i>Modelado alométrico y fracción de carbono:</i> El cálculo de biomasa modula la densidad de la madera (D, t MS/m³), el factor de expansión (BEF) y la relación raíz/tallo (R) según la ecozona IPCC. La fracción de carbono es CF = 0,47 t C por tonelada de biomasa seca y la conversión a CO₂e utiliza la relación 44/12 ≈ 3,6667.<br>3. <i>Incertidumbre y validación en campo:</i> Las capas satelitales (SRTM 30m, ESRI 10m LULC, WorldClim 1km, OpenLandMap 250m) tienen una incertidumbre de ±20% a ±30%. Esta proyección no sustituye los inventarios empíricos de campo.";
-                    } else if (curLang === 'ru') {
-                        extendedNotice = "<b>Методологическая основа IPCC Tier 1, стандартные константы и замечания к спутниковой модели:</b><br>1. <i>Область применения и цель:</i> Данное моделирование использует глобальные коэффициенты по умолчанию МГЭИК (IPCC 2006/2019) Tier 1 и нелинейные уравнения роста древостоя Чепмена-Ричардса, откалиброванные с помощью Google Earth Engine (GEE). Предназначено для предварительного ТЭО, планирования лесоразведения и сравнения лесоводственных сценариев.<br>2. <i>Аллометрическое моделирование и доля углерода:</i> Расчет биомассы динамически корректирует базовую плотность древесины (D, т АСП/м³), коэффициент расширения биомассы (BEF) и соотношение корней и побегов (R) в соответствии с экозоной МГЭИК. Доля углерода составляет CF = 0,47 т C на тонну сухой биомассы, а связывание в эквиваленте CO₂ использует молекулярное соотношение 44/12 ≈ 3,6667.<br>3. <i>Неопределенность и наземная верификация:</i> Спутниковые данные (SRTM 30m, ESRI 10m LULC, WorldClim 1km, OpenLandMap 250m) имеют погрешность ±20%..±30%. Моделирование носит оценочный характер и не заменяет натурных инвентаризационных измерений.";
-                    } else if (curLang === 'zh') {
-                        extendedNotice = "<b>IPCC 第一级（Tier 1）方法学框架、标准常数与遥感模型注意事项：</b><br>1. <i>适用范围与目的：</i> 本模拟采用 IPCC 2006/2019 修订版 Tier 1 全球默认系数，以及结合 Google Earth Engine (GEE) 空间图层校准的查普曼-理查兹（Chapman-Richards）非线性林分生长方程。旨在用于造林技术前期可行性论证、造林规划布局及育林方案对比决策支持。<br>2. <i>异速生长建模与碳分数：</i> 生物量估算根据目标区域的 IPCC 气候生态带动态校准基本木材密度（D）、生物量扩展因子（BEF）及根冠比（R）。依据 IPCC 准则，干燥生物量含碳率设定为 CF = 0.47，二氧化碳当量（CO₂e）换算采用分子量比率 44/12 ≈ 3.6667。<br>3. <i>不确定性与实地验证：</i> 卫星遥感数据（SRTM 30m、ESRI 10m LULC、WorldClim 1km、OpenLandMap 250m）因微气候、苗木种源和抚育作业存在 ±20% 至 ±30% 的固有不确定性。本分析不能替代碳信用核证所需的地面样地实测调查。";
-                    } else {
-                        extendedNotice = "<b>IPCC Tier 1 Methodological Framework, Constants & Remote Sensing Model Caveats:</b><br>1. <i>Scope and Purpose:</i> This simulation employs IPCC 2006/2019 Refinement Tier 1 global default coefficients and mathematical Chapman-Richards non-linear stand growth equations calibrated with Google Earth Engine (GEE) spatial layers. It is designed for preliminary technical feasibility, spatial planning, and silvicultural scenario comparison.<br>2. <i>Allometric Modeling & Carbon Fraction:</i> Plant biomass expansion relies on wood density (D, t DM/m³), Biomass Expansion Factor (BEF), and root-to-shoot ratio (R) dynamically modulated across bioclimatic ecozones (Boreal, Temperate Oceanic/Continental, Mediterranean, Subtropical, Tropical). In accordance with IPCC guidelines, carbon fraction is set to CF = 0.47 ton C per ton dry biomass, and equivalent CO₂ sequestration uses the stoichiometric ratio 44/12 ≈ 3.6667.<br>3. <i>Uncertainty and Ground-Truthing:</i> Satellite-derived remote sensing models (SRTM 30m, ESRI 10m LULC, WorldClim 1km, OpenLandMap/FAO 250m) inherently carry an uncertainty margin of ±20% to ±30% due to local microclimatic variations, genetic seedling provenance, and management interventions. This projection does not substitute for empirical field inventory plots or formal third-party validation (Verra VCS / Gold Standard Tier 2/Tier 3) required for tradable carbon credit issuance.";
-                    }
+                    var extendedNotice = '<b>' + _cTxt('sec9') + '</b><br>' + _cTxt('carbon_standard_notice') +
+                        '<br>IPCC 2006/2019 Tier 1; Chapman-Richards; Google Earth Engine.<br>' +
+                        _cTxt('math_agb') + '<br>' + _cTxt('math_bgb') + '<br>' + _cTxt('math_carbon') + '<br>' + _cTxt('math_co2') +
+                        '<br>' + _cTxt('uncertainty') + ': ±20–30%; SRTM 30 m; ESRI LULC 10 m; WorldClim 1 km; OpenLandMap/FAO 250 m.';
 
                     var sylvaBase64Logo = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAcgAAAH6CAYAAACDE9xMAAAQAElEQVR4AexdBYAcRdZ+1Tou6+6bjbsRSEiCu10CHHLYhUMCBJe7n+U4JDhBgx4Owd0JmhD3bLLZzbrb+Ez7/2o2GwKXBIvsJt3br6u6urq66iv56r3q6WXA3EwETARMBEwETARMBP4HAZMg/wcSM8BEwETARMBEwEQAwCTIvtwKzLybCJgImAiYCOw2BEyC3G3QmgmbCJgImAiYCPRlBEyC7Mu1Z+a9LyNg5t1EwESglyNgEmQvryAzeyYCJgImAiYCewcBkyD3Du7mU00ETAT6MgJm3vcLBEyC3C+q2SykiYCJgImAicDvRcAkyN+LmBnfRMBEwETARKAvI/Cb824S5G+GyoxoImAiYCJgIrA/IWAS5P5U22ZZTQRMBEwETAR+MwImQf5mqPZcRPNJJgImAiYCJgJ7HwGTIPd+HZg5MBEwETARMBHohQiYBNkLK8XMUl9GwMy7iYCJwL6CgEmQ+0pNmuUwETARMBEwEdilCJgEuUvhNBMzETAR6MsImHk3EdgWAZMgt0XD9JsImAiYCJgImAhsQcAkyC1AmI6JgImAiYCJQF9GYNfn3STIXY+pmaKJgImAiYCJwD6AgEmQ+0AlmkUwETARMBEwEdj1CJgEuesx3VGKZriJgImAiYCJQB9CwCTIPlRZZlZNBEwETARMBPYcAiZB7jmszSf1ZQTMvJsImAjsdwiYBLnfVblZYBMBEwETAROB34KASZC/BSUzjonAvo6Amfe+joBJkPt6DZvlMxEwETARMBHYIwiYBLlHYDYfYiJgItCXETDzbiLQexEwCXJv14CZHxMBEwETAROBvYiASZB/GnwzARMBE4G+jICZdxOBXoKASZC9pCLMLJgImAiYCJgI9C4ETILsXfVh5sZEwETARMBEoC8jYBLkvly75t1MBEwETARMBHYrAiZB7lZ4zcxMBEwETARMBPoyAiZB9uXaM+9mImAiYCJgIrDbEDAJcrdBayZsImAi0JcRMPNuInD7CJgEuX3szBMTARMBEwETAROB34KBXY8g95bkm7kwETARMBEwEdh9CJgEufuwNTM2ETAR6MsImHk3EdgPEHA9+uh/3/n//j0S7H/fcTz9wO1/XvbL599557n7H194/5OPPvzgfU8++ff/vft/99zzwEO3PfjAww/f//CDf/vfA3/7/wMP/e0/f/vfQ//9+0P//vuf//7Q/Y/9+4H7/3vvfQ8+9Pe/33fvY3974N+PP3jvfQ/99e9P3P/3xx975P+e+/8e+P+/77r/n/c8+PDfH//vBx965K+P/f2Bh/551/8e+Nf/Pnrfffff99/7/777/r89+O+777r77vv/8/cD/3nk4f/c/feH73/wP/ff9/c/3/33h/72v4f+8/eH/uO+/77v/vvufeD+f/99/33/vf++/5677rn73w8+cO+9//3k4w89+Oh/H3jg0f/ce89dd9/34L/vuefef99zz4P3PPDvB+7+30M/f/R/77v3nrsf+Ovfjz362MMP/eP/v+9/H/jnA3978M9/uf/ee+574N/3PPDwv+9/5K8PP/Tgvfe89e5777nn3ocffOjh/3/svvsffODh+x957LH//c9f/3PffQ/ce+8//3Pvvf/++9///v/7/37gvvse/Nu/H/nro/9+4N//e9/dDzzw8KOP3P///+ehf919178f/M9D9/37vvv+85/77rvn3r8/9O/77rvv3nsffPDhhx9+8K/3PvzQQw8/+NDDjzz68EOP3P/gPffff899997193vv/ve9D/z9sYcfuPe/737ooUcfffzvv//73nvvv+/v/37w7nvvvfuh++5/6K8P3Xff//3/33v/vf/7vnvveehvDzzw1z//5d8P3X///e7/3nvvffjhhx959JE/P/Tw3/7zyCOPPfboo/c/9Nfff/r/AwAA//9EU2ISAAA=';
 
                     // Rapor HTML İskeleti
                     var reportHtml = '<!DOCTYPE html>' +
-                        '<html><head><meta charset="utf-8">' +
+                        '<html lang="' + curLang + '" dir="' + (/^(ar|fa|ur)$/.test(curLang) ? 'rtl' : 'ltr') + '"><head><meta charset="utf-8">' +
                         '<title>' + reportTitle + '</title>' +
                         (faviconHref ? '<link rel="icon" type="image/png" href="' + faviconHref + '">' : '') +
                         '<style>' +
-                        '@page { size: A4 portrait; margin-top: 10mm; margin-bottom: 12mm; margin-left: 15mm; margin-right: 15mm; }' +
-                        'body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", Arial, sans-serif; color: #1e293b; margin: 28px; line-height: 1.5; font-size: 12.5px; }' +
+                        '@page { size: A4 portrait; margin: 12mm 15mm; }' +
+                        '* { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; box-sizing:border-box; }' +
+                        'table,tr,.report-section,.callout-box,.math-card,.warn-box { page-break-inside:avoid; break-inside:avoid; } h2,h3 { break-after:avoid; }' +
+                        'body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", Arial, sans-serif; color: #1e293b; margin: 0; line-height: 1.5; font-size: 12.5px; }' +
                         'h1 { font-size: 19px; color: #0f172a; margin-bottom: 4px; display: flex; align-items: center; }' +
                         'h2 { font-size: 13.5px; color: #1e3a8a; border-bottom: 2px solid #e2e8f0; padding-bottom: 4px; margin-top: 20px; }' +
                         'h3 { font-size: 12px; color: #1e3a8a; margin-top: 12px; }' +
@@ -16180,7 +16397,7 @@ var _CARBON_SPECIES_DB = {
                         '  .no-print { display: none !important; }' +
                         '  body { margin: 0 !important; }' +
                         '  .pdf-footer { display: flex !important; justify-content: space-between; align-items: center; border-top: 1px solid #e2e8f0; padding-top: 6px; margin-top: 15px; font-size: 11px; color: #64748b; }' +
-                        '  table { page-break-inside: auto; }' +
+                        '  table { page-break-inside: avoid; }' +
                         '  tr { page-break-inside: avoid; page-break-after: auto; }' +
                         '  thead { display: table-header-group; }' +
                         '  h2 { page-break-after: avoid; }' +
@@ -16188,14 +16405,7 @@ var _CARBON_SPECIES_DB = {
                         '  .warn-box, .notice, .chart-box { page-break-inside: avoid; }' +
                         '}' +
                         '</style>' +
-                        '<script>' +
-                        'window.addEventListener("beforeprint", function () { window._sylvaPrevTitle = document.title; document.title = ""; });' +
-                        'window.addEventListener("afterprint", function () { if (window._sylvaPrevTitle) document.title = window._sylvaPrevTitle; });' +
-                        '<\/script>' +
                         '</head><body>' +
-                        '<div class="no-print" style="margin-bottom:12px;display:flex;justify-content:flex-end;">' +
-                        '<button onclick="window.print()" style="padding:8px 16px;background:#15803d;color:#fff;border:none;border-radius:6px;font-weight:600;cursor:pointer;">📄 ' + _cTxt('보고서 다운로드 (PDF)', 'Download Report (PDF)', 'Raporu İndir (PDF)') + '</button>' +
-                        '</div>' +
                         '<h1 style="display:flex; align-items:center;"><img src="' + sylvaBase64Logo + '" style="height: 18px; vertical-align: middle; margin-right: 8px;" alt="SylvaGIS Logo">' + reportTitle + '</h1>' +
                         '<div style="font-size:11.5px;color:#64748b;margin-bottom:12px;">' + _cTxt('보고서 작성일: ', 'Report Date: ', 'Rapor Tarihi: ') + nowStr + ' | ' + _cTxt('대상 국가: ', 'Target Country: ', 'Hedef Ülke: ') + countryCode + ' | ' + _cTxt('생태대: ', 'Ecozone: ', 'Ekozon: ') + ecozoneName + '</div>' +
 
@@ -16203,7 +16413,7 @@ var _CARBON_SPECIES_DB = {
                         '<h2>' + _cTxt('1. 입지 및 조림 파라미터 개요', '1. Site & Silvicultural Overview', '1. Saha ve Ağaçlandırma Parametreleri') + '</h2>' +
                         '<table>' +
                         '<tr><th style="width:34%;">' + _cTxt('파라미터', 'Parameter', 'Parametre') + '</th><th style="width:66%;">' + _cTxt('값', 'Value', 'Değer') + '</th></tr>' +
-                        '<tr><td>' + _cTxt('대상 수종', 'Target Tree Species', 'Hedef Ağaç Türü') + '</td><td><b>' + (meta.species_name || st.species) + '</b>' + (meta.common_tr ? ' (' + (isKo ? (meta.common_ko || meta.common_en || meta.common_tr) : (isTr ? meta.common_tr : (meta.common_en || meta.common_tr))) + ')' : '') + ' <span class="badge">' + _cTxt('일치: ', 'Match: ', 'Eşleşme: ') + (meta.match_level || 'standart') + '</span></td></tr>' +
+                        '<tr><td>' + _cTxt('대상 수종', 'Target Tree Species', 'Hedef Ağaç Türü') + '</td><td><b>' + _carbonEscapeText(meta.species_name || st.species) + '</b>' + (meta['common_' + curLang] ? ' (' + _carbonEscapeText(meta['common_' + curLang]) + ')' : '') + ' <span class="badge">' + _cTxt('일치: ', 'Match: ', 'Eşleşme: ') + _cTxt('match_' + (meta.match_level || 'unknown')) + '</span></td></tr>' +
                         '<tr><td>' + _cTxt('연구 대상 면적', 'Study Area', 'Çalışma Alanı') + '</td><td>' + areaHa + ' ha (' + areaDa + ' ' + _cTxt('데카르/10a', 'decare', 'dekar') + ')</td></tr>' +
                         '<tr><td>' + _cTxt('식재 간격 및 밀도', 'Planting Spacing & Density', 'Dikim Deseni & Sıklığı') + '</td><td>' + (st.spacingX || 3) + ' m × ' + (st.spacingY || 3) + ' m (' + Math.round(meta.initial_trees_per_ha || (10000 / ((st.spacingX || 3) * (st.spacingY || 3)))) + ' ' + _cTxt('본/ha', 'seedlings/ha', 'fidan/ha') + ')' +
                         (st.densityScale && st.densityScale !== 1.0 ? ' <span class="badge" title="' + _cTxt('조림 밀도 보정', 'Afforestation Density Scale', 'Ağaçlandırma Yoğunluk Ölçeği') + '">x' + st.densityScale.toFixed(2) + ' ' + _cTxt('동적 보정', 'Dynamically Scaled', 'Dinamik Ölçeklendi') + '</span>' : '') + '</td></tr>' +
@@ -16248,48 +16458,36 @@ var _CARBON_SPECIES_DB = {
                         '<div class="math-card">' +
                         '<div class="math-title">' + _cTxt('1. 임분 생장 모델 (채프먼-리차즈 S곡선 방정식)', '1. Stand Growth Model (Chapman-Richards S-Curve Equation)', '1. Ağaç Büyüme Modeli (Chapman-Richards S-Eğrisi Fonksiyonu)') + '</div>' +
                         '<div class="math-eq">B(t) = A · (1 - e^{-k · t})^p</div>' +
-                        '<div class="math-desc">' + (isKo
-                            ? ('시간(t, 년) 경과에 따른 누적 줄기 재적 및 바이오매스 증가를 모델링하는 비선형 생물학적 생장 함수입니다. A는 점근적 포화 상한, k는 연간 생장률 계수, p는 임분 상대생장 형상 지수입니다.' + (spGroup === 'fruit_tree' ? ' 과수 및 혼농임업 수종의 경우 점근치 A는 개방형 수관 구조와 전정 관리를 고려하여 IPCC 다년생 농경지 지침에 따라 보정되었습니다.' : ''))
-                            : (isTr
-                                ? ('Zaman (t, yıl) boyunca kümülatif gövde hacmi ve biyokütle gelişimini modelleyen non-lineer biyolojik büyüme fonksiyonudur. A asimptotik doygunluk tavanını, k yıllık artım katsayısını, p meşcere allometrik şekil üssünü simgeler.' + (spGroup === 'fruit_tree' ? ' Meyve/yemiş ve tarımsal ormancılık (agroforestry) türlerinde A tavanı, açık taç mimarisi ve budama yönetimi gereği IPCC Çok Yıllık Tarım kılavuzlarına göre kalibre edilmiştir.' : ''))
-                                : ('Models cumulative stem volume and biomass progression over time (t in years). Parameter A represents asymptotic saturation biomass, k denotes annual growth rate coefficient, and p represents stand allometric shape parameter.' + (spGroup === 'fruit_tree' ? ' For agroforestry/orchard species, growth asymptote A reflects open-canopy architecture and systematic pruning under IPCC Perennial Cropland guidelines.' : '')))) + '</div>' +
-                        '<div class="math-params">' + _cTxt('보정 계수값: A = ' + aVal + ' t AGB/ha | k = ' + kVal + ' 년⁻¹ | p = ' + pVal, 'Calibrated Parameters: A = ' + aVal + ' t AGB/ha | k = ' + kVal + ' yr⁻¹ | p = ' + pVal, 'Kalibre Değerler: A = ' + aVal + ' t AGB/ha | k = ' + kVal + ' yıl⁻¹ | p = ' + pVal) + '</div>' +
+                        '<div class="math-desc">' + _cTxt('math_growth') + (spGroup === 'fruit_tree' ? ' — ' + _cTxt('과수 및 견과류 수종 (IPCC 다년생 농경지)', 'Fruit & Nut Tree (IPCC Perennial Cropland)', 'Meyve & Yemiş Ağacı (IPCC Çok Yıllık Tarım)') : '') + '</div>' +
+                        '<div class="math-params">A = ' + aVal + ' t AGB/ha | k = ' + kVal + ' ' + _cTxt('yr⁻¹') + ' | p = ' + pVal + '</div>' +
                         '</div>' +
 
                         '<div class="math-card">' +
                         '<div class="math-title">' + _cTxt('2. 총 지상부 바이오매스 (AGB)', '2. Total Above-Ground Biomass (AGB)', '2. Toplam Yer Üstü Biyokütle (AGB)') + '</div>' +
                         '<div class="math-eq">AGB(t) = V(t) · D · BEF</div>' +
-                        '<div class="math-desc">' + (isKo
-                            ? 'V(t) 줄기 재적(m³/ha), D 기본 목재 밀도(건조 중량 t DM/m³), BEF는 가지, 잎, 수피를 포함하는 바이오매스 확장 계수입니다.'
-                            : (isTr
-                                ? 'V(t) gövde hacmi (m³/ha), D fırın kurusu odun yoğunluğu (t DM/m³), BEF tepe, dal ve yaprakları içeren Biyokütle Genişletme Faktörüdür.'
-                                : 'V(t) is stem volume (m³/ha), D is basic wood density (t DM/m³), and BEF is the Biomass Expansion Factor accounting for branches, foliage, and bark.')) + '</div>' +
-                        '<div class="math-params">' + _cTxt('적용 계수: D = ' + dwVal + ' t DM/m³ | BEF = ' + befVal, 'Applied Coefficients: D = ' + dwVal + ' t DM/m³ | BEF = ' + befVal, 'Kullanılan Katsayılar: D = ' + dwVal + ' t DM/m³ | BEF = ' + befVal) + '</div>' +
+                        '<div class="math-desc">' + _cTxt('math_agb') + '</div>' +
+                        '<div class="math-params">D = ' + dwVal + ' t DM/m³ | BEF = ' + befVal + '</div>' +
                         '</div>' +
 
                         '<div class="math-card">' +
                         '<div class="math-title">' + _cTxt('3. 지하부 (뿌리) 바이오매스 (BGB)', '3. Below-Ground (Root) Biomass (BGB)', '3. Yeraltı (Kök) Biyokütlesi (BGB)') + '</div>' +
                         '<div class="math-eq">BGB(t) = AGB(t) · R</div>' +
-                        '<div class="math-desc">' + (isKo
-                            ? ('R은 지상부 대비 뿌리 생체량 비율(Root-to-shoot ratio)입니다. 기후, 강수 및 토양 조건에 따라 수종별 적응 특성을 반영합니다.' + (spGroup === 'fruit_tree' ? ' 과수 수종의 경우 깊은 직근성 뿌리 체계와 탄수화물 저장 기능을 고려하여 보정됩니다.' : ''))
-                            : (isTr
-                                ? ('R kök/sürgün oranıdır. Ağaç türünün iklim kuşağına, kuraklık kısıtına ve su arama derinliğine göre yer altında depolanan kök sistemini hesaplar.' + (spGroup === 'fruit_tree' ? ' Meyve ve yemiş türlerinde derin kazık kök yapısını ve kalıcı karbon rezervlerini temsil eder.' : ''))
-                                : ('R is the root-to-shoot ratio. Quantifies root biomass based on tree species adaptations to climate, rainfall regimes, and soil drought tolerance.' + (spGroup === 'fruit_tree' ? ' For fruit and nut species, root-to-shoot ratio accounts for deep taproots and perennial carbohydrate storage.' : '')))) + '</div>' +
-                        '<div class="math-params">' + _cTxt('적용 계수: R = ' + rVal + ' (BGB / AGB)', 'Applied Coefficient: R = ' + rVal + ' (BGB / AGB)', 'Kullanılan Katsayı: R = ' + rVal + ' (BGB / AGB)') + '</div>' +
+                        '<div class="math-desc">' + _cTxt('math_bgb') + '</div>' +
+                        '<div class="math-params">R = ' + rVal + ' (BGB / AGB)</div>' +
                         '</div>' +
 
                         '<div class="math-card">' +
                         '<div class="math-title">' + _cTxt('4. 총 탄소 축적량 및 동적 수지 (C)', '4. Total Carbon Stock & Dynamic Balance', '4. Toplam Karbon Stoku ve Dinamik Denge (C)') + '</div>' +
                         '<div class="math-eq">C(t) = (AGB(t) + BGB(t)) · CF · (1 - M) · (1 - H)</div>' +
-                        '<div class="math-desc">' + _cTxt('CF = 0.47 (건조 목재 내 탄소 함유율 기본값), M은 자연 고사율(~0.3-0.5%/년), H는 해당 연도의 간벌/벌채 제거율을 나타냅니다.', 'CF = 0.47 (IPCC Tier 1 standard carbon fraction of dry wood), M represents natural stand mortality rate (~0.3-0.5%/yr), and H represents thinning/harvest removal rate in year t.', 'CF = 0.47 (IPCC fırın kurusu biyokütledeki karbon fraksiyonu), M doğal meşcere ölüm/mortalite oranı (~%0.3-0.5/yıl), H silvikültürel aralama veya hasatla sahadan çıkarılan gövde oranıdır.') + '</div>' +
-                        '<div class="math-params">' + _cTxt('상수: CF = ' + cfVal + ' t C / t DM | 연간 자연 고사율 M ≈ 0.3%/년 | 토양 유기탄소(SOC) 축적: +0.35 t C/ha/년', 'Constants: CF = ' + cfVal + ' t C / t DM | Stand Mortality M ≈ 0.3%/yr | Soil Organic Carbon (SOC) Accumulation: +0.35 t C/ha/yr', 'Sabitler: CF = ' + cfVal + ' t C / t DM | Yıllık Doğal Mortalite M ≈ %0.3 | Organik Toprak SOC Artımı: +0.35 t C/ha/yıl') + '</div>' +
+                        '<div class="math-desc">' + _cTxt('math_carbon') + '</div>' +
+                        '<div class="math-params">CF = ' + cfVal + ' t C/t DM | M ≈ 0.3%/' + _cTxt('unit_year') + ' | SOC: +0.35 t C/ha/' + _cTxt('unit_year') + '</div>' +
                         '</div>' +
 
                         '<div class="math-card">' +
                         '<div class="math-title">' + _cTxt('5. 이산화탄소 상당량(CO₂e) 격리 환산', '5. Equivalent CO₂ Sequestration Conversion', '5. Eşdeğer CO₂ Dönüşümü (CO₂e)') + '</div>' +
                         '<div class="math-eq">CO₂(t) = C(t) · (44 / 12)</div>' +
-                        '<div class="math-desc">' + _cTxt('탄소 축적량에 이산화탄소(CO₂ = 44.01 g/mol) 대 원소 탄소(C = 12.011 g/mol)의 화학량론적 분자량 비율(44/12 ≈ 3.6667)을 곱하여 CO₂ 상당량으로 환산합니다.', 'Multiplies carbon stock by the stoichiometric molecular weight ratio of carbon dioxide (CO₂ = 44.01 g/mol) to elemental carbon (C = 12.011 g/mol), equaling 3.6667.', 'Atmosferik karbondioksitin (CO₂ = 44.01 g/mol) elementer karbona (C = 12.011 g/mol) olan stokiyometrik moleküler ağırlık oranıdır (44/12 ≈ 3.6667).') + '</div>' +
-                        '<div class="math-params">' + _cTxt('환산 계수: 44 / 12 = ' + co2RatioVal + ' t CO₂e / t C', 'Conversion Factor: 44 / 12 = ' + co2RatioVal + ' t CO₂e / t C', 'Dönüşüm Katsayısı: 44 / 12 = ' + co2RatioVal + ' t CO₂e / t C') + '</div>' +
+                        '<div class="math-desc">' + _cTxt('math_co2') + '</div>' +
+                        '<div class="math-params">44 / 12 = ' + co2RatioVal + ' t CO₂e/t C</div>' +
                         '</div>' +
 
                         // ── BÖLÜM 5: Karbon Stoğu ve Yutak Dengesi (İdare Süresi Sonu) ──
@@ -16336,26 +16534,14 @@ var _CARBON_SPECIES_DB = {
                         extendedNotice +
                         '</div>' +
 
-                        '<div class="pdf-footer">' +
-                        '<div style="display:flex;align-items:center;">' +
-                        '<img src="' + sylvaBase64Logo + '" style="height:14px;vertical-align:middle;margin-right:6px;" alt="SylvaGIS Logo">' +
-                        '<span>SylvaGIS</span>' +
-                        '</div>' +
-                        '<div>3/4</div>' +
-                        '</div>' +
                         '</body></html>';
 
-                    var printWin = window.open('', '_blank');
-                    if (printWin && !printWin.closed && typeof printWin.closed !== 'undefined') {
-                        printWin.document.open();
-                        printWin.document.write(reportHtml);
-                        printWin.document.close();
-                        printWin.document.title = reportTitle;
-                        printWin.focus();
-                    } else if (typeof _carbonDownloadPDF === 'function') {
-                        var fileName = (typeof _cTxt === 'function' ? _cTxt('file_title', 'SylvaGIS_Carbon_Simulation_Report_') : 'SylvaGIS_Carbon_Simulation_Report_') + new Date().toISOString().slice(0, 10) + '.pdf';
-                        _carbonDownloadPDF(reportHtml, fileName);
-                    }
+                    var fileName = _carbonExportFilename(curLang, 'pdf');
+                    return _carbonDownloadPDF(reportHtml, fileName).catch(function (err) {
+                        console.error('Carbon PDF export:',err);
+                        if(typeof sylvaAlert==='function') sylvaAlert(_cTxt('export_error'),'error');
+                    });
+
                 };
 
                 window.carbonSimDownloadPdfReport = window.carbonSimPrintReport;
@@ -16703,9 +16889,9 @@ var _CARBON_SPECIES_DB = {
                                 var retEl = document.getElementById('carbon-retention-rate');
                                 var retVal = retEl ? (parseFloat(retEl.value) || 85) : 85;
                                 var effective = Math.round(density * (retVal / 100));
-                                hintEl.textContent = (typeof _carbonFormatSpacingHint === 'function')
+                                hintEl.innerHTML = (typeof _carbonFormatSpacingHint === 'function')
                                     ? _carbonFormatSpacingHint(density, r, t, retVal, effective)
-                                    : ("~" + density + " fidan/ha (" + r + "x" + t + "m)" + (retVal < 100 ? " • Tutma sonrası: ~" + effective + "/ha" : ""));
+                                    : ''; // Localized formatter fills this before first paint.
                             }
                         }
                     } catch (e) {
@@ -21025,16 +21211,16 @@ function _sylvaHasMixedStackCategories(paneId) {
         (function () {
             var _sylvaResizeRAF = null;
             function _sylvaFullMapResize() {
-                if (_sylvaResizeRAF) cancelAnimationFrame(_sylvaResizeRAF);
-                _sylvaResizeRAF = requestAnimationFrame(function () {
+                if (_sylvaResizeRAF) clearTimeout(_sylvaResizeRAF);
+                _sylvaResizeRAF = setTimeout(function () {
                     if (typeof map !== 'undefined' && map && map.invalidateSize) {
-                        map.invalidateSize({ animate: false, pan: false });
+                        window._sylvaInvalidateMapIfResized(map);
                     }
                     if (typeof map2 !== 'undefined' && map2 && map2.invalidateSize) {
-                        map2.invalidateSize({ animate: false, pan: false });
+                        window._sylvaInvalidateMapIfResized(map2);
                     }
                     if (typeof window._updateRulers === 'function') window._updateRulers();
-                });
+                }, 150);
             }
             window._sylvaFullMapResize = _sylvaFullMapResize;
 
@@ -23607,7 +23793,7 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
             // setTimeout below does not override the correct DOMContentLoaded value.
             var _sylvaInitLang = (function () {
                 try {
-                    var _saved = localStorage.getItem('sylvaSelectedLanguage');
+                    var _saved = localStorage.getItem('sylvaSelectedLanguage') || localStorage.getItem('sylva_lang') || window._sylvaEarlyLang;
                     // Accept only non-empty strings; validation against
                     // SYLVA_TRANSLATIONS is done inside applySylvaLang.
                     return (_saved && _saved.length) ? _saved : 'en';
@@ -23650,7 +23836,7 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
             }
             // Başlangıç dilini uygula (sayfa yüklenince) — kayıtlı tercih varsa onunla,
             // yoksa İngilizce ile açılır.
-            setTimeout(function(){ if (typeof applySylvaLang === 'function') applySylvaLang(_sylvaInitLang); }, 100);
+            // DOMContentLoaded applies the saved language; no stale delayed override.
         })();
 
         // ---------------------------------------------------------
@@ -59649,7 +59835,7 @@ var SYLVA_TRANSLATIONS = {
 var SYLVA_RTL = { ar: true, fa: true, ur: true };
 
 // Current language
-var _sylvaLang = 'en';
+var _sylvaLang = window._sylvaEarlyLang || 'tr';
 
 // ── Language persistence (localStorage) ─────────────────────────
 // Kullanıcının seçtiği dil, sayfa yenilense veya oturum kapatılsa
@@ -59664,7 +59850,8 @@ function sylvaSaveLang(lang) {
 
 function sylvaGetSavedLang() {
   try {
-    var saved = window.localStorage.getItem(SYLVA_LANG_STORAGE_KEY);
+    var saved = window.localStorage.getItem(SYLVA_LANG_STORAGE_KEY) || window.localStorage.getItem('sylva_lang');
+    saved = saved ? String(saved).toLowerCase().split('-')[0] : null;
     return (saved && SYLVA_TRANSLATIONS[saved]) ? saved : null;
   } catch (e) {
     return null;
@@ -60078,6 +60265,10 @@ function applySylvaLang(lang) {
     if (val) el.innerHTML = val;
   });
 
+  // Derived carbon text uses the same language as static labels, synchronously.
+  if (typeof window.carbonSimUpdateSpacingHint === 'function') window.carbonSimUpdateSpacingHint();
+  if (typeof window.carbonSimRefreshResultsUI === 'function') window.carbonSimRefreshResultsUI();
+
   // Çalışma alanı satırları ekran adını da aktif dile göre yeniler.
   if (typeof renderWorkspaceList === 'function') renderWorkspaceList();
 
@@ -60424,14 +60615,15 @@ function applySylvaLang(lang) {
 // Auto-apply on load (lang switcher also calls this)
 document.addEventListener('DOMContentLoaded', function() {
   // Kayıtlı bir dil tercihi varsa onu kullan; yoksa menüde aktif işaretli
-  // olan dili, o da yoksa İngilizce'yi kullan.
+  // olan dili, o da yoksa erken başlangıç dilini kullan.
   var savedLang = (typeof sylvaGetSavedLang === 'function') ? sylvaGetSavedLang() : null;
-  var initLang = savedLang || 'en';
-  // İlk ziyaret: dil her zaman İngilizce başlar. Kayıtlı tercih varsa onu koru.
+  var initLang = savedLang || window._sylvaEarlyLang || 'tr';
+  // İlk ziyaret erken başlangıç dilini kullanır. Kayıtlı tercih varsa onu koru.
   if (!savedLang) {
-    try { window.localStorage.setItem('sylvaSelectedLanguage', 'en'); } catch (e) {}
+    try { window.localStorage.setItem('sylvaSelectedLanguage', initLang); } catch (e) {}
   }
   applySylvaLang(initLang);
+  window._sylvaInitialLanguageApplied = true;
   // Kullanıcı girişi yapılmadan önce dil düğmesi ve tüm dil seçenekleri kesinlikle aktif.
   if (typeof window._sylvaPreLoginLanguageUnlock === 'function') window._sylvaPreLoginLanguageUnlock();
   var _langBtn = document.getElementById('lang-toggle-btn');
@@ -71918,6 +72110,22 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
     if(!locked && lastEnvName && isEnvName(lastEnvName)) lock();
   });
   mo.observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['style','class','disabled']});
+})();
+</script>
+<script id="sylva-i18n-first-paint-ready">
+(function () {
+    function ready() {
+        try {
+            if (!window._sylvaInitialLanguageApplied && typeof applySylvaLang === 'function') {
+                applySylvaLang(window._sylvaLang || window._sylvaEarlyLang || 'tr');
+            }
+        } finally {
+            // Do not leave the application invisible if an unrelated UI initializer fails.
+            document.documentElement.classList.remove('sylva-i18n-pending');
+        }
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ready);
+    else ready();
 })();
 </script>
 </html>
