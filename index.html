@@ -5213,6 +5213,42 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                     }
                 };
 
+                // 🛠️ BUG FİX (KÖK NEDEN): _carbonGetActiveAOI hiçbir yerde
+                // tanımlı değildi; carbonSimRunReal() ve diğer 3 çağrı
+                // noktası bu fonksiyonu doğrudan (typeof koruması olmadan)
+                // çağırdığında "Uncaught ReferenceError: _carbonGetActiveAOI
+                // is not defined" hatası tüm JS akışını durduruyor, bu yüzden
+                // Karbon simülasyonu "Analizi Çalıştır" ile hiç başlamıyordu.
+                // Çözüm: fonksiyon, uygulamanın ZATEN kullandığı ve tüm diğer
+                // modüllerde (istatistik, alan hesabı vb.) aynı şekilde
+                // referans alınan window.currentLayer / window.currentLayer2
+                // + map / map2 mimarisiyle BİREBİR TUTARLI şekilde tanımlandı
+                // (genel/tahmini bir Leaflet katman taraması yerine).
+                // Dönüş sözleşmesi çağıran kodların beklediğiyle birebir
+                // eşleşir: { geometry: <ham GeoJSON Polygon/MultiPolygon>,
+                // paneMap: <o ekranın Leaflet map nesnesi> } veya çizilmiş
+                // bir alan yoksa null.
+                function _carbonGetActiveAOI(paneId) {
+                    try {
+                        paneId = (paneId === 'map2') ? 'map2' : 'map';
+                        var paneMap = (paneId === 'map2' && typeof map2 !== 'undefined' && map2)
+                            ? map2
+                            : ((typeof map !== 'undefined') ? map : null);
+                        var layer = (paneId === 'map2') ? window.currentLayer2 : window.currentLayer;
+                        if (!layer || typeof layer.toGeoJSON !== 'function') return null;
+                        var feature = layer.toGeoJSON();
+                        var geometry = feature && feature.geometry;
+                        if (!geometry || (geometry.type !== 'Polygon' && geometry.type !== 'MultiPolygon')) {
+                            return null;
+                        }
+                        return { geometry: geometry, paneMap: paneMap, layer: layer };
+                    } catch (e) {
+                        console.warn('[Carbon] AOI resolve error:', e);
+                        return null;
+                    }
+                }
+                window._carbonGetActiveAOI = _carbonGetActiveAOI;
+
                 // Delikli (donut) poligon ve çoklu poligon geometrilerini normalize eder
                 function _carbonNormalizePolyList(geom) {
                     if (!geom) return [];
@@ -7445,6 +7481,17 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                             window.carbonSimUpdateLockState();
                         }
                     } else if (t.checked && t.matches('input[name="sylva-module"], input.uydu-analiz-checkbox, input.uydu-veriseti-checkbox, input[name="uydu-goruntu-sensor"], input[data-analysis], input.raw-band-checkbox')) {
+                        // 🛠️ BUG FİX (Çift Yönlü Akıllı Temizleme — eksik yön):
+                        // Karbon kutusu işaretliyken kullanıcı başka bir analiz/
+                        // katman kutusunu işaretlerse, Karbon kutusu açık kalıp
+                        // iki modül çakışıyordu. Ters yön (Karbon işaretlenince
+                        // diğerlerinin temizlenmesi) zaten _sylvaClearAllOtherAnalysesForCarbon
+                        // ile çalışıyordu; artık bu yön de simetrik olarak eklendi.
+                        var _carbonCbNow = document.getElementById('carbon-sim-active-check');
+                        if (_carbonCbNow && _carbonCbNow.checked) {
+                            _carbonCbNow.checked = false;
+                            try { _carbonCbNow.dispatchEvent(new Event('change', { bubbles: true })); } catch (e2) {}
+                        }
                         window.carbonSimUpdateLockState();
                     } else if (t.matches('input[name="sylva-module"], input.uydu-analiz-checkbox, input.uydu-veriseti-checkbox, input[name="uydu-goruntu-sensor"], input[data-analysis], input.raw-band-checkbox')) {
                         window.carbonSimUpdateLockState();
