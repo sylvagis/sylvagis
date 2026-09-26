@@ -4710,7 +4710,7 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                 </summary>
                 <div class="details-content">
                     <label class="option-item" id="carbon-sim-layer-item" style="display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;margin-bottom:6px;font-size:0.85rem;color:#1f2937;font-weight:400;">
-                        <input type="checkbox" id="carbon-sim-active-check" style="width:15px;height:15px;cursor:pointer;accent-color:#1e3a8a;margin:0;flex-shrink:0;">
+                        <input type="checkbox" id="carbon-sink-sim-checkbox" data-layer="carbon_sink_sim" class="carbon-sim-active-check" style="width:15px;height:15px;cursor:pointer;accent-color:#1e3a8a;margin:0;flex-shrink:0;">
                         <span data-i18n="carbon_sink_sim_subtitle" style="color:#1f2937;font-size:0.85rem;font-weight:400;">Karbon Yutak Alanı Simülasyonu</span>
                         <button type="button" class="env-info-btn" id="carbon-sim-info-btn" data-key="CARBON_SIMULATION" data-lang-title="info_carbon_sink_sim" title="Bu analiz hakkında bilgi" aria-label="Karbon Yutak Alanı Simülasyonu hakkında bilgi" onclick="event.preventDefault();event.stopPropagation();if(window._sylvaOpenEnvInfo)window._sylvaOpenEnvInfo('CARBON_SIMULATION');">i</button>
                     </label>
@@ -4953,6 +4953,7 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                 // 🌲💨 Çift Ekran (Screen 1 = map / Screen 2 = map2) Bağımsız Karbon Hafızası
                 window._carbonStateByPane = window._carbonStateByPane || {
                     map: {
+                        simActive: false,
                         country: 'TR',
                         species: '',
                         spacingX: 3,
@@ -4971,6 +4972,7 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                         lastSimResult: null
                     },
                     map2: {
+                        simActive: false,
                         country: 'TR',
                         species: '',
                         spacingX: 3,
@@ -4990,10 +4992,11 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                     }
                 };
 
-                function _getCarbonActiveState() {
-                    var paneId = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
+                function _getCarbonActiveState(customPaneId) {
+                    var paneId = customPaneId || ((typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map');
                     if (!window._carbonStateByPane[paneId]) {
                         window._carbonStateByPane[paneId] = {
+                            simActive: false,
                             country: 'TR',
                             species: '',
                             spacingX: 3,
@@ -5021,7 +5024,7 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                     var targetId = paneId || ((typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map');
                     if (!window._carbonStateByPane[targetId]) return;
                     var st = window._carbonStateByPane[targetId];
-                    var checkEl = document.getElementById('carbon-sim-active-check');
+                    var checkEl = document.getElementById('carbon-sink-sim-checkbox') || document.getElementById('carbon-sim-active-check') || document.querySelector('input[data-layer="carbon_sink_sim"]');
                     var cEl = document.getElementById('carbon-country-select');
                     var sEl = document.getElementById('carbon-species-select') || document.getElementById('carbon-species-input');
                     var xEl = document.getElementById('carbon-spacing-x');
@@ -5029,7 +5032,7 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                     var rEl = document.getElementById('carbon-rotation-years');
                     var retEl = document.getElementById('carbon-retention-rate');
                     var resEl = document.getElementById('carbon-sim-results');
-                    if (checkEl) st.simActive = checkEl.checked;
+                    if (checkEl) st.simActive = !!checkEl.checked;
                     if (cEl) st.country = cEl.value;
                     if (sEl) st.species = sEl.value;
                     if (xEl) st.spacingX = Math.max(1, parseInt(xEl.value, 10) || 3);
@@ -5228,26 +5231,164 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                 // eşleşir: { geometry: <ham GeoJSON Polygon/MultiPolygon>,
                 // paneMap: <o ekranın Leaflet map nesnesi> } veya çizilmiş
                 // bir alan yoksa null.
-                function _carbonGetActiveAOI(paneId) {
+                window._carbonGetActiveAOI = function (paneId) {
                     try {
-                        paneId = (paneId === 'map2') ? 'map2' : 'map';
-                        var paneMap = (paneId === 'map2' && typeof map2 !== 'undefined' && map2)
-                            ? map2
-                            : ((typeof map !== 'undefined') ? map : null);
-                        var layer = (paneId === 'map2') ? window.currentLayer2 : window.currentLayer;
-                        if (!layer || typeof layer.toGeoJSON !== 'function') return null;
-                        var feature = layer.toGeoJSON();
-                        var geometry = feature && feature.geometry;
-                        if (!geometry || (geometry.type !== 'Polygon' && geometry.type !== 'MultiPolygon')) {
-                            return null;
+                        function _norm(res) {
+                            if (!res) return null;
+                            if (res.type === 'FeatureCollection' && Array.isArray(res.features) && res.features.length > 0) {
+                                res = res.features[0];
+                            }
+                            if (typeof res !== 'object') return res;
+                            if (!res.geometry) {
+                                if (res.type === 'Polygon' || res.type === 'MultiPolygon') {
+                                    res.geometry = { type: res.type, coordinates: res.coordinates };
+                                } else if (res.coordinates) {
+                                    res.geometry = { type: 'Polygon', coordinates: res.coordinates };
+                                }
+                            }
+                            if (!res.paneMap) {
+                                var p = paneId || window._sylvaActivePane || ((typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map');
+                                res.paneMap = (p === 'map2' && typeof window.map2 !== 'undefined' && window.map2)
+                                    ? window.map2
+                                    : ((typeof window.map !== 'undefined') ? window.map : null);
+                            }
+                            return res;
                         }
-                        return { geometry: geometry, paneMap: paneMap, layer: layer };
+
+                        // 0. runAnalysis veya dış modüllerden aktarılan aktif AOI
+                        if (window._carbonSimActiveAOI) {
+                            var a0 = (typeof window._carbonSimActiveAOI.toGeoJSON === 'function')
+                                ? window._carbonSimActiveAOI.toGeoJSON()
+                                : window._carbonSimActiveAOI;
+                            if (a0) return _norm(a0);
+                        }
+
+                        var pTarget = paneId || window._sylvaActivePane || ((typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map');
+
+                        // 1. Platformun diğer analizlerde kullandığı birincil AOI kaynakları
+                        if (typeof window.getActiveAOI === 'function') {
+                            var a = window.getActiveAOI(pTarget);
+                            if (a) return _norm(a);
+                        }
+                        if (typeof window._sylvaGetActiveAOI === 'function') {
+                            var a = window._sylvaGetActiveAOI(pTarget);
+                            if (a) return _norm(a);
+                        }
+
+                        // 2. Çizilmiş aktif poligon nesneleri
+                        var drawnPolys = (pTarget === 'map2')
+                            ? [window.drawnPolygon2, window.drawnPolygon, window._sylvaActivePolygon2, window._sylvaActivePolygon]
+                            : [window.drawnPolygon, window._sylvaActivePolygon, window.drawnPolygon2, window._sylvaActivePolygon2];
+                        for (var dp = 0; dp < drawnPolys.length; dp++) {
+                            var pObj = drawnPolys[dp];
+                            if (pObj) {
+                                if (typeof pObj.toGeoJSON === 'function') return _norm(pObj.toGeoJSON());
+                                if (pObj.geometry || pObj.coordinates) return _norm(pObj);
+                            }
+                        }
+
+                        if (window._sylvaActiveAOI) return _norm(window._sylvaActiveAOI);
+                        if (window.selectedPolygonGeoJSON) return _norm(window.selectedPolygonGeoJSON);
+                        if (window._currentAOIGeoJSON) return _norm(window._currentAOIGeoJSON);
+                        if (window.activeAOI) return _norm(window.activeAOI);
+
+                        // 3. Yüklenmiş vektör katmanları (GeoJSON, KML, KMZ vb.)
+                        var uploadedGeo = (pTarget === 'map2')
+                            ? (window._currentUploadedGeoJson2 || window._currentUploadedGeoJson || window._uploadedGeoJson2 || window._uploadedGeoJson || window.uploadedGeoJsonLayer2 || window.uploadedGeoJsonLayer)
+                            : (window._currentUploadedGeoJson || window._currentUploadedGeoJson2 || window._uploadedGeoJson || window.uploadedGeoJsonLayer);
+                        if (uploadedGeo) {
+                            if (typeof uploadedGeo.toGeoJSON === 'function') return _norm(uploadedGeo.toGeoJSON());
+                            if (uploadedGeo.geometry || uploadedGeo.features || uploadedGeo.coordinates) return _norm(uploadedGeo);
+                        }
+
+                        // 4. Seçilmiş idari sınırlar / poligonlar
+                        var adminGeo = (pTarget === 'map2')
+                            ? (window._selectedAdminFeature2 || window._selectedAdminFeature || window.selectedBoundaryFeature2 || window.selectedBoundaryFeature || window.adminBoundaryFeature)
+                            : (window._selectedAdminFeature || window.selectedBoundaryFeature || window.adminBoundaryFeature || window._selectedRegionGeoJSON);
+                        if (adminGeo) {
+                            if (typeof adminGeo.toGeoJSON === 'function') return _norm(adminGeo.toGeoJSON());
+                            if (adminGeo.geometry || adminGeo.features || adminGeo.coordinates) return _norm(adminGeo);
+                        }
+
+                        // 5. Mevcut currentLayer / currentLayer2 desteği
+                        var curL = (pTarget === 'map2') ? (window.currentLayer2 || window.currentLayer) : (window.currentLayer || window.currentLayer2);
+                        if (curL && typeof curL.toGeoJSON === 'function') {
+                            return _norm(curL.toGeoJSON());
+                        }
+
+                        // 6. drawnItems / editableLayers katman grupları (Ekran 1 ve Ekran 2)
+                        var groups = (pTarget === 'map2')
+                            ? [window.drawnItems2, window._drawnItems2, window.drawnItems, window._drawnItems, window.editableLayers]
+                            : [window.drawnItems, window._drawnItems, window.drawnItems2, window.editableLayers];
+                        for (var g = 0; g < groups.length; g++) {
+                            var grp = groups[g];
+                            if (grp && typeof grp.getLayers === 'function') {
+                                var layers = grp.getLayers();
+                                if (layers && layers.length > 0) {
+                                    var lastLayer = layers[layers.length - 1];
+                                    if (typeof lastLayer.toGeoJSON === 'function') {
+                                        return _norm(lastLayer.toGeoJSON());
+                                    }
+                                }
+                            }
+                        }
+
+                        // 7. Çift ekran desteği ile harita katmanlarını tara
+                        var mapsToCheck = [
+                            (pTarget === 'map2' ? window.map2 : window.map),
+                            window.map,
+                            window._sylvaMap1,
+                            window.map2,
+                            window._sylvaMap2
+                        ];
+
+                        for (var i = 0; i < mapsToCheck.length; i++) {
+                            var currentMap = mapsToCheck[i];
+                            if (!currentMap || typeof currentMap.eachLayer !== 'function') continue;
+
+                            var foundGeo = null;
+                            currentMap.eachLayer(function (layer) {
+                                if (foundGeo) return;
+                                if (layer && (layer instanceof L.Polygon || layer instanceof L.Rectangle)) {
+                                    if (layer.pm || layer._drawn || layer._pmTempLayer === false || (layer.feature && layer.feature.geometry)) {
+                                        if (typeof layer.toGeoJSON === 'function') {
+                                            foundGeo = layer.toGeoJSON();
+                                        }
+                                    }
+                                }
+                            });
+                            if (foundGeo) return _norm(foundGeo);
+                        }
+
+                        // 8. Son çare (Fallback): Aktif harita görüş alanı (map.getBounds() / map2.getBounds())
+                        var targetMap = (pTarget === 'map2' && typeof window.map2 !== 'undefined' && window.map2)
+                            ? window.map2
+                            : ((typeof window.map !== 'undefined') ? window.map : null);
+                        if (targetMap && typeof targetMap.getBounds === 'function') {
+                            try {
+                                var b = targetMap.getBounds();
+                                if (b && typeof b.isValid === 'function' && b.isValid()) {
+                                    var s = b.getSouth(), n = b.getNorth(), w = b.getWest(), e = b.getEast();
+                                    if (s < n && w < e) {
+                                        return _norm({
+                                            type: 'Feature',
+                                            geometry: {
+                                                type: 'Polygon',
+                                                coordinates: [[[w, s], [e, s], [e, n], [w, n], [w, s]]]
+                                            },
+                                            paneMap: targetMap,
+                                            properties: { isMapBounds: true }
+                                        });
+                                    }
+                                }
+                            } catch (errB) {}
+                        }
                     } catch (e) {
-                        console.warn('[Carbon] AOI resolve error:', e);
-                        return null;
+                        console.warn("[Carbon] AOI resolve error:", e);
                     }
-                }
-                window._carbonGetActiveAOI = _carbonGetActiveAOI;
+                    return null;
+                };
+                var _carbonGetActiveAOI = window._carbonGetActiveAOI;
 
                 // Delikli (donut) poligon ve çoklu poligon geometrilerini normalize eder
                 function _carbonNormalizePolyList(geom) {
@@ -5488,7 +5629,7 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                             },
                             properties: {
                                 id: i + 1,
-                                name: (spName && spName !== 'Fidan' ? spName + ' #' + (i + 1) : _sylvaSeedlingLabel() + ' #' + (i + 1)),
+                                name: (spName && spName !== 'Fidan' ? spName + ' #' + (i + 1) : ((typeof window._sylvaSeedlingLabel === 'function') ? window._sylvaSeedlingLabel() : ((typeof _sylvaSeedlingLabel === 'function') ? _sylvaSeedlingLabel() : 'Seedling')) + ' #' + (i + 1)),
                                 seedling_index: i + 1,
                                 species: spName,
                                 spacing: sx + 'x' + sy + 'm',
@@ -7410,18 +7551,26 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                     var checkedEls = document.querySelectorAll(sel);
                     for (var i = 0; i < checkedEls.length; i++) {
                         var el = checkedEls[i];
-                        if (el.id === 'carbon-sim-active-check') continue;
+                        if (el.id === 'carbon-sink-sim-checkbox' || el.id === 'carbon-sim-active-check' || el.getAttribute('data-layer') === 'carbon_sink_sim') continue;
                         if (el.closest && el.closest('#carbon-sink-sim-details')) continue;
                         if (el.checked) return true;
                     }
                     return false;
                 }
 
+                var _CARBON_ANALYSIS_SELECTOR = 'input.uydu-analiz-checkbox, input.uydu-veriseti-checkbox, input[name="uydu-goruntu-sensor"], input[data-analysis], input.raw-band-checkbox, input[name="sylva-module"], input.uydu-goruntu-radio';
+
                 function _sylvaClearAllOtherAnalysesForCarbon() {
-                    var sel = 'input[name="sylva-module"]:checked, input.uydu-analiz-checkbox:checked, input.uydu-veriseti-checkbox:checked, input[name="uydu-goruntu-sensor"]:checked, input[data-analysis]:checked, input.raw-band-checkbox:checked';
-                    var otherBoxes = document.querySelectorAll(sel);
-                    otherBoxes.forEach(function (cb) {
-                        if (cb.id !== 'carbon-sim-active-check') {
+                    // Tüm uydu/analiz katmanlarını temizle (Carbon checkbox'ı ve carbon detayları hariç; basemap ve split-sync kutularına dokunma)
+                    var allBoxes = document.querySelectorAll(_CARBON_ANALYSIS_SELECTOR);
+                    allBoxes.forEach(function (cb) {
+                        if (cb.id === 'carbon-sink-sim-checkbox' || cb.id === 'carbon-sim-active-check' || cb.getAttribute('data-layer') === 'carbon_sink_sim') {
+                            return;
+                        }
+                        if (cb.closest && cb.closest('#carbon-sink-sim-details')) {
+                            return;
+                        }
+                        if (cb.checked) {
                             cb.checked = false;
                             try {
                                 cb.dispatchEvent(new Event('change', { bubbles: true }));
@@ -7474,26 +7623,59 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                 document.addEventListener('change', function (e) {
                     var t = e.target;
                     if (!t) return;
-                    if (t.id === 'carbon-sim-active-check') {
+                    var isCarbonCb = (t.id === 'carbon-sink-sim-checkbox' || t.id === 'carbon-sim-active-check' || (t.getAttribute && t.getAttribute('data-layer') === 'carbon_sink_sim'));
+                    if (isCarbonCb) {
+                        var curPane = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
+                        var st = _getCarbonActiveState(curPane);
+                        if (st) st.simActive = !!t.checked;
                         if (t.checked) {
                             _sylvaClearAllOtherAnalysesForCarbon();
+                            if (st && st.plantingPoints && st.plantingPoints.length > 0 && !st.plantingLayer) {
+                                var aoiInfo = _carbonGetActiveAOI(curPane);
+                                if (aoiInfo && aoiInfo.paneMap && typeof L !== 'undefined') {
+                                    var canvasRenderer = _carbonGetCanvasRenderer(aoiInfo.paneMap);
+                                    var markers = [];
+                                    for (var mi = 0; mi < st.plantingPoints.length; mi++) {
+                                        markers.push(L.circleMarker(st.plantingPoints[mi], {
+                                            renderer: canvasRenderer,
+                                            radius: 3.5,
+                                            fillColor: '#16a34a',
+                                            fillOpacity: 0.85,
+                                            stroke: false,
+                                            interactive: false
+                                        }));
+                                    }
+                                    var layerGroup = L.layerGroup(markers);
+                                    layerGroup.addTo(aoiInfo.paneMap);
+                                    st.plantingLayer = layerGroup;
+                                    _carbonBindMapDebouncedInvalidate(aoiInfo.paneMap);
+                                    if (typeof _sylvaRegisterCarbonVectorLayer === 'function') {
+                                        _sylvaRegisterCarbonVectorLayer(curPane);
+                                    }
+                                }
+                            }
                         } else {
+                            window.carbonSimClearPlantingLayer(curPane);
                             window.carbonSimUpdateLockState();
                         }
-                    } else if (t.checked && t.matches('input[name="sylva-module"], input.uydu-analiz-checkbox, input.uydu-veriseti-checkbox, input[name="uydu-goruntu-sensor"], input[data-analysis], input.raw-band-checkbox')) {
-                        // 🛠️ BUG FİX (Çift Yönlü Akıllı Temizleme — eksik yön):
-                        // Karbon kutusu işaretliyken kullanıcı başka bir analiz/
-                        // katman kutusunu işaretlerse, Karbon kutusu açık kalıp
-                        // iki modül çakışıyordu. Ters yön (Karbon işaretlenince
-                        // diğerlerinin temizlenmesi) zaten _sylvaClearAllOtherAnalysesForCarbon
-                        // ile çalışıyordu; artık bu yön de simetrik olarak eklendi.
-                        var _carbonCbNow = document.getElementById('carbon-sim-active-check');
-                        if (_carbonCbNow && _carbonCbNow.checked) {
-                            _carbonCbNow.checked = false;
-                            try { _carbonCbNow.dispatchEvent(new Event('change', { bubbles: true })); } catch (e2) {}
+                        _saveCarbonPaneInputs(curPane);
+                    } else {
+                        // Eğer karbon kontrol kutusu açıkken başka bir analiz/katman kutusu işaretlenirse
+                        if (t.closest && t.closest('#carbon-sink-sim-details')) {
+                            return; // Karbon formu içindeki değişiklikleri atla
                         }
-                        window.carbonSimUpdateLockState();
-                    } else if (t.matches('input[name="sylva-module"], input.uydu-analiz-checkbox, input.uydu-veriseti-checkbox, input[name="uydu-goruntu-sensor"], input[data-analysis], input.raw-band-checkbox')) {
+                        var isAnalysisInput = t.matches && t.matches(_CARBON_ANALYSIS_SELECTOR);
+                        if (isAnalysisInput && t.checked) {
+                            var _carbonCbNow = document.getElementById('carbon-sink-sim-checkbox') || document.getElementById('carbon-sim-active-check') || document.querySelector('input[data-layer="carbon_sink_sim"]');
+                            if (_carbonCbNow && _carbonCbNow.checked) {
+                                _carbonCbNow.checked = false;
+                                var curPane = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
+                                var stNow = _getCarbonActiveState(curPane);
+                                if (stNow) stNow.simActive = false;
+                                window.carbonSimClearPlantingLayer(curPane);
+                                try { _carbonCbNow.dispatchEvent(new Event('change', { bubbles: true })); } catch (e2) {}
+                            }
+                        }
                         window.carbonSimUpdateLockState();
                     }
                 });
@@ -7678,7 +7860,7 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                     _lastActiveCarbonPaneId = currentPaneId;
 
                     var st = _getCarbonActiveState();
-                    var checkEl = document.getElementById('carbon-sim-active-check');
+                    var checkEl = document.getElementById('carbon-sink-sim-checkbox') || document.getElementById('carbon-sim-active-check') || document.querySelector('input[data-layer="carbon_sink_sim"]');
                     var cEl = document.getElementById('carbon-country-select');
                     var sEl = document.getElementById('carbon-species-select') || document.getElementById('carbon-species-input');
                     var xEl = document.getElementById('carbon-spacing-x');
