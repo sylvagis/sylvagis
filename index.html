@@ -4922,9 +4922,9 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                             <div id="carbon-thinning-list" style="margin-top:6px;display:flex;flex-direction:column;gap:3px;"></div>
                         </div>
 
-                        <!-- Rapor Yazdır / İndir Butonu (Ana PDF İndir butonuna entegre edildi) -->
-                        <button id="btn-print-carbon-sim" type="button" onclick="carbonSimPrintReport()" style="width:100%;margin-top:10px;padding:6px 10px;background:#f1f5f9;color:#1e293b;border:1px solid #cbd5e1;border-radius:6px;font-size:0.72rem;font-weight:600;cursor:pointer;">
-                            🖨️ <span data-i18n="carbon_print_btn_text">Simülasyon Özeti İndir / Yazdır</span>
+                        <!-- Rapor İndir (PDF) Butonu -->
+                        <button id="btn-print-carbon-sim" type="button" onclick="carbonSimPrintReport()" style="width:100%;margin-top:10px;padding:6px 10px;background:#f1f5f9;color:#1e293b;border:1px solid #cbd5e1;border-radius:6px;font-size:0.72rem;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;">
+                            <span data-i18n="carbon_print_btn_text">📄 Raporu İndir (PDF)</span>
                         </button>
 
                         <!-- Fidan Noktalarını KML İndir Butonu -->
@@ -5541,21 +5541,14 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                     var eps = Math.max(1e-6, Math.min(deltaLat, deltaLng) * 0.12);
                     var epsSq = eps * eps;
 
-                    var latSpan = bbox.maxLat - bbox.minLat;
-                    var lngSpan = bbox.maxLng - bbox.minLng;
-                    var numLatSteps = Math.max(0, Math.floor((latSpan + 1e-7) / deltaLat));
-                    var numLngSteps = Math.max(0, Math.floor((lngSpan + 1e-7) / deltaLng));
-                    var offsetLat = Math.max(0, (latSpan - numLatSteps * deltaLat) / 2);
-                    var offsetLng = Math.max(0, (lngSpan - numLngSteps * deltaLng) / 2);
-
-                    var startLat = bbox.minLat + offsetLat;
-                    var startLng = bbox.minLng + offsetLng;
+                    var tolLat = deltaLat * 0.1;
+                    var tolLng = deltaLng * 0.1;
 
                     var renderPoints = [];
-                    var maxRenderCap = 100000;
+                    var maxRenderCap = 600000;
 
-                    for (var lat = startLat; lat <= bbox.maxLat + deltaLat * 0.05; lat += deltaLat) {
-                        for (var lng = startLng; lng <= bbox.maxLng + deltaLng * 0.05; lng += deltaLng) {
+                    for (var lat = bbox.minLat; lat <= bbox.maxLat + tolLat; lat += deltaLat) {
+                        for (var lng = bbox.minLng; lng <= bbox.maxLng + tolLng; lng += deltaLng) {
                             if (_carbonPointInGeom(lng, lat, polyList, epsSq)) {
                                 renderPoints.push([lat, lng]);
                                 if (renderPoints.length >= maxRenderCap) break;
@@ -5884,7 +5877,7 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                         carbon_locked_badge: '(Diğer analiz katmanları seçiliyken pasiftir)',
                         carbon_locked_warning_title: 'Karbon Simülasyonu Kilitli',
                         carbon_locked_warning_desc: 'Haritada diğer uydu/analiz katmanları (Sentinel-2, Landsat, DEM, LULC vb.) seçiliyken Karbon Yutak Alanı Simülasyonu çalıştırılamaz. Simülasyonu aktif etmek için lütfen seçili analiz katmanlarının işaretini kaldırın.',
-                        carbon_print_btn_text: 'Simülasyon Özeti İndir / Yazdır',
+                        carbon_print_btn_text: '📄 Raporu İndir (PDF)',
                         carbon_download_kml_btn_text: 'Fidan Noktalarını İndir (.KML)',
                         carbon_no_points_kml: 'İndirilecek fidan koordinat noktası bulunamadı. Lütfen önce simülasyonu çalıştırın.',
                         carbon_per_ha_trees: 'Hektar başı: {count} ağaç',
@@ -5903,6 +5896,10 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                         carbon_site_precip: 'Yıllık Yağış',
                         carbon_site_soc: 'Toprak SOC',
                         carbon_site_sf: 'Saha Çarpanı (Sf)',
+                        carbon_standing_stock_legend: 'Duran Stoğu',
+                        carbon_total_legend: 'Toplam (Hasat Dahil)',
+                        carbon_baseline_legend: 'Müdahalesiz',
+                        carbon_thinning_legend: 'Aralama',
                         carbon_fidan_title: 'Karbon Fidan Dağılımı (KML)',
                         vdl_cat_carbon: 'Karbon & Ağaçlandırma Simülasyonu'
                     },
@@ -5930,7 +5927,7 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                         carbon_locked_badge: '(Disabled while other analysis layers are active)',
                         carbon_locked_warning_title: 'Carbon Simulation Locked',
                         carbon_locked_warning_desc: 'Carbon Sink Area Simulation cannot be run while other satellite/analysis layers (Sentinel-2, Landsat, DEM, LULC, etc.) are selected. Please uncheck active analysis layers to enable simulation.',
-                        carbon_print_btn_text: 'Download / Print Simulation Summary',
+                        carbon_print_btn_text: '📄 Download Report (PDF)',
                         carbon_download_kml_btn_text: 'Download Planting Points (.KML)',
                         carbon_fidan_title: 'Carbon Seedling Distribution (KML)',
                         vdl_cat_carbon: 'Carbon & Afforestation Simulation',
@@ -5950,7 +5947,11 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                         carbon_site_temp: 'Annual Mean Temp',
                         carbon_site_precip: 'Annual Precipitation',
                         carbon_site_soc: 'Soil SOC',
-                        carbon_site_sf: 'Site Factor (Sf)'
+                        carbon_site_sf: 'Site Factor (Sf)',
+                        carbon_standing_stock_legend: 'Standing Stock',
+                        carbon_total_legend: 'Total (Incl. Harvest)',
+                        carbon_baseline_legend: 'Baseline (Unmanaged)',
+                        carbon_thinning_legend: 'Thinning'
                     },
                     de: {
     carbon_tree_cat_fruit: "🍎 Obst- und Nussbäume (IPCC Dauerkulturen)",
@@ -5976,7 +5977,7 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                         carbon_locked_badge: '(Deaktiviert, während andere Analyse-Ebenen aktiv sind)',
                         carbon_locked_warning_title: 'Kohlenstoff-Simulation gesperrt',
                         carbon_locked_warning_desc: 'Die Kohlenstoffsenken-Simulation kann nicht ausgeführt werden, während andere Satelliten-/Analyseebenen (Sentinel-2, Landsat, DEM, LULC usw.) aktiv sind. Bitte deaktivieren Sie diese Ebenen, um fortzufahren.',
-                        carbon_print_btn_text: 'Simulationszusammenfassung drucken / herunterladen',
+                        carbon_print_btn_text: '📄 Bericht herunterladen (PDF)',
                         carbon_download_kml_btn_text: 'Pflanzpunkte herunterladen (.KML)',
                         carbon_no_points_kml: 'Keine Setzling-Koordinatenpunkte gefunden. Bitte führen Sie zuerst die Simulation aus.',
                         carbon_per_ha_trees: 'Pro Hektar: {count} Bäume',
@@ -6020,7 +6021,7 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                         carbon_locked_badge: '(Désactivé lorsque d\'autres couches d\'analyse sont actives)',
                         carbon_locked_warning_title: 'Simulation de carbone verrouillée',
                         carbon_locked_warning_desc: 'La simulation de puits de carbone ne peut pas être exécutée pendant que d\'autres couches d\'analyse (Sentinel-2, Landsat, DEM, LULC, etc.) sont actives. Veuillez décocher les couches pour l\'activer.',
-                        carbon_print_btn_text: 'Télécharger / Imprimer le résumé de la simulation',
+                        carbon_print_btn_text: '📄 Télécharger le rapport (PDF)',
                         carbon_download_kml_btn_text: 'Télécharger les points de plantation (.KML)',
                         carbon_no_points_kml: 'Aucun point de coordonnées trouvé. Veuillez d\'abord exécuter la simulation.',
                         carbon_per_ha_trees: 'Par hectare : {count} arbres',
@@ -6101,14 +6102,54 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                         effective_trees_retention: '（実効：{effective} 本 - 定着率 {rate}%）'
                     },
                     ko: {
-    carbon_tree_cat_fruit: "🍎 과수 및 견과류 나무 (IPCC 다년생 농경지)",
-    carbon_tree_cat_forest: "🌲 산림 수종 (침엽수 및 활엽수)",
+                        carbon_tree_cat_fruit: "🍎 과수 및 견과류 수종 (IPCC 다년생 농경지)",
+                        carbon_tree_cat_forest: "🌲 산림 수종 (침엽수 및 활엽수)",
+                        carbon_sink_sim_title: '🌱 탄소 회계',
+                        carbon_sink_sim_subtitle: '탄소 흡수원 영역 시뮬레이션',
+                        carbon_sink_sim_desc: '비산림 초지/방목지에 계획된 신규 조림에 대한 탄소 격리량을 시뮬레이션하며 간벌 시나리오를 지원합니다.',
+                        carbon_results_title: '시뮬레이션 결과',
+                        carbon_clear_btn: '초기화',
+                        carbon_summary_area: '대상 면적',
+                        carbon_summary_trees: '총 묘목 수 (유효 본수)',
+                        carbon_summary_standing: '잔존 탄소 축적량',
+                        carbon_summary_harvested: '수확 탄소량 (간벌)',
+                        carbon_summary_total: '총 격리 CO2e',
+                        carbon_summary_annual: '연평균 탄소 격리량',
+                        carbon_summary_stand_dims: '최종 임분 규격 (흉고직경/수고)',
+                        carbon_thinning_add_title: '➕ 간벌 계획 추가',
+                        carbon_thinning_year_label: '간벌 연도',
+                        carbon_thinning_percent_label: '벌채율 (%)',
+                        carbon_thinning_add_btn: '추가',
+                        carbon_density_scale_label: '조림 밀도 조정 (스케일)',
+                        carbon_density_scale_desc: '식재 밀도 및 입목도를 실시간으로 조정하며 탄소 격리 곡선 및 누적 총량을 동적으로 재계산합니다.',
+                        carbon_locked_badge: '(다른 분석 레이어가 활성화된 동안 비활성화됨)',
+                        carbon_locked_warning_title: '탄소 시뮬레이션 비활성화됨',
+                        carbon_locked_warning_desc: '다른 위성/분석 레이어(Sentinel-2, Landsat, DEM, LULC 등)가 선택된 상태에서는 탄소 흡수원 시뮬레이션을 실행할 수 없습니다. 시뮬레이션을 활성화하려면 해당 분석 레이어의 선택을 해제해 주세요.',
+                        carbon_print_btn_text: '📄 보고서 다운로드 (PDF)',
                         carbon_download_kml_btn_text: '식재 포인트 다운로드 (.KML)',
-                        carbon_no_points_kml: '묘목 좌표 포인트를 찾을 수 없습니다. 먼저 시뮬레이션을 실행하세요.',
-                        carbon_per_ha_trees: '헥타르당: {count} 그루',
-                        per_ha_trees: '헥타르당: {count} 그루',
-                        carbon_effective_trees_retention: '(유효: {effective} 그루 - 활착률 {rate}%)',
-                        effective_trees_retention: '(유효: {effective} 그루 - 활착률 {rate}%)'
+                        carbon_fidan_title: '탄소 묘목 분포 (KML)',
+                        vdl_cat_carbon: '탄소 및 조림 시뮬레이션',
+                        carbon_no_points_kml: '내보낼 묘목 좌표 포인트를 찾을 수 없습니다. 먼저 시뮬레이션을 실행해 주세요.',
+                        carbon_per_ha_trees: 'ha당 본수: {count} 본',
+                        per_ha_trees: 'ha당 본수: {count} 본',
+                        carbon_effective_trees_retention: '(유효: {effective} 본 - 활착률 {rate}%)',
+                        effective_trees_retention: '(유효: {effective} 본 - 활착률 {rate}%)',
+                        carbon_standard_notice: '📌 참고: 본 시뮬레이션은 IPCC Tier 1 기본 계수 및 채프먼-리차즈(Chapman-Richards) 성장 모델을 기반으로 하며, 현장 실측치, 공식 탄소 인증 또는 국가 인벤토리 보고서를 대체하지 않는 사전 타당성 검토 및 계획 수립 목적의 추정치입니다.',
+                        carbon_calculating: '계산 중...',
+                        carbon_error_msg: '탄소 시뮬레이션 실행 중 오류 발생: ',
+                        carbon_no_roi_warning: '먼저 지도에서 연구 대상지(폴리곤)를 그리거나 선택해 주세요.',
+                        carbon_no_sim_to_print: '다운로드할 시뮬레이션 결과가 없습니다. 먼저 시뮬레이션을 실행해 주세요.',
+                        carbon_site_env_title: '입지 및 기후 분석 (GEE)',
+                        carbon_site_elev: '해발고도',
+                        carbon_site_slope_aspect: '경사도 / 방위',
+                        carbon_site_temp: '연평균 기온',
+                        carbon_site_precip: '연평균 강수량',
+                        carbon_site_soc: '토양 유기탄소(SOC)',
+                        carbon_site_sf: '입지 계수 (Sf)',
+                        carbon_standing_stock_legend: '임목 축적량',
+                        carbon_total_legend: '총량 (수확 포함)',
+                        carbon_baseline_legend: '기준선 (비관리)',
+                        carbon_thinning_legend: '간벌'
                     },
                     ar: {
     carbon_tree_cat_fruit: "🍎 أشجار الفاكهة والمكسرات (أراضي المحاصيل المعمرة IPCC)",
@@ -6302,6 +6343,39 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                     }
                 };
 
+                var _CARBON_REPORT_BTN_I18N = {
+                    tr: '📄 Raporu İndir (PDF)',
+                    en: '📄 Download Report (PDF)',
+                    de: '📄 Bericht herunterladen (PDF)',
+                    fr: '📄 Télécharger le rapport (PDF)',
+                    es: '📄 Descargar informe (PDF)',
+                    it: '📄 Scarica rapporto (PDF)',
+                    pt: '📄 Descarregar relatório (PDF)',
+                    ru: '📄 Скачать отчет (PDF)',
+                    zh: '📄 下载报告 (PDF)',
+                    ja: '📄 レポートをダウンロード (PDF)',
+                    ko: '📄 보고서 다운로드 (PDF)',
+                    ar: '📄 تنزيل التقرير (PDF)',
+                    fa: '📄 دانلود گزارش (PDF)',
+                    az: '📄 Hesabatı Yüklə (PDF)',
+                    uz: '📄 Hisobotni yuklab olish (PDF)',
+                    kk: '📄 Есепті жүктеп алу (PDF)',
+                    ky: '📄 Отчетту жүктөп алуу (PDF)',
+                    el: '📄 Λήψη αναφοράς (PDF)',
+                    bg: '📄 Изтегляне на доклад (PDF)',
+                    hu: '📄 Jelentés letöltése (PDF)',
+                    pl: '📄 Pobierz raport (PDF)',
+                    id: '📄 Unduh Laporan (PDF)',
+                    ms: '📄 Muat Turun Laporan (PDF)',
+                    vi: '📄 Tải xuống báo cáo (PDF)',
+                    th: '📄 ดาวน์โหลดรายงาน (PDF)',
+                    hi: '📄 रिपोर्ट डाउनलोड करें (PDF)',
+                    bn: '📄 رپورٹ ডাউনলোড করুন (PDF)',
+                    ur: '📄 رپورٹ ڈاؤن لوڈ کریں (PDF)',
+                    mn: '📄 Тайлан татах (PDF)',
+                    ka: '📄 ანგარიშის ჩამოტვირთვა (PDF)'
+                };
+
                 function _injectCarbonI18n() {
                     var translations = (typeof SYLVA_TRANSLATIONS !== 'undefined') ? SYLVA_TRANSLATIONS : (typeof window !== 'undefined' ? window.SYLVA_TRANSLATIONS : null);
                     if (!translations || typeof _CARBON_I18N === 'undefined') return;
@@ -6316,10 +6390,17 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                         Object.keys(src).forEach(function (k) {
                             translations[lang][k] = src[k];
                         });
+                        if (_CARBON_REPORT_BTN_I18N[lang]) {
+                            translations[lang]['carbon_print_btn_text'] = _CARBON_REPORT_BTN_I18N[lang];
+                            if (_CARBON_I18N[lang]) {
+                                _CARBON_I18N[lang]['carbon_print_btn_text'] = _CARBON_REPORT_BTN_I18N[lang];
+                            }
+                        }
                     });
                 }
                 window._injectCarbonI18n = _injectCarbonI18n;
                 window._CARBON_I18N = _CARBON_I18N;
+                window._CARBON_REPORT_BTN_I18N = _CARBON_REPORT_BTN_I18N;
                 _injectCarbonI18n();
 
                 window.carbonSimClearActiveResult = function () {
@@ -6946,6 +7027,15 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                     }
 
                     // 4. API Çağrısı (POST /api/carbon-simulation) & Loading Durumu
+                    if (typeof showSylvaLoading === 'function') {
+                        showSylvaLoading();
+                    } else if (typeof window.showSylvaLoading === 'function') {
+                        window.showSylvaLoading();
+                    } else {
+                        var _ov = document.getElementById('analysis-loading-overlay');
+                        if (_ov) _ov.classList.add('active');
+                    }
+
                     var btn = document.getElementById('btn-run-carbon-simulation');
                     if (btn) {
                         btn.disabled = true;
@@ -7052,6 +7142,14 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                     })
                     .finally(function () {
                         if (abortTimer) { clearTimeout(abortTimer); abortTimer = null; }
+                        if (typeof hideSylvaLoading === 'function') {
+                            hideSylvaLoading();
+                        } else if (typeof window.hideSylvaLoading === 'function') {
+                            window.hideSylvaLoading();
+                        } else {
+                            var _ov = document.getElementById('analysis-loading-overlay');
+                            if (_ov) _ov.classList.remove('active');
+                        }
                         if (btn) {
                             btn.disabled = false;
                             btn.innerHTML = (typeof t === 'function') ? t('carbon_start_btn', '🌱 Analizi Başlat') : '🌱 Analizi Başlat';
@@ -7122,6 +7220,15 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                     }
 
                     var curLang = window._sylvaLang || (typeof sylvaCurrentLang !== 'undefined' ? sylvaCurrentLang : 'tr');
+                    var isKo = (curLang === 'ko');
+                    var isTr = (curLang === 'tr');
+                    var isEn = (curLang === 'en');
+                    var _cTxt = function (ko, en, tr) {
+                        if (isKo) return ko;
+                        if (isTr) return tr;
+                        return en;
+                    };
+
                     var reportTitle = _getCarbonReportTitle(curLang);
                     var favEl = document.getElementById('sylva-custom-favicon') || document.querySelector('link[rel*="icon"]');
                     var faviconHref = favEl ? favEl.href : '';
@@ -7136,16 +7243,16 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
 
                     var areaHa = (st.areaHa || meta.area_ha || 0).toFixed(2);
                     var areaDa = ((st.areaHa || meta.area_ha || 0) * 10).toFixed(1);
-                    var nowStr = new Date().toLocaleString();
+                    var nowStr = new Date().toLocaleString(isKo ? 'ko-KR' : (isTr ? 'tr-TR' : 'en-US'));
                     var chartSvg = (document.getElementById('carbon-sim-chart-box') || {}).innerHTML || '';
 
                     // 1. Aralama Takvimi Satırları
                     var thinningRows = thinnings.map(function (ev) {
                         var mYr = (series.managed || []).filter(function (p) { return p.year === ev.year; })[0];
                         var harv = mYr && mYr.harvested_co2e > 0.05 ? mYr.harvested_co2e.toFixed(1) + ' tCO2e' : '—';
-                        var rem = mYr ? Math.round(mYr.trees_per_ha) + ' ' + (curLang === 'en' ? 'trees/ha' : 'ağaç/ha') : '—';
+                        var rem = mYr ? Math.round(mYr.trees_per_ha) + ' ' + _cTxt('본/ha', 'trees/ha', 'ağaç/ha') : '—';
                         return '<tr>' +
-                            '<td style="padding:6px;border:1px solid #e2e8f0;text-align:center;">' + ev.year + '. ' + (curLang === 'en' ? 'Year' : 'Yıl') + '</td>' +
+                            '<td style="padding:6px;border:1px solid #e2e8f0;text-align:center;">' + ev.year + _cTxt('년차', '. Year', '. Yıl') + '</td>' +
                             '<td style="padding:6px;border:1px solid #e2e8f0;text-align:center;">%' + ev.percent + '</td>' +
                             '<td style="padding:6px;border:1px solid #e2e8f0;text-align:center;color:#b45309;font-weight:600;">' + harv + '</td>' +
                             '<td style="padding:6px;border:1px solid #e2e8f0;text-align:center;">' + rem + '</td>' +
@@ -7154,7 +7261,7 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
 
                     if (!thinningRows) {
                         thinningRows = '<tr><td colspan="4" style="padding:8px;text-align:center;color:#64748b;border:1px solid #e2e8f0;">' +
-                            (curLang === 'en' ? 'No thinning interventions scheduled.' : 'Tanımlanmış aralama müdahalesi bulunmamaktadır.') +
+                            _cTxt('계획된 간벌 일정이 없습니다.', 'No thinning interventions scheduled.', 'Tanımlanmış aralama müdahalesi bulunmamaktadır.') +
                             '</td></tr>';
                     }
 
@@ -7183,7 +7290,7 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                             var isFinal = (yr === rotYr);
                             var rowBg = isFinal ? ' style="background:#f0fdf4;font-weight:600;"' : '';
                             return '<tr' + rowBg + '>' +
-                                '<td style="padding:5px 8px;border:1px solid #e2e8f0;text-align:center;font-weight:600;">' + yr + '. ' + (curLang === 'en' ? 'Yr' : 'Yıl') + '</td>' +
+                                '<td style="padding:5px 8px;border:1px solid #e2e8f0;text-align:center;font-weight:600;">' + yr + _cTxt('년차', '. Yr', '. Yıl') + '</td>' +
                                 '<td style="padding:5px 8px;border:1px solid #e2e8f0;text-align:right;">' + vVal + '</td>' +
                                 '<td style="padding:5px 8px;border:1px solid #e2e8f0;text-align:right;color:#15803d;">' + standingVal + '</td>' +
                                 '<td style="padding:5px 8px;border:1px solid #e2e8f0;text-align:right;color:#b45309;">' + harvVal + '</td>' +
@@ -7202,32 +7309,36 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                     var suit = suitability || {};
                     var stStatus = suit.status || 'good';
                     var badgeClass = 'badge-' + (stStatus === 'excellent' ? 'excellent' : (stStatus === 'good' ? 'good' : (stStatus === 'moderate' ? 'moderate' : 'poor')));
-                    var badgeLabel = (curLang === 'en')
-                        ? (suit.status_en || (stStatus === 'excellent' ? 'Optimal Suitability' : (stStatus === 'good' ? 'Good Suitability' : (stStatus === 'moderate' ? 'Moderate Suitability' : 'Low Suitability / Risky'))))
-                        : (suit.status_tr || (stStatus === 'excellent' ? 'Çok Yüksek Uyum (Optimal)' : (stStatus === 'good' ? 'İyi Uyum' : (stStatus === 'moderate' ? 'Orta Uyum' : 'Düşük Uyum / Riskli'))));
+                    var badgeLabel = isKo
+                        ? (stStatus === 'excellent' ? '최적 적지 (Optimal)' : (stStatus === 'good' ? '적합 적지' : (stStatus === 'moderate' ? '보통 적지' : '부적합 / 위험')))
+                        : (isTr
+                            ? (suit.status_tr || (stStatus === 'excellent' ? 'Çok Yüksek Uyum (Optimal)' : (stStatus === 'good' ? 'İyi Uyum' : (stStatus === 'moderate' ? 'Orta Uyum' : 'Düşük Uyum / Riskli'))))
+                            : (suit.status_en || (stStatus === 'excellent' ? 'Optimal Suitability' : (stStatus === 'good' ? 'Good Suitability' : (stStatus === 'moderate' ? 'Moderate Suitability' : 'Low Suitability / Risky')))));
 
                     var elevText = sc.elevation_m != null ? Math.round(sc.elevation_m) + ' m' : '—';
                     var slopeVal = sc.slope_deg != null ? sc.slope_deg.toFixed(1) + '°' : '—';
-                    var aspDir = sc.aspect_dir ? (sc.aspect_dir.tr || sc.aspect_dir.en || sc.aspect_dir.code) : '';
+                    var aspDir = sc.aspect_dir ? (isKo ? (sc.aspect_dir.ko || sc.aspect_dir.en || sc.aspect_dir.code || sc.aspect_dir.tr) : (isTr ? (sc.aspect_dir.tr || sc.aspect_dir.en || sc.aspect_dir.code) : (sc.aspect_dir.en || sc.aspect_dir.code || sc.aspect_dir.tr))) : '';
                     var aspText = (sc.aspect_deg != null ? Math.round(sc.aspect_deg) + '°' : '') + (aspDir ? ' (' + aspDir + ')' : '');
-                    var slopeAspText = slopeVal + (aspText ? ' | ' + (curLang === 'en' ? 'Aspect: ' : 'Bakı: ') + aspText : '');
+                    var slopeAspText = slopeVal + (aspText ? ' | ' + _cTxt('방위: ', 'Aspect: ', 'Bakı: ') + aspText : '');
                     var tempText = sc.temp_c != null ? sc.temp_c.toFixed(1) + ' °C' : '—';
-                    var precipText = sc.precip_mm != null ? Math.round(sc.precip_mm) + ' mm/' + (curLang === 'en' ? 'yr' : 'yıl') : '—';
+                    var precipText = sc.precip_mm != null ? Math.round(sc.precip_mm) + ' mm/' + _cTxt('년', 'yr', 'yıl') : '—';
                     var socText = sc.soc_g_kg != null ? sc.soc_g_kg.toFixed(1) + ' g/kg' : '—';
                     var sfVal = (meta.site_suitability_factor != null ? meta.site_suitability_factor : (suit.site_suitability_factor != null ? suit.site_suitability_factor : 1.0)).toFixed(2);
                     var sfPct = suit.suitability_score_pct != null ? suit.suitability_score_pct.toFixed(0) : '100';
 
                     var soilObj = sc.soil_info || {};
-                    var soilGroup = (curLang === 'en') ? (soilObj.group_en || soilObj.group_tr || '—') : (soilObj.group_tr || '—');
-                    var soilTexture = (curLang === 'en') ? (soilObj.texture_en || soilObj.texture_tr || '—') : (soilObj.texture_tr || '—');
-                    var climateLabel = (curLang === 'en' ? meta.ecozone_name_en : meta.ecozone_name_tr) || sc.climate_zone_label || (sc.climate_info && ((curLang === 'en') ? sc.climate_info.en : sc.climate_info.tr)) || sc.climate_zone || '—';
+                    var soilGroup = isKo ? (soilObj.group_ko || soilObj.group_en || soilObj.group_tr || '—') : (isTr ? (soilObj.group_tr || '—') : (soilObj.group_en || soilObj.group_tr || '—'));
+                    var soilTexture = isKo ? (soilObj.texture_ko || soilObj.texture_en || soilObj.texture_tr || '—') : (isTr ? (soilObj.texture_tr || '—') : (soilObj.texture_en || soilObj.texture_tr || '—'));
+                    var climateLabel = isKo ? (meta.ecozone_name_ko || meta.ecozone_name_en || meta.ecozone_name_tr || sc.climate_zone_label || (sc.climate_info && (sc.climate_info.ko || sc.climate_info.en || sc.climate_info.tr)) || sc.climate_zone || '—')
+                        : (isTr ? (meta.ecozone_name_tr || sc.climate_zone_label || (sc.climate_info && sc.climate_info.tr) || sc.climate_zone || '—')
+                        : (meta.ecozone_name_en || sc.climate_zone_label || (sc.climate_info && sc.climate_info.en) || sc.climate_zone || '—'));
 
                     // ESRI 10m LULC Dağılım Tablosu
                     var esriHtml = '';
                     var esriData = sc.esri_lulc || [];
                     if (esriData.length > 0) {
                         var esriRows = esriData.map(function (item) {
-                            var clsName = (curLang === 'en') ? item.name_en : item.name_tr;
+                            var clsName = isKo ? (item.name_ko || item.name_en || item.name_tr) : (isTr ? item.name_tr : item.name_en);
                             return '<tr>' +
                                 '<td style="padding:5px 8px;border:1px solid #e2e8f0;display:flex;align-items:center;gap:6px;">' +
                                 '<span style="display:inline-block;width:12px;height:12px;background:' + item.color + ';border-radius:3px;border:1px solid #cbd5e1;flex-shrink:0;"></span>' +
@@ -7239,19 +7350,19 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
 
                         esriHtml = '<div style="margin-top:12px;">' +
                             '<h3 style="font-size:12px;color:#1e3a8a;margin:0 0 6px 0;">' +
-                            (curLang === 'en' ? '🛰️ Recent Land Cover Distribution (ESRI 10m Sentinel-2 Global LULC):' : '🛰️ Güncel Arazi Örtüsü Dağılımı (ESRI 10m Sentinel-2 Global LULC):') +
+                            _cTxt('🛰️ 최근 토지 피복 분포 (ESRI 10m Sentinel-2 글로벌 LULC):', '🛰️ Recent Land Cover Distribution (ESRI 10m Sentinel-2 Global LULC):', '🛰️ Güncel Arazi Örtüsü Dağılımı (ESRI 10m Sentinel-2 Global LULC):') +
                             '</h3>' +
                             '<table>' +
-                            '<tr><th style="width:50%;">' + (curLang === 'en' ? 'Land Cover Class' : 'Arazi Örtüsü Sınıfı') + '</th><th style="text-align:right;width:25%;">' + (curLang === 'en' ? 'Area (ha)' : 'Alan (ha)') + '</th><th style="text-align:right;width:25%;">' + (curLang === 'en' ? 'Share (%)' : 'Oran (%)') + '</th></tr>' +
+                            '<tr><th style="width:50%;">' + _cTxt('토지 피복 유형', 'Land Cover Class', 'Arazi Örtüsü Sınıfı') + '</th><th style="text-align:right;width:25%;">' + _cTxt('면적 (ha)', 'Area (ha)', 'Alan (ha)') + '</th><th style="text-align:right;width:25%;">' + _cTxt('비율 (%)', 'Share (%)', 'Oran (%)') + '</th></tr>' +
                             esriRows +
                             '</table></div>';
                     }
 
                     var nicheInfo = suit.matched_niche || {};
                     var optDetails = [];
-                    if (nicheInfo.temp_opt_range) optDetails.push((curLang === 'en' ? 'Optimum Temp: ' : 'Optimum Sıcaklık: ') + nicheInfo.temp_opt_range);
-                    if (nicheInfo.precip_opt_range) optDetails.push((curLang === 'en' ? 'Optimum Precip: ' : 'Optimum Yağış: ') + nicheInfo.precip_opt_range);
-                    if (nicheInfo.elev_range) optDetails.push((curLang === 'en' ? 'Elevation Belt: ' : 'Yükselti Kuşağı: ') + nicheInfo.elev_range);
+                    if (nicheInfo.temp_opt_range) optDetails.push(_cTxt('최적 기온: ', 'Optimum Temp: ', 'Optimum Sıcaklık: ') + nicheInfo.temp_opt_range);
+                    if (nicheInfo.precip_opt_range) optDetails.push(_cTxt('최적 강수량: ', 'Optimum Precip: ', 'Optimum Yağış: ') + nicheInfo.precip_opt_range);
+                    if (nicheInfo.elev_range) optDetails.push(_cTxt('고도 대역: ', 'Elevation Belt: ', 'Yükselti Kuşağı: ') + nicheInfo.elev_range);
 
                     var warns = suit.warnings || [];
                     if (!warns.length && suit.ecological_warning) warns = [suit.ecological_warning];
@@ -7259,13 +7370,13 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                     if (warns.length > 0) {
                         var isSev = stStatus === 'poor' || !!suit.ecological_warning;
                         warnHtml = '<div class="warn-box' + (isSev ? ' severe' : '') + '">' +
-                            '<b>⚠️ ' + (curLang === 'en' ? 'Silvicultural & Ecological Risk Warnings:' : 'Silvikültürel ve Ekolojik Risk Uyarıları:') + '</b>' +
+                            '<b>' + _cTxt('⚠️ 조림학적 및 생태학적 위험 경고:', '⚠️ Silvicultural & Ecological Risk Warnings:', '⚠️ Silvikültürel ve Ekolojik Risk Uyarıları:') + '</b>' +
                             '<ul style="margin:4px 0 0 16px;padding:0;">' +
                             warns.map(function (w) { return '<li>' + w + '</li>'; }).join('') +
                             '</ul></div>';
                     } else if (suit.advisories && suit.advisories.length > 0) {
                         warnHtml = '<div style="margin-top:8px;padding:8px 10px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;font-size:11px;color:#166534;">' +
-                            '<b>🌱 ' + (curLang === 'en' ? 'Site Ecological Suitability Assessment:' : 'Saha Ekolojik Uygunluk Değerlendirmesi:') + '</b>' +
+                            '<b>' + _cTxt('🌱 입지 생태 적합성 평가:', '🌱 Site Ecological Suitability Assessment:', '🌱 Saha Ekolojik Uygunluk Değerlendirmesi:') + '</b>' +
                             '<ul style="margin:4px 0 0 16px;padding:0;">' +
                             suit.advisories.map(function (a) { return '<li>' + a + '</li>'; }).join('') +
                             '</ul></div>';
@@ -7281,25 +7392,32 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                     var aVal = meta.asymptotic_biomass_a != null ? meta.asymptotic_biomass_a : (meta.chapman_v_max != null ? Math.round(meta.chapman_v_max * dwVal * befVal) : 260.0);
                     var cfVal = meta.carbon_fraction != null ? meta.carbon_fraction : 0.47;
                     var co2RatioVal = meta.co2_to_c_ratio != null ? meta.co2_to_c_ratio.toFixed(4) : '3.6667';
-                    var ecozoneName = (curLang === 'en' ? meta.ecozone_name_en : meta.ecozone_name_tr) || climateLabel;
+                    var ecozoneName = (isKo ? meta.ecozone_name_ko : (isTr ? meta.ecozone_name_tr : meta.ecozone_name_en)) || climateLabel;
                     var countryCode = meta.country_code || st.country || 'TR';
                     var spGroup = (meta && (meta.species_group || meta.group)) || '';
                     var speciesCategoryLabel = (spGroup === 'fruit_tree')
-                        ? (curLang === 'en' ? 'Fruit & Nut Tree (IPCC Perennial Cropland)' : 'Meyve & Yemiş Ağacı (IPCC Çok Yıllık Tarım)')
+                        ? _cTxt('과수 및 견과류 수종 (IPCC 다년생 농경지)', 'Fruit & Nut Tree (IPCC Perennial Cropland)', 'Meyve & Yemiş Ağacı (IPCC Çok Yıllık Tarım)')
                         : (spGroup === 'broadleaf'
-                            ? (curLang === 'en' ? 'Broadleaf' : 'Geniş Yapraklı')
-                            : (curLang === 'en' ? 'Conifer' : 'İğne Yapraklı'));
+                            ? _cTxt('활엽수', 'Broadleaf', 'Geniş Yapraklı')
+                            : _cTxt('침엽수', 'Conifer', 'İğne Yapraklı'));
 
                     // 4. Genişletilmiş Yasal & Metodolojik Açıklama Metni (IPCC Tier 1)
-                    var extendedNotice = (curLang === 'en')
-                        ? '<b>IPCC Tier 1 Methodological Framework, Constants & Remote Sensing Model Caveats:</b><br>' +
-                          '1. <i>Scope and Purpose:</i> This simulation employs IPCC 2006/2019 Refinement Tier 1 global default coefficients and mathematical Chapman-Richards non-linear stand growth equations calibrated with Google Earth Engine (GEE) spatial layers. It is designed for preliminary technical feasibility, spatial planning, and silvicultural scenario comparison.<br>' +
-                          '2. <i>Allometric Modeling & Carbon Fraction:</i> Plant biomass expansion relies on wood density (D, t DM/m³), Biomass Expansion Factor (BEF), and root-to-shoot ratio (R) dynamically modulated across bioclimatic ecozones (Boreal, Temperate Oceanic/Continental, Mediterranean, Subtropical, Tropical). In accordance with IPCC guidelines, carbon fraction is set to CF = 0.47 ton C per ton dry biomass, and equivalent CO₂ sequestration uses the stoichiometric ratio 44/12 ≈ 3.6667.<br>' +
-                          '3. <i>Uncertainty and Ground-Truthing:</i> Satellite-derived remote sensing models (SRTM 30m, ESRI 10m LULC, WorldClim 1km, OpenLandMap/FAO 250m) inherently carry an uncertainty margin of ±20% to ±30% due to local microclimatic variations, genetic seedling provenance, and management interventions. This projection does not substitute for empirical field inventory plots or formal third-party validation (Verra VCS / Gold Standard Tier 2/Tier 3) required for tradable carbon credit issuance.'
-                        : '<b>IPCC Tier 1 Metodolojik Çerçeve, Standart Sabitler ve Uzaktan Algılama Modeli Açıklaması:</b><br>' +
-                          '1. <i>Kapsam ve Amaç:</i> Bu simülasyon, IPCC 2006/2019 Refinement Tier 1 küresel varsayılan katsayılarını ve Google Earth Engine (GEE) uzaysal katmanlarıyla kalibre edilmiş Chapman-Richards doğrusal olmayan meşcere büyüme denklemlerini kullanır. Çalışma, ön teknik fizibilite, ağaçlandırma planlaması ve silvikültürel senaryo analizi amacıyla tasarlanmıştır.<br>' +
-                          '2. <i>Allometrik Modelleme ve Karbon Fraksiyonu:</i> Biyokütle hesaplaması temel odun yoğunluğu (D, ton fırın kurusu/m³), Biyokütle Genişletme Faktörü (BEF) ve kök/gövde oranını (R) sahanın IPCC iklim ekozonuna (Akdeniz, Ilıman Karasal/Okyanusal, Boreal, Subtropikal, Tropikal) göre dinamik olarak modüle eder. IPCC standartlarına göre 1 ton kuru biyokütle başına karbon oranı CF = 0.47 alınmış, CO₂ eşdeğerinde 44/12 ≈ 3.6667 moleküler ağırlık katsayısı uygulanmıştır.<br>' +
-                          '3. <i>Belirsizlik ve Doğrulama:</i> Uydu tabanlı uzaktan algılama katmanları (SRTM 30m, ESRI 10m LULC, WorldClim 1km, OpenLandMap/FAO 250m), mikroiklimsel farklılıklar, fidan genetik orijini ve arazi müdahalelerine bağlı olarak ±%20 ila ±%30 arasında belirsizlik payı taşır. Bu çalışma karar destek projeksiyonudur; ticari karbon kredisi sertifikasyonu (Verra VCS / Gold Standard Tier 2/Tier 3) ve resmi ulusal envanterler için sahada deneme alanı ölçümü (ground-truthing) yapılması zorunludur.';
+                    var extendedNotice = isKo
+                        ? '<b>IPCC Tier 1 방법론 체계, 표준 상수 및 원격탐사 모델 유의사항:</b><br>' +
+                          '1. <i>적용 범위 및 목적:</i> 본 시뮬레이션은 IPCC 2006/2019 보편 기준 Tier 1 글로벌 기본 계수와 Google Earth Engine(GEE) 공간 레이어로 보정된 채프먼-리차즈(Chapman-Richards) 비선형 임분 생장 방정식을 적용합니다. 본 결과는 사전 기술적 타당성 검토, 식재 계획 수립 및 조림 시나리오 비교를 위한 의사결정 지원용으로 설계되었습니다.<br>' +
+                          '2. <i>상대성장 모델링 및 탄소 계수:</i> 바이오매스 산정은 기본 목재 밀도(D, ton DM/m³), 바이오매스 확장 계수(BEF), 지상부/지하부 비율(R)을 대상지의 IPCC 기후 생태대(Boreal, Temperate Oceanic/Continental, Mediterranean, Subtropical, Tropical)에 맞춰 동적으로 보정합니다. IPCC 가이드라인에 따라 건조 바이오매스 1톤당 탄소 비율은 CF = 0.47로 설정되었으며, 이산화탄소 상당량(CO₂e) 격리는 분자량 비율 44/12 ≈ 3.6667을 적용합니다.<br>' +
+                          '3. <i>불확실성 및 현장 검증(Ground-Truthing):</i> 위성 기반 원격탐사 레이어(SRTM 30m, ESRI 10m LULC, WorldClim 1km, OpenLandMap/FAO 250m)는 미기후 차이, 묘목 유전적 계통 및 관리 작업에 따라 ±20% ~ ±30%의 고유한 불확실성을 포함합니다. 본 분석은 공식 탄소 크레딧 발행(Verra VCS / Gold Standard Tier 2/Tier 3) 또는 국가 온실가스 인벤토리 제출을 위한 현장 표준지 조사 실측치를 대체하지 않습니다.'
+                        : (isTr
+                            ? '<b>IPCC Tier 1 Metodolojik Çerçeve, Standart Sabitler ve Uzaktan Algılama Modeli Açıklaması:</b><br>' +
+                              '1. <i>Kapsam ve Amaç:</i> Bu simülasyon, IPCC 2006/2019 Refinement Tier 1 küresel varsayılan katsayılarını ve Google Earth Engine (GEE) uzaysal katmanlarıyla kalibre edilmiş Chapman-Richards doğrusal olmayan meşcere büyüme denklemlerini kullanır. Çalışma, ön teknik fizibilite, ağaçlandırma planlaması ve silvikültürel senaryo analizi amacıyla tasarlanmıştır.<br>' +
+                              '2. <i>Allometrik Modelleme ve Karbon Fraksiyonu:</i> Biyokütle hesaplaması temel odun yoğunluğu (D, ton fırın kurusu/m³), Biyokütle Genişletme Faktörü (BEF) ve kök/gövde oranını (R) sahanın IPCC iklim ekozonuna (Akdeniz, Ilıman Karasal/Okyanusal, Boreal, Subtropikal, Tropikal) göre dinamik olarak modüle eder. IPCC standartlarına göre 1 ton kuru biyokütle başına karbon oranı CF = 0.47 alınmış, CO₂ eşdeğerinde 44/12 ≈ 3.6667 moleküler ağırlık katsayısı uygulanmıştır.<br>' +
+                              '3. <i>Belirsizlik ve Doğrulama:</i> Uydu tabanlı uzaktan algılama katmanları (SRTM 30m, ESRI 10m LULC, WorldClim 1km, OpenLandMap/FAO 250m), mikroiklimsel farklılıklar, fidan genetik orijini ve arazi müdahalelerine bağlı olarak ±%20 ila ±%30 arasında belirsizlik payı taşır. Bu çalışma karar destek projeksiyonudur; ticari karbon kredisi sertifikasyonu (Verra VCS / Gold Standard Tier 2/Tier 3) ve resmi ulusal envanterler için sahada deneme alanı ölçümü (ground-truthing) yapılması zorunludur.'
+                            : '<b>IPCC Tier 1 Methodological Framework, Constants & Remote Sensing Model Caveats:</b><br>' +
+                              '1. <i>Scope and Purpose:</i> This simulation employs IPCC 2006/2019 Refinement Tier 1 global default coefficients and mathematical Chapman-Richards non-linear stand growth equations calibrated with Google Earth Engine (GEE) spatial layers. It is designed for preliminary technical feasibility, spatial planning, and silvicultural scenario comparison.<br>' +
+                              '2. <i>Allometric Modeling & Carbon Fraction:</i> Plant biomass expansion relies on wood density (D, t DM/m³), Biomass Expansion Factor (BEF), and root-to-shoot ratio (R) dynamically modulated across bioclimatic ecozones (Boreal, Temperate Oceanic/Continental, Mediterranean, Subtropical, Tropical). In accordance with IPCC guidelines, carbon fraction is set to CF = 0.47 ton C per ton dry biomass, and equivalent CO₂ sequestration uses the stoichiometric ratio 44/12 ≈ 3.6667.<br>' +
+                              '3. <i>Uncertainty and Ground-Truthing:</i> Satellite-derived remote sensing models (SRTM 30m, ESRI 10m LULC, WorldClim 1km, OpenLandMap/FAO 250m) inherently carry an uncertainty margin of ±20% to ±30% due to local microclimatic variations, genetic seedling provenance, and management interventions. This projection does not substitute for empirical field inventory plots or formal third-party validation (Verra VCS / Gold Standard Tier 2/Tier 3) required for tradable carbon credit issuance.');
+
+                    var sylvaBase64Logo = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAcgAAAH6CAYAAACDE9xMAAAQAElEQVR4AexdBYAcRdZ+1Tou6+6bjbsRSEiCu10CHHLYhUMCBJe7n+U4JDhBgx4Owd0JmhD3bLLZzbrb+Ez7/2o2GwKXBIvsJt3br6u6urq66iv56r3q6WXA3EwETARMBEwETARMBP4HAZMg/wcSM8BEwETARMBEwEQAwCTIvtwKzLybCJgImAiYCOw2BEyC3G3QmgmbCJgImAiYCPRlBEyC7Mu1Z+a9LyNg5t1EwESglyNgEmQvryAzeyYCJgImAiYCewcBkyD3Du7mU00ETAT6MgJm3vcLBEyC3C+q2SykiYCJgImAicDvRcAkyN+LmBnfRMBEwETARKAvI/Cb824S5G+GyoxoImAiYCJgIrA/IWAS5P5U22ZZTQRMBEwETAR+MwImQf5mqPZcRPNJJgImAiYCJgJ7HwGTIPd+HZg5MBEwETARMBHohQiYBNkLK8XMUl9GwMy7iYCJwL6CgEmQ+0pNmuUwETARMBEwEdilCJgEuUvhNBMzETAR6MsImHk3EdgWAZMgt0XD9JsImAiYCJgImAhsQcAkyC1AmI6JgImAiYCJQF9GYNfn3STIXY+pmaKJgImAiYCJwD6AgEmQ+0AlmkUwETARMBEwEdj1CJgEuesx3VGKZriJgImAiYCJQB9CwCTIPlRZZlZNBEwETARMBPYcAiZB7jmszSf1ZQTMvJsImAjsdwiYBLnfVblZYBMBEwETAROB34KASZC/BSUzjomAiUBfRsDMu4nAH0LAJMg/BJt5k4mAiYCJgInAvo6ASZD7eg2b5TMRMBEwEejLCOzFvJsEuRfBNx9tImAiYCJgItB7ETAJsvfWjZkzEwETARMBE4G9iIBJkH8afDMBEwETARMBE4F9EQGTIPfFWjXLZCJgImAiYCLwpxEwCfJPQ2gm0JcRMPNuImAiYCKwIwRMgtwRMma4iYCJgImAicB+jYBJkPt19ZuFNxHoywiYeTcR2L0ImAS5e/E1UzcRMBEwETAR6KMImATZRyvOzLaJgImAiUBfRqAv5N0kyL5QS2YeTQRMBEwETAT2OAImQe5xyM0HmgiYCJgImAj0BQRMgtxRLZnhJgImAiYCJgL7NQImQe7X1W8W3kTARMBEwERgRwiYBLkjZMzwvoyAmXcTARMBE4E/jYBJkH8aQjMBEwETARMBE4F9EQGTIPfFWjXLZCLQlxEw824i0EsQMAmyl1SEmQ0TARMBEwETgd6FgEmQvas+zNyYCJgImAj0ZQT2qbybBLlPVadZGBMBEwETAROBXYWASZC7CkkzHRMBEwETAROBfQqB/Y4g96naMwtjImAiYCJgIrDbEDAJcrdBayZsImAiYCJgItCXETAJsi/X3n6Xd7PAJgImAiYCew4BkyD3HNbmk0wETARMBEwE+hACJkH2ocoys2oi0JcRMPNuItDXEDAJsq/VmJlfEwETARMBE4E9goBJkHsEZvMhJgImAiYCfRmB/TPvJkHun/VultpEwETARMBE4FcQMAnyVwAyL5sImAiYCJgI7J8I7CsEuX/WnllqEwETARMBE4HdhoBJkLsNWjNhEwETARMBE4G+jIBJkH259vaVvJvlMBEwETAR6IUImATZCyvFzJKJgImAiYCJwN5HwCTIvV8HZg5MBPoyAmbeTQT2WQRMgtxnq9YsmImAiYCJgInAn0HAJMg/gw55r4mAiYCJQF9GwMz7ThEwCXKn8JgXTQRMBEwETAT2VwRMgtxfa94st4mAiYCJgInAThHo5QS507ybF00ETARMBEwETAR2GwImQe42aM2ETQRMBEwETAT6MgImQfbl2uvleTezZyJgImAi0JcRMAmyL9eemXcTARMBEwETgd2GgEmQuw1aM2ETgb6MgJl3EwETAZMgzTZgImAiYCJgImAisB0ETILcDihmkImAiYCJQF9GwMz7rkHAJMhdg6OZiomAiYCJgInAPoaASZD7WIWaxTERMBEwETAR2DUI7B2C3DV5N1MxETARMBEwETAR2G0ImAS526A1EzYRMBEwETAR6MsImATZl2tv7+TdfKqJgImAicB+gYBJkPtFNZuF7I0IlJaWMvPmzRPmvj/X9si8eY6n333aOeejF11z5811P/v2s56n5j2V8OgHL3m75VF0e+QlL71O5cUXX3Q9+/nz9o8++kicu3QuT9PsjWU182Qi0BcRMAmyL9aameedCPA/k6VfnvPIvEfsz/3vO46nH7j9z8t+/f877r5rzoN/mHvvAw8/t/DFt5+7f+H9Tz7+5DOPPfzAg08/9vD9f/vfD557/tF77717zqMLH3vyibvvf+TBhx567OGHH77vnv8+9viTc56a+9iDD9137yMP3H///f/98P899vDcRx988OH777vrvnt/e/e99zzw9BP3PXD/XXfd9cADDz7+6GMPP/TY40889uTDf3/ykYeeePjhJx956KEH77vrrrvunHPv/c/Mvvfee+Y88ND9/3v84UfuffbJeY8/dO+dD/1r9gN3PfTgUw8/eM9Tf7nv3lsef/Kh5x59/MnHn5rzwEP3P/r4Y3OfvPee+Q8/+8TDd//7wYcefPjxR+6/9577H3r0/kcfuPvBB/59599uuu/Oux6694E7fnvvgw/dc/e999971933/PuhRx56/LH7H7n/gYf/85+nHn3kP08+8eh/7r73rnvv+88d99z74H/uv+e+++65+94H/vPIow8/8vD9f3/0kUf/c/c99zz40CMPP/rYI48/+NjjDz/62CN/f+Cxx/7+6GM/f/R/H/rn3x56+N777nv0wQcf/s9/Hrr/vgfuvvvv99175z1/v/e++/99z/3/fvCB++556N5/3/foow/9+9FHHnvs8UeefOSJR/7990ceeeih/9z34D/vv+feex+49/5/3X//v++/58F7Hrz/of/cd899f/v3Iw899NDDjz3yyKN/f+yxJ/79yCMP/fehh/7z378/+PD9999373/u/ff99z7w6GOPPPLPf//7wf/c+/eH73/kkUfvv//++x56+P7/Pf74448//thjD/3jfwAAAAD//0RTYhIAAA==';
 
                     // Rapor HTML İskeleti
                     var reportHtml = '<!DOCTYPE html>' +
@@ -7307,9 +7425,9 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                         '<title>' + reportTitle + '</title>' +
                         (faviconHref ? '<link rel="icon" type="image/png" href="' + faviconHref + '">' : '') +
                         '<style>' +
-                        '@page { size: A4 portrait; margin: 12mm 15mm 15mm 15mm; }' +
-                        'body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; color: #1e293b; margin: 28px; line-height: 1.5; font-size: 12.5px; }' +
-                        'h1 { font-size: 19px; color: #0f172a; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; }' +
+                        '@page { size: A4 portrait; margin-top: 10mm; margin-bottom: 12mm; margin-left: 15mm; margin-right: 15mm; }' +
+                        'body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", Arial, sans-serif; color: #1e293b; margin: 28px; line-height: 1.5; font-size: 12.5px; }' +
+                        'h1 { font-size: 19px; color: #0f172a; margin-bottom: 4px; display: flex; align-items: center; }' +
                         'h2 { font-size: 13.5px; color: #1e3a8a; border-bottom: 2px solid #e2e8f0; padding-bottom: 4px; margin-top: 20px; }' +
                         'h3 { font-size: 12px; color: #1e3a8a; margin-top: 12px; }' +
                         'table { width: 100%; border-collapse: collapse; margin-top: 7px; font-size: 11.5px; }' +
@@ -7329,11 +7447,11 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                         '.warn-box.severe { background: #fef2f2; border-color: #fecaca; color: #991b1b; }' +
                         '.notice { margin-top: 18px; padding: 10px 14px; background: #f8fafc; border-left: 4px solid #3b82f6; font-size: 11px; color: #334155; border-radius: 4px; line-height: 1.5; }' +
                         '.chart-box { max-width: 460px; margin: 10px auto; padding: 6px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; }' +
-                        '.print-footer { display: none; }' +
+                        '.pdf-footer { display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #e2e8f0; padding-top: 6px; margin-top: 15px; font-size: 11px; color: #64748b; }' +
                         '@media print {' +
                         '  .no-print { display: none !important; }' +
-                        '  body { margin: 0 !important; padding-bottom: 24px !important; }' +
-                        '  .print-footer { display: flex !important; position: fixed; bottom: 0; left: 0; right: 0; height: 18px; border-top: 1px solid #cbd5e1; background: #ffffff; font-size: 9px; color: #64748b; justify-content: space-between; align-items: center; padding-top: 2px; }' +
+                        '  body { margin: 0 !important; }' +
+                        '  .pdf-footer { display: flex !important; justify-content: space-between; align-items: center; border-top: 1px solid #e2e8f0; padding-top: 6px; margin-top: 15px; font-size: 11px; color: #64748b; }' +
                         '  table { page-break-inside: auto; }' +
                         '  tr { page-break-inside: avoid; page-break-after: auto; }' +
                         '  thead { display: table-header-group; }' +
@@ -7341,141 +7459,148 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                         '  .math-card { page-break-inside: avoid; }' +
                         '  .warn-box, .notice, .chart-box { page-break-inside: avoid; }' +
                         '}' +
-                        '</style></head><body>' +
+                        '</style>' +
+                        '<script>' +
+                        'window.addEventListener("beforeprint", function () { window._sylvaPrevTitle = document.title; document.title = ""; });' +
+                        'window.addEventListener("afterprint", function () { if (window._sylvaPrevTitle) document.title = window._sylvaPrevTitle; });' +
+                        '<\/script>' +
+                        '</head><body>' +
                         '<div class="no-print" style="margin-bottom:12px;display:flex;justify-content:flex-end;">' +
-                        '<button onclick="window.print()" style="padding:8px 16px;background:#15803d;color:#fff;border:none;border-radius:6px;font-weight:600;cursor:pointer;">🖨️ ' + (curLang === 'en' ? 'Print / Save as PDF' : 'Yazdır / PDF Kaydet') + '</button>' +
+                        '<button onclick="window.print()" style="padding:8px 16px;background:#15803d;color:#fff;border:none;border-radius:6px;font-weight:600;cursor:pointer;">📄 ' + _cTxt('보고서 다운로드 (PDF)', 'Download Report (PDF)', 'Raporu İndir (PDF)') + '</button>' +
                         '</div>' +
-                        '<h1>🌲 ' + reportTitle + '</h1>' +
-                        '<div style="font-size:11.5px;color:#64748b;margin-bottom:12px;">' + (curLang === 'en' ? 'Report Date: ' : 'Rapor Tarihi: ') + nowStr + ' | ' + (curLang === 'en' ? 'Target Country: ' : 'Hedef Ülke: ') + countryCode + ' | ' + (curLang === 'en' ? 'Ecozone: ' : 'Ekozon: ') + ecozoneName + '</div>' +
+                        '<h1 style="display:flex; align-items:center;"><img src="' + sylvaBase64Logo + '" style="height: 18px; vertical-align: middle; margin-right: 8px;" alt="SylvaGIS Logo">' + reportTitle + '</h1>' +
+                        '<div style="font-size:11.5px;color:#64748b;margin-bottom:12px;">' + _cTxt('보고서 작성일: ', 'Report Date: ', 'Rapor Tarihi: ') + nowStr + ' | ' + _cTxt('대상 국가: ', 'Target Country: ', 'Hedef Ülke: ') + countryCode + ' | ' + _cTxt('생태대: ', 'Ecozone: ', 'Ekozon: ') + ecozoneName + '</div>' +
 
                         // ── BÖLÜM 1: Saha ve Ağaçlandırma Parametreleri ──
-                        '<h2>1. ' + (curLang === 'en' ? 'Site & Silvicultural Overview' : 'Saha ve Ağaçlandırma Parametreleri') + '</h2>' +
+                        '<h2>' + _cTxt('1. 입지 및 조림 파라미터 개요', '1. Site & Silvicultural Overview', '1. Saha ve Ağaçlandırma Parametreleri') + '</h2>' +
                         '<table>' +
-                        '<tr><th style="width:34%;">' + (curLang === 'en' ? 'Parameter' : 'Parametre') + '</th><th style="width:66%;">' + (curLang === 'en' ? 'Value' : 'Değer') + '</th></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'Target Tree Species' : 'Hedef Ağaç Türü') + '</td><td><b>' + (meta.species_name || st.species) + '</b>' + (meta.common_tr ? ' (' + meta.common_tr + ' / ' + (meta.common_en || '') + ')' : '') + ' <span class="badge">' + (curLang === 'en' ? 'Match: ' : 'Eşleşme: ') + (meta.match_level || 'standart') + '</span></td></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'Study Area' : 'Çalışma Alanı') + '</td><td>' + areaHa + ' ha (' + areaDa + ' dekar)</td></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'Planting Spacing & Density' : 'Dikim Deseni & Sıklığı') + '</td><td>' + (st.spacingX) + ' m × ' + (st.spacingY) + ' m (' + Math.round(meta.initial_trees_per_ha || 0) + ' ' + (curLang === 'en' ? 'seedlings/ha' : 'fidan/ha') + ')</td></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'Afforestation Density Scale' : 'Ağaçlandırma Yoğunluk Ölçeği') + '</td><td>%' + (st.densityScale != null ? st.densityScale : 100) + (st.densityScale && st.densityScale < 100 ? ' <span class="badge" style="background:#e0f2fe;color:#0369a1;border:1px solid #bae6fd;">' + (curLang === 'en' ? 'Dynamically Scaled' : 'Dinamik Ölçeklendi') + '</span>' : '') + '</td></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'Seedling Retention Rate' : 'Fidan Tutma Oranı') + '</td><td>%' + (st.retention) + ' (' + (curLang === 'en' ? 'Total Effective: ' : 'Toplam Efektif: ') + (st.effectiveTrees || 0).toLocaleString() + ' ' + (curLang === 'en' ? 'trees' : 'fidan') + ')</td></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'Rotation Period' : 'İdare Süresi (Rotasyon)') + '</td><td>' + (st.rotation) + ' ' + (curLang === 'en' ? 'years' : 'yıl') + '</td></tr>' +
+                        '<tr><th style="width:34%;">' + _cTxt('파라미터', 'Parameter', 'Parametre') + '</th><th style="width:66%;">' + _cTxt('값', 'Value', 'Değer') + '</th></tr>' +
+                        '<tr><td>' + _cTxt('대상 수종', 'Target Tree Species', 'Hedef Ağaç Türü') + '</td><td><b>' + (meta.species_name || st.species) + '</b>' + (meta.common_tr ? ' (' + (isKo ? (meta.common_ko || meta.common_en || meta.common_tr) : (isTr ? meta.common_tr : (meta.common_en || meta.common_tr))) + ')' : '') + ' <span class="badge">' + _cTxt('일치: ', 'Match: ', 'Eşleşme: ') + (meta.match_level || 'standart') + '</span></td></tr>' +
+                        '<tr><td>' + _cTxt('연구 대상 면적', 'Study Area', 'Çalışma Alanı') + '</td><td>' + areaHa + ' ha (' + areaDa + ' ' + _cTxt('데카르/10a', 'decare', 'dekar') + ')</td></tr>' +
+                        '<tr><td>' + _cTxt('식재 간격 및 밀도', 'Planting Spacing & Density', 'Dikim Deseni & Sıklığı') + '</td><td>' + (st.spacingX) + ' m × ' + (st.spacingY) + ' m (' + Math.round(meta.initial_trees_per_ha || 0) + ' ' + _cTxt('본/ha', 'seedlings/ha', 'fidan/ha') + ')</td></tr>' +
+                        '<tr><td>' + _cTxt('조림 밀도 스케일', 'Afforestation Density Scale', 'Ağaçlandırma Yoğunluk Ölçeği') + '</td><td>%' + (st.densityScale != null ? st.densityScale : 100) + (st.densityScale && st.densityScale < 100 ? ' <span class="badge" style="background:#e0f2fe;color:#0369a1;border:1px solid #bae6fd;">' + _cTxt('동적 조정됨', 'Dynamically Scaled', 'Dinamik Ölçeklendi') + '</span>' : '') + '</td></tr>' +
+                        '<tr><td>' + _cTxt('묘목 활착률', 'Seedling Retention Rate', 'Fidan Tutma Oranı') + '</td><td>%' + (st.retention) + ' (' + _cTxt('총 유효 본수: ', 'Total Effective: ', 'Toplam Efektif: ') + (st.effectiveTrees || 0).toLocaleString() + ' ' + _cTxt('본', 'trees', 'fidan') + ')</td></tr>' +
+                        '<tr><td>' + _cTxt('벌기령 (벌채 순환주기)', 'Rotation Period', 'İdare Süresi (Rotasyon)') + '</td><td>' + (st.rotation) + ' ' + _cTxt('년', 'years', 'yıl') + '</td></tr>' +
                         '</table>' +
 
                         // ── BÖLÜM 2: Seçilen Ülke, Ekozon ve Tür Katsayıları Tablosu ──
-                        '<h2>2. ' + (curLang === 'en' ? 'Selected Country, Ecozone & Growth Coefficients Table' : 'Seçilen Ülke, Ekozon ve Tür Katsayıları Tablosu') + '</h2>' +
+                        '<h2>' + _cTxt('2. 국가, 생태대 및 수종 생장 계수 표', '2. Selected Country, Ecozone & Growth Coefficients Table', '2. Seçilen Ülke, Ekozon ve Tür Katsayıları Tablosu') + '</h2>' +
                         '<table>' +
-                        '<tr><th style="width:34%;">' + (curLang === 'en' ? 'Parameter / Factor' : 'Katsayı / Parametre') + '</th><th style="width:20%;">' + (curLang === 'en' ? 'Symbol & Unit' : 'Sembol & Birim') + '</th><th style="width:22%;text-align:right;">' + (curLang === 'en' ? 'Calibrated Value' : 'Hesaplanan Değer') + '</th><th style="width:24%;">' + (curLang === 'en' ? 'Methodology / Source' : 'Metodoloji & Ekozon') + '</th></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'Target Species Name' : 'Seçilen Ağaç Türü') + '</td><td><i>Botanical Name</i></td><td style="text-align:right;font-weight:700;">' + (meta.species_name || st.species) + '</td><td>' + speciesCategoryLabel + '</td></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'Target Country & Ecozone' : 'Hedef Ülke & Ekozon') + '</td><td>ISO / Ecozone</td><td style="text-align:right;font-weight:700;">' + countryCode + '</td><td>' + ecozoneName + '</td></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'Basic Wood Density (D)' : 'Temel Odun Yoğunluğu (D)') + '</td><td>D (t DM / m³)</td><td style="text-align:right;font-weight:700;color:#0284c7;">' + dwVal + '</td><td>IPCC 2006/2019 Ecozone Tab. 4.4</td></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'Root-to-Shoot Ratio (R)' : 'Kök / Sürgün Oranı (R)') + '</td><td>R (BGB / AGB)</td><td style="text-align:right;font-weight:700;color:#0284c7;">' + rVal + '</td><td>' + (curLang === 'en' ? 'IPCC Tier 1 Tab. 4.7 (Below-Ground Biomass)' : 'IPCC Tier 1 Tab. 4.7 (Yeraltı Kökü)') + '</td></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'Biomass Expansion Factor (BEF)' : 'Biyokütle Genişletme Faktörü (BEF)') + '</td><td>BEF (' + (curLang === 'en' ? 'dimensionless' : 'boyutsuz') + ')</td><td style="text-align:right;font-weight:700;color:#0284c7;">' + befVal + '</td><td>' + (curLang === 'en' ? 'IPCC Standard (Stem → AGB Expansion)' : 'IPCC Standart (Gövde → Yerüstü)') + '</td></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'Carbon Fraction (CF)' : 'Karbon Fraksiyonu (CF)') + '</td><td>CF (t C / t DM)</td><td style="text-align:right;font-weight:700;">' + cfVal + '</td><td>' + (curLang === 'en' ? 'IPCC Tier 1 Standard (47% Carbon)' : 'IPCC Tier 1 Standart (47% Karbon)') + '</td></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'Equivalent CO₂ Conversion' : 'Eşdeğer CO₂ Dönüşüm Oranı') + '</td><td>CO₂ / C (mol/mol)</td><td style="text-align:right;font-weight:700;">' + co2RatioVal + '</td><td>' + (curLang === 'en' ? 'Molecular Stoichiometry (44 / 12)' : 'Moleküler Ağırlık (44 / 12)') + '</td></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'Mean Annual Increment (MAI)' : 'Yıllık Hacim Artım Potansiyeli (MAI)') + '</td><td>m³ / ha / ' + (curLang === 'en' ? 'yr' : 'yıl') + '</td><td style="text-align:right;font-weight:700;color:#15803d;">' + maiVal + '</td><td>' + (curLang === 'en' ? 'Ecozone-Calibrated Effective Increment' : 'Ekozon Tabanlı Efektif Artım') + '</td></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'Chapman-Richards Growth Rate (k)' : 'Chapman-Richards Büyüme Hızı (k)') + '</td><td>k (' + (curLang === 'en' ? 'yr⁻¹' : 'yıl⁻¹') + ')</td><td style="text-align:right;font-weight:700;color:#0f172a;">' + kVal + '</td><td>' + (curLang === 'en' ? 'Calibrated Stand Growth Rate' : 'Kalibre Edilmiş Büyüme Katsayısı') + '</td></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'Chapman-Richards Shape Exponent (p)' : 'Chapman-Richards Şekil Üssü (p)') + '</td><td>p / m (' + (curLang === 'en' ? 'dimensionless' : 'boyutsuz') + ')</td><td style="text-align:right;font-weight:700;">' + pVal + '</td><td>' + (curLang === 'en' ? 'Stand Allometric Shape Exponent' : 'Meşcere Allometrik Şekil Katsayısı') + '</td></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'Asymptotic Biomass Ceiling (A)' : 'Asimptotik Biyokütle Tavanı (A)') + '</td><td>A (t AGB / ha)</td><td style="text-align:right;font-weight:700;color:#0f172a;">' + aVal + '</td><td>A = V_max · D · BEF ' + (curLang === 'en' ? '(Theoretical Ceiling)' : '(Teorik Tavan)') + '</td></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'Site Suitability Factor (Sf)' : 'Ekolojik Saha Çarpanı (Sf)') + '</td><td>Sf (' + (curLang === 'en' ? 'dimensionless' : 'boyutsuz') + ')</td><td style="text-align:right;font-weight:700;color:#15803d;">' + sfVal + '</td><td>' + (curLang === 'en' ? 'GEE Topography, Climate & Soil Score' : 'GEE Topoğrafya, İklim ve Toprak Skoru') + '</td></tr>' +
+                        '<tr><th style="width:34%;">' + _cTxt('계수 / 파라미터', 'Parameter / Factor', 'Katsayı / Parametre') + '</th><th style="width:20%;">' + _cTxt('기호 및 단위', 'Symbol & Unit', 'Sembol & Birim') + '</th><th style="width:22%;text-align:right;">' + _cTxt('산출값', 'Calibrated Value', 'Hesaplanan Değer') + '</th><th style="width:24%;">' + _cTxt('방법론 및 출처', 'Methodology / Source', 'Metodoloji & Ekozon') + '</th></tr>' +
+                        '<tr><td>' + _cTxt('선택 수종 학명', 'Target Species Name', 'Seçilen Ağaç Türü') + '</td><td><i>Botanical Name</i></td><td style="text-align:right;font-weight:700;">' + (meta.species_name || st.species) + '</td><td>' + speciesCategoryLabel + '</td></tr>' +
+                        '<tr><td>' + _cTxt('대상 국가 & 생태대', 'Target Country & Ecozone', 'Hedef Ülke & Ekozon') + '</td><td>ISO / Ecozone</td><td style="text-align:right;font-weight:700;">' + countryCode + '</td><td>' + ecozoneName + '</td></tr>' +
+                        '<tr><td>' + _cTxt('기본 목재 밀도 (D)', 'Basic Wood Density (D)', 'Temel Odun Yoğunluğu (D)') + '</td><td>D (t DM / m³)</td><td style="text-align:right;font-weight:700;color:#0284c7;">' + dwVal + '</td><td>IPCC 2006/2019 Ecozone Tab. 4.4</td></tr>' +
+                        '<tr><td>' + _cTxt('지하부/지상부 비율 (R)', 'Root-to-Shoot Ratio (R)', 'Kök / Sürgün Oranı (R)') + '</td><td>R (BGB / AGB)</td><td style="text-align:right;font-weight:700;color:#0284c7;">' + rVal + '</td><td>' + _cTxt('IPCC Tier 1 표 4.7 (지하부 뿌리)', 'IPCC Tier 1 Tab. 4.7 (Below-Ground Biomass)', 'IPCC Tier 1 Tab. 4.7 (Yeraltı Kökü)') + '</td></tr>' +
+                        '<tr><td>' + _cTxt('바이오매스 확장 계수 (BEF)', 'Biomass Expansion Factor (BEF)', 'Biyokütle Genişletme Faktörü (BEF)') + '</td><td>BEF (' + _cTxt('무차원', 'dimensionless', 'boyutsuz') + ')</td><td style="text-align:right;font-weight:700;color:#0284c7;">' + befVal + '</td><td>' + _cTxt('IPCC 표준 (줄기 → 지상부 확장)', 'IPCC Standard (Stem → AGB Expansion)', 'IPCC Standart (Gövde → Yerüstü)') + '</td></tr>' +
+                        '<tr><td>' + _cTxt('탄소 함유율 (CF)', 'Carbon Fraction (CF)', 'Karbon Fraksiyonu (CF)') + '</td><td>CF (t C / t DM)</td><td style="text-align:right;font-weight:700;">' + cfVal + '</td><td>' + _cTxt('IPCC Tier 1 표준 (47% 탄소)', 'IPCC Tier 1 Standard (47% Carbon)', 'IPCC Tier 1 Standart (47% Karbon)') + '</td></tr>' +
+                        '<tr><td>' + _cTxt('이산화탄소(CO₂) 환산 계수', 'Equivalent CO₂ Conversion', 'Eşdeğer CO₂ Dönüşüm Oranı') + '</td><td>CO₂ / C (mol/mol)</td><td style="text-align:right;font-weight:700;">' + co2RatioVal + '</td><td>' + _cTxt('분자량 비 (44 / 12)', 'Molecular Stoichiometry (44 / 12)', 'Moleküler Ağırlık (44 / 12)') + '</td></tr>' +
+                        '<tr><td>' + _cTxt('연평균 생장량 (MAI)', 'Mean Annual Increment (MAI)', 'Yıllık Hacim Artım Potansiyeli (MAI)') + '</td><td>m³ / ha / ' + _cTxt('년', 'yr', 'yıl') + '</td><td style="text-align:right;font-weight:700;color:#15803d;">' + maiVal + '</td><td>' + _cTxt('생태대 보정 유효 생장량', 'Ecozone-Calibrated Effective Increment', 'Ekozon Tabanlı Efektif Artım') + '</td></tr>' +
+                        '<tr><td>' + _cTxt('채프먼-리차즈 생장률 (k)', 'Chapman-Richards Growth Rate (k)', 'Chapman-Richards Büyüme Hızı (k)') + '</td><td>k (' + _cTxt('년⁻¹', 'yr⁻¹', 'yıl⁻¹') + ')</td><td style="text-align:right;font-weight:700;color:#0f172a;">' + kVal + '</td><td>' + _cTxt('보정된 임분 생장 속도', 'Calibrated Stand Growth Rate', 'Kalibre Edilmiş Büyüme Katsayısı') + '</td></tr>' +
+                        '<tr><td>' + _cTxt('채프먼-리차즈 형상 지수 (p)', 'Chapman-Richards Shape Exponent (p)', 'Chapman-Richards Şekil Üssü (p)') + '</td><td>p / m (' + _cTxt('무차원', 'dimensionless', 'boyutsuz') + ')</td><td style="text-align:right;font-weight:700;">' + pVal + '</td><td>' + _cTxt('임분 상대생장 형상 지수', 'Stand Allometric Shape Exponent', 'Meşcere Allometrik Şekil Katsayısı') + '</td></tr>' +
+                        '<tr><td>' + _cTxt('점근적 바이오매스 상한 (A)', 'Asymptotic Biomass Ceiling (A)', 'Asimptotik Biyokütle Tavanı (A)') + '</td><td>A (t AGB / ha)</td><td style="text-align:right;font-weight:700;color:#0f172a;">' + aVal + '</td><td>A = V_max · D · BEF ' + _cTxt('(이론적 상한)', '(Theoretical Ceiling)', '(Teorik Tavan)') + '</td></tr>' +
+                        '<tr><td>' + _cTxt('입지 적합성 계수 (Sf)', 'Site Suitability Factor (Sf)', 'Ekolojik Saha Çarpanı (Sf)') + '</td><td>Sf (' + _cTxt('무차원', 'dimensionless', 'boyutsuz') + ')</td><td style="text-align:right;font-weight:700;color:#15803d;">' + sfVal + '</td><td>' + _cTxt('GEE 지형, 기후 및 토양 평가 지수', 'GEE Topography, Climate & Soil Score', 'GEE Topoğrafya, İklim ve Toprak Skoru') + '</td></tr>' +
                         '</table>' +
 
                         // ── BÖLÜM 3: Saha Koşulları & Coğrafi Veri Özeti Tablosu ──
-                        '<h2>3. ' + (curLang === 'en' ? 'Site Conditions & Earth Observation Data (Google Earth Engine)' : 'Saha Koşulları & Coğrafi Veri Özeti Tablosu (Google Earth Engine)') + '</h2>' +
+                        '<h2>' + _cTxt('3. 입지 환경 및 원격탐사 관측 데이터 (Google Earth Engine)', '3. Site Conditions & Earth Observation Data (Google Earth Engine)', '3. Saha Koşulları & Coğrafi Veri Özeti Tablosu (Google Earth Engine)') + '</h2>' +
                         '<table>' +
-                        '<tr><th style="width:34%;">' + (curLang === 'en' ? 'Geographic / Environmental Layer' : 'Coğrafi / Çevresel Katman') + '</th><th style="width:66%;">' + (curLang === 'en' ? 'Satellite Measurement & Ecological Status' : 'Uydu Ölçüm Değeri ve Ekolojik Durum') + '</th></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'General Suitability & Score' : 'Genel Uyum Durumu & Skoru') + '</td><td><span class="' + badgeClass + '">' + badgeLabel + '</span> — ' + (curLang === 'en' ? 'Site Factor (Sf): ' : 'Saha Çarpanı (Sf): ') + '<b>' + sfVal + '</b> (' + (curLang === 'en' ? 'Index: %' : 'Uyum İndeksi: %') + sfPct + ')</td></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'Topography (Elevation, Slope, Aspect)' : 'Topoğrafya (Rakım, Eğim, Bakı)') + '</td><td>' + (curLang === 'en' ? 'Elevation: ' : 'Ortalama Rakım: ') + '<b>' + elevText + '</b> (USGS SRTM 30m) | ' + (curLang === 'en' ? 'Slope/Aspect: ' : 'Eğim/Bakı: ') + '<b>' + slopeAspText + '</b></td></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'Bioclimatic Normals (Temperature & Rain)' : 'Biyoklimatik Normaller (Sıcaklık & Yağış)') + '</td><td>' + (curLang === 'en' ? 'Annual Mean Temp: ' : 'Yıllık Ortalama Sıcaklık: ') + '<b>' + tempText + '</b> | ' + (curLang === 'en' ? 'Annual Mean Precip: ' : 'Yıllık Ortalama Yağış: ') + '<b>' + precipText + '</b> (WorldClim BIO)</td></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'Climate Zone & Ecozone (IPCC / Köppen)' : 'İklim Kuşağı & IPCC Ekozonu') + '</td><td><b>' + ecozoneName + '</b></td></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'Soil Characteristics (FAO / OpenLandMap)' : 'Toprak Yapısı & Türü (FAO / OpenLandMap)') + '</td><td>' + (curLang === 'en' ? 'Dominant Soil Group: ' : 'Baskın Toprak Grubu: ') + '<b>' + soilGroup + '</b> | ' + (curLang === 'en' ? 'Texture: ' : 'Doku: ') + '<b>' + soilTexture + '</b> | ' + (curLang === 'en' ? 'Soil SOC: ' : 'Toprak SOC: ') + '<b>' + socText + '</b></td></tr>' +
-                        (optDetails.length ? '<tr><td>' + (curLang === 'en' ? 'Species Ecological Niche Range' : 'Tür Optimum Ekolojik Nişi') + '</td><td>' + optDetails.join(' | ') + '</td></tr>' : '') +
+                        '<tr><th style="width:34%;">' + _cTxt('지리 / 환경 레이어', 'Geographic / Environmental Layer', 'Coğrafi / Çevresel Katman') + '</th><th style="width:66%;">' + _cTxt('위성 관측값 및 생태적 상태', 'Satellite Measurement & Ecological Status', 'Uydu Ölçüm Değeri ve Ekolojik Durum') + '</th></tr>' +
+                        '<tr><td>' + _cTxt('종합 적합성 및 점수', 'General Suitability & Score', 'Genel Uyum Durumu & Skoru') + '</td><td><span class="' + badgeClass + '">' + badgeLabel + '</span> — ' + _cTxt('입지 계수 (Sf): ', 'Site Factor (Sf): ', 'Saha Çarpanı (Sf): ') + '<b>' + sfVal + '</b> (' + _cTxt('적합도: %', 'Index: %', 'Uyum İndeksi: %') + sfPct + ')</td></tr>' +
+                        '<tr><td>' + _cTxt('지형 (해발고도, 경사, 방위)', 'Topography (Elevation, Slope, Aspect)', 'Topoğrafya (Rakım, Eğim, Bakı)') + '</td><td>' + _cTxt('평균 해발고도: ', 'Elevation: ', 'Ortalama Rakım: ') + '<b>' + elevText + '</b> (USGS SRTM 30m) | ' + _cTxt('경사/방위: ', 'Slope/Aspect: ', 'Eğim/Bakı: ') + '<b>' + slopeAspText + '</b></td></tr>' +
+                        '<tr><td>' + _cTxt('생물기후 평년값 (기온 및 강수량)', 'Bioclimatic Normals (Temperature & Rain)', 'Biyoklimatik Normaller (Sıcaklık & Yağış)') + '</td><td>' + _cTxt('연평균 기온: ', 'Annual Mean Temp: ', 'Yıllık Ortalama Sıcaklık: ') + '<b>' + tempText + '</b> | ' + _cTxt('연평균 강수량: ', 'Annual Mean Precip: ', 'Yıllık Ortalama Yağış: ') + '<b>' + precipText + '</b> (WorldClim BIO)</td></tr>' +
+                        '<tr><td>' + _cTxt('기후대 및 IPCC 생태대', 'Climate Zone & Ecozone (IPCC / Köppen)', 'İklim Kuşağı & IPCC Ekozonu') + '</td><td><b>' + ecozoneName + '</b></td></tr>' +
+                        '<tr><td>' + _cTxt('토양 특성 (FAO / OpenLandMap)', 'Soil Characteristics (FAO / OpenLandMap)', 'Toprak Yapısı & Türü (FAO / OpenLandMap)') + '</td><td>' + _cTxt('우점 토양군: ', 'Dominant Soil Group: ', 'Baskın Toprak Grubu: ') + '<b>' + soilGroup + '</b> | ' + _cTxt('토성: ', 'Texture: ', 'Doku: ') + '<b>' + soilTexture + '</b> | ' + _cTxt('토양 유기탄소(SOC): ', 'Soil SOC: ', 'Toprak SOC: ') + '<b>' + socText + '</b></td></tr>' +
+                        (optDetails.length ? '<tr><td>' + _cTxt('수종 최적 생태 지위(Niche)', 'Species Ecological Niche Range', 'Tür Optimum Ekolojik Nişi') + '</td><td>' + optDetails.join(' | ') + '</td></tr>' : '') +
                         '</table>' +
                         esriHtml +
                         warnHtml +
 
                         // ── BÖLÜM 4: Matematiksel Modelleme ve Formüller Bölümü ──
-                        '<h2>4. ' + (curLang === 'en' ? 'Mathematical Modeling & Formulations' : 'Matematiksel Modelleme ve Formüller Bölümü') + '</h2>' +
+                        '<h2>' + _cTxt('4. 수학적 모델링 및 산정 공식', '4. Mathematical Modeling & Formulations', '4. Matematiksel Modelleme ve Formüller Bölümü') + '</h2>' +
                         '<div class="math-card">' +
-                        '<div class="math-title">1. ' + (curLang === 'en' ? 'Stand Growth Model (Chapman-Richards S-Curve Equation)' : 'Ağaç Büyüme Modeli (Chapman-Richards S-Eğrisi Fonksiyonu)') + '</div>' +
+                        '<div class="math-title">' + _cTxt('1. 임분 생장 모델 (채프먼-리차즈 S곡선 방정식)', '1. Stand Growth Model (Chapman-Richards S-Curve Equation)', '1. Ağaç Büyüme Modeli (Chapman-Richards S-Eğrisi Fonksiyonu)') + '</div>' +
                         '<div class="math-eq">B(t) = A · (1 - e^{-k · t})^p</div>' +
-                        '<div class="math-desc">' + (curLang === 'en'
-                            ? 'Models cumulative stem volume and biomass progression over time (t in years). Parameter A represents asymptotic saturation biomass, k denotes annual growth rate coefficient, and p represents stand allometric shape parameter.' + (spGroup === 'fruit_tree' ? ' For agroforestry/orchard species, growth asymptote A reflects open-canopy architecture and systematic pruning under IPCC Perennial Cropland guidelines.' : '')
-                            : 'Zaman (t, yıl) boyunca kümülatif gövde hacmi ve biyokütle gelişimini modelleyen non-lineer biyolojik büyüme fonksiyonudur. A asimptotik doygunluk tavanını, k yıllık artım katsayısını, p meşcere allometrik şekil üssünü simgeler.' + (spGroup === 'fruit_tree' ? ' Meyve/yemiş ve tarımsal ormancılık (agroforestry) türlerinde A tavanı, açık taç mimarisi ve budama yönetimi gereği IPCC Çok Yıllık Tarım kılavuzlarına göre kalibre edilmiştir.' : '')) + '</div>' +
-                        '<div class="math-params">' + (curLang === 'en' ? ('Calibrated Parameters: A = ' + aVal + ' t AGB/ha | k = ' + kVal + ' yr⁻¹ | p = ' + pVal) : ('Kalibre Değerler: A = ' + aVal + ' t AGB/ha | k = ' + kVal + ' yıl⁻¹ | p = ' + pVal)) + '</div>' +
+                        '<div class="math-desc">' + (isKo
+                            ? ('시간(t, 년) 경과에 따른 누적 줄기 재적 및 바이오매스 증가를 모델링하는 비선형 생물학적 생장 함수입니다. A는 점근적 포화 상한, k는 연간 생장률 계수, p는 임분 상대생장 형상 지수입니다.' + (spGroup === 'fruit_tree' ? ' 과수 및 혼농임업 수종의 경우 점근치 A는 개방형 수관 구조와 전정 관리를 고려하여 IPCC 다년생 농경지 지침에 따라 보정되었습니다.' : ''))
+                            : (isEn
+                                ? ('Models cumulative stem volume and biomass progression over time (t in years). Parameter A represents asymptotic saturation biomass, k denotes annual growth rate coefficient, and p represents stand allometric shape parameter.' + (spGroup === 'fruit_tree' ? ' For agroforestry/orchard species, growth asymptote A reflects open-canopy architecture and systematic pruning under IPCC Perennial Cropland guidelines.' : ''))
+                                : ('Zaman (t, yıl) boyunca kümülatif gövde hacmi ve biyokütle gelişimini modelleyen non-lineer biyolojik büyüme fonksiyonudur. A asimptotik doygunluk tavanını, k yıllık artım katsayısını, p meşcere allometrik şekil üssünü simgeler.' + (spGroup === 'fruit_tree' ? ' Meyve/yemiş ve tarımsal ormancılık (agroforestry) türlerinde A tavanı, açık taç mimarisi ve budama yönetimi gereği IPCC Çok Yıllık Tarım kılavuzlarına göre kalibre edilmiştir.' : '')))) + '</div>' +
+                        '<div class="math-params">' + _cTxt('보정 계수값: A = ' + aVal + ' t AGB/ha | k = ' + kVal + ' 년⁻¹ | p = ' + pVal, 'Calibrated Parameters: A = ' + aVal + ' t AGB/ha | k = ' + kVal + ' yr⁻¹ | p = ' + pVal, 'Kalibre Değerler: A = ' + aVal + ' t AGB/ha | k = ' + kVal + ' yıl⁻¹ | p = ' + pVal) + '</div>' +
                         '</div>' +
 
                         '<div class="math-card">' +
-                        '<div class="math-title">2. ' + (curLang === 'en' ? 'Total Above-Ground Biomass (AGB)' : 'Toplam Yer Üstü Biyokütle (AGB)') + '</div>' +
+                        '<div class="math-title">' + _cTxt('2. 총 지상부 바이오매스 (AGB)', '2. Total Above-Ground Biomass (AGB)', '2. Toplam Yer Üstü Biyokütle (AGB)') + '</div>' +
                         '<div class="math-eq">AGB(t) = V(t) · D · BEF</div>' +
-                        '<div class="math-desc">' + (curLang === 'en'
-                            ? 'V(t) is stand stem volume (m³/ha), D is basic wood density (ton dry matter per m³ fresh volume), and BEF is Biomass Expansion Factor accounting for crown, branch, foliage, and bark fractions.' + (spGroup === 'fruit_tree' ? ' For orchard/agroforestry systems, BEF reflects the high branch-to-trunk ratio characteristic of pruned open crowns.' : '')
-                            : 'V(t) meşcere gövde hacmi (m³/ha), D temel odun yoğunluğu (t kuru madde / m³ gövde hacmi), BEF gövde hacmini tepe çatısı, ibre/yaprak, dal ve kabuk biyokütlesiyle birleştiren genişletme faktörüdür.' + (spGroup === 'fruit_tree' ? ' Meyve bahçelerinde ve tarımsal ormancılık sistemlerinde BEF, budanmış açık taç yapısının yüksek dal-gövde oranını yansıtır.' : '')) + '</div>' +
-                        '<div class="math-params">' + (curLang === 'en' ? ('Applied Coefficients: D = ' + dwVal + ' t/m³ | BEF = ' + befVal) : ('Kullanılan Katsayılar: D = ' + dwVal + ' t/m³ | BEF = ' + befVal)) + '</div>' +
+                        '<div class="math-desc">' + (isKo
+                            ? ('V(t)는 임분 줄기 재적(m³/ha), D는 기본 목재 밀도(t 건중량/m³ 생재적), BEF는 줄기 재적을 수관, 잎, 가지, 수피 바이오매스로 확장하는 계수입니다.' + (spGroup === 'fruit_tree' ? ' 과수원 및 혼농임업 시스템의 BEF는 전정된 수관의 높은 가지 비율을 반영합니다.' : ''))
+                            : (isEn
+                                ? ('V(t) is stand stem volume (m³/ha), D is basic wood density (ton dry matter per m³ fresh volume), and BEF is Biomass Expansion Factor accounting for crown, branch, foliage, and bark fractions.' + (spGroup === 'fruit_tree' ? ' For orchard/agroforestry systems, BEF reflects the high branch-to-trunk ratio characteristic of pruned open crowns.' : ''))
+                                : ('V(t) meşcere gövde hacmi (m³/ha), D temel odun yoğunluğu (t kuru madde / m³ gövde hacmi), BEF gövde hacmini tepe çatısı, ibre/yaprak, dal ve kabuk biyokütlesiyle birleştiren genişletme faktörüdür.' + (spGroup === 'fruit_tree' ? ' Meyve bahçelerinde ve tarımsal ormancılık sistemlerinde BEF, budanmış açık taç yapısının yüksek dal-gövde oranını yansıtır.' : '')))) + '</div>' +
+                        '<div class="math-params">' + _cTxt('적용 계수: D = ' + dwVal + ' t/m³ | BEF = ' + befVal, 'Applied Coefficients: D = ' + dwVal + ' t/m³ | BEF = ' + befVal, 'Kullanılan Katsayılar: D = ' + dwVal + ' t/m³ | BEF = ' + befVal) + '</div>' +
                         '</div>' +
 
                         '<div class="math-card">' +
-                        '<div class="math-title">3. ' + (curLang === 'en' ? 'Below-Ground (Root) Biomass (BGB)' : 'Yeraltı (Kök) Biyokütlesi (BGB)') + '</div>' +
+                        '<div class="math-title">' + _cTxt('3. 지하부(뿌리) 바이오매스 (BGB)', '3. Below-Ground (Root) Biomass (BGB)', '3. Yeraltı (Kök) Biyokütlesi (BGB)') + '</div>' +
                         '<div class="math-eq">BGB(t) = AGB(t) · R</div>' +
-                        '<div class="math-desc">' + (curLang === 'en'
-                            ? 'R is the root-to-shoot ratio. Quantifies root biomass based on tree species adaptations to climate, rainfall regimes, and soil drought tolerance.' + (spGroup === 'fruit_tree' ? ' For fruit and nut species, root-to-shoot ratio accounts for deep taproots and perennial carbohydrate storage.' : '')
-                            : 'R kök/sürgün oranıdır. Ağaç türünün iklim kuşağına, kuraklık kısıtına ve su arama derinliğine göre yer altında depolanan kök sistemini hesaplar.' + (spGroup === 'fruit_tree' ? ' Meyve ve yemiş türlerinde derin kazık kök yapısını ve kalıcı karbon rezervlerini temsil eder.' : '')) + '</div>' +
-                        '<div class="math-params">' + (curLang === 'en' ? ('Applied Coefficient: R = ' + rVal + ' (BGB / AGB)') : ('Kullanılan Katsayı: R = ' + rVal + ' (BGB / AGB)')) + '</div>' +
+                        '<div class="math-desc">' + (isKo
+                            ? ('R은 지하부/지상부 비율입니다. 기후대, 가뭄 저항성 및 토양 심도에 따른 수종별 적응 특성을 바탕으로 지하 뿌리계 바이오매스를 산정합니다.' + (spGroup === 'fruit_tree' ? ' 과수 및 견과류 수종의 심근성 직근과 다년생 탄소 저장능을 반영합니다.' : ''))
+                            : (isEn
+                                ? ('R is the root-to-shoot ratio. Quantifies root biomass based on tree species adaptations to climate, rainfall regimes, and soil drought tolerance.' + (spGroup === 'fruit_tree' ? ' For fruit and nut species, root-to-shoot ratio accounts for deep taproots and perennial carbohydrate storage.' : ''))
+                                : ('R kök/sürgün oranıdır. Ağaç türünün iklim kuşağına, kuraklık kısıtına ve su arama derinliğine göre yer altında depolanan kök sistemini hesaplar.' + (spGroup === 'fruit_tree' ? ' Meyve ve yemiş türlerinde derin kazık kök yapısını ve kalıcı karbon rezervlerini temsil eder.' : '')))) + '</div>' +
+                        '<div class="math-params">' + _cTxt('적용 계수: R = ' + rVal + ' (BGB / AGB)', 'Applied Coefficient: R = ' + rVal + ' (BGB / AGB)', 'Kullanılan Katsayı: R = ' + rVal + ' (BGB / AGB)') + '</div>' +
                         '</div>' +
 
                         '<div class="math-card">' +
-                        '<div class="math-title">4. ' + (curLang === 'en' ? 'Total Carbon Stock & Dynamic Balance' : 'Toplam Karbon Stoku ve Dinamik Denge (C)') + '</div>' +
+                        '<div class="math-title">' + _cTxt('4. 총 탄소 축적량 및 동적 수지 (C)', '4. Total Carbon Stock & Dynamic Balance', '4. Toplam Karbon Stoku ve Dinamik Denge (C)') + '</div>' +
                         '<div class="math-eq">C(t) = (AGB(t) + BGB(t)) · CF · (1 - M) · (1 - H)</div>' +
-                        '<div class="math-desc">' + (curLang === 'en'
-                            ? 'CF = 0.47 (IPCC Tier 1 standard carbon fraction of dry wood), M represents natural stand mortality rate (~0.3-0.5%/yr), and H represents thinning/harvest removal rate in year t.'
-                            : 'CF = 0.47 (IPCC fırın kurusu biyokütledeki karbon fraksiyonu), M doğal meşcere ölüm/mortalite oranı (~%0.3-0.5/yıl), H silvikültürel aralama veya hasatla sahadan çıkarılan gövde oranıdır.') + '</div>' +
-                        '<div class="math-params">' + (curLang === 'en' ? ('Constants: CF = ' + cfVal + ' t C / t DM | Stand Mortality M ≈ 0.3%/yr | Soil Organic Carbon (SOC) Accumulation: +0.35 t C/ha/yr') : ('Sabitler: CF = ' + cfVal + ' t C / t DM | Yıllık Doğal Mortalite M ≈ %0.3 | Organik Toprak SOC Artımı: +0.35 t C/ha/yıl')) + '</div>' +
+                        '<div class="math-desc">' + _cTxt('CF = 0.47 (건조 목재 내 탄소 함유율 기본값), M은 자연 고사율(~0.3-0.5%/년), H는 해당 연도의 간벌/벌채 제거율을 나타냅니다.', 'CF = 0.47 (IPCC Tier 1 standard carbon fraction of dry wood), M represents natural stand mortality rate (~0.3-0.5%/yr), and H represents thinning/harvest removal rate in year t.', 'CF = 0.47 (IPCC fırın kurusu biyokütledeki karbon fraksiyonu), M doğal meşcere ölüm/mortalite oranı (~%0.3-0.5/yıl), H silvikültürel aralama veya hasatla sahadan çıkarılan gövde oranıdır.') + '</div>' +
+                        '<div class="math-params">' + _cTxt('상수: CF = ' + cfVal + ' t C / t DM | 연간 자연 고사율 M ≈ 0.3%/년 | 토양 유기탄소(SOC) 축적: +0.35 t C/ha/년', 'Constants: CF = ' + cfVal + ' t C / t DM | Stand Mortality M ≈ 0.3%/yr | Soil Organic Carbon (SOC) Accumulation: +0.35 t C/ha/yr', 'Sabitler: CF = ' + cfVal + ' t C / t DM | Yıllık Doğal Mortalite M ≈ %0.3 | Organik Toprak SOC Artımı: +0.35 t C/ha/yıl') + '</div>' +
                         '</div>' +
 
                         '<div class="math-card">' +
-                        '<div class="math-title">5. ' + (curLang === 'en' ? 'Equivalent CO₂ Sequestration Conversion' : 'Eşdeğer CO₂ Dönüşümü (CO₂e)') + '</div>' +
+                        '<div class="math-title">' + _cTxt('5. 이산화탄소 상당량(CO₂e) 격리 환산', '5. Equivalent CO₂ Sequestration Conversion', '5. Eşdeğer CO₂ Dönüşümü (CO₂e)') + '</div>' +
                         '<div class="math-eq">CO₂(t) = C(t) · (44 / 12)</div>' +
-                        '<div class="math-desc">' + (curLang === 'en'
-                            ? 'Multiplies carbon stock by the stoichiometric molecular weight ratio of carbon dioxide (CO₂ = 44.01 g/mol) to elemental carbon (C = 12.011 g/mol), equaling 3.6667.'
-                            : 'Atmosferik karbondioksitin (CO₂ = 44.01 g/mol) elementer karbona (C = 12.011 g/mol) olan stokiyometrik moleküler ağırlık oranıdır (44/12 ≈ 3.6667).') + '</div>' +
-                        '<div class="math-params">' + (curLang === 'en' ? ('Conversion Factor: 44 / 12 = ' + co2RatioVal + ' t CO₂e / t C') : ('Dönüşüm Katsayısı: 44 / 12 = ' + co2RatioVal + ' t CO₂e / t C')) + '</div>' +
+                        '<div class="math-desc">' + _cTxt('탄소 축적량에 이산화탄소(CO₂ = 44.01 g/mol) 대 원소 탄소(C = 12.011 g/mol)의 화학량론적 분자량 비율(44/12 ≈ 3.6667)을 곱하여 CO₂ 상당량으로 환산합니다.', 'Multiplies carbon stock by the stoichiometric molecular weight ratio of carbon dioxide (CO₂ = 44.01 g/mol) to elemental carbon (C = 12.011 g/mol), equaling 3.6667.', 'Atmosferik karbondioksitin (CO₂ = 44.01 g/mol) elementer karbona (C = 12.011 g/mol) olan stokiyometrik moleküler ağırlık oranıdır (44/12 ≈ 3.6667).') + '</div>' +
+                        '<div class="math-params">' + _cTxt('환산 계수: 44 / 12 = ' + co2RatioVal + ' t CO₂e / t C', 'Conversion Factor: 44 / 12 = ' + co2RatioVal + ' t CO₂e / t C', 'Dönüşüm Katsayısı: 44 / 12 = ' + co2RatioVal + ' t CO₂e / t C') + '</div>' +
                         '</div>' +
 
                         // ── BÖLÜM 5: Karbon Stoğu ve Yutak Dengesi (İdare Süresi Sonu) ──
-                        '<h2>5. ' + (curLang === 'en' ? 'Carbon Stock & Yield Balance (End of Rotation)' : 'Karbon Stoğu ve Yutak Dengesi (İdare Süresi Sonu)') + '</h2>' +
+                        '<h2>' + _cTxt('5. 탄소 축적량 및 흡수 수지 (벌기령 종료 시)', '5. Carbon Stock & Yield Balance (End of Rotation)', '5. Karbon Stoğu ve Yutak Dengesi (İdare Süresi Sonu)') + '</h2>' +
                         '<table>' +
-                        '<tr><th>' + (curLang === 'en' ? 'Metric / Indicator' : 'Metrik / Gösterge') + '</th><th style="text-align:right;">' + (curLang === 'en' ? 'Managed Scenario (with Thinning)' : 'Yönetilen Senaryo (Aralamalı)') + '</th><th style="text-align:right;">' + (curLang === 'en' ? 'Baseline (Unmanaged)' : 'Müdahalesiz (Baseline)') + '</th></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'Standing Carbon Stock' : 'Duran Meşcere Karbon Stoğu') + '</td><td style="text-align:right;font-weight:600;color:#15803d;">' + (managed.total_standing_co2e || 0).toFixed(1) + ' tCO2e (' + (managed.total_standing_c != null ? managed.total_standing_c.toFixed(1) : '—') + ' tC)</td><td style="text-align:right;">' + (baseline.total_standing_co2e || 0).toFixed(1) + ' tCO2e</td></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'Cumulative Harvested Carbon' : 'Kümülatif Hasat Edilen Karbon') + '</td><td style="text-align:right;font-weight:600;color:#b45309;">' + (managed.total_harvested_co2e || 0).toFixed(1) + ' tCO2e (' + (managed.total_harvested_c != null ? managed.total_harvested_c.toFixed(1) : '—') + ' tC)</td><td style="text-align:right;">0.0 tCO2e</td></tr>' +
-                        '<tr style="background:#f8fafc;font-weight:bold;"><td>' + (curLang === 'en' ? 'Total Cumulative Sequestered CO2e' : 'Toplam Kümülatif Tutulan CO2e') + '</td><td style="text-align:right;color:#0f172a;font-size:12.5px;">' + (managed.grand_total_co2e || 0).toFixed(1) + ' tCO2e</td><td style="text-align:right;color:#64748b;">' + (baseline.grand_total_co2e || 0).toFixed(1) + ' tCO2e</td></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'Mean Annual Sequestration' : 'Yıllık Ortalama CO2 Tutumu') + '</td><td style="text-align:right;color:#0284c7;font-weight:600;">' + (managed.mean_annual_sequestration_co2e || 0).toFixed(2) + ' tCO2e/' + (curLang === 'en' ? 'yr' : 'yıl') + '</td><td style="text-align:right;">' + (baseline.mean_annual_sequestration_co2e || 0).toFixed(2) + ' tCO2e/' + (curLang === 'en' ? 'yr' : 'yıl') + '</td></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'Final Mean DBH' : 'Nihai Ortalama Göğüs Çapı (DBH)') + '</td><td style="text-align:right;">' + (managed.final_mean_dbh_cm != null ? managed.final_mean_dbh_cm.toFixed(1) + ' cm' : '—') + '</td><td style="text-align:right;">' + (baseline.final_mean_dbh_cm != null ? baseline.final_mean_dbh_cm.toFixed(1) + ' cm' : '—') + '</td></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'Final Mean Height' : 'Nihai Ortalama Ağaç Boyu (H)') + '</td><td style="text-align:right;">' + (managed.final_mean_height_m != null ? managed.final_mean_height_m.toFixed(1) + ' m' : '—') + '</td><td style="text-align:right;">' + (baseline.final_mean_height_m != null ? baseline.final_mean_height_m.toFixed(1) + ' m' : '—') + '</td></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'Final Stand Density' : 'Nihai Ağaç Sıklığı') + '</td><td style="text-align:right;">' + (managed.final_trees_per_ha != null ? Math.round(managed.final_trees_per_ha) + ' ' + (curLang === 'en' ? 'trees/ha' : 'ağaç/ha') : '—') + '</td><td style="text-align:right;">' + (baseline.final_trees_per_ha != null ? Math.round(baseline.final_trees_per_ha) + ' ' + (curLang === 'en' ? 'trees/ha' : 'ağaç/ha') : '—') + '</td></tr>' +
+                        '<tr><th>' + _cTxt('지표 / 항목', 'Metric / Indicator', 'Metrik / Gösterge') + '</th><th style="text-align:right;">' + _cTxt('관리 시나리오 (간벌 포함)', 'Managed Scenario (with Thinning)', 'Yönetilen Senaryo (Aralamalı)') + '</th><th style="text-align:right;">' + _cTxt('기준선 (비관리)', 'Baseline (Unmanaged)', 'Müdahalesiz (Baseline)') + '</th></tr>' +
+                        '<tr><td>' + _cTxt('잔존 임목 탄소 축적량', 'Standing Carbon Stock', 'Duran Meşcere Karbon Stoğu') + '</td><td style="text-align:right;font-weight:600;color:#15803d;">' + (managed.total_standing_co2e || 0).toFixed(1) + ' tCO2e (' + (managed.total_standing_c != null ? managed.total_standing_c.toFixed(1) : '—') + ' tC)</td><td style="text-align:right;">' + (baseline.total_standing_co2e || 0).toFixed(1) + ' tCO2e</td></tr>' +
+                        '<tr><td>' + _cTxt('누적 간벌 수확 탄소량', 'Cumulative Harvested Carbon', 'Kümülatif Hasat Edilen Karbon') + '</td><td style="text-align:right;font-weight:600;color:#b45309;">' + (managed.total_harvested_co2e || 0).toFixed(1) + ' tCO2e (' + (managed.total_harvested_c != null ? managed.total_harvested_c.toFixed(1) : '—') + ' tC)</td><td style="text-align:right;">0.0 tCO2e</td></tr>' +
+                        '<tr style="background:#f8fafc;font-weight:bold;"><td>' + _cTxt('총 누적 격리 CO2e', 'Total Cumulative Sequestered CO2e', 'Toplam Kümülatif Tutulan CO2e') + '</td><td style="text-align:right;color:#0f172a;font-size:12.5px;">' + (managed.grand_total_co2e || 0).toFixed(1) + ' tCO2e</td><td style="text-align:right;color:#64748b;">' + (baseline.grand_total_co2e || 0).toFixed(1) + ' tCO2e</td></tr>' +
+                        '<tr><td>' + _cTxt('연평균 CO2 격리량', 'Mean Annual Sequestration', 'Yıllık Ortalama CO2 Tutumu') + '</td><td style="text-align:right;color:#0284c7;font-weight:600;">' + (managed.mean_annual_sequestration_co2e || 0).toFixed(2) + ' tCO2e/' + _cTxt('년', 'yr', 'yıl') + '</td><td style="text-align:right;">' + (baseline.mean_annual_sequestration_co2e || 0).toFixed(2) + ' tCO2e/' + _cTxt('년', 'yr', 'yıl') + '</td></tr>' +
+                        '<tr><td>' + _cTxt('최종 평균 흉고직경 (DBH)', 'Final Mean DBH', 'Nihai Ortalama Göğüs Çapı (DBH)') + '</td><td style="text-align:right;">' + (managed.final_mean_dbh_cm != null ? managed.final_mean_dbh_cm.toFixed(1) + ' cm' : '—') + '</td><td style="text-align:right;">' + (baseline.final_mean_dbh_cm != null ? baseline.final_mean_dbh_cm.toFixed(1) + ' cm' : '—') + '</td></tr>' +
+                        '<tr><td>' + _cTxt('최종 평균 수고 (H)', 'Final Mean Height', 'Nihai Ortalama Ağaç Boyu (H)') + '</td><td style="text-align:right;">' + (managed.final_mean_height_m != null ? managed.final_mean_height_m.toFixed(1) + ' m' : '—') + '</td><td style="text-align:right;">' + (baseline.final_mean_height_m != null ? baseline.final_mean_height_m.toFixed(1) + ' m' : '—') + '</td></tr>' +
+                        '<tr><td>' + _cTxt('최종 임분 밀도', 'Final Stand Density', 'Nihai Ağaç Sıklığı') + '</td><td style="text-align:right;">' + (managed.final_trees_per_ha != null ? Math.round(managed.final_trees_per_ha) + ' ' + _cTxt('본/ha', 'trees/ha', 'ağaç/ha') : '—') + '</td><td style="text-align:right;">' + (baseline.final_trees_per_ha != null ? Math.round(baseline.final_trees_per_ha) + ' ' + _cTxt('본/ha', 'trees/ha', 'ağaç/ha') : '—') + '</td></tr>' +
                         '</table>' +
-                        (chartSvg ? '<div class="chart-box"><b>' + (curLang === 'en' ? 'Carbon Growth & Thinning Dynamics:' : 'Karbon Büyüme ve Aralama Dinamiği:') + '</b><br>' + chartSvg + '</div>' : '') +
+                        (chartSvg ? '<div class="chart-box"><b>' + _cTxt('탄소 생장 및 간벌 동태:', 'Carbon Growth & Thinning Dynamics:', 'Karbon Büyüme ve Aralama Dinamiği:') + '</b><br>' + chartSvg + '</div>' : '') +
 
                         // ── BÖLÜM 6: Yıllara Göre Karbon ve Meşcere Gelişim Projeksiyonu (5 Yıllık Aralıklar) ──
-                        (periodicRows ? ('<h2>6. ' + (curLang === 'en' ? 'Multi-Year Carbon & Stand Development Projections (5-Year Intervals)' : 'Yıllara Göre Karbon ve Meşcere Gelişim Projeksiyonu (5 Yıllık Aralıklar)') + '</h2>' +
+                        (periodicRows ? ('<h2>' + _cTxt('6. 연도별 탄소 및 임분 생장 예측 (5년 주기)', '6. Multi-Year Carbon & Stand Development Projections (5-Year Intervals)', '6. Yıllara Göre Karbon ve Meşcere Gelişim Projeksiyonu (5 Yıllık Aralıklar)') + '</h2>' +
                         '<table>' +
-                        '<tr><th style="text-align:center;">' + (curLang === 'en' ? 'Year' : 'Yıl') + '</th><th style="text-align:right;">' + (curLang === 'en' ? 'Stem Volume (m³/ha)' : 'Gövde Hacmi (m³/ha)') + '</th><th style="text-align:right;">' + (curLang === 'en' ? 'Standing CO₂e (t)' : 'Duran CO₂e (t)') + '</th><th style="text-align:right;">' + (curLang === 'en' ? 'Harvested CO₂e (t)' : 'Hasat CO₂e (t)') + '</th><th style="text-align:right;">' + (curLang === 'en' ? 'Total Cumulative CO₂e (t)' : 'Toplam Kümülatif CO₂e (t)') + '</th><th style="text-align:right;">' + (curLang === 'en' ? 'Mean DBH (cm)' : 'Ort. Göğüs Çapı (cm)') + '</th><th style="text-align:right;">' + (curLang === 'en' ? 'Mean Height (m)' : 'Ort. Ağaç Boyu (m)') + '</th><th style="text-align:right;">' + (curLang === 'en' ? 'Density (trees/ha)' : 'Meşcere Sıklığı (ağaç/ha)') + '</th></tr>' +
+                        '<tr><th style="text-align:center;">' + _cTxt('연도', 'Year', 'Yıl') + '</th><th style="text-align:right;">' + _cTxt('줄기 재적 (m³/ha)', 'Stem Volume (m³/ha)', 'Gövde Hacmi (m³/ha)') + '</th><th style="text-align:right;">' + _cTxt('잔존 CO₂e (t)', 'Standing CO₂e (t)', 'Duran CO₂e (t)') + '</th><th style="text-align:right;">' + _cTxt('수확 CO₂e (t)', 'Harvested CO₂e (t)', 'Hasat CO₂e (t)') + '</th><th style="text-align:right;">' + _cTxt('총 누적 CO₂e (t)', 'Total Cumulative CO₂e (t)', 'Toplam Kümülatif CO₂e (t)') + '</th><th style="text-align:right;">' + _cTxt('평균 흉고직경 (cm)', 'Mean DBH (cm)', 'Ort. Göğüs Çapı (cm)') + '</th><th style="text-align:right;">' + _cTxt('평균 수고 (m)', 'Mean Height (m)', 'Ort. Ağaç Boyu (m)') + '</th><th style="text-align:right;">' + _cTxt('임분 밀도 (본/ha)', 'Density (trees/ha)', 'Meşcere Sıklığı (ağaç/ha)') + '</th></tr>' +
                         periodicRows +
                         '</table>') : '') +
 
                         // ── BÖLÜM 7: Aralama ve Silvikültürel Müdahale Takvimi ──
-                        '<h2>7. ' + (curLang === 'en' ? 'Thinning & Silvicultural Intervention Schedule' : 'Aralama ve Silvikültürel Müdahale Takvimi') + '</h2>' +
+                        '<h2>' + _cTxt('7. 간벌 및 조림 관리 작업 일정', '7. Thinning & Silvicultural Intervention Schedule', '7. Aralama ve Silvikültürel Müdahale Takvimi') + '</h2>' +
                         '<table>' +
-                        '<tr><th style="text-align:center;">' + (curLang === 'en' ? 'Intervention Year' : 'Müdahale Yılı') + '</th><th style="text-align:center;">' + (curLang === 'en' ? 'Removal Rate (%)' : 'Çıkarılan Gövde Oranı (%)') + '</th><th style="text-align:center;">' + (curLang === 'en' ? 'Estimated Harvested Carbon' : 'Tahmini Hasat Karbonu') + '</th><th style="text-align:center;">' + (curLang === 'en' ? 'Remaining Stand Density' : 'Kalan Meşcere Sıklığı') + '</th></tr>' +
+                        '<tr><th style="text-align:center;">' + _cTxt('작업 연차', 'Intervention Year', 'Müdahale Yılı') + '</th><th style="text-align:center;">' + _cTxt('벌채율 (%)', 'Removal Rate (%)', 'Çıkarılan Gövde Oranı (%)') + '</th><th style="text-align:center;">' + _cTxt('예상 수확 탄소량', 'Estimated Harvested Carbon', 'Tahmini Hasat Karbonu') + '</th><th style="text-align:center;">' + _cTxt('잔존 임분 밀도', 'Remaining Stand Density', 'Kalan Meşcere Sıklığı') + '</th></tr>' +
                         thinningRows +
                         '</table>' +
 
                         // ── BÖLÜM 8: Bilimsel Veri Kaynakları ve Uzamsal Çözünürlük ──
-                        '<h2>8. ' + (curLang === 'en' ? 'Scientific Data Sources & Spatial Resolution' : 'Bilimsel Veri Kaynakları ve Çözünürlük') + '</h2>' +
+                        '<h2>' + _cTxt('8. 과학 데이터 출처 및 공간 해상도', '8. Scientific Data Sources & Spatial Resolution', '8. Bilimsel Veri Kaynakları ve Çözünürlük') + '</h2>' +
                         '<table>' +
-                        '<tr><th style="width:34%;">' + (curLang === 'en' ? 'Parameter / Module' : 'Katman / Gösterge') + '</th><th style="width:46%;">' + (curLang === 'en' ? 'Dataset & Provider' : 'Veri Kaynağı & Sağlayıcı') + '</th><th style="width:20%;text-align:right;">' + (curLang === 'en' ? 'Resolution' : 'Çözünürlük') + '</th></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'Topography (Elevation, Slope, Aspect)' : 'Topoğrafya (Yükselti, Eğim, Bakı)') + '</td><td>USGS SRTM GL1 (NASA / USGS Shuttle Radar)</td><td style="text-align:right;">30 m</td></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'Recent Land Cover (LULC)' : 'Güncel Arazi Örtüsü (LULC)') + '</td><td>ESRI Global Land Cover 10m TS (Sentinel-2 AI)</td><td style="text-align:right;">10 m</td></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'Bioclimatic Temperature & Rain' : 'Biyoklimatik Sıcaklık ve Yağış Normalleri') + '</td><td>WorldClim V1 BIO Global Climatology</td><td style="text-align:right;">~1 km</td></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'Soil Organic Carbon & Texture' : 'Toprak Organik Karbonu (SOC) & Doku') + '</td><td>OpenLandMap USDA Soil Texture & SoilGrids / FAO</td><td style="text-align:right;">250 m</td></tr>' +
-                        '<tr><td>' + (curLang === 'en' ? 'Biomass & Carbon Yield Model' : 'Biyokütle Büyüme & Karbon Modeli') + '</td><td>Chapman-Richards S-Curve & IPCC Tier 1 (2006/2019 Refinement)</td><td style="text-align:right;">' + (curLang === 'en' ? 'Stand Level' : 'Meşcere Düzeyi') + '</td></tr>' +
+                        '<tr><th style="width:34%;">' + _cTxt('항목 / 모듈', 'Parameter / Module', 'Katman / Gösterge') + '</th><th style="width:46%;">' + _cTxt('데이터셋 및 제공기관', 'Dataset & Provider', 'Veri Kaynağı & Sağlayıcı') + '</th><th style="width:20%;text-align:right;">' + _cTxt('해상도', 'Resolution', 'Çözünürlük') + '</th></tr>' +
+                        '<tr><td>' + _cTxt('지형 (해발고도, 경사, 방위)', 'Topography (Elevation, Slope, Aspect)', 'Topoğrafya (Yükselti, Eğim, Bakı)') + '</td><td>USGS SRTM GL1 (NASA / USGS Shuttle Radar)</td><td style="text-align:right;">30 m</td></tr>' +
+                        '<tr><td>' + _cTxt('최신 토지 피복 (LULC)', 'Recent Land Cover (LULC)', 'Güncel Arazi Örtüsü (LULC)') + '</td><td>ESRI Global Land Cover 10m TS (Sentinel-2 AI)</td><td style="text-align:right;">10 m</td></tr>' +
+                        '<tr><td>' + _cTxt('생물기후 기온 및 강수 평년값', 'Bioclimatic Temperature & Rain', 'Biyoklimatik Sıcaklık ve Yağış Normalleri') + '</td><td>WorldClim V1 BIO Global Climatology</td><td style="text-align:right;">~1 km</td></tr>' +
+                        '<tr><td>' + _cTxt('토양 유기탄소(SOC) 및 토성', 'Soil Organic Carbon & Texture', 'Toprak Organik Karbonu (SOC) & Doku') + '</td><td>OpenLandMap USDA Soil Texture & SoilGrids / FAO</td><td style="text-align:right;">250 m</td></tr>' +
+                        '<tr><td>' + _cTxt('바이오매스 생장 및 탄소 모델', 'Biomass & Carbon Yield Model', 'Biyokütle Büyüme & Karbon Modeli') + '</td><td>Chapman-Richards S-Curve & IPCC Tier 1 (2006/2019 Refinement)</td><td style="text-align:right;">' + _cTxt('임분 단위', 'Stand Level', 'Meşcere Düzeyi') + '</td></tr>' +
                         '</table>' +
 
                         // ── BÖLÜM 9: Yasal & Metodolojik Uyarı Metni (Genişletilmiş) ──
@@ -7483,10 +7608,12 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                         extendedNotice +
                         '</div>' +
 
-                        '<div class="print-footer">' +
-                        '<span>SylvaGIS — ' + reportTitle + '</span>' +
-                        '<span>' + (curLang === 'en' ? 'Spatial Analysis & Feasibility Projection' : 'Uzaktan Algılama ve Karar Destek Projeksiyonu') + ' | ' + nowStr + '</span>' +
+                        '<div class="pdf-footer">' +
+                        '<div style="display:flex;align-items:center;">' +
+                        '<img src="' + sylvaBase64Logo + '" style="height:14px;vertical-align:middle;margin-right:6px;" alt="SylvaGIS Logo">' +
                         '<span>SylvaGIS</span>' +
+                        '</div>' +
+                        '<div>3/4</div>' +
                         '</div>' +
                         '</body></html>';
 
