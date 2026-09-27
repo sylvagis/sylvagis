@@ -14453,6 +14453,89 @@ function _carbonAutoDetectAndSetCountry(aoiInfo) {
 
 // 📄 Direct PDF Download Engine (Never opens about:blank or new tabs)
 // Export owns only an off-screen iframe; html2canvas never traverses the live map DOM.
+// PDF-only layout measurements: never mutate the live map or statistics panel.
+window._sylvaPdfMeasure = function(root) {
+    var origin=root.getBoundingClientRect(), blocks=[], view=root.ownerDocument.defaultView;
+    function add(el, end, atomic) {
+        var r=el.getBoundingClientRect(), b=(end||el).getBoundingClientRect();
+        if(r.height>0 && b.bottom>r.top) blocks.push({top:Math.max(0,r.top-origin.top),bottom:b.bottom-origin.top,atomic:!!atomic});
+    }
+    root.querySelectorAll('table,.report-section,.callout-box,.notice,.math-card,.warn-box,.chart-box,p,li,.pdf-row').forEach(function(el){add(el,null,false);});
+    root.querySelectorAll('tr,svg,img,canvas,h1,h2,h3,h4').forEach(function(el){add(el,null,true);});
+    root.querySelectorAll('h1,h2,h3,h4,div').forEach(function(el){
+        var heading=/^H[1-4]$/.test(el.tagName) || (!el.querySelector('div,table,p') && parseInt(view.getComputedStyle(el).fontWeight,10)>=600);
+        if(!heading) return;
+        add(el,null,true);
+        var next=el.nextElementSibling;
+        if(!next) return;
+        add(el,next,false);
+        if(next.tagName==='TABLE') {
+            var first=next.querySelector('tbody tr') || next.querySelector('tr');
+            if(first) add(el,first,true);
+        } else {
+            var first=next.querySelector('h1,h2,h3,h4,p,.pdf-row,tr') || next;
+            add(el,first,false);
+            var texts=root.ownerDocument.createTreeWalker(next,4), textNode;
+            while((textNode=texts.nextNode())) {
+                if(!textNode.nodeValue.trim())continue;
+                var lineRange=root.ownerDocument.createRange();lineRange.selectNodeContents(textNode);
+                var line=Array.from(lineRange.getClientRects()).find(function(r){return r.height>0 && r.width>0;});
+                if(line){blocks.push({top:Math.max(0,el.getBoundingClientRect().top-origin.top),bottom:line.bottom-origin.top,atomic:true});break;}
+            }
+        }
+    });
+    root.querySelectorAll('table').forEach(function(table){
+        var first=table.querySelector('tbody tr'), head=table.querySelector('thead');
+        if(head && first) add(head,first,true);
+    });
+    // Text line rectangles protect long paragraphs without forcing an entire long answer onto one page.
+    var walker=root.ownerDocument.createTreeWalker(root,4), node;
+    while((node=walker.nextNode())) {
+        if(!node.nodeValue.trim() || /^(STYLE|SCRIPT)$/.test(node.parentElement.tagName)) continue;
+        var range=root.ownerDocument.createRange(); range.selectNodeContents(node);
+        Array.from(range.getClientRects()).forEach(function(r){if(r.height>0 && r.width>0) blocks.push({top:Math.max(0,r.top-origin.top),bottom:r.bottom-origin.top,atomic:true});});
+    }
+    return {width:origin.width,blocks:blocks};
+};
+window._sylvaPdfCut = function(layout, scale, start, capacity, total) {
+    var limit=Math.min(total,start+Math.floor(capacity)), end=limit;
+    var ranges=layout.blocks.map(function(b){return {top:Math.round(b.top*scale),bottom:Math.round(b.bottom*scale),atomic:b.atomic};});
+    // Retreat until no fitting block straddles the cut. Sorting/DOM traversal order cannot change the result.
+    for(var pass=0;pass<=ranges.length;pass++) {
+        var crossing=ranges.filter(function(b){return b.top<end && b.bottom>end && (b.atomic || b.bottom-b.top<=capacity);});
+        var starts=crossing.filter(function(b){return b.top>start;}).map(function(b){return b.top;});
+        if(starts.length){end=starts.reduce(function(a,b){return Math.min(a,b);},end);continue;}
+        if(crossing.length) {
+            // A single row/image taller than a page stays whole and is proportionally fitted to that page.
+            end=Math.min(total,crossing.reduce(function(a,b){return Math.max(a,b.bottom);},end));
+            for(var guard=0;guard<=ranges.length;guard++) {
+                var farther=end;
+                ranges.forEach(function(b){if(b.atomic && b.top<end && b.bottom>end)farther=Math.max(farther,b.bottom);});
+                farther=Math.min(total,farther);if(farther===end)break;end=farther;
+            }
+        }
+        break;
+    }
+    return Math.max(start+1,Math.min(total,end));
+};
+window._sylvaPdfPaintCanvas = function(pdf,canvas,layout,left,top,bottom,stamp) {
+    var pageW=pdf.internal.pageSize.getWidth(), pageH=pdf.internal.pageSize.getHeight();
+    var width=pageW-left*2, height=pageH-top-bottom, ratio=width/canvas.width;
+    var capacity=height/ratio, scale=canvas.width/layout.width;
+    var total=canvas.height, y=0, first=true;
+    while(y<total){
+        var end=window._sylvaPdfCut(layout,scale,y,capacity,total), sliceH=end-y;
+        var slice=document.createElement('canvas');slice.width=canvas.width;slice.height=sliceH;
+        slice.getContext('2d').drawImage(canvas,0,y,canvas.width,sliceH,0,0,canvas.width,sliceH);
+        if(!window._sylvaCanvasHasContent || window._sylvaCanvasHasContent(slice)){
+            if(!first)pdf.addPage();
+            var fit=Math.min(1,height/(sliceH*ratio));
+            pdf.addImage(slice.toDataURL('image/jpeg',0.95),'JPEG',left,top,width*fit,sliceH*ratio*fit);
+            if(stamp)stamp();first=false;
+        }
+        slice.width=slice.height=0;y=end;
+    }
+};
 var _carbonPdfJob = null;
 function _carbonDownloadPDF(reportHtml, fileName) {
     if (_carbonPdfJob) return _carbonPdfJob;
@@ -14478,11 +14561,11 @@ function _carbonDownloadPDF(reportHtml, fileName) {
                 var root=doc.createElement('div'); root.id='carbon-pdf-render-area';
                 while(doc.body.firstChild) root.appendChild(doc.body.firstChild);
                 doc.body.appendChild(root); doc.body.style.margin='0'; doc.body.style.padding='0';
-                doc.documentElement.style.overflow='hidden'; // Stable viewport width while the renderer clones it.
-                root.style.width='180mm'; root.style.boxSizing='border-box';
+                doc.documentElement.style.overflowX='hidden'; doc.documentElement.style.overflowY='visible';
+                root.style.width='180mm'; root.style.boxSizing='border-box'; root.style.display='flow-root';
                 if(doc.fonts) await doc.fonts.ready;
                 // Keep a short section's heading with its table in either renderer.
-                root.querySelectorAll('h2').forEach(function(heading){
+                root.querySelectorAll('h1,h2,h3').forEach(function(heading){
                     var next=heading.nextElementSibling;
                     if(next && next.tagName==='TABLE'){
                         var section=doc.createElement('div');section.className='report-section';
@@ -14523,22 +14606,22 @@ function _carbonDownloadPDF(reportHtml, fileName) {
                 root.querySelectorAll('table,.report-section,.callout-box,.notice').forEach(function(el){
                     if(el.getBoundingClientRect().height>pageHeight){el.style.breakInside='auto';el.style.pageBreakInside='auto';}
                 });
+                var pdfLayout=window._sylvaPdfMeasure(root);
                 async function canvasFallback(){
                     var Pdf=(window.jspdf && window.jspdf.jsPDF)||window.jsPDF;
                     if(typeof window.html2canvas!=='function'||typeof Pdf!=='function') throw new Error('PDF rendering libraries unavailable');
                     var pdf=new Pdf({unit:'mm',format:'a4',orientation:'portrait',compress:true});
                     var width=root.getBoundingClientRect().width, height=root.scrollHeight;
                     if(!width || !height) throw new Error('PDF report is empty');
-                    var pagePx=(297-10-18)*width/180, top=root.getBoundingClientRect().top;
-                    var blocks=Array.from(root.querySelectorAll('table,.report-section,.notice,.callout-box,tr,.math-card,.chart-box,h2,h3')).map(function(el){var r=el.getBoundingClientRect();return {top:r.top-top,bottom:r.bottom-top};});
+                    var pagePx=(297-10-18)*width/180;
                     for(var y=0,page=0;y<height;page++){
                         if(disposed) throw new Error('PDF export cancelled');
-                        var end=Math.min(height,y+pagePx);
-                        blocks.forEach(function(b){if(b.top>y+1 && b.top<end && b.bottom>end && b.bottom-b.top<=pagePx)end=b.top;});
-                        var canvas=await window.html2canvas(root,{scale:2,backgroundColor:'#ffffff',useCORS:true,logging:false,x:0,y:y,width:width,height:Math.ceil(end-y),windowWidth:794});
+                        var end=window._sylvaPdfCut(pdfLayout,1,y,pagePx,height);
+                        var canvas=await window.html2canvas(root,{scale:2,backgroundColor:'#ffffff',useCORS:true,logging:false,x:0,y:y,width:width,height:end-y,windowWidth:794});
                         if(!canvas.width||!canvas.height) throw new Error('PDF canvas is empty');
                         if(page)pdf.addPage();
-                        pdf.addImage(canvas.toDataURL('image/jpeg',0.95),'JPEG',15,10,180,(end-y)*180/width);
+                        var fit=Math.min(1,pagePx/(end-y));
+                        pdf.addImage(canvas.toDataURL('image/jpeg',0.95),'JPEG',15,10,180*fit,(end-y)*180/width*fit);
                         canvas.width=canvas.height=0; y=end;
                     }
                     return pdf;
@@ -14561,9 +14644,19 @@ function _carbonDownloadPDF(reportHtml, fileName) {
                     var options=win.JSON.parse(JSON.stringify({margin:[10,15,18,15],filename:fileName,
                         image:{type:'jpeg',quality:0.95},html2canvas:{scale:2,backgroundColor:'#ffffff',useCORS:true,logging:false},
                         jsPDF:{unit:'mm',format:'a4',orientation:'portrait',compress:true},
-                        pagebreak:{mode:['css'],avoid:['tr','.math-card','.chart-box']}
+                        pagebreak:{mode:[]}
                     }));
-                    pdf=await win.html2pdf().set(options).from(root).toPdf().get('pdf');
+                    var worker=win.html2pdf().set(options).from(root).toContainer();
+                    var renderContainer=await worker.get('container');
+                    var renderedLayout=window._sylvaPdfMeasure(renderContainer);
+                    worker=worker.toPdf();
+                    pdf=await worker.get('pdf');
+                    var reportCanvas=await worker.get('canvas');
+                    while(pdf.internal.getNumberOfPages()>1)pdf.deletePage(pdf.internal.getNumberOfPages());
+                    // Clear the library's fixed-height first slice before painting safe slices.
+                    pdf.addPage();pdf.deletePage(1);pdf.setPage(1);
+                    window._sylvaPdfPaintCanvas(pdf,reportCanvas,renderedLayout,15,10,18);
+                    reportCanvas.width=reportCanvas.height=0;
                 } catch(renderError){
                     if(disposed) throw renderError;
                     console.warn('Carbon PDF: using local canvas renderer',renderError);
@@ -16301,6 +16394,31 @@ var _CARBON_SPECIES_DB = {
                 // ───────────────────────────────────────────────────────────
                 // 🖨️ RAPORLAMA VE YAZDIRMA MOTORU (AŞAMA 10 & 11) — AKADEMİK & BİLİMSEL RAPOR
                 // ───────────────────────────────────────────────────────────
+                // Report values always come from numeric simulation state, never translated DOM labels.
+                window._sylvaCarbonReportNumbers = function(st,resp,lang) {
+                    function numeric(value) {
+                        if(typeof value==='number')return Number.isFinite(value)?value:null;
+                        if(typeof value==='string' && /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(value.trim())) {
+                            var parsed=Number(value);return Number.isFinite(parsed)?parsed:null;
+                        }
+                        return null;
+                    }
+                    var rawPct=numeric(st && st.densityScale);
+                    var scalePct=rawPct!=null && rawPct>=1 && rawPct<=100?Math.round(rawPct):100;
+                    var factor=scalePct/100;
+                    var meta=(resp && resp.meta)||{};
+                    var sx=numeric(st && st.spacingX),sy=numeric(st && st.spacingY);
+                    var base=numeric(meta.initial_trees_per_ha);
+                    if(base==null && sx>0 && sy>0)base=10000/(sx*sy);
+                    var area=numeric(st && st.areaHa);
+                    if(area==null)area=numeric(meta.area_ha);
+                    function format(value,decimals) {
+                        var n=numeric(value);if(n==null)return '—';
+                        try{return new Intl.NumberFormat(lang||'tr',{minimumFractionDigits:decimals,maximumFractionDigits:decimals}).format(n);}
+                        catch(e){return n.toFixed(decimals);}
+                    }
+                    return {scalePct:scalePct,factor:factor,treesPerHa:base==null?null:Math.round(base*factor),areaHa:area,format:format,numeric:numeric};
+                };
                 window.carbonSimPrintReport = function () {
                     if (_carbonPdfJob) return _carbonPdfJob;
                     var st = _getCarbonActiveState();
@@ -16338,17 +16456,18 @@ var _CARBON_SPECIES_DB = {
                     var baseline = sum.baseline || {};
                     var series = resp.yearly_series || {};
                     var thinnings = st.thinningEvents || [];
+                    var densityReport = window._sylvaCarbonReportNumbers(st, resp, curLang);
 
-                    var areaHa = (st.areaHa || meta.area_ha || 0).toFixed(2);
-                    var areaDa = ((st.areaHa || meta.area_ha || 0) * 10).toFixed(1);
+                    var areaHa = (densityReport.areaHa == null ? 0 : densityReport.areaHa).toFixed(2);
+                    var areaDa = ((densityReport.areaHa == null ? 0 : densityReport.areaHa) * 10).toFixed(1);
                     var nowStr = new Date().toLocaleString(curLang);
                     var chartSvg = _carbonBuildMultiLineSVG((st.lastSimResponse.yearly_series || {}).baseline, (st.lastSimResponse.yearly_series || {}).managed, st.thinningEvents);
 
                     // 1. Aralama Takvimi Satırları
                     var thinningRows = thinnings.map(function (ev) {
                         var mYr = (series.managed || []).filter(function (p) { return p.year === ev.year; })[0];
-                        var harv = mYr && mYr.harvested_co2e > 0.05 ? mYr.harvested_co2e.toFixed(1) + ' tCO2e' : '—';
-                        var rem = mYr ? Math.round(mYr.trees_per_ha) + ' ' + _cTxt('본/ha', 'trees/ha', 'ağaç/ha') : '—';
+                        var harv = mYr && mYr.harvested_co2e > 0.05 ? densityReport.format(mYr.harvested_co2e, 1) + ' tCO2e' : '—';
+                        var rem = mYr ? densityReport.format(mYr.trees_per_ha, 0) + ' ' + _cTxt('본/ha', 'trees/ha', 'ağaç/ha') : '—';
                         return '<tr>' +
                             '<td style="padding:6px;border:1px solid #e2e8f0;text-align:center;">' + ev.year + _cTxt('년차', '. Year', '. Yıl') + '</td>' +
                             '<td style="padding:6px;border:1px solid #e2e8f0;text-align:center;">%' + ev.percent + '</td>' +
@@ -16378,13 +16497,13 @@ var _CARBON_SPECIES_DB = {
                         periodicRows = targetYears.map(function (yr) {
                             var pt = mList.filter(function (p) { return p.year === yr; })[0];
                             if (!pt) return '';
-                            var harvVal = (pt.harvested_co2e && pt.harvested_co2e > 0.05) ? pt.harvested_co2e.toFixed(1) : '—';
-                            var standingVal = (pt.standing_co2e != null) ? pt.standing_co2e.toFixed(1) : '—';
-                            var totalVal = (pt.total_co2e != null) ? pt.total_co2e.toFixed(1) : '—';
-                            var vVal = (pt.stem_volume_m3_ha != null) ? pt.stem_volume_m3_ha.toFixed(1) : '—';
-                            var nVal = (pt.trees_per_ha != null) ? Math.round(pt.trees_per_ha) : '—';
-                            var dbhVal = (pt.mean_dbh_cm != null) ? pt.mean_dbh_cm.toFixed(1) : '—';
-                            var hVal = (pt.mean_height_m != null) ? pt.mean_height_m.toFixed(1) : '—';
+                            var harvVal = (pt.harvested_co2e && pt.harvested_co2e > 0.05) ? densityReport.format(pt.harvested_co2e, 1) : '—';
+                            var standingVal = (pt.standing_co2e != null) ? densityReport.format(pt.standing_co2e, 1) : '—';
+                            var totalVal = (pt.total_co2e != null) ? densityReport.format(pt.total_co2e, 1) : '—';
+                            var vVal = (pt.stem_volume_m3_ha != null) ? densityReport.format(pt.stem_volume_m3_ha, 1) : '—';
+                            var nVal = (pt.trees_per_ha != null) ? densityReport.format(pt.trees_per_ha, 0) : '—';
+                            var dbhVal = (pt.mean_dbh_cm != null) ? densityReport.format(pt.mean_dbh_cm, 1) : '—';
+                            var hVal = (pt.mean_height_m != null) ? densityReport.format(pt.mean_height_m, 1) : '—';
                             var isFinal = (yr === rotYr);
                             var rowBg = isFinal ? ' style="background:#f0fdf4;font-weight:600;"' : '';
                             return '<tr' + rowBg + '>' +
@@ -16521,7 +16640,7 @@ var _CARBON_SPECIES_DB = {
                         '<style>' +
                         '@page { size: A4 portrait; margin: 12mm 15mm; }' +
                         '* { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; box-sizing:border-box; }' +
-                        'table,tr,.report-section,.callout-box,.math-card,.warn-box { page-break-inside:avoid; break-inside:avoid; } h2,h3 { break-after:avoid; }' +
+                        'table,tr,.report-section,.callout-box,.math-card,.warn-box,.notice,.chart-box,h1,h2,h3 { page-break-inside:avoid; break-inside:avoid; } h1,h2,h3 { page-break-after:avoid; break-after:avoid; } p,li { orphans:3; widows:3; } thead { display:table-header-group; } tbody { break-inside:auto; } tr { break-inside:avoid; }' +
                         'body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", Arial, sans-serif; color: #1e293b; margin: 0; line-height: 1.5; font-size: 12.5px; }' +
                         'h1 { font-size: 19px; color: #0f172a; margin-bottom: 4px; display: flex; align-items: center; }' +
                         'h2 { font-size: 13.5px; color: #1e3a8a; border-bottom: 2px solid #e2e8f0; padding-bottom: 4px; margin-top: 20px; }' +
@@ -16566,9 +16685,9 @@ var _CARBON_SPECIES_DB = {
                         '<tr><th style="width:34%;">' + _cTxt('파라미터', 'Parameter', 'Parametre') + '</th><th style="width:66%;">' + _cTxt('값', 'Value', 'Değer') + '</th></tr>' +
                         '<tr><td>' + _cTxt('대상 수종', 'Target Tree Species', 'Hedef Ağaç Türü') + '</td><td><b>' + _carbonEscapeText(meta.species_name || st.species) + '</b>' + (meta['common_' + curLang] ? ' (' + _carbonEscapeText(meta['common_' + curLang]) + ')' : '') + ' <span class="badge">' + _cTxt('일치: ', 'Match: ', 'Eşleşme: ') + _cTxt('match_' + (meta.match_level || 'unknown')) + '</span></td></tr>' +
                         '<tr><td>' + _cTxt('연구 대상 면적', 'Study Area', 'Çalışma Alanı') + '</td><td>' + areaHa + ' ha (' + areaDa + ' ' + _cTxt('데카르/10a', 'decare', 'dekar') + ')</td></tr>' +
-                        '<tr><td>' + _cTxt('식재 간격 및 밀도', 'Planting Spacing & Density', 'Dikim Deseni & Sıklığı') + '</td><td>' + (st.spacingX || 3) + ' m × ' + (st.spacingY || 3) + ' m (' + Math.round(meta.initial_trees_per_ha || (10000 / ((st.spacingX || 3) * (st.spacingY || 3)))) + ' ' + _cTxt('본/ha', 'seedlings/ha', 'fidan/ha') + ')' +
-                        (st.densityScale && st.densityScale !== 1.0 ? ' <span class="badge" title="' + _cTxt('조림 밀도 보정', 'Afforestation Density Scale', 'Ağaçlandırma Yoğunluk Ölçeği') + '">x' + st.densityScale.toFixed(2) + ' ' + _cTxt('동적 보정', 'Dynamically Scaled', 'Dinamik Ölçeklendi') + '</span>' : '') + '</td></tr>' +
-                        '<tr><td>' + _cTxt('묘목 활착률', 'Seedling Retention Rate', 'Fidan Tutma Oranı') + '</td><td>%' + (st.retention != null ? st.retention : 85) + ' (' + _cTxt('총 유효 본수: ', 'Total Effective: ', 'Toplam Efektif: ') + (st.effectiveTrees ? st.effectiveTrees.toLocaleString() : '—') + ' ' + _cTxt('본', 'trees', 'fidan') + ')</td></tr>' +
+                        '<tr><td>' + _cTxt('식재 간격 및 밀도', 'Planting Spacing & Density', 'Dikim Deseni & Sıklığı') + '</td><td>' + (st.spacingX || 3) + ' m × ' + (st.spacingY || 3) + ' m (' + densityReport.format(densityReport.treesPerHa, 0) + ' ' + _cTxt('본/ha', 'seedlings/ha', 'fidan/ha') + ')' +
+                        (densityReport.scalePct !== 100 ? ' <span class="badge" title="' + _cTxt('조림 밀도 보정', 'Afforestation Density Scale', 'Ağaçlandırma Yoğunluk Ölçeği') + '">x' + densityReport.factor.toFixed(2) + ' ' + _cTxt('동적 보정', 'Dynamically Scaled', 'Dinamik Ölçeklendi') + '</span>' : '') + '</td></tr>' +
+                        '<tr><td>' + _cTxt('묘목 활착률', 'Seedling Retention Rate', 'Fidan Tutma Oranı') + '</td><td>%' + (st.retention != null ? st.retention : 85) + ' (' + _cTxt('총 유효 본수: ', 'Total Effective: ', 'Toplam Efektif: ') + densityReport.format(st.effectiveTrees, 0) + ' ' + _cTxt('본', 'trees', 'fidan') + ')</td></tr>' +
                         '<tr><td>' + _cTxt('벌기령 (윤벌기)', 'Rotation Period', 'İdare Süresi (Rotasyon)') + '</td><td>' + (st.rotation || 30) + ' ' + _cTxt('년', 'years', 'yıl') + '</td></tr>' +
                         '</table>' +
 
@@ -16645,13 +16764,13 @@ var _CARBON_SPECIES_DB = {
                         '<h2>' + _cTxt('5. 탄소 축적량 및 흡수 수지 (벌기령 종료 시)', '5. Carbon Stock & Yield Balance (End of Rotation)', '5. Karbon Stoğu ve Yutak Dengesi (İdare Süresi Sonu)') + '</h2>' +
                         '<table>' +
                         '<tr><th>' + _cTxt('지표 / 항목', 'Metric / Indicator', 'Metrik / Gösterge') + '</th><th style="text-align:right;">' + _cTxt('관리 시나리오 (간벌 포함)', 'Managed Scenario (with Thinning)', 'Yönetilen Senaryo (Aralamalı)') + '</th><th style="text-align:right;">' + _cTxt('기준선 (비관리)', 'Baseline (Unmanaged)', 'Müdahalesiz (Baseline)') + '</th></tr>' +
-                        '<tr><td>' + _cTxt('잔존 임목 탄소 축적량', 'Standing Carbon Stock', 'Duran Meşcere Karbon Stoğu') + '</td><td style="text-align:right;font-weight:600;color:#15803d;">' + (managed.total_standing_co2e || 0).toFixed(1) + ' tCO2e (' + (managed.total_standing_c != null ? managed.total_standing_c.toFixed(1) : '—') + ' tC)</td><td style="text-align:right;">' + (baseline.total_standing_co2e || 0).toFixed(1) + ' tCO2e</td></tr>' +
-                        '<tr><td>' + _cTxt('누적 간벌 수확 탄소량', 'Cumulative Harvested Carbon', 'Kümülatif Hasat Edilen Karbon') + '</td><td style="text-align:right;font-weight:600;color:#b45309;">' + (managed.total_harvested_co2e || 0).toFixed(1) + ' tCO2e (' + (managed.total_harvested_c != null ? managed.total_harvested_c.toFixed(1) : '—') + ' tC)</td><td style="text-align:right;">0.0 tCO2e</td></tr>' +
-                        '<tr style="background:#f8fafc;font-weight:bold;"><td>' + _cTxt('총 누적 격리 CO2e', 'Total Cumulative Sequestered CO2e', 'Toplam Kümülatif Tutulan CO2e') + '</td><td style="text-align:right;color:#0f172a;font-size:12.5px;">' + (managed.grand_total_co2e || 0).toFixed(1) + ' tCO2e</td><td style="text-align:right;color:#64748b;">' + (baseline.grand_total_co2e || 0).toFixed(1) + ' tCO2e</td></tr>' +
-                        '<tr><td>' + _cTxt('연평균 CO2 격리량', 'Mean Annual Sequestration', 'Yıllık Ortalama CO2 Tutumu') + '</td><td style="text-align:right;color:#0284c7;font-weight:600;">' + (managed.mean_annual_sequestration_co2e || 0).toFixed(2) + ' tCO2e/' + _cTxt('년', 'yr', 'yıl') + '</td><td style="text-align:right;">' + (baseline.mean_annual_sequestration_co2e || 0).toFixed(2) + ' tCO2e/' + _cTxt('년', 'yr', 'yıl') + '</td></tr>' +
+                        '<tr><td>' + _cTxt('잔존 임목 탄소 축적량', 'Standing Carbon Stock', 'Duran Meşcere Karbon Stoğu') + '</td><td style="text-align:right;font-weight:600;color:#15803d;">' + densityReport.format(managed.total_standing_co2e == null ? 0 : managed.total_standing_co2e, 1) + ' tCO2e (' + (managed.total_standing_c != null ? densityReport.format(managed.total_standing_c, 1) : '—') + ' tC)</td><td style="text-align:right;">' + densityReport.format(baseline.total_standing_co2e == null ? 0 : baseline.total_standing_co2e, 1) + ' tCO2e</td></tr>' +
+                        '<tr><td>' + _cTxt('누적 간벌 수확 탄소량', 'Cumulative Harvested Carbon', 'Kümülatif Hasat Edilen Karbon') + '</td><td style="text-align:right;font-weight:600;color:#b45309;">' + densityReport.format(managed.total_harvested_co2e == null ? 0 : managed.total_harvested_co2e, 1) + ' tCO2e (' + (managed.total_harvested_c != null ? densityReport.format(managed.total_harvested_c, 1) : '—') + ' tC)</td><td style="text-align:right;">0.0 tCO2e</td></tr>' +
+                        '<tr style="background:#f8fafc;font-weight:bold;"><td>' + _cTxt('총 누적 격리 CO2e', 'Total Cumulative Sequestered CO2e', 'Toplam Kümülatif Tutulan CO2e') + '</td><td style="text-align:right;color:#0f172a;font-size:12.5px;">' + densityReport.format(managed.grand_total_co2e == null ? 0 : managed.grand_total_co2e, 1) + ' tCO2e</td><td style="text-align:right;color:#64748b;">' + densityReport.format(baseline.grand_total_co2e == null ? 0 : baseline.grand_total_co2e, 1) + ' tCO2e</td></tr>' +
+                        '<tr><td>' + _cTxt('연평균 CO2 격리량', 'Mean Annual Sequestration', 'Yıllık Ortalama CO2 Tutumu') + '</td><td style="text-align:right;color:#0284c7;font-weight:600;">' + densityReport.format(managed.mean_annual_sequestration_co2e == null ? 0 : managed.mean_annual_sequestration_co2e, 2) + ' tCO2e/' + _cTxt('년', 'yr', 'yıl') + '</td><td style="text-align:right;">' + densityReport.format(baseline.mean_annual_sequestration_co2e == null ? 0 : baseline.mean_annual_sequestration_co2e, 2) + ' tCO2e/' + _cTxt('년', 'yr', 'yıl') + '</td></tr>' +
                         '<tr><td>' + _cTxt('최종 평균 흉고직경 (DBH)', 'Final Mean DBH', 'Nihai Ortalama Göğüs Çapı (DBH)') + '</td><td style="text-align:right;">' + (managed.final_mean_dbh_cm != null ? managed.final_mean_dbh_cm.toFixed(1) + ' cm' : '—') + '</td><td style="text-align:right;">' + (baseline.final_mean_dbh_cm != null ? baseline.final_mean_dbh_cm.toFixed(1) + ' cm' : '—') + '</td></tr>' +
                         '<tr><td>' + _cTxt('최종 평균 수고 (H)', 'Final Mean Height', 'Nihai Ortalama Ağaç Boyu (H)') + '</td><td style="text-align:right;">' + (managed.final_mean_height_m != null ? managed.final_mean_height_m.toFixed(1) + ' m' : '—') + '</td><td style="text-align:right;">' + (baseline.final_mean_height_m != null ? baseline.final_mean_height_m.toFixed(1) + ' m' : '—') + '</td></tr>' +
-                        '<tr><td>' + _cTxt('최종 임분 밀도', 'Final Stand Density', 'Nihai Ağaç Sıklığı') + '</td><td style="text-align:right;">' + (managed.final_trees_per_ha != null ? Math.round(managed.final_trees_per_ha) + ' ' + _cTxt('본/ha', 'trees/ha', 'ağaç/ha') : '—') + '</td><td style="text-align:right;">' + (baseline.final_trees_per_ha != null ? Math.round(baseline.final_trees_per_ha) + ' ' + _cTxt('본/ha', 'trees/ha', 'ağaç/ha') : '—') + '</td></tr>' +
+                        '<tr><td>' + _cTxt('최종 임분 밀도', 'Final Stand Density', 'Nihai Ağaç Sıklığı') + '</td><td style="text-align:right;">' + (managed.final_trees_per_ha != null ? densityReport.format(managed.final_trees_per_ha, 0) + ' ' + _cTxt('본/ha', 'trees/ha', 'ağaç/ha') : '—') + '</td><td style="text-align:right;">' + (baseline.final_trees_per_ha != null ? densityReport.format(baseline.final_trees_per_ha, 0) + ' ' + _cTxt('본/ha', 'trees/ha', 'ağaç/ha') : '—') + '</td></tr>' +
                         '</table>' +
                         (chartSvg ? '<div class="chart-box"><b>' + _cTxt('탄소 생장 및 간벌 동태:', 'Carbon Growth & Thinning Dynamics:', 'Karbon Büyüme ve Aralama Dinamiği:') + '</b><br>' + chartSvg + '</div>' : '') +
 
@@ -18244,14 +18363,7 @@ function _sylvaHasMixedStackCategories(paneId) {
         // sayfa kesimi bu sınırlara göre yapılacak ki bir satır asla iki
         // sayfaya bölünmesin.
         var reportRect = reportEl.getBoundingClientRect();
-        var rowBoundaries = [];
-        Array.prototype.forEach.call(table.querySelectorAll('tr'), function (tr) {
-            var r = tr.getBoundingClientRect();
-            rowBoundaries.push({
-                top: (r.top - reportRect.top) * SCALE,
-                bottom: (r.bottom - reportRect.top) * SCALE
-            });
-        });
+        var pdfLayout = window._sylvaPdfMeasure(reportEl);
 
         Promise.all([
             html2canvas(reportEl, { backgroundColor: '#ffffff', scale: SCALE, useCORS: true }),
@@ -18279,11 +18391,7 @@ function _sylvaHasMixedStackCategories(paneId) {
             // BOŞ bir sayfa oluşturuyordu. Artık döngü yalnızca en son satırın
             // BİTTİĞİ noktaya kadar gidiyor; geri kalan boş padding hiçbir
             // zaman kendi sayfasını almıyor.
-            var contentBottomPx = canvas.height;
-            if (rowBoundaries.length) {
-                var lastRowBottom = Math.ceil(rowBoundaries[rowBoundaries.length - 1].bottom);
-                if (lastRowBottom > 0 && lastRowBottom < contentBottomPx) contentBottomPx = lastRowBottom;
-            }
+
 
             // Logo boyutu: en fazla 26pt yükseklik, 90pt genişlik — oranı korunur.
             var logoDrawH = 0, logoDrawW = 0;
@@ -18297,35 +18405,7 @@ function _sylvaHasMixedStackCategories(paneId) {
                 try { doc.addImage(logo.url, 'PNG', pageW - marginSide - logoDrawW, 10, logoDrawW, logoDrawH); } catch (e) {}
             }
 
-            var y = 0, first = true;
-            while (y < contentBottomPx) {
-                var maxY = Math.min(y + pageContentPx, contentBottomPx);
-                // 🛠️ BUG FİX: Önceki sürüm sayfayı SABİT piksel yüksekliğinde
-                // kesiyordu — bu, bir tablo satırının üst yarısını bir
-                // sayfada, alt yarısını bir sonraki sayfada bırakabiliyordu
-                // ("veri ortadan kesiliyor" hatası). Artık kesim noktası
-                // yalnızca bir SATIRIN TAM BİTTİĞİ yere denk gelecek şekilde
-                // seçiliyor; sığmayan satır bir sonraki sayfadan BAŞLAR.
-                var cutY = maxY;
-                for (var i = 0; i < rowBoundaries.length; i++) {
-                    var rb = rowBoundaries[i];
-                    if (rb.top >= y && rb.bottom <= maxY + 0.5) cutY = rb.bottom;
-                    if (rb.top >= maxY) break;
-                }
-                if (cutY <= y) cutY = maxY; // tek bir satır tüm sayfadan uzunsa (uç durum) çaresiz kes
-                var sliceH = cutY - y;
-                var sliceCanvas = document.createElement('canvas');
-                sliceCanvas.width = canvas.width; sliceCanvas.height = Math.max(1, Math.round(sliceH));
-                sliceCanvas.getContext('2d').drawImage(canvas, 0, y, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
-                // Boş dilimi tamamen at; böylece PDF'de boş sayfa oluşmaz.
-                if (window._sylvaCanvasHasContent(sliceCanvas)) {
-                    if (!first) doc.addPage();
-                    doc.addImage(sliceCanvas.toDataURL('image/jpeg', 0.92), 'JPEG', marginSide, marginTop, imgW, sliceH * pxToPt);
-                    stampLogo();
-                    first = false;
-                }
-                y = cutY;
-            }
+            window._sylvaPdfPaintCanvas(doc, canvas, pdfLayout, marginSide, marginTop, marginBottom, stampLogo);
             var fname = (filenameBase || 'SylvaGIS_Weather') + '.pdf';
             doc.save(fname);
             if (typeof playSylvaChime === 'function') playSylvaChime('download');
@@ -26230,6 +26310,7 @@ function selectRamp(name) {
         window._sylvaClearAllContourVectorLayers = _sylvaClearAllContourVectorLayers;
 
         function _sylvaLoadContourVectorLayer(paneId, layerKey, payload) {
+            var releaseLoading = typeof window._sylvaBeginMapLoadingTask === "function" ? window._sylvaBeginMapLoadingTask() : function () {};
             var targetMap = _sylvaTargetMap(paneId);
             var lineColor = (payload && payload.contourLineColor) || window._sylvaContourLineColor || '#1e3a8a';
             var HILITE_COLOR = '#ffd400'; // sarı — kullanıcı isteği: tıklanınca sarı "parlama"
@@ -26341,7 +26422,8 @@ function selectRamp(name) {
                 geoLayer.on('remove', function () { targetMap.off('zoomend', _sylvaUpdateContourLabelDensity); });
                 _sylvaUpdateContourLabelDensity();
             })
-            .catch(function (err) { console.warn('[SylvaGIS] Vektör kontur isteği başarısız:', err); });
+            .catch(function (err) { console.warn('[SylvaGIS] Vektör kontur isteği başarısız:', err); })
+            .finally(releaseLoading);
         }
         window._sylvaLoadContourVectorLayer = _sylvaLoadContourVectorLayer;
 
@@ -26388,7 +26470,9 @@ function selectRamp(name) {
                     });
                 } catch(_scanErr) {}
             }
-            var layer = L.tileLayer(tileUrl, opts).addTo(targetMap);
+            var layer = L.tileLayer(tileUrl, opts);
+            if (typeof window._sylvaTrackLoadingTile === 'function') window._sylvaTrackLoadingTile(layer);
+            layer.addTo(targetMap);
             layer._sylvaIsGeeAnalysis = true;
             layer._sylvaAnalysisKey = layerKey;
             store[layerKey] = layer;
@@ -28066,34 +28150,19 @@ function selectRamp(name) {
         // da makul bir süre içinde 'load' tetiklenmezse (güvenlik ağı),
         // overlay yine de kapanır — ekran sonsuza dek takılı kalmaz.
         function _hideLoadingWhenTileReady(layer) {
-            // 🛠️ İYİLEŞTİRME ("veriler ekrana geç geliyor"): Genel amaçlı
-            // _waitForTileReady() (aşağıda) GÖRÜNÜMDEKİ TÜM karolar bitene kadar
-            // bekler — bu, Zaman Serisi video oynatımı için doğru davranıştır
-            // (bir sonraki kareye ancak veri TAM gelince geçilmeli). Ama SADECE
-            // yükleme ekranını (overlay) kapatmak için bu kadar katı beklemeye
-            // gerek yok: İLK karo ekrana geldiği an harita artık görsel olarak
-            // "boş" değildir, o yüzden overlay o an kapatılabilir — kullanıcı
-            // artık geri kalan karoların (görünüm dışı/kenar karoları dahil)
-            // tamamlanmasını beklemek zorunda kalmaz. Ayrıca güvenlik ağı süresi
-            // 12 sn'den 6 sn'ye düşürüldü, böylece 'load'/'tileload' hiç
-            // tetiklenmese bile ekran daha kısa sürede kilitli kalmaktan çıkar.
-            // (DÜRÜSTLÜK NOTU: bu zamanlama yalnızca canlı tarayıcıda
-            // gözlemlenebildiğinden, yerel ortamımda uçtan uca DOĞRULANAMADI —
-            // mantığa dayalı, güvenli/geriye dönük bir iyileştirmedir.)
-            var done = false;
+            var done = false, timer;
             function finish() {
                 if (done) return;
                 done = true;
+                clearTimeout(timer);
+                if (layer && typeof layer.off === 'function') layer.off('load tileerror remove', finish);
                 hideSylvaLoading();
             }
-            if (layer && typeof layer.once === 'function') {
-                layer.once('load', finish);
-                layer.once('tileload', finish);
-                layer.once('tileerror', finish);
-            } else {
-                setTimeout(finish, 0);
-            }
-            setTimeout(finish, 6000); // güvenlik ağı
+            timer = setTimeout(finish, 45000);
+            if (layer && typeof layer.on === 'function') {
+                layer.on('load tileerror remove', finish);
+                if (typeof layer.isLoading === 'function' && !layer.isLoading()) setTimeout(finish, 0);
+            } else setTimeout(finish, 0);
         }
         // 🎬 Genel amaçlı: verilen katmanın karoları (tile) TAMAMEN yükleyip
         // ekrana yansıyana kadar bekler, sonra callback'i çağırır. Zaman Serisi
@@ -28152,6 +28221,7 @@ function selectRamp(name) {
             // currentClassificationType Classified ise kendi gerçek min/max'ı
             // üzerinden sınıflar yeniden oluşturulur.
             var _freshPaneKey = paneId === 'map2' ? 'map2' : 'map';
+            if (window._sylvaTsChartByPane) delete window._sylvaTsChartByPane[_freshPaneKey];
             window._sylvaEditorStateByPane = window._sylvaEditorStateByPane || {map:{},map2:{}};
             window._sylvaEditorStateByPane[_freshPaneKey] = {};
             window._sylvaLayerLegendSnapshotByPane = window._sylvaLayerLegendSnapshotByPane || {map:{},map2:{}};
@@ -28469,6 +28539,7 @@ function selectRamp(name) {
                 return;
             }
 
+            if (window._sylvaTsChartByPane) delete window._sylvaTsChartByPane[_sylvaActivePaneId()];
             // Zaman Serisi dışındaki yeni bir analiz başlatıldığında eski
             // zaman serisi sahne kuyruğunu temizle; aksi halde daha sonra yapılan
             // normal raster indirmesi eski dönemleri tekrar ZIP'e ekleyebilirdi.
@@ -29974,6 +30045,10 @@ function selectRamp(name) {
             // gibi meta.analysisName kullanılır (geriye dönük uyumlu).
             var _lk = layerKeyOverride || meta.analysisName;
             var _iaKey = (_pane === 'map2') ? 'map2' : 'map';
+            // Publish the response before legend/readiness observers can inspect the layer.
+            window._sylvaIndexAnalysisStates = window._sylvaIndexAnalysisStates || {map:{},map2:{}};
+            window._sylvaIndexAnalysisStates[_iaKey] = window._sylvaIndexAnalysisStates[_iaKey] || {};
+            window._sylvaIndexAnalysisStates[_iaKey][_lk] = {meta:meta, data:data};
             // 🛠️ BUG FİX (Lejant/Galeri/Bilgi Kutusu ↔ Üst Katman Uyuşmazlığı):
             // bu fonksiyon HEM ilk analiz dispatch'inden (birden fazla analiz aynı
             // anda işaretlenmişse yarış durumuna açık — bkz. çağrı noktasındaki
@@ -30030,7 +30105,7 @@ function selectRamp(name) {
                     _renderLineChart({ series: data.series });
                     lastChartData = null;
                     var _tableWrapR = document.getElementById('stats-chart-table');
-                    if (_tableWrapR) _tableWrapR.innerHTML = '';
+                    // The line renderer owns its statistical table.
                     if (_btnBarR) { _btnBarR.classList.remove('active'); _btnBarR.classList.add('disabled-chart'); _btnBarR.disabled = true; }
                     if (_btnPieR) { _btnPieR.classList.remove('active'); _btnPieR.classList.add('disabled-chart'); _btnPieR.disabled = true; }
                     if (_btnLineR) { _btnLineR.classList.remove('disabled-chart'); _btnLineR.disabled = false; _btnLineR.classList.add('active'); }
@@ -32668,8 +32743,31 @@ function selectRamp(name) {
             });
         }
 
+        function _sylvaStatsExportSnapshot() {
+            var data = _sylvaSafeChartData(typeof lastChartData !== 'undefined' ? lastChartData : null);
+            if (!data) return null;
+            var unit = ['m2', 'km2', 'ha'].indexOf(_sylvaStatsAreaUnit) >= 0 ? _sylvaStatsAreaUnit : 'ha';
+            var label = _sylvaAreaUnitLabel(unit), decimals = _sylvaAreaUnitDecimals(unit);
+            return {data:data, unit:unit, label:label, decimals:decimals,
+                headers:[t('col_class','Sınıf'), t('col_pct','%'), t('col_area','Alan') + ' (' + label + ')'],
+                rows:data.classes.map(function (c, i) {
+                    var pct = data.percentages[i];
+                    var area = data.areaHa === null ? null : _sylvaConvertHaTo(data.areaHa * pct / 100, unit);
+                    if (!Number.isFinite(area)) area = null;
+                    return {name:c.name, color:c.color, pct:pct, area:area,
+                        areaText:area === null ? '—' : area.toLocaleString('tr-TR', {maximumFractionDigits:decimals}) + ' ' + label};
+                })};
+        }
+        function _sylvaStatsExportTable(snapshot) {
+            if (!snapshot) return document.querySelector('#stats-chart-table table');
+            var host = document.createElement('div');
+            host.innerHTML = buildStatsTableHTML(snapshot.data, null, snapshot.unit);
+            return host.querySelector('table');
+        }
+
         function downloadCSV() {
-            var tableEl = document.querySelector('#stats-chart-table table');
+            var exportSnapshot = _sylvaStatsExportSnapshot();
+            var tableEl = exportSnapshot ? true : document.querySelector('#stats-chart-table table');
             if (!tableEl) { sylvaAlert(t('run_first'), 'info'); return; }
             if (typeof JSZip === 'undefined') { sylvaAlert(t('err_jspdf') || 'JSZip library could not be loaded.', 'error'); return; }
 
@@ -32702,6 +32800,13 @@ function selectRamp(name) {
             }
 
             var rowsData = [];
+            if (exportSnapshot) {
+                rowsData.push(exportSnapshot.headers.map(function (text) { return {v:text, n:false}; }));
+                exportSnapshot.rows.forEach(function (row) {
+                    rowsData.push([{v:row.name, n:false}, {v:row.pct.toFixed(1), n:true},
+                        row.area === null ? {v:'—', n:false} : {v:row.area.toLocaleString('en-US', {useGrouping:false, maximumFractionDigits:exportSnapshot.decimals}), n:true}]);
+                });
+            } else {
             var theadRows = tableEl.querySelectorAll('thead tr');
             var bodyRows = tableEl.querySelectorAll('tbody tr');
             var sections = (theadRows.length || bodyRows.length)
@@ -32717,6 +32822,8 @@ function selectRamp(name) {
                     rowsData.push(vals);
                 });
             });
+
+            }
 
             function colLetter(idx) {
                 var s = '';
@@ -32814,7 +32921,8 @@ function selectRamp(name) {
         // TÜM diller harfi harfine ve hatasız görünür. Tablo sayfa yüksekliğini
         // aşarsa otomatik olarak ek sayfalara bölünür.
         function downloadPDF() {
-            var tableEl = document.querySelector('#stats-chart-table table');
+            var exportSnapshot = _sylvaStatsExportSnapshot();
+            var tableEl = _sylvaStatsExportTable(exportSnapshot);
             var carbonSt = (typeof _getCarbonActiveState === 'function') ? _getCarbonActiveState() : null;
             var carbonResp = (carbonSt && carbonSt.lastSimResponse) || window._lastCarbonSimResult;
 
@@ -32875,13 +32983,14 @@ function selectRamp(name) {
                 var baseline = sum.baseline || {};
                 var series = carbonResp.yearly_series || {};
                 var thinnings = (carbonSt && carbonSt.thinningEvents) || [];
-                var areaHa = (carbonSt && carbonSt.areaHa) || meta.area_ha || 0;
+                var densityReport = window._sylvaCarbonReportNumbers(carbonSt, carbonResp, _sylvaLang);
+                var areaHa = densityReport.areaHa == null ? 0 : densityReport.areaHa;
                 var areaHaStr = areaHa.toFixed(2);
                 var areaDaStr = (areaHa * 10).toFixed(1);
                 var speciesStr = meta.species_name || (carbonSt && carbonSt.species) || '—';
                 var spacingX = (carbonSt && carbonSt.spacingX) || meta.spacing_x || 3;
                 var spacingY = (carbonSt && carbonSt.spacingY) || meta.spacing_y || 3;
-                var initialTrees = meta.initial_trees_per_ha ? Math.round(meta.initial_trees_per_ha) : Math.round(10000 / (spacingX * spacingY));
+                var initialTrees = densityReport.format(densityReport.treesPerHa, 0);
                 var rotYears = (carbonSt && carbonSt.rotation) || meta.rotation_years || 30;
                 var retRate = (carbonSt && carbonSt.retention != null) ? carbonSt.retention : (meta.retention_rate != null ? meta.retention_rate : 85);
                 var effTrees = (carbonSt && carbonSt.effectiveTrees != null) ? carbonSt.effectiveTrees : Math.round(initialTrees * areaHa * (retRate / 100));
@@ -32899,8 +33008,8 @@ function selectRamp(name) {
                     '<tr><th colspan="2" style="background:#f1f5f9;padding:6px 8px;border:1px solid #cbd5e1;text-align:left;color:#0f172a;font-weight:700;">' + _cTxt(null, '1. Site & Silvicultural Overview', '1. Saha ve Ağaçlandırma Parametreleri') + '</th></tr>' +
                     '<tr><td style="width:34%;padding:6px 8px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;">' + _cTxt(null, 'Target Tree Species', 'Hedef Ağaç Türü') + '</td><td style="padding:6px 8px;border:1px solid #e2e8f0;"><b>' + escapeHtml(speciesStr) + '</b></td></tr>' +
                     '<tr><td style="padding:6px 8px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;">' + _cTxt(null, 'Study Area', 'Çalışma Alanı') + '</td><td style="padding:6px 8px;border:1px solid #e2e8f0;">' + areaHaStr + ' ha (' + areaDaStr + ' ' + _cTxt(null, 'decare', 'dekar') + ')</td></tr>' +
-                    '<tr><td style="padding:6px 8px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;">' + _cTxt(null, 'Planting Spacing & Density', 'Dikim Deseni & Sıklık') + '</td><td style="padding:6px 8px;border:1px solid #e2e8f0;">' + spacingX + ' m × ' + spacingY + ' m (' + initialTrees + ' ' + _cTxt(null, 'trees/ha', 'fidan/ha') + ')</td></tr>' +
-                    '<tr><td style="padding:6px 8px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;">' + _cTxt(null, 'Seedling Retention Rate', 'Fidan Tutma Oranı') + '</td><td style="padding:6px 8px;border:1px solid #e2e8f0;">%' + retRate + ' (' + _cTxt(null, 'Total Effective: ', 'Tahmini Efektif: ') + effTrees.toLocaleString() + ' ' + _cTxt(null, 'trees', 'adet') + ')</td></tr>' +
+                    '<tr><td style="padding:6px 8px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;">' + _cTxt(null, 'Planting Spacing & Density', 'Dikim Deseni & Sıklık') + '</td><td style="padding:6px 8px;border:1px solid #e2e8f0;">' + spacingX + ' m × ' + spacingY + ' m (' + initialTrees + ' ' + _cTxt(null, 'trees/ha', 'fidan/ha') + ')' + (densityReport.scalePct !== 100 ? ' ×' + densityReport.factor.toFixed(2) : '') + '</td></tr>' +
+                    '<tr><td style="padding:6px 8px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;">' + _cTxt(null, 'Seedling Retention Rate', 'Fidan Tutma Oranı') + '</td><td style="padding:6px 8px;border:1px solid #e2e8f0;">%' + retRate + ' (' + _cTxt(null, 'Total Effective: ', 'Tahmini Efektif: ') + densityReport.format(effTrees, 0) + ' ' + _cTxt(null, 'trees', 'adet') + ')</td></tr>' +
                     '<tr><td style="padding:6px 8px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:600;">' + _cTxt(null, 'Rotation Period', 'İdare Süresi (Rotasyon)') + '</td><td style="padding:6px 8px;border:1px solid #e2e8f0;">' + rotYears + ' ' + _cTxt(null, 'years', 'yıl') + '</td></tr>' +
                     '</table>';
 
@@ -32941,20 +33050,20 @@ function selectRamp(name) {
                     '<th style="background:#1e3a8a;color:#fff;padding:7px 8px;border:1px solid #cbd5e1;text-align:right;">' + _cTxt(null, 'Managed Scenario (with Thinning)', 'Yönetilen Senaryo') + '</th>' +
                     '<th style="background:#1e3a8a;color:#fff;padding:7px 8px;border:1px solid #cbd5e1;text-align:right;">' + _cTxt(null, 'Baseline (Unmanaged)', 'Müdahalesiz (Baseline)') + '</th></tr>' +
                     '<tr><td style="padding:6px 8px;border:1px solid #e2e8f0;">' + _cTxt(null, 'Standing Carbon Stock', 'Duran Meşcere Karbon Stoğu') + '</td>' +
-                    '<td style="padding:6px 8px;border:1px solid #e2e8f0;text-align:right;font-weight:600;color:#15803d;">' + (managed.total_standing_co2e != null ? managed.total_standing_co2e.toFixed(1) : '—') + ' tCO2e</td>' +
-                    '<td style="padding:6px 8px;border:1px solid #e2e8f0;text-align:right;">' + (baseline.total_standing_co2e != null ? baseline.total_standing_co2e.toFixed(1) : '—') + ' tCO2e</td></tr>' +
+                    '<td style="padding:6px 8px;border:1px solid #e2e8f0;text-align:right;font-weight:600;color:#15803d;">' + (managed.total_standing_co2e != null ? densityReport.format(managed.total_standing_co2e, 1) : '—') + ' tCO2e</td>' +
+                    '<td style="padding:6px 8px;border:1px solid #e2e8f0;text-align:right;">' + (baseline.total_standing_co2e != null ? densityReport.format(baseline.total_standing_co2e, 1) : '—') + ' tCO2e</td></tr>' +
                     '<tr><td style="padding:6px 8px;border:1px solid #e2e8f0;">' + _cTxt(null, 'Cumulative Harvested Carbon', 'Kümülatif Hasat Edilen Karbon') + '</td>' +
-                    '<td style="padding:6px 8px;border:1px solid #e2e8f0;text-align:right;font-weight:600;color:#b45309;">' + (managed.total_harvested_co2e != null ? managed.total_harvested_co2e.toFixed(1) : '—') + ' tCO2e</td>' +
+                    '<td style="padding:6px 8px;border:1px solid #e2e8f0;text-align:right;font-weight:600;color:#b45309;">' + (managed.total_harvested_co2e != null ? densityReport.format(managed.total_harvested_co2e, 1) : '—') + ' tCO2e</td>' +
                     '<td style="padding:6px 8px;border:1px solid #e2e8f0;text-align:right;">0.0 tCO2e</td></tr>' +
                     '<tr style="background:#f8fafc;font-weight:bold;"><td style="padding:6px 8px;border:1px solid #e2e8f0;">' + _cTxt(null, 'Total Cumulative Sequestered CO2e', 'Toplam Kümülatif Tutulan CO2e') + '</td>' +
-                    '<td style="padding:6px 8px;border:1px solid #e2e8f0;text-align:right;color:#0f172a;">' + (managed.grand_total_co2e != null ? managed.grand_total_co2e.toFixed(1) : '—') + ' tCO2e</td>' +
-                    '<td style="padding:6px 8px;border:1px solid #e2e8f0;text-align:right;color:#64748b;">' + (baseline.grand_total_co2e != null ? baseline.grand_total_co2e.toFixed(1) : '—') + ' tCO2e</td></tr>' +
+                    '<td style="padding:6px 8px;border:1px solid #e2e8f0;text-align:right;color:#0f172a;">' + (managed.grand_total_co2e != null ? densityReport.format(managed.grand_total_co2e, 1) : '—') + ' tCO2e</td>' +
+                    '<td style="padding:6px 8px;border:1px solid #e2e8f0;text-align:right;color:#64748b;">' + (baseline.grand_total_co2e != null ? densityReport.format(baseline.grand_total_co2e, 1) : '—') + ' tCO2e</td></tr>' +
                     '<tr><td style="padding:6px 8px;border:1px solid #e2e8f0;">' + _cTxt(null, 'Mean Annual Sequestration', 'Yıllık Ortalama CO2 Tutumu') + '</td>' +
-                    '<td style="padding:6px 8px;border:1px solid #e2e8f0;text-align:right;color:#0284c7;font-weight:600;">' + (managed.mean_annual_sequestration_co2e != null ? managed.mean_annual_sequestration_co2e.toFixed(2) : '—') + ' ' + _cTxt(null, 'tCO2e/yr', 'tCO2e/yıl') + '</td>' +
-                    '<td style="padding:6px 8px;border:1px solid #e2e8f0;text-align:right;">' + (baseline.mean_annual_sequestration_co2e != null ? baseline.mean_annual_sequestration_co2e.toFixed(2) : '—') + ' ' + _cTxt(null, 'tCO2e/yr', 'tCO2e/yıl') + '</td></tr>' +
+                    '<td style="padding:6px 8px;border:1px solid #e2e8f0;text-align:right;color:#0284c7;font-weight:600;">' + (managed.mean_annual_sequestration_co2e != null ? densityReport.format(managed.mean_annual_sequestration_co2e, 2) : '—') + ' ' + _cTxt(null, 'tCO2e/yr', 'tCO2e/yıl') + '</td>' +
+                    '<td style="padding:6px 8px;border:1px solid #e2e8f0;text-align:right;">' + (baseline.mean_annual_sequestration_co2e != null ? densityReport.format(baseline.mean_annual_sequestration_co2e, 2) : '—') + ' ' + _cTxt(null, 'tCO2e/yr', 'tCO2e/yıl') + '</td></tr>' +
                     '<tr><td style="padding:6px 8px;border:1px solid #e2e8f0;">' + _cTxt(null, 'Final Mean DBH', 'Nihai Meşcere Boyutları (DBH / Boy / Sıklık)') + '</td>' +
-                    '<td style="padding:6px 8px;border:1px solid #e2e8f0;text-align:right;">' + (managed.final_mean_dbh_cm != null ? managed.final_mean_dbh_cm.toFixed(1) + ' cm' : '—') + ' | ' + (managed.final_mean_height_m != null ? managed.final_mean_height_m.toFixed(1) + ' m' : '—') + ' (' + (managed.final_trees_per_ha != null ? Math.round(managed.final_trees_per_ha) : '—') + ' ' + _cTxt(null, 'trees/ha', 'ağaç/ha') + ')</td>' +
-                    '<td style="padding:6px 8px;border:1px solid #e2e8f0;text-align:right;">' + (baseline.final_mean_dbh_cm != null ? baseline.final_mean_dbh_cm.toFixed(1) + ' cm' : '—') + ' | ' + (baseline.final_mean_height_m != null ? baseline.final_mean_height_m.toFixed(1) + ' m' : '—') + ' (' + (baseline.final_trees_per_ha != null ? Math.round(baseline.final_trees_per_ha) : '—') + ' ' + _cTxt(null, 'trees/ha', 'ağaç/ha') + ')</td></tr>' +
+                    '<td style="padding:6px 8px;border:1px solid #e2e8f0;text-align:right;">' + (managed.final_mean_dbh_cm != null ? managed.final_mean_dbh_cm.toFixed(1) + ' cm' : '—') + ' | ' + (managed.final_mean_height_m != null ? managed.final_mean_height_m.toFixed(1) + ' m' : '—') + ' (' + (managed.final_trees_per_ha != null ? densityReport.format(managed.final_trees_per_ha, 0) : '—') + ' ' + _cTxt(null, 'trees/ha', 'ağaç/ha') + ')</td>' +
+                    '<td style="padding:6px 8px;border:1px solid #e2e8f0;text-align:right;">' + (baseline.final_mean_dbh_cm != null ? baseline.final_mean_dbh_cm.toFixed(1) + ' cm' : '—') + ' | ' + (baseline.final_mean_height_m != null ? baseline.final_mean_height_m.toFixed(1) + ' m' : '—') + ' (' + (baseline.final_trees_per_ha != null ? densityReport.format(baseline.final_trees_per_ha, 0) : '—') + ' ' + _cTxt(null, 'trees/ha', 'ağaç/ha') + ')</td></tr>' +
                     '</table>';
 
                 // Aralama Tablosu (varsa)
@@ -32963,7 +33072,7 @@ function selectRamp(name) {
                     var thRows = thinnings.map(function (ev) {
                         var mYr = (series.managed || []).filter(function (p) { return p.year === ev.year; })[0];
                         var harv = mYr && mYr.harvested_co2e > 0.05 ? mYr.harvested_co2e.toFixed(1) + ' tCO2e' : '—';
-                        var rem = mYr ? Math.round(mYr.trees_per_ha) + ' ' + _cTxt(null, 'trees/ha', 'ağaç/ha') : '—';
+                        var rem = mYr ? densityReport.format(mYr.trees_per_ha, 0) + ' ' + _cTxt(null, 'trees/ha', 'ağaç/ha') : '—';
                         return '<tr>' +
                             '<td style="padding:6px 8px;border:1px solid #e2e8f0;text-align:center;">' + ev.year + _cTxt(null, '. Year', '. Yıl') + '</td>' +
                             '<td style="padding:6px 8px;border:1px solid #e2e8f0;text-align:center;">%' + ev.percent + '</td>' +
@@ -33005,6 +33114,7 @@ function selectRamp(name) {
 
             document.body.appendChild(reportEl);
 
+            var pdfLayout = window._sylvaPdfMeasure(reportEl);
             html2canvas(reportEl, { backgroundColor: '#ffffff', scale: 2, useCORS: true }).then(function(canvas) {
                 if (document.body.contains(reportEl)) document.body.removeChild(reportEl);
                 var doc = new JsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
@@ -33014,22 +33124,7 @@ function selectRamp(name) {
                 var imgW = pageW - margin * 2;
                 var pxToPt = imgW / canvas.width;
                 var pageContentPx = (pageH - margin * 2) / pxToPt;
-                var y = 0;
-                var first = true;
-                while (y < canvas.height) {
-                    var sliceH = Math.min(pageContentPx, canvas.height - y);
-                    var sliceCanvas = document.createElement('canvas');
-                    sliceCanvas.width = canvas.width;
-                    sliceCanvas.height = Math.max(1, Math.round(sliceH));
-                    sliceCanvas.getContext('2d').drawImage(canvas, 0, y, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
-                    // Boş dilimi tamamen at; böylece PDF'de boş sayfa oluşmaz.
-                    if (window._sylvaCanvasHasContent(sliceCanvas)) {
-                        if (!first) doc.addPage();
-                        doc.addImage(sliceCanvas.toDataURL('image/jpeg', 0.92), 'JPEG', margin, margin, imgW, sliceH * pxToPt);
-                        first = false;
-                    }
-                    y += sliceH;
-                }
+                window._sylvaPdfPaintCanvas(doc, canvas, pdfLayout, margin, margin, margin);
                 var outFileName = 'SylvaGIS_' + (tableEl && carbonResp ? 'Kapsamli_Rapor' : (carbonResp ? 'Karbon_Simulasyon_Raporu' : t('file_analiz_raporu'))) + '.pdf';
                 doc.save(outFileName);
                 if (typeof playSylvaChime === 'function') playSylvaChime('download');
@@ -33058,9 +33153,15 @@ function selectRamp(name) {
 
         // ── Grafik + Tablo verisini seçilen formatta indirir ─────────
         function executeChartDownload() {
+            var exportSnapshot = _sylvaStatsExportSnapshot();
             var wrap = document.getElementById('stats-chart-svg-wrap');
             if (!wrap) return;
             var svgEl = wrap.querySelector('svg');
+            if (exportSnapshot && (currentChartType === 'bar' || currentChartType === 'pie')) {
+                var exportHost = document.createElement('div');
+                exportHost.innerHTML = currentChartType === 'bar' ? buildBarChartSVG(exportSnapshot.data) : buildPieChartSVG(exportSnapshot.data);
+                svgEl = exportHost.querySelector('svg');
+            }
             if (!svgEl) return;
 
             var fmtEl = document.querySelector('input[name="chart-dl-fmt"]:checked');
@@ -33083,7 +33184,10 @@ function selectRamp(name) {
             var scale = 2;
 
             // Tablo verisi (lastChartData'dan)
-            var data = lastChartData;
+            var data = exportSnapshot ? exportSnapshot.data : lastChartData;
+            var exportUnit = exportSnapshot ? exportSnapshot.unit : _sylvaStatsAreaUnit;
+            var exportUnitLabel = _sylvaAreaUnitLabel(exportUnit);
+            var exportDecimals = _sylvaAreaUnitDecimals(exportUnit);
             var rowLines = [];
             if (data && data.classes) {
                 data.classes.forEach(function(c, i) {
@@ -33132,11 +33236,12 @@ function selectRamp(name) {
                 mctx.font = '9px Arial, sans-serif';
 
                 var hdrPctLabel = '%';
-                var hdrHaLabel  = t('col_area_ha','Alan (ha)');
+                var hdrHaLabel  = t('col_area','Alan') + ' (' + exportUnitLabel + ')';
                 var hdrNameLabel = t('col_class_name','Sınıf Adı');
                 var rowsMeta = rowLines.map(function(row) {
                     var pctStr = row.pct.toFixed(1) + '%';
-                    var haStr  = row.ha !== null ? row.ha.toLocaleString('tr-TR', { maximumFractionDigits: 1 }) + ' ha' : '—';
+                    var area = row.ha === null ? null : _sylvaConvertHaTo(row.ha, exportUnit);
+                    var haStr = Number.isFinite(area) ? area.toLocaleString('tr-TR', { maximumFractionDigits: exportDecimals }) + ' ' + exportUnitLabel : '—';
                     return { pctStr: pctStr, haStr: haStr };
                 });
 
@@ -33372,6 +33477,19 @@ function selectRamp(name) {
         }
 
         function renderChart(stats, meta, paneId) {
+            if (meta && typeof isLulcAnalysis === 'function' && isLulcAnalysis(meta.analysisName)) {
+                var definitions = _sylvaGetPresentLulcDefs(meta, stats);
+                var classes = definitions.map(function (d) {
+                    return {min:d.code, max:d.code, name:d.key ? (t(d.key) || d.label) : d.label, color:d.color};
+                });
+                var percentages = stats && stats.value && computeClassPercentagesFromHistogram(classes, stats.value);
+                var pane = paneId === 'map2' ? 'map2' : (paneId || _sylvaActivePaneId());
+                var layer = pane === 'map2' ? currentLayer2 : currentLayer;
+                var areaHa = null;
+                try { if (layer) areaHa = turf.area(layer.toGeoJSON()) / 10000; } catch (error) {}
+                renderStatsChart(percentages && classes.length ? {classes:classes, percentages:percentages, areaHa:areaHa} : null, pane);
+                return;
+            }
             var nativeClassAnalysesExcluded = ['LULC', 'LULC_ESA', 'LULC_MODIS', 'LULC_CORINE'];
             if (meta && meta.legendType === 'classified' && meta.classesRaw &&
                 nativeClassAnalysesExcluded.indexOf(meta.analysisName) === -1 &&
@@ -33904,13 +34022,16 @@ function selectRamp(name) {
             return unit === 'm2' ? 0 : (unit === 'km2' ? 3 : 1);
         }
         window.sylvaSetStatsAreaUnit = function (unit) {
+            if (["m2", "km2", "ha"].indexOf(unit) < 0) return;
             _sylvaStatsAreaUnit = unit;
+            if (_sylvaChartChunkTimer !== null) { clearTimeout(_sylvaChartChunkTimer); _sylvaChartChunkTimer = null; }
             document.querySelectorAll('.sylva-area-unit-btn').forEach(function (b) {
                 b.classList.toggle('active', b.getAttribute('data-unit') === unit);
             });
             if (typeof lastChartData !== 'undefined' && lastChartData) {
                 var tableWrap = document.getElementById('stats-chart-table');
-                if (tableWrap) tableWrap.innerHTML = buildStatsTableHTML(lastChartData);
+                if (lastChartData.classes && lastChartData.classes.length > 128) renderStatsChart(lastChartData);
+                else if (tableWrap) tableWrap.innerHTML = buildStatsTableHTML(lastChartData);
             }
         };
 
@@ -33933,10 +34054,10 @@ function selectRamp(name) {
             return label || null;
         }
 
-        function buildStatsTableHTML(data, batch) {
+        function buildStatsTableHTML(data, batch, exportUnit) {
             data = batch ? data : _sylvaSafeChartData(data);
             if (!data) return '';
-            var unit = _sylvaStatsAreaUnit;
+            var unit = exportUnit || _sylvaStatsAreaUnit;
             var unitLabel = _sylvaAreaUnitLabel(unit);
             var decimals = _sylvaAreaUnitDecimals(unit);
             var rows = (batch ? data.classes.slice(batch.start, batch.end) : data.classes).map(function (c, i) {
@@ -33964,13 +34085,16 @@ function selectRamp(name) {
                         _sylvaAreaUnitLabel(u) + '</button>';
                 }).join('') + '</div>';
             return unitSwitcher + '<table style="width:100%;font-size:0.72rem;border-collapse:collapse;margin-top:2px;">' +
-                '<thead><tr style="color:#64748b;"><th style="text-align:left;padding:3px 4px;">' + t('col_class','Sınıf') + '</th><th style="text-align:right;padding:3px 4px;">' + t('col_pct','%') + '</th><th style="text-align:right;padding:3px 4px;">' + t('col_area','Alan') + '</th></tr></thead>' +
+                '<thead><tr style="color:#64748b;"><th style="text-align:left;padding:3px 4px;">' + t('col_class','Sınıf') + '</th><th style="text-align:right;padding:3px 4px;">' + t('col_pct','%') + '</th><th style="text-align:right;padding:3px 4px;">' + t('col_area','Alan') + ' (' + unitLabel + ')' + '</th></tr></thead>' +
                 '<tbody>' + rows + '</tbody></table>' + areaNote;
         }
 
         // Dil değişince grafik + tablo başlıklarını yenile
         window.sylvaRefreshStatsChart = function() {
-            if (typeof lastChartData !== 'undefined' && lastChartData) {
+            if (typeof window._sylvaRefreshDataChartsForLayer === 'function' &&
+                (window._sylvaTsChartByPane || {})[_sylvaActivePaneId()]) {
+                window._sylvaRefreshDataChartsForLayer(_sylvaActivePaneId());
+            } else if (typeof lastChartData !== 'undefined' && lastChartData) {
                 renderStatsChart(lastChartData);
             }
         };
@@ -34948,14 +35072,7 @@ function selectRamp(name) {
                 if (_estW * _estH > MAX_CANVAS_AREA) {
                     SCALE = Math.sqrt(MAX_CANVAS_AREA / (760 * Math.max(1, reportRect.height)));
                 }
-                var rowBoundaries = [];
-                Array.prototype.forEach.call(reportEl.querySelectorAll('.pdf-row'), function (rowEl) {
-                    var r = rowEl.getBoundingClientRect();
-                    rowBoundaries.push({
-                        top: (r.top - reportRect.top) * SCALE,
-                        bottom: (r.bottom - reportRect.top) * SCALE
-                    });
-                });
+                var pdfLayout = window._sylvaPdfMeasure(reportEl);
 
                 var _logoPromise = (typeof window._wxLoadLogoAsset === 'function') ? window._wxLoadLogoAsset() : Promise.resolve(null);
 
@@ -34985,11 +35102,7 @@ function selectRamp(name) {
                     // FAZLADAN, TAMAMEN BOŞ bir sayfa oluşturuyordu. Artık
                     // döngü yalnızca en son "satırın" (pdf-row) bittiği
                     // noktaya kadar gidiyor.
-                    var contentBottomPx = canvas.height;
-                    if (rowBoundaries.length) {
-                        var lastRowBottom = Math.ceil(rowBoundaries[rowBoundaries.length - 1].bottom);
-                        if (lastRowBottom > 0 && lastRowBottom < contentBottomPx) contentBottomPx = lastRowBottom;
-                    }
+        
 
                     var logoDrawH = 0, logoDrawW = 0;
                     if (logo) {
@@ -35002,29 +35115,7 @@ function selectRamp(name) {
                         try { doc.addImage(logo.url, 'PNG', pageW - marginSide - logoDrawW, 10, logoDrawW, logoDrawH); } catch (eLogo) {}
                     }
 
-                    var y = 0, first = true;
-                    while (y < contentBottomPx) {
-                        var maxY = Math.min(y + pageContentPx, contentBottomPx);
-                        var cutY = maxY;
-                        for (var i = 0; i < rowBoundaries.length; i++) {
-                            var rb = rowBoundaries[i];
-                            if (rb.top >= y && rb.bottom <= maxY + 0.5) cutY = rb.bottom;
-                            if (rb.top >= maxY) break;
-                        }
-                        if (cutY <= y) cutY = maxY; // tek "satır" tüm sayfadan uzunsa çaresiz kes
-                        var sliceH = cutY - y;
-                        var sliceCanvas = document.createElement('canvas');
-                        sliceCanvas.width = canvas.width; sliceCanvas.height = Math.max(1, Math.round(sliceH));
-                        sliceCanvas.getContext('2d').drawImage(canvas, 0, y, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
-                        // Boş dilimi tamamen at; böylece PDF'de boş sayfa oluşmaz.
-                        if (window._sylvaCanvasHasContent(sliceCanvas)) {
-                            if (!first) doc.addPage();
-                            doc.addImage(sliceCanvas.toDataURL('image/jpeg', 0.92), 'JPEG', marginSide, marginTop, imgW, sliceH * pxToPt);
-                            stampLogo();
-                            first = false;
-                        }
-                        y = cutY;
-                    }
+                    window._sylvaPdfPaintCanvas(doc, canvas, pdfLayout, marginSide, marginTop, marginBottom, stampLogo);
 
                     // 🆕 Faz 77: sayfa numaraları — her sayfanın ALT ORTASINA
                     // "1", "2", "3"... basılıyor. Bu adım TÜM sayfalar
@@ -61300,6 +61391,14 @@ function _sylvaExportXml(value) {
   });
 })();
 
+
+(function () {
+    var rows = {"en":["Decrease","Increase","No change","Minimum","Maximum","Mean","Index"],"tr":["Azalış","Artış","Değişim yok","Minimum","Maksimum","Ortalama","İndeks"],"ko":["감소","증가","변화 없음","최소","최대","평균","지수"],"ja":["減少","増加","変化なし","最小値","最大値","平均値","指数"],"de":["Abnahme","Zunahme","Keine Änderung","Minimum","Maximum","Mittelwert","Index"],"fr":["Diminution","Augmentation","Aucun changement","Minimum","Maximum","Moyenne","Indice"],"es":["Disminución","Aumento","Sin cambios","Mínimo","Máximo","Media","Índice"],"pt":["Diminuição","Aumento","Sem alteração","Mínimo","Máximo","Média","Índice"],"it":["Diminuzione","Aumento","Nessuna variazione","Minimo","Massimo","Media","Indice"],"ru":["Снижение","Рост","Без изменений","Минимум","Максимум","Среднее","Индекс"],"zh":["下降","上升","无变化","最小值","最大值","平均值","指数"],"ka":["კლება","მატება","უცვლელია","მინიმუმი","მაქსიმუმი","საშუალო","ინდექსი"],"uz":["Kamayish","O‘sish","O‘zgarish yo‘q","Minimum","Maksimum","O‘rtacha","Indeks"],"el":["Μείωση","Αύξηση","Χωρίς μεταβολή","Ελάχιστο","Μέγιστο","Μέσος όρος","Δείκτης"],"bg":["Намаление","Увеличение","Без промяна","Минимум","Максимум","Средна стойност","Индекс"],"az":["Azalma","Artım","Dəyişiklik yoxdur","Minimum","Maksimum","Orta qiymət","İndeks"],"hu":["Csökkenés","Növekedés","Nincs változás","Minimum","Maximum","Átlag","Index"],"kk":["Кему","Өсу","Өзгеріс жоқ","Ең аз мән","Ең көп мән","Орташа мән","Индекс"],"ar":["انخفاض","ارتفاع","دون تغيير","الحد الأدنى","الحد الأقصى","المتوسط","المؤشر"],"fa":["کاهش","افزایش","بدون تغییر","کمینه","بیشینه","میانگین","شاخص"],"hi":["कमी","वृद्धि","कोई परिवर्तन नहीं","न्यूनतम","अधिकतम","औसत","सूचकांक"],"id":["Penurunan","Peningkatan","Tidak berubah","Minimum","Maksimum","Rata-rata","Indeks"],"th":["ลดลง","เพิ่มขึ้น","ไม่เปลี่ยนแปลง","ค่าต่ำสุด","ค่าสูงสุด","ค่าเฉลี่ย","ดัชนี"],"bn":["হ্রাস","বৃদ্ধি","অপরিবর্তিত","সর্বনিম্ন","সর্বোচ্চ","গড়","সূচক"],"vi":["Giảm","Tăng","Không thay đổi","Nhỏ nhất","Lớn nhất","Trung bình","Chỉ số"],"ur":["کمی","اضافہ","کوئی تبدیلی نہیں","کم از کم","زیادہ سے زیادہ","اوسط","اشاریہ"],"pl":["Spadek","Wzrost","Bez zmian","Minimum","Maksimum","Średnia","Wskaźnik"],"ms":["Penurunan","Peningkatan","Tiada perubahan","Minimum","Maksimum","Purata","Indeks"],"ky":["Азайуу","Өсүү","Өзгөрүү жок","Эң аз маани","Эң чоң маани","Орточо маани","Индекс"],"mn":["Бууралт","Өсөлт","Өөрчлөлтгүй","Хамгийн бага","Хамгийн их","Дундаж","Индекс"]};
+    var keys = ["ts_stat_decrease","ts_stat_increase","ts_stat_unchanged","ts_stat_min","ts_stat_max","ts_stat_mean","ts_stat_index"];
+    Object.keys(rows).forEach(function (lang) {
+        keys.forEach(function (key, i) { SYLVA_TRANSLATIONS[lang][key] = rows[lang][i]; });
+    });
+})();
 function t(key, fallback) {
   var T = (typeof SYLVA_TRANSLATIONS !== 'undefined' && (SYLVA_TRANSLATIONS[_sylvaLang] || SYLVA_TRANSLATIONS['en'])) || {};
   var Ten = (typeof SYLVA_TRANSLATIONS !== 'undefined' && SYLVA_TRANSLATIONS['en']) || {};
@@ -68418,8 +68517,17 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape')closePrivacy
     var _orig = window.setChartType;
     var _tsData = null;
 
-    window._setTsLineData = function (data) {
+    window._sylvaTsChartByPane = window._sylvaTsChartByPane || {};
+    window._setTsLineData = function (data, paneId) {
+        var pane = paneId || _sylvaActivePaneId();
+        window._sylvaTsChartByPane[pane] = data;
+        if (pane !== _sylvaActivePaneId()) return;
         _tsData = data;
+        if (data && data.series && data.series.length) {
+            window.setChartType('line');
+            var body = document.getElementById('data-charts-body');
+            if (body && (body.style.display === 'none' || body.classList.contains('sec-collapsed')) && typeof sylvaToggleSec === 'function') sylvaToggleSec('data-charts-body');
+        }
     };
 
     window.setChartType = function (type) {
@@ -68430,7 +68538,9 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape')closePrivacy
             // 🛠️ Buton artık her zaman tıklanabilir; veri henüz yoksa (Zaman
             // Serisi hiç çalıştırılmadıysa) sessizce hiçbir şey yapmaz — hata
             // vermez, sadece grafiği çizecek veri bulamaz.
+            _tsData = (window._sylvaTsChartByPane || {})[_sylvaActivePaneId()] || null;
             if (!_tsData) return;
+            currentChartType = 'line';
             if (btnBar)  btnBar.classList.remove('active');
             if (btnPie)  btnPie.classList.remove('active');
             if (btnLine) btnLine.classList.add('active');
@@ -68549,7 +68659,7 @@ function _buildTsStatsHtml(data, colors) {
         if (!st) return;
         any = true;
         var col = s.color || colors[si % colors.length];
-        var trendLabel = st.trend === 'up' ? '📈 Artış' : (st.trend === 'down' ? '📉 Azalış' : '➖ Değişim yok');
+        var trendLabel = st.trend === 'up' ? '📈 ' + t('ts_stat_increase') : (st.trend === 'down' ? '📉 ' + t('ts_stat_decrease') : '➖ ' + t('ts_stat_unchanged'));
         var pctStr = (st.changePct !== null)
             ? (st.changePct >= 0 ? '+' : '') + st.changePct.toFixed(1) + '%'
             : '—';
@@ -68559,9 +68669,9 @@ function _buildTsStatsHtml(data, colors) {
               +     '<span>' + s.index + ' — ' + trendLabel + ' (' + pctStr + ')</span>'
               +   '</div>'
               +   '<div style="padding-left:13px;line-height:1.55;color:#64748b;">'
-              +     'Min: <b>' + st.min.toFixed(4) + '</b> (' + (st.minDate || '—') + ') &nbsp;·&nbsp; '
-              +     'Maks: <b>' + st.max.toFixed(4) + '</b> (' + (st.maxDate || '—') + ') &nbsp;·&nbsp; '
-              +     'Ortalama: <b>' + st.mean.toFixed(4) + '</b>'
+              +     t('ts_stat_min') + ': <b>' + st.min.toFixed(4) + '</b> (' + (st.minDate || '—') + ') &nbsp;·&nbsp; '
+              +     t('ts_stat_max') + ': <b>' + st.max.toFixed(4) + '</b> (' + (st.maxDate || '—') + ') &nbsp;·&nbsp; '
+              +     t('ts_stat_mean') + ': <b>' + st.mean.toFixed(4) + '</b>'
               +   '</div>'
               + '</div>';
     });
@@ -68593,6 +68703,9 @@ function _buildTsStatsHtml(data, colors) {
 // GERÇEK bir boşluk bırakacak şekilde ayrı parçalara bölünüyor — eksik veri
 // asla komşu bir noktaya (ör. 0'mış gibi) yanlışlıkla bağlanıp yanıltmıyor.
 function _renderLineChart(data) {
+    if (typeof _sylvaStatsChartFrame !== 'undefined' && _sylvaStatsChartFrame !== null) { cancelAnimationFrame(_sylvaStatsChartFrame); _sylvaStatsChartFrame = null; }
+    if (typeof _sylvaChartChunkTimer !== 'undefined' && _sylvaChartChunkTimer !== null) { clearTimeout(_sylvaChartChunkTimer); _sylvaChartChunkTimer = null; }
+    if (typeof lastChartData !== 'undefined') lastChartData = null;
     var wrap = document.getElementById('stats-chart-svg-wrap');
     if (!wrap || !data || !data.series || !data.series.length) return;
     var W=280,H=160,PL=36,PR=10,PT=14,PB=28;
@@ -68643,6 +68756,16 @@ function _renderLineChart(data) {
 
     wrap.className='';
     wrap.innerHTML='<svg viewBox="0 0 '+W+' '+H+'" width="100%" height="180" style="display:block;">'+grid+xLbls+svg+leg+'</svg>' + statsHtml;
+    var table = document.getElementById('stats-chart-table');
+    if (table) {
+        var rows = data.series.map(function (series) {
+            var stats = _computeTsSeriesStats(series);
+            if (!stats) return '';
+            return '<tr><td>' + escapeHtml(series.index) + '</td><td>' + stats.min.toFixed(4) + '</td><td>' + stats.max.toFixed(4) + '</td><td>' + stats.mean.toFixed(4) + '</td></tr>';
+        }).join('');
+        table.innerHTML = '<table style="width:100%;font-size:0.72rem;border-collapse:collapse;"><thead><tr>' +
+            ['ts_stat_index','ts_stat_min','ts_stat_max','ts_stat_mean'].map(function (key) { return '<th>' + escapeHtml(t(key)) + '</th>'; }).join('') + '</tr></thead><tbody>' + rows + '</tbody></table>';
+    }
 }
 
 /* ── 🛰️ RGB Uydu Görüntüsü Zaman Serisi Galerisi ────────────────────────
@@ -68934,8 +69057,7 @@ function runTimeSeriesAnalysis() {
             if (_tsLineBtn2) { _tsLineBtn2.classList.remove('disabled-chart'); _tsLineBtn2.disabled = false; }
             var _tsChartDlRow2 = document.getElementById('chart-download-buttons-row');
             if (_tsChartDlRow2) { _tsChartDlRow2.style.opacity = ''; _tsChartDlRow2.style.pointerEvents = ''; }
-            window._setTsLineData({ series: series });
-            window.setChartType('line');
+            window._setTsLineData({ series: series }, _pane);
 
             // Zaman Serisi uydu ANALİZİ sonucunda Lejant ve Semboloji paneli
             // kullanıcı tarafından düzenlenebilir olmalıdır. Ham uydu görüntüsü
@@ -134785,6 +134907,13 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
   rendering=true;
   try{
    if(typeof window.sylvaSyncRgbPassiveChartLegend==='function')window.sylvaSyncRgbPassiveChartLegend();
+   var timeSeries=(window._sylvaTsChartByPane||{})[p];
+   var analysis=state&&state.meta&&state.meta.analysisName||k;
+   if(timeSeries&&timeSeries.series&&timeSeries.series.length&&(!k||timeSeries.series.some(function(s){return s.index===analysis;}))){
+    clear(p);buttons(true);currentChartType='line';_renderLineChart(timeSeries);
+    ['stats-chart-svg-wrap','stats-chart-table'].forEach(function(id){var el=document.getElementById(id);if(el)el.setAttribute('data-chart-layer-key',k||'timeseries');});
+    return;
+   }
    if(!k||String(k).indexOf('RGB::')===0){clear(p);return;}
    var meta=state&&state.meta,data=state&&state.data,stats=data&&data.stats;
    var line=!!(meta&&meta.chartType==='line'&&data.series&&data.series.length&&typeof _renderLineChart==='function');
@@ -134794,7 +134923,7 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
     clear(p);_renderLineChart({series:data.series});
    }else{
     var snap=bank(p)[k];
-    if(snap&&Array.isArray(snap.classes)&&Array.isArray(snap.percentages)){
+    if(snap&&(!data||stats&&stats.value)&&Array.isArray(snap.classes)&&Array.isArray(snap.percentages)){
      window.renderStatsChart(snap,p);
     }else if(stats&&stats.value&&meta){
      clear(p);
@@ -134843,13 +134972,19 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
  };
  var result=window._sylvaRenderIndexAnalysisResult;
  if(typeof result==='function')window._sylvaRenderIndexAnalysisResult=function(meta,data,p,skip,k,isTop){
+  if(!meta||!data)return result.apply(this,arguments);
   var pane=p==='map2'?'map2':'map',key=k||(meta&&meta.analysisName);
   var old=((window._sylvaIndexAnalysisStates||{})[pane]||{})[key];
   if(!window._sylvaChartSwitchInProgress&&(!old||old.data!==data))delete bank(pane)[key];
-  var out=result.apply(this,arguments);
-  // Late results stay in their own layer state; never draw them over the selected layer.
-  if(isTop!==false&&key===top(pane)&&!window._sylvaChartSwitchInProgress)schedule(pane);
-  return out;
+  // Make chart completion independent of optional legend/gallery rendering.
+  window._sylvaIndexAnalysisStates=window._sylvaIndexAnalysisStates||{map:{},map2:{}};
+  window._sylvaIndexAnalysisStates[pane]=window._sylvaIndexAnalysisStates[pane]||{};
+  window._sylvaIndexAnalysisStates[pane][key]={meta:meta,data:data};
+  try{return result.apply(this,arguments);}
+  finally{
+   // Only the visible pane's selected layer may commit to the shared panel.
+   if(isTop!==false&&key===top(pane)&&!window._sylvaChartSwitchInProgress)refresh(pane);
+  }
  };
  wrap('_sylvaRenderLayerSwitchBox',function(p){bindMap(p==='map2'?'map2':'map');schedule(p);});
  wrap('_sylvaClearGeeLayers',function(p){p=p==='map2'?'map2':'map';window._sylvaChartSnapshotByPane=window._sylvaChartSnapshotByPane||{};window._sylvaChartSnapshotByPane[p]={};clear(p);});
@@ -135188,4 +135323,131 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
     body.sylva-dual-screen-on :is(#btn-before-after, #btn-before-after-map2) { font-size:0.65rem !important; }
 }
 </style>
+
+<style id="sylva-map-centered-loading">
+#analysis-loading-overlay {
+    display:flex !important;
+    inset:auto;
+    pointer-events:none;
+    background:rgba(248,250,252,0.12);
+    backdrop-filter:none;
+    z-index:450;
+    opacity:0;
+    visibility:hidden;
+    transition:opacity 220ms ease, visibility 0s linear 220ms;
+    overflow:hidden;
+}
+#analysis-loading-overlay.sylva-loading-visible {
+    opacity:1; visibility:visible;
+    transition:opacity 180ms ease;
+}
+#analysis-loading-overlay #analysis-loading-text {
+    animation:sylva-map-loading-breathe 1.6s ease-in-out infinite;
+    animation-play-state:paused;
+    max-width:70%;
+}
+#analysis-loading-overlay.sylva-loading-visible #analysis-loading-text { animation-play-state:running; }
+#analysis-loading-overlay #analysis-loading-text img { max-width:100%; max-height:90px; object-fit:contain; }
+#analysis-loading-overlay #analysis-loading-cancel-btn { pointer-events:auto; }
+@keyframes sylva-map-loading-breathe {
+    0%,100% { opacity:1; transform:scale(1); }
+    50% { opacity:0.4; transform:scale(0.96); }
+}
+@media (prefers-reduced-motion:reduce) {
+    #analysis-loading-overlay #analysis-loading-text { animation:none; }
+}
+</style>
+<script id="sylva-map-centered-loading-sync">
+(function () {
+    var overlay = document.getElementById('analysis-loading-overlay');
+    if (!overlay) return;
+    var tiles = new Map(), timer = null, settleFrame = null, epoch = 0;
+    var started = 0, expired = false, wasRequested = false;
+    function requested() { return overlay.classList.contains('active') || (window._sylvaLoadingRefCount || 0) > 0; }
+    function chartPending() {
+        return (typeof _sylvaStatsChartFrame !== 'undefined' && _sylvaStatsChartFrame !== null) ||
+            (typeof _sylvaChartChunkTimer !== 'undefined' && _sylvaChartChunkTimer !== null);
+    }
+    function position() {
+        var pane = typeof window._sylvaActivePaneId === 'function' ? window._sylvaActivePaneId() : 'map';
+        var el = document.getElementById(pane === 'map2' ? 'map2' : 'map');
+        if (!el) return;
+        var r = el.getBoundingClientRect();
+        ['left','top','width','height'].forEach(function (key) {
+            var value = r[key] + 'px';
+            if (overlay.style[key] !== value) overlay.style[key] = value;
+        });
+    }
+    function check() {
+        clearTimeout(timer); timer = null;
+        var req = requested();
+        if (req && !wasRequested) { expired = false; started = Date.now(); }
+        wasRequested = req;
+        var busy = !expired && (req || tiles.size > 0 || (started && chartPending()));
+        // A lost completion callback must never leave a permanent indicator.
+        if (busy && started && Date.now() - started > 240000) {
+            expired = true; busy = false;
+            Array.from(tiles.values()).forEach(function (done) { done(); });
+        }
+        if (busy) {
+            epoch++;
+            if (settleFrame !== null) { cancelAnimationFrame(settleFrame); settleFrame = null; }
+            position();
+            overlay.classList.add('sylva-loading-visible');
+            timer = setTimeout(check, 50);
+        } else if (overlay.classList.contains('sylva-loading-visible') && settleFrame === null) {
+            var token = ++epoch;
+            settleFrame = requestAnimationFrame(function () {
+                settleFrame = requestAnimationFrame(function () {
+                    settleFrame = null;
+                    if (token !== epoch) return;
+                    if (!expired && (requested() || tiles.size || chartPending())) { check(); return; }
+                    overlay.classList.remove('sylva-loading-visible');
+                    started = 0;
+                });
+            });
+        }
+    }
+    window._sylvaBeginMapLoadingTask = function () {
+        if (!requested() && !overlay.classList.contains('sylva-loading-visible')) return function () {};
+        var token = {}, done = false;
+        var safety = setTimeout(finish, 180000);
+        function finish() {
+            if (done) return;
+            done = true; clearTimeout(safety); tiles.delete(token); check();
+        }
+        tiles.set(token, finish); check();
+        return finish;
+    };
+    window._sylvaTrackLoadingTile = function (layer) {
+        if (!layer || typeof layer.on !== 'function' || (!requested() && !overlay.classList.contains('sylva-loading-visible'))) return;
+        if (tiles.has(layer)) return;
+        var done = false, safety;
+        function finish() {
+            if (done) return;
+            done = true;
+            clearTimeout(safety);
+            layer.off('load tileerror remove', finish);
+            tiles.delete(layer);
+            check();
+        }
+        tiles.set(layer, finish);
+        layer.on('load tileerror remove', finish);
+        safety = setTimeout(finish, 45000);
+        setTimeout(function () {
+            if (typeof layer.isLoading === 'function' && !layer.isLoading()) finish();
+        }, 0);
+        check();
+    };
+    // Existing analysis, carbon and time-series flows keep their own active/ref-count lifecycle.
+    new MutationObserver(function () {
+        // Ignore our own visibility-class updates; polling covers outstanding paint jobs.
+        if (requested() !== wasRequested) check();
+    }).observe(overlay, {attributes:true, attributeFilter:['class']});
+    window.addEventListener('resize', position);
+    window.addEventListener('orientationchange', position);
+    if (window.visualViewport) window.visualViewport.addEventListener('resize', position);
+    check();
+})();
+</script>
 </html>
