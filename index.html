@@ -639,23 +639,6 @@ tr.class-highlight-active {
     background: transparent;
 }
 
-/* Uygula (Ok) Butonu */
-.apply-btn {
-    background: none;
-    border: none;
-    cursor: pointer;
-    font-size: 1.2rem;
-    color: #475569;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: color 0.2s;
-}
-
-.apply-btn:hover {
-    color: #152d6e; /* Üzerine gelince mavi olur */
-}
-
 /* Sınıf Rengi Seçici - 20 Özgün Renk Paleti */
 .class-color-wrapper {
     position: relative;
@@ -3297,6 +3280,8 @@ tr.class-highlight-active {
         #btn-chart-line.disabled-chart,
         #btn-chart-bar.disabled-chart,
         #btn-chart-pie.disabled-chart { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
+        #chart-download-buttons-row button[data-i18n="btn_csv"]:disabled,
+        #chart-download-buttons-row button[data-i18n="btn_pdf"]:disabled { opacity: 0.5; cursor: not-allowed; pointer-events: none; }
         #btn-before-after.active, #btn-before-after-map2.active { background:#1e3a8a !important; color:#fff !important; border-color:#1e3a8a !important; }
 
         .ts-series-dot { cursor: pointer; }
@@ -15641,6 +15626,7 @@ var _CARBON_SPECIES_DB = {
                 window.carbonSimClearActiveResult = function () {
                     var paneId = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
                     window.carbonSimClearPlantingLayer(paneId);
+                    if (window._sylvaCarbonAOIBoundsByPane) window._sylvaCarbonAOIBoundsByPane[paneId] = null;
                     var st = _getCarbonActiveState();
                     st.resultsVisible = false;
                     st.spacingHintResult = null;
@@ -16152,6 +16138,8 @@ var _CARBON_SPECIES_DB = {
                         }
                         return;
                     }
+
+                    if (typeof window._sylvaRememberCarbonAOIBounds === 'function') window._sylvaRememberCarbonAOIBounds(paneId, aoiInfo.geometry);
 
                     // Hide the previous density summary until this analysis succeeds.
                     st.spacingHintResult = null;
@@ -20560,6 +20548,7 @@ function _sylvaHasMixedStackCategories(paneId) {
             if (secondPane) secondPane.classList.toggle('sylva-active-map-pane', id === 'map2');
             if (typeof window._sylvaUseMarkupPane === 'function') window._sylvaUseMarkupPane(id);
             if (typeof window._sylvaSyncActivePaneControls === 'function') window._sylvaSyncActivePaneControls();
+            _sylvaSyncLegendTitleInputs(id);
             if (typeof _sylvaUpdateBeforeAfterButtons === 'function') {
                 _sylvaUpdateBeforeAfterButtons(!!window._sylvaDualScreenActive, id);
             }
@@ -20822,9 +20811,7 @@ function _sylvaHasMixedStackCategories(paneId) {
             }
             var map2HomeView = function () {
                 // The right home button uses only the right map workspace.
-                if (currentLayer2) {
-                    map2.fitBounds(currentLayer2.getBounds());
-                } else {
+                if (!_sylvaFitHomeAOI('map2', map2, currentLayer2)) {
                     map2.setView(HOME_VIEW.center, HOME_VIEW.zoom);
                 }
                 updateMap2Controls();
@@ -21755,6 +21742,31 @@ function _sylvaHasMixedStackCategories(paneId) {
 
         // Yeni bir katmanı "çalışma alanı" yapar — eskisi varsa kaldırır,
         // haritaya ekler (henüz eklenmemişse), yakınlaştırır ve bilgi kutusunu gösterir
+        // Home-view state only: keep the analysed carbon AOI independently for each map.
+        window._sylvaCarbonAOIBoundsByPane = window._sylvaCarbonAOIBoundsByPane || {map:null, map2:null};
+        function _sylvaRememberCarbonAOIBounds(paneId, geometry) {
+            paneId = paneId === 'map2' ? 'map2' : 'map';
+            try {
+                if (!geometry || typeof L === 'undefined') return;
+                var bounds = typeof geometry.getBounds === 'function' ? geometry.getBounds() : L.geoJSON(geometry).getBounds();
+                if (bounds && bounds.isValid()) {
+                    // Copy the extent so later marker/style updates cannot mutate the Home target.
+                    window._sylvaCarbonAOIBoundsByPane[paneId] = L.latLngBounds(bounds.getSouthWest(), bounds.getNorthEast());
+                }
+            } catch (error) { console.warn('[SylvaGIS] Carbon AOI bounds unavailable:', error); }
+        }
+        window._sylvaRememberCarbonAOIBounds = _sylvaRememberCarbonAOIBounds;
+        function _sylvaFitHomeAOI(paneId, targetMap, layer) {
+            var carbonBounds = window._sylvaCarbonAOIBoundsByPane[paneId];
+            var bounds = null;
+            try { if (layer && typeof layer.getBounds === 'function') bounds = layer.getBounds(); } catch (error) {}
+            if (!bounds || !bounds.isValid()) bounds = carbonBounds;
+            if (!bounds || !bounds.isValid()) return false;
+            if (carbonBounds && carbonBounds.isValid()) targetMap.fitBounds(bounds, {padding:[20,20], maxZoom:16, animate:true});
+            else targetMap.fitBounds(bounds);
+            return true;
+        }
+
         function setCurrentLayer(layer) {
             var paneId = _sylvaActivePaneId();
             // Senkron modda sağ panel salt yansıtma panelidir. Sağdan
@@ -21775,6 +21787,7 @@ function _sylvaHasMixedStackCategories(paneId) {
             if (previous && targetMap && targetMap.hasLayer(previous)) targetMap.removeLayer(previous);
             if (paneId === 'map2') { currentLayer2 = layer; window._workspaceLayer2 = layer; }
             else { currentLayer = layer; window._workspaceLayer = layer; }
+            if (window._sylvaCarbonAOIBoundsByPane[paneId]) _sylvaRememberCarbonAOIBounds(paneId, layer);
             var state = _sylvaPaneState(paneId);
             state.workspaceVisible = true;
             state.wsStrokeActive = !!window._wsStrokeActive;
@@ -21808,6 +21821,7 @@ function _sylvaHasMixedStackCategories(paneId) {
         // görünüyordu. Bu fonksiyon ilgili ekranın ham referansını da
         // temizleyerek bu hayalet geri dönüşü engeller.
         window._sylvaClearRawWorkspaceRef = function (paneId) {
+            window._sylvaCarbonAOIBoundsByPane[paneId === 'map2' ? 'map2' : 'map'] = null;
             if (typeof window.carbonSimClearPlantingLayer === 'function') {
                 window.carbonSimClearPlantingLayer(paneId);
             }
@@ -21826,6 +21840,8 @@ function _sylvaHasMixedStackCategories(paneId) {
         // Böylece aktif ekran ne olursa olsun Ekran 1 ve Ekran 2 aynı anda
         // temizlenir; eski katman referansları da haritada asılı kalmaz.
         window._sylvaClearAllAreaLayers = function () {
+            window._sylvaCarbonAOIBoundsByPane.map = null;
+            window._sylvaCarbonAOIBoundsByPane.map2 = null;
             if (typeof window.carbonSimClearPlantingLayer === 'function') {
                 window.carbonSimClearPlantingLayer('map');
                 window.carbonSimClearPlantingLayer('map2');
@@ -21893,11 +21909,7 @@ function _sylvaHasMixedStackCategories(paneId) {
         document.getElementById('zoom-in').addEventListener('click', function () { map.zoomIn(); });
         document.getElementById('zoom-out').addEventListener('click', function () { map.zoomOut(); });
         document.getElementById('zoom-home').addEventListener('click', function () {
-            if (window.SylvaVAW && window.SylvaVAW.workspaces.length === 0) {
-                map.setView(HOME_VIEW.center, HOME_VIEW.zoom);
-            } else if (currentLayer) {
-                map.fitBounds(currentLayer.getBounds());
-            } else {
+            if (!_sylvaFitHomeAOI('map', map, currentLayer)) {
                 map.setView(HOME_VIEW.center, HOME_VIEW.zoom);
             }
         });
@@ -24354,19 +24366,23 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
 
         // "linear-gradient(to right,#aaa,#bbb,...)" stringinden renk durağı listesini çıkarır
         function extractRampStopTokens(rampCss) {
-            var inner = rampCss
-                .replace(/^linear-gradient\(\s*to\s+right\s*,/i, '')
-                .replace(/\)\s*$/, '');
-            return inner.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+            var inner = String(rampCss || '').replace(/^linear-gradient\(\s*/i, '').replace(/\)\s*$/, '');
+            inner = inner.replace(/^(?:to\s+[^,]+|[-+]?([\d.]+)(?:deg|turn|rad|grad))\s*,\s*/i, '');
+            return inner.split(/,(?![^(]*\))/).map(function (token) {
+                return token.trim().replace(/\s+[-+]?([\d.]+)%\s*$/, '');
+            }).filter(Boolean);
         }
 
         var __rampStopsCache = {};
         function getRampStopsRGB(name) {
-            if (__rampStopsCache[name]) return __rampStopsCache[name];
-            var raw = ramps[name];
+            var selected = document.getElementById('selectedRamp');
+            var selectedName = selected && selected.getAttribute('data-ramp');
+            var raw = selected && name === selectedName
+                ? (selected.style.backgroundImage || selected.style.background) : ramps[name];
             if (!raw) return null;
+            if (__rampStopsCache[raw]) return __rampStopsCache[raw];
             var rgbStops = extractRampStopTokens(raw).map(cssColorToRGBArray);
-            __rampStopsCache[name] = rgbStops;
+            __rampStopsCache[raw] = rgbStops;
             return rgbStops;
         }
 
@@ -24499,7 +24515,6 @@ function selectRamp(name) {
                 (function() {
                     var _sr = document.getElementById('selectedRamp');
                     var _rn = _sr ? (_sr.getAttribute('data-ramp') || 'black-white') : 'black-white';
-                    if (_rn === '__gee__') _rn = 'black-white';
                     if (typeof applyRampToClassification === 'function') applyRampToClassification(_rn);
                 })();
             }
@@ -24852,7 +24867,6 @@ function selectRamp(name) {
                 btnAutoClassify.addEventListener('click', function() {
                     var selectedRampEl = document.getElementById('selectedRamp');
                     var rampName = selectedRampEl.getAttribute('data-ramp') || 'black-white';
-                    if (rampName === '__gee__') rampName = 'black-white';
                     applyRampToClassification(rampName);
                 });
             }
@@ -24897,17 +24911,19 @@ function selectRamp(name) {
             return Math.round(n * 100) / 100;
         }
 
-        // Seçilen sınıf sayısına göre satırları (Min, Max, Lejant Adı, Renk, ➔) baştan oluşturur
+        // Seçilen sınıf sayısına göre satırları (Min, Max, Lejant Adı, Renk) baştan oluşturur
         function buildClassRows(count) {
             classRowsContainer.innerHTML = '';
 
             var rangeStart = currentClassRangeMin, rangeEnd = currentClassRangeMax;
             var step = (rangeEnd - rangeStart) / count;
+            var selectedRamp = document.getElementById('selectedRamp');
+            var colors = sampleRampColors(selectedRamp ? (selectedRamp.getAttribute('data-ramp') || 'black-white') : 'black-white', count);
 
             for (var i = 0; i < count; i++) {
                 var rowMin = roundTo2(rangeStart + step * i);
                 var rowMax = roundTo2(rangeStart + step * (i + 1));
-                var color = CLASS_COLOR_PALETTE[i % CLASS_COLOR_PALETTE.length];
+                var color = colors[i] || CLASS_COLOR_PALETTE[i % CLASS_COLOR_PALETTE.length];
 
                 var row = document.createElement('div');
                 row.className = 'classification-row';
@@ -24917,8 +24933,7 @@ function selectRamp(name) {
                     '<input type="number" class="class-input class-min" value="' + rowMin + '" placeholder="Min">' +
                     '<input type="number" class="class-input class-max" value="' + rowMax + '" placeholder="Max">' +
                     '<input type="text" class="class-name" data-auto="' + (i + 1) + '" value="' + (t('class_word') || 'Class') + ' ' + (i + 1) + '" placeholder="' + (t('legend_name_placeholder') || 'Legend Name') + '">' +
-                    buildClassColorPickerHTML(i, color) +
-                    '<button type="button" class="apply-btn" data-row="' + i + '" data-i18n-title="apply_action" title="' + escapeHtml(t('apply_action')) + '">➔</button>';
+                    buildClassColorPickerHTML(i, color);
 
                 classRowsContainer.appendChild(row);
             }
@@ -24933,13 +24948,12 @@ function selectRamp(name) {
             if (currentClassificationType === 'classified') {
                 var _sr = document.getElementById('selectedRamp');
                 var _rn = _sr ? (_sr.getAttribute('data-ramp') || 'black-white') : 'black-white';
-                if (_rn === '__gee__') _rn = 'black-white';
                 if (typeof applyRampToClassification === 'function') applyRampToClassification(_rn);
             }
         });
 
         // -----------------------------------------------------------
-        // Satır içi etkileşimler: renk tetikleyici, renk seçimi, ➔ uygula
+        // Satır içi etkileşimler: renk tetikleyici ve renk seçimi
         // (Tek bir delegasyon dinleyicisi — satırlar dinamik üretildiği için)
         // -----------------------------------------------------------
         // Kullanıcı sınıf adını elle değiştirdiğinde otomatik dil yeniden
@@ -24991,12 +25005,6 @@ function selectRamp(name) {
                 return;
             }
 
-            // 3) ➔ Uygula okuna basıldı -> min/max/ad değişikliklerini haritaya yansıt
-            // Renkler yalnızca Apply Legend butonu ile _flushPendingColors() aracılığıyla uygulanır.
-            if (e.target.classList.contains('apply-btn')) {
-                applyClassificationToMap();
-                return;
-            }
         });
 
         // Satırların dışına tıklanırsa açık paletleri kapat
@@ -25008,7 +25016,7 @@ function selectRamp(name) {
 
         // -----------------------------------------------------------
         // Sınıflandırmanın altındaki "✅ Lejantı Uygula" butonu da,
-        // satırlardaki ➔ okları gibi tüm tabloyu harita ve lejanta uygular
+        // tüm tabloyu harita ve lejanta tek seferde uygular
         // -----------------------------------------------------------
         function _flushPendingColors() {
             document.querySelectorAll('#class-rows-container .class-color-trigger').forEach(function (trigger) {
@@ -25032,7 +25040,7 @@ function selectRamp(name) {
         }
 
         // -----------------------------------------------------------
-        // ➔ Uygula: Min/Max + Lejant Adı + Seçilen Renk -> Harita & Lejant
+        // Lejantı Uygula: Min/Max + Lejant Adı + Seçilen Renk -> Harita & Lejant
         // -----------------------------------------------------------
 
         // HTML enjeksiyonuna karşı güvenli metin kaçışı
@@ -25348,9 +25356,9 @@ function selectRamp(name) {
             var _dynamicAnalysisName = (window._lastAnalyzeMetaByPane && window._lastAnalyzeMetaByPane[_rdlPaneId] && window._lastAnalyzeMetaByPane[_rdlPaneId].analysisName) || (window._lastAnalyzeMeta && window._lastAnalyzeMeta.analysisName) || '';
             var _dynamicTopo = /^TOPO(?:_|$)/i.test(String(_dynamicAnalysisName || ''));
             // TOPO için teknik analiz kodu yerine Bilgi Kutusu'ndaki aynı başlık kullanılır.
-            var title = _dynamicTopo
-                ? escapeHtml(_sylvaAnalysisDisplayTitle(_dynamicAnalysisName))
-                : ((titleEl && titleEl.value.trim()) ? escapeHtml(titleEl.value.trim()) : t('classified_data', 'Sınıflandırılmış Veri'));
+            var title = (titleEl && titleEl.value.trim())
+                ? escapeHtml(titleEl.value.trim())
+                : (_dynamicTopo ? escapeHtml(_sylvaAnalysisDisplayTitle(_dynamicAnalysisName)) : t('classified_data', 'Sınıflandırılmış Veri'));
 
 
             var rowsHtml = '<div class="sylva-legend-rows" style="display:flex;flex-direction:column;gap:2px;margin-top:5px;">' +
@@ -25912,12 +25920,9 @@ function selectRamp(name) {
                 window._sylvaLegendInfoByPane[paneId].legendDisplay = legendBox.style.display;
             }
 
-            // Dil değişimi sırasında başlık ve input alanlarına dokunma
+            _sylvaSyncLegendTitleInputs(paneId);
+            // Dil değişimi sırasında aralık ve sınıflandırma modu korunur.
             if (!window._sylvaLangChanging) {
-                var stretchedTitle = document.getElementById('stretched-title');
-                if (stretchedTitle) stretchedTitle.value = meta.analysisName;
-                var classifiedTitle = document.getElementById('classified-title');
-                if (classifiedTitle) classifiedTitle.value = meta.analysisName;
 
                 // ── Semboloji panelini doğru moda getir ─────────────────────────
                 // TOPO ve indeks analizler → Stretched; LULC vb. → Classified
@@ -26068,7 +26073,6 @@ function selectRamp(name) {
                 (function() {
                     var _sr = document.getElementById('selectedRamp');
                     var _rn = _sr ? (_sr.getAttribute('data-ramp') || 'black-white') : 'black-white';
-                    if (_rn === '__gee__') _rn = 'black-white';
                     if (typeof applyRampToClassification === 'function') applyRampToClassification(_rn);
                 })();
                 applyClassificationToMap();
@@ -26079,6 +26083,24 @@ function selectRamp(name) {
         }
 
         // ── Lejant konum/boyut koruyucu yardımcı ─────────────────────
+        function _sylvaSyncLegendTitleInputs(paneId, force) {
+            var activePane = typeof _sylvaActivePaneId === 'function' ? _sylvaActivePaneId() : 'map';
+            paneId = paneId || activePane;
+            if (paneId !== activePane) return;
+            var box = document.getElementById(paneId === 'map2' ? 'map2-legend-box' : 'map-legend-box');
+            var heading = box && box.querySelector('b, strong');
+            var title = heading ? heading.textContent.trim() : '';
+            var layer = (window._sylvaTopGeeLayerByPane || {})[paneId] || '';
+            var context = paneId + '|' + layer + '|' + document.documentElement.lang + '|' + title;
+            ['stretched-title', 'classified-title'].forEach(function (id) {
+                var input = document.getElementById(id);
+                if (input && (force || input._sylvaLegendTitleContext !== context)) {
+                    input.value = title;
+                    input._sylvaLegendTitleContext = context;
+                }
+            });
+        }
+
         function _setLegendHTML(legendBox, html) {
             // İlk render'dan önce mevcut konumu/boyutu kaydet
             var s = legendBox.style;
@@ -26086,6 +26108,7 @@ function selectRamp(name) {
             // Eğer legend daha önce en az bir kez render edildiyse ve genişliği kilitliyse koru
 
             legendBox.innerHTML = html;
+            _sylvaSyncLegendTitleInputs(legendBox.id === 'map2-legend-box' ? 'map2' : 'map');
 
             // Konum bilgilerini geri yaz (sürükleme sonrası kaybolmasin)
             if (pos) s.position = pos;
@@ -26095,6 +26118,17 @@ function selectRamp(name) {
             // Genişlik kilitleme kaldırıldı — kutu içeriğe göre otomatik boyutlanır
             legendBox.style.minWidth = '';
         }
+
+        document.addEventListener('DOMContentLoaded', function () {
+            ['map-legend-box', 'map2-legend-box'].forEach(function (id) {
+                var box = document.getElementById(id);
+                if (box) new MutationObserver(function () { _sylvaSyncLegendTitleInputs(); })
+                    .observe(box, { childList: true, subtree: true, characterData: true });
+            });
+            new MutationObserver(function () { _sylvaSyncLegendTitleInputs(); })
+                .observe(document.documentElement, { attributes: true, attributeFilter: ['lang'] });
+            _sylvaSyncLegendTitleInputs();
+        });
 
         // ── Logo ilerleme halkası (kullanılmıyor — halka kaldırıldı) ──────
         // _startLogoRing / _stopLogoRing çağrılmamaktadır; kalmış dead code.
@@ -26315,12 +26349,11 @@ function selectRamp(name) {
             var lineColor = (payload && payload.contourLineColor) || window._sylvaContourLineColor || '#1e3a8a';
             var HILITE_COLOR = '#ffd400'; // sarı — kullanıcı isteği: tıklanınca sarı "parlama"
 
-            fetch(API_BASE + '/api/topo-contour-vector', {
+            _sylvaFetchAnalysisJSON(API_BASE + '/api/topo-contour-vector', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             })
-            .then(function (r) { return r.json(); })
             .then(function (data) {
                 if (!data || !data.success) {
                     console.warn('[SylvaGIS] Vektör kontur üretilemedi:', data && data.error);
@@ -26422,7 +26455,7 @@ function selectRamp(name) {
                 geoLayer.on('remove', function () { targetMap.off('zoomend', _sylvaUpdateContourLabelDensity); });
                 _sylvaUpdateContourLabelDensity();
             })
-            .catch(function (err) { console.warn('[SylvaGIS] Vektör kontur isteği başarısız:', err); })
+            .catch(function (err) { _sylvaReportAnalysisError(err); })
             .finally(releaseLoading);
         }
         window._sylvaLoadContourVectorLayer = _sylvaLoadContourVectorLayer;
@@ -26773,6 +26806,7 @@ function selectRamp(name) {
             if (stretchedMinEl) { stretchedMinEl.value = state.stretchedMin || ''; stretchedMinEl._userEdited = !!state.stretchedUserEdited; }
             if (stretchedMaxEl) { stretchedMaxEl.value = state.stretchedMax || ''; stretchedMaxEl._userEdited = !!state.stretchedUserEdited; }
             if (stretchedTitleEl) stretchedTitleEl.value = state.stretchedTitleVal || '';
+            _sylvaSyncLegendTitleInputs(paneId, true);
         }
         window._sylvaRestoreEditorStateForLayer = _sylvaRestoreEditorStateForLayer;
 
@@ -28145,24 +28179,17 @@ function selectRamp(name) {
             if (ov) ov.classList.remove('active');
         }
         // Verilen Leaflet tile katmanı, geçerli görünümdeki tüm karoları
-        // (tile) tamamen yükleyip ekrana yansıtana kadar bekler, ardından
-        // yükleme ekranını kapatır. Bir hata/karo yükleme sorunu olursa ya
-        // da makul bir süre içinde 'load' tetiklenmezse (güvenlik ağı),
-        // overlay yine de kapanır — ekran sonsuza dek takılı kalmaz.
+        // (tile) tamamen yükleyip ekrana yansıtana kadar bekler.
+        // Hatalar ve yeniden denemeler ortak yükleme koordinatöründe izlenir.
         function _hideLoadingWhenTileReady(layer) {
-            var done = false, timer;
-            function finish() {
-                if (done) return;
-                done = true;
-                clearTimeout(timer);
-                if (layer && typeof layer.off === 'function') layer.off('load tileerror remove', finish);
+            // The overlay coordinator owns tile readiness, retries and the final paint.
+            if (typeof window._sylvaTrackLoadingTile === 'function') {
+                window._sylvaTrackLoadingTile(layer);
                 hideSylvaLoading();
+                return;
             }
-            timer = setTimeout(finish, 45000);
-            if (layer && typeof layer.on === 'function') {
-                layer.on('load tileerror remove', finish);
-                if (typeof layer.isLoading === 'function' && !layer.isLoading()) setTimeout(finish, 0);
-            } else setTimeout(finish, 0);
+            if (layer && typeof layer.once === 'function') layer.once('load', hideSylvaLoading);
+            else hideSylvaLoading();
         }
         // 🎬 Genel amaçlı: verilen katmanın karoları (tile) TAMAMEN yükleyip
         // ekrana yansıyana kadar bekler, sonra callback'i çağırır. Zaman Serisi
@@ -28394,6 +28421,29 @@ function selectRamp(name) {
                 _sylvaAnalysisRequestQueue.shift().start();
             }
         }
+        // Keep transport failures separate from errors while applying a successful result.
+        function _sylvaRequestError(error) {
+            if (!error || typeof error !== 'object') error = new Error(String(error));
+            error._sylvaErrorOrigin = 'request';
+            return error;
+        }
+        function _sylvaFetchAnalysisJSON(url, options) {
+            return Promise.resolve().then(function () { return fetch(url, options); })
+                .catch(function (error) { throw _sylvaRequestError(error); })
+                .then(function (response) {
+                    if (!response.ok) throw _sylvaRequestError(new Error(t('server_detail_prefix') + 'HTTP ' + response.status));
+                    return response.json().catch(function (error) { throw _sylvaRequestError(error); });
+                });
+        }
+        function _sylvaReportAnalysisError(error) {
+            if (error && error.name === 'AbortError') return;
+            if (!error || error._sylvaErrorOrigin !== 'request') {
+                console.error('[SylvaGIS] Analysis interface error:', error);
+                return;
+            }
+            showAnalysisToast(t('server_error') + ' (' + (error.message || String(error)) + ')', 'error');
+        }
+
         function _sylvaAnalysisRequest(url, payload, isCurrent) {
             return new Promise(function (resolve, reject) {
                 _sylvaCancelStaleAnalysisRequests();
@@ -28415,7 +28465,7 @@ function selectRamp(name) {
                 _sylvaAnalysisQueuedBytes += bytes;
                 var job = { isCurrent:isCurrent, start:start, cancel:cancel };
                 _sylvaAnalysisJobs.add(job);
-                var timer = setTimeout(function () { cancel(new Error(t('request_timeout') + ' (180 s)')); }, 180000);
+                var timer = setTimeout(function () { cancel(_sylvaRequestError(new Error(t('request_timeout') + ' (180 s)'))); }, 180000);
                 function finish(error, data) {
                     if (finished) return;
                     finished = true;
@@ -28442,16 +28492,11 @@ function selectRamp(name) {
                         controller = typeof AbortController === 'function' ? new AbortController() : null;
                         active = true;
                         _sylvaAnalysisRequestsActive++;
-                        Promise.resolve(fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:body,
-                            signal:controller ? controller.signal : undefined})).then(function (response) {
+                        _sylvaFetchAnalysisJSON(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:body,
+                            signal:controller ? controller.signal : undefined}).then(function (data) {
                             if (finished) return;
                             if (isCurrent && !isCurrent()) { cancel(); return; }
-                            if (!response.ok) throw new Error(t('server_detail_prefix') + 'HTTP ' + response.status);
-                            return response.json();
-                        }).then(function (data) {
-                            if (finished) return;
-                            if (isCurrent && !isCurrent()) { cancel(); return; }
-                            if (!data || typeof data !== 'object' || Array.isArray(data) || typeof data.success !== 'boolean') throw new Error(t('gqa_err_generic'));
+                            if (!data || typeof data !== 'object' || Array.isArray(data) || typeof data.success !== 'boolean') throw _sylvaRequestError(new Error(t('gqa_err_generic')));
                             finish(null, data);
                         }).catch(function (error) { finish(error); });
                     } catch (error) { finish(error); }
@@ -28472,7 +28517,7 @@ function selectRamp(name) {
                     var overlay = document.getElementById('analysis-loading-overlay');
                     if (overlay) overlay.classList.remove('active');
                 }
-                try { showAnalysisToast(t('server_error') + ' (' + (error.message || String(error)) + ')', 'error'); } catch (noticeError) {}
+                try { _sylvaReportAnalysisError(error); } catch (noticeError) { console.error(noticeError); }
             }
         }
 
@@ -29253,7 +29298,7 @@ function selectRamp(name) {
                 }).catch(function(err) {
                     if (_analysisGeneration !== _runBatchGeneration) return;
                     console.warn('[SylvaGIS] Analiz işlemi başarısız:', err);
-                    try { showAnalysisToast(t('server_error') + '(' + (err && err.message ? err.message : String(err)) + ')', 'error'); } catch (noticeError) {}
+                    try { _sylvaReportAnalysisError(err); } catch (noticeError) { console.error(noticeError); }
                 }).finally(_onOneRequestSettled);
             });
         }
@@ -32114,7 +32159,7 @@ function selectRamp(name) {
                 }
                 if (_gw) _gw.style.opacity = '1';
             })();
-            fetch(API_BASE + '/api/rgb-scenes', {
+            _sylvaFetchAnalysisJSON(API_BASE + '/api/rgb-scenes', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -32126,10 +32171,8 @@ function selectRamp(name) {
                     months:    window.sylvaSelectedMonths || []
                 })
             })
-            .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (runBtn) { runBtn.disabled = false; runBtn.textContent = t('run_analysis'); }
-                hideSylvaLoading();
                 // Geciken yanıt: kullanıcı yeni bir analiz başlattıysa bu yanıtı yoksay
                 if (_analysisGeneration !== _rgbGen) return;
                 if (!data.success) {
@@ -32163,7 +32206,6 @@ function selectRamp(name) {
             })
             .catch(function(err) {
                 if (runBtn) { runBtn.disabled = false; runBtn.textContent = t('run_analysis'); }
-                hideSylvaLoading();
                 // 🛠️ BUG FİX (Görsel 1-2-3 - Arama Boş/Hatalı Dönünce Galeri
                 // Kilitleniyordu): önceden bu catch bloğu galeriyi tamamen
                 // gizliyordu (innerHTML='' + display='none') AMA "legend-
@@ -32175,10 +32217,14 @@ function selectRamp(name) {
                 // etkileşimli kalmalı. Artık hem başarısız hem de boş-sonuç
                 // dallarında (yukarıda) hem de bu ağ hatası dalında ortak
                 // _sylvaUnlockGalleryUI() ile panel kilidi açılıyor.
-                galleryEl.innerHTML = '';
-                galleryEl.style.display = 'none';
+                if (err && err._sylvaErrorOrigin === 'request') {
+                    galleryEl.innerHTML = '';
+                    galleryEl.style.display = 'none';
+                }
                 _sylvaUnlockGalleryUI(paneId);
-                showAnalysisToast(t('server_error') + '(' + err.message + ')', 'error');
+                _sylvaReportAnalysisError(err);
+            }).finally(function () {
+                hideSylvaLoading();
             });
         }
 
@@ -32766,6 +32812,7 @@ function selectRamp(name) {
         }
 
         function downloadCSV() {
+            if (currentChartType === 'line') return;
             var exportSnapshot = _sylvaStatsExportSnapshot();
             var tableEl = exportSnapshot ? true : document.querySelector('#stats-chart-table table');
             if (!tableEl) { sylvaAlert(t('run_first'), 'info'); return; }
@@ -32921,6 +32968,7 @@ function selectRamp(name) {
         // TÜM diller harfi harfine ve hatasız görünür. Tablo sayfa yüksekliğini
         // aşarsa otomatik olarak ek sayfalara bölünür.
         function downloadPDF() {
+            if (currentChartType === 'line') return;
             var exportSnapshot = _sylvaStatsExportSnapshot();
             var tableEl = _sylvaStatsExportTable(exportSnapshot);
             var carbonSt = (typeof _getCarbonActiveState === 'function') ? _getCarbonActiveState() : null;
@@ -33152,8 +33200,78 @@ function selectRamp(name) {
         }
 
         // ── Grafik + Tablo verisini seçilen formatta indirir ─────────
+        function _sylvaBuildTsExportStats(data, chartHeight, minWidth) {
+            var canvas = document.createElement('canvas'), ctx = canvas.getContext('2d');
+            var padding = 16, gap = 18, lineHeight = 16;
+            var colors = ['#22c55e','#1e3a8a','#f97316','#ef4444','#a855f7','#06b6d4'];
+            var rtl = /^(ar|fa|ur)$/.test(typeof _sylvaLang === 'string' ? _sylvaLang : document.documentElement.lang);
+            function isolate(value) { return rtl ? '\u2066' + String(value) + '\u2069' : String(value); }
+            var headers = ['ts_stat_index','ts_stat_min','ts_stat_max','ts_stat_mean'].map(function (key) { return t(key); });
+            var rows = (data.series || []).map(function (series, i) {
+                var stats = _computeTsSeriesStats(series);
+                if (!stats) return null;
+                var trend = stats.trend === 'up' ? '📈 ' + t('ts_stat_increase')
+                    : stats.trend === 'down' ? '📉 ' + t('ts_stat_decrease') : '➖ ' + t('ts_stat_unchanged');
+                var percent = stats.changePct === null ? '—' : (stats.changePct >= 0 ? '+' : '') + stats.changePct.toFixed(1) + '%';
+                return {
+                    color: series.color || colors[i % colors.length],
+                    title: isolate(series.index) + ' — ' + trend + ' (' + isolate(percent) + ')',
+                    details: [t('ts_stat_min') + ': ' + isolate(stats.min.toFixed(4)) + ' (' + isolate(stats.minDate || '—') + ')',
+                        t('ts_stat_max') + ': ' + isolate(stats.max.toFixed(4)) + ' (' + isolate(stats.maxDate || '—') + ')',
+                        t('ts_stat_mean') + ': ' + isolate(stats.mean.toFixed(4))],
+                    cells: [isolate(series.index), isolate(stats.min.toFixed(4)), isolate(stats.max.toFixed(4)), isolate(stats.mean.toFixed(4))]
+                };
+            }).filter(Boolean);
+            var columnWidths = headers.map(function (label, i) {
+                ctx.font = 'bold 11px Arial, sans-serif';
+                var width = ctx.measureText(label).width;
+                ctx.font = '10px Arial, sans-serif';
+                rows.forEach(function (row) { width = Math.max(width, ctx.measureText(row.cells[i]).width); });
+                return Math.ceil(width) + gap;
+            });
+            var width = Math.max(minWidth, columnWidths.reduce(function (a, b) { return a + b; }, padding * 2));
+            rows.forEach(function (row) {
+                ctx.font = 'bold 11px Arial, sans-serif';
+                width = Math.max(width, Math.ceil(ctx.measureText(row.title).width) + padding * 2 + 14);
+                ctx.font = '10px Arial, sans-serif';
+                row.details.forEach(function (detail) { width = Math.max(width, Math.ceil(ctx.measureText(detail).width) + padding * 2 + 14); });
+            });
+            width = Math.ceil(width);
+            var svg = '', y = chartHeight + 12;
+            function text(value, x, baseline, size, bold, anchor) {
+                return '<text x="' + x + '" y="' + baseline + '" font-size="' + size + '" font-family="Arial,sans-serif" fill="' + (bold ? '#334155' : '#64748b') + '" font-weight="' + (bold ? '700' : '400') + '" text-anchor="' + (anchor || 'start') + '" direction="' + (rtl ? 'rtl' : 'ltr') + '">' + escapeHtml(value) + '</text>';
+            }
+            svg += '<line x1="' + padding + '" y1="' + y + '" x2="' + (width-padding) + '" y2="' + y + '" stroke="#e2e8f0"/>';
+            y += lineHeight;
+            rows.forEach(function (row) {
+                svg += '<rect x="' + (rtl ? width-padding-8 : padding) + '" y="' + (y-8) + '" width="8" height="8" rx="2" fill="' + row.color + '"/>';
+                var x = rtl ? width-padding-14 : padding+14;
+                svg += text(row.title, x, y, 11, true);
+                row.details.forEach(function (detail) { y += lineHeight; svg += text(detail, x, y, 10, false); });
+                y += lineHeight + 8;
+            });
+            var tableWidth = columnWidths.reduce(function (a, b) { return a + b; }, 0);
+            var tableLeft = (width-tableWidth)/2, tableTop = y-12;
+            svg += '<rect x="' + tableLeft + '" y="' + tableTop + '" width="' + tableWidth + '" height="24" fill="#f1f5f9"/>';
+            function cells(values, baseline, bold) {
+                var x = tableLeft;
+                values.forEach(function (value, i) {
+                    svg += text(value, x+columnWidths[i]/2, baseline, bold ? 11 : 10, bold, 'middle');
+                    x += columnWidths[i];
+                });
+            }
+            cells(headers, y+4, true);
+            y = tableTop+24;
+            rows.forEach(function (row) {
+                cells(row.cells, y+15, false);
+                y += 22;
+                svg += '<line x1="' + tableLeft + '" y1="' + y + '" x2="' + (tableLeft+tableWidth) + '" y2="' + y + '" stroke="#e2e8f0"/>';
+            });
+            return { svg: svg, width: width, height: y+12 };
+        }
+
         function executeChartDownload() {
-            var exportSnapshot = _sylvaStatsExportSnapshot();
+            var exportSnapshot = currentChartType === 'line' ? null : _sylvaStatsExportSnapshot();
             var wrap = document.getElementById('stats-chart-svg-wrap');
             if (!wrap) return;
             var svgEl = wrap.querySelector('svg');
@@ -33163,6 +33281,8 @@ function selectRamp(name) {
                 svgEl = exportHost.querySelector('svg');
             }
             if (!svgEl) return;
+            var lineData = currentChartType === 'line' ? svgEl._sylvaTsExportData : null;
+            if (currentChartType === 'line' && !lineData) { sylvaAlert(t('err_chart_save'), 'error'); return; }
 
             var fmtEl = document.querySelector('input[name="chart-dl-fmt"]:checked');
             var fnInput = document.getElementById('chart-dl-filename');
@@ -33282,6 +33402,24 @@ function selectRamp(name) {
                 });
             }
 
+            if (lineData) {
+                var chartPadding = 16;
+                var labelMeasure = document.createElement('canvas').getContext('2d');
+                svgEl.querySelectorAll('text').forEach(function (label) {
+                    var x = parseFloat(label.getAttribute('x')) || 0;
+                    labelMeasure.font = (label.getAttribute('font-size') || '7') + 'px Arial, sans-serif';
+                    var textWidth = labelMeasure.measureText(label.textContent).width;
+                    var anchor = label.getAttribute('text-anchor') || 'start';
+                    var left = x - (anchor === 'middle' ? textWidth/2 : anchor === 'end' ? textWidth : 0);
+                    var right = left + textWidth;
+                    chartPadding = Math.max(chartPadding, Math.ceil(-left)+12, Math.ceil(right-svgW)+12);
+                });
+                var summary = _sylvaBuildTsExportStats(lineData, svgH, svgW+chartPadding*2);
+                outW = summary.width;
+                tableSvg = summary.svg;
+                totalH = summary.height;
+            }
+
             // ── SylvaGIS logosu için ayrılmış, içerikten tamamen izole alt bant ──
             // Grafik/tablo/lejant içeriği hiçbir zaman bu banda taşmaz; bant
             // yalnızca logo için ayrılmış ek bir alandır (mevcut içerik alanı
@@ -33299,7 +33437,7 @@ function selectRamp(name) {
             var fullSvg = '<?xml version="1.0" encoding="UTF-8"?>'
                 + '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + outW + ' ' + contentH + '" width="' + outW + '" height="' + contentH + '">'
                 + '<rect width="' + outW + '" height="' + contentH + '" fill="#ffffff"/>'
-                + chartInner
+                + '<g transform="translate(' + ((outW - svgW) / 2) + ' 0)">' + chartInner + '</g>'
                 + tableSvg
                 + '</svg>';
 
@@ -33534,8 +33672,8 @@ function selectRamp(name) {
                 keys.forEach(function(k) {
                     if (k >= bMin && (i === numBins - 1 ? k <= bMax : k < bMax)) count += hist[k];
                 });
-                var t  = (i + 0.5) / numBins;
-                var ci = Math.round(t * (palette.length - 1));
+                var palettePosition = (i + 0.5) / numBins;
+                var ci = Math.round(palettePosition * (palette.length - 1));
                 bins.push({
                     color: palette[ci],
                     name:  _sylvaLocalizedContinuousClassName(meta && meta.analysisName, i) || (bMin.toFixed(2) + ' – ' + bMax.toFixed(2)),
@@ -33774,6 +33912,16 @@ function selectRamp(name) {
         var currentChartType = 'bar';
         var lastChartData = null;
 
+        function _sylvaSyncChartExportButtons(type) {
+            var isLine = (type || currentChartType) === 'line';
+            document.querySelectorAll('#chart-download-buttons-row button').forEach(function (button) {
+                var key = button.getAttribute('data-i18n');
+                var disabled = isLine && (key === 'btn_csv' || key === 'btn_pdf');
+                button.disabled = disabled;
+                button.setAttribute('aria-disabled', String(disabled));
+            });
+        }
+
         // ── Sınıf Vurgulama (Highlight) ─────────────────────────────
         // Lejant satırı / grafik dilimi / tablo satırından herhangi birine
         // tıklanınca, o sınıfa ait alanlar haritada ayrı bir maskeli tile
@@ -33899,6 +34047,7 @@ function selectRamp(name) {
             // değişiyor; veri yokken tıklama sessizce hiçbir şey yapmaz.
             if (!lastChartData) return;
             currentChartType = type;
+            _sylvaSyncChartExportButtons();
             var btnBar = document.getElementById('btn-chart-bar');
             var btnPie = document.getElementById('btn-chart-pie');
             if (btnBar) btnBar.classList.toggle('active', type === 'bar');
@@ -34154,6 +34303,7 @@ function selectRamp(name) {
                 });
                 return;
             }
+            _sylvaSyncChartExportButtons();
             paneId = paneId || (typeof _sylvaActivePaneId === 'function' ? _sylvaActivePaneId() : 'map');
             var wrap = document.getElementById('stats-chart-svg-wrap');
             var tableWrap = document.getElementById('stats-chart-table');
@@ -34257,6 +34407,126 @@ function selectRamp(name) {
         // Kullanımı vb.) asistana birlikte gönderilir ve tek bir birleşik
         // rapor/yorum üretilebilir. Aynı analiz adının birden fazla kez
         // görünmesi engellenir.
+        // Report-only source codes mirror build_result_image's remap lists; map/raster IDs stay unchanged.
+        var _SYLVA_GQA_SOURCE_CODES = {
+            LULC_ESA: [10,20,30,40,50,60,70,80,90,95,100],
+            LULC_CORINE: [111,112,121,122,123,124,131,132,133,141,142,211,212,213,221,222,223,231,241,242,243,244,311,312,313,321,322,323,324,331,332,333,334,335,411,412,421,422,423,511,512,521,522,523]
+        };
+        function _sylvaGqaNumber(value) {
+            if (value == null || typeof value === 'boolean' || (typeof value === 'string' && !value.trim())) return null;
+            var number = Number(value);
+            return Number.isFinite(number) ? number : null;
+        }
+        function _sylvaGqaMergeLegendClasses(rows, sourceClasses) {
+            sourceClasses = sourceClasses || [];
+            function colorKey(value) {
+                if (!value) return '';
+                var el = document.createElement('span'); el.style.color = value;
+                if (!el.style.color) return '';
+                return el.style.color.toLowerCase().replace(/\s/g, '');
+            }
+            return rows.map(function (row) {
+                var min = _sylvaGqaNumber(row.min), max = _sylvaGqaNumber(row.max);
+                var index = -1;
+                if (min !== null && max !== null) index = sourceClasses.findIndex(function (c) {
+                    return _sylvaGqaNumber(c.min) === min && _sylvaGqaNumber(c.max) === max;
+                });
+                if (index < 0 && (min === null || max === null)) {
+                    var code = _sylvaGqaNumber(row.code === undefined ? row.value : row.code);
+                    if (code !== null) index = sourceClasses.findIndex(function (c) {
+                        return _sylvaGqaNumber(c.code === undefined ? c.min : c.code) === code;
+                    });
+                    if (index < 0) {
+                        var color = colorKey(row.color);
+                        var matches = sourceClasses.map(function (c, i) { return color && colorKey(c.color) === color ? i : -1; }).filter(function (i) { return i >= 0; });
+                        if (matches.length === 1) index = matches[0];
+                    }
+                    if (index < 0) index = sourceClasses.findIndex(function (c) { return String(c.name || c.label || '') === String(row.name || row.label || ''); });
+                    // Native legends store the index into the present-class list, never the full dictionary.
+                    var legendIndex = _sylvaGqaNumber(row._legendIndex);
+                    if (index < 0 && legendIndex !== null && Number.isInteger(legendIndex) && legendIndex >= 0 && legendIndex < sourceClasses.length) index = legendIndex;
+                }
+                var source = index >= 0 ? sourceClasses[index] : null;
+                var merged = Object.assign({}, source || {}, row);
+                if (min === null && source) merged.min = source.min;
+                if (max === null && source) merged.max = source.max;
+                merged._sourceIndex = index;
+                var lo = _sylvaGqaNumber(merged.min), hi = _sylvaGqaNumber(merged.max);
+                if (lo !== null && hi !== null) {
+                    merged.min = Math.min(lo, hi); merged.max = Math.max(lo, hi);
+                    if (!merged.displayRange) merged.displayRange = merged.min === merged.max ? String(merged.min) : merged.min + ' – ' + merged.max;
+                }
+                return merged;
+            });
+        }
+        function _sylvaGqaPrepareReportClasses(analysisName, rows, percentages, areaHa) {
+            var sourceCodes = _SYLVA_GQA_SOURCE_CODES[analysisName];
+            var nativeDefs = typeof window.sylvaLocalizedNativeClasses === 'function' ? (window.sylvaLocalizedNativeClasses(analysisName) || []) : [];
+            return rows.map(function (row, index) {
+                var c = Object.assign({}, row);
+                // Translate recognised built-in labels; retain user-defined legend names.
+                if (c.key && typeof SYLVA_TRANSLATIONS !== 'undefined') {
+                    var builtIn = c.name === c.label || Object.keys(SYLVA_TRANSLATIONS).some(function (lang) {
+                        return SYLVA_TRANSLATIONS[lang] && SYLVA_TRANSLATIONS[lang][c.key] === c.name;
+                    });
+                    if (builtIn) c.name = _sylvaGqaReportContext().t(c.key, c.label || c.name);
+                }
+                var min = _sylvaGqaNumber(c.min), max = _sylvaGqaNumber(c.max);
+                var code = _sylvaGqaNumber(c.code === undefined ? c.value : c.code);
+                if (min === null && code !== null) min = code;
+                if (max === null && code !== null) max = code;
+                if (min === null || max === null) throw new Error('Unresolved report class: ' + analysisName + ' / ' + c.name);
+                c.analysis_min = min; c.analysis_max = max;
+                if (min === max) c.analysis_code = code === null ? min : code;
+                if (sourceCodes) {
+                    var codes = sourceCodes.filter(function (value, i) { return i + 1 >= min && i + 1 <= max; });
+                    if (!codes.length) throw new Error('Unknown source class: ' + analysisName + ' / ' + min);
+                    c.pixel_values = codes;
+                    c.min = codes[0]; c.max = codes[codes.length - 1];
+                    if (codes.length === 1) { c.code = codes[0]; c.pixel_value = codes[0]; }
+                    c.displayRange = codes.length === 1 ? String(codes[0]) : codes.join(', ');
+                } else {
+                    c.min = min; c.max = max;
+                    if (min === max) { c.code = code === null ? min : code; c.pixel_value = min; }
+                    var native = nativeDefs.find(function (d) { return _sylvaGqaNumber(d.code) === c.analysis_code; });
+                    if (analysisName === 'TOPO_ASPECT' && native && _sylvaGqaNumber(native.min) !== null && _sylvaGqaNumber(native.max) !== null) {
+                        c.ranges = [{min:Number(native.min), max:Number(native.max)}];
+                        if (c.analysis_code === 2) c.ranges.push({min:327.5,max:360});
+                        c.min = c.ranges[0].min; c.max = c.ranges[0].max;
+                        c.displayRange = c.ranges.map(function (r) { return r.min + ' – ' + r.max; }).join('; ');
+                    } else if (!c.displayRange) c.displayRange = min === max ? String(min) : min + ' – ' + max;
+                }
+                c.percentage = _sylvaGqaNumber(percentages[index]);
+                if (c.percentage === null || c.percentage < 0 || c.percentage > 100.000001) throw new Error('Invalid report percentage: ' + analysisName);
+                var area = _sylvaGqaNumber(c.area_ha);
+                if (area === null && _sylvaGqaNumber(c.area_m2) !== null) area = Number(c.area_m2) / 10000;
+                if (area === null && _sylvaGqaNumber(c.area_km2) !== null) area = Number(c.area_km2) * 100;
+                if (area === null && _sylvaGqaNumber(areaHa) !== null) {
+                    area = Number(areaHa) * c.percentage / 100;
+                    c.area_method = 'aoi_percentage';
+                } else if (area !== null) c.area_method = c.area_method || 'source';
+                if (area !== null && area < 0) throw new Error('Invalid report area: ' + analysisName);
+                c.area_ha = area; c.area_m2 = area === null ? null : area * 10000; c.area_km2 = area === null ? null : area / 100;
+                delete c._legendIndex; delete c._sourceIndex;
+                return c;
+            });
+        }
+
+        function _sylvaGqaPercentagesFromHistogram(classes, hist) {
+            if (!hist) return null;
+            var counts = classes.map(function () { return 0; }), total = 0;
+            Object.keys(hist).forEach(function (key) {
+                var value = _sylvaGqaNumber(key), count = _sylvaGqaNumber(hist[key]);
+                if (value === null || count === null || count < 0) return;
+                total += count;
+                for (var i = 0; i < classes.length; i++) {
+                    var min = _sylvaGqaNumber(classes[i].min), max = _sylvaGqaNumber(classes[i].max);
+                    if (min !== null && max !== null && value >= min && value <= max) { counts[i] += count; break; }
+                }
+            });
+            return total > 0 ? counts.map(function (count) { return count / total * 100; }) : null;
+        }
+
         function _sylvaGqaComputeDatasetFromState(meta, data, pane, fallbackName) {
             if (!meta || !data) return null;
             var hist = (data.stats && data.stats.value) ? data.stats.value : null;
@@ -34290,7 +34560,7 @@ function selectRamp(name) {
                     }
                     classes = rawClasses.map(function (cls, index) {
                         var code = (cls.code !== undefined) ? Number(cls.code) : ((cls.value !== undefined) ? Number(cls.value) : index);
-                        return { min: code, max: code, count: (counts[code] || 0), name: cls.label || ('Class ' + (index + 1)) };
+                        return Object.assign({}, cls, { code: code, min: code, max: code, count: (counts[code] || 0), name: cls.label || ('Class ' + (index + 1)) });
                     });
                     var totalNative = classes.reduce(function (sum, c) { return sum + c.count; }, 0) || 1;
                     percentages = classes.map(function (c) { return (c.count / totalNative) * 100; });
@@ -34302,10 +34572,10 @@ function selectRamp(name) {
                 if (presentDefs && presentDefs.length) {
                     classes = presentDefs.map(function (d) {
                         var label = (d.key && typeof t === 'function') ? (t(d.key) || d.label) : d.label;
-                        return { min: d.code, max: d.code, name: label };
+                        return Object.assign({}, d, { min: d.code, max: d.code, name: label });
                     });
-                    percentages = (typeof computeClassPercentagesFromHistogram === 'function')
-                        ? computeClassPercentagesFromHistogram(classes, hist) : null;
+                    percentages = (typeof _sylvaGqaPercentagesFromHistogram === 'function')
+                        ? _sylvaGqaPercentagesFromHistogram(classes, hist) : null;
                 }
             } else {
                 // Sürekli/"stretched" veriler (ör. Yükseklik/DEM, Eğim) — sabit
@@ -34400,7 +34670,7 @@ function selectRamp(name) {
             // "Class 1 (0 - 13.75)" varsa PDF de Class 1 + 0 - 13.75 olur.
             // PDF kendi başına 7 yeni bin üretmez ve sınıf adını/range'ini
             // "Slope Class 1" gibi yeniden yazmaz.
-            function _sylvaGqaExactLegendClassification(analysisName) {
+            function _sylvaGqaExactLegendClassification(analysisName, sourceClasses) {
                 var wanted = String(analysisName || '').trim().toUpperCase();
                 if (!wanted) return null;
 
@@ -34437,6 +34707,7 @@ function selectRamp(name) {
                             rows.push({
                                 min: (typeof min === 'number' && isFinite(min) && typeof max === 'number' && isFinite(max) ? Math.min(min, max) : null),
                                 max: (typeof min === 'number' && isFinite(min) && typeof max === 'number' && isFinite(max) ? Math.max(min, max) : null),
+                                _legendIndex: rowEl.hasAttribute('data-class-idx') ? _sylvaGqaNumber(rowEl.getAttribute('data-class-idx')) : null,
                                 name: label,
                                 displayRange: rangeText,
                                 color: color
@@ -34512,26 +34783,16 @@ function selectRamp(name) {
                         // Bu durumda isim ve renk YİNE doğrudan ekrandaki lejanttan
                         // alınır; min/max yalnızca aynı sıradaki analiz state'inden
                         // tamamlanır. Böylece isim hiçbir zaman yeniden üretilmez.
-                        if (legendRows.some(function(r){ return typeof r.min !== 'number' || !isFinite(r.min) || typeof r.max !== 'number' || !isFinite(r.max); }) && st0 && st0.data) {
-                            var sourceClasses = st0.classRows || (st0.data && st0.data.classes) || [];
-                            legendRows.forEach(function(r, idx){
-                                var src = sourceClasses[idx];
-                                if (src) {
-                                    if ((typeof r.min !== 'number' || !isFinite(r.min)) && isFinite(Number(src.min))) r.min = Number(src.min);
-                                    if ((typeof r.max !== 'number' || !isFinite(r.max)) && isFinite(Number(src.max))) r.max = Number(src.max);
-                                    if (!r.displayRange && isFinite(r.min) && isFinite(r.max)) r.displayRange = String(src.min) + ' - ' + String(src.max);
-                                }
-                            });
-                        }
+                        legendRows = _sylvaGqaMergeLegendClasses(legendRows, sourceClasses);
 
-                        var validLegendRows = legendRows.filter(function(r){ return !!r.name; });
+                        var validLegendRows = legendRows.filter(function(r){ return !!r.name && _sylvaGqaNumber(r.min) !== null && _sylvaGqaNumber(r.max) !== null; });
                         if (validLegendRows.length === legendRows.length) {
                             var exactPct = null;
                             // Yüzdeleri mevcut analiz istatistiğinden al; sınıf
                             // sınırları aynı olduğundan her yüzde aynı satıra aittir.
                             try {
-                                if (validLegendRows.every(function(r){ return Number.isFinite(r.min) && Number.isFinite(r.max); }) && st0 && st0.data && st0.data.stats && typeof computeClassPercentagesFromHistogram === 'function') {
-                                    exactPct = computeClassPercentagesFromHistogram(validLegendRows, st0.data.stats.value);
+                                if (wanted !== 'TOPO_ASPECT' && validLegendRows.every(function(r){ return Number.isFinite(r.min) && Number.isFinite(r.max); }) && st0 && st0.data && st0.data.stats && typeof _sylvaGqaPercentagesFromHistogram === 'function') {
+                                    exactPct = _sylvaGqaPercentagesFromHistogram(validLegendRows, st0.data.stats.value);
                                 }
                             } catch (eLegendPct) { exactPct = null; }
 
@@ -34548,8 +34809,8 @@ function selectRamp(name) {
                 function build(rows, hist, fallbackPct) {
                     if (!Array.isArray(rows) || !rows.length) return null;
                     var classes = rows.map(function(r) {
-                        var min = Number(r.min), max = Number(r.max);
-                        if (!isFinite(min) || !isFinite(max)) return null;
+                        var min = _sylvaGqaNumber(r.min), max = _sylvaGqaNumber(r.max);
+                        if (min === null || max === null) return null;
                         return {
                             min: Math.min(min, max),
                             max: Math.max(min, max),
@@ -34560,8 +34821,8 @@ function selectRamp(name) {
                     });
                     if (classes.some(function(c){ return !c || !c.name; })) return null;
                     var percentages = null;
-                    if (hist && typeof computeClassPercentagesFromHistogram === 'function') {
-                        try { percentages = computeClassPercentagesFromHistogram(classes, hist); } catch (ePct) { percentages = null; }
+                    if (hist && typeof _sylvaGqaPercentagesFromHistogram === 'function') {
+                        try { percentages = _sylvaGqaPercentagesFromHistogram(classes, hist); } catch (ePct) { percentages = null; }
                     }
                     if (!percentages && Array.isArray(fallbackPct) && fallbackPct.length === classes.length) percentages = fallbackPct.slice();
                     return { classes: classes, percentages: percentages };
@@ -34606,9 +34867,9 @@ function selectRamp(name) {
                 // yeniden 7 sınıf üretmek yerine doğrudan o sınıflandırmayı
                 // kullan. Böylece isim + min/max + sınıf sayısı + yüzde hesabı
                 // haritadaki lejant ile birebir aynı olur.
-                var _exactLegend = _sylvaGqaExactLegendClassification(analysisName);
+                var _exactLegend = _sylvaGqaExactLegendClassification(analysisName, classes);
                 var _reportClasses = _exactLegend ? _exactLegend.classes : classes.map(function (c) {
-                    return { name: c.name, min: c.min, max: c.max };
+                    return Object.assign({}, c);
                 });
                 if (!_exactLegend && typeof window.sylvaLocalizedNativeClasses === 'function') {
                     var localized = window.sylvaLocalizedNativeClasses(analysisName) || [];
@@ -34620,7 +34881,11 @@ function selectRamp(name) {
                         return match ? Object.assign({}, c, { name: match.label }) : c;
                     });
                 }
-                var _reportPercentages = (_exactLegend && _exactLegend.percentages) ? _exactLegend.percentages : percentages;
+                var _reportPercentages = (_exactLegend && _exactLegend.percentages) ? _exactLegend.percentages : _reportClasses.map(function (c, i) {
+                    var sourceIndex = _sylvaGqaNumber(c._sourceIndex);
+                    return percentages[sourceIndex !== null && sourceIndex >= 0 ? sourceIndex : i];
+                });
+                _reportClasses = _sylvaGqaPrepareReportClasses(analysisName, _reportClasses, _reportPercentages, areaHa);
                 out.push({
                     analysis_name: key,
                     classes: _reportClasses,
@@ -34951,6 +35216,7 @@ function selectRamp(name) {
                 var _classLbl = _t('gqa_pdf_class', 'Sınıf');
                 var _rangeLbl = _t('gqa_pdf_range', 'Aralık');
                 var _pctLbl = _t('gqa_pdf_percentage', 'Yüzde (%)');
+                var _areaLbl = _t('col_area_ha', 'Area (ha)');
 
                 // ── Gizli HTML raporu inşa ediliyor ──────────────────────
                 var reportEl = document.createElement('div');
@@ -35000,19 +35266,21 @@ function selectRamp(name) {
                             '<thead><tr class="pdf-row">' +
                             '<th style="text-align:' + (isRTL ? 'right' : 'left') + ';font-size:16px;font-weight:700;padding:6px 6px;border-bottom:1.5px solid #334155;">' + _esc(_classLbl) + '</th>' +
                             '<th style="text-align:' + (isRTL ? 'right' : 'left') + ';font-size:16px;font-weight:700;padding:6px 6px;border-bottom:1.5px solid #334155;">' + _esc(_rangeLbl) + '</th>' +
-                            '<th style="text-align:' + (isRTL ? 'right' : 'left') + ';font-size:16px;font-weight:700;padding:6px 6px;border-bottom:1.5px solid #334155;">' + _esc(_pctLbl) + '</th>' +
+                            '<th style="text-align:' + (isRTL ? 'right' : 'left') + ';font-size:16px;font-weight:700;padding:6px 6px;border-bottom:1.5px solid #334155;">' + _esc(_pctLbl) + ' / ' + _esc(_areaLbl) + '</th>' +
                             '</tr></thead><tbody>';
                         var classes = ds.classes || [];
                         var pct = ds.percentages || [];
                         for (var i = 0; i < classes.length; i++) {
                             var c = classes[i] || {};
                             var name = String(c.name || '?');
-                            var rng = c.displayRange ? String(c.displayRange) : ((c.min != null && c.max != null) ? (c.min + ' – ' + c.max) : '—');
+                            var rng = c.displayRange ? String(c.displayRange) : (c.pixel_value != null ? String(c.pixel_value) : ((c.min != null && c.max != null) ? (c.min === c.max ? String(c.min) : c.min + ' – ' + c.max) : ''));
                             var pv = (pct[i] !== undefined && !isNaN(Number(pct[i]))) ? (Number(pct[i]).toFixed(1) + '%') : '—';
+                            var classArea = _sylvaGqaNumber(c.area_ha);
+                            var areaText = classArea === null ? '' : ((c.area_method === 'aoi_percentage' ? '≈ ' : '') + classArea.toFixed(2) + ' ha');
                             html += '<tr class="pdf-row">' +
                                 '<td style="padding:5px 6px;border-bottom:1px solid #e2e8f0;">' + _esc(name) + '</td>' +
-                                '<td style="padding:5px 6px;border-bottom:1px solid #e2e8f0;">' + _esc(rng) + '</td>' +
-                                '<td style="padding:5px 6px;border-bottom:1px solid #e2e8f0;">' + _esc(pv) + '</td>' +
+                                '<td style="padding:5px 6px;border-bottom:1px solid #e2e8f0;">' + '<bdi dir="ltr">' + _esc(rng) + '</bdi></td>' +
+                                '<td style="padding:5px 6px;border-bottom:1px solid #e2e8f0;">' + '<bdi dir="ltr">' + _esc(pv) + '</bdi>' + (areaText ? '<br><bdi dir="ltr">' + _esc(areaText) + '</bdi>' : '') + '</td>' +
                                 '</tr>';
                         }
                         html += '</tbody></table>';
@@ -67523,6 +67791,9 @@ if (ws.paneId === 'map2') {
     currentLayer = ws.layer;
     window._workspaceLayer = ws.layer;
 }
+if (window._sylvaCarbonAOIBoundsByPane && window._sylvaCarbonAOIBoundsByPane[ws.paneId] && typeof window._sylvaRememberCarbonAOIBounds === 'function') {
+    window._sylvaRememberCarbonAOIBounds(ws.paneId, ws.layer);
+}
 renderWorkspaceList();
         renderToolForm();
         showWsClickInfo(ws);
@@ -68708,6 +68979,8 @@ function _renderLineChart(data) {
     if (typeof lastChartData !== 'undefined') lastChartData = null;
     var wrap = document.getElementById('stats-chart-svg-wrap');
     if (!wrap || !data || !data.series || !data.series.length) return;
+    currentChartType = 'line';
+    _sylvaSyncChartExportButtons();
     var W=280,H=160,PL=36,PR=10,PT=14,PB=28;
     var cW=W-PL-PR, cH=H-PT-PB;
     function hasVal(p){ return !!(p && p.value !== null && p.value !== undefined && !isNaN(p.value)); }
@@ -68756,6 +69029,7 @@ function _renderLineChart(data) {
 
     wrap.className='';
     wrap.innerHTML='<svg viewBox="0 0 '+W+' '+H+'" width="100%" height="180" style="display:block;">'+grid+xLbls+svg+leg+'</svg>' + statsHtml;
+    wrap.querySelector('svg')._sylvaTsExportData = data;
     var table = document.getElementById('stats-chart-table');
     if (table) {
         var rows = data.series.map(function (series) {
@@ -68932,7 +69206,7 @@ function runTimeSeriesAnalysis() {
     if (_tsBarBtn) { _tsBarBtn.classList.add('disabled-chart'); _tsBarBtn.disabled = true; }
     if (_tsPieBtn) { _tsPieBtn.classList.add('disabled-chart'); _tsPieBtn.disabled = true; }
 
-    fetch(API_BASE + '/api/timeseries', {
+    _sylvaFetchAnalysisJSON(API_BASE + '/api/timeseries', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -68956,10 +69230,7 @@ function runTimeSeriesAnalysis() {
             months:    window.sylvaTsSelectedMonths || []
         })
     })
-    .then(function(r) { return r.json(); })
     .then(function(data) {
-        if (btn) { btn.disabled = false; btn.innerHTML = _btnOrigLabel; }
-        if (_tsLoadingOverlay) _tsLoadingOverlay.classList.remove('active');
 
         if (!data.success) {
             _clearTsGalleryNow();
@@ -69164,11 +69435,10 @@ function runTimeSeriesAnalysis() {
 
     })
     .catch(function(err) {
+        _sylvaReportAnalysisError(err);
+    }).finally(function () {
         if (btn) { btn.disabled = false; btn.innerHTML = _btnOrigLabel; }
         if (_tsLoadingOverlay) _tsLoadingOverlay.classList.remove('active');
-        var errMsg = 'Zaman serisi hesaplanamadı: ' + err;
-        if (typeof showAnalysisToast === 'function') showAnalysisToast(errMsg, 'error');
-        else alert(errMsg);
     });
 }
 
@@ -69864,6 +70134,7 @@ function toggleTimeSliderPlay() {}
             tile._sylvaBaseSrc = baseSrc;
         }
         var delay = Math.min(_SYLVA_RETRY_CAP_MS, _SYLVA_RETRY_BASE_MS * Math.pow(1.6, attempt - 1));
+        tile._sylvaRetryPending = true;
         setTimeout(function () {
             var sep = baseSrc.indexOf('?') === -1 ? '?' : '&';
             // Aynı src'yi doğrudan tekrar atamak bazı tarayıcılarda isteği
@@ -69876,7 +70147,7 @@ function toggleTimeSliderPlay() {}
     function _sylvaHandleFailure(tile) {
         if (!tile || !tile.src) return;
         var attempt = (tile._sylvaRetryCount || 0) + 1;
-        if (attempt > _SYLVA_MAX_TILE_RETRIES) return; // çok nadir, kalıcı sunucu hatası — sessizce bırak
+        if (attempt > _SYLVA_MAX_TILE_RETRIES) { tile._sylvaRetryPending = false; return; }
         tile._sylvaRetryCount = attempt;
         _sylvaRetryTile(tile, attempt);
     }
@@ -69924,6 +70195,7 @@ function toggleTimeSliderPlay() {}
                         // ki ileride (ör. pan sonrası) yeniden aynı DOM elemanı hatalı
                         // içerik alırsa tekrar tam hak kullanabilsin.
                         tile._sylvaRetryCount = 0;
+                        tile._sylvaRetryPending = false;
                     }
                 });
             });
@@ -82352,7 +82624,7 @@ function syncNativeClassEditorState(){var locked=nativeClassified();var group=do
    başlangıç renklerini yeniden kurar. */
 function readGradientStops(css){var re=/#(?:[0-9a-f]{3}|[0-9a-f]{6})\b|rgba?\([^)]*\)/gi,m,out=[];while((m=re.exec(css||''))){var x=m[0],d=document.createElement('span');d.style.color=x;document.body.appendChild(d);var v=getComputedStyle(d).color;d.remove();var q=v.match(/\d+(?:\.\d+)?/g);if(q)out.push([+q[0],+q[1],+q[2]])}return out}
 function hex(rgb){return '#'+rgb.map(function(v){return Math.max(0,Math.min(255,Math.round(v))).toString(16).padStart(2,'0')}).join('')}
-function gradientColors(count){var ramp=document.getElementById('selectedRamp'),css=ramp?(ramp.style.background||getComputedStyle(ramp).backgroundImage):'',stops=readGradientStops(css);if(!stops.length)return[];return Array.from({length:count},function(_,i){var t=count===1?.5:i/(count-1),p=t*(stops.length-1),a=stops[Math.min(stops.length-2,Math.floor(p))],b=stops[Math.min(stops.length-1,Math.floor(p)+1)],f=p-Math.floor(p);return hex([0,1,2].map(function(k){return a[k]+(b[k]-a[k])*f}))})}
+function gradientColors(count){var ramp=document.getElementById('selectedRamp');return sampleRampColors(ramp?(ramp.getAttribute('data-ramp')||'black-white'):'black-white',count)}
 function paintInitialClassRows(force){
 if(nativeClassified())return;
 var pane=(typeof window._sylvaActivePaneId==='function'?window._sylvaActivePaneId():'map');
@@ -134323,17 +134595,6 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
         appearance:textfield;
         -moz-appearance:textfield;
     }
-    #class-rows-container .classification-row .apply-btn {
-        flex:0 0 20px;
-        width:20px;
-        min-width:0;
-        height:32px;
-        padding:0;
-        margin:0;
-        font-size:14px;
-        text-align:center;
-        box-sizing:border-box;
-    }
     #class-rows-container .classification-row input.class-name {
         flex:1 1 0 !important;
         width:0;
@@ -134893,6 +135154,7 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
   ['stats-chart-svg-wrap','stats-chart-table'].forEach(function(id){var el=document.getElementById(id);if(el){el.innerHTML='';el.removeAttribute('data-chart-layer-key');}});
  }
  function buttons(line){
+   _sylvaSyncChartExportButtons(line ? 'line' : 'bar');
   if(!line&&typeof currentChartType!=='undefined'&&currentChartType!=='bar'&&currentChartType!=='pie')currentChartType='bar';
   ['bar','pie','line'].forEach(function(type){var b=document.getElementById('btn-chart-'+type);if(!b)return;var disabled=line?type!=='line':type==='line';b.disabled=disabled;b.classList.toggle('disabled-chart',disabled);b.classList.toggle('active',!disabled&&(line||type===currentChartType));});
  }
@@ -135329,8 +135591,8 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
     display:flex !important;
     inset:auto;
     pointer-events:none;
-    background:rgba(248,250,252,0.12);
-    backdrop-filter:none;
+    background:rgba(0,0,0,0.35);
+    backdrop-filter:blur(2px);
     z-index:450;
     opacity:0;
     visibility:hidden;
@@ -135338,7 +135600,7 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
     overflow:hidden;
 }
 #analysis-loading-overlay.sylva-loading-visible {
-    opacity:1; visibility:visible;
+    opacity:1; visibility:visible; pointer-events:auto;
     transition:opacity 180ms ease;
 }
 #analysis-loading-overlay #analysis-loading-text {
@@ -135361,8 +135623,8 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
 (function () {
     var overlay = document.getElementById('analysis-loading-overlay');
     if (!overlay) return;
-    var tiles = new Map(), timer = null, settleFrame = null, epoch = 0;
-    var started = 0, expired = false, wasRequested = false;
+    var layers = new Map(), tasks = new Map(), timer = null, settleFrame = null, epoch = 0;
+    var wasRequested = false, quietSince = 0;
     function requested() { return overlay.classList.contains('active') || (window._sylvaLoadingRefCount || 0) > 0; }
     function chartPending() {
         return (typeof _sylvaStatsChartFrame !== 'undefined' && _sylvaStatsChartFrame !== null) ||
@@ -135378,32 +135640,81 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
             if (overlay.style[key] !== value) overlay.style[key] = value;
         });
     }
+    function reportTimeout() {
+        try { _sylvaReportAnalysisError(_sylvaRequestError(new Error(t('request_timeout')))); }
+        catch (error) { console.error('[SylvaGIS] Layer loading timeout:', error); }
+    }
+    function forget(layer) {
+        var state = layers.get(layer);
+        if (!state) return;
+        layer.off('add loading tileloadstart tileload tileerror load', state.changed);
+        layer.off('remove', state.removed);
+        layers.delete(layer);
+    }
+    function layerPending(layer, state) {
+        if (!layer._map) return !state.added;
+        state.added = true;
+        if (typeof layer.isLoading === 'function' && layer.isLoading()) return true;
+        var map = layer._map;
+        if (map._animatingZoom || (map._panAnim && map._panAnim._inProgress)) return true;
+        var tiles = layer._tiles || {};
+        return Object.keys(tiles).some(function (key) {
+            var tile = tiles[key];
+            if (tile.current === false) return false;
+            var image = tile.el;
+            if (!tile.loaded || state.errors.has(image)) return true;
+            // Leaflet fades decoded tiles in after its load event; retries can run outside isLoading().
+            if (image && (image.complete === false || (image.tagName === 'IMG' && !image.naturalWidth) || image._sylvaRetryPending)) return true;
+            return !!(map._fadeAnimated && !tile.active);
+        });
+    }
+    function mapPaintPending() {
+        if (typeof _sylvaTargetMap !== 'function') return false;
+        return ['map','map2'].some(function (pane) {
+            var map = _sylvaTargetMap(pane);
+            if (!map) return false;
+            if (map._animatingZoom || (map._panAnim && map._panAnim._inProgress)) return true;
+            if (map._renderer && map._renderer._redrawRequest) return true;
+            return Object.keys(map._layers || {}).some(function (key) {
+                var renderer = map._layers[key]._renderer;
+                return !!(renderer && renderer._redrawRequest);
+            });
+        });
+    }
+    function pending() {
+        var busy = requested() || tasks.size > 0 || chartPending();
+        if ((busy || layers.size || overlay.classList.contains('sylva-loading-visible')) && mapPaintPending()) busy = true;
+        layers.forEach(function (state, layer) {
+            if (!layerPending(layer, state)) return;
+            if (Date.now() - state.started >= 180000) {
+                // A genuine tile failure is reported, never mistaken for successful completion.
+                forget(layer); reportTimeout();
+            } else busy = true;
+        });
+        return busy;
+    }
     function check() {
         clearTimeout(timer); timer = null;
-        var req = requested();
-        if (req && !wasRequested) { expired = false; started = Date.now(); }
-        wasRequested = req;
-        var busy = !expired && (req || tiles.size > 0 || (started && chartPending()));
-        // A lost completion callback must never leave a permanent indicator.
-        if (busy && started && Date.now() - started > 240000) {
-            expired = true; busy = false;
-            Array.from(tiles.values()).forEach(function (done) { done(); });
-        }
-        if (busy) {
-            epoch++;
+        wasRequested = requested();
+        if (pending()) {
+            quietSince = 0; epoch++;
             if (settleFrame !== null) { cancelAnimationFrame(settleFrame); settleFrame = null; }
-            position();
-            overlay.classList.add('sylva-loading-visible');
+            position(); overlay.classList.add('sylva-loading-visible');
             timer = setTimeout(check, 50);
-        } else if (overlay.classList.contains('sylva-loading-visible') && settleFrame === null) {
+        } else if (overlay.classList.contains('sylva-loading-visible')) {
+            // Allow delayed retry probes, Leaflet fades and layout to settle before the final two paints.
+            if (!quietSince) quietSince = Date.now();
+            if (Date.now() - quietSince < 250) { timer = setTimeout(check, 50); return; }
+            if (settleFrame !== null) return;
             var token = ++epoch;
             settleFrame = requestAnimationFrame(function () {
                 settleFrame = requestAnimationFrame(function () {
                     settleFrame = null;
                     if (token !== epoch) return;
-                    if (!expired && (requested() || tiles.size || chartPending())) { check(); return; }
+                    if (pending()) { check(); return; }
+                    layers.forEach(function (state, layer) { forget(layer); });
                     overlay.classList.remove('sylva-loading-visible');
-                    started = 0;
+                    quietSince = 0;
                 });
             });
         }
@@ -135411,37 +135722,53 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
     window._sylvaBeginMapLoadingTask = function () {
         if (!requested() && !overlay.classList.contains('sylva-loading-visible')) return function () {};
         var token = {}, done = false;
-        var safety = setTimeout(finish, 180000);
+        var safety = setTimeout(function () { reportTimeout(); finish(); }, 180000);
         function finish() {
             if (done) return;
-            done = true; clearTimeout(safety); tiles.delete(token); check();
+            done = true; clearTimeout(safety); tasks.delete(token); check();
         }
-        tiles.set(token, finish); check();
+        tasks.set(token, finish); check();
         return finish;
     };
     window._sylvaTrackLoadingTile = function (layer) {
         if (!layer || typeof layer.on !== 'function' || (!requested() && !overlay.classList.contains('sylva-loading-visible'))) return;
-        if (tiles.has(layer)) return;
-        var done = false, safety;
-        function finish() {
-            if (done) return;
-            done = true;
-            clearTimeout(safety);
-            layer.off('load tileerror remove', finish);
-            tiles.delete(layer);
-            check();
-        }
-        tiles.set(layer, finish);
-        layer.on('load tileerror remove', finish);
-        safety = setTimeout(finish, 45000);
-        setTimeout(function () {
-            if (typeof layer.isLoading === 'function' && !layer.isLoading()) finish();
-        }, 0);
+        if (layers.has(layer)) return;
+        var state = {added:!!layer._map, started:Date.now(), errors:new Set()};
+        state.changed = function (event) {
+            if (event && event.type === 'tileerror' && event.tile) state.errors.add(event.tile);
+            if (event && event.type === 'tileload' && event.tile) state.errors.delete(event.tile);
+            if (layer._map) state.added = true;
+            quietSince = 0; check();
+        };
+        state.removed = function () { forget(layer); check(); };
+        layers.set(layer, state);
+        layer.on('add loading tileloadstart tileload tileerror load', state.changed);
+        layer.on('remove', state.removed);
         check();
     };
-    // Existing analysis, carbon and time-series flows keep their own active/ref-count lifecycle.
+    // Include legacy/replacement and mirrored analysis rasters without changing their add/remove flow.
+    if (typeof L !== 'undefined' && L.TileLayer && typeof L.TileLayer.addInitHook === 'function') {
+        L.TileLayer.addInitHook(function () {
+            if (!this.options || this.options.pane !== 'geeAnalysisPane') return;
+            this.on('add', function () { window._sylvaTrackLoadingTile(this); });
+        });
+    }
+    // Block map gestures and keyboard controls without changing Leaflet handlers or panel controls.
+    function blockMapInteraction(event) {
+        if (!overlay.classList.contains('sylva-loading-visible')) return;
+        if (overlay.contains(event.target)) return;
+        var target = event.target;
+        var inMap = ['map','map2'].some(function (id) {
+            var el = document.getElementById(id);
+            return el && el.contains(target);
+        });
+        if (!inMap) return;
+        event.preventDefault(); event.stopImmediatePropagation();
+    }
+    ['pointerdown','mousedown','touchstart','wheel','click','dblclick','keydown'].forEach(function (type) {
+        document.addEventListener(type, blockMapInteraction, {capture:true, passive:false});
+    });
     new MutationObserver(function () {
-        // Ignore our own visibility-class updates; polling covers outstanding paint jobs.
         if (requested() !== wasRequested) check();
     }).observe(overlay, {attributes:true, attributeFilter:['class']});
     window.addEventListener('resize', position);
