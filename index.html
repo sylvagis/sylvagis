@@ -16098,9 +16098,81 @@ var _CARBON_SPECIES_DB = {
                 // ───────────────────────────────────────────────────────────
                 // 🚀 GERÇEK SİMÜLASYON API ÇAĞRISI (AŞAMA 8)
                 // ───────────────────────────────────────────────────────────
+                // Carbon transport remains separate from result rendering and simulation calculations.
+                var _carbonPendingRequests = {};
+                function _carbonResponseError(phase, message, status) {
+                    var error = new Error(message);
+                    error._carbonPhase = phase;
+                    error.status = status || 0;
+                    return error;
+                }
+                function _carbonValidateSimulationResponse(data) {
+                    if (!data || data.success !== true) {
+                        throw _carbonResponseError('server', (data && data.error) || '[payload] Invalid simulation response.');
+                    }
+                    function finite(value) { return typeof value === 'number' && Number.isFinite(value); }
+                    var summaryFields = ['total_standing_c', 'total_harvested_c', 'grand_total_c', 'total_standing_co2e', 'total_harvested_co2e', 'grand_total_co2e', 'mean_annual_sequestration_co2e', 'final_mean_dbh_cm', 'final_mean_height_m', 'final_trees_per_ha'];
+                    var seriesFields = ['year', 'standing_c', 'harvested_c', 'standing_co2e', 'harvested_co2e', 'total_co2e', 'trees_per_ha', 'mean_dbh_cm', 'mean_height_m'];
+                    var complete = data.meta && ['area_ha', 'initial_trees_per_ha', 'initial_trees_total'].every(function (key) { return finite(data.meta[key]); });
+                    complete = complete && ['baseline', 'managed'].every(function (scenario) {
+                        var summary = data.summary && data.summary[scenario];
+                        var series = data.yearly_series && data.yearly_series[scenario];
+                        return summary && summaryFields.every(function (key) { return finite(summary[key]); }) &&
+                            Array.isArray(series) && series.length > 0 && series.every(function (row) {
+                                return row && seriesFields.every(function (key) { return finite(row[key]); });
+                            });
+                    });
+                    if (!complete) throw _carbonResponseError('payload', '[payload] Incomplete carbon summary or yearly series.');
+                    return data;
+                }
+                async function _carbonFetchSimulation(payload) {
+                    var endpoint = String(window.API_BASE || '').replace(/\/+$/, '') + '/api/carbon-simulation';
+                    var configuredTimeout = Number(window.SYLVA_CARBON_TIMEOUT_MS);
+                    var timeoutMs = Number.isFinite(configuredTimeout) && configuredTimeout > 0
+                        ? Math.max(60000, Math.min(600000, configuredTimeout)) : 180000;
+                    var body = JSON.stringify(payload);
+                    for (var attempt = 0; attempt < 2; attempt++) {
+                        var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+                        var timer, expired = false;
+                        var deadline = new Promise(function (_, reject) {
+                            timer = setTimeout(function () {
+                                expired = true;
+                                if (controller) controller.abort();
+                                reject(_carbonResponseError('timeout', '[timeout] ' + (timeoutMs / 1000) + ' s'));
+                            }, timeoutMs);
+                        });
+                        try {
+                            var request = (async function () {
+                                var response = await fetch(endpoint, {
+                                    method: 'POST', headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                                    body: body, signal: controller ? controller.signal : undefined
+                                });
+                                var text = await response.text();
+                                var data;
+                                try { data = JSON.parse(text); } catch (parseError) {
+                                    throw _carbonResponseError(response.ok ? 'json' : 'http', '[HTTP ' + response.status + '] Invalid JSON response.', response.status);
+                                }
+                                if (!response.ok) throw _carbonResponseError('http', '[HTTP ' + response.status + '] ' + ((data && data.error) || response.statusText), response.status);
+                                return _carbonValidateSimulationResponse(data);
+                            })();
+                            return await Promise.race([request, deadline]);
+                        } catch (error) {
+                            if (expired) throw _carbonResponseError('timeout', '[timeout] ' + (timeoutMs / 1000) + ' s');
+                            var retryable = !error._carbonPhase && error.name === 'TypeError';
+                            retryable = retryable || (error._carbonPhase === 'http' && [502, 503, 504].indexOf(error.status) !== -1);
+                            if (!error._carbonPhase) error._carbonPhase = 'network';
+                            if (!retryable || attempt !== 0) throw error;
+                        } finally {
+                            clearTimeout(timer);
+                        }
+                        await new Promise(function (resolve) { setTimeout(resolve, 1000); });
+                    }
+                }
+
                 window.carbonSimRunReal = function (_silent) {
                     var paneId = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
                     var st = _getCarbonActiveState();
+                    if (_carbonPendingRequests[paneId]) return _carbonPendingRequests[paneId];
 
                     // Kilit kontrolü: Başka bir uydu/analiz katmanı seçiliyken simülasyonu engelle (uyarı vermeden sessizce dön)
                     if (typeof window.carbonSimIsLocked === 'function' && window.carbonSimIsLocked()) {
@@ -16230,28 +16302,10 @@ var _CARBON_SPECIES_DB = {
                         geojson: cleanGeojson
                     };
 
-                    // Zaman aşımı koruması (AbortController ile 60 sn)
-                    var abortCtrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
-                    var abortTimer = abortCtrl ? setTimeout(function () {
-                        try { abortCtrl.abort(); } catch (e) {}
-                    }, 60000) : null;
-
-                    fetch((window.API_BASE || '') + '/api/carbon-simulation', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload),
-                        signal: abortCtrl ? abortCtrl.signal : undefined
-                    })
-                    .then(function (res) {
-                        if (abortTimer) { clearTimeout(abortTimer); abortTimer = null; }
-                        return res.json().catch(function () {
-                            throw new Error('Sunucudan geçersiz veri yanıtı alındı (HTTP ' + res.status + ').');
-                        });
-                    })
+                    var requestPromise = _carbonFetchSimulation(payload)
                     .then(function (data) {
-                        if (!data || data.success === false) {
-                            throw new Error((data && data.error) || 'Simülasyon motoru geçersiz yanıt verdi.');
-                        }
+                        var currentAOI = _carbonGetActiveAOI(paneId);
+                        if (!currentAOI || JSON.stringify(currentAOI.geometry) !== JSON.stringify(payload.geojson)) return;
                         st.rawSimResponse = JSON.parse(JSON.stringify(data));
                         st.lastSimResponse = data;
                         st.yearly_series = data.yearly_series;
@@ -16265,21 +16319,6 @@ var _CARBON_SPECIES_DB = {
                             spacingY: payload.spacing_y,
                             retention: payload.retention_rate
                         };
-
-                        // Use the same pane-scoped workspace controls as other successful analyses.
-                        if (typeof _sylvaPaneState === 'function') {
-                            var workspaceState = _sylvaPaneState(paneId);
-                            workspaceState.analysisActive = true;
-                            workspaceState.workspaceVisible = true;
-                        }
-                        if (paneId === window._sylvaActivePaneId() && typeof window._sylvaSyncActivePaneControls === 'function') {
-                            window._sylvaSyncActivePaneControls();
-                        }
-
-                        // Analiz sonuçları ekrana geldiğinde dil seçimini F5 yapılana kadar kilitle
-                        if (typeof window._sylvaSetLanguageLocked === 'function') {
-                            window._sylvaSetLanguageLocked(true);
-                        }
 
                         var scaleSlider = document.getElementById('carbon-density-scale');
                         var currentScale = st.densityScale || 100;
@@ -16297,14 +16336,28 @@ var _CARBON_SPECIES_DB = {
                                 window.carbonSimUpdateSpacingHint();
                             }
                         }
+
+                        // Use the same pane-scoped workspace controls as other successful analyses.
+                        if (typeof _sylvaPaneState === 'function') {
+                            var workspaceState = _sylvaPaneState(paneId);
+                            workspaceState.analysisActive = true;
+                            workspaceState.workspaceVisible = true;
+                        }
+                        if (paneId === window._sylvaActivePaneId() && typeof window._sylvaSyncActivePaneControls === 'function') {
+                            window._sylvaSyncActivePaneControls();
+                        }
+
+                        // Analiz sonuçları ekrana geldiğinde dil seçimini F5 yapılana kadar kilitle
+                        if (typeof window._sylvaSetLanguageLocked === 'function') {
+                            window._sylvaSetLanguageLocked(true);
+                        }
+
+
                     })
                     .catch(function (err) {
-                        if (abortTimer) { clearTimeout(abortTimer); abortTimer = null; }
-                        console.error('Carbon simulation error:', err);
-                        var isAbort = (err && (err.name === 'AbortError' || String(err).indexOf('abort') !== -1));
-                        var rawErr = isAbort
-                            ? ((typeof t === 'function' ? t('carbon_timeout_err') : null) || 'Sunucu yanıtı zaman aşımına uğradı (60 sn). Lütfen internet bağlantınızı kontrol edip tekrar deneyin.')
-                            : (err.message || String(err));
+                        console.error('Carbon simulation ' + (err._carbonPhase || 'render') + ' error:', err);
+                        var rawErr = err && err.message ? err.message : String(err);
+                        if (!err._carbonPhase) rawErr = '[render] ' + rawErr;
                         var errMsg = (typeof t === 'function')
                             ? t('carbon_error_msg', 'Karbon simülasyonu çalıştırılırken hata oluştu: ')
                             : 'Karbon simülasyonu çalıştırılırken hata oluştu: ';
@@ -16315,7 +16368,7 @@ var _CARBON_SPECIES_DB = {
                         }
                     })
                     .finally(function () {
-                        if (abortTimer) { clearTimeout(abortTimer); abortTimer = null; }
+                        delete _carbonPendingRequests[paneId];
                         if (typeof hideSylvaLoading === 'function') {
                             hideSylvaLoading();
                         } else if (typeof window.hideSylvaLoading === 'function') {
@@ -16333,6 +16386,8 @@ var _CARBON_SPECIES_DB = {
                             mainRunBtn.innerHTML = (typeof t === 'function' ? t('run_analysis') : null) || prevMainText || '🚀 Analizi Çalıştır';
                         }
                     });
+                    _carbonPendingRequests[paneId] = requestPromise;
+                    return requestPromise;
                 };
 
                 // Geriye dönük uyumluluk için alias
@@ -31851,6 +31906,9 @@ function selectRamp(name) {
             // 🎬 Video/kaydırıcı oynatımı sırasında (silent) bu ekran gösterilmez —
             // her karede yanıp sönen "SylvaGIS" overlay'i akıcı video hissini bozuyordu.
             if (!silent) showSylvaLoading();
+            // Silent initial time-series scenes still belong to the active loading transaction.
+            var releaseSceneLoading = typeof window._sylvaBeginMapLoadingTask === 'function'
+                ? window._sylvaBeginMapLoadingTask() : function () {};
 
             var _specificSceneAnalyzePayload = {
                 roi:       _roi,
@@ -31888,14 +31946,14 @@ function selectRamp(name) {
             window._lastAnalyzePayloadByPane = window._lastAnalyzePayloadByPane || { map: null, map2: null };
             window._lastAnalyzePayloadByPane[_pane] = _specificSceneAnalyzePayload;
 
-            fetch(API_BASE + '/api/analyze', {
+            return _sylvaFetchAnalysisJSON(API_BASE + '/api/analyze', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(_specificSceneAnalyzePayload)
             })
-            .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (!data.success) {
+                    if (silent && opts.timeSeriesAnalysis === true) showNoDataModal(_TOAST_NO_DATA_MSG, _sceneSatellite + (meta && meta.analysisName ? (' — ' + _sylvaLayerFriendlyName(meta.analysisName)) : ''), data.error);
                     if (!silent) { hideSylvaLoading(); showNoDataModal(_TOAST_NO_DATA_MSG, _sceneSatellite + (meta && meta.analysisName ? (' — ' + _sylvaLayerFriendlyName(meta.analysisName)) : ''), data.error); }
                     if (onDone) onDone();
                     return;
@@ -32064,8 +32122,11 @@ function selectRamp(name) {
                 _ensureDefaultVisibility();
             })
             .catch(function(err) {
+                if (silent && opts.timeSeriesAnalysis === true) _sylvaReportAnalysisError(err);
                 if (!silent) { hideSylvaLoading(); showAnalysisToast(t('scene_load_failed') + ': ' + err.message, 'error'); }
                 if (onDone) onDone();
+            }).finally(function () {
+                releaseSceneLoading();
             });
         }
 
@@ -69196,7 +69257,11 @@ function runTimeSeriesAnalysis() {
     // yerine ekranda yanıp sönen SylvaGIS logolu ortak yükleniyor overlay'i
     // gösterilir (bkz. runAnalysis() içindeki aynı mekanizma).
     var _tsLoadingOverlay = document.getElementById('analysis-loading-overlay');
-    if (_tsLoadingOverlay) _tsLoadingOverlay.classList.add('active');
+    var _tsOwnLoadingReference = typeof showSylvaLoading === 'function';
+    if (_tsOwnLoadingReference) showSylvaLoading();
+    else if (_tsLoadingOverlay) _tsLoadingOverlay.classList.add('active');
+    var _tsReleaseLoading = typeof window._sylvaBeginMapLoadingTask === 'function'
+        ? window._sylvaBeginMapLoadingTask() : function () {};
 
     // 🆕 Zaman Serisi analizi başlatıldığında Sütun/Pasta grafik butonları
     // pasifleştirilir — bu analiz türünde sonuç yalnızca Çizgi Grafik
@@ -69206,7 +69271,7 @@ function runTimeSeriesAnalysis() {
     if (_tsBarBtn) { _tsBarBtn.classList.add('disabled-chart'); _tsBarBtn.disabled = true; }
     if (_tsPieBtn) { _tsPieBtn.classList.add('disabled-chart'); _tsPieBtn.disabled = true; }
 
-    _sylvaFetchAnalysisJSON(API_BASE + '/api/timeseries', {
+    return _sylvaFetchAnalysisJSON(API_BASE + '/api/timeseries', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -69389,6 +69454,7 @@ function runTimeSeriesAnalysis() {
         }
         // renderGalleryFromScenes zaten [sceneId, timestamp_ms, cloud_pct]
         // formatını bekliyor — normal NDVI/NDWI galerisiyle aynı mekanizma.
+        var _tsSceneRequest = null;
         if (data.gallery && data.gallery.length) {
             var scenesArr = data.gallery.map(function(g) {
                 return [g.sceneId, g.timestamp, g.cloud];
@@ -69408,7 +69474,7 @@ function runTimeSeriesAnalysis() {
                 // sahneyi hemen haritaya getir. Normal date-start/date-end alanları
                 // farklı bir aralıkta kalmış olsa bile bu istek TS'nin kendi aralığını
                 // kullanır; böylece analiz seçildiğinde ekran boş kalmaz.
-                loadSpecificScene(scenesArr[0][0], _pane, {
+                _tsSceneRequest = loadSpecificScene(scenesArr[0][0], _pane, {
                     silent: true,
                     meta: _meta,
                     startDate: String(sy) + '-01-01',
@@ -69432,13 +69498,15 @@ function runTimeSeriesAnalysis() {
             });
         }
 
-
+        return _tsSceneRequest;
     })
     .catch(function(err) {
         _sylvaReportAnalysisError(err);
     }).finally(function () {
         if (btn) { btn.disabled = false; btn.innerHTML = _btnOrigLabel; }
-        if (_tsLoadingOverlay) _tsLoadingOverlay.classList.remove('active');
+        _tsReleaseLoading();
+        if (_tsOwnLoadingReference) hideSylvaLoading();
+        else if (_tsLoadingOverlay) _tsLoadingOverlay.classList.remove('active');
     });
 }
 
@@ -82615,7 +82683,7 @@ function hideEmptyLegendDates(){document.querySelectorAll('.real-stats-row').for
 /* Sunucunun kendine ait kategorileri olan katmanların sembolojisi değişmez.
    Editör kapalı görünür, fakat kullanıcı hangi nedenle kapalı olduğunu
    anlayabilsin diye şeffaf bırakılır. */
-function nativeClassified(){var meta=window._lastAnalyzeMeta;var isAspect=!!(meta&&String(meta.analysisName||'').toUpperCase()==='TOPO_ASPECT');return!!(meta&&meta.legendType==='classified'&&meta.classesRaw&&!isAspect)}
+function nativeClassified(){if(typeof window._sylvaIsFixedLulcLayer==='function')return window._sylvaIsFixedLulcLayer();var meta=window._lastAnalyzeMeta;return ['LULC','LULC_ESA','LULC_CORINE','LULC_MODIS'].indexOf(String(meta&&meta.analysisName||'').toUpperCase())!==-1}
 function syncNativeClassEditorState(){var locked=nativeClassified();var group=document.getElementById('classification-type-group');var stretch=document.getElementById('stretched-settings');var classified=document.getElementById('classified-settings');[group,stretch,classified].forEach(function(el){if(!el)return;el.style.opacity=locked?'.42':'';el.style.pointerEvents=locked?'none':'';el.setAttribute('aria-disabled',locked?'true':'false')});document.querySelectorAll('#classification-type-group button,#stretched-settings input,#stretched-settings button,#classified-settings input,#classified-settings button,#classified-settings select').forEach(function(el){if(locked){el.disabled=true;el.setAttribute('data-native-symbol-disabled','1')}else if(el.getAttribute('data-native-symbol-disabled')==='1'){el.disabled=false;el.removeAttribute('data-native-symbol-disabled')}})}
 
 /* Sürekli veride ilk sınıflandırma, genel gri kategorik paletten değil,
@@ -84131,6 +84199,7 @@ refresh();
     var meta=window._lastAnalyzeMetaByPane&&window._lastAnalyzeMetaByPane[p] || window._lastAnalyzeMeta;
     if(!top || !meta) return;
     var state=window._sylvaEditorStateByPane&&window._sylvaEditorStateByPane[p]&&window._sylvaEditorStateByPane[p][top];
+    if(typeof window._sylvaIsFixedLulcLayer==='function'&&window._sylvaIsFixedLulcLayer(p))return;
     // Bakı/Kabartma kendi sembolojisini yönetir; ortak sınıflandırma editörü kapalıdır.
     var name=String(meta.analysisName||'').toUpperCase();
     if(name==='TOPO_ASPECT' || name==='TOPO_HILLSHADE') return;
@@ -84163,6 +84232,8 @@ refresh();
 
   function paneId(){ return (typeof window._sylvaActivePaneId==='function' ? window._sylvaActivePaneId() : 'map'); }
   function metaForPane(p){
+    var key=(window._sylvaTopGeeLayerByPane||{})[p],state=((window._sylvaIndexAnalysisStates||{})[p]||{})[key];
+    if(key)return state&&state.meta||{analysisName:String(key).split('__')[0]};
     var m = window._lastAnalyzeMetaByPane && window._lastAnalyzeMetaByPane[p];
     if(m) return m;
     return window._lastAnalyzeMeta || null;
@@ -84181,7 +84252,7 @@ refresh();
     p.style.opacity='.35'; p.style.pointerEvents='none'; p.style.userSelect='none';
     p.setAttribute('aria-disabled','true');
     p.querySelectorAll('button,input,select').forEach(function(el){
-      el.disabled=true; el.setAttribute('data-sylva-hillshade-disabled','1');
+      if(!el.disabled)el.setAttribute('data-sylva-hillshade-disabled','1'); el.disabled=true;
     });
   }
   function forceGrayRamp(){
@@ -84245,10 +84316,8 @@ refresh();
       return;
     }
     if(name==='TOPO_ASPECT'){
-      // Bakı artık veri sınıflandırıcısını değiştiren ortak editörü kullanmaz.
-      // Lejantı analiz tarafından belirlenir; Semboloji paneli şeffaf/pasiftir.
-      forceGrayRamp();
-      lockHillshade();
+      unlock();
+      if(typeof window.syncNativeClassEditorState==='function')window.syncNativeClassEditorState();
       return;
     }
     // Diğer analizlerde önce özel kilidi kaldır, ardından yerleşik sınıflandırma
@@ -84280,10 +84349,12 @@ refresh();
 (function(){
   'use strict';
   var TOPO=/^TOPO(?:_|$)/i;
-  var PASSIVE={TOPO_ASPECT:true,TOPO_HILLSHADE:true};
+  var PASSIVE={TOPO_HILLSHADE:true};
 
   function pane(){return typeof window._sylvaActivePaneId==='function'?window._sylvaActivePaneId():'map';}
   function metaFor(p){
+    var key=(window._sylvaTopGeeLayerByPane||{})[p],state=((window._sylvaIndexAnalysisStates||{})[p]||{})[key];
+    if(key)return state&&state.meta||{analysisName:String(key).split('__')[0]};
     return (window._lastAnalyzeMetaByPane&&window._lastAnalyzeMetaByPane[p])||window._lastAnalyzeMeta||null;
   }
   function cleanEmojiText(root){
@@ -84352,6 +84423,7 @@ refresh();
   function isolateEditor(){
     var p=pane(), top=window._sylvaTopGeeLayerByPane&&window._sylvaTopGeeLayerByPane[p], m=metaFor(p);
     if(!top||!m) return;
+    if(typeof window._sylvaIsFixedLulcLayer==='function'&&window._sylvaIsFixedLulcLayer(p))return;
     var name=String(m.analysisName||'').toUpperCase();
     if(PASSIVE[name]){ if(name==='TOPO_ASPECT') setupAspect(); else setupHillshade(); cleanTopoChrome(p); return; }
     var store=window._sylvaEditorStateByPane&&window._sylvaEditorStateByPane[p];
@@ -84434,10 +84506,12 @@ refresh();
   // ile Min/Max + renk rampası doğrudan veriye uygulanır.
   // Topografik analizlerdeki önceki pasif davranış değiştirilmez: yalnızca
   // kullanıcı tarafından istenen çevresel native-classified katmanlar pasiftir.
-  var PASSIVE={TOPO_ASPECT:true,TOPO_HILLSHADE:true,FOREST_LOSS:true,URBAN_GROWTH:true};
+  var PASSIVE={TOPO_HILLSHADE:true,FOREST_LOSS:true,URBAN_GROWTH:true};
   function activePane(){return typeof window._sylvaActivePaneId==='function'?window._sylvaActivePaneId():'map';}
   function activeMeta(){
     var p=activePane();
+    var key=(window._sylvaTopGeeLayerByPane||{})[p],state=((window._sylvaIndexAnalysisStates||{})[p]||{})[key];
+    if(key)return state&&state.meta||{analysisName:String(key).split('__')[0]};
     return (window._lastAnalyzeMetaByPane&&window._lastAnalyzeMetaByPane[p])||window._lastAnalyzeMeta||null;
   }
   // Eski native-class kilidini de geçersiz kıl: kullanıcı talebi gereği
@@ -84464,6 +84538,7 @@ refresh();
       panel.style.userSelect='';
       panel.removeAttribute('aria-disabled');
     }
+    if(panel)panel.querySelectorAll('[data-sylva-hillshade-disabled]').forEach(function(el){el.disabled=false;el.removeAttribute('data-sylva-hillshade-disabled');});
     var ids=['classification-type-group','stretched-settings','classified-settings','paletteList'];
     ids.forEach(function(id){
       var el=document.getElementById(id); if(!el) return;
@@ -84494,11 +84569,12 @@ refresh();
     panel.style.userSelect='none';
     panel.setAttribute('aria-disabled','true');
     panel.querySelectorAll('input,select,button').forEach(function(el){
+      if(!el.disabled)el.setAttribute('data-sylva-passive-disabled','1');
       el.disabled=true;
-      el.setAttribute('data-sylva-passive-disabled','1');
     });
   }
   function syncClassificationAvailability(){
+    if(typeof window._sylvaIsFixedLulcLayer==='function'&&window._sylvaIsFixedLulcLayer()){window._sylvaSyncLegendDataAvailability();return;}
     var m=activeMeta();
     var name=String(m&&m.analysisName||'').toUpperCase();
     if(PASSIVE[name]){
@@ -84753,13 +84829,14 @@ refresh();
 <script id="sylva-final-classification-open-fix-20260819">
 (function(){
   'use strict';
-  var PASSIVE={TOPO_ASPECT:true,TOPO_HILLSHADE:true};
+  var PASSIVE={TOPO_HILLSHADE:true};
   function pane(){return typeof window._sylvaActivePaneId==='function'?window._sylvaActivePaneId():'map';}
-  function meta(){var p=pane();return (window._lastAnalyzeMetaByPane&&window._lastAnalyzeMetaByPane[p])||window._lastAnalyzeMeta||null;}
+  function meta(){var p=pane(),key=(window._sylvaTopGeeLayerByPane||{})[p],state=((window._sylvaIndexAnalysisStates||{})[p]||{})[key];if(key)return state&&state.meta||{analysisName:String(key).split('__')[0]};return (window._lastAnalyzeMetaByPane&&window._lastAnalyzeMetaByPane[p])||window._lastAnalyzeMeta||null;}
   function apply(){
     var m=meta(), name=String(m&&m.analysisName||'').toUpperCase();
     var panel=document.getElementById('legend-symbology-body');
     if(!panel)return;
+    if(typeof window._sylvaSyncLegendDataAvailability==='function'&&!window._sylvaSyncLegendDataAvailability())return;
     if(PASSIVE[name])return;
     panel.style.opacity='1';panel.style.pointerEvents='';panel.style.userSelect='';panel.removeAttribute('aria-disabled');
     panel.querySelectorAll('[data-sylva-passive-disabled="1"]').forEach(function(el){el.disabled=false;el.removeAttribute('data-sylva-passive-disabled')});
@@ -134204,6 +134281,35 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
       }
     });
   }
+  // Resolve fixed palettes from the selected raster, never a previous analysis response.
+  var fixedLulc = ['LULC','LULC_ESA','LULC_CORINE','LULC_MODIS','DYNAMIC_WORLD','DYNAMIC_WORLD_V1','DYNAMICWORLD','ESA_WORLDCOVER','ESA_WORLD_COVER','ESA_WORLDCOVER_V100','ESA_WORLDCOVER_V200','CORINE','CORINE_LAND_COVER','CORINE_LANDCOVER','MODIS_MCD12Q1','MCD12Q1'];
+  function fixedName(value){
+    var name=String(value||'').split('__')[0].toUpperCase().replace(/[ -]+/g,'_');
+    return fixedLulc.indexOf(name)!==-1 || /^(GOOGLE\/DYNAMICWORLD\/V1|ESA\/WORLDCOVER\/V(?:100|200)|COPERNICUS\/CORINE\/V20\/100M|MODIS\/(?:006|061)\/MCD12Q1)$/.test(name);
+  }
+  window._sylvaIsFixedLulcLayer=function(pane){
+    pane=pane||activePane();
+    var key=(window._sylvaTopGeeLayerByPane||{})[pane];
+    var state=((window._sylvaIndexAnalysisStates||{})[pane]||{})[key];
+    return !!key && (fixedName(key) || fixedName(state&&state.meta&&state.meta.analysisName));
+  };
+  function syncFixedLulcPanel(panel,locked){
+    var root=document.getElementById('legend-symbology-panel')||panel;
+    if(root.classList.contains('sylva-lulc-standard-passive')!==locked)root.classList.toggle('sylva-lulc-standard-passive',locked);
+    if(root!==panel && root.inert!==locked)root.inert=locked;
+    if(locked){if(root.getAttribute('aria-disabled')!=='true')root.setAttribute('aria-disabled','true');}
+    else if(root!==panel && root.hasAttribute('aria-disabled'))root.removeAttribute('aria-disabled');
+    root.querySelectorAll('input,select,button').forEach(function(control){
+      if(locked){
+        var managed=['data-sylva-no-analysis-disabled','data-native-symbol-disabled','data-sylva-passive-disabled','data-sylva-hillshade-disabled','data-sylva-env-disabled','data-sylva-rgb-passive'].some(function(flag){return control.hasAttribute(flag);});
+        if((!control.disabled||managed) && !control.hasAttribute('data-sylva-lulc-disabled'))control.setAttribute('data-sylva-lulc-disabled','1');
+        if(!control.disabled)control.disabled=true;
+      }else if(control.getAttribute('data-sylva-lulc-disabled')==='1'){
+        if(!control.hasAttribute('data-sylva-no-analysis-disabled') && !control.hasAttribute('data-native-symbol-disabled') && !control.hasAttribute('data-sylva-passive-disabled') && !control.hasAttribute('data-sylva-hillshade-disabled') && !control.hasAttribute('data-sylva-env-disabled'))control.disabled=false;
+        control.removeAttribute('data-sylva-lulc-disabled');
+      }
+    });
+  }
   function syncLegendDataAvailability(){
     var panel = document.getElementById('legend-symbology-body');
     if (!panel) return false;
@@ -134212,34 +134318,39 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
     var state = ((window._sylvaIndexAnalysisStates || {})[pane] || {})[top];
     var ready = !!(top && !isRgbTop(pane) && state && state.data && state.data.success !== false &&
       (state.data.stats || (Array.isArray(state.data.series) && state.data.series.length)));
+    var fixed = window._sylvaIsFixedLulcLayer(pane);
+    syncFixedLulcPanel(panel, fixed);
     var wasEmpty = panel.classList.contains('sylva-legend-empty');
     if (wasEmpty !== !ready) panel.classList.toggle('sylva-legend-empty', !ready);
-    panel.inert = !ready;
+    if(panel.inert !== (!ready || fixed))panel.inert = !ready || fixed;
     var controls = panel.querySelectorAll('input,select,button');
     controls.forEach(function(control){
       if (!ready) {
         if (!control.disabled) control.setAttribute('data-sylva-no-analysis-disabled', '1');
-        control.disabled = true;
+        if(!control.disabled)control.disabled = true;
       } else if (control.getAttribute('data-sylva-no-analysis-disabled') === '1') {
-        if (!control.hasAttribute('data-sylva-passive-disabled') && !control.hasAttribute('data-native-symbol-disabled') && !control.hasAttribute('data-sylva-hillshade-disabled')) control.disabled = false;
+        if (!fixed && !control.hasAttribute('data-sylva-passive-disabled') && !control.hasAttribute('data-native-symbol-disabled') && !control.hasAttribute('data-sylva-hillshade-disabled')) control.disabled = false;
         control.removeAttribute('data-sylva-no-analysis-disabled');
       }
     });
+    if (fixed && panel.getAttribute('aria-disabled') !== 'true')panel.setAttribute('aria-disabled','true');
     if (!ready) {
-      panel.setAttribute('aria-disabled', 'true');
+      if(panel.getAttribute('aria-disabled')!=='true')panel.setAttribute('aria-disabled', 'true');
       panel.querySelectorAll('#class-rows-container input, #stretched-settings input, #classified-settings > input').forEach(function(input){
         if (input.value !== '') input.value = '';
       });
       panel.querySelectorAll('.color-dropdown').forEach(function(dropdown){ dropdown.classList.add('hidden'); });
     } else if (wasEmpty) {
-      panel.removeAttribute('aria-disabled');
+      if(!fixed)panel.removeAttribute('aria-disabled');
       // Existing result/layer restore functions populate values; never recreate saved user classes.
       var saved = ((window._sylvaEditorStateByPane || {})[pane] || {})[top];
       var fields = panel.querySelectorAll('#class-rows-container input');
       var blank = fields.length && Array.prototype.every.call(fields, function(input){ return input.value === ''; });
       if (blank && saved && typeof window._sylvaRestoreEditorStateForLayer === 'function') window._sylvaRestoreEditorStateForLayer(pane, top);
     }
-    return ready;
+    // Controls released from an empty state must still obey the fixed-palette lock.
+    if(fixed)syncFixedLulcPanel(panel,true);
+    return ready && !fixed;
   }
   window._sylvaSyncLegendDataAvailability = syncLegendDataAvailability;
   function syncPassivePanels(){
@@ -134266,6 +134377,22 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
       legend.removeAttribute('aria-disabled');
     }
   }
+  window._sylvaSyncLegendPanelForActiveLayer=function(){
+    syncPassivePanels();
+    if(!window._sylvaIsFixedLulcLayer()&&typeof window.syncNativeClassEditorState==='function')window.syncNativeClassEditorState();
+  };
+  function fixedInteraction(event){
+    if(!window._sylvaIsFixedLulcLayer())return;
+    var target=event.target;
+    if(target&&target.closest&&target.closest('#legend-symbology-panel, #legend-symbology-body')){
+      event.preventDefault();event.stopImmediatePropagation();syncLegendDataAvailability();
+    }
+  }
+  ['click','input','change','keydown'].forEach(function(type){document.addEventListener(type,fixedInteraction,true);});
+  var fixedRoot=document.getElementById('legend-symbology-panel')||document.getElementById('legend-symbology-body');
+  if(fixedRoot)new MutationObserver(function(){
+    if(window._sylvaIsFixedLulcLayer())syncLegendDataAvailability();
+  }).observe(fixedRoot,{subtree:true,childList:true,attributes:true,attributeFilter:['disabled','style','class','aria-disabled','inert']});
   function autoSizeLegend(box){
     if(!box) return;
     box.style.maxHeight = 'none';
@@ -134322,6 +134449,16 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
 
 /* Uydu görüntüsü aktifken Lejant ve Semboloji panosu da ekran görüntüsündeki
    gibi soluk/şeffaf ve pasiftir. Analiz lejantının kendisi etkilenmez. */
+
+/* Only fixed LULC palettes disable the entire legend/symbology accordion. */
+#legend-symbology-panel.sylva-lulc-standard-passive {
+  opacity: .5 !important;
+  pointer-events: none !important;
+  user-select: none !important;
+}
+#legend-symbology-panel.sylva-lulc-standard-passive #legend-symbology-body {
+  opacity: 1 !important;
+}
 #legend-symbology-body.sylva-satellite-passive {
   opacity: .35 !important;
   pointer-events: none !important;
@@ -135024,6 +135161,8 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
   }
   function meta(){
     var pane=(typeof window._sylvaActivePaneId==='function') ? window._sylvaActivePaneId() : 'map';
+    var key=(window._sylvaTopGeeLayerByPane||{})[pane],state=((window._sylvaIndexAnalysisStates||{})[pane]||{})[key];
+    if(key)return state&&state.meta||{analysisName:String(key).split('__')[0]};
     return (window._lastAnalyzeMetaByPane && window._lastAnalyzeMetaByPane[pane]) || window._lastAnalyzeMeta || null;
   }
   // 🛠️ BUG FİX (sayfa donması / "Sayfa Yanıt Vermiyor"): lock()/unlock()
@@ -135048,8 +135187,8 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
       el.classList.add('sylva-env-urban-passive');
       el.setAttribute('aria-disabled','true');
       el.querySelectorAll('input,select,button').forEach(function(x){
+        if(!x.disabled)x.setAttribute('data-sylva-env-disabled','1');
         x.disabled=true;
-        x.setAttribute('data-sylva-env-disabled','1');
       });
     });
   }
@@ -135070,7 +135209,7 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
     if(isEnvName(n)){ lastEnvName=n; lock(); return; }
     // During the short period in which metadata is rebuilt, do NOT unlock.
     // This is the source of the visible flash in the previous implementation.
-    if(!force && locked && lastEnvName) return;
+    if(!force && locked && lastEnvName && !n) return;
     if(!n) return;
     lastEnvName=''; unlock();
   }
@@ -135143,7 +135282,7 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
  'use strict';
  // All layer selectors converge here after the existing layer operation finishes.
  // Histograms are already returned by analysis; switching must not rerun GEE.
- var queued={}, rendering=false, boundMaps=[];
+ var queued={}, commits={}, rendering=false, boundMaps=[];
  function active(){return typeof window._sylvaActivePaneId==='function'?window._sylvaActivePaneId():'map';}
  function top(p){return (window._sylvaTopGeeLayerByPane||{})[p]||null;}
  function bank(p){window._sylvaChartSnapshotByPane=window._sylvaChartSnapshotByPane||{};return window._sylvaChartSnapshotByPane[p]||(window._sylvaChartSnapshotByPane[p]={});}
@@ -135168,6 +135307,7 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
   var k=top(p),state=((window._sylvaIndexAnalysisStates||{})[p]||{})[k];
   rendering=true;
   try{
+   if(typeof window._sylvaSyncLegendPanelForActiveLayer==='function')window._sylvaSyncLegendPanelForActiveLayer();
    if(typeof window.sylvaSyncRgbPassiveChartLegend==='function')window.sylvaSyncRgbPassiveChartLegend();
    var timeSeries=(window._sylvaTsChartByPane||{})[p];
    var analysis=state&&state.meta&&state.meta.analysisName||k;
@@ -135217,6 +135357,15 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
   p=p==='map2'?'map2':'map';if(queued[p])return;
   queued[p]=true;setTimeout(function(){delete queued[p];refresh(p);},0);
  }
+ // Commit after existing delegated handlers and their deferred layer operations.
+ // Coalesce rapid choices and re-read the selected pane/layer at the final paint.
+ function commit(p){
+  p=p==='map2'?'map2':'map';if(commits[p])return;
+  commits[p]={frame:null};
+  setTimeout(function(){
+   commits[p].frame=requestAnimationFrame(function(){delete commits[p];refresh(p);});
+  },0);
+ }
  function bindMap(p){
   var m=p==='map2'?window.map2:(typeof map!=='undefined'?map:window.map);
   if(!m||typeof m.on!=='function'||boundMaps.indexOf(m)!==-1)return;boundMaps.push(m);
@@ -135230,7 +135379,7 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
  var bring=window._sylvaBringGeeLayerToFront;
  if(typeof bring==='function')window._sylvaBringGeeLayerToFront=function(p,k){
   var previous=window._sylvaChartSwitchInProgress;window._sylvaChartSwitchInProgress=true;
-  try{return bring.apply(this,arguments);}finally{window._sylvaChartSwitchInProgress=previous;if(!previous)refresh(p);}
+  try{return bring.apply(this,arguments);}finally{window._sylvaChartSwitchInProgress=previous;if(!previous){refresh(p);commit(p);}}
  };
  var result=window._sylvaRenderIndexAnalysisResult;
  if(typeof result==='function')window._sylvaRenderIndexAnalysisResult=function(meta,data,p,skip,k,isTop){
@@ -135253,14 +135402,23 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
  // Pane refresh must use the selected layer, not the pane's last unrelated chart.
  window.sylvaRefreshChartForActivePane=function(){refresh(active());};
  wrap('_sylvaSetActiveMap',function(){refresh(active());});
- function selection(e){
-  var el=e.target,control=el&&el.closest&&el.closest('.sylva-layer-switch-item, .sylva-layer-switch-visibility, select[data-pane][data-layer-key]');
-  if(control){var p=control.getAttribute('data-pane');if((p==='map'||p==='map2')&&p!==active()&&typeof window._sylvaSetActiveMap==='function')window._sylvaSetActiveMap(p);schedule(p);}
-  else if(e.type==='change'&&el&&el.matches&&el.matches('select, .uydu-analiz-checkbox, .uydu-veriseti-checkbox, input[data-analysis]'))schedule(active());
+ function controlFor(e){
+  var el=e.target;return el&&el.closest&&el.closest('.sylva-layer-switch-item, .sylva-layer-switch-visibility, select[data-pane][data-layer-key]');
  }
- document.addEventListener('click',selection,true);
- document.addEventListener('change',selection,true);
- document.addEventListener('layerchange',function(){schedule(active());});
+ function activateSelectionPane(e){
+  var control=controlFor(e),p=control&&control.getAttribute('data-pane');
+  if((p==='map'||p==='map2')&&p!==active()&&typeof window._sylvaSetActiveMap==='function')window._sylvaSetActiveMap(p);
+ }
+ function selection(e){
+  var el=e.target,control=controlFor(e);
+  if(control)commit(control.getAttribute('data-pane'));
+  else if(e.type==='change'&&el&&el.matches&&el.matches('select, .uydu-analiz-checkbox, .uydu-veriseti-checkbox, input[data-analysis]'))commit(active());
+ }
+ document.addEventListener('click',activateSelectionPane,true);
+ document.addEventListener('change',activateSelectionPane,true);
+ document.addEventListener('click',selection);
+ document.addEventListener('change',selection);
+ document.addEventListener('layerchange',function(e){commit(e.detail&&e.detail.paneId||active());});
  window._sylvaRefreshDataChartsForLayer=refresh;
  function init(){bindMap('map');bindMap('map2');schedule(active());}
  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
