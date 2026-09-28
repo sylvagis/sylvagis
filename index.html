@@ -12,6 +12,569 @@
         document.documentElement.setAttribute('dir', /^(ar|fa|ur)$/.test(lang) ? 'rtl' : 'ltr');
         document.documentElement.classList.add('sylva-i18n-pending');
     })();
+    // Each operation retains its own signal even after a modal closes or a new job starts.
+    window.currentDownloadAbortController = null;
+    window.downloadCancelled = false;
+    window._sylvaAbortError = function () { return new DOMException('Operation cancelled', 'AbortError'); };
+    window._sylvaCheckDownload = function (controller) {
+        if (controller && controller.signal.aborted) throw window._sylvaAbortError();
+    };
+    window._sylvaDownloadAbort = {
+        _controllers: {},
+        create: function (type, filename) {
+            type = type === 'raster' ? 'geotiff' : type;
+            this.abort(type);
+            var ctrl = new AbortController();
+            ctrl.type = type; ctrl.serverRequests = new Map(); ctrl.cleanups = new Set();
+            ctrl.check = function () { window._sylvaCheckDownload(ctrl); };
+            ctrl.finish = function (status) {
+                if (ctrl.signal.aborted) status = 'cancelled';
+                if (ctrl.downloadId) window._sylvaFinishDownload(ctrl.downloadId, status || 'completed');
+                if (window._sylvaDownloadAbort._controllers[type] === ctrl) delete window._sylvaDownloadAbort._controllers[type];
+                if (window.currentDownloadAbortController === ctrl) window.currentDownloadAbortController = null;
+                ctrl.cleanups.clear();
+            };
+            ctrl.signal.addEventListener('abort', function () {
+                window.downloadCancelled = true;
+                ctrl.cleanups.forEach(function (fn) { try { fn(); } catch (e) {} });
+                ctrl.cleanups.clear();
+                ctrl.serverRequests.forEach(function (cancelUrl) {
+                    // Cancellation has its own transport; never attach the aborted signal.
+                    fetch(cancelUrl, { method:'POST', keepalive:true }).catch(function () {});
+                });
+                ctrl.finish('cancelled');
+            }, { once:true });
+            this._controllers[type] = ctrl;
+            window.currentDownloadAbortController = ctrl;
+            window.downloadCancelled = false;
+            if (filename && typeof window._sylvaRegisterDownload === 'function') {
+                ctrl.downloadId = window._sylvaRegisterDownload(null, { filename:filename, title:filename, type:type, controller:ctrl });
+            }
+            return ctrl;
+        },
+        get: function (type) { return this._controllers[type === 'raster' ? 'geotiff' : type] || null; },
+        getSignal: function (type) { var c=this.get(type); return c ? c.signal : undefined; },
+        abort: function (type) {
+            var c = type ? this.get(type) : null;
+            if (type) { if(c) c.abort(); }
+            else Object.keys(this._controllers).forEach(function(k){ var c=window._sylvaDownloadAbort._controllers[k]; if(c)c.abort(); });
+        },
+        isAborted: function (type) { var c=this.get(type); return !c || c.signal.aborted; }
+    };
+    window._sylvaDownloadFetch = function (url, options, controller) {
+        if(!controller.check)controller.check=function(){window._sylvaCheckDownload(controller);};
+        if(!controller.serverRequests){
+            controller.serverRequests=new Map();
+            controller.signal.addEventListener('abort',function(){controller.serverRequests.forEach(function(cancelUrl){fetch(cancelUrl,{method:'POST',keepalive:true}).catch(function(){});});},{once:true});
+        }
+        controller.check();
+        options = Object.assign({}, options, { signal:controller.signal });
+        var id = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : Date.now().toString(36)+'-'+Math.random().toString(36).slice(2);
+        var cancelUrl = String(url).replace(/\/api\/[^?#]+(?:[?#].*)?$/, '/api/cancel-operation/'+id);
+        var headers = new Headers(options.headers || {}); headers.set('X-Sylva-Operation', id); options.headers = headers;
+        controller.serverRequests.set(id, cancelUrl);
+        return fetch(url, options).then(function (response) {
+            controller.check();
+            // Keep the cancellation endpoint alive until the response body is consumed.
+            ['blob','json','text','arrayBuffer'].forEach(function (method) {
+                var read = response[method].bind(response);
+                response[method] = function () { controller.check(); return read().then(function(data){controller.check();return data;}).finally(function(){controller.serverRequests.delete(id);}); };
+            });
+            return response;
+        }).catch(function(error){controller.serverRequests.delete(id);throw error;});
+    };
+    window._sylvaDownloadDelay = function (controller, ms) {
+        return new Promise(function(resolve,reject){
+            controller.check();
+            function cancel(){clearTimeout(timer);reject(window._sylvaAbortError());}
+            var timer=setTimeout(function(){controller.signal.removeEventListener('abort',cancel);resolve();},ms);
+            controller.signal.addEventListener('abort',cancel,{once:true});
+        });
+    };
+    window._sylvaDownloadZip = function (zip, options, controller) {
+        controller.check();
+        // JSZip's public stream can be paused; cancellation releases listeners and buffers.
+        return new Promise(function(resolve,reject){
+            var chunks=[], stream=zip.generateInternalStream(Object.assign({},options,{type:'uint8array'}));
+            function cancel(){stream.pause();chunks.length=0;controller.signal.removeEventListener('abort',cancel);reject(window._sylvaAbortError());}
+            controller.signal.addEventListener('abort',cancel,{once:true});
+            stream.on('data',function(chunk){if(controller.signal.aborted){cancel();return;}chunks.push(chunk);})
+                .on('error',function(err){chunks.length=0;controller.signal.removeEventListener('abort',cancel);reject(err);})
+                .on('end',function(){controller.signal.removeEventListener('abort',cancel);if(controller.signal.aborted){cancel();return;}resolve(new Blob(chunks,{type:options.mimeType||'application/zip'}));chunks.length=0;})
+                .resume();
+        });
+    };
+    window.addEventListener('pagehide', function () { window._sylvaDownloadAbort.abort(); });
+    document.addEventListener('click',function(event){
+        var button=event.target.closest && event.target.closest('#analysis-loading-cancel-btn');
+        if(button)window._sylvaDownloadAbort.abort('raw-bands');
+    },true);
+
+    /* ══════════════════════════════════════════════════════════════════════════
+       📥 SYLVAGIS UNIVERSAL DOWNLOAD & EXPORT MANAGER
+       - Modern File System Access API (showSaveFilePicker / directory selection)
+       - Standard browser download fallback
+       - Floating Download Manager Bar with cancellation and progress
+       ══════════════════════════════════════════════════════════════════════════ */
+    window._sylvaDownloads = {};
+
+    function _sylvaGetMimeTypes(name, customTypes) {
+        if (customTypes && customTypes.length) return customTypes;
+        var ext = (name.indexOf('.') !== -1) ? name.split('.').pop().toLowerCase() : '';
+        var mimeMap = {
+            'png':     { desc: 'PNG Görüntüsü',           mime: 'image/png', ext: '.png' },
+            'jpg':     { desc: 'JPEG Görüntüsü',          mime: 'image/jpeg', ext: '.jpg' },
+            'jpeg':    { desc: 'JPEG Görüntüsü',          mime: 'image/jpeg', ext: '.jpeg' },
+            'pdf':     { desc: 'PDF Belgesi',             mime: 'application/pdf', ext: '.pdf' },
+            'docx':    { desc: 'Word Belgesi (DOCX)',      mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', ext: '.docx' },
+            'csv':     { desc: 'CSV Dosyası',             mime: 'text/csv', ext: '.csv' },
+            'xlsx':    { desc: 'Excel Çalışma Kitabı',     mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', ext: '.xlsx' },
+            'zip':     { desc: 'ZIP Arşivi',              mime: 'application/zip', ext: '.zip' },
+            'tif':     { desc: 'GeoTIFF Raster',          mime: 'image/tiff', ext: '.tif' },
+            'tiff':    { desc: 'GeoTIFF Raster',          mime: 'image/tiff', ext: '.tiff' },
+            'kml':     { desc: 'KML Dosyası',             mime: 'application/vnd.google-earth.kml+xml', ext: '.kml' },
+            'kmz':     { desc: 'KMZ Dosyası',             mime: 'application/vnd.google-earth.kmz', ext: '.kmz' },
+            'geojson': { desc: 'GeoJSON Dosyası',         mime: 'application/geo+json', ext: '.geojson' },
+            'json':    { desc: 'JSON Dosyası',            mime: 'application/json', ext: '.json' },
+            'svg':     { desc: 'SVG Görseli',             mime: 'image/svg+xml', ext: '.svg' },
+            'dxf':     { desc: 'AutoCAD DXF Dosyası',     mime: 'application/dxf', ext: '.dxf' },
+            'gpx':     { desc: 'GPX Rota/İz Dosyası',     mime: 'application/gpx+xml', ext: '.gpx' },
+            'shp':     { desc: 'ESRI Shapefile ZIP',      mime: 'application/zip', ext: '.zip' },
+            'sqlite':  { desc: 'SQLite Veritabanı',       mime: 'application/x-sqlite3', ext: '.sqlite' },
+            'mbtiles': { desc: 'MBTiles Raster/Vektör',   mime: 'application/vnd.mapbox-vector-tile', ext: '.mbtiles' },
+            'db':      { desc: 'Veritabanı Dosyası',      mime: 'application/x-sqlite3', ext: '.db' },
+            'sylva':   { desc: 'SylvaGIS Proje Dosyası',  mime: 'application/json', ext: '.sylva' }
+        };
+        var item = mimeMap[ext];
+        if (item) {
+            var acceptObj = {};
+            acceptObj[item.mime] = [item.ext];
+            return [{ description: item.desc, accept: acceptObj }];
+        }
+        return [];
+    }
+
+    function _sylvaGetDownloadIcon(type, filename) {
+        var t = (type || '').toLowerCase();
+        var f = (filename || '').toLowerCase();
+        if (t.indexOf('geotiff') !== -1 || f.endsWith('.tif') || f.endsWith('.tiff')) return '🗺️';
+        if (t.indexOf('pdf') !== -1 || f.endsWith('.pdf')) return '📄';
+        if (t.indexOf('xlsx') !== -1 || f.endsWith('.xlsx')) return '📊';
+        if (t.indexOf('csv') !== -1 || f.endsWith('.csv')) return '📋';
+        if (t.indexOf('vector') !== -1 || f.endsWith('.kml') || f.endsWith('.kmz') || f.endsWith('.geojson') || f.endsWith('.shp')) return '📐';
+        if (f.endsWith('.png') || f.endsWith('.jpg') || f.endsWith('.jpeg') || f.endsWith('.svg')) return '🖼️';
+        if (f.endsWith('.zip')) return '📦';
+        return '⬇️';
+    }
+
+    function _sylvaEnsureDownloadManagerDOM() {
+        var el = document.getElementById('sylva-download-manager');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'sylva-download-manager';
+            document.body.appendChild(el);
+        }
+        return el;
+    }
+
+    window._sylvaRegisterDownload = function(id, opts) {
+        opts = opts || {};
+        var dlId = id || ('dl_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5));
+        var item = {
+            id: dlId,
+            title: opts.title || 'Dosya İndirme',
+            filename: opts.filename || 'download',
+            type: opts.type || '',
+            status: opts.status || 'pending',
+            progress: (typeof opts.progress === 'number') ? opts.progress : null,
+            statusText: opts.statusText || 'Hazırlanıyor…',
+            cancelCallback: opts.cancelCallback || null,
+            controller: opts.controller || null,
+            startTime: Date.now()
+        };
+        window._sylvaDownloads[dlId] = item;
+        _sylvaRenderDownloadCard(item);
+        return dlId;
+    };
+
+    window._sylvaUpdateDownloadProgress = function(id, progress, statusText) {
+        var item = window._sylvaDownloads[id];
+        if (!item || item.status === 'cancelled') return;
+        if (typeof progress === 'number') item.progress = Math.max(0, Math.min(100, Math.round(progress)));
+        if (statusText) item.statusText = statusText;
+        item.status = 'downloading';
+        _sylvaRenderDownloadCard(item);
+    };
+
+    window._sylvaFinishDownload = function(id, status, message) {
+        var item = window._sylvaDownloads[id];
+        if (!item) return;
+        if (item.status === 'cancelled' && status !== 'cancelled') return;
+        item.status = status || 'completed';
+        if (item.status === 'completed') {
+            item.progress = 100;
+            item.statusText = message || 'Tamamlandı ✅';
+            if (typeof playSylvaChime === 'function') {
+                try { playSylvaChime('download'); } catch(e) {}
+            }
+        } else if (item.status === 'cancelled') {
+            item.statusText = message || 'İptal edildi ❌';
+        } else {
+            item.status = 'error';
+            item.statusText = message || 'Hata oluştu ⚠️';
+        }
+        _sylvaRenderDownloadCard(item);
+
+        var dismissTimeout = (item.status === 'completed') ? 4000 : (item.status === 'cancelled') ? 3200 : 6000;
+        setTimeout(function() {
+            window._sylvaDismissDownload(id);
+        }, dismissTimeout);
+    };
+
+    window._sylvaCancelDownload = function(id) {
+        var item = window._sylvaDownloads[id];
+        if (!item) return;
+        if (item.controller) item.controller.abort();
+        if (typeof item.cancelCallback === 'function') {
+            try { item.cancelCallback(); } catch(e) {}
+        }
+        if (window._sylvaDownloadAbort) {
+            try { if (!item.controller) window._sylvaDownloadAbort.abort(item.type || id); } catch(e) {}
+        }
+        window._sylvaFinishDownload(id, 'cancelled', 'İşlem iptal edildi.');
+    };
+
+    window._sylvaDismissDownload = function(id) {
+        var item=window._sylvaDownloads[id];
+        if(item && (item.status==='pending'||item.status==='downloading')) window._sylvaCancelDownload(id);
+        var card = document.getElementById('sylva-dl-card-' + id);
+        if (card) {
+            card.classList.add('sylva-dl-fade-out');
+            setTimeout(function() {
+                if (card.parentNode) card.parentNode.removeChild(card);
+            }, 300);
+        }
+        delete window._sylvaDownloads[id];
+    };
+
+    function _sylvaRenderDownloadCard(item) {
+        if (!document.body) {
+            document.addEventListener('DOMContentLoaded', function() { _sylvaRenderDownloadCard(item); });
+            return;
+        }
+        var container = _sylvaEnsureDownloadManagerDOM();
+        var card = document.getElementById('sylva-dl-card-' + item.id);
+        var isNew = !card;
+        if (isNew) {
+            card = document.createElement('div');
+            card.id = 'sylva-dl-card-' + item.id;
+            card.className = 'sylva-dl-card';
+            container.appendChild(card);
+        }
+
+        card.className = 'sylva-dl-card status-' + item.status;
+        var icon = _sylvaGetDownloadIcon(item.type, item.filename);
+        var showCancelBtn = (item.status === 'pending' || item.status === 'downloading');
+        var isIndeterminate = (item.progress === null || item.progress === undefined) && showCancelBtn;
+        var progressPercent = (typeof item.progress === 'number') ? item.progress : (item.status === 'completed' ? 100 : 0);
+        var barClass = isIndeterminate ? 'indeterminate' : (item.status === 'completed' ? 'completed' : item.status === 'cancelled' ? 'cancelled' : item.status === 'error' ? 'error' : '');
+
+        var html = '<div class="sylva-dl-header">' +
+            '<div class="sylva-dl-icon">' + icon + '</div>' +
+            '<div class="sylva-dl-info">' +
+                '<div class="sylva-dl-title" title="' + (item.title || '') + '">' + (item.title || 'Dosya İndirme') + '</div>' +
+                '<div class="sylva-dl-filename" title="' + (item.filename || '') + '">' + (item.filename || '') + '</div>' +
+            '</div>' +
+            '<div class="sylva-dl-actions">' +
+                (showCancelBtn ? '<button type="button" class="sylva-dl-btn-cancel" onclick="window._sylvaCancelDownload(\'' + item.id + '\')">İptal Et</button>' : '') +
+                '<button type="button" class="sylva-dl-btn-close" onclick="window._sylvaDismissDownload(\'' + item.id + '\')">&times;</button>' +
+            '</div>' +
+        '</div>' +
+        '<div class="sylva-dl-progress-track">' +
+            '<div class="sylva-dl-progress-bar ' + barClass + '" style="width:' + (isIndeterminate ? '100%' : progressPercent + '%') + '"></div>' +
+        '</div>' +
+        '<div class="sylva-dl-status">' +
+            '<span>' + (item.statusText || '') + '</span>' +
+            '<span>' + (!isIndeterminate && typeof item.progress === 'number' ? item.progress + '%' : '') + '</span>' +
+        '</div>';
+
+        card.innerHTML = html;
+    }
+
+    /* ── Pre-selection: ask user WHERE to save before long-running fetch starts ── */
+    window.selectSaveFile = function(suggestedName, customTypes) {
+        var name = suggestedName || 'download';
+        if (window.showSaveFilePicker && typeof window.showSaveFilePicker === 'function') {
+            var types = _sylvaGetMimeTypes(name, customTypes);
+            var opts = { suggestedName: name };
+            if (types.length) opts.types = types;
+            return window.showSaveFilePicker(opts)
+                .then(function(handle) {
+                    return { handle: handle, name: handle.name || name, method: 'picker' };
+                })
+                .catch(function(err) {
+                    if (err && err.name === 'AbortError') {
+                        return { cancelled: true, method: 'cancelled', name: name };
+                    }
+                    return { isFallback: true, name: name, method: 'anchor' };
+                });
+        }
+        return Promise.resolve({ isFallback: true, name: name, method: 'anchor' });
+    };
+
+    window.writeToSelectedFile = function (target, blob, fallbackName, controller) {
+        if(!target || target.cancelled) return Promise.resolve({method:'cancelled',filename:fallbackName});
+        controller=controller || target.controller || window._sylvaDownloadAbort.create('save-'+Date.now()+'-'+Math.random().toString(36).slice(2),fallbackName || target.name);
+        return _sylvaSaveBlob(blob,target.name||fallbackName,controller,target);
+    };
+    async function _sylvaSaveBlob(blob,name,controller,target) {
+        var writable, abortWrite;
+        try {
+            controller.check();
+            if(target && target.handle) {
+                writable=await target.handle.createWritable(); controller.check();
+                abortWrite=function(){writable.abort().catch(function(){});};
+                controller.signal.addEventListener('abort',abortWrite,{once:true});
+                await writable.write(blob); controller.check();
+                await writable.close(); controller.check();
+            } else {
+                controller.check();
+                var url=URL.createObjectURL(blob), a=document.createElement('a');
+                try { a.href=url;a.download=name;a.style.display='none';document.body.appendChild(a);controller.check();a.click(); }
+                finally { a.remove();setTimeout(function(){URL.revokeObjectURL(url);},4000); }
+            }
+            controller.finish('completed'); return {method:target&&target.handle?'picker':'anchor',filename:name};
+        } catch(error) {
+            if(writable) { try { await writable.abort(); } catch(e){} }
+            if(controller.signal.aborted || error.name==='AbortError') { controller.abort();return {method:'cancelled',filename:name}; }
+            controller.finish('error'); throw error;
+        } finally { if(abortWrite)controller.signal.removeEventListener('abort',abortWrite); }
+    }
+    function _sylvaStandardAnchorDownload(blob,name,existingDlId,controller) {
+        controller=controller || (window._sylvaDownloads[existingDlId]||{}).controller || window._sylvaDownloadAbort.create('save-'+Date.now()+'-'+Math.random().toString(36).slice(2),name);
+        return _sylvaSaveBlob(blob,name,controller,null);
+    }
+    window.saveFileWithPicker = async function(blob,suggestedName,customTypes,existingDlId,controller) {
+        var name=suggestedName||'download';
+        controller=controller || (window._sylvaDownloads[existingDlId]||{}).controller || window._sylvaDownloadAbort.create('save-'+Date.now()+'-'+Math.random().toString(36).slice(2),name);
+        try {
+            controller.check();
+            if(!blob)throw new Error('No blob provided');
+            if(!(blob instanceof Blob))blob=new Blob([blob],{type:typeof blob==='string'?'text/plain;charset=utf-8':''});
+            var target=await window.selectSaveFile(name,customTypes);controller.check();
+            if(target.cancelled){controller.abort();return {method:'cancelled',filename:name};}
+            return await _sylvaSaveBlob(blob,name,controller,target);
+        } catch(error) {
+            if(controller.signal.aborted || error.name==='AbortError'){controller.abort();return {method:'cancelled',filename:name};}
+            controller.finish('error');throw error;
+        }
+    };
+
+    /* ── Global SylvaDownloadManager Controller ── */
+    window.SylvaDownloadManager = {
+        register: function(id, opts) {
+            return (typeof window._sylvaRegisterDownload === 'function') ? window._sylvaRegisterDownload(id, opts) : id;
+        },
+        update: function(id, progress, statusText) {
+            if (typeof window._sylvaUpdateDownloadProgress === 'function') window._sylvaUpdateDownloadProgress(id, progress, statusText);
+        },
+        finish: function(id, status, message) {
+            if (typeof window._sylvaFinishDownload === 'function') window._sylvaFinishDownload(id, status, message);
+        },
+        cancel: function(id) {
+            if (typeof window._sylvaCancelDownload === 'function') window._sylvaCancelDownload(id);
+        },
+        dismiss: function(id) {
+            if (typeof window._sylvaDismissDownload === 'function') window._sylvaDismissDownload(id);
+        },
+        notify: function(filename, status, msg) {
+            var dlId = (typeof window._sylvaRegisterDownload === 'function') ? window._sylvaRegisterDownload(null, {
+                filename: filename,
+                title: filename,
+                type: (filename || '').split('.').pop().toLowerCase(),
+                status: status || 'completed',
+                progress: 100,
+                statusText: msg || (status === 'cancelled' ? 'İptal edildi' : 'İndirildi ✅')
+            }) : null;
+            if (dlId && typeof window._sylvaFinishDownload === 'function') {
+                window._sylvaFinishDownload(dlId, status || 'completed', msg);
+            }
+            return dlId;
+        }
+    };
+    </script>
+    <style id="sylva-download-manager-styles">
+    #sylva-download-manager {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        z-index: 999999;
+        max-width: 360px;
+        width: calc(100vw - 48px);
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        pointer-events: none;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    .sylva-dl-card {
+        pointer-events: auto;
+        background: #ffffff;
+        border-radius: 12px;
+        box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.18), 0 8px 10px -6px rgba(15, 23, 42, 0.1);
+        border: 1px solid #cbd5e1;
+        padding: 12px 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        animation: sylvaDlIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) both;
+        transition: opacity 0.3s ease, transform 0.3s ease;
+    }
+    .sylva-dl-card.sylva-dl-fade-out {
+        opacity: 0;
+        transform: translateY(10px) scale(0.96);
+    }
+    @keyframes sylvaDlIn {
+        from { opacity: 0; transform: translateY(16px) scale(0.96); }
+        to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .sylva-dl-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+    .sylva-dl-icon {
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.15rem;
+        flex-shrink: 0;
+        background: #eff6ff;
+    }
+    .sylva-dl-info {
+        flex: 1;
+        min-width: 0;
+    }
+    .sylva-dl-title {
+        font-size: 13px;
+        font-weight: 700;
+        color: #0f172a;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        line-height: 1.25;
+    }
+    .sylva-dl-filename {
+        font-size: 11px;
+        color: #64748b;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        margin-top: 2px;
+    }
+    .sylva-dl-actions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-shrink: 0;
+    }
+    .sylva-dl-btn-cancel {
+        background: #fff1f2;
+        color: #e11d48;
+        border: 1px solid #fecdd3;
+        border-radius: 6px;
+        padding: 4px 8px;
+        font-size: 11px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.15s, border-color 0.15s;
+        line-height: 1;
+    }
+    .sylva-dl-btn-cancel:hover {
+        background: #ffe4e6;
+        border-color: #fda4af;
+    }
+    .sylva-dl-btn-close {
+        background: none;
+        border: none;
+        color: #94a3b8;
+        cursor: pointer;
+        font-size: 16px;
+        line-height: 1;
+        padding: 2px 4px;
+        border-radius: 4px;
+    }
+    .sylva-dl-btn-close:hover {
+        color: #475569;
+        background: #f1f5f9;
+    }
+    .sylva-dl-progress-track {
+        width: 100%;
+        height: 5px;
+        background: #f1f5f9;
+        border-radius: 999px;
+        overflow: hidden;
+        position: relative;
+    }
+    .sylva-dl-progress-bar {
+        height: 100%;
+        border-radius: 999px;
+        transition: width 0.25s ease, background-color 0.25s ease;
+    }
+    .sylva-dl-progress-bar.indeterminate {
+        width: 100% !important;
+        background: linear-gradient(90deg, #0d9488 0%, #38bdf8 50%, #0d9488 100%);
+        background-size: 200% 100%;
+        animation: sylvaDlIndeterminate 1.5s linear infinite;
+    }
+    @keyframes sylvaDlIndeterminate {
+        0% { background-position: 200% 0; }
+        100% { background-position: -200% 0; }
+    }
+    .sylva-dl-progress-bar.completed {
+        background: #16a34a !important;
+        width: 100% !important;
+    }
+    .sylva-dl-progress-bar.cancelled {
+        background: #94a3b8 !important;
+        width: 100% !important;
+    }
+    .sylva-dl-progress-bar.error {
+        background: #dc2626 !important;
+        width: 100% !important;
+    }
+    .sylva-dl-status {
+        font-size: 11px;
+        color: #64748b;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        line-height: 1.3;
+    }
+    .sylva-dl-card.status-completed {
+        border-color: #86efac;
+        background: #f0fdf4;
+    }
+    .sylva-dl-card.status-completed .sylva-dl-icon {
+        background: #dcfce7;
+    }
+    .sylva-dl-card.status-cancelled {
+        border-color: #cbd5e1;
+        background: #f8fafc;
+        opacity: 0.9;
+    }
+    .sylva-dl-card.status-error {
+        border-color: #fca5a5;
+        background: #fff1f2;
+    }
+    .sylva-dl-card.status-error .sylva-dl-icon {
+        background: #fee2e2;
+    }
+    </style>
+    <script>
     </script>
     <style id="sylva-i18n-first-paint">
         :root {
@@ -14533,6 +15096,7 @@ window._sylvaPdfPaintCanvas = function(pdf,canvas,layout,left,top,bottom,stamp) 
 var _carbonPdfJob = null;
 function _carbonDownloadPDF(reportHtml, fileName) {
     if (_carbonPdfJob) return _carbonPdfJob;
+    var downloadOp=window._sylvaDownloadAbort.create('carbon-pdf',fileName);
     var frame = document.createElement('iframe'), button = document.getElementById('btn-print-carbon-sim');
     frame.id = '_carbon_pdf_iframe'; frame.setAttribute('aria-hidden','true'); frame.setAttribute('scrolling','no'); frame.tabIndex = -1;
     frame.style.cssText = 'position:fixed;left:-10000px;top:0;width:794px;height:1123px;border:0;pointer-events:none;';
@@ -14545,6 +15109,7 @@ function _carbonDownloadPDF(reportHtml, fileName) {
         _carbonPdfJob=null;
     }
     _carbonPdfJob = new Promise(function(resolve,reject){
+        downloadOp.cleanups.add(function(){cleanup();reject(window._sylvaAbortError());});
         timer=setTimeout(function(){reject(new Error('PDF export timeout'));},120000);
         frame.onload=function(){
             frame.onload=null;
@@ -14609,7 +15174,7 @@ function _carbonDownloadPDF(reportHtml, fileName) {
                     if(!width || !height) throw new Error('PDF report is empty');
                     var pagePx=(297-10-18)*width/180;
                     for(var y=0,page=0;y<height;page++){
-                        if(disposed) throw new Error('PDF export cancelled');
+                        if(disposed || downloadOp.signal.aborted) throw new Error('PDF export cancelled');
                         var end=window._sylvaPdfCut(pdfLayout,1,y,pagePx,height);
                         var canvas=await window.html2canvas(root,{scale:2,backgroundColor:'#ffffff',useCORS:true,logging:false,x:0,y:y,width:width,height:end-y,windowWidth:794});
                         if(!canvas.width||!canvas.height) throw new Error('PDF canvas is empty');
@@ -14633,7 +15198,7 @@ function _carbonDownloadPDF(reportHtml, fileName) {
                         lib.onerror=function(){clearTimeout(libraryTimer);fail(new Error('PDF isolated library unavailable'));};
                         doc.head.appendChild(lib);
                     });
-                    if(disposed) throw new Error('PDF export cancelled');
+                    if(disposed || downloadOp.signal.aborted) throw new Error('PDF export cancelled');
                     // html2pdf 0.10 checks Array with instanceof: options must belong to its iframe realm.
                     var options=win.JSON.parse(JSON.stringify({margin:[10,15,18,15],filename:fileName,
                         image:{type:'jpeg',quality:0.95},html2canvas:{scale:2,backgroundColor:'#ffffff',useCORS:true,logging:false},
@@ -14652,7 +15217,7 @@ function _carbonDownloadPDF(reportHtml, fileName) {
                     window._sylvaPdfPaintCanvas(pdf,reportCanvas,renderedLayout,15,10,18);
                     reportCanvas.width=reportCanvas.height=0;
                 } catch(renderError){
-                    if(disposed) throw renderError;
+                    if(disposed || downloadOp.signal.aborted) throw renderError;
                     console.warn('Carbon PDF: using local canvas renderer',renderError);
                     doc.querySelectorAll('.html2pdf__overlay').forEach(function(el){el.remove();});
                     pdf=await canvasFallback();
@@ -14663,15 +15228,29 @@ function _carbonDownloadPDF(reportHtml, fileName) {
                     if(logoData){try{pdf.addImage(logoData,'PNG',15,h-8.5-logoH/2,logoW,logoH,'sylva-footer-logo');}catch(e){logoData=null;logoW=0;}}
                     pdf.text(page+'/'+total,w-15,h-8.5,{align:'right',baseline:'middle'});
                 }
-                if(disposed) throw new Error('PDF export cancelled');
-                var url=URL.createObjectURL(pdf.output('blob')),link=document.createElement('a');
-                link.href=url;link.download=fileName;link.style.display='none';
-                document.body.appendChild(link);
-                try{link.click();}finally{link.remove();setTimeout(function(){URL.revokeObjectURL(url);},30000);}
+                if(disposed || downloadOp.signal.aborted) throw new Error('PDF export cancelled');
+                var _pdfBlob = pdf.output('blob');
+                var _carbonDlId = downloadOp.downloadId;
+                if (typeof window.saveFileWithPicker === 'function') {
+                    var saveRes = await window.saveFileWithPicker(_pdfBlob, fileName, [{ description: 'PDF Document', accept: { 'application/pdf': ['.pdf'] } }],null,downloadOp);
+                    if (_carbonDlId && typeof window._sylvaFinishDownload === 'function') {
+                        if (saveRes && saveRes.method === 'cancelled') {
+                            window._sylvaFinishDownload(_carbonDlId, 'cancelled', typeof t === 'function' ? t('gtiff_cancelled', 'İptal edildi') : 'İptal edildi');
+                        } else {
+                            window._sylvaFinishDownload(_carbonDlId, 'completed');
+                        }
+                    }
+                } else {
+                    var url=URL.createObjectURL(_pdfBlob),link=document.createElement('a');
+                    link.href=url;link.download=fileName;link.style.display='none';
+                    document.body.appendChild(link);
+                    try{link.click();}finally{link.remove();setTimeout(function(){URL.revokeObjectURL(url);},30000);}
+                    if (_carbonDlId && typeof window._sylvaFinishDownload === 'function') window._sylvaFinishDownload(_carbonDlId, true);
+                }
             }).then(resolve,reject);
         };
         frame.srcdoc=reportHtml;document.body.appendChild(frame);
-    }).then(function(){cleanup();},function(err){cleanup();throw err;});
+    }).then(function(){cleanup();downloadOp.finish();},function(err){cleanup();downloadOp.finish(downloadOp.signal.aborted?'cancelled':'error');throw err;});
     return _carbonPdfJob;
 }
 // Retain the public compatibility name without a print/focus fallback.
@@ -15473,7 +16052,9 @@ var _CARBON_SPECIES_DB = {
                         })
                     });
                     var blob = new Blob([JSON.stringify(exportGeoJSON, null, 2)], { type: 'application/geo+json;charset=utf-8' });
-                    if (typeof _vdlFallbackDownload === 'function') {
+                    if (typeof window.saveFileWithPicker === 'function') {
+                        window.saveFileWithPicker(blob, fileName, [{ description: 'GeoJSON Document', accept: { 'application/geo+json': ['.geojson'] } }]);
+                    } else if (typeof _vdlFallbackDownload === 'function') {
                         _vdlFallbackDownload(blob, fileName);
                     } else {
                         var a = document.createElement('a');
@@ -15481,7 +16062,7 @@ var _CARBON_SPECIES_DB = {
                         a.download = fileName;
                         document.body.appendChild(a);
                         a.click();
-                        setTimeout(function () { URL.revokeObjectURL(a.href); document.body.removeChild(a); }, 2000);
+                        setTimeout(function () { URL.revokeObjectURL(a.href); if (a.parentNode) a.parentNode.removeChild(a); }, 2000);
                     }
                 };
 
@@ -15516,7 +16097,9 @@ var _CARBON_SPECIES_DB = {
                     var dateStr = new Date().toISOString().slice(0, 10);
                     var fileName = 'SylvaGIS_' + seedLabel.replace(/\s+/g, '_') + '_' + cleanSpecies + '_' + dateStr + '.csv';
                     var blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8' });
-                    if (typeof _vdlFallbackDownload === 'function') {
+                    if (typeof window.saveFileWithPicker === 'function') {
+                        window.saveFileWithPicker(blob, fileName, [{ description: 'CSV Document', accept: { 'text/csv': ['.csv'] } }]);
+                    } else if (typeof _vdlFallbackDownload === 'function') {
                         _vdlFallbackDownload(blob, fileName);
                     } else {
                         var a = document.createElement('a');
@@ -15524,7 +16107,7 @@ var _CARBON_SPECIES_DB = {
                         a.download = fileName;
                         document.body.appendChild(a);
                         a.click();
-                        setTimeout(function () { URL.revokeObjectURL(a.href); document.body.removeChild(a); }, 2000);
+                        setTimeout(function () { URL.revokeObjectURL(a.href); if (a.parentNode) a.parentNode.removeChild(a); }, 2000);
                     }
                 };
 
@@ -15610,8 +16193,10 @@ var _CARBON_SPECIES_DB = {
 
                 window.carbonSimClearActiveResult = function (paneId) {
                     var targetPane = paneId || ((typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map');
-                    var panesToClear = (paneId && paneId !== 'all') ? [targetPane] : ['map', 'map2'];
+                    var panesToClear = paneId === 'all' ? ['map', 'map2'] : [targetPane];
                     panesToClear.forEach(function (p) {
+                        if(window._sylvaDownloadAbort)window._sylvaDownloadAbort.abort('carbon-analysis-'+p);
+                        delete _carbonPendingRequests[p];
                         window.carbonSimClearPlantingLayer(p);
                         if (window._sylvaCarbonAOIBoundsByPane) window._sylvaCarbonAOIBoundsByPane[p] = null;
                         var st = _getCarbonActiveState(p);
@@ -15630,6 +16215,11 @@ var _CARBON_SPECIES_DB = {
                             st.renderCount = 0;
                             st.isSampled = false;
                             st.plantingPoints = [];
+                            st.rawPlantingPoints = [];
+                            st.yearly_series = null;
+                            st.summary = null;
+                            st.site_conditions = null;
+                            st.suitability = null;
                             st.pointsGeoJSON = null;
                             st.thinningEvents = [];
                         }
@@ -15637,6 +16227,8 @@ var _CARBON_SPECIES_DB = {
                             window._lastAnalyzeMetaByPane[p] = null;
                         }
                     });
+                    var activePane = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
+                    if(panesToClear.indexOf(activePane) === -1)return;
                     window._lastCarbonSimResult = null;
 
                     var _carbonCb = document.getElementById('carbon-sink-sim-checkbox') ||
@@ -15720,17 +16312,21 @@ var _CARBON_SPECIES_DB = {
                         if(button)button.title=_cTxt('carbon_no_points_kml');
                         return;
                     }
-                    var url;
                     try {
                         var content=_sylvaCarbonPointsToKML(st.plantingPoints,st.species,st.spacingX,st.spacingY);
-                        url=URL.createObjectURL(new Blob([content],{type:'application/vnd.google-earth.kml+xml;charset=utf-8'}));
-                        var link=document.createElement('a');link.href=url;link.download=_carbonExportFilename(_carbonGetLang(),'kml');
-                        link.style.display='none';document.body.appendChild(link);link.click();link.remove();
+                        var fileName = _carbonExportFilename(_carbonGetLang(),'kml');
+                        var blob = new Blob([content],{type:'application/vnd.google-earth.kml+xml;charset=utf-8'});
+                        if (typeof window.saveFileWithPicker === 'function') {
+                            window.saveFileWithPicker(blob, fileName, [{ description: 'KML Document', accept: { 'application/vnd.google-earth.kml+xml': ['.kml'] } }]);
+                        } else if (typeof _vdlFallbackDownload === 'function') {
+                            _vdlFallbackDownload(blob, fileName);
+                        } else {
+                            var link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=fileName;
+                            link.style.display='none';document.body.appendChild(link);link.click();link.remove();
+                        }
                     } catch(err) {
                         console.error('Carbon KML export:',err);
                         if(button)button.title=_carbonReportText(_carbonGetLang(),'export_error');
-                    } finally {
-                        if(url)setTimeout(function(){URL.revokeObjectURL(url);},30000);
                     }
                 };
 
@@ -15875,7 +16471,9 @@ var _CARBON_SPECIES_DB = {
                         : ((isTr ? 'SylvaGIS_Yillik_Karbon_Tablosu' : 'SylvaGIS_Annual_Carbon_Table') + '_' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '.csv');
                     var blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
 
-                    if (typeof _vdlFallbackDownload === 'function') {
+                    if (typeof window.saveFileWithPicker === 'function') {
+                        window.saveFileWithPicker(blob, fileName, [{ description: 'CSV Document', accept: { 'text/csv': ['.csv'] } }]).catch(function(error){if(error.name!=='AbortError')console.error('Carbon export:',error);});
+                    } else if (typeof _vdlFallbackDownload === 'function') {
                         _vdlFallbackDownload(blob, fileName);
                     } else {
                         var a = document.createElement('a');
@@ -16336,14 +16934,17 @@ var _CARBON_SPECIES_DB = {
                     if (!complete) throw _carbonResponseError('payload', '[payload] Incomplete carbon summary or yearly series.');
                     return data;
                 }
-                async function _carbonFetchSimulation(payload) {
+                async function _carbonFetchSimulation(payload, operationController) {
                     var endpoint = String(window.API_BASE || '').replace(/\/+$/, '') + '/api/carbon-simulation';
                     var configuredTimeout = Number(window.SYLVA_CARBON_TIMEOUT_MS);
                     var timeoutMs = Number.isFinite(configuredTimeout) && configuredTimeout > 0
                         ? Math.max(60000, Math.min(600000, configuredTimeout)) : 180000;
                     var body = JSON.stringify(payload);
                     for (var attempt = 0; attempt < 2; attempt++) {
+                        if(operationController)operationController.check();
                         var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+                        var abortAttempt=function(){if(controller)controller.abort();};
+                        if(operationController)operationController.signal.addEventListener('abort',abortAttempt,{once:true});
                         var timer, expired = false;
                         var deadline = new Promise(function (_, reject) {
                             timer = setTimeout(function () {
@@ -16354,10 +16955,10 @@ var _CARBON_SPECIES_DB = {
                         });
                         try {
                             var request = (async function () {
-                                var response = await fetch(endpoint, {
+                                var response = await (operationController ? window._sylvaDownloadFetch : fetch)(endpoint, {
                                     method: 'POST', headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
                                     body: body, signal: controller ? controller.signal : undefined
-                                });
+                                }, operationController ? controller : undefined);
                                 var text = await response.text();
                                 var data;
                                 try { data = JSON.parse(text); } catch (parseError) {
@@ -16368,6 +16969,7 @@ var _CARBON_SPECIES_DB = {
                             })();
                             return await Promise.race([request, deadline]);
                         } catch (error) {
+                            if(operationController && operationController.signal.aborted)throw window._sylvaAbortError();
                             if (expired) throw _carbonResponseError('timeout', '[timeout] ' + (timeoutMs / 1000) + ' s');
                             var retryable = !error._carbonPhase && error.name === 'TypeError';
                             retryable = retryable || (error._carbonPhase === 'http' && [502, 503, 504].indexOf(error.status) !== -1);
@@ -16375,8 +16977,10 @@ var _CARBON_SPECIES_DB = {
                             if (!retryable || attempt !== 0) throw error;
                         } finally {
                             clearTimeout(timer);
+                            if(operationController)operationController.signal.removeEventListener('abort',abortAttempt);
                         }
-                        await new Promise(function (resolve) { setTimeout(resolve, 1000); });
+                        if(operationController)await window._sylvaDownloadDelay(operationController,1000);
+                        else await new Promise(function (resolve) { setTimeout(resolve, 1000); });
                     }
                 }
 
@@ -16513,8 +17117,22 @@ var _CARBON_SPECIES_DB = {
                         geojson: cleanGeojson
                     };
 
-                    var requestPromise = _carbonFetchSimulation(payload)
+                    var carbonOp=window._sylvaDownloadAbort.create('carbon-analysis-'+paneId);
+                    var loadingReleased=false;
+                    function releaseCarbonLoading(){
+                        if(loadingReleased)return;loadingReleased=true;
+                        if(typeof hideSylvaLoading==='function')hideSylvaLoading();
+                        else if(typeof window.hideSylvaLoading==='function')window.hideSylvaLoading();
+                        else {var ov=document.getElementById('analysis-loading-overlay');if(ov)ov.classList.remove('active');}
+                    }
+                    carbonOp.cleanups.add(function(){
+                        releaseCarbonLoading();
+                        if(btn){btn.disabled=false;btn.innerHTML=(typeof t==='function')?t('carbon_start_btn','🌱 Analizi Başlat'):'🌱 Analizi Başlat';}
+                        if(mainRunBtn){mainRunBtn.disabled=false;mainRunBtn.innerHTML=(typeof t==='function'?t('run_analysis'):null)||prevMainText||'🚀 Analizi Çalıştır';}
+                    });
+                    var requestPromise = _carbonFetchSimulation(payload,carbonOp)
                     .then(function (data) {
+                        carbonOp.check();
                         var currentAOI = _carbonGetActiveAOI(paneId);
                         if (!currentAOI || JSON.stringify(currentAOI.geometry) !== JSON.stringify(payload.geojson)) return;
                         st.rawSimResponse = JSON.parse(JSON.stringify(data));
@@ -16566,6 +17184,7 @@ var _CARBON_SPECIES_DB = {
 
                     })
                     .catch(function (err) {
+                        if(carbonOp.signal.aborted || err.name==='AbortError')return;
                         console.error('Carbon simulation ' + (err._carbonPhase || 'render') + ' error:', err);
                         var rawErr = err && err.message ? err.message : String(err);
                         if (!err._carbonPhase) rawErr = '[render] ' + rawErr;
@@ -16579,15 +17198,10 @@ var _CARBON_SPECIES_DB = {
                         }
                     })
                     .finally(function () {
-                        delete _carbonPendingRequests[paneId];
-                        if (typeof hideSylvaLoading === 'function') {
-                            hideSylvaLoading();
-                        } else if (typeof window.hideSylvaLoading === 'function') {
-                            window.hideSylvaLoading();
-                        } else {
-                            var _ov = document.getElementById('analysis-loading-overlay');
-                            if (_ov) _ov.classList.remove('active');
-                        }
+                        if(_carbonPendingRequests[paneId]===requestPromise)delete _carbonPendingRequests[paneId];
+                        releaseCarbonLoading();
+                        if(carbonOp.signal.aborted)return;
+                        carbonOp.finish();
                         if (btn) {
                             btn.disabled = false;
                             btn.innerHTML = (typeof t === 'function') ? t('carbon_start_btn', '🌱 Analizi Başlat') : '🌱 Analizi Başlat';
@@ -17062,6 +17676,7 @@ var _CARBON_SPECIES_DB = {
 
                     var fileName = _carbonExportFilename(curLang, 'pdf');
                     return _carbonDownloadPDF(reportHtml, fileName).catch(function (err) {
+                        if(err && err.name==='AbortError')return;
                         console.error('Carbon PDF export:',err);
                         if(typeof sylvaAlert==='function') sylvaAlert(_cTxt('export_error'),'error');
                     });
@@ -18465,6 +19080,7 @@ function _sylvaHasMixedStackCategories(paneId) {
             '<sheetData>' + sheetRowsXml + '</sheetData>' +
             '</worksheet>';
 
+        var downloadOp=window._sylvaDownloadAbort.create('weather-xlsx',(filenameBase||'SylvaGIS_Weather')+'.xlsx');
         var zip = new JSZip();
         zip.file('[Content_Types].xml', contentTypesXml);
         zip.folder('_rels').file('.rels', rootRelsXml);
@@ -18473,15 +19089,26 @@ function _sylvaHasMixedStackCategories(paneId) {
         xl.folder('_rels').file('workbook.xml.rels', workbookRelsXml);
         xl.folder('worksheets').file('sheet1.xml', sheetXml);
 
-        zip.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }).then(function (blob) {
-            var a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = (filenameBase || 'SylvaGIS_Weather') + '.xlsx';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
+        window._sylvaDownloadZip(zip,{ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },downloadOp).then(function (blob) {
+            downloadOp.check();
+            var fileName = (filenameBase || 'SylvaGIS_Weather') + '.xlsx';
+            if (typeof window.saveFileWithPicker === 'function') {
+                return window.saveFileWithPicker(blob, fileName, [{ description: 'Excel Spreadsheet', accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'] } }],null,downloadOp);
+            } else if (typeof _vdlFallbackDownload === 'function') {
+                _vdlFallbackDownload(blob, fileName);
+            } else {
+                var a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = fileName;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                setTimeout(function() { URL.revokeObjectURL(a.href); }, 2000);
+            }
             if (typeof playSylvaChime === 'function') playSylvaChime('download');
         }).catch(function (err) {
+            if(downloadOp.signal.aborted||err.name==='AbortError')return;
+            downloadOp.finish('error');
             if (typeof sylvaAlert === 'function') sylvaAlert((_t('err_jspdf', 'Excel file could not be created')) + ': ' + err.message, 'error');
         });
     }
@@ -18583,7 +19210,9 @@ function _sylvaHasMixedStackCategories(paneId) {
         var header = rowsData[0];
         var bodyRows = rowsData.slice(1);
 
+        var downloadOp=window._sylvaDownloadAbort.create('weather-pdf',(filenameBase||'SylvaGIS_Weather')+'.pdf');
         var reportEl = document.createElement('div');
+        downloadOp.cleanups.add(function(){reportEl.remove();});
         reportEl.style.cssText = 'position:fixed;left:-100000px;top:0;background:#ffffff;padding:24px;' +
             'width:700px;box-sizing:border-box;font-family:Arial,"Segoe UI","Noto Sans",sans-serif;' +
             'direction:' + (isRTL ? 'rtl' : 'ltr') + ';color:#0f172a;';
@@ -18648,6 +19277,7 @@ function _sylvaHasMixedStackCategories(paneId) {
             html2canvas(reportEl, { backgroundColor: '#ffffff', scale: SCALE, useCORS: true }),
             _wxLoadLogoAsset()
         ]).then(function (results) {
+            downloadOp.check();
             var canvas = results[0], logo = results[1];
             if (document.body.contains(reportEl)) document.body.removeChild(reportEl);
             var doc = new JsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
@@ -18686,9 +19316,21 @@ function _sylvaHasMixedStackCategories(paneId) {
 
             window._sylvaPdfPaintCanvas(doc, canvas, pdfLayout, marginSide, marginTop, marginBottom, stampLogo);
             var fname = (filenameBase || 'SylvaGIS_Weather') + '.pdf';
-            doc.save(fname);
-            if (typeof playSylvaChime === 'function') playSylvaChime('download');
+            if (typeof window.saveFileWithPicker === 'function') {
+                var pdfBlob = doc.output('blob');
+                return window.saveFileWithPicker(pdfBlob, fname, [{ description: 'PDF Document', accept: { 'application/pdf': ['.pdf'] } }],null,downloadOp)
+                    .then(function(res) {
+                        if (res && res.method !== 'cancelled') {
+                            if (typeof playSylvaChime === 'function') playSylvaChime('download');
+                        }
+                    });
+            } else {
+                doc.save(fname);
+                if (typeof playSylvaChime === 'function') playSylvaChime('download');
+            }
         }).catch(function (err) {
+            if(downloadOp.signal.aborted||err.name==='AbortError')return;
+            downloadOp.finish('error');
             if (document.body.contains(reportEl)) document.body.removeChild(reportEl);
             if (typeof sylvaAlert === 'function') sylvaAlert((_t('err_jspdf', 'PDF could not be created')) + ': ' + err.message, 'error');
         });
@@ -28718,8 +29360,8 @@ function selectRamp(name) {
             error._sylvaErrorOrigin = 'request';
             return error;
         }
-        function _sylvaFetchAnalysisJSON(url, options) {
-            return Promise.resolve().then(function () { return fetch(url, options); })
+        function _sylvaFetchAnalysisJSON(url, options, controller) {
+            return Promise.resolve().then(function () { return controller ? window._sylvaDownloadFetch(url, options, controller) : fetch(url, options); })
                 .catch(function (error) { throw _sylvaRequestError(error); })
                 .then(function (response) {
                     if (!response.ok) throw _sylvaRequestError(new Error(t('server_detail_prefix') + 'HTTP ' + response.status));
@@ -28784,7 +29426,7 @@ function selectRamp(name) {
                         active = true;
                         _sylvaAnalysisRequestsActive++;
                         _sylvaFetchAnalysisJSON(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:body,
-                            signal:controller ? controller.signal : undefined}).then(function (data) {
+                            signal:controller ? controller.signal : undefined},controller).then(function (data) {
                             if (finished) return;
                             if (isCurrent && !isCurrent()) { cancel(); return; }
                             if (!data || typeof data !== 'object' || Array.isArray(data) || typeof data.success !== 'boolean') throw _sylvaRequestError(new Error(t('gqa_err_generic')));
@@ -33230,6 +33872,7 @@ function selectRamp(name) {
                 '<sheetData>' + sheetRowsXml + '</sheetData>' +
                 '</worksheet>';
 
+            var downloadOp=window._sylvaDownloadAbort.create('xlsx','SylvaGIS.xlsx');
             var zip = new JSZip();
             zip.file('[Content_Types].xml', contentTypesXml);
             zip.folder('_rels').file('.rels', rootRelsXml);
@@ -33238,16 +33881,29 @@ function selectRamp(name) {
             xl.folder('_rels').file('workbook.xml.rels', workbookRelsXml);
             xl.folder('worksheets').file('sheet1.xml', sheetXml);
 
-            zip.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }).then(function(blob) {
-                var a = document.createElement('a');
-                a.href = URL.createObjectURL(blob);
-                a.download = 'SylvaGIS_' + t('file_analiz_sonuclari') + '.xlsx';
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                playSylvaChime('download');
-
+            window._sylvaDownloadZip(zip,{mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'},downloadOp).then(function(blob) {
+                downloadOp.check();
+                var filename = 'SylvaGIS_' + t('file_analiz_sonuclari') + '.xlsx';
+                if (typeof window.saveFileWithPicker === 'function') {
+                    return window.saveFileWithPicker(blob, filename,null,null,downloadOp).then(function(res) {
+                        if (res && res.method !== 'cancelled') {
+                            playSylvaChime('download');
+                        }
+                    });
+                } else {
+                    var a = document.createElement('a');
+                    var url = URL.createObjectURL(blob);
+                    a.href = url;
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    setTimeout(function() { URL.revokeObjectURL(url); }, 4000);
+                    playSylvaChime('download');
+                }
             }).catch(function(err) {
+                if(downloadOp.signal.aborted || err.name==='AbortError')return;
+                downloadOp.finish('error');
                 sylvaAlert((t('err_jspdf') || 'Excel file could not be created') + ': ' + err.message, 'error');
             });
         }
@@ -33282,7 +33938,9 @@ function selectRamp(name) {
             var JsPDF = jspdfLib.jsPDF || jspdfLib;
             var isRTL = !!(typeof SYLVA_RTL !== 'undefined' && SYLVA_RTL[_sylvaLang]);
 
+            var downloadOp=window._sylvaDownloadAbort.create('pdf','SylvaGIS_Report.pdf');
             var reportEl = document.createElement('div');
+            downloadOp.cleanups.add(function(){reportEl.remove();});
             reportEl.style.cssText = 'position:fixed;left:-100000px;top:0;background:#ffffff;padding:24px;' +
                 'width:760px;box-sizing:border-box;font-family:Arial,"Segoe UI","Noto Sans",sans-serif;' +
                 'direction:' + (isRTL ? 'rtl' : 'ltr') + ';color:#0f172a;';
@@ -33461,6 +34119,7 @@ function selectRamp(name) {
 
             var pdfLayout = window._sylvaPdfMeasure(reportEl);
             html2canvas(reportEl, { backgroundColor: '#ffffff', scale: 2, useCORS: true }).then(function(canvas) {
+                downloadOp.check();
                 if (document.body.contains(reportEl)) document.body.removeChild(reportEl);
                 var doc = new JsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
                 var pageW = doc.internal.pageSize.getWidth();
@@ -33471,10 +34130,22 @@ function selectRamp(name) {
                 var pageContentPx = (pageH - margin * 2) / pxToPt;
                 window._sylvaPdfPaintCanvas(doc, canvas, pdfLayout, margin, margin, margin);
                 var outFileName = 'SylvaGIS_' + (tableEl && carbonResp ? 'Kapsamli_Rapor' : (carbonResp ? 'Karbon_Simulasyon_Raporu' : t('file_analiz_raporu'))) + '.pdf';
-                doc.save(outFileName);
-                if (typeof playSylvaChime === 'function') playSylvaChime('download');
+                if (typeof window.saveFileWithPicker === 'function') {
+                    var pdfBlob = doc.output('blob');
+                    return window.saveFileWithPicker(pdfBlob, outFileName, [{ description: 'PDF Belgesi', accept: { 'application/pdf': ['.pdf'] } }],null,downloadOp)
+                        .then(function(res) {
+                            if (res && res.method !== 'cancelled') {
+                                if (typeof playSylvaChime === 'function') playSylvaChime('download');
+                            }
+                        });
+                } else {
+                    doc.save(outFileName);
+                    if (typeof playSylvaChime === 'function') playSylvaChime('download');
+                }
 
             }).catch(function(err) {
+                if(downloadOp.signal.aborted || err.name==='AbortError')return;
+                downloadOp.finish('error');
                 if (document.body.contains(reportEl)) document.body.removeChild(reportEl);
                 sylvaAlert((t('err_jspdf') || 'PDF could not be created') + ': ' + err.message, 'error');
             });
@@ -33738,10 +34409,13 @@ function selectRamp(name) {
                 + tableSvg
                 + '</svg>';
 
+            var downloadOp=window._sylvaDownloadAbort.create('chart',filename);
             var blob = new Blob([fullSvg], { type: 'image/svg+xml;charset=utf-8' });
             var url  = URL.createObjectURL(blob);
             var img  = new Image();
+            downloadOp.cleanups.add(function(){img.onload=null;img.onerror=null;img.src='';URL.revokeObjectURL(url);});
             img.onload = function() {
+                if(downloadOp.signal.aborted)return;
                 var canvas = document.createElement('canvas');
                 canvas.width  = outW * scale;
                 canvas.height = totalH * scale;
@@ -33788,27 +34462,16 @@ function selectRamp(name) {
                 var mimeType = format === 'jpeg' ? 'image/jpeg' : 'image/png';
                 var ext      = format === 'jpeg' ? '.jpg' : '.png';
                 canvas.toBlob(function(resultBlob) {
+                    if(downloadOp.signal.aborted)return;
                     document.getElementById('chart-download-modal').style.display = 'none';
-                    // showSaveFilePicker destekleniyorsa klasör seçimini sun
-                    if (window.showSaveFilePicker) {
+                    var fullFilename = filename + ext;
+                    if (typeof window.saveFileWithPicker === 'function') {
                         var acceptObj = {};
                         acceptObj[mimeType] = [ext];
-                        window.showSaveFilePicker({
-                            suggestedName: filename + ext,
-                            types: [{ description: format.toUpperCase() + ' Görsel', accept: acceptObj }]
-                        }).then(function(fh) {
-                            return fh.createWritable();
-                        }).then(function(w) {
-                            return w.write(resultBlob).then(function() { return w; });
-                        }).then(function(w) {
-                            return w.close();
-                        }).then(function() {
-
-                        }).catch(function(e) {
-                            if (e.name !== 'AbortError') _fallbackChartDownload(resultBlob, filename + ext);
-                        });
+                        var customTypes = [{ description: format.toUpperCase() + ' Görsel', accept: acceptObj }];
+                        window.saveFileWithPicker(resultBlob, fullFilename, customTypes,null,downloadOp).catch(function(){if(!downloadOp.signal.aborted)downloadOp.finish('error');});
                     } else {
-                        _fallbackChartDownload(resultBlob, filename + ext);
+                        _fallbackChartDownload(resultBlob, fullFilename,downloadOp);
                     }
                 }, mimeType, format === 'jpeg' ? 0.92 : undefined);
             };
@@ -33816,13 +34479,17 @@ function selectRamp(name) {
             img.src = url;
         }
 
-        function _fallbackChartDownload(blob, filename) {
+        function _fallbackChartDownload(blob, filename,downloadOp) {
+            window._sylvaCheckDownload(downloadOp);
+            if (typeof window.saveFileWithPicker === 'function') {
+                window.saveFileWithPicker(blob, filename,null,null,downloadOp);
+                return;
+            }
             var a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
             a.download = filename;
             document.body.appendChild(a); a.click(); document.body.removeChild(a);
             setTimeout(function() { URL.revokeObjectURL(a.href); }, 2000);
-
         }
 
         // 🛠️ BUG FİX (Faz 76 — Bakı/Aspect lejantındaki yüzdeler toplamda 100%
@@ -34586,10 +35253,8 @@ function selectRamp(name) {
                 var tableWrap = document.getElementById('stats-chart-table');
                 if (wrap) {
                     wrap.className = 'chart-placeholder';
-                    wrap.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;min-height:90px;color:#94a3b8;font-size:0.75rem;padding:16px;text-align:center;line-height:1.4;">' +
-                        '📊 <span data-i18n="chart_unclassified_hint">' +
-                        (typeof t === 'function' ? t('chart_unclassified_hint', 'Sürekli (Stretch) raster katmanı aktif. Sınıf istatistikleri ve grafik için lütfen "Lejant ve Semboloji" panelinden katmanı sınıflandırıp "Lejantı Uygula"ya basınız.') : 'Sürekli (Stretch) raster katmanı aktif. Sınıf istatistikleri ve grafik için lütfen "Lejant ve Semboloji" panelinden katmanı sınıflandırıp "Lejantı Uygula"ya basınız.') +
-                        '</span></div>';
+                    wrap.innerHTML = '';
+                    wrap.style.minHeight = '120px';
                 }
                 if (tableWrap) tableWrap.innerHTML = '';
                 return;
@@ -35406,54 +36071,9 @@ function selectRamp(name) {
         // doc.save() yerine Blob + gizli <a download> ile yapılır (daha
         // güvenilir); tüm denemeler tükenirse onError callback'i ile
         // kullanıcıya görünür bir uyarı verilir (artık sessiz atlanmaz).
-        function _sylvaGqaDownloadPdfBlob(doc, filename) {
-            // Analiz Robotu PDF indirme: Blob + güvenli kullanıcı tetikleme.
-            // Bazı tarayıcılarda async canvas üretiminden sonra doc.save()
-            // sessizce engellenebildiği için önce Blob, ardından anchor/iframe
-            // ve son çare olarak jsPDF save() kullanılır.
-            try {
-                var blob = doc.output('blob');
-                if (!blob || !blob.size) throw new Error('PDF blob oluşturulamadı.');
-
-                if (navigator && typeof navigator.msSaveOrOpenBlob === 'function') {
-                    navigator.msSaveOrOpenBlob(blob, filename);
-                    return true;
-                }
-
-                var url = URL.createObjectURL(blob);
-                var a = document.createElement('a');
-                a.href = url;
-                a.download = filename || 'SylvaGIS_Rapor.pdf';
-                a.rel = 'noopener';
-                a.style.position = 'fixed';
-                a.style.left = '-9999px';
-                document.body.appendChild(a);
-
-                // Chrome/Edge/Firefox için programatik indirme.
-                try { a.click(); } catch (eClick) {
-                    // click() bazı ortamlarda engellenirse iframe fallback.
-                    var frame = document.createElement('iframe');
-                    frame.style.display = 'none';
-                    frame.src = url;
-                    document.body.appendChild(frame);
-                    setTimeout(function () {
-                        try { document.body.removeChild(frame); } catch (eFrameRm) {}
-                    }, 3000);
-                }
-
-                setTimeout(function () {
-                    try { document.body.removeChild(a); } catch (eRm) {}
-                    try { URL.revokeObjectURL(url); } catch (eRv) {}
-                }, 3000);
-                return true;
-            } catch (eBlobSave) {
-                console.error('[Sylva] Blob PDF indirme hatası:', eBlobSave);
-                try { doc.save(filename); return true; }
-                catch (eDirectSave) {
-                    console.error('[Sylva] jsPDF save() hatası:', eDirectSave);
-                    return false;
-                }
-            }
+        function _sylvaGqaDownloadPdfBlob(doc,filename,downloadOp) {
+            downloadOp.check();
+            return window.saveFileWithPicker(doc.output('blob'),filename,null,null,downloadOp);
         }
 
         function _sylvaGqaReportContext() {
@@ -35465,13 +36085,18 @@ function selectRamp(name) {
 
         function _sylvaGqaBuildAndDownloadReportPDF(question, answerText, datasets, building, onError, retries, context) {
             context = context || _sylvaGqaReportContext();
+            context.downloadOp=context.downloadOp || window._sylvaDownloadAbort.create('ai-report','SylvaGIS_AI_Report.pdf');
+            var abortReport=function(){if(context.reject)context.reject(window._sylvaAbortError());};
             return new Promise(function (resolve, reject) {
+                context.reject=reject;
+                if(context.downloadOp.signal.aborted){reject(window._sylvaAbortError());return;}
+                context.downloadOp.signal.addEventListener('abort',abortReport,{once:true});
                 context.done = resolve;
                 _sylvaGqaBuildAndDownloadReportPDFAttempt(question, answerText, datasets, building, function (message) {
                     try { if (typeof onError === 'function') onError(message); }
                     finally { reject(new Error(message)); }
                 }, retries, context);
-            });
+            }).finally(function(){context.downloadOp.signal.removeEventListener('abort',abortReport);context.reject=null;});
         }
 
         function _sylvaGqaBuildAndDownloadReportPDFAttempt(question, answerText, datasets, building, onError, _retriesLeft, context) {
@@ -35481,15 +36106,18 @@ function selectRamp(name) {
             // tekrar deniyordu ki bu genelde yetersizdi ve kullanıcı doğrudan
             // "PDF indirilemedi" hatasını görüyordu. Deneme sayısı ve bekleme
             // süresi artırıldı.
+            if(context.downloadOp.signal.aborted)return;
             if (_retriesLeft === undefined) _retriesLeft = 3;
             try {
                 var jspdfLib = window.jspdf || window.jsPDF;
                 var _t0 = context.t;
                 if (!jspdfLib || typeof html2canvas === 'undefined') {
                     if (_retriesLeft > 0) {
-                        setTimeout(function () {
+                        var retryTimer=setTimeout(function () {
+                            if(context.downloadOp.signal.aborted)return;
                             _sylvaGqaBuildAndDownloadReportPDFAttempt(question, answerText, datasets, building, onError, _retriesLeft - 1, context);
                         }, 1200);
+                        context.downloadOp.cleanups.add(function(){clearTimeout(retryTimer);});
                         return;
                     }
                     if (typeof onError === 'function') onError(_t0('err_jspdf', 'jsPDF library could not be loaded.'));
@@ -35511,6 +36139,7 @@ function selectRamp(name) {
 
                 // ── Gizli HTML raporu inşa ediliyor ──────────────────────
                 var reportEl = document.createElement('div');
+                context.downloadOp.cleanups.add(function(){reportEl.remove();});
                 reportEl.style.cssText = 'position:fixed;left:-100000px;top:0;background:#ffffff;padding:22px;' +
                     'width:760px;box-sizing:border-box;' +
                     'font-family:Arial,"Segoe UI","Noto Sans","Noto Sans KR","Noto Sans SC","Noto Sans TC",' +
@@ -35639,6 +36268,7 @@ function selectRamp(name) {
                     html2canvas(reportEl, { backgroundColor: '#ffffff', scale: SCALE, useCORS: true }),
                     _logoPromise
                 ]).then(function (results) {
+                    context.downloadOp.check();
                     var canvas = results[0], logo = results[1];
                     if (document.body.contains(reportEl)) document.body.removeChild(reportEl);
 
@@ -35691,24 +36321,14 @@ function selectRamp(name) {
                     } catch (ePageNum) {}
 
                     var _filenameWord = _t('gqa_pdf_filename_word', 'Rapor');
-                    var _saveOk = _sylvaGqaDownloadPdfBlob(doc, 'SylvaGIS_' + _filenameWord + '.pdf');
-                    if (_saveOk) context.done();
-                    if (!_saveOk) {
-                        if (_retriesLeft > 0) {
-                            setTimeout(function () {
-                                _sylvaGqaBuildAndDownloadReportPDFAttempt(question, answerText, datasets, building, onError, _retriesLeft - 1, context);
-                            }, 900);
-                            return;
-                        }
-                        if (typeof onError === 'function') onError(_t('gqa_pdf_download_failed', 'PDF indirilemedi.'));
-                    }
+                    var _saveOk = _sylvaGqaDownloadPdfBlob(doc, 'SylvaGIS_' + _filenameWord + '.pdf',context.downloadOp);
+                    return _saveOk.then(function(){context.done();});
                 }).catch(function (ePdfInner) {
+                    if(context.downloadOp.signal.aborted || ePdfInner.name==='AbortError')return;
                     if (document.body.contains(reportEl)) document.body.removeChild(reportEl);
                     console.error('[Sylva] AI raporu PDF olarak indirilemedi:', ePdfInner);
                     if (_retriesLeft > 0) {
-                        setTimeout(function () {
-                            _sylvaGqaBuildAndDownloadReportPDFAttempt(question, answerText, datasets, building, onError, _retriesLeft - 1, context);
-                        }, 1200);
+                        window._sylvaDownloadDelay(context.downloadOp,1200).then(function(){ _sylvaGqaBuildAndDownloadReportPDFAttempt(question, answerText, datasets, building, onError, _retriesLeft - 1, context); }).catch(function(){});
                         return;
                     }
                     // 🛠️ BUG FİX: tüm denemeler tükendiğinde artık yalnızca
@@ -35719,11 +36339,10 @@ function selectRamp(name) {
                     if (typeof onError === 'function') onError(_t('gqa_pdf_download_failed', 'PDF indirilemedi.') + _detail);
                 });
             } catch (ePdf) {
+                if(context.downloadOp.signal.aborted || ePdf.name==='AbortError')return;
                 console.error('[Sylva] AI raporu PDF olarak indirilemedi:', ePdf);
                 if (_retriesLeft > 0) {
-                    setTimeout(function () {
-                        _sylvaGqaBuildAndDownloadReportPDFAttempt(question, answerText, datasets, building, onError, _retriesLeft - 1, context);
-                    }, 1200);
+                    window._sylvaDownloadDelay(context.downloadOp,1200).then(function(){ _sylvaGqaBuildAndDownloadReportPDFAttempt(question, answerText, datasets, building, onError, _retriesLeft - 1, context); }).catch(function(){});
                     return;
                 }
                 var _detail2 = (ePdf && ePdf.message) ? (' (' + ePdf.message + ')') : '';
@@ -35756,6 +36375,8 @@ function selectRamp(name) {
                 return;
             }
 
+            var downloadOp=window._sylvaDownloadAbort.create('ai-report','SylvaGIS_AI_Report.pdf');
+            reportContext.downloadOp=downloadOp;
             answerEl.style.display = 'none';
             statusEl.style.display = 'block';
             statusEl.style.background = '#f1f5f9'; statusEl.style.color = '#334155';
@@ -35766,6 +36387,12 @@ function selectRamp(name) {
                 askBtn.classList.add('sylva-ai-report-busy');
                 askBtn.setAttribute('aria-busy', 'true');
             }
+
+            downloadOp.cleanups.add(function(){
+                window._sylvaGqaSubmitting=false;
+                statusEl.style.display='none';
+                if(askBtn){askBtn.disabled=false;askBtn.classList.remove('sylva-ai-report-busy');askBtn.removeAttribute('aria-busy');}
+            });
 
             // 🆕 Faz 75: kullanıcı isteğiyle görsel dahil etme artık bir seçenek
             // DEĞİL — her soruda arka planda HER ZAMAN otomatik çalışır (önceki
@@ -35805,11 +36432,11 @@ function selectRamp(name) {
                 if (_wxDays && _wxDays.length) {
                     body.weather_days = _wxDays;
                 }
-                return fetch(API_BASE + '/api/gemini-data-qa', {
+                return window._sylvaDownloadFetch(API_BASE + '/api/gemini-data-qa', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(body)
-                });
+                },downloadOp);
             })
                 .then(function (r) { return r.json(); })
                 .then(function (data) {
@@ -35848,9 +36475,14 @@ function selectRamp(name) {
                     }
                 })
                 .catch(function (err) {
+                    if(downloadOp.signal.aborted || err.name==='AbortError'){var latest=window._sylvaDownloadAbort.get('ai-report');if(!latest || latest===downloadOp)statusEl.style.display='none';return;}
+                    downloadOp.finish('error');
                     statusEl.style.background = '#fee2e2'; statusEl.style.color = '#991b1b';
                     statusEl.textContent = '⚠️ ' + _t('gqa_err_network', 'Sunucuya ulaşılamadı: ') + (err && err.message ? err.message : String(err));
                 }).finally(function () {
+                    var latest=window._sylvaDownloadAbort.get('ai-report');
+                    if(latest && latest!==downloadOp)return;
+                    if(!downloadOp.signal.aborted)downloadOp.finish();
                     window._sylvaGqaSubmitting = false;
                     if (askBtn) {
                         askBtn.disabled = false;
@@ -39016,6 +39648,7 @@ function selectRamp(name) {
                 if (!map2Visible && dsCheck) dsCheck.checked = false;
             }
             function closeModal() {
+                window._sylvaDownloadAbort.abort('map-export');
                 overlay.classList.remove('open');
                 resetProgress();
                 btnStart.disabled = false;
@@ -39065,7 +39698,67 @@ function selectRamp(name) {
             }
 
             // --- Ekran elemanlarını (lejant, kuzey oku, ölçek) canvas'a çiz ---
-            function drawOverlaysOnCanvas(ctx, mapEl, scale) {
+            function drawExportNorthArrow(ctx, mapEl, scale, offsetX, offsetY) {
+                if (!mapEl) return;
+                var selector = mapEl.id === 'map2' ? '.north-arrow.map2-control' : '.north-arrow:not(.map2-control)';
+                var north = document.querySelector(selector);
+                if (!north) return;
+                var rect = north.getBoundingClientRect(), mapRect = mapEl.getBoundingClientRect();
+                if (!(rect.width > 0 && rect.height > 0)) return;
+                var style = window.getComputedStyle(north);
+                var ox = Number(offsetX) || 0, oy = Number(offsetY) || 0;
+                var x = ox + (rect.left - mapRect.left) * scale;
+                var y = oy + (rect.top - mapRect.top) * scale;
+                var width = rect.width * scale, height = rect.height * scale;
+                var border = (parseFloat(style.borderTopWidth) || 1.5) * scale;
+                var inset = border / 2, radius = Math.max(0, (parseFloat(style.borderTopLeftRadius) || 6) * scale - inset);
+                ctx.save();
+                ctx.fillStyle = style.backgroundColor || 'rgba(255,255,255,0.95)';
+                ctx.strokeStyle = style.borderTopColor || '#cbd5e1';
+                ctx.lineWidth = border;
+                ctx.beginPath();
+                if (ctx.roundRect) ctx.roundRect(x + inset, y + inset, width - border, height - border, radius);
+                else ctx.rect(x + inset, y + inset, width - border, height - border);
+                var shadow = String(style.boxShadow || '').match(/(rgba?\([^)]+\))\s+([-\d.]+)px\s+([-\d.]+)px\s+([-\d.]+)px/);
+                if (shadow) {
+                    ctx.shadowColor = shadow[1];
+                    ctx.shadowOffsetX = Number(shadow[2]) * scale;
+                    ctx.shadowOffsetY = Number(shadow[3]) * scale;
+                    ctx.shadowBlur = Number(shadow[4]) * scale;
+                }
+                ctx.fill();
+                ctx.shadowColor = 'transparent'; ctx.shadowOffsetX = ctx.shadowOffsetY = ctx.shadowBlur = 0;
+                ctx.stroke();
+                function drawLabel(className, fallbackText, fallbackSize, fallbackCenter) {
+                    var label = north.querySelector(className);
+                    var labelStyle = label ? window.getComputedStyle(label) : null;
+                    var box = label ? label.getBoundingClientRect() : null;
+                    var size = labelStyle ? parseFloat(labelStyle.fontSize) : fallbackSize;
+                    ctx.font = (labelStyle ? labelStyle.fontStyle + ' ' + labelStyle.fontWeight : 'normal 900') + ' ' + ((size || fallbackSize) * scale) + 'px ' + (labelStyle ? labelStyle.fontFamily : 'sans-serif');
+                    ctx.fillStyle = labelStyle ? labelStyle.color : '#111827';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'alphabetic';
+                    var text = (label && label.textContent.trim()) || fallbackText;
+                    var metrics = ctx.measureText(text);
+                    var ascent = metrics.fontBoundingBoxAscent || size * scale * 0.8;
+                    var descent = metrics.fontBoundingBoxDescent || size * scale * 0.2;
+                    var tx = x + width / 2, lineTop, lineHeight;
+                    if (box && box.width > 0 && box.height > 0) {
+                        tx = ox + (box.left - mapRect.left + box.width / 2) * scale;
+                        lineTop = oy + (box.top - mapRect.top) * scale;
+                        lineHeight = box.height * scale;
+                    } else {
+                        lineHeight = (size || fallbackSize) * scale;
+                        lineTop = y + height * fallbackCenter - lineHeight / 2;
+                    }
+                    ctx.fillText(text, tx, lineTop + (lineHeight - ascent - descent) / 2 + ascent);
+                }
+                drawLabel('.north-arrow-icon', '▲', 19.2, 0.35);
+                drawLabel('.north-arrow-text', 'N', 13.6, 0.72);
+                ctx.restore();
+            }
+
+            function drawOverlaysOnCanvas(ctx, mapEl, scale, includeNorth) {
                 // 🛠️ BUG FİX: Bu fonksiyon Ekran 2 (map2) için çağrıldığında da
                 // eskiden HER ZAMAN Ekran 1'in elemanlarını (document.querySelector
                 // ile ilk bulduğu .north-arrow, #map-legend-box, #map-info-box vb.)
@@ -39075,7 +39768,6 @@ function selectRamp(name) {
                 var _isMap2 = !!(mapEl && mapEl.id === 'map2');
                 var _legendBoxId = _isMap2 ? 'map2-legend-box' : 'map-legend-box';
                 var _infoBoxId   = _isMap2 ? 'map2-info-box'   : 'map-info-box';
-                var _northSel    = _isMap2 ? '.north-arrow.map2-control' : '.north-arrow:not(.map2-control)';
 
                 // ── Logo sol-alt köşede sabit — Y sınırını önceden hesapla ───────────
                 // Lejant logoyla çakışınca lejant yukarı kaydırılır; logo hiç hareket etmez.
@@ -39576,40 +40268,7 @@ function selectRamp(name) {
                  } // lejant ve bilgi kutusu her zaman native canvas ile çizildi
                     // ── Aşağıdakiler HTML2CANVAS veya LEAFLET-IMAGE fark etmeksizin
                     // HER ZAMAN çizilir (kullanıcı gizlemiş olsa bile). ────────────
-                    var north = document.querySelector(_northSel);
-                    if (north) {
-                        var nRect  = north.getBoundingClientRect();
-                        var mRect2 = mapEl.getBoundingClientRect();
-                        // Kutunun sol-üst köşesi (DOM'dan birebir)
-                        var nX = (nRect.left - mRect2.left) * scale;
-                        var nY = (nRect.top  - mRect2.top)  * scale;
-                        var nW = nRect.width  * scale;
-                        var nH = nRect.height * scale;
-                        // Merkez nokta
-                        var cx = nX + nW / 2;
-                        var cy = nY + nH / 2;
-                        ctx.save();
-                        // Arka plan kutusu — DOM boyutunda, nötr/temiz kart yapısı
-                        ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
-                        ctx.strokeStyle = '#cbd5e1';
-                        ctx.lineWidth = 1.5 * scale;
-                        ctx.beginPath();
-                        if (ctx.roundRect) ctx.roundRect(nX, nY, nW, nH, 6 * scale);
-                        else ctx.rect(nX, nY, nW, nH);
-                        ctx.fill(); ctx.stroke();
-                        // textBaseline:'middle' → y = metnin tam dikey ortası, kayma yok
-                        ctx.textAlign    = 'center';
-                        ctx.textBaseline = 'middle';
-                        // ▲ kuzey oku — modern koyu/siyah ton (#111827)
-                        ctx.fillStyle = '#111827';
-                        ctx.font = 'bold ' + Math.round(nH * 0.38) + 'px sans-serif';
-                        ctx.fillText('▲', cx, cy - nH * 0.14);
-                        // N harfi — modern koyu/siyah ton (#111827)
-                        ctx.fillStyle = '#111827';
-                        ctx.font = 'bold ' + Math.round(nH * 0.28) + 'px sans-serif';
-                        ctx.fillText('N', cx, cy + nH * 0.28);
-                        ctx.restore();
-                    }
+                    if (includeNorth !== false) drawExportNorthArrow(ctx, mapEl, scale);
     
                     // Ölçek çubuğu (Leaflet'in .leaflet-control-scale-line'ı)
                     // Kullanıcı ölçeği gizlemiş olsa bile çıktıda her zaman göster.
@@ -39946,7 +40605,7 @@ function selectRamp(name) {
             // adımları izler; tek fark sonucu indirmek yerine Promise ile
             // döndürmesidir, böylece iki ekran yan yana birleştirilebilir.
             // ════════════════════════════════════════════════════════════
-            function composeMapCanvas(paneId, scale) {
+            function composeMapCanvas(paneId, scale, includeNorth) {
                 return new Promise(function(resolve) {
                     var mapEl = document.getElementById(paneId);
                     if (!mapEl) { resolve(null); return; }
@@ -39974,7 +40633,7 @@ function selectRamp(name) {
                                 // Kuzey oku, ölçek, lejant, bilgi kutusu ve logo — bu ekrana
                                 // ait kendi elemanlarıyla (bkz. drawOverlaysOnCanvas'taki
                                 // mapEl.id === 'map2' ayrımı) native canvas ile çizilir.
-                                drawOverlaysOnCanvas(ctx, mapEl, scale);
+                                drawOverlaysOnCanvas(ctx, mapEl, scale, includeNorth);
                                 resolve(final);
                             }
                             if (markupSVG) drawSVGOnCanvas(ctx, markupSVG, mapEl, scale).then(finish);
@@ -40048,13 +40707,15 @@ function selectRamp(name) {
                 ctx.stroke();
                 ctx.restore();
 
+                // Combined viewport has one north arrow in the right pane's original position.
+                drawExportNorthArrow(ctx, document.getElementById('map2'), scale, x2, (h - c2.height) / 2);
                 return final;
             }
 
             // Çift ekran çıktısını baştan sona yürütür: her iki ekranı ayrı ayrı
             // composeMapCanvas ile yakalar, yan yana birleştirir ve mevcut
             // saveCanvas/savePDF motorlarıyla (PNG/JPEG/PDF) dışa aktarır.
-            function runDualScreenExport(filename, fmt, scale) {
+            function runDualScreenExport(filename, fmt, scale, downloadOp) {
                 setProgress(10, 'Ekran 1 hazırlanıyor…');
                 var _wsExportStateDual = (function() {
                     var wl = window._workspaceLayer;
@@ -40077,10 +40738,17 @@ function selectRamp(name) {
                     return { hidden: false, layer: wl };
                 })();
 
+                downloadOp.cleanups.add(function(){
+                    if(_wsExportStateDual){
+                        if(_wsExportStateDual.hidden && _wsExportStateDual.wasOnMap && _wsExportStateDual.layer){try{_wsExportStateDual.layer.addTo(map);}catch(e){}}
+                        else if(typeof window._applyWorkspaceStyle==='function')window._applyWorkspaceStyle();
+                    }
+                });
                 Promise.all([
-                    composeMapCanvas('map', scale),
-                    composeMapCanvas('map2', scale)
+                    composeMapCanvas('map', scale, false),
+                    composeMapCanvas('map2', scale, false)
                 ]).then(function(results) {
+                    downloadOp.check();
                     var c1 = results[0], c2 = results[1];
                     if (!c1 || !c2) {
                         sylvaAlert(t('export_dualscreen_error') || 'Dual-screen export could not be prepared.', 'error');
@@ -40101,8 +40769,9 @@ function selectRamp(name) {
                     }
 
                     setProgress(95, 'Dosya oluşturuluyor…');
-                    saveCanvas(combined, fmt, filename, scale, combined.width / scale, combined.height / scale);
+                    saveCanvas(combined, fmt, filename, scale, combined.width / scale, combined.height / scale,downloadOp);
                 }).catch(function() {
+                    if(downloadOp.signal.aborted)return;
                     sylvaAlert(t('export_dualscreen_error') || 'Dual-screen export could not be prepared.', 'error');
                     btnStart.disabled = false;
                     btnStart.innerHTML = t('btn_download');
@@ -40111,6 +40780,7 @@ function selectRamp(name) {
 
             // --- Ana export fonksiyonu ---
             btnStart.addEventListener('click', function() {
+                var downloadOp=window._sylvaDownloadAbort.create('map-export','SylvaGIS_Map');
                 var filename = (document.getElementById('exp-filename').value.trim() || t('export_default_filename'));
                 var fmt      = selectedFormat;
                 // 🖥️➜🖨️ YÜKSEK ÇÖZÜNÜRLÜKLÜ ÇIKTI (≈300 DPI / HD):
@@ -40135,7 +40805,7 @@ function selectRamp(name) {
                 setProgress(5, 'Harita katmanları yükleniyor…');
 
                 // 🖥️🖥️ Çift Ekran Çıktısı seçiliyse ayrı bir akışa yönlendir —
-                // her iki ekran kendi kuzey oku/ölçek/lejant/logosuyla ayrı ayrı
+                // her iki ekran kendi ölçek/lejant/logosuyla ayrı ayrı
                 // yakalanır ve aralarında belirgin beyaz bir ayraçla birleştirilir.
                 var dsCheck = document.getElementById('exp-dualscreen-check');
                 var dsWrap  = document.getElementById('exp-dualscreen-wrap');
@@ -40149,7 +40819,7 @@ function selectRamp(name) {
                     var _dsCombinedW = _dsW1 + 16 + _dsW2; // 16 ≈ ayraç taban genişliği
                     var _dsCombinedH = Math.max(_dsH1, _dsH2);
                     var dualScale = _sylvaSafeExportScale(scale, _dsCombinedW, _dsCombinedH);
-                    runDualScreenExport(filename, fmt, dualScale);
+                    runDualScreenExport(filename, fmt, dualScale,downloadOp);
                     return;
                 }
 
@@ -40175,6 +40845,7 @@ function selectRamp(name) {
 
                 // Leaflet-image'ı kullan; yoksa fallback
                 function buildFinalCanvas(tileCanvas) {
+                    if(downloadOp.signal.aborted)return;
                     setProgress(50, 'Vektör ve markup katmanlar ekleniyor…');
 
                     // Ana composite canvas
@@ -40206,6 +40877,7 @@ function selectRamp(name) {
                     });
 
                     Promise.all(svgPromises).then(function() {
+                    downloadOp.check();
                         setProgress(75, 'Markup çizimleri aktarılıyor…');
 
                         // Markup SVG her zaman drawSVGOnCanvas ile çizilir —
@@ -40230,11 +40902,13 @@ function selectRamp(name) {
                         }
 
                         function finishExport() {
+                            if(downloadOp.signal.aborted)return;
                             setProgress(88, 'Harita elemanları ekleniyor…');
                             drawOverlaysOnCanvas(ctx, mapEl, scale);
                             Promise.all([captureInfoBoxOverlay(), captureLegendOverlay()]).then(function() {
+                    downloadOp.check();
                                 setProgress(95, 'Dosya oluşturuluyor…');
-                                saveCanvas(final, fmt, filename, scale, W, H);
+                                saveCanvas(final, fmt, filename, scale, W, H,downloadOp);
                             });
                         }
 
@@ -40281,13 +40955,22 @@ function selectRamp(name) {
                 })();
                 // ───────────────────────────────────────────────────────────
 
+                downloadOp.cleanups.add(function(){
+                    if(_wsExportState){
+                        if(_wsExportState.hidden && _wsExportState.wasOnMap && _wsExportState.layer){try{_wsExportState.layer.addTo(map);}catch(e){}}
+                        else if(typeof window._applyWorkspaceStyle==='function')window._applyWorkspaceStyle();
+                    }
+                    btnStart.disabled=false;
+                });
                 window._exportUsedHtml2canvas = false;
                 // html2canvas her zaman scale=1 ile çağrılır (hizalama hatasından
                 // kaçınmak için); nihai çözünürlük artışı buildFinalCanvas() içindeki
                 // final canvas'ın W*scale × H*scale boyutuna çizilmesiyle sağlanır.
                 getLeafletCanvas(1).then(function(canvas) {
+                    downloadOp.check();
                     buildFinalCanvas(canvas);
                 }).catch(function() {
+                    if(downloadOp.signal.aborted)return;
                     // Son çare: Leaflet tile canvas'larını/img'lerini manuel topla
                     var tileCanvas = document.createElement('canvas');
                     tileCanvas.width  = W * scale;
@@ -40312,7 +40995,7 @@ function selectRamp(name) {
             });
 
             // --- Canvas'ı kaydet ---
-            function saveCanvas(canvas, fmt, filename, scale, W, H) {
+            function saveCanvas(canvas, fmt, filename, scale, W, H,downloadOp) {
                 // Feature 7: Çalışma alanı stilini export öncesi hale geri getir
                 if (typeof _wsExportState !== 'undefined' && _wsExportState) {
                     if (_wsExportState.hidden && _wsExportState.wasOnMap && _wsExportState.layer) {
@@ -40324,19 +41007,20 @@ function selectRamp(name) {
                 setProgress(100, t('export_file_dl'));
 
                 if (fmt === 'pdf') {
-                    savePDF(canvas, filename, W, H, scale);
+                    savePDF(canvas, filename, W, H, scale,downloadOp);
                 } else {
                     var mimeType = fmt === 'jpeg' ? 'image/jpeg' : 'image/png';
                     var quality  = fmt === 'jpeg' ? 0.95 : 1.0;
                     var ext      = fmt === 'jpeg' ? 'jpg' : 'png';
                     canvas.toBlob(function(blob) {
-                        downloadBlob(blob, filename + '.' + ext);
+                        if(downloadOp.signal.aborted)return;
+                        downloadBlob(blob, filename + '.' + ext,downloadOp);
                         setTimeout(closeModal, 800);
                     }, mimeType, quality);
                 }
             }
 
-            function savePDF(canvas, filename, W, H, scale) {
+            function savePDF(canvas, filename, W, H, scale,downloadOp) {
                 var jspdf = window.jspdf || window.jsPDF;
                 if (!jspdf) { jspdf = window.jspdf = {}; }
                 var jsPDFConstructor = (window.jspdf && window.jspdf.jsPDF) || window.jsPDF;
@@ -40392,33 +41076,53 @@ function selectRamp(name) {
                 // Başlık ve metadata
                 doc.setProperties({ title: 'SylvaGIS Harita Çıktısı', creator: 'SylvaGIS', subject: filename });
                 var pdfBlob = doc.output('blob');
-                downloadBlob(pdfBlob, filename + '.pdf');
+                downloadBlob(pdfBlob, filename + '.pdf',downloadOp);
             }
 
-            function downloadBlob(blob, name) {
+            function downloadBlob(blob, name,downloadOp) {
+                if(downloadOp.signal.aborted)return;
                 var ext = name.split('.').pop().toLowerCase();
                 var types = [];
                 if (ext === 'png')             types = [{ description: 'PNG Görüntüsü',  accept: { 'image/png': ['.png'] } }];
                 else if (ext === 'jpg' || ext === 'jpeg') types = [{ description: 'JPEG Görüntüsü', accept: { 'image/jpeg': ['.jpg', '.jpeg'] } }];
                 else if (ext === 'pdf')        types = [{ description: 'PDF Belgesi',     accept: { 'application/pdf': ['.pdf'] } }];
 
-                if (window.showSaveFilePicker) {
+                if (typeof window.saveFileWithPicker === 'function') {
+                    window.saveFileWithPicker(blob, name, types,null,downloadOp).then(function(res) {
+                    downloadOp.check();
+                        if (res && res.method === 'cancelled') {
+                            setProgress(0, 'İptal edildi');
+                            return;
+                        }
+                        setProgress(100, '✅ ' + ((res && res.filename) || name) + ' kaydedildi!');
+                        setTimeout(function(){if(!downloadOp.signal.aborted && !window._sylvaDownloadAbort.get('map-export'))closeModal();},1200);
+                    }).catch(function(e) {
+                    if(downloadOp.signal.aborted)return;
+                        _fallbackDownload(blob, name,downloadOp);
+                    });
+                } else if (window.showSaveFilePicker) {
                     var opts = { suggestedName: name };
                     if (types.length) opts.types = types;
                     window.showSaveFilePicker(opts)
-                        .then(function(fh) { return fh.createWritable(); })
-                        .then(function(w)  { return w.write(blob).then(function() { return w.close(); }); })
-                        .then(function()   { setProgress(100, '✅ ' + name + ' kaydedildi!'); setTimeout(closeModal, 1200); })
+                        .then(function(fh) {
+                    downloadOp.check(); return fh.createWritable(); })
+                        .then(function(w)  {
+                    downloadOp.check(); return w.write(blob).then(function() {
+                    downloadOp.check(); return w.close(); }); })
+                        .then(function()   {
+                    downloadOp.check(); setProgress(100, '✅ ' + name + ' kaydedildi!'); setTimeout(closeModal, 1200); })
                         .catch(function(e) {
+                    if(downloadOp.signal.aborted)return;
                             if (e.name === 'AbortError') return; // Kullanıcı iptal etti
-                            _fallbackDownload(blob, name);
+                            _fallbackDownload(blob, name,downloadOp);
                         });
                 } else {
                     _fallbackDownload(blob, name);
                 }
             }
 
-            function _fallbackDownload(blob, name) {
+            function _fallbackDownload(blob, name,downloadOp) {
+                if(downloadOp.signal.aborted)return;
                 var url = URL.createObjectURL(blob);
                 var a = document.createElement('a');
                 a.href = url; a.download = name;
@@ -40428,7 +41132,7 @@ function selectRamp(name) {
                 setTimeout(function() { URL.revokeObjectURL(url); }, 2000);
                 setProgress(100, t('export_dl_started'));
 
-                setTimeout(closeModal, 1000);
+                setTimeout(function(){if(!downloadOp.signal.aborted && !window._sylvaDownloadAbort.get('map-export'))closeModal();},1000);
             }
 
             // ════════════════════════════════════════════════════════════
@@ -40891,7 +41595,7 @@ function selectRamp(name) {
         </p>
 
         <div style="display:flex; gap:8px; justify-content:flex-end;">
-            <button onclick="document.getElementById('chart-download-modal').style.display='none'"
+            <button onclick="if(window._sylvaDownloadAbort)window._sylvaDownloadAbort.abort('chart');document.getElementById('chart-download-modal').style.display='none'"
                 style="padding:8px 18px; border:1px solid #cbd5e1; border-radius:5px; cursor:pointer; background:#f1f5f9; font-size:0.85rem; color:#475569;" data-i18n="btn_cancel">
                 İptal
             </button>
@@ -42198,6 +42902,10 @@ function downloadRawBands() {
 
     // 📥 İndirme animasyonu: ZIP hazır olup indirilene kadar ekranı yarı
     // saydam beyaz katmanla kapla ve ortada yanıp sönen "SylvaGIS" göster.
+    var downloadOp=window._sylvaDownloadAbort.create('raw-bands','SylvaGIS_Raw_Bands.zip');
+    var loadingReleased=false;
+    function releaseLoading(){if(!loadingReleased){loadingReleased=true;hideSylvaLoading();}}
+    downloadOp.cleanups.add(function(){releaseLoading();if(btn)btn.disabled=false;if(status)status.style.display='none';});
     showSylvaLoading();
     // 📡 Ham Veri indirmesi başlayınca Legend & Symbology paneli yarı saydama döner
     (function() { var _lsp = document.getElementById('legend-symbology-body'); if (_lsp) { _lsp.style.opacity = '0.35'; _lsp.style.pointerEvents = 'none'; _lsp.style.userSelect = 'none'; } })();
@@ -42214,7 +42922,7 @@ function downloadRawBands() {
     // dillerde ZIP tamamlandıktan sonra buton dili istemeden değişmez.
     if (btn) { btn.disabled = true; }
 
-    fetch(API_BASE + '/api/download-raw-bands', {
+    window._sylvaDownloadFetch(API_BASE + '/api/download-raw-bands', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -42226,8 +42934,9 @@ function downloadRawBands() {
             maxCloud: cloudSliderEl ? parseInt(cloudSliderEl.value, 10) : 100,
             scope:    scope
         })
-    })
+    },downloadOp)
     .then(function(r) {
+        downloadOp.check();
         var ct = r.headers.get('Content-Type') || '';
         if (ct.indexOf('application/zip') !== -1) {
             // Başarılı: ZIP dosyası döndü
@@ -42236,11 +42945,13 @@ function downloadRawBands() {
             var filename = m ? m[1] : 'SylvaGIS.zip';
             var warn = r.headers.get('X-Partial-Errors');
             return r.blob().then(function(blob) {
+        downloadOp.check();
                 return { blob: blob, filename: filename, warn: warn };
             });
         }
         // Hata: JSON döndü
         return r.text().then(function(text) {
+        downloadOp.check();
             var msg = text;
             try {
                 var data = JSON.parse(text);
@@ -42250,32 +42961,49 @@ function downloadRawBands() {
         });
     })
     .then(function(result) {
+        downloadOp.check();
         if (btn) { btn.disabled = false; }
         // ZIP indirilmeye hazır: yükleme overlay'ini kapat
-        hideSylvaLoading();
+        releaseLoading();
 
-        var url = URL.createObjectURL(result.blob);
-        var a = document.createElement('a');
-        a.href = url;
-        a.download = result.filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        setTimeout(function() { URL.revokeObjectURL(url); }, 4000);
+        var handlePostDownload = function(cancelled) {
+            if (status && !cancelled) {
+                status.style.color = '#065f46';
+                status.style.background = '#d1fae5';
+                status.style.border = '1px solid #6ee7b7';
+                _lastRawDlResult = { filename: result.filename, bandCount: selectedBands.length, scope: scope, warn: result.warn };
+                renderRawDlStatus();
+            }
+        };
 
-        if (status) {
-            status.style.color = '#065f46';
-            status.style.background = '#d1fae5';
-            status.style.border = '1px solid #6ee7b7';
-            _lastRawDlResult = { filename: result.filename, bandCount: selectedBands.length, scope: scope, warn: result.warn };
-            renderRawDlStatus();
-
+        if (typeof window.saveFileWithPicker === 'function') {
+            window.saveFileWithPicker(result.blob, result.filename, [{ description: 'ZIP Arşivi', accept: { 'application/zip': ['.zip'] } }],null,downloadOp)
+                .then(function(res) {
+        downloadOp.check();
+                    handlePostDownload(res && res.method === 'cancelled');
+                })
+                .catch(function() {
+                    if(downloadOp.signal.aborted)return;
+                    handlePostDownload(false);
+                });
+        } else {
+            var url = URL.createObjectURL(result.blob);
+            var a = document.createElement('a');
+            a.href = url;
+            a.download = result.filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(function() { URL.revokeObjectURL(url); }, 4000);
+            handlePostDownload(false);
         }
     })
     .catch(function(err) {
+        if(downloadOp.signal.aborted || err.name==='AbortError'){releaseLoading();return;}
+        downloadOp.finish('error');
         if (btn) { btn.disabled = false; }
         // Hata durumunda da overlay'i kapat, kullanıcı kilitlenmesin
-        hideSylvaLoading();
+        releaseLoading();
         if (status) {
             status.style.color = '#991b1b';
             status.style.background = '#fee2e2';
@@ -42816,7 +43544,19 @@ function _executeGeoTiffDownloadCore() {
 
     // Bu isteğe özel yeni bir AbortController — cancelGeoTiffDownload()
     // çağrıldığında fetch() isteği gerçekten iptal edilebilsin diye.
-    _geotiffAbortController = new AbortController();
+    _geotiffAbortController = (window._sylvaDownloadAbort && window._sylvaDownloadAbort.create) ? window._sylvaDownloadAbort.create('geotiff') : new AbortController();
+    var downloadOp=_geotiffAbortController;
+    var _gtiffDlId = 'geotiff_' + Date.now();
+    if (typeof window._sylvaRegisterDownload === 'function') {
+        window._sylvaRegisterDownload(_gtiffDlId, {
+            controller:downloadOp,
+            title: 'GeoTIFF Raster İndirme',
+            filename: (filename || 'SylvaGIS') + '.tif',
+            type: 'geotiff',
+            statusText: 'GEE analiz katmanı hazırlanıyor…',
+            cancelCallback: function() { cancelGeoTiffDownload(); }
+        });
+    }
 
     var _dlViewMode = 'clip';
     var _dlSelectedIndex = (window._lastAnalyzeMetaByPane && window._lastAnalyzeMetaByPane[_gtiffPane] && window._lastAnalyzeMetaByPane[_gtiffPane].analysisName) || '';
@@ -42840,6 +43580,7 @@ function _executeGeoTiffDownloadCore() {
         if (btn) { btn.disabled = false; btn.textContent = t('gtiff_btn_download'); }
         if (cancelBtn) cancelBtn.disabled = false;
         _geotiffAbortController = null;
+        if (typeof window._sylvaFinishDownload === 'function') window._sylvaFinishDownload(_gtiffDlId, 'error', 'Çalışma alanı seçilmedi.');
         status.style.color   = '#991b1b';
         status.style.background = '#fee2e2';
         status.style.borderColor = '#fca5a5';
@@ -42853,7 +43594,7 @@ function _executeGeoTiffDownloadCore() {
     var dialogBox = document.getElementById('geotiff-dialog-box');
     if (dialogBox) dialogBox.classList.add('downloading');
 
-    fetch(API_BASE + '/api/download-geotiff', {
+    window._sylvaDownloadFetch(API_BASE + '/api/download-geotiff', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         // İptal butonuna basılınca bu isteğin GERÇEKTEN durdurulabilmesi için:
@@ -42875,8 +43616,9 @@ function _executeGeoTiffDownloadCore() {
             // indirme uç noktalarıyla aynı alan adı ve GeoJSON formatı).
             roi: _gtiffRoi
         })
-    })
+    },downloadOp)
     .then(function(r) {
+        downloadOp.check();
         var ct = r.headers.get('Content-Type') || '';
         // Sunucu hata durumunda JSON, başarı durumunda binary .tif döner.
         // 🛠️ BUG FİX: Aşağıdaki iki durumda da sunucuya GERÇEKTEN ulaşılmış
@@ -42890,6 +43632,7 @@ function _executeGeoTiffDownloadCore() {
         // mesaj gösterilmez.
         if (ct.indexOf('application/json') !== -1) {
             return r.json().then(function(data) {
+        downloadOp.check();
                 var _jsonErr = new Error((data && data.error) || 'Bilinmeyen hata');
                 _jsonErr._sylvaServerReached = true;
                 throw _jsonErr;
@@ -42903,21 +43646,11 @@ function _executeGeoTiffDownloadCore() {
         var cd = r.headers.get('Content-Disposition') || '';
         var m = /filename="?([^"]+)"?/.exec(cd);
         var tifName = m ? m[1] : (filename + '.tif');
-        return r.blob().then(function(blob) { return { blob: blob, tifName: tifName }; });
+        return r.blob().then(function(blob) {
+        downloadOp.check(); return { blob: blob, tifName: tifName }; });
     })
     .then(function(res) {
-        var blobUrl = URL.createObjectURL(res.blob);
-        // Otomatik indirme dene
-        try {
-            var a = document.createElement('a');
-            a.href     = blobUrl;
-            a.download = res.tifName;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-        } catch(e) {}
-        setTimeout(function() { URL.revokeObjectURL(blobUrl); }, 4000);
-
+        downloadOp.check();
         if (btn) { btn.disabled = false; btn.textContent = t('gtiff_btn_download'); }
         // İstek tamamlandı — artık iptal edilecek aktif bir istek yok.
         _geotiffAbortController = null;
@@ -42938,6 +43671,25 @@ function _executeGeoTiffDownloadCore() {
         status.style.display = 'none';
         status.innerHTML = '';
 
+        if (typeof window._sylvaUpdateDownloadProgress === 'function') {
+            window._sylvaUpdateDownloadProgress(_gtiffDlId, 95, 'Dosya kaydediliyor…');
+        }
+
+        window.saveFileWithPicker(res.blob, res.tifName, null, _gtiffDlId, downloadOp).then(function(saveRes) {
+        downloadOp.check();
+            if (typeof window._sylvaFinishDownload === 'function') {
+                if (saveRes && saveRes.method === 'cancelled') {
+                    window._sylvaFinishDownload(_gtiffDlId, 'cancelled', 'Kaydetme iptal edildi.');
+                } else {
+                    window._sylvaFinishDownload(_gtiffDlId, 'completed', 'GeoTIFF kaydedildi ✅');
+                }
+            }
+        }).catch(function() {
+            if (typeof window._sylvaFinishDownload === 'function') {
+                window._sylvaFinishDownload(_gtiffDlId, 'error', 'Dosya kaydedilemedi.');
+            }
+        });
+
         // 🆕 BUG FİX (Arazi Kullanımı/LULC indirmesi ArcMap'te "Could not
         // open the specified file" hatası veriyordu): LULC indirmeleri
         // sunucudan tek başına bir .tif olarak DEĞİL, doğru renk/sınıf
@@ -42956,6 +43708,10 @@ function _executeGeoTiffDownloadCore() {
         }
     })
     .catch(function(err) {
+        if (typeof window._sylvaFinishDownload === 'function') {
+            var isAborted = (err && (err.name === 'AbortError' || String(err).indexOf('abort') !== -1));
+            window._sylvaFinishDownload(_gtiffDlId, isAborted ? 'cancelled' : 'error', isAborted ? 'İndirme iptal edildi ❌' : 'İndirme başarısız ⚠️');
+        }
         // 🛠️ BUG FİX: kullanıcı "İptal" butonuna bastığında fetch() isteği
         // AbortError ile reddedilir — bu durumda bir "hata" göstermek yanlış
         // olur; cancelGeoTiffDownload() zaten arayüzü (pencere, durum mesajı,
@@ -43015,6 +43771,7 @@ function executeGeoTiffDownload() {
 }
 
 function cancelGeoTiffDownload() {
+    window._sylvaDownloadAbort.abort('geotiff');
     // 🛠️ BUG FİX (İptal butonu şimdiye kadar hiçbir şey yapmıyordu / aktif
     // değildi): İndirme sürüyorsa, aktif AbortController üzerinden fetch()
     // isteğini GERÇEKTEN durdur — sunucuya giden istek anında iptal edilir
@@ -67093,6 +67850,7 @@ function onVdlCrsChange() {
 }
 
 function closeVectorDownloadDialog() {
+    window._sylvaDownloadAbort.abort('vector');
     var modal = document.getElementById('vector-download-modal');
     if (modal) modal.style.display = 'none';
     var box = document.getElementById('vector-dialog-box');
@@ -67108,6 +67866,7 @@ function selectVdlFormat(fmt) {
 }
 
 function _executeVectorDownloadCore() {
+    var downloadOp=window._sylvaDownloadAbort.create('vector','SylvaGIS_Vector');
     var fmt      = _vdlSelectedFormat;
     var fnInput  = document.getElementById('vdl-filename');
     var filename = (fnInput ? fnInput.value.trim() : '') || ('SylvaGIS_' + _vdlT('file_vector', 'Vector'));
@@ -67209,6 +67968,7 @@ function _executeVectorDownloadCore() {
     // gerçekten seçtiği kaynak (_vdlSelectedSource: 'raster' veya
     // 'workspace') artık olduğu gibi gönderiliyor.
     if (_vdlSelectedSource === 'workspace' && !geomGeoJSON && !(document.getElementById('vdl-coord-north') || {}).value) {
+        downloadOp.finish('error');
         clearInterval(_stepInterval);
         if (box) box.classList.remove('downloading');
         if (btn) { btn.disabled = false; btn.innerHTML = _vdlT('btn_download', '\u2b07\ufe0f Download'); }
@@ -67224,21 +67984,25 @@ function _executeVectorDownloadCore() {
     }
 
     var _vdlExecPaneForSession = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
+    downloadOp.cleanups.add(function(){clearInterval(_stepInterval);if(btn)btn.disabled=false;});
     var body = { format: fmt, filename: filename, crs: crs, dataSource: _vdlSelectedSource,
         analysisId: (window._sylvaDownloadAnalysisIdByPane || {})[_vdlExecPaneForSession] || null };
     if (geomGeoJSON) body.geometry = geomGeoJSON;
 
-    fetch((window.API_BASE || '') + '/api/vector-download', {
+    window._sylvaDownloadFetch((window.API_BASE || '') + '/api/vector-download', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
-    })
+    }, downloadOp)
     .then(function(res) {
+        downloadOp.check();
         clearInterval(_stepInterval);
-        if (!res.ok) return res.json().then(function(e) { throw new Error(e.error || res.statusText); });
+        if (!res.ok) return res.json().then(function(e) {
+        downloadOp.check(); throw new Error(e.error || res.statusText); });
         return res.blob();
     })
     .then(function(blob) {
+        downloadOp.check();
         var ext       = (fmt === 'shp') ? '_shp.zip' : (fmt === 'geojson') ? '_data.zip' : ('.' + fmt);
         var finalName = filename + ext;
 
@@ -67247,44 +68011,34 @@ function _executeVectorDownloadCore() {
             var _gjName = filename + '.geojson';
             var _reader = new FileReader();
             _reader.onload = function() {
+                if(downloadOp.signal.aborted)return;
                 var _zip = new JSZip();
                 _zip.file(_gjName, _reader.result);
-                _zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } })
+                window._sylvaDownloadZip(_zip,{compression:'DEFLATE',compressionOptions:{level:6}},downloadOp)
                     .then(function(zipBlob) {
+        downloadOp.check();
                         window._sylvaLastExportBlob = zipBlob;
                         window._sylvaLastExportName = finalName;
-                        _vdlFallbackDownload(zipBlob, finalName);
-                        closeVectorDownloadDialog();
+                        return _vdlFallbackDownload(zipBlob, finalName, [{ description: 'ZIP Archive', accept: { 'application/zip': ['.zip'] } }], downloadOp).then(function(){ if(!downloadOp.signal.aborted)closeVectorDownloadDialog(); }).catch(function(err){if(!downloadOp.signal.aborted)downloadOp.finish('error');});
                     });
             };
+            downloadOp.cleanups.add(function(){clearInterval(_stepInterval);_reader.abort();});
             _reader.readAsText(blob);
             if (box) box.classList.remove('downloading');
             if (btn) { btn.disabled = false; btn.innerHTML = '\u2b07\ufe0f Download'; }
             return;
         }
 
-        // showSaveFilePicker: klasör/kaydet diyaloğu (destekleniyorsa)
-        if (window.showSaveFilePicker) {
-            var extMap = {
-                kml: [{ description: 'KML File', accept: { 'application/vnd.google-earth.kml+xml': ['.kml'] } }],
-                kmz: [{ description: 'KMZ File', accept: { 'application/vnd.google-earth.kmz': ['.kmz'] } }],
-                shp: [{ description: 'ZIP Archive', accept: { 'application/zip': ['.zip'] } }]
-            };
-            window.showSaveFilePicker({ suggestedName: finalName, types: extMap[fmt] || [] })
-                .then(function(fh) { return fh.createWritable(); })
-                .then(function(w)  { return w.write(blob).then(function() { return w; }); })
-                .then(function(w)  { return w.close(); })
-                .then(function()   { closeVectorDownloadDialog(); })
-                .catch(function(e) {
-                    if (e.name !== 'AbortError') { _vdlFallbackDownload(blob, finalName); }
-                    closeVectorDownloadDialog();
-                });
-        } else {
-            _vdlFallbackDownload(blob, finalName);
-            closeVectorDownloadDialog();
-        }
+        var extMap = {
+            kml: [{ description: 'KML File', accept: { 'application/vnd.google-earth.kml+xml': ['.kml'] } }],
+            kmz: [{ description: 'KMZ File', accept: { 'application/vnd.google-earth.kmz': ['.kmz'] } }],
+            shp: [{ description: 'ZIP Archive', accept: { 'application/zip': ['.zip'] } }]
+        };
+        return _vdlFallbackDownload(blob, finalName, extMap[fmt] || [],downloadOp).then(function(){if(!downloadOp.signal.aborted)closeVectorDownloadDialog();});
     })
     .catch(function(err) {
+        if(downloadOp.signal.aborted || err.name==='AbortError')return;
+        downloadOp.finish('error');
         clearInterval(_stepInterval);
         if (box) box.classList.remove('downloading');
         if (btn) { btn.disabled = false; btn.innerHTML = _vdlT('btn_download', '\u2b07\ufe0f Download'); }
@@ -67310,13 +68064,14 @@ function _executeVectorDownloadCore() {
 
 
 function executeVectorDownload() {
+    var syncOp=window._sylvaDownloadAbort.create('vector');
     // Raster Veri (Analiz Sonucu) seçimi = aktif çalışma ekranındaki
     // TÜM SINIFLANDIRILMIŞ analizleri otomatik seç ve tek ZIP'te indir.
     if (_vdlSelectedSource === 'raster') {
         var _batchSync = window._sylvaDownloadSyncPromise;
         window._sylvaDownloadSyncPromise = null;
         if (_batchSync) {
-            _batchSync.then(function(){ _executeVectorBatchDownload(); });
+            _batchSync.then(function(){if(!syncOp.signal.aborted)_executeVectorBatchDownload();}).catch(function(){});
         } else {
             _executeVectorBatchDownload();
         }
@@ -67325,20 +68080,23 @@ function executeVectorDownload() {
     if (window._sylvaDownloadSyncPromise) {
         var p = window._sylvaDownloadSyncPromise;
         window._sylvaDownloadSyncPromise = null;
-        p.then(function(){ _executeVectorDownloadCore(); });
+        p.then(function(){if(!syncOp.signal.aborted)_executeVectorDownloadCore();}).catch(function(){});
         return;
     }
     _executeVectorDownloadCore();
 }
 
-function _vdlFallbackDownload(blob, name) {
+function _vdlFallbackDownload(blob, name, customTypes, downloadOp) {
+    window._sylvaCheckDownload(downloadOp);
+    if (typeof window.saveFileWithPicker === 'function') {
+        return window.saveFileWithPicker(blob, name, customTypes, null, downloadOp);
+    }
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = name;
     document.body.appendChild(a);
     a.click();
-    setTimeout(function() { URL.revokeObjectURL(a.href); document.body.removeChild(a); }, 3000);
-
+    setTimeout(function() { URL.revokeObjectURL(a.href); if (a.parentNode) document.body.removeChild(a); }, 3000);
 }
 // Close on overlay click
 (function() {
@@ -83947,6 +84705,7 @@ refresh();
 
     function _executeVectorBatchDownload() {
         var fmt = _vdlSelectedFormat;
+        var downloadOp=window._sylvaDownloadAbort.create('vector','SylvaGIS_Vector_Analysis.zip');
         var pane = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
         var entries = vectorEntries(pane);
         var status = document.getElementById('vdl-status');
@@ -83974,8 +84733,9 @@ refresh();
         // gibi; ayrı logo bölümüne hiç gerek yok.
         if (btn) { btn.disabled=true; btn.innerHTML='⏳…'; }
         if (status) { status.style.display='block'; status.style.color='#1e3a8a'; }
+        var downloadOp=window._sylvaDownloadAbort.create('vector','SylvaGIS_Vector_Analysis.zip');
         var zip = (typeof JSZip !== 'undefined') ? new JSZip() : null;
-        if (!zip) { if(status) status.textContent='❌ '+_vdlT('vdl_batch_jszip_missing','JSZip kütüphanesi yüklenemedi.'); if(btn)btn.disabled=false; return; }
+        if (!zip) { downloadOp.finish('error'); if(status) status.textContent='❌ '+_vdlT('vdl_batch_jszip_missing','JSZip kütüphanesi yüklenemedi.'); if(btn)btn.disabled=false; return; }
         var errors=[]; var used={};
         function uniqueName(name) {
             var out=name, i=2;
@@ -83985,15 +84745,18 @@ refresh();
         function addBlob(blob, item, outName) {
             var u8 = blob.arrayBuffer ? blob.arrayBuffer() : new Response(blob).arrayBuffer();
             return u8.then(function(buf){
+                downloadOp.check();
                 if (fmt === 'shp') {
                     // SHP tek dosya değildir (.shp/.shx/.dbf/.prj). İç ZIP'i
                     // ana ZIP'e katman klasörü olarak aç; böylece kullanıcı
                     // tek tek dosyaları doğrudan çıkarabilir.
                     return JSZip.loadAsync(buf).then(function(inner){
+                downloadOp.check();
                         var folder = outName.replace(/_shp\.zip$/i,'');
                         var jobs=[];
                         inner.forEach(function(path,file){
-                            if (!file.dir) jobs.push(file.async('arraybuffer').then(function(data){ zip.file(folder+'/'+path.split('/').pop(), data); }));
+                            if (!file.dir) jobs.push(file.async('arraybuffer').then(function(data){
+                downloadOp.check(); zip.file(folder+'/'+path.split('/').pop(), data); }));
                         });
                         return Promise.all(jobs);
                     });
@@ -84019,29 +84782,35 @@ refresh();
         // eşleşirse kısa geri çekilmeyle 2 kez daha deneme) mekanizması
         // eklendi.
         function fetchVectorItem(body, fallbackName, label, attempt) {
-            return responseBlobNamed('/api/vector-download', body, fallbackName).catch(function(err) {
+            return responseBlobNamed('/api/vector-download', body, fallbackName, downloadOp).catch(function(err) {
+                if(downloadOp.signal.aborted || err.name==='AbortError') throw err;
                 var transient = /failed to fetch|networkerror|load failed/i.test(String(err && err.message || err));
                 if (!transient || attempt >= 2) throw err;
                 if (status) status.textContent = '⏳ ' + label + ' — ' + _vdlT('vdl_batch_retry_suffix', 'bağlantı yeniden deneniyor') + ' (' + (attempt + 1) + '/2)…';
-                return new Promise(function(resolve) { setTimeout(resolve, 1200 * (attempt + 1)); })
-                    .then(function() { return fetchVectorItem(body, fallbackName, label, attempt + 1); });
+                return window._sylvaDownloadDelay(downloadOp,1200*(attempt+1))
+                    .then(function() {
+                downloadOp.check(); return fetchVectorItem(body, fallbackName, label, attempt + 1); });
             });
         }
         var chain=Promise.resolve();
         entries.forEach(function(entry, idx){
             chain=chain.then(function(){
+                downloadOp.check();
                 var n=idx+1, total=entries.length, label=entry.index || 'Analiz '+n;
                 if(status) { status.style.display='block'; status.style.color='#1e3a8a'; status.textContent='⏳ '+n+'/'+total+' — '+label+_vdlT('vdl_batch_converting_suffix',' vektöre dönüştürülüyor…')+' ('+_vdlT('vdl_batch_raster_to_vector_prefix','Raster → vektör → ')+fmt.toUpperCase()+')'; }
                 var filename=_vectorBatchFilename(entry,n);
                 var body={vectorizePayload:true, payload:entry.payload, format:fmt, filename:filename, crs:'EPSG:4326'};
                 return fetchVectorItem(body, filename + (fmt==='shp'?'_shp.zip':'.'+fmt), label, 0)
                     .then(function(res){
+                downloadOp.check();
                         return addBlob(res.blob, entry, res.name);
                     })
-                    .catch(function(err){ errors.push({name:filename,error:(err&&err.message)||String(err)}); });
+                    .catch(function(err){
+                if(downloadOp.signal.aborted || err.name==='AbortError') throw err; errors.push({name:filename,error:(err&&err.message)||String(err)}); });
             });
         });
         return chain.then(function(){
+                downloadOp.check();
             if (errors.length) {
                 var lines=[_vdlT('vdl_undownloadable_title','SylvaGIS — UNDOWNLOADED LAYERS'),'', _vdlT('vdl_undownloadable_intro','The failed layers are listed below; the other successful layers are preserved in the ZIP.'),''];
                 errors.forEach(function(e){ lines.push('- '+e.name+': '+e.error); });
@@ -84053,15 +84822,25 @@ refresh();
             // zaten dışa aktarılan vektör dosyasının (KML/SHP/GeoJSON)
             // öznitelikleri içinde geliyor.
             if(status) status.textContent='⏳ '+_vdlT('vdl_batch_zip_preparing','ZIP dosyası hazırlanıyor…');
-            return zip.generateAsync({type:'blob',compression:'DEFLATE',compressionOptions:{level:6}});
+            return window._sylvaDownloadZip(zip,{compression:'DEFLATE',compressionOptions:{level:6}},downloadOp);
         }).then(function(blob){
+                downloadOp.check();
             var base=_vdlT('vector_analysis_zip_name','SylvaGIS_Vector_Analysis');
-            var a=document.createElement('a'), url=URL.createObjectURL(blob); a.href=url; a.download=base+'.zip'; document.body.appendChild(a); a.click(); a.remove();
-            setTimeout(function(){URL.revokeObjectURL(url);},60000);
+            var zipTypes = [{ description: 'ZIP Archive', accept: { 'application/zip': ['.zip'] } }];
+            if (typeof _vdlFallbackDownload === 'function') {
+                return _vdlFallbackDownload(blob, base + '.zip', zipTypes, downloadOp);
+            } else if (typeof window.saveFileWithPicker === 'function') {
+                return window.saveFileWithPicker(blob, base + '.zip', zipTypes, null, downloadOp);
+            } else {
+                var a=document.createElement('a'), url=URL.createObjectURL(blob); a.href=url; a.download=base+'.zip'; document.body.appendChild(a); a.click(); a.remove();
+                setTimeout(function(){URL.revokeObjectURL(url);},60000);
+            }
             if(status){ status.style.color='#065f46'; status.textContent='✓ '+entries.length+_vdlT('vdl_batch_done_suffix',' katman işlendi.')+(errors.length?' '+errors.length+_vdlT('vdl_batch_error_report_suffix',' katman için hata raporu ZIP içine eklendi.'):''); }
         }).catch(function(err){
+                if(downloadOp.signal.aborted || err.name==='AbortError') return;
+            downloadOp.finish('error');
             if(status){status.style.color='#991b1b';status.textContent='❌ '+((err&&err.message)||_vdlT('vdl_batch_failed','Toplu vektör indirme başarısız.'));}
-        }).finally(function(){ if(btn) {btn.disabled=false;btn.innerHTML=_vdlT('btn_download','⬇️ İndir');} if(box) box.classList.remove('downloading'); });
+        }).finally(function(){ if(window._sylvaDownloadAbort.get('vector') && window._sylvaDownloadAbort.get('vector')!==downloadOp)return; if(btn) {btn.disabled=false;btn.innerHTML=_vdlT('btn_download','⬇️ İndir');} if(box) box.classList.remove('downloading'); });
     }
     // 🛠️ BUG FİX (KÖK NEDEN — devamı, bkz. yukarıdaki vectorEntries notu):
     // "📥 Veriyi Vektör İndir" penceresinde "Raster Veri" seçiliyken "İndir"
@@ -84074,8 +84853,8 @@ refresh();
         return fetch((window.API_BASE || '') + url, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })
             .then(function (r) { return r.json().then(function (d) { if (!r.ok || !d || d.success === false) throw new Error((d && d.error) || r.statusText); return d; }); });
     }
-    function responseBlob(url, body) {
-        return fetch((window.API_BASE || '') + url, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })
+    function responseBlob(url, body, downloadOp) {
+        return window._sylvaDownloadFetch((window.API_BASE || '') + url, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) }, downloadOp)
             .then(function (r) { if (!r.ok || (r.headers.get('Content-Type') || '').indexOf('application/json') >= 0) return r.json().then(function(d){throw new Error((d && d.error) || r.statusText);}); return r.blob(); });
     }
     // 🛠️ BUG FİX (ArcMap "Could not add the specified file(s) — The document
@@ -84094,8 +84873,8 @@ refresh();
     // adı/uzantısı artık sunucunun Content-Disposition başlığından okunur —
     // tıpkı 📡 Ham Veri (Bantlar) indirmesinin zaten yaptığı gibi (bkz.
     // downloadRawBands() içindeki aynı desen).
-    function responseBlobNamed(url, body, fallbackName) {
-        return fetch((window.API_BASE || '') + url, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })
+    function responseBlobNamed(url, body, fallbackName, downloadOp) {
+        return window._sylvaDownloadFetch((window.API_BASE || '') + url, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) }, downloadOp)
             .then(function (r) {
                 if (!r.ok || (r.headers.get('Content-Type') || '').indexOf('application/json') >= 0) {
                     return r.json().then(function(d){throw new Error((d && d.error) || r.statusText);});
@@ -84106,13 +84885,23 @@ refresh();
                 return r.blob().then(function (blob) { return { blob: blob, name: name }; });
             });
     }
-    function downloadBlob(blob, name) { var a=document.createElement('a'), url=URL.createObjectURL(blob); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(function(){URL.revokeObjectURL(url);}, 60000); }
+    function downloadBlob(blob, name, customTypes) {
+        if (typeof window.saveFileWithPicker === 'function') {
+            return window.saveFileWithPicker(blob, name, customTypes);
+        }
+        var a=document.createElement('a'), url=URL.createObjectURL(blob);
+        a.href=url; a.download=name;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(function(){URL.revokeObjectURL(url);}, 60000);
+    }
 
     // Aktif ekranın raster katmanlarını bulur ve HER ZAMAN tek bir ZIP üretir.
     // 1 raster da, 2+ raster da aynı sunucu paketleme hattından geçer; böylece
     // her TIFF'in yanında gerekli RAT/VAT/.clr veya RGB .aux.xml sidecar'ları
     // korunur. Zaman Serisi varsa gerçek dönem sahneleri de bu kuyruğa eklenir.
     window.executeGeoTiffDownload = function () {
+        var downloadOp=window._sylvaDownloadAbort.create('geotiff','SylvaGIS_Raster.zip');
+        _geotiffAbortController=downloadOp;
         var pane = activePane(), entries = rasterEntries(pane);
         var status=document.getElementById('geotiff-status'), btn=document.getElementById('btn-geotiff-execute');
         var filename=(document.getElementById('geotiff-filename').value || 'SylvaGIS').trim();
@@ -84160,7 +84949,7 @@ refresh();
             });
         }
         var _dlqT = (typeof t === 'function') ? t : function (k, fb) { return fb || k; };
-        if (!entries.length) { if(status){status.style.display='block';status.textContent='❌ ' + _dlqT('dlq_no_raster', 'İndirilebilir raster analiz bulunamadı.');} return; }
+        if (!entries.length) { downloadOp.finish('error'); if(status){status.style.display='block';status.textContent='❌ ' + _dlqT('dlq_no_raster', 'İndirilebilir raster analiz bulunamadı.');} return; }
         if (btn) { btn.disabled=true; btn.textContent='⏳ ' + _dlqT('dlq_preparing_btn', 'Hazırlanıyor…'); }
         if (status) { status.style.display='block'; status.style.color='#1e3a8a'; status.textContent='⏳ ' + _dlqT('dlq_preparing_active', 'Aktif ekrandaki raster analizler hazırlanıyor…'); }
         var items=[];
@@ -84299,15 +85088,18 @@ refresh();
             // tüm toplu indirmenin bozulmasına neden olmasın diye kısa geri
             // çekilmeyle iki kez daha dene.
             function fetchItem(attempt) {
-                return responseBlob('/api/download-geotiff', body).catch(function(err) {
+                return responseBlob('/api/download-geotiff', body, downloadOp).catch(function(err) {
+                if(downloadOp.signal.aborted || err.name==='AbortError') throw err;
                     var transient = /failed to fetch|networkerror|load failed/i.test(String(err && err.message || err));
                     if (!transient || attempt >= 2) throw err;
                     if (status) status.textContent = '⏳ ' + label + ' — ' + _dlqT('dlq_retry_suffix', 'bağlantı yeniden deneniyor') + ' (' + (attempt + 1) + '/2)…';
-                    return new Promise(function(resolve) { setTimeout(resolve, 1200 * (attempt + 1)); })
-                        .then(function() { return fetchItem(attempt + 1); });
+                    return window._sylvaDownloadDelay(downloadOp,1200*(attempt+1))
+                        .then(function() {
+                downloadOp.check(); return fetchItem(attempt + 1); });
                 });
             }
             return fetchItem(0).then(function(blob){
+                downloadOp.check();
                 if (!blob || !blob.size) throw new Error(label + ': sunucu boş dosya döndürdü.');
                 if (status) status.textContent='✓ ' + _dlqFmt(_dlqT('dlq_progress', '{n}/{total} — {name} hazırlanıyor…'), {n:n,total:total,name:label}).replace('hazırlanıyor…','hazır.');
                 return blob;
@@ -84330,6 +85122,7 @@ refresh();
             if (!_masterZip) return Promise.reject(new Error('JSZip kütüphanesi yüklenemedi.'));
             var u8Promise = blob.arrayBuffer ? blob.arrayBuffer() : new Response(blob).arrayBuffer();
             return u8Promise.then(function(buf){
+                downloadOp.check();
                 var sig = new Uint8Array(buf,0,Math.min(4,buf.byteLength));
                 var isZip = sig.length >= 2 && sig[0]===80 && sig[1]===75;
                 if(!isZip){
@@ -84337,10 +85130,12 @@ refresh();
                     return;
                 }
                 return JSZip.loadAsync(buf).then(function(inner){
+                downloadOp.check();
                     var files=[];
                     inner.forEach(function(path, file){ if(!file.dir) files.push({path:path,file:file}); });
                     return Promise.all(files.map(function(entry){
                         return entry.file.async('arraybuffer').then(function(data){
+                downloadOp.check();
                             _masterZip.file(_uniqueZipName(entry.path), data);
                         });
                     }));
@@ -84351,13 +85146,17 @@ refresh();
         var _downloadPromise;
         if (_masterZip) {
             _downloadPromise = Promise.resolve().then(function(){
+                downloadOp.check();
                 var chain = Promise.resolve();
                 var _batchErrors = [];
                 items.forEach(function(item, idx){
                     chain = chain.then(function(){
+                downloadOp.check();
                         return _directGeoTiffItem(item, idx+1, items.length).then(function(blob){
+                downloadOp.check();
                             return _addReturnedZipToMaster(blob, item);
                         }).catch(function(err){
+                if(downloadOp.signal.aborted || err.name==='AbortError') throw err;
                             _batchErrors.push({name:item.filename || ('Raster '+(idx+1)), error:(err && err.message) || String(err)});
                             // Bir LULC/başka katman geçici olarak alınamazsa diğer
                             // başarılı katmanların ZIP'e girmesini engelleme.
@@ -84366,25 +85165,27 @@ refresh();
                     });
                 });
                 return chain.then(function(){
+                downloadOp.check();
                     if (_batchErrors.length) {
                         var _lines=[_dlqT('vdl_undownloadable_title','SylvaGIS — UNDOWNLOADED LAYERS'),'',_dlqT('vdl_undownloadable_intro','The failed layers are listed below; the other successful layers are preserved in the ZIP.'),''];
                         _batchErrors.forEach(function(e){ _lines.push('- '+e.name+': '+e.error); });
                         _masterZip.file(_dlqT('vdl_undownloadable_filename','UNDOWNLOADED_LAYERS')+'.txt', _lines.join('\n'));
                     }
                     if (status) status.textContent='⏳ ' + _dlqT('dlq_building_geotiff', 'ZIP dosyası hazırlanıyor…');
-                    return _masterZip.generateAsync({type:'blob', compression:'DEFLATE', compressionOptions:{level:6}});
+                    return window._sylvaDownloadZip(_masterZip,{compression:'DEFLATE',compressionOptions:{level:6}},downloadOp);
                 });
             });
         } else {
             // JSZip CDN yüklenmediyse güvenli geri dönüş: eski sunucu batch yolu.
-            _downloadPromise = responseBlob('/api/download-geotiff-batch', {items:items, zipFilename:_batchName + '.zip', lang: (typeof _sylvaLang !== 'undefined' && _sylvaLang) || 'en'});
+            _downloadPromise = responseBlob('/api/download-geotiff-batch', {items:items, zipFilename:_batchName + '.zip', lang: (typeof _sylvaLang !== 'undefined' && _sylvaLang) || 'en'}, downloadOp);
         }
         return _downloadPromise.then(function(b){
+                downloadOp.check();
             if(status){ status.style.color='#065f46'; status.textContent='✓ ' + _dlqT('dlq_ready', 'İndirme hazırlandı.'); }
-            var url=URL.createObjectURL(b), a=document.createElement('a');
-            a.href=url; a.download=_batchName+'.zip'; document.body.appendChild(a); a.click(); a.remove();
-            setTimeout(function(){URL.revokeObjectURL(url);},60000);
+            return window.saveFileWithPicker(b,_batchName+'.zip',null,null,downloadOp);
         }).catch(function(err) {
+                if(downloadOp.signal.aborted || err.name==='AbortError') return;
+            downloadOp.finish('error');
             if(status) {
                 status.style.color='#991b1b';
                 var _dlqRawErrMsg = (err && err.message) || '';
@@ -84402,7 +85203,7 @@ refresh();
                     });
                 }
             }
-        }).finally(function(){ if(btn){btn.disabled=false;btn.textContent=(typeof t==='function'?t('gtiff_btn_download'):'İndir');} });
+        }).finally(function(){ if(_geotiffAbortController===downloadOp)_geotiffAbortController=null; if(window._sylvaDownloadAbort.get('geotiff') && window._sylvaDownloadAbort.get('geotiff')!==downloadOp)return; if(btn){btn.disabled=false;btn.textContent=(typeof t==='function'?t('gtiff_btn_download'):'İndir');} });
     };
 }());
 </script>
