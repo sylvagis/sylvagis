@@ -1,3 +1,11 @@
+import sys
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
 import ee
 import re
 import io
@@ -26,6 +34,202 @@ from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
+
+# Cancellation is explicit: a WSGI client closing a fetch is not a GEE task cancellation.
+# Tokens also check the connected socket where the serving WSGI server exposes it.
+import select
+import socket
+from functools import wraps
+
+
+class _SylvaOperationCancelled(BaseException):
+    """Unwind export fallback/retry handlers without treating cancellation as a failure."""
+
+
+_SYLVA_OPERATION_LOCAL = threading.local()
+_SYLVA_OPERATIONS = {}
+_SYLVA_OPERATIONS_LOCK = threading.Lock()
+_SYLVA_CANCEL_DIR = os.path.join(tempfile.gettempdir(), 'sylvagis-operation-cancel')
+_SYLVA_OPERATION_ID = re.compile(r'^[A-Za-z0-9-]{16,80}$')
+
+
+class _SylvaOperation:
+    def __init__(self, operation_id, client_socket=None):
+        self.id = operation_id
+        self.event = threading.Event()
+        self.client_socket = client_socket
+        self.resources = set()
+        self.futures = set()
+        self.lock = threading.Lock()
+        self.next_marker_check = 0
+
+    def cancel(self):
+        self.event.set()
+        with self.lock:
+            resources, futures = list(self.resources), list(self.futures)
+        for future in futures:
+            future.cancel()
+        for response in resources:
+            # Interrupt a blocked streaming read before closing its connection.
+            try:
+                connection = getattr(response.raw, '_connection', None)
+                sock = getattr(connection, 'sock', None)
+                if sock is None:
+                    fp = getattr(getattr(response.raw, '_fp', None), 'fp', None)
+                    sock = getattr(getattr(fp, 'raw', None), '_sock', None)
+                if sock is not None:
+                    sock.shutdown(socket.SHUT_RDWR)
+            except (OSError, AttributeError):
+                pass
+            try:
+                response.close()
+            except Exception:
+                pass
+
+    def check(self):
+        if self.event.is_set():
+            raise _SylvaOperationCancelled()
+        now = time.monotonic()
+        if now >= self.next_marker_check:
+            self.next_marker_check = now + 0.05
+            if os.path.isfile(os.path.join(_SYLVA_CANCEL_DIR, self.id)):
+                self.cancel()
+                raise _SylvaOperationCancelled()
+            if self.client_socket is not None:
+                try:
+                    readable, _, _ = select.select([self.client_socket], [], [], 0)
+                    if readable and self.client_socket.recv(1, socket.MSG_PEEK) == b'':
+                        self.cancel()
+                        raise _SylvaOperationCancelled()
+                except (OSError, ValueError):
+                    self.cancel()
+                    raise _SylvaOperationCancelled()
+
+
+def _sylva_check_cancelled():
+    token = getattr(_SYLVA_OPERATION_LOCAL, 'token', None)
+    if token is not None:
+        token.check()
+
+
+def _sylva_cancel_wait(seconds):
+    token = getattr(_SYLVA_OPERATION_LOCAL, 'token', None)
+    if token is None:
+        time.sleep(seconds)
+        return
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        token.check()
+        token.event.wait(min(0.05, max(0, deadline - time.monotonic())))
+    token.check()
+
+
+def _sylva_submit(pool, function, *args, **kwargs):
+    token = getattr(_SYLVA_OPERATION_LOCAL, 'token', None)
+    _sylva_check_cancelled()
+    def run():
+        previous = getattr(_SYLVA_OPERATION_LOCAL, 'token', None)
+        _SYLVA_OPERATION_LOCAL.token = token
+        try:
+            _sylva_check_cancelled()
+            result = function(*args, **kwargs)
+            _sylva_check_cancelled()
+            return result
+        finally:
+            _SYLVA_OPERATION_LOCAL.token = previous
+    future = pool.submit(run)
+    if token is not None:
+        with token.lock:
+            token.futures.add(future)
+        def completed(done):
+            with token.lock:
+                token.futures.discard(done)
+        future.add_done_callback(completed)
+        if token.event.is_set():
+            future.cancel()
+    return future
+
+
+def _sylva_export_get(url, **kwargs):
+    token = getattr(_SYLVA_OPERATION_LOCAL, 'token', None)
+    if token is None:
+        return requests.get(url, **kwargs)
+    token.check()
+    kwargs['stream'] = True
+    response = requests.get(url, **kwargs)
+    with token.lock:
+        token.resources.add(response)
+    try:
+        token.check()
+        # Preserve Response.content/text behaviour expected by existing raster helpers.
+        chunks = []
+        for chunk in response.iter_content(chunk_size=65536):
+            token.check()
+            if chunk:
+                chunks.append(chunk)
+        token.check()
+        response._content = b''.join(chunks)
+        response._content_consumed = True
+        return response
+    except Exception:
+        token.check()
+        raise
+    finally:
+        with token.lock:
+            token.resources.discard(response)
+        response.close()
+
+
+@app.route('/api/cancel-operation/<operation_id>', methods=['POST'])
+def _sylva_cancel_operation(operation_id):
+    if not _SYLVA_OPERATION_ID.fullmatch(operation_id):
+        return jsonify({'success': False}), 400
+    # A marker carries cancellation across Gunicorn workers on the same host,
+    # including cancel-before-start races. Bounded retention prevents file leakage.
+    os.makedirs(_SYLVA_CANCEL_DIR, exist_ok=True)
+    marker = os.path.join(_SYLVA_CANCEL_DIR, operation_id)
+    with open(marker, 'w', encoding='ascii') as handle:
+        handle.write('cancelled')
+    with _SYLVA_OPERATIONS_LOCK:
+        token = _SYLVA_OPERATIONS.get(operation_id)
+    if token is not None:
+        token.cancel()
+    cutoff = time.time() - 3600
+    for entry in os.scandir(_SYLVA_CANCEL_DIR):
+        try:
+            if entry.is_file() and entry.stat().st_mtime < cutoff:
+                os.unlink(entry.path)
+        except OSError:
+            pass
+    return jsonify({'success': True, 'cancelled': True})
+
+
+def _sylva_cancellable_view(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        operation_id = request.headers.get('X-Sylva-Operation', '')
+        if not _SYLVA_OPERATION_ID.fullmatch(operation_id):
+            return view(*args, **kwargs)
+        client_socket = request.environ.get('werkzeug.socket') or request.environ.get('gunicorn.socket')
+        token = _SylvaOperation(operation_id, client_socket)
+        previous = getattr(_SYLVA_OPERATION_LOCAL, 'token', None)
+        _SYLVA_OPERATION_LOCAL.token = token
+        with _SYLVA_OPERATIONS_LOCK:
+            _SYLVA_OPERATIONS[operation_id] = token
+        try:
+            token.check()
+            response = view(*args, **kwargs)
+            token.check()
+            return response
+        except (_SylvaOperationCancelled, BrokenPipeError, ConnectionResetError):
+            token.cancel()
+            return Response('', status=499)
+        finally:
+            with _SYLVA_OPERATIONS_LOCK:
+                _SYLVA_OPERATIONS.pop(operation_id, None)
+            _SYLVA_OPERATION_LOCAL.token = previous
+    return wrapped
+
 
 # GEE dışa aktarma isteklerini süreç genelinde sıraya al. Earth Engine
 # Restricted Mode / 429 concurrency limit altında aynı anda birden fazla
@@ -111,6 +315,134 @@ _UNDOWNLOADABLE_REPORT_I18N = {
 }
 
 
+_EXPORT_LABELS = {
+    "en": [
+        "Seedling",
+        "Vector_Analysis"
+    ],
+    "tr": [
+        "Fidan",
+        "Vektor_Analizleri"
+    ],
+    "uz": [
+        "Ko‘chat",
+        "Vektor_tahlili"
+    ],
+    "el": [
+        "Δενδρύλλιο",
+        "Διανυσματική_Ανάλυση"
+    ],
+    "bg": [
+        "Фиданка",
+        "Векторен_анализ"
+    ],
+    "az": [
+        "Ting",
+        "Vektor_təhlili"
+    ],
+    "hu": [
+        "Csemete",
+        "Vektorelemzés"
+    ],
+    "kk": [
+        "Көшет",
+        "Векторлық_талдау"
+    ],
+    "de": [
+        "Setzling",
+        "Vektoranalyse"
+    ],
+    "fr": [
+        "Plant",
+        "Analyse_vectorielle"
+    ],
+    "es": [
+        "Plántula",
+        "Análisis_vectorial"
+    ],
+    "pt": [
+        "Muda",
+        "Análise_vetorial"
+    ],
+    "ar": [
+        "شتلة",
+        "التحليل_المتجهي"
+    ],
+    "fa": [
+        "نهال",
+        "تحلیل_برداری"
+    ],
+    "zh": [
+        "幼苗",
+        "矢量分析"
+    ],
+    "ja": [
+        "苗木",
+        "ベクトル解析"
+    ],
+    "ko": [
+        "묘목",
+        "벡터_분석"
+    ],
+    "hi": [
+        "पौधा",
+        "वेक्टर_विश्लेषण"
+    ],
+    "id": [
+        "Bibit",
+        "Analisis_Vektor"
+    ],
+    "ru": [
+        "Саженец",
+        "Векторный_анализ"
+    ],
+    "th": [
+        "ต้นกล้า",
+        "การวิเคราะห์เวกเตอร์"
+    ],
+    "bn": [
+        "চারা",
+        "ভেক্টর_বিশ্লেষণ"
+    ],
+    "vi": [
+        "Cây con",
+        "Phân_tích_vectơ"
+    ],
+    "ur": [
+        "پودا",
+        "ویکٹر_تجزیہ"
+    ],
+    "pl": [
+        "Sadzonka",
+        "Analiza_wektorowa"
+    ],
+    "ms": [
+        "Anak benih",
+        "Analisis_Vektor"
+    ],
+    "ky": [
+        "Көчөт",
+        "Вектордук_талдоо"
+    ],
+    "mn": [
+        "Суулгац",
+        "Вектор_шинжилгээ"
+    ],
+    "ka": [
+        "ნერგი",
+        "ვექტორული_ანალიზი"
+    ],
+    "it": [
+        "Piantina",
+        "Analisi_vettoriale"
+    ]
+}
+
+
+def _export_labels(lang):
+    return _EXPORT_LABELS.get(str(lang or "en").lower().split("-")[0], _EXPORT_LABELS["en"])
+
+
 def _undownloadable_report_texts(lang):
     """(dosya_adi_uzantisiz, baslik, aciklama) döndürür; bilinmeyen/eksik dil
     için İngilizce'ye düşer."""
@@ -184,6 +516,8 @@ def _sylva_export_type_and_source(analysis_index, satellite_key, dem_source=None
     (İstemci tarafındaki sylvaExportTypeAndSource()/…FromPayload() ile
     AYNI mantığı izler; bkz. index.html.)"""
     idx = analysis_index or ''
+    if idx in ('CARBON_SIMULATION', 'CARBON_SINK', 'CARBON_PLANTING'):
+        return 'Karbon_Fidan_Dagilimi', 'Simulasyon'
     if idx in _LULC_SOURCE_LABELS:
         return 'LULC', _LULC_SOURCE_LABELS[idx]
     if idx.startswith('TOPO'):
@@ -209,6 +543,14 @@ def _sylva_build_export_basename(analysis_index, satellite_key, area_name=None,
         parts.append(area_clean)
     parts.append(date_str or datetime.datetime.utcnow().strftime('%Y-%m-%d'))
     return '_'.join(p for p in parts if p)
+
+
+@app.route('/')
+@app.route('/index.html')
+def serve_index():
+    from flask import send_from_directory
+    root_dir = os.path.dirname(os.path.abspath(__file__))
+    return send_from_directory(root_dir, 'index.html')
 
 
 # API istemcisi JSON bekler. Flask'in varsayılan HTML 404/405 sayfaları,
@@ -283,8 +625,12 @@ def _call_with_retry(fn, *args, retries=3, base_delay=1.5, **kwargs):
     last_err = None
     for attempt in range(retries + 1):
         try:
-            return fn(*args, **kwargs)
+            _sylva_check_cancelled()
+            result = fn(*args, **kwargs)
+            _sylva_check_cancelled()
+            return result
         except Exception as e:
+            _sylva_check_cancelled()
             last_err = e
             msg = str(e).lower()
             if any(m in msg for m in _non_retryable_markers):
@@ -295,7 +641,7 @@ def _call_with_retry(fn, *args, retries=3, base_delay=1.5, **kwargs):
                     delay *= 2.0
                 print('[SylvaGIS] ⚠️ Geçici hata (deneme {}/{}), {:.1f} sn sonra '
                       'tekrar denenecek: {}'.format(attempt + 1, retries + 1, delay, e))
-                time.sleep(delay)
+                _sylva_cancel_wait(delay)
             else:
                 raise
     raise last_err
@@ -2020,6 +2366,8 @@ def _sylvagis_ensure_ee_before_request():
     başarısız olduysa) burada kendini iyileştirmeyi dener — böylece
     kullanıcı "Earth Engine client library not initialized" hatasını bir
     daha görmeden önce sorun istek anında arka planda çözülmeye çalışılır."""
+    if request.endpoint == '_sylva_cancel_operation':
+        return
     if not _EE_READY:
         _ensure_ee_ready()
 
@@ -2911,6 +3259,7 @@ def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name, legend_labels=No
     import numpy as np
     from rasterio.io import MemoryFile
 
+    _sylva_check_cancelled()
     defs = LULC_CLASS_DEFS.get(index_name)
     if not defs:
         return None
@@ -2920,13 +3269,17 @@ def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name, legend_labels=No
     _label_override = {}
     if isinstance(legend_labels, list):
         for item in legend_labels:
+            _sylva_check_cancelled()
             if isinstance(item, dict) and item.get('code') is not None:
+                _sylva_check_cancelled()
                 try: _label_override[int(item.get('code'))] = str(item.get('label') or '').strip()
                 except Exception: pass
     code_info = {}
     for d in defs:
+        _sylva_check_cancelled()
         hexc = d['color'].lstrip('#')
         rgb = tuple(int(hexc[i:i + 2], 16) for i in (0, 2, 4))
+        _sylva_check_cancelled()
         label = _label_override.get(int(d['code'])) or d['label']
         code_info[d['code']] = (label, rgb)
 
@@ -3168,6 +3521,7 @@ def _build_rgb_symbology_zip(tif_bytes, safe_name):
             src_nodata = src.nodata
             stats = []
             for b in range(1, count + 1):
+                _sylva_check_cancelled()
                 arr = src.read(b).astype(np.float64)
                 if src_nodata is not None:
                     valid = arr[~np.isclose(arr, float(src_nodata))]
@@ -3182,6 +3536,7 @@ def _build_rgb_symbology_zip(tif_bytes, safe_name):
 
     bands_xml = []
     for i, (bmin, bmax, bmean, bstd) in enumerate(stats, start=1):
+        _sylva_check_cancelled()
         bands_xml.append(
             '  <PAMRasterBand band="{0}">\n'
             '    <Metadata>\n'
@@ -3404,6 +3759,7 @@ def _add_internal_raster_overviews(tif_bytes, resampling='bilinear'):
                     with out.open(**profile) as dst:
                         dst.write(data)
                         for i, tg in enumerate(tags, 1):
+                            _sylva_check_cancelled()
                             if tg:
                                 dst.update_tags(i, **tg)
                         if cmap:
@@ -3437,6 +3793,7 @@ def _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=Non
             src_nodata = src.nodata if nodata_value is None else nodata_value
             stats = []
             for band in data:
+                _sylva_check_cancelled()
                 valid = np.isfinite(band.astype(np.float64))
                 if src_nodata is not None:
                     try:
@@ -3464,6 +3821,7 @@ def _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=Non
         with out_mem.open(**profile) as dst:
             dst.write(data)
             for i, (mn, mx, mean, std) in enumerate(stats, start=1):
+                _sylva_check_cancelled()
                 dst.update_tags(i,
                     STATISTICS_MINIMUM=repr(mn),
                     STATISTICS_MAXIMUM=repr(mx),
@@ -3472,6 +3830,7 @@ def _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=Non
                     STATISTICS_APPROXIMATE='NO')
             # Overview levels yalnızca raster boyutu izin veriyorsa eklenir.
             levels = [2, 4, 8, 16, 32, 64, 128, 256, 512]
+            _sylva_check_cancelled()
             levels = [lv for lv in levels if profile.get('width', 0) // lv >= 32 and profile.get('height', 0) // lv >= 32]
             if levels:
                 try:
@@ -3482,6 +3841,7 @@ def _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=Non
                     # kategorik tam sayı rasterlarda nearest korunsun. Ham
                     # piksel değerleri değişmez, yalnızca ArcMap/QGIS'in uzak
                     # zoom önizlemesi daha doğru olur.
+                    _sylva_check_cancelled()
                     _dtype = str(profile.get('dtype', '')).lower()
                     _overview_resampling = Resampling.bilinear if ('float' in _dtype or 'complex' in _dtype) else Resampling.nearest
                     dst.build_overviews(levels, _overview_resampling)
@@ -3496,6 +3856,7 @@ def _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=Non
     # ArcMap/QGIS için gerçek istatistikleri taşıyan PAM sidecar.
     bands_xml = []
     for i, (mn, mx, mean, std) in enumerate(stats, start=1):
+        _sylva_check_cancelled()
         bands_xml.append(
             '  <PAMRasterBand band="{}">\n'
             '    <Metadata>\n'
@@ -3623,8 +3984,11 @@ def _build_classified_symbology_zip(tif_bytes, vis, safe_name, breaks=None, n_cl
             byte_band, code_info = _classify_from_visualized_rgb(band, valid, rgb_bytes)
 
         if not code_info:
+            _sylva_check_cancelled()
             vmin = vis.get('min') if isinstance(vis, dict) else None
+            _sylva_check_cancelled()
             vmax = vis.get('max') if isinstance(vis, dict) else None
+            _sylva_check_cancelled()
             palette = (vis.get('palette') if isinstance(vis, dict) else None) or ['000000', 'ffffff']
             if vmin is None or vmax is None:
                 # Vis min/max sağlanmadıysa (beklenmedik durum) veriden hesapla —
@@ -4441,11 +4805,15 @@ def gemini_data_qa():
     """
     try:
         data = request.json or {}
+        _sylva_check_cancelled()
         question = str(data.get('question') or '').strip()
+        _sylva_check_cancelled()
         datasets = data.get('datasets')
+        _sylva_check_cancelled()
         building = data.get('building') or None
         # 🆕 Faz 75: aktif arayüz dili — front-end window._sylvaLang değerini
         # gönderir; asistanın yanıt dilini belirler (bkz. _build_gemini_system_instruction).
+        _sylva_check_cancelled()
         req_lang = str(data.get('lang') or 'tr').strip().lower()
         if req_lang not in _GEMINI_LANG_NAMES:
             req_lang = 'tr'
@@ -4454,7 +4822,9 @@ def gemini_data_qa():
         # dağılımı da (yaklaşık, betimsel olarak) yorumlayabilir. Boyut/tür
         # doğrulaması aşağıda, kota kontrolünden ÖNCE yapılır (kötüye kullanım/
         # aşırı büyük istek engeli).
+        _sylva_check_cancelled()
         image_base64 = data.get('image_base64')
+        _sylva_check_cancelled()
         image_mime = str(data.get('image_mime') or 'image/jpeg').strip().lower()
         _ALLOWED_IMAGE_MIMES = ('image/jpeg', 'image/png', 'image/webp')
         if image_base64 is not None:
@@ -4472,14 +4842,19 @@ def gemini_data_qa():
         # veya aşırı büyük TEKİL öğeler isteği reddetmez — sessizce listeden
         # çıkarılır. (Yukarıdaki tekil "image_base64" alanı geriye dönük
         # uyumluluk için hâlâ katı doğrulamayla korunuyor.)
+        _sylva_check_cancelled()
         raw_images = data.get('images')
         valid_images = []
         if isinstance(raw_images, list):
             for im in raw_images[:6]:
+                _sylva_check_cancelled()
                 if not isinstance(im, dict):
                     continue
+                _sylva_check_cancelled()
                 im_b64 = im.get('base64')
+                _sylva_check_cancelled()
                 im_mime = str(im.get('mime') or 'image/jpeg').strip().lower()
+                _sylva_check_cancelled()
                 im_name = im.get('analysis_name')
                 if not isinstance(im_b64, str) or not im_b64:
                     continue
@@ -4502,6 +4877,7 @@ def gemini_data_qa():
         # içinde tutuyor) — SADECE bu veri gerçekten mevcutsa (yani o
         # analizler kullanılıyorsa) rapora dahil edilir. Ham günlük dizi çok
         # büyükse (beklenmedik/aşırı istek) sessizce göz ardı edilir.
+        _sylva_check_cancelled()
         weather_days = data.get('weather_days')
         if not isinstance(weather_days, list) or len(weather_days) > 60:
             weather_days = None
@@ -4510,9 +4886,12 @@ def gemini_data_qa():
         # Geriye dönük uyumluluk: eski tekli-veri-seti formatı gönderildiyse
         # tek elemanlı bir listeye çevir.
         if not datasets:
+            _sylva_check_cancelled()
             legacy_classes = data.get('classes') or []
+            _sylva_check_cancelled()
             legacy_pct = data.get('percentages') or []
             if legacy_classes and legacy_pct:
+                _sylva_check_cancelled()
                 datasets = [{
                     'analysis_name': data.get('analysis_name') or 'Bilinmeyen',
                     'classes': legacy_classes,
@@ -4529,12 +4908,16 @@ def gemini_data_qa():
         # En az bir geçerli veri seti VEYA bina/çatı verisi gerekli.
         valid_datasets = []
         for ds in datasets:
+            _sylva_check_cancelled()
             if not isinstance(ds, dict):
                 continue
+            _sylva_check_cancelled()
             ds_classes = ds.get('classes') or []
+            _sylva_check_cancelled()
             ds_pct = ds.get('percentages') or []
             if ds_classes and ds_pct and len(ds_classes) == len(ds_pct):
                 valid_datasets.append(ds)
+        _sylva_check_cancelled()
         has_building = bool(building and (building.get('buildingCount') or building.get('totalAreaM2')))
 
         if not valid_datasets and not has_building:
@@ -4552,6 +4935,7 @@ def gemini_data_qa():
                 'servisinizde GEMINI_API_KEY ortam değişkeni olarak tanımlayın.'
             )})
 
+        _sylva_check_cancelled()
         client_ip = (request.headers.get('X-Forwarded-For', '').split(',')[0].strip() or request.remote_addr or 'unknown')
         ok, quota_err = _gemini_check_and_increment_quota(client_ip)
         if not ok:
@@ -4567,9 +4951,13 @@ def gemini_data_qa():
 
         data_summary_blocks = []
         for idx, ds in enumerate(valid_datasets, start=1):
+            _sylva_check_cancelled()
             ds_name = str(ds.get('analysis_name') or ('%s %d' % (_L['dataset'], idx)))
+            _sylva_check_cancelled()
             ds_classes = ds.get('classes') or []
+            _sylva_check_cancelled()
             ds_pct = ds.get('percentages') or []
+            _sylva_check_cancelled()
             ds_area = ds.get('area_ha')
             lines = ['%s %d — %s' % (_L['dataset'], idx, ds_name)]
             if ds_area is not None:
@@ -4579,8 +4967,11 @@ def gemini_data_qa():
                     pass
             lines.append(_L['classes_header'])
             for c, p in zip(ds_classes, ds_pct):
+                _sylva_check_cancelled()
                 name = str((c or {}).get('name') or '?')
+                _sylva_check_cancelled()
                 cmin = (c or {}).get('min')
+                _sylva_check_cancelled()
                 cmax = (c or {}).get('max')
                 rng = ('%s - %s' % (cmin, cmax)) if (cmin is not None and cmax is not None) else '—'
                 try:
@@ -4592,8 +4983,11 @@ def gemini_data_qa():
 
         if has_building:
             b_lines = [_L['building_section']]
+            _sylva_check_cancelled()
             b_count = building.get('buildingCount')
+            _sylva_check_cancelled()
             b_area = building.get('totalAreaM2')
+            _sylva_check_cancelled()
             b_dataset = building.get('dataset')
             if b_count is not None:
                 try:
@@ -4628,6 +5022,7 @@ def gemini_data_qa():
             if weather_summary['mean_humidity_pct'] is not None:
                 w_lines.append('%s %.1f%%' % (_L['weather_humidity'], weather_summary['mean_humidity_pct']))
             if weather_summary['trend'] is not None:
+                _sylva_check_cancelled()
                 trend_word = {
                     'up': _L['weather_trend_up'],
                     'down': _L['weather_trend_down'],
@@ -4648,6 +5043,7 @@ def gemini_data_qa():
         # eklenir — Gemini'nin çok modlu (multimodal) girdi biçimi budur.
         gemini_parts = [{'text': user_prompt}]
         for _im in valid_images:
+            _sylva_check_cancelled()
             _im_label = _im['analysis_name'] or _L['general_map_view']
             gemini_parts.append({'text': _L['image_label'] % _im_label})
             gemini_parts.append({'inlineData': {'mimeType': _im['mime'], 'data': _im['base64']}})
@@ -4665,6 +5061,7 @@ def gemini_data_qa():
         try:
             # Görüntü sayısı arttıkça istek daha uzun sürebilir; zaman aşımı buna göre uzatılır.
             _gqa_timeout = 20 + (5 * len(valid_images)) if valid_images else 20
+            _sylva_check_cancelled()
             resp = requests.post(gemini_url, json=gemini_body, timeout=min(_gqa_timeout, 50))
         except Exception as _net_err:
             return jsonify({'success': False, 'error': 'Gemini API\'ye ulaşılamadı: ' + str(_net_err)})
@@ -4672,6 +5069,7 @@ def gemini_data_qa():
         if resp.status_code != 200:
             err_detail = ''
             try:
+                _sylva_check_cancelled()
                 err_detail = (resp.json().get('error') or {}).get('message', '')
             except Exception:
                 err_detail = resp.text[:300]
@@ -4681,10 +5079,13 @@ def gemini_data_qa():
 
         try:
             resp_json = resp.json()
+            _sylva_check_cancelled()
             candidates = resp_json.get('candidates') or []
             if not candidates:
                 return jsonify({'success': False, 'error': 'Gemini yanıt üretmedi (boş yanıt) — soruyu farklı bir şekilde tekrar deneyin.'})
+            _sylva_check_cancelled()
             parts = (candidates[0].get('content') or {}).get('parts') or []
+            _sylva_check_cancelled()
             answer_text = ''.join(p.get('text', '') for p in parts).strip()
             if not answer_text:
                 return jsonify({'success': False, 'error': 'Gemini yanıt üretmedi (boş yanıt) — soruyu farklı bir şekilde tekrar deneyin.'})
@@ -5269,6 +5670,28 @@ def _collect_scenes_across_years(col, start_date, end_date, months=None,
     edt = datetime.datetime.strptime(str(end_date)[:10], '%Y-%m-%d')
     month_filter = _calendar_month_filter(months)
 
+    # 🛠️ BUG FİX (22/09/2026 — Galeri sadece 8-10 görüntü gösteriyor, seçilen
+    # tarih aralığının SONUNA kadar gelmiyor):
+    # Önceden her yıl için SABİT bir per_year_limit (ör. 8) uygulanıyor ve
+    # o yılın kesişen aralığı içinden yalnızca kronolojik olarak İLK
+    # per_year_limit kadar sahne alınıyordu. Kullanıcı tek bir takvim yılı
+    # içinde kalan (ör. 07/22/2026-09/22/2026 gibi 2 aylık) bir aralık
+    # seçtiğinde bile, o aralıktaki TÜM eşleşen sahneler yerine sadece en
+    # erken ~8 tanesi (yaklaşık ilk 1 ay) dönüyor, aralığın geri kalanı
+    # (08/22-09/22) sorgudan tamamen düşüyordu — "tüm görüntü seçenekleri
+    # gelsin" beklentisi karşılanmıyordu.
+    #
+    # ÇÖZÜM: per_year_limit artık aralıktaki yıl sayısına göre ADİL şekilde
+    # büyütülüyor: aralık kaç takvim yılına yayılıyorsa, toplam bütçe
+    # (total_limit) o kadar yıla bölünüp her yıla pay ediliyor — ama asla
+    # çağıranın verdiği per_year_limit'in altına düşmüyor (min. taban).
+    # Böylece tek yıllık (veya birkaç yıllık) aralıklarda per-year sınırı
+    # pratikte total_limit'e eşitlenir ve aralıktaki TÜM eşleşen sahneler
+    # (total_limit'e kadar) döner; çok yıllı geniş aralıklarda ise eski
+    # "her yıldan adil örnekleme" davranışı korunur.
+    num_years = max(1, edt.year - sdt.year + 1)
+    effective_per_year_limit = max(per_year_limit, -(-total_limit // num_years))  # ceil
+
     merged = None
     for year in range(sdt.year, edt.year + 1):
         year_start = datetime.datetime(year, 1, 1)
@@ -5280,7 +5703,7 @@ def _collect_scenes_across_years(col, start_date, end_date, months=None,
         yr_col = col.filterDate(clip_start.strftime('%Y-%m-%d'), clip_end.strftime('%Y-%m-%d'))
         if month_filter is not None:
             yr_col = yr_col.filter(month_filter)
-        yr_col = yr_col.sort('system:time_start').limit(per_year_limit)
+        yr_col = yr_col.sort('system:time_start').limit(effective_per_year_limit)
         merged = yr_col if merged is None else merged.merge(yr_col)
 
     if merged is None:
@@ -5985,14 +6408,23 @@ def build_result_image(data, for_export=False):
     vis sözlüğünü değiştirir) o dal for_export'tan etkilenmeden aynen
     çalışmaya devam eder.
     """
+    _sylva_check_cancelled()
     roi_coords = data.get('roi')
+    _sylva_check_cancelled()
     clip_mode  = data.get('clipMode', 'clip')
+    _sylva_check_cancelled()
     satellite  = data.get('satellite', 's2-l2a')
+    _sylva_check_cancelled()
     index      = data.get('index', 'NDVI')
+    _sylva_check_cancelled()
     start_date = data.get('startDate')
+    _sylva_check_cancelled()
     end_date   = data.get('endDate')
+    _sylva_check_cancelled()
     max_cloud  = int(data.get('maxCloud', 20))
+    _sylva_check_cancelled()
     scene_id   = data.get('sceneId')
+    _sylva_check_cancelled()
     class_breaks = data.get('classBreaks')
     if for_export:
         class_breaks = None
@@ -6104,6 +6536,7 @@ def build_result_image(data, for_export=False):
         # sonlandırıyoruz — böylece hem sorun kesin olarak teşhis edilebilir
         # hale gelir hem de olası bağlantı-düşürme senaryosu tamamen ortadan
         # kalkar.
+        _sylva_check_cancelled()
         _dw_obs_count = _call_with_retry(lambda: recent.size().getInfo())
         if not _dw_obs_count:
             raise ValueError(
@@ -6299,6 +6732,7 @@ def build_result_image(data, for_export=False):
         # NASADEM zaten tek görüntü olduğu için boşluk sorunu yaşamaz.
         _srtm_fallback = ee.Image('USGS/SRTMGL1_003').select('elevation')
 
+        _sylva_check_cancelled()
         dem_source = data.get('demSource', 'SRTM')
         if dem_source == 'ALOS':
             dem = (ee.ImageCollection('JAXA/ALOS/AW3D30/V3_2')
@@ -6533,6 +6967,7 @@ def build_result_image(data, for_export=False):
             # kalınlığında, gerçek eş yükselti çizgilerine benzeyen ince ve
             # temiz bir sonuç verir.
             try:
+                _sylva_check_cancelled()
                 _contour_interval = float(data.get('contourInterval', 50) or 50)
             except (TypeError, ValueError):
                 _contour_interval = 50.0
@@ -6591,6 +7026,7 @@ def build_result_image(data, for_export=False):
             # tut: gerçek değerler korunur, yalnızca GÖRSEL germe dengelenir.
             if index in ('TOPO_CURVATURE', 'TOPO_PLAN_CURV', 'TOPO_PROFILE_CURV'):
                 try:
+                    _sylva_check_cancelled()
                     _absmax = max(abs(float(vis.get('min', -30))), abs(float(vis.get('max', 30))))
                     if _absmax > 0 and _math.isfinite(_absmax):
                         vis['min'] = -_absmax
@@ -6611,6 +7047,7 @@ def build_result_image(data, for_export=False):
         # ÇÖZÜM: for_export=True → SADECE ham result kullan, sınıflandırma
         # ve palette/min/max TAMAMEN atlanır. Piksel değerleri değişmez.
         # for_export=False (harita önizleme) → önceki davranış aynen korunur.
+        _sylva_check_cancelled()
         custom_palette = data.get('palette')
         # Hillshade özel katmandır: harita/semboloji panelinden gelen önceki
         # renk paleti (ör. lacivert/blue-ocean) KESİNLİKLE bu veriye uygulanmaz.
@@ -6624,8 +7061,11 @@ def build_result_image(data, for_export=False):
         # yalnızca maskenin değeri 1 olan eş yükselti çizgilerine uygulanır.
         # Ayrı alan adı kullanılması, genel semboloji paletinin kontur
         # çizgisini yanlışlıkla bir dolgu/alan rengine dönüştürmesini önler.
+        _sylva_check_cancelled()
         contour_line_color = data.get('contourLineColor')
+        _sylva_check_cancelled()
         custom_min     = data.get('min')
+        _sylva_check_cancelled()
         custom_max     = data.get('max')
 
         if for_export:
@@ -6737,6 +7177,7 @@ def build_result_image(data, for_export=False):
         # önizlemesi. satellite alanı SATELLITE_DATASETS anahtarlarından biri
         # olmalıdır (s2-l1c, s2-l2a, l89-l2, l7-l2, l45-l2, l89-l1, l7-l1,
         # l45-l1, mss-l1).
+        _sylva_check_cancelled()
         ds = SATELLITE_DATASETS.get(satellite)
         if not ds:
             raise ValueError('Bilinmeyen uydu görüntüsü veri seti: ' + str(satellite))
@@ -6765,6 +7206,7 @@ def build_result_image(data, for_export=False):
 
         disp = image.select(ds['rgbBands'])
         if ds.get('scaleFactor', 1) != 1 or ds.get('offset', 0) != 0:
+            _sylva_check_cancelled()
             disp = disp.multiply(ds['scaleFactor']).add(ds.get('offset', 0))
         disp = disp.rename(['red', 'green', 'blue'])
 
@@ -6812,8 +7254,11 @@ def build_result_image(data, for_export=False):
         # aktarım (for_export=True) etkilenmez — GeoTIFF'e her zaman ham/
         # sürekli dB değerleri yazılmaya devam eder, yalnızca harita
         # önizlemesindeki renklendirme değişir.
+        _sylva_check_cancelled()
         custom_palette = data.get('palette')
+        _sylva_check_cancelled()
         custom_min = data.get('min')
+        _sylva_check_cancelled()
         custom_max = data.get('max')
         if for_export:
             display_result = result
@@ -6902,12 +7347,15 @@ def build_result_image(data, for_export=False):
         sub_data['endDate'] = e
         sub_data.pop('sceneId', None)
         if months_key is not None:
+            _sylva_check_cancelled()
             sub_data['months'] = base_data.get(months_key)
         _disp, _sub_roi, sub_result, _sub_vis, sub_crs = build_result_image(sub_data, for_export=True)
         return sub_result, sub_crs
 
     def _env_urban_require_period2(data):
+        _sylva_check_cancelled()
         s2 = data.get('startDate2')
+        _sylva_check_cancelled()
         e2 = data.get('endDate2')
         if not s2 or not e2:
             raise ValueError(
@@ -6924,6 +7372,7 @@ def build_result_image(data, for_export=False):
         # lejant -10°C..+10°C gibi DAR bir aralıkta). Mutlak LST için zaten
         # mevcut 'LST' indeksi kullanılabilir.
         lst_img, crs_probe = _env_urban_single_period_image(data, 'LST', start_date, end_date)
+        _sylva_check_cancelled()
         mean_lst = _call_with_retry(
             lambda: lst_img.reduceRegion(
                 reducer=ee.Reducer.mean(), geometry=roi, scale=_stats_scale_for('UHI_LST'),
@@ -6941,11 +7390,13 @@ def build_result_image(data, for_export=False):
         s2, e2 = _env_urban_require_period2(data)
         lst1, crs1 = _env_urban_single_period_image(data, 'LST', start_date, end_date)
         lst2, _crs2 = _env_urban_single_period_image(data, 'LST', s2, e2, months_key='months2')
+        _sylva_check_cancelled()
         mean1 = _call_with_retry(
             lambda: lst1.reduceRegion(reducer=ee.Reducer.mean(), geometry=roi,
                                        scale=_stats_scale_for('UHI_TREND'), maxPixels=1e9,
                                        bestEffort=True, tileScale=4).get('value').getInfo()
         )
+        _sylva_check_cancelled()
         mean2 = _call_with_retry(
             lambda: lst2.reduceRegion(reducer=ee.Reducer.mean(), geometry=roi,
                                        scale=_stats_scale_for('UHI_TREND'), maxPixels=1e9,
@@ -7003,6 +7454,7 @@ def build_result_image(data, for_export=False):
         water2 = ndwi2.gt(0)
         ever_water = water1.Or(water2)
         dem = ee.Image('USGS/SRTMGL1_003').select('elevation')
+        _sylva_check_cancelled()
         max_water_elev = _call_with_retry(
             lambda: dem.updateMask(ever_water).reduceRegion(
                 reducer=ee.Reducer.max(), geometry=roi, scale=30,
@@ -7108,6 +7560,7 @@ def build_result_image(data, for_export=False):
         def _dw_built_mean(s, e, period_label):
             col = (ee.ImageCollection('GOOGLE/DYNAMICWORLD/V1')
                    .filterBounds(roi).filterDate(s, e))
+            _sylva_check_cancelled()
             _obs_count = _call_with_retry(lambda: col.size().getInfo())
             if not _obs_count:
                 raise ValueError(
@@ -7165,6 +7618,7 @@ def build_result_image(data, for_export=False):
         cur_precip = chirps.filterDate(start_date, end_date).select('precipitation').sum()
         _hist_sums = []
         for _yr_back in range(1, 11):
+            _sylva_check_cancelled()
             try:
                 _hs = _d0.replace(year=_d0.year - _yr_back).isoformat()
                 _he = _d1.replace(year=_d1.year - _yr_back).isoformat()
@@ -7221,6 +7675,7 @@ def build_result_image(data, for_export=False):
         cur_precip2 = chirps2.filterDate(start_date, end_date).select('precipitation').sum()
         _hist_sums2 = []
         for _yr_back in range(1, 6):
+            _sylva_check_cancelled()
             try:
                 _hs2 = _d0c.replace(year=_d0c.year - _yr_back).isoformat()
                 _he2 = _d1c.replace(year=_d1c.year - _yr_back).isoformat()
@@ -7257,6 +7712,7 @@ def build_result_image(data, for_export=False):
         # filtresini YOK SAYIYORDU. Dönem 2 için AYNI mantıkla months2'den
         # kendi filtresi türetilir (bkz. _env_urban_single_period_image'daki
         # months_key deseni).
+        _sylva_check_cancelled()
         month_filter2 = _calendar_month_filter(_parse_months_param({'months': data.get('months2')}))
 
         def _s1_vv_mean(s, e, mf):
@@ -7327,6 +7783,7 @@ def build_result_image(data, for_export=False):
         # 🛠️ BUG FİX (tutarlılık): bkz. FLOOD_MAPPING'deki AYNI notu — mevcut
         # 'SAR' indeksiyle aynı koleksiyonu kullandığı için ay filtresi burada
         # da uygulanır.
+        _sylva_check_cancelled()
         month_filter2 = _calendar_month_filter(_parse_months_param({'months': data.get('months2')}))
 
         def _s1_vv_mean_eq(s, e, mf):
@@ -7549,6 +8006,7 @@ def build_result_image(data, for_export=False):
         col = (ee.ImageCollection('LANDSAT/LM05/C02/T1').filterBounds(roi))
         for _mss_id in ('LANDSAT/LM04/C02/T1', 'LANDSAT/LM03/C02/T1',
                          'LANDSAT/LM02/C02/T1', 'LANDSAT/LM01/C02/T1'):
+            _sylva_check_cancelled()
             col = col.merge(ee.ImageCollection(_mss_id).filterBounds(roi))
         b = {'nir': 'B3', 'red': 'B2', 'green': 'B1',
              'swir': None, 'blue': None, 'thermal': None}
@@ -7869,6 +8327,7 @@ def build_result_image(data, for_export=False):
         lulc = (ee.ImageCollection('GOOGLE/DYNAMICWORLD/V1')
                 .filterBounds(roi).filterDate(start_date, end_date)
                 .select('label').reduce(ee.Reducer.mode()).rename('lulc'))
+        _sylva_check_cancelled()
         _class_stats = _call_with_retry(
             lambda: lst_c.addBands(lulc).reduceRegion(
                 reducer=ee.Reducer.mean().group(groupField=1, groupName='lulc'),
@@ -7915,8 +8374,11 @@ def build_result_image(data, for_export=False):
     # DEM: metre, eğim: derece, vb.) — sınıflandırma veya görsel germen
     # indirilecek dosyayı ASLA etkilemez.
     # for_export=False (harita önizleme) → önceki davranış aynen korunur.
+    _sylva_check_cancelled()
     custom_palette = data.get('palette')
+    _sylva_check_cancelled()
     custom_min     = data.get('min')
+    _sylva_check_cancelled()
     custom_max     = data.get('max')
 
     if for_export:
@@ -8167,13 +8629,18 @@ def timeseries():
     try:
         data = request.get_json(silent=True) or {}
 
+        _sylva_check_cancelled()
         satellite  = (data.get('satellite') or 's2-l2a').strip()
+        _sylva_check_cancelled()
         period     = (data.get('period') or 'yearly').strip().lower()
+        _sylva_check_cancelled()
         max_cloud  = int(data.get('maxCloud', 30))
         # Birden fazla indeks seçilebilir (Kullanılabilir Analizler'deki
         # işaretli kutular) — her biri grafikte ayrı bir çizgi olur.
+        _sylva_check_cancelled()
         indices = data.get('indices')
         if not indices:
+            _sylva_check_cancelled()
             indices = [data.get('index', 'NDVI')]
 
         # 🛠️ BUG FİX (ay filtresi Zaman Serisi galerisinde yok sayılıyordu):
@@ -8184,7 +8651,9 @@ def timeseries():
         months = _parse_months_param(data)
 
         try:
+            _sylva_check_cancelled()
             start_year = int(data.get('startYear'))
+            _sylva_check_cancelled()
             end_year   = int(data.get('endYear'))
         except (TypeError, ValueError):
             return jsonify({'success': False, 'error': 'Geçersiz başlangıç/bitiş yılı.'}), 400
@@ -8204,12 +8673,15 @@ def timeseries():
                 'error': 'Seçilen aralık çok geniş (%d periyot). Daha kısa bir aralık seçin ya da Yıllık periyodu kullanın.' % len(ranges)
             }), 400
 
+        _sylva_check_cancelled()
         roi = make_roi(data.get('roi'))
 
         series = []
         for idx in indices:
+            _sylva_check_cancelled()
             pts = []
             for label, sdate, edate in ranges:
+                _sylva_check_cancelled()
                 period_data = dict(data)
                 period_data['index']     = idx
                 period_data['startDate'] = sdate
@@ -8220,6 +8692,7 @@ def timeseries():
                     _final, p_roi, p_result, _vis, _probe = _call_with_retry(
                         build_result_image, period_data, for_export=False
                     )
+                    _sylva_check_cancelled()
                     mean_val = _call_with_retry(
                         lambda: p_result.reduceRegion(
                             reducer=ee.Reducer.mean(), geometry=p_roi,
@@ -8238,6 +8711,7 @@ def timeseries():
         # tek bir sahne akışı gösterir, indeks başına ayrı galeri yoktur)
         gallery = []
         for label, sdate, edate in ranges:
+            _sylva_check_cancelled()
             scene = _sylva_least_cloud_scene(roi, satellite, sdate, edate, max_cloud, months=months)
             if scene:
                 scene['label'] = label
@@ -8251,10 +8725,12 @@ def timeseries():
         # tarayıcı GEE thumbnail adresine doğrudan erişmez (CORS/CORB sorunu yok).
         if gallery:
             def _thumb_for_scene(sc):
+                _sylva_check_cancelled()
                 return _sylva_scene_thumbnail_data_uri(roi, satellite, sc.get('sceneId'), dimensions=128)
             with ThreadPoolExecutor(max_workers=min(8, len(gallery))) as _ts_thumb_pool:
                 _thumbs = list(_ts_thumb_pool.map(_thumb_for_scene, gallery))
             for _i, _scene in enumerate(gallery):
+                _sylva_check_cancelled()
                 _scene['thumbnailUrl'] = _thumbs[_i] if _i < len(_thumbs) else None
 
         return jsonify({
@@ -8283,13 +8759,17 @@ def analyze():
         # sahne metadata'sı (tarih, sensör, bulutluluk, CRS, çözünürlük,
         # Image ID) doğrudan döndürülür.
         if data.get('index') == 'RGB':
+            _sylva_check_cancelled()
             ds = SATELLITE_DATASETS.get(data.get('satellite'))
             if not ds:
                 return jsonify({'success': False, 'error': 'Bilinmeyen uydu görüntüsü veri seti.'})
 
+            _sylva_check_cancelled()
             roi = make_roi(data.get('roi'))
+            _sylva_check_cancelled()
             max_cloud = int(data.get('maxCloud', 100))
             col = build_rgb_collection(ds, roi, max_cloud)
+            _sylva_check_cancelled()
             scene_id = data.get('sceneId')
             # 🛠️ BUG FİX (ay filtresi): bu blok yalnızca Görüntü Bilgileri
             # panelinde gösterilecek meta veriyi (tarih/bulutluluk/CRS) okumak
@@ -8302,12 +8782,14 @@ def analyze():
             if scene_id:
                 image = col.filter(ee.Filter.eq('system:index', scene_id)).first()
             else:
+                _sylva_check_cancelled()
                 _rgb_meta_dated = col.filterDate(data.get('startDate'), data.get('endDate'))
                 if _rgb_meta_month_filter is not None:
                     _rgb_meta_dated = _rgb_meta_dated.filter(_rgb_meta_month_filter)
                 image = _rgb_meta_dated.sort('system:time_start', False).first()
 
             final_display, roi, result, vis, _unused_crs_probe = build_result_image(data)
+            _sylva_check_cancelled()
             map_id = _call_with_retry(lambda: final_display.getMapId(vis))
             tile_url_direct = map_id['tile_fetcher'].url_format
 
@@ -8321,9 +8803,11 @@ def analyze():
             # varsayılanı (download_native_crs) için, coğrafi (EPSG:4326)
             # çıkması durumunda AOI merkezinden UTM dilimine yükseltilir —
             # bkz. yukarıdaki "PROJEKSİYON ÖNCELİĞİ" açıklaması.
+            _sylva_check_cancelled()
             download_native_crs = meta.get('crs')
             if not download_native_crs or download_native_crs.strip().upper() == 'EPSG:4326':
                 try:
+                    _sylva_check_cancelled()
                     _lon, _lat = _roi_center_lonlat(data.get('roi'))
                     download_native_crs = _utm_epsg_from_lonlat(_lon, _lat)
                 except Exception:
@@ -8344,6 +8828,7 @@ def analyze():
             tile_url = _tile_url_for_client(_sid, tile_url_direct)
             _analysis_sid = _register_analysis_session(data, kind='analyze', extra=_extra)
 
+            _sylva_check_cancelled()
             return jsonify({
                 'success':  True,
                 'tileUrl':  tile_url,
@@ -8376,10 +8861,12 @@ def analyze():
         # ÇÖZÜM: map id ilk sırada, istatistikler sonra. Böylece tile üretimi
         # kotanın en boş olduğu anda gerçekleşir ve istatistik hataları
         # katmanı artık düşüremez (aşağıda ayrıca güvenli varsayılana düşülür).
+        _sylva_check_cancelled()
         map_id = _call_with_retry(lambda: final_display.getMapId(vis))
         tile_url_direct = map_id['tile_fetcher'].url_format
 
         # Bu analizin doğal çözünürlüğü — tüm reduceRegion çağrıları bunu kullanır.
+        _sylva_check_cancelled()
         stats_scale = _stats_scale_for(data.get('index', 'NDVI'))
 
         # ── 🌐 Gerçek/doğal CRS tespiti ─────────────────────────────
@@ -8401,6 +8888,7 @@ def analyze():
         native_crs = None
         try:
             _crs_source = crs_probe_img if crs_probe_img is not None else result
+            _sylva_check_cancelled()
             native_crs = _call_with_retry(
                 lambda: _crs_source.projection().crs().getInfo(), retries=1
             )
@@ -8432,6 +8920,7 @@ def analyze():
         # (ve onun retry bütçesini) tamamen kaldırır.
         if not native_crs or native_crs.strip().upper() == 'EPSG:4326':
             try:
+                _sylva_check_cancelled()
                 _lon, _lat = _roi_center_lonlat(data.get('roi'))
                 native_crs = _utm_epsg_from_lonlat(_lon, _lat)
             except Exception as _centroid_err:
@@ -8472,6 +8961,7 @@ def analyze():
         # Lejant/grafik istatistiğe bağlıdır ama HARİTA KATMANI değildir;
         # istatistik alınamasa bile tile'lar gösterilebilmelidir.
         try:
+            _sylva_check_cancelled()
             stats = _call_with_retry(
                 lambda: result.reduceRegion(
                     reducer    = ee.Reducer.frequencyHistogram(),
@@ -8507,6 +8997,7 @@ def analyze():
             # uygulanarak.
             _stats_img = result
             if data.get('index') == 'TOPO_CONTOUR':
+                _sylva_check_cancelled()
                 _stats_dem_source = data.get('demSource', 'SRTM')
                 _stats_srtm_fallback = ee.Image('USGS/SRTMGL1_003').select('elevation')
                 if _stats_dem_source == 'ALOS':
@@ -8524,6 +9015,7 @@ def analyze():
                 _stats_img = _stats_dem.rename('value')
 
             try:
+                _sylva_check_cancelled()
                 mm = _call_with_retry(
                     lambda: _stats_img.reduceRegion(
                         reducer    = combined_reducer,
@@ -8550,6 +9042,7 @@ def analyze():
                 print('[SylvaGIS] ⚠️ Gerçek min/max hesaplanamadı (1. deneme) — '
                       'daha kaba ölçekle tekrar deneniyor: {}'.format(_mm_err))
                 _coarse_scale = min(max(stats_scale * 4, stats_scale + 100), 500)
+                _sylva_check_cancelled()
                 mm = _call_with_retry(
                     lambda: _stats_img.reduceRegion(
                         reducer    = combined_reducer,
@@ -8559,6 +9052,7 @@ def analyze():
                         bestEffort = True,
                     ).getInfo()
                 )
+            _sylva_check_cancelled()
             real_minmax = {
                 'min':  mm.get('value_min'),
                 'max':  mm.get('value_max'),
@@ -8576,15 +9070,21 @@ def analyze():
         # ── Zaman serisi galerisi ────────────────────────────────
         # LULC ailesi statik/tek-katmanlı veri setleridir; zaman serisi
         # galerisi kavramı bunlara uygulanamaz — bu sorguyu tamamen atlarız.
+        _sylva_check_cancelled()
         satellite  = data.get('satellite', 's2-l2a')
+        _sylva_check_cancelled()
         start_date = data.get('startDate')
+        _sylva_check_cancelled()
         end_date   = data.get('endDate')
+        _sylva_check_cancelled()
         scene_id   = data.get('sceneId')
+        _sylva_check_cancelled()
         max_cloud  = int(data.get('maxCloud', 20))
         scenes_list = []
 
         if not scene_id and data.get('index', 'NDVI') not in LULC_FAMILY_INDICES:
             try:
+                _sylva_check_cancelled()
                 roi_coords = data.get('roi')
                 roi_geo = make_roi(roi_coords)
                 # 🛠️ KÖK NEDEN DÜZELTMESİ (Faz 51 — "Sentinel-2/Landsat 8-9
@@ -8614,9 +9114,11 @@ def analyze():
                 # KESİN olarak bulunmasını garanti eder ve tüm Landsat
                 # ailelerine (7 / 4-5 / 1-5 MSS) eksiksiz çoklu-koleksiyon
                 # kapsamı (LC09/LT04/LM04-01 dahil) kazandırır.
+                _sylva_check_cancelled()
                 _ds2 = SATELLITE_DATASETS.get(satellite)
                 if _ds2:
                     col2 = build_rgb_collection(_ds2, roi_geo, max_cloud)
+                    _sylva_check_cancelled()
                     cloud_prop = _ds2.get('cloudProp')
                 else:
                     col2 = (ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
@@ -8628,7 +9130,9 @@ def analyze():
                     col2, start_date, end_date, months=months_filter,
                     per_year_limit=10, total_limit=60,
                 )
+                _sylva_check_cancelled()
                 scene_ids  = _call_with_retry(lambda: limited.aggregate_array('system:index').getInfo(), retries=1)
+                _sylva_check_cancelled()
                 timestamps = _call_with_retry(lambda: limited.aggregate_array('system:time_start').getInfo(), retries=1)
                 # mss-l1 (Landsat 1-5) gibi tutarlı bir bulutluluk özniteliği
                 # taşımayan veri setlerinde (cloud_prop None) aggregate_array
@@ -8636,6 +9140,7 @@ def analyze():
                 # TÜM galeri şeridi boşalıyordu; artık bulut % bilgisi
                 # olmadan (None) sahneler yine de listelenir.
                 if cloud_prop:
+                    _sylva_check_cancelled()
                     clouds_arr = _call_with_retry(lambda: limited.aggregate_array(cloud_prop).getInfo(), retries=1)
                 else:
                     clouds_arr = [None] * len(scene_ids)
@@ -8643,6 +9148,7 @@ def analyze():
             except Exception:
                 scenes_list = []
 
+        _sylva_check_cancelled()
         return jsonify({
             'success':   True,
             'tileUrl':   tile_url,
@@ -8772,7 +9278,9 @@ def download_geotiff():
         # hiç göndermezse (eski/güncellenmemiş istemci), önceki paylaşılan-
         # global davranış AYNEN korunur — bu değişiklik geriye dönük
         # tamamen uyumludur.
+        _sylva_check_cancelled()
         analysis_id = req_data.get('analysisId')
+        _sylva_check_cancelled()
         payload_data = req_data.get('payload')
 
         # 🆕 TOPLU İNDİRME KÖK NEDEN DÜZELTMESİ:
@@ -8793,6 +9301,7 @@ def download_geotiff():
         # dönüş yolu olarak korunur; en son çare global davranıştır.
         if isinstance(payload_data, dict) and payload_data.get('index'):
             data = dict(payload_data)
+            _sylva_check_cancelled()
             session_native_crs = (data.get('nativeCrs') or
                                   req_data.get('nativeCrs') or
                                   _last_analyze_native_crs)
@@ -8825,11 +9334,14 @@ def download_geotiff():
         # sonra uygulanmalıdır. Önceki sürümde bu atama data tanımlanmadan
         # önce yapıldığı için tüm GeoTIFF indirmelerinde:
         # "local variable 'data' referenced before assignment" oluşabiliyordu.
+        _sylva_check_cancelled()
         fresh_roi = req_data.get('roi')
         if fresh_roi is not None:
             data['roi'] = fresh_roi
 
+        _sylva_check_cancelled()
         filename = (req_data.get('filename') or 'SylvaGIS').strip() or 'SylvaGIS'
+        _sylva_check_cancelled()
         scale    = int(req_data.get('scale', 30))
 
         # 🛠️ BUG FİX (LULC indirmeleri anormal derecede büyük/bozuk dosyalar
@@ -8855,6 +9367,7 @@ def download_geotiff():
         # (download_raw_bands) istemciden HİÇ scale almayıp HER ZAMAN
         # sahnenin kendi native_scale'ini (ee.Image.projection()
         # .nominalScale()) kullanması gibi.
+        _sylva_check_cancelled()
         _dl_index_for_scale = data.get('index')
         if _dl_index_for_scale in _NATIVE_STATS_SCALE:
             # LULC ve kaba çözünürlüklü çevresel veri setleri için gerçek
@@ -8881,6 +9394,7 @@ def download_geotiff():
         # nativeCrs'e göre otomatik ön-seçip gönderir; bu yalnızca bir
         # güvenlik ağıdır. Kullanıcı seçiciden farklı bir CRS seçtiyse o
         # değer (req_data.get('crs')) her zaman önceliklidir.
+        _sylva_check_cancelled()
         crs = (req_data.get('crs') or session_native_crs or 'EPSG:4326').strip()
 
         # Güvenlik: Yalnızca EPSG:NNNNN formatına izin ver
@@ -8959,15 +9473,19 @@ def download_geotiff():
         # burada, germe hesaplanmadan HEMEN önce, erken okunup uygulanır;
         # aşağıdaki asıl `requested_vis` bloğu aynı değerleri tekrar
         # (zararsızca, idempotent) uygulamaya devam eder.
+        _sylva_check_cancelled()
         _early_requested_vis = req_data.get('visualization')
         if isinstance(_early_requested_vis, dict):
             for _early_vis_key in ('min', 'max'):
+                _sylva_check_cancelled()
                 if _early_requested_vis.get(_early_vis_key) not in (None, '', []):
                     vis[_early_vis_key] = _early_requested_vis[_early_vis_key]
 
         _is_byte_rgb_export = False
         if data.get('index') == 'RGB' and data.get('satellite') in ('s2-l1c', 's2-l2a'):
+            _sylva_check_cancelled()
             v_min = vis.get('min', 0)
+            _sylva_check_cancelled()
             v_max = vis.get('max', 0.3)
             final_display = (
                 final_display
@@ -9052,6 +9570,7 @@ def download_geotiff():
         # kodlarının olası bir CRS yeniden örneklemesinde — _ensure_output_crs
         # — bilinear yerine en_yakın_komşu kullanmasını sağlar; aksi halde
         # komşu sınıflar arasında anlamsız ondalıklı "ara" kodlar üretilebilirdi).
+        _sylva_check_cancelled()
         lulc_index = data.get('index')
         # LULC ailesi yanında, kendi sınıf kodlarını üreten çevresel/kentsel
         # rasterlar da yeniden projeksiyon/mozaik aşamasında NEAREST kullanmalı.
@@ -9134,6 +9653,7 @@ def download_geotiff():
         # son-kesme aşamasına da gönderiyoruz. Böylece tek istek veya karo-mozaik
         # sonucunda bile çalışma alanı dışındaki dikdörtgen pikseller gerçek
         # NoData olur; çalışma alanının içine alan dolu bir kare veri oluşmaz.
+        _sylva_check_cancelled()
         aoi_geom_4326 = _call_with_retry(lambda: roi.getInfo())
 
         # 🎨 ArcMap/QGIS "Siyah-Beyaz + Rakam" / "Hepsi RGB İniyor" SORUNU
@@ -9158,11 +9678,13 @@ def download_geotiff():
         # eder; çevresel/kentsel bir indeks hiçbir zaman RGB'ye dönüştürülmez.
         is_env_urban_raster = lulc_index in _ENV_URBAN_RASTER_INDICES
 
+        _sylva_check_cancelled()
         requested_vis = req_data.get('visualization')
         requested_breaks = None
         requested_legend_labels = None
         if isinstance(requested_vis, dict):
             for _vis_key in ('min', 'max', 'palette'):
+                _sylva_check_cancelled()
                 if requested_vis.get(_vis_key) not in (None, '', []):
                     vis[_vis_key] = requested_vis[_vis_key]
             # 🛠️ BUG FİX (Faz 15 — "bar olarak indirmiştim, sınıflandırılmış
@@ -9178,6 +9700,7 @@ def download_geotiff():
             if requested_vis.get('mode') == 'classified' and isinstance(requested_vis.get('breaks'), list):
                 requested_breaks = requested_vis['breaks']
             if isinstance(requested_vis.get('legendLabels'), list):
+                _sylva_check_cancelled()
                 requested_legend_labels = requested_vis.get('legendLabels')
         if requested_breaks is None and str(lulc_index or '').upper() in _native_export_breaks:
             requested_breaks = list(_native_export_breaks[str(lulc_index or '').upper()])
@@ -9189,20 +9712,26 @@ def download_geotiff():
             if isinstance(requested_legend_labels, list) and requested_legend_labels:
                 _ll_by_code = {}
                 for _ll in requested_legend_labels:
+                    _sylva_check_cancelled()
                     if not isinstance(_ll, dict):
                         continue
                     try:
+                        _sylva_check_cancelled()
                         _ll_code = int(_ll.get('code'))
                     except Exception:
                         continue
                     _ll_by_code[_ll_code] = _ll
                 for _i, _br in enumerate(requested_breaks):
+                    _sylva_check_cancelled()
                     _code = int(_br.get('code', _i))
+                    _sylva_check_cancelled()
                     _ll = _ll_by_code.get(_code) or _ll_by_code.get(_i) or _ll_by_code.get(_i + 1)
                     if _ll:
                         if str(_ll.get('label') or '').strip():
+                            _sylva_check_cancelled()
                             _br['label'] = str(_ll.get('label')).strip()
                         if str(_ll.get('color') or '').strip():
+                            _sylva_check_cancelled()
                             _br['color'] = str(_ll.get('color')).strip()
 
         # 🛠️ PAKET 85 — SUNUCU TARAFI SAVUNMA KATMANI (kullanıcının GERÇEK
@@ -9250,8 +9779,11 @@ def download_geotiff():
             _fam_key = str(lulc_index or '').upper()
             _have_codes = set()
             for _b in requested_breaks:
+                _sylva_check_cancelled()
                 try:
+                    _sylva_check_cancelled()
                     _bmin = int(round(float(_b.get('min'))))
+                    _sylva_check_cancelled()
                     _bmax = int(round(float(_b.get('max'))))
                 except (TypeError, ValueError):
                     continue
@@ -9260,9 +9792,11 @@ def download_geotiff():
             _ll_by_code2 = {}
             if isinstance(requested_legend_labels, list):
                 for _ll in requested_legend_labels:
+                    _sylva_check_cancelled()
                     if not isinstance(_ll, dict):
                         continue
                     try:
+                        _sylva_check_cancelled()
                         _ll_by_code2[int(_ll.get('code'))] = _ll
                     except Exception:
                         continue
@@ -9287,32 +9821,43 @@ def download_geotiff():
             # için de gerçekten kullanılması gerekiyordu.
             if _ll_by_code2:
                 for _br_existing in requested_breaks:
+                    _sylva_check_cancelled()
                     try:
+                        _sylva_check_cancelled()
                         _br_code = int(round(float(_br_existing.get('min'))))
                     except (TypeError, ValueError):
                         continue
+                    _sylva_check_cancelled()
                     _ll3 = _ll_by_code2.get(_br_code)
                     if _ll3:
                         if str(_ll3.get('label') or '').strip():
+                            _sylva_check_cancelled()
                             _br_existing['label'] = str(_ll3.get('label')).strip()
                         if str(_ll3.get('color') or '').strip():
+                            _sylva_check_cancelled()
                             _br_existing['color'] = str(_ll3.get('color')).strip()
 
             for _ref in _native_export_breaks[_fam_key]:
+                _sylva_check_cancelled()
                 _rc = int(_ref['min'])
                 if _rc in _have_codes:
                     continue
                 _missing_entry = dict(_ref)
+                _sylva_check_cancelled()
                 _ll2 = _ll_by_code2.get(_rc)
                 if _ll2:
                     if str(_ll2.get('label') or '').strip():
+                        _sylva_check_cancelled()
                         _missing_entry['label'] = str(_ll2.get('label')).strip()
                     if str(_ll2.get('color') or '').strip():
+                        _sylva_check_cancelled()
                         _missing_entry['color'] = str(_ll2.get('color')).strip()
                 requested_breaks.append(_missing_entry)
+                _sylva_check_cancelled()
                 print('[SylvaGIS] ⚠️ Paket 85: {} indirmesinde istemciden eksik '
                       'gelen kod {} sınıfı ("{}") sunucu tarafından '
                       'tamamlandı.'.format(_fam_key, _rc, _missing_entry.get('label')))
+            _sylva_check_cancelled()
             requested_breaks.sort(key=lambda b: float(b.get('min', 0)))
 
         is_true_color_rgb = (lulc_index == 'RGB') and not is_env_urban_raster
@@ -9537,13 +10082,16 @@ def download_geotiff():
             # flatTiff=true göndermesi artık bu kuralı delmez. Bina/Çatı
             # rasterı bu endpointte rasterEntries kuyruğuna alınmadığı için
             # burada ayrıca çıplak TIFF yolu açılmaz.
+            _sylva_check_cancelled()
             allow_flat_tiff = (str(data.get('index') or '').upper() == 'BUILDING_FOOTPRINT') and bool(req_data.get('flatTiff'))
             if allow_flat_tiff:
+                _sylva_check_cancelled()
                 tif_bytes = sym_files.get('{}.tif'.format(safe_name), tif_bytes)
             else:
                 zip_buf = io.BytesIO()
                 with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
                     for fname, fbytes in sym_files.items():
+                        _sylva_check_cancelled()
                         zf.writestr(fname, fbytes)
                 zip_bytes = zip_buf.getvalue()
                 resp = Response(zip_bytes, mimetype='application/zip')
@@ -9560,6 +10108,7 @@ def download_geotiff():
         # (bkz. Faz 14 — responseBlobNamed() BUG FİX notu).
         zip_buf = io.BytesIO()
         with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+            _sylva_check_cancelled()
             zf.writestr('{}.tif'.format(safe_name), tif_bytes)
         zip_bytes = zip_buf.getvalue()
         resp = Response(zip_bytes, mimetype='application/zip')
@@ -9567,6 +10116,9 @@ def download_geotiff():
         resp.headers['Content-Length'] = str(len(zip_bytes))
         return resp
 
+    except (BrokenPipeError, ConnectionResetError):
+        print('[SylvaGIS] ℹ️ İstemci bağlantıyı kesti (GeoTIFF indirme iptal edildi).')
+        return Response('', status=499)
     except Exception as e:
         traceback.print_exc()
         err = str(e).strip() or '{} (mesajsız hata — sunucu konsoluna bakın)'.format(type(e).__name__)
@@ -9897,6 +10449,7 @@ def _ensure_output_crs(tif_bytes, target_crs, nodata_value=None, is_categorical=
                 with MemoryFile() as out_memfile:
                     with out_memfile.open(**out_meta) as dst:
                         for band_idx in range(1, src.count + 1):
+                            _sylva_check_cancelled()
                             reproject(
                                 source=rasterio.band(src, band_idx),
                                 destination=rasterio.band(dst, band_idx),
@@ -9970,6 +10523,7 @@ def _stamp_exact_band_statistics(tif_bytes, nodata_value=None):
             with out_memfile.open(**profile) as dst:
                 dst.write(data)
                 for b_idx in range(1, data.shape[0] + 1):
+                    _sylva_check_cancelled()
                     band = data[b_idx - 1].astype('float64')
                     if src_nodata is not None:
                         valid = band[band != float(src_nodata)]
@@ -10208,8 +10762,10 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
         # DEĞİŞMEDEN kalmaya devam ediyor — o zaten yalnızca GERÇEKTEN
         # gerektiğinde (boyut sınırı aşıldığında) devreye giriyor.
 
+        _sylva_check_cancelled()
         url = _call_with_retry(lambda: img.getDownloadURL(params))
-        r = _call_with_retry(lambda: requests.get(url, timeout=180), retries=2)
+        _sylva_check_cancelled()
+        r = _call_with_retry(lambda: _sylva_export_get(url, timeout=180), retries=2)
         if not r.ok:
             # GEE bazen boyut/limit hatalarını HTTP gövdesinde (200 dışı
             # durum koduyla) döner; ayrıştırılabilmesi için mesaja dahil et.
@@ -10234,8 +10790,10 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
             ):
                 fb_params = dict(params)
                 fb_params['region'] = fallback_region_geom
+                _sylva_check_cancelled()
                 fb_url = _call_with_retry(lambda: img.getDownloadURL(fb_params))
-                fb_r = _call_with_retry(lambda: requests.get(fb_url, timeout=180), retries=2)
+                _sylva_check_cancelled()
+                fb_r = _call_with_retry(lambda: _sylva_export_get(fb_url, timeout=180), retries=2)
                 if not fb_r.ok:
                     body_snippet = (fb_r.text or '')[:500]
                     raise Exception(
@@ -10279,6 +10837,7 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
         try:
             tile_paths = []
             for idx, tile_spec in enumerate(tile_specs):
+                _sylva_check_cancelled()
                 tile_params = {
                     'name':        base_name + '_t{}'.format(idx),
                     'format':      'GEO_TIFF',
@@ -10289,8 +10848,10 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
                 if nodata_value is not None:
                     tile_params['formatOptions'] = {'noData': nodata_value}
 
+                _sylva_check_cancelled()
                 tile_url = _call_with_retry(lambda: img.getDownloadURL(tile_params))
-                tr = _call_with_retry(lambda: requests.get(tile_url, timeout=180), retries=2)
+                _sylva_check_cancelled()
+                tr = _call_with_retry(lambda: _sylva_export_get(tile_url, timeout=180), retries=2)
                 if not tr.ok:
                     body_snippet = (tr.text or '')[:500]
                     _tile_err_msg = 'GEE karo indirme isteği başarısız (karo {}, HTTP {}): {}'.format(
@@ -10329,6 +10890,7 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
                     out_meta['nodata'] = nodata_value
             finally:
                 for s in srcs:
+                    _sylva_check_cancelled()
                     s.close()
 
             out_path = os.path.join(tmpdir, 'merged.tif')
@@ -10364,12 +10926,19 @@ def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata
     """
     # Earth Engine Restricted Mode altında aynı anda yapılan export istekleri
     # 429 concurrency hatası verebilir. Tek süreçte indirmeleri sıraya al.
-    with _GEE_EXPORT_LOCK:
+    while not _GEE_EXPORT_LOCK.acquire(timeout=0.05):
+        _sylva_check_cancelled()
+        _sylva_check_cancelled()
+    try:
+        _sylva_check_cancelled()
         raw_bytes = _download_band_geotiff_bytes_impl(
             img, region_geom, scale, crs, base_name,
             nodata_value=nodata_value, aoi_geom_4326=aoi_geom_4326,
             fallback_region_geom=fallback_region_geom
         )
+    finally:
+        _GEE_EXPORT_LOCK.release()
+    _sylva_check_cancelled()
     # 🔒 GEE ne dönerse dönsün, kullanıcının seçtiği CRS'i kesin olarak
     # garanti eden güvence katmanı — bkz. _ensure_output_crs() docstring'i.
     raw_bytes = _ensure_output_crs(raw_bytes, crs, nodata_value=nodata_value, is_categorical=is_categorical)
@@ -10416,16 +10985,21 @@ def download_raw_bands():
     """
     try:
         data = request.json or {}
+        _sylva_check_cancelled()
         dataset_key = data.get('dataset')
+        _sylva_check_cancelled()
         ds          = SATELLITE_DATASETS.get(dataset_key)
+        _sylva_check_cancelled()
         band_groups = RAW_BAND_GROUPS.get(dataset_key)
         if not ds or not band_groups:
             return jsonify({'success': False, 'error': 'Bilinmeyen veri seti: ' + str(dataset_key)})
 
+        _sylva_check_cancelled()
         scene_id = data.get('sceneId')
         if not scene_id:
             return jsonify({'success': False, 'error': 'Önce 🛰️ Uydu Görüntüsü Galerisi üzerinden bir sahne seçin.'})
 
+        _sylva_check_cancelled()
         requested_bands = data.get('bands') or []
         if not requested_bands or not isinstance(requested_bands, list):
             return jsonify({'success': False, 'error': 'Lütfen indirmek için en az bir bant seçin.'})
@@ -10436,18 +11010,23 @@ def download_raw_bands():
         # Geçerli bant adlarını + etiketlerini + yedek (katalog) çözünürlüğünü indeksle
         band_catalog = {}
         for grp in band_groups:
+            _sylva_check_cancelled()
             for b in grp['bands']:
+                _sylva_check_cancelled()
                 band_catalog[b['name']] = {'label': b['label'], 'resolution': grp['resolution']}
 
         invalid = [b for b in requested_bands if b not in band_catalog]
         if invalid:
             return jsonify({'success': False, 'error': 'Bu veri setinde bulunmayan bant(lar): ' + ', '.join(invalid)})
 
+        _sylva_check_cancelled()
         roi = make_roi(data.get('roi'))
 
+        _sylva_check_cancelled()
         aoi_name  = (data.get('aoiName') or '').strip()
         safe_aoi  = _sylva_safe_filename(aoi_name.replace(' ', '_'), allow_dots=False) if aoi_name else ''
 
+        _sylva_check_cancelled()
         max_cloud = int(data.get('maxCloud', 100))
         col   = build_rgb_collection(ds, roi, max_cloud)
         image = col.filter(ee.Filter.eq('system:index', scene_id)).first()
@@ -10455,6 +11034,7 @@ def download_raw_bands():
 
         # Sahne gerçekten mevcut mu? (filter+first boşsa getInfo None döner)
         try:
+            _sylva_check_cancelled()
             check = image.get('system:index').getInfo()
         except Exception:
             check = None
@@ -10464,6 +11044,7 @@ def download_raw_bands():
         # Dosya adı için sahne tarihi
         date_label = 'tarihsiz'
         try:
+            _sylva_check_cancelled()
             ts = image.get('system:time_start').getInfo()
             if ts:
                 date_label = datetime.datetime.utcfromtimestamp(ts / 1000.0).strftime('%Y-%m-%d')
@@ -10482,6 +11063,7 @@ def download_raw_bands():
         # 🔒 true-clip güvencesi: bkz. _true_clip_tif_bytes() docstring'i —
         # AOI'nin gerçek poligon şeklini (EPSG:4326) bir kez alıp her bant
         # indirmesinde kullanıyoruz.
+        _sylva_check_cancelled()
         aoi_geom_4326 = _call_with_retry(lambda: roi.getInfo()) if scope == 'clip' else None
 
         # 🛠️ PAKET 88 — ÇOKLU BANT İNDİRME PARALELLEŞTİRİLDİ:
@@ -10520,10 +11102,12 @@ def download_raw_bands():
             # Orijinal (native) çözünürlük ve CRS — resampling YAPILMAZ.
             proj = band_img.projection()
             try:
+                _sylva_check_cancelled()
                 native_scale = proj.nominalScale().getInfo() or info['resolution']
             except Exception:
                 native_scale = info['resolution']
             try:
+                _sylva_check_cancelled()
                 native_crs = proj.crs().getInfo() or 'EPSG:4326'
             except Exception:
                 native_crs = 'EPSG:4326'
@@ -10603,12 +11187,14 @@ def download_raw_bands():
         _max_band_workers = min(4, len(requested_bands))
         with ThreadPoolExecutor(max_workers=_max_band_workers) as _band_pool:
             _band_future_map = {
-                _band_pool.submit(_download_one_raw_band, bn): bn
+                _sylva_submit(_band_pool, _download_one_raw_band, bn): bn
                 for bn in requested_bands
             }
             for _band_future in as_completed(_band_future_map):
+                _sylva_check_cancelled()
                 _bn = _band_future_map[_band_future]
                 try:
+                    _sylva_check_cancelled()
                     zip_entries_by_band[_bn] = _band_future.result()
                 except Exception as be:
                     traceback.print_exc()
@@ -10626,8 +11212,10 @@ def download_raw_bands():
         zip_buf = io.BytesIO()
         with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
             for arcname, tif_bytes in zip_entries:
+                _sylva_check_cancelled()
                 zf.writestr(arcname, tif_bytes)
             if errors:
+                _sylva_check_cancelled()
                 zf.writestr('HATALAR.txt', 'Bazı bantlar dışa aktarılamadı:\n' + '\n'.join(errors))
         zip_buf.seek(0)
 
@@ -10645,6 +11233,9 @@ def download_raw_bands():
             )
         return resp
 
+    except (BrokenPipeError, ConnectionResetError):
+        print('[SylvaGIS] ℹ️ İstemci bağlantıyı kesti (Ham bant indirme iptal edildi).')
+        return Response('', status=499)
     except Exception as e:
         traceback.print_exc()
         err = str(e).strip() or '{} (mesajsız hata — sunucu konsoluna bakın)'.format(type(e).__name__)
@@ -11021,17 +11612,23 @@ def _features_to_kml(features, name='SylvaGIS_vector'):
     ]
 
     def _coords_str(ring):
-        return ' '.join(f'{lon},{lat},0' for lon, lat in ring)
+        return ' '.join(f'{pt[0]},{pt[1]},{pt[2] if len(pt) > 2 else 0}' for pt in ring)
 
     for i, feat in enumerate(features, start=1):
+        _sylva_check_cancelled()
         props = feat.get('properties') or {}
+        _sylva_check_cancelled()
         geom  = feat.get('geometry') or {}
+        _sylva_check_cancelled()
         gtype = geom.get('type', '')
+        _sylva_check_cancelled()
         coords = geom.get('coordinates', [])
 
-        # Placemark adı: class_value → sınıf, yoksa class_name, yoksa numara
-        label = (props.get('class_name') or props.get('label') or
+        # Placemark adı: name → class_name → label → class_value → numara
+        _sylva_check_cancelled()
+        label = (props.get('name') or props.get('class_name') or props.get('label') or
                  props.get('class_value') or props.get('first') or str(i))
+        _sylva_check_cancelled()
         color_hex = (props.get('color') or 'ffffffff')
         # KML renk formatı: aabbggrr (alpha, blue, green, red)
         def _hex_to_kml(h):
@@ -11046,6 +11643,8 @@ def _features_to_kml(features, name='SylvaGIS_vector'):
         lines.append(f'    <name>{sax.escape(str(label))}</name>')
         if gtype == 'LineString':
             lines.append(f'    <Style><LineStyle><color>{kml_color}</color><width>3</width></LineStyle></Style>')
+        elif gtype == 'Point':
+            lines.append(f'    <Style><IconStyle><color>{kml_color}</color><scale>0.8</scale><Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle><LabelStyle><scale>0.7</scale></LabelStyle></Style>')
         else:
             lines.append(f'    <Style><PolyStyle><color>{kml_color}</color><outline>1</outline></PolyStyle></Style>')
 
@@ -11053,7 +11652,8 @@ def _features_to_kml(features, name='SylvaGIS_vector'):
         if props:
             lines.append('    <ExtendedData>')
             for k, v in props.items():
-                lines.append(f'      <Data name="{sax.escape(str(k))}"><value>{sax.escape(str(v))}</value></Data>')
+                _sylva_check_cancelled()
+                lines.append(f'      <Data name={sax.quoteattr(str(k))}><value>{sax.escape(str(v))}</value></Data>')
             lines.append('    </ExtendedData>')
 
         if gtype == 'Polygon':
@@ -11063,6 +11663,7 @@ def _features_to_kml(features, name='SylvaGIS_vector'):
                 lines.append('        ' + _coords_str(coords[0]))
                 lines.append('      </coordinates></LinearRing></outerBoundaryIs>')
                 for inner in coords[1:]:
+                    _sylva_check_cancelled()
                     lines.append('      <innerBoundaryIs><LinearRing><coordinates>')
                     lines.append('        ' + _coords_str(inner))
                     lines.append('      </coordinates></LinearRing></innerBoundaryIs>')
@@ -11070,12 +11671,14 @@ def _features_to_kml(features, name='SylvaGIS_vector'):
         elif gtype == 'MultiPolygon':
             lines.append('    <MultiGeometry>')
             for poly_coords in coords:
+                _sylva_check_cancelled()
                 lines.append('      <Polygon>')
                 if poly_coords:
                     lines.append('        <outerBoundaryIs><LinearRing><coordinates>')
                     lines.append('          ' + _coords_str(poly_coords[0]))
                     lines.append('        </coordinates></LinearRing></outerBoundaryIs>')
                     for inner in poly_coords[1:]:
+                        _sylva_check_cancelled()
                         lines.append('        <innerBoundaryIs><LinearRing><coordinates>')
                         lines.append('          ' + _coords_str(inner))
                         lines.append('        </coordinates></LinearRing></innerBoundaryIs>')
@@ -11097,7 +11700,7 @@ def _features_to_kml(features, name='SylvaGIS_vector'):
 
 def _features_to_shp_zip(features, name='SylvaGIS_vector'):
     """GeoJSON feature listesini SHP (shapefile) ZIP arşivine dönüştürür.
-    Önce pyshp (shapefile) dener; yoksa GeoJSON'u .zip içine koyar."""
+    pyshp bağımlılığı yoksa farklı bir dosya biçimini SHP olarak sunmaz."""
     try:
         import shapefile as shp  # pyshp
         import io as _io
@@ -11111,6 +11714,8 @@ def _features_to_shp_zip(features, name='SylvaGIS_vector'):
         w.field('CLASS_VAL', 'C', 40)
         w.field('CLASS_NAME', 'C', 80)
         w.field('COLOR', 'C', 10)
+        w.field('NAME', 'C', 80)
+        w.field('SPECIES', 'C', 50)
 
         def _flat_ring(ring):
             return [list(pt) for pt in ring]
@@ -11123,6 +11728,7 @@ def _features_to_shp_zip(features, name='SylvaGIS_vector'):
             if n < 3:
                 return 0.0
             for i in range(n):
+                _sylva_check_cancelled()
                 x1, y1 = ring[i][0], ring[i][1]
                 x2, y2 = ring[(i + 1) % n][0], ring[(i + 1) % n][1]
                 area += (x1 * y2 - x2 * y1)
@@ -11152,32 +11758,44 @@ def _features_to_shp_zip(features, name='SylvaGIS_vector'):
             return r
 
         for feat in features:
+            _sylva_check_cancelled()
             props = feat.get('properties') or {}
+            _sylva_check_cancelled()
             geom  = feat.get('geometry') or {}
+            _sylva_check_cancelled()
             gtype = geom.get('type', '')
+            _sylva_check_cancelled()
             coords = geom.get('coordinates', [])
 
-            cv   = str(props.get('class_value') or props.get('first') or props.get('label') or '')
+            _sylva_check_cancelled()
+            cv   = str(props.get('class_value') if props.get('class_value') is not None else props.get('first') if props.get('first') is not None else props.get('label') or '')
+            _sylva_check_cancelled()
             cn   = str(props.get('class_name') or props.get('label') or cv)
+            _sylva_check_cancelled()
             col  = str(props.get('color') or '')
+            _sylva_check_cancelled()
+            nm   = str(props.get('name') or '')
+            _sylva_check_cancelled()
+            sp   = str(props.get('species') or '')
 
             if gtype == 'Polygon':
                 parts = [_ring_for_shp(r, i > 0) for i, r in enumerate(coords)]
                 w.poly(parts)
-                w.record(cv, cn, col)
+                w.record(cv, cn, col, nm, sp)
             elif gtype == 'MultiPolygon':
                 all_parts = []
                 for poly in coords:
+                    _sylva_check_cancelled()
                     all_parts.extend([_ring_for_shp(r, i > 0) for i, r in enumerate(poly)])
                 w.poly(all_parts)
-                w.record(cv, cn, col)
+                w.record(cv, cn, col, nm, sp)
             elif gtype == 'Point':
                 if coords and len(coords) >= 2:
                     w.point(coords[0], coords[1])
-                    w.record(cv, cn, col)
+                    w.record(cv, cn, col, nm, sp)
             elif gtype == 'LineString':
                 w.line([_flat_ring(coords)])
-                w.record(cv, cn, col)
+                w.record(cv, cn, col, nm, sp)
 
         w.close()
 
@@ -11188,22 +11806,19 @@ def _features_to_shp_zip(features, name='SylvaGIS_vector'):
 
         zip_buf = io.BytesIO()
         with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as z:
+            _sylva_check_cancelled()
             z.writestr(f'{name}.shp', shp_buf.getvalue())
+            _sylva_check_cancelled()
             z.writestr(f'{name}.shx', shx_buf.getvalue())
+            _sylva_check_cancelled()
             z.writestr(f'{name}.dbf', dbf_buf.getvalue())
+            _sylva_check_cancelled()
             z.writestr(f'{name}.prj', prj_wkt)
         zip_buf.seek(0)
         return zip_buf.read()
 
-    except ImportError:
-        # pyshp yok — GeoJSON olarak paketle
-        import json as _json
-        fc = _json.dumps({'type': 'FeatureCollection', 'features': features}, ensure_ascii=False).encode('utf-8')
-        zip_buf = io.BytesIO()
-        with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as z:
-            z.writestr(f'{name}.geojson', fc)
-        zip_buf.seek(0)
-        return zip_buf.read()
+    except ImportError as exc:
+        raise ValueError('SHP oluşturulamadı: sunucuda pyshp bağımlılığı bulunamadı.') from exc
 
 
 def _geojson_to_features(geom):
@@ -11247,6 +11862,7 @@ def _generate_contour_vectors(data):
     from rasterio.io import MemoryFile as _MemoryFile
     from shapely.geometry import shape as _shp_shape, LineString as _ShpLine
 
+    _sylva_check_cancelled()
     roi_coords = data.get('roi')
     if not roi_coords:
         return {'success': False, 'error': 'Çalışma alanı geometrisi bulunamadı. Haritada bir alan çizin.'}
@@ -11254,6 +11870,7 @@ def _generate_contour_vectors(data):
 
     # ── DEM kaynağı seç (build_result_image ile birebir aynı mantık) ──
     _srtm_fallback = ee.Image('USGS/SRTMGL1_003').select('elevation')
+    _sylva_check_cancelled()
     dem_source = data.get('demSource', 'SRTM')
     if dem_source == 'ALOS':
         dem = (ee.ImageCollection('JAXA/ALOS/AW3D30/V3_2')
@@ -11269,6 +11886,7 @@ def _generate_contour_vectors(data):
         dem = ee.Image('USGS/SRTMGL1_003').select('elevation')
 
     try:
+        _sylva_check_cancelled()
         interval = float(data.get('contourInterval', 50) or 50)
     except (TypeError, ValueError):
         interval = 50.0
@@ -11357,6 +11975,7 @@ def _generate_contour_vectors(data):
     levels = []
     lv = level_start
     while lv <= level_end + 1e-9:
+        _sylva_check_cancelled()
         if e_min < lv < e_max:   # sadece AOI içinde gerçekten geçilen seviyeler
             levels.append(round(lv, 4))
         lv += interval
@@ -11410,8 +12029,10 @@ def _generate_contour_vectors(data):
         if len(pts) < 3:
             return pts
         for _ in range(iterations):
+            _sylva_check_cancelled()
             new_pts = [pts[0]]
             for i in range(len(pts) - 1):
+                _sylva_check_cancelled()
                 p0 = pts[i]; p1 = pts[i + 1]
                 q = (0.75 * p0[0] + 0.25 * p1[0], 0.75 * p0[1] + 0.25 * p1[1])
                 r = (0.25 * p0[0] + 0.75 * p1[0], 0.25 * p0[1] + 0.75 * p1[1])
@@ -11487,6 +12108,7 @@ def _generate_contour_vectors(data):
 
         key_to_segs = {}
         for k in range(n):
+            _sylva_check_cancelled()
             a = _key(xs0[k], ys0[k]); b = _key(xs1[k], ys1[k])
             if a == b:
                 continue
@@ -11501,6 +12123,7 @@ def _generate_contour_vectors(data):
             return (float(xs1[k]), float(ys1[k])) if a == key else (float(xs0[k]), float(ys0[k]))
 
         for k in range(n):
+            _sylva_check_cancelled()
             if used[k]:
                 continue
             used[k] = True
@@ -11509,6 +12132,7 @@ def _generate_contour_vectors(data):
 
             cur_key = _key(*p1)
             while True:
+                _sylva_check_cancelled()
                 cands = [c for c in key_to_segs.get(cur_key, []) if not used[c]]
                 if not cands:
                     break
@@ -11520,6 +12144,7 @@ def _generate_contour_vectors(data):
 
             cur_key = _key(*p0)
             while True:
+                _sylva_check_cancelled()
                 cands = [c for c in key_to_segs.get(cur_key, []) if not used[c]]
                 if not cands:
                     break
@@ -11535,6 +12160,7 @@ def _generate_contour_vectors(data):
 
     features_out = []
     for level in levels:
+        _sylva_check_cancelled()
         try:
             polylines = _marching_squares_level(level)
         except Exception as e:
@@ -11542,6 +12168,7 @@ def _generate_contour_vectors(data):
             continue
 
         for pix_pts in polylines:
+            _sylva_check_cancelled()
             if len(pix_pts) < 2:
                 continue
             geo_pts = [_pixel_to_geo(c, r) for (c, r) in pix_pts]
@@ -11575,6 +12202,7 @@ def _generate_contour_vectors(data):
                 parts = []
 
             for part in parts:
+                _sylva_check_cancelled()
                 coords = list(part.coords)
                 if len(coords) < 2:
                     continue
@@ -11777,15 +12405,27 @@ def terrain_3d_data():
 def vector_download():
     req_data = request.get_json(silent=True) or {}
 
+    _sylva_check_cancelled()
     fmt         = (req_data.get('format') or 'kml').strip().lower()
-    filename    = (req_data.get('filename') or 'SylvaGIS_vector').strip() or 'SylvaGIS_vector'
+    _sylva_check_cancelled()
+    raw_fname   = (req_data.get('filename') or '').strip()
+    _sylva_check_cancelled()
     crs         = (req_data.get('crs') or 'EPSG:4326').strip() or 'EPSG:4326'
+    _sylva_check_cancelled()
     data_source = (req_data.get('dataSource') or 'workspace').strip()
+    _sylva_check_cancelled()
     geom_json   = req_data.get('geometry')
+    _sylva_check_cancelled()
+    lang_code   = str(req_data.get('lang') or 'en').strip()
+
+    if not raw_fname or raw_fname.lower() in ('sylvagis_vector', 'sylvagis_vektor', 'sylvagis_vektor_analizleri', 'sylvagis_vector_analysis'):
+        filename = 'SylvaGIS_' + _export_labels(lang_code)[1]
+    else:
+        filename = raw_fname
 
     # Güvenli dosya adı (Türkçe karakterler ASCII'ye çevrilir, silinmez —
     # bkz. _sylva_safe_filename() ve dosya başındaki BUG FİX notu)
-    safe_name = _sylva_safe_filename(filename)[:80] or 'SylvaGIS_vector'
+    safe_name = _sylva_safe_filename(filename)[:80] or ('SylvaGIS_' + _export_labels(lang_code)[1])
 
     # 🆕 Toplu vektör kuyruğunun tek-katman çağrısı. UI her katmanı ayrı
     # HTTP isteğiyle gönderir; böylece 1/8, 2/8… ilerleme gösterilebilir ve
@@ -11793,7 +12433,10 @@ def vector_download():
     # /api/vector-download-batch ise doğrudan API tüketicileri için de vardır.
     if req_data.get('vectorizePayload'):
         try:
-            payload = req_data.get('payload') or {}
+            _sylva_check_cancelled()
+            payload = dict(req_data.get('payload') or {})
+            _sylva_check_cancelled()
+            payload.setdefault('lang', req_data.get('lang') or 'en')
             feats, meta = _vectorize_analysis_payload(payload, crs)
             body, out_name = _make_vector_response(fmt, feats, safe_name)
             if fmt == 'kml': ctype = 'application/vnd.google-earth.kml+xml; charset=utf-8'
@@ -11802,6 +12445,9 @@ def vector_download():
             else: ctype = 'application/geo+json; charset=utf-8'
             return Response(body, headers={'Content-Type': ctype,
                 'Content-Disposition': _content_disposition(out_name)})
+        except (BrokenPipeError, ConnectionResetError):
+            print('[SylvaGIS] ℹ️ İstemci bağlantıyı kesti (Vektör indirme iptal edildi).')
+            return Response('', status=499)
         except Exception as ex:
             traceback.print_exc()
             return jsonify({'error': str(ex)}), 500
@@ -11823,6 +12469,7 @@ def vector_download():
             # SINIRLAMA" notu. İstemci 'analysisId' gönderirse KENDİ izole
             # analiz oturumu kullanılır; göndermezse önceki paylaşılan-global
             # davranış değiştirilmeden korunur.
+            _sylva_check_cancelled()
             analysis_id = req_data.get('analysisId')
             if analysis_id:
                 _session = _get_analysis_session(analysis_id)
@@ -11837,60 +12484,9 @@ def vector_download():
                     return jsonify({'error': 'Henüz bir analiz yapılmadı. Önce haritada bir analiz çalıştırın.'}), 400
                 data = dict(_last_analyze_params)
 
-            # Vektörizasyon için sınıflandırılmış görüntüyü al
+            # Vektörizasyon için _vectorize_analysis_payload kullan
             try:
-                final_display, roi, result, vis, _ = _call_with_retry(
-                    build_result_image, data, for_export=False  # sınıf renkleri korunur
-                )
-            except Exception as e:
-                traceback.print_exc()
-                return jsonify({'error': f'Analiz yeniden hesaplanamadı: {str(e)}'}), 500
-
-            # Ölçek: çok küçük ölçek → çok fazla piksel → timeout
-            # Güvenli alt sınır: analiz tipine göre otomatik seç
-            index = data.get('index', 'NDVI')
-            if index in ('LULC', 'LULC_ESA'):
-                vec_scale = 100   # Dynamic World / ESA 10 m → 100 m güvenli
-            elif index.startswith('TOPO'):
-                vec_scale = 90    # SRTM 30 m → 90 m güvenli
-            elif index == 'LULC_MODIS':
-                vec_scale = 500
-            else:
-                vec_scale = 300   # Uydu indeksleri (NDVI vb.) → 300 m
-
-            print(f'[SylvaGIS] Vektörizasyon başlatılıyor: index={index} scale={vec_scale}')
-            try:
-                # reduceToVectors: pikselleri poligona çevir
-                # GEE reduceToVectors() uses the first band as the integer
-                # label band. Reducer.first() consumes one additional band;
-                # a one-band image therefore raises:
-                # "Need 1+1 bands for Reducer.first, image has 1".
-                _vector_input = final_display.int().rename('class_value').addBands(
-                    ee.Image.constant(1).rename('vector_value')
-                )
-                vec_fc = _call_with_retry(
-                    lambda: _vector_input.reduceToVectors(
-                        reducer=ee.Reducer.first(),
-                        # 🛠️ BUG FİX (Görsel 5 - "Geometry.bounds: ... non-zero
-                        # error margin"): bkz. _split_bbox_grid_aligned içindeki
-                        # aynı düzeltme notu — maxError açıkça verilmeden .bounds()
-                        # çağrısı GEE tarafından reddediliyordu.
-                        # ÇALIŞMA ALANI SINIRINI KORU: Daha önce roi.bounds() kullanıldığı için
-                        # reduceToVectors kare bounding-box üzerinde çalışıyor ve KML/SHP/KMZ
-                        # Google Earth'te çalışma alanını dikkate almayan büyük bir kare olarak
-                        # görünüyordu. Artık gerçek AOI geometrisi kullanılıyor; vektörler çalışma
-                        # alanının gerçek poligon sınırı içinde üretiliyor.
-                        geometry=roi,
-                        scale=vec_scale,
-                        maxPixels=1e8,
-                        geometryType='polygon',
-                        eightConnected=False,
-                        labelProperty='class_value',
-                        crs=crs if crs.upper().startswith('EPSG:') else 'EPSG:4326',
-                    ).limit(4000)
-                )
-                fc_info = _call_with_retry(lambda: vec_fc.getInfo())
-                features = fc_info.get('features', []) if fc_info else []
+                features, class_meta = _vectorize_analysis_payload(data, crs)
             except Exception as e:
                 traceback.print_exc()
                 return jsonify({'error': f'Vektöre dönüştürme başarısız: {str(e)}'}), 500
@@ -11917,6 +12513,7 @@ def vector_download():
             kml_bytes = _features_to_kml(features, safe_name)
             buf = io.BytesIO()
             with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
+                _sylva_check_cancelled()
                 z.writestr(f'{safe_name}.kml', kml_bytes)
             buf.seek(0)
             return Response(buf.read(), headers={
@@ -11952,6 +12549,9 @@ def vector_download():
         else:
             return jsonify({'error': f'Bilinmeyen format: {fmt}'}), 400
 
+    except (BrokenPipeError, ConnectionResetError):
+        print('[SylvaGIS] ℹ️ İstemci bağlantıyı kesti (Vektör indirme iptal edildi).')
+        return Response('', status=499)
     except Exception as ex:
         traceback.print_exc()
         return jsonify({'error': str(ex)}), 500
@@ -11973,11 +12573,18 @@ def _vector_class_meta(data, vis):
         for i, item in enumerate(localized):
             if not isinstance(item, dict):
                 continue
-            out.append({
+            entry = {
                 'code': item.get('code', i+1),
                 'label': str(item.get('label') or f'Class {i+1}'),
                 'color': str(item.get('color') or '#999999')
-            })
+            }
+            if 'min' in item and 'max' in item:
+                try:
+                    entry['min'] = float(item['min'])
+                    entry['max'] = float(item['max'])
+                except Exception:
+                    pass
+            out.append(entry)
         if out:
             return out
     breaks = data.get('classBreaks')
@@ -11989,7 +12596,8 @@ def _vector_class_meta(data, vis):
             except Exception:
                 continue
             out.append({'code': i, 'label': str(b.get('label') or f'{lo:g} – {hi:g}'),
-                        'color': str(b.get('color') or '#999999')})
+                        'color': str(b.get('color') or '#999999'),
+                        'min': lo, 'max': hi})
         if out:
             return out
     native = {
@@ -12027,11 +12635,15 @@ def _vector_class_meta(data, vis):
         vmin=float((vis or {}).get('min',0)); vmax=float((vis or {}).get('max',len(pal)))
     except Exception:
         vmin, vmax = 0.0, float(len(pal))
+    if vmax <= vmin:
+        vmax = vmin + 1.0
     n=max(2,min(len(pal),24)) if len(pal)>1 else 1
     step=(vmax-vmin)/n if n else 1
     return [{'code':i+1,
              'label':f'{vmin+i*step:.4g} – {(vmax if i==n-1 else vmin+(i+1)*step):.4g}',
-             'color':'#'+str(pal[min(i,len(pal)-1)]).lstrip('#')}
+             'color':'#'+str(pal[min(i,len(pal)-1)]).lstrip('#'),
+             'min': round(vmin+i*step, 4),
+             'max': round(vmax if i==n-1 else vmin+(i+1)*step, 4)}
             for i in range(n)]
 
 
@@ -12039,8 +12651,10 @@ def _enrich_vector_features(features, class_meta):
     by_code={str(x['code']):x for x in (class_meta or [])}
     out=[]
     for feat in features or []:
+        if not feat or not feat.get('geometry'):
+            continue
         f=dict(feat); props=dict(f.get('properties') or {})
-        raw=props.get('class_value', props.get('first', props.get('label','')))
+        raw=props.get('class_value', props.get('class', props.get('first', props.get('label',''))))
         try: code=int(float(raw))
         except Exception: code=None
         meta=by_code.get(str(code)) if code is not None else None
@@ -12051,7 +12665,29 @@ def _enrich_vector_features(features, class_meta):
         if meta is None and code is not None:
             meta = by_code.get(str(code + 1)) if str(code + 1) in by_code else None
         if meta:
-            props['class_value']=meta['code']; props['class_name']=meta['label']; props['color']=meta['color']
+            props['class']=meta['code']
+            props['class_value']=meta['code']
+            props['class_name']=meta['label']
+            props['color']=meta.get('color', '#999999')
+            if 'min' in meta and 'max' in meta:
+                props['min_val']=meta['min']
+                props['max_val']=meta['max']
+                props['range']=f"{meta['min']} – {meta['max']}"
+        elif code is not None:
+            props['class']=code
+            props['class_value']=code
+            props['class_name']=f'Class {code}'
+            props['color']=props.get('color', '#999999')
+
+        geom = f.get('geometry')
+        if geom:
+            try:
+                area_m2 = _geojson_area_m2(geom)
+                props['area_ha'] = round(area_m2 / 10000.0, 4)
+                props['area_m2'] = round(area_m2, 2)
+            except Exception:
+                pass
+
         f['properties']=props; out.append(f)
     return out
 
@@ -12100,202 +12736,192 @@ def _building_footprint_legend_labels(data):
     return roof_label, roof_color, outside_label, outside_color
 
 
+
+def _sylva_normalize_vector_breaks(data):
+    """Keep raster class IDs, vector labels and colors in the same range order."""
+    breaks = data.get('classBreaks')
+    if not breaks:
+        return
+    if not isinstance(breaks, list) or len(breaks) > 255:
+        raise ValueError('Vektör sınıfları geçerli bir liste olmalıdır (en fazla 255 sınıf).')
+    normalized = []
+    localized = data.get('localizedClassMeta') or []
+    for pos, item in enumerate(breaks):
+        if not isinstance(item, dict):
+            raise ValueError('Geçersiz vektör sınıfı.')
+        try:
+            lo, hi = float(item['min']), float(item['max'])
+        except (KeyError, TypeError, ValueError):
+            raise ValueError('Vektör sınıf sınırları geçerli sayılar olmalıdır.') from None
+        if not math.isfinite(lo) or not math.isfinite(hi):
+            raise ValueError('Vektör sınıf sınırları sonlu sayılar olmalıdır.')
+        lo, hi = min(lo, hi), max(lo, hi)
+        normalized.append((lo, hi, pos, dict(item, min=lo, max=hi)))
+    normalized.sort(key=lambda entry: (entry[0], entry[1]))
+    data['classBreaks'] = [entry[3] for entry in normalized]
+    if isinstance(localized, list) and localized:
+        ordered = []
+        for code, (lo, hi, pos, item) in enumerate(normalized, 1):
+            match = next((meta for meta in localized if isinstance(meta, dict) and
+                          meta.get('code') == pos + 1), None)
+            if match is None and pos < len(localized) and isinstance(localized[pos], dict):
+                match = localized[pos]
+            ordered.append(dict(match or {}, code=code, min=lo, max=hi,
+                                label=(match or {}).get('label') or item.get('label') or f'{lo:g} – {hi:g}',
+                                color=(match or {}).get('color') or item.get('color') or '#999999'))
+        data['localizedClassMeta'] = ordered
+
+
 def _vectorize_analysis_payload(data, crs='EPSG:4326'):
     """Bir aktif analiz payload'ını gerçek AOI üzerinde sınıflı vektöre dönüştürür."""
     data=dict(data or {})
+    _sylva_check_cancelled()
     index=str(data.get('index') or '').upper()
     if index == 'RGB':
         raise ValueError('RGB uydu görüntüsü sınıflandırılmış vektör katmanı değildir; vektör toplu indirmesine dahil edilmedi.')
     if index == 'TOPO_CONTOUR':
         result=_generate_contour_vectors(data)
         if not result.get('success'):
+            _sylva_check_cancelled()
             raise ValueError(result.get('error') or 'Eş yükselti vektörü üretilemedi.')
+        _sylva_check_cancelled()
         feats=result.get('features') or []
+        _sylva_check_cancelled()
         color=str(data.get('contourLineColor') or '#1e3a8a')
         for f in feats:
+            _sylva_check_cancelled()
             props=f.setdefault('properties',{})
             props['class_name']='Eş Yükselti'; props['color']=color
         return feats,[{'code':1,'label':'Eş Yükselti','color':color}]
 
-    if index == 'BUILDING_FOOTPRINT':
-        # Öncelik: analiz ekranında zaten başarıyla üretilmiş gerçek GeoJSON.
-        # Böylece indirme aşamasında aynı bina sorgusunu ikinci kez çalıştırıp
-        # farklı/boş bir kapsam dönmesi engellenir.
-        roof_label, roof_color, outside_label, outside_color = _building_footprint_legend_labels(data)
-        supplied_geojson=data.get('geojson')
-        if isinstance(supplied_geojson, dict):
-            feats=supplied_geojson.get('features') or []
-            if feats:
-                out=[]
-                for f in feats:
-                    if not isinstance(f, dict) or not f.get('geometry'):
-                        continue
-                    nf=dict(f)
-                    props=dict(nf.get('properties') or {})
-                    props.update({'class_value':1,'class_name':roof_label,'color':roof_color})
-                    nf['properties']=props
-                    out.append(nf)
-                if out:
-                    return out,[{'code':1,'label':roof_label,'color':roof_color},
-                                {'code':0,'label':outside_label,'color':outside_color}]
+    if index in ('CARBON_SIMULATION', 'CARBON_SINK', 'CARBON_PLANTING'):
+        # 🌲 Karbon Analizi fidan verileri Karbon Modülü içerisindeki özel KML indirme
+        # butonuyla sunulduğundan genel vektör dönüştürme ve dışa aktarma hattından tamamen muaftır.
+        return [], []
+    if index not in LULC_CLASS_DEFS and index not in _NATIVE_CATEGORICAL_RASTER_INDICES:
+        _sylva_normalize_vector_breaks(data)
+    # 1. GEE Görüntüsünü ve Çalışma Alanı (ROI) Geometrisini Oluştur
+    try:
+        final_display, roi, result, vis, _ = _call_with_retry(
+            build_result_image, data, for_export=False  # sınıf renkleri ve etiketleri korunur
+        )
+    except Exception as e:
+        traceback.print_exc()
+        raise ValueError(f'Analiz görüntüsü oluşturulamadı: {str(e)}')
 
-        # Geriye dönük uyumluluk: eski istemciler GeoJSON göndermiyorsa
-        # mevcut asenkron/OSM yedekli bina hattını yeniden kullan.
-        geom=data.get('roi') or data.get('geometry')
-        if not geom:
-            raise ValueError('Bina Çatı Tespiti için çalışma alanı geometrisi bulunamadı.')
-        with app.test_request_context('/api/building-footprints', method='POST', json={'geometry': geom}):
-            resp=building_footprints()
-        if isinstance(resp, tuple):
-            resp=resp[0]
-        if not isinstance(resp, Response) or resp.status_code >= 400:
-            raise ValueError('Bina verileri alınamadı.')
-        payload=resp.get_json(silent=True) or {}
-        if not payload.get('success'):
-            raise ValueError(payload.get('error') or 'Bina verileri alınamadı.')
-        feats=(payload.get('geojson') or {}).get('features') or []
-        if not feats:
-            raise ValueError('Bina Çatı Tespiti sonucunda dışa aktarılabilir poligon bulunamadı.')
-        for f in feats:
-            props=dict(f.get('properties') or {})
-            props.update({'class_value':1,'class_name':roof_label,'color':roof_color})
-            f['properties']=props
-        return feats,[{'code':1,'label':roof_label,'color':roof_color},
-                      {'code':0,'label':outside_label,'color':outside_color}]
+    if roi is None:
+        raise ValueError('Çalışma alanı (ROI) bulunamadı.')
 
-    final_display, roi, result, vis, _ = _call_with_retry(build_result_image, data, for_export=False)
-    class_meta=_vector_class_meta(data, vis)
-    if not class_meta:
-        raise ValueError('Bu katman için vektöre aktarılabilir sınıf/lejant bilgisi bulunamadı.')
-    vector_img=final_display
-    # Kullanıcı sınıflandırması varsa continuous sonucu sınıf kodlarına
-    # dönüştür. Böylece NDVI/Eğim/TWI/BSI vb. sınıflandırılmış katmanlarda
-    # vektör özellikleri gerçek class_name + color ile eşleşir.
+    # Sınıf metadata'sını (renkler, etiketler, min/max aralıkları) hazırla
+    class_meta = _vector_class_meta(data, vis)
+
+    _sylva_check_cancelled()
     _payload_breaks = data.get('classBreaks')
-    # 🛠️ BUG FİX (kullanıcı bildirimi — Çevresel/Kentsel Analizler'de Orman
-    # Kaybı ekranda 3 sınıf (Orman/Değişmeyen, Kayıp, Kazanım) gösterirken
-    # indirilen vektörde (KML/SHP/GeoJSON) yalnızca 2, eksik ve YANLIŞ
-    # etiketli sınıf olarak geliyordu): KÖK NEDEN — FOREST_LOSS/URBAN_GROWTH
-    # zaten build_result_image() içinde native 0/1/2 (ya da 0/1) sınıf
-    # kodlarını üretir (bkz. _NATIVE_CATEGORICAL_RASTER_INDICES ve raster
-    # dışa aktarımdaki eşdeğer düzeltme, ~satır 7863). Ancak bu iki koşul
-    # yalnızca `index not in LULC_CLASS_DEFS` kontrolü yaptığından (FOREST_LOSS/
-    # URBAN_GROWTH bu sözlükte YOKTUR — ayrı bir "native" aile), istemciden
-    # classBreaks gelmediğinde aşağıdaki `elif` dalı devreye giriyor ve
-    # zaten kategorik olan 0/1/2 değerlerini SANKİ SÜREKLİ bir değişkenmiş
-    # gibi palette uzunluğuna göre yeniden kutuluyordu (0→1, 1→2, 2→3).
-    # Sonuç: _vector_class_meta()'nın native sözlüğü (kod 0/1/2) artık
-    # üretilen kodlarla (1/2/3) EŞLEŞMİYORDU — kod 0 (Orman/Değişmeyen)
-    # hiç eşleşmediği için TAMAMEN KAYBOLUYOR, kod 1 (gerçek Orman Kaybı)
-    # "Orman (Değişmeyen)" pikselleriyle karışıp yanlışlıkla "Orman Kaybı"
-    # etiketiyle çıkıyor, kod 2 (gerçek Orman Kazanımı) da yanlışlıkla
-    # gerçek kayıp pikselleriyle eşleşiyor, ve gerçek kazanım (kayan kod 3)
-    # hiçbir sınıf koduna karşılık gelmediği için sessizce dışa aktarımdan
-    # DÜŞÜYORDU. ÇÖZÜM: bu native kategorik katmanlar
-    # (_NATIVE_CATEGORICAL_RASTER_INDICES) her iki dalda da LULC_CLASS_DEFS
-    # ile AYNI şekilde hariç tutulur — vector_img, üstteki `final_display`
-    # (native 0/1/2 kodları) olarak KALIR ve _vector_class_meta ile birebir
-    # eşleşir. IMPERVIOUS_CHANGE gibi GERÇEKTEN sürekli (continuous) değişim
-    # katmanları bu istisnaya DAHİL DEĞİLDİR — onlar için palette tabanlı
-    # kutulama davranışı (doğru şekilde) aynen sürüyor.
-    if index not in LULC_CLASS_DEFS and index != 'TOPO_ASPECT' and index not in _NATIVE_CATEGORICAL_RASTER_INDICES and isinstance(_payload_breaks, list) and _payload_breaks:
-        try:
-            _valid_breaks=[]
-            for _b in _payload_breaks[:24]:
-                if not isinstance(_b, dict): continue
-                _lo=float(_b.get('min')); _hi=float(_b.get('max'))
-                if _hi < _lo: _lo,_hi=_hi,_lo
-                _valid_breaks.append((_lo,_hi))
-            if _valid_breaks:
-                _cls=ee.Image.constant(0).rename('class_value')
-                for _i,(_lo,_hi) in enumerate(_valid_breaks,1):
-                    _cond=result.gte(_lo).And(result.lte(_hi))
-                    _cls=_cls.where(_cond,_i)
-                vector_img=_cls.updateMask(result.mask())
-        except Exception:
-            # Sınıf aralıkları hatalıysa aşağıdaki palette fallback'i devreye
-            # girer; indirme tamamen sessizce bozulmaz.
-            vector_img=final_display
-    elif index not in LULC_CLASS_DEFS and index != 'TOPO_ASPECT' and index not in _NATIVE_CATEGORICAL_RASTER_INDICES and not (isinstance(_payload_breaks, list) and _payload_breaks):
-        pal=(vis or {}).get('palette') if isinstance(vis,dict) else None
-        if isinstance(pal,list) and len(pal)>1:
+
+    # 2. Sürekli Rasterı Tamsayı Sınıflarına Dönüştür (Reclassify) ve Maskele
+    # NDVI, NDBI, NDWI, Eğim (Slope), DEM vb. sürekli indeksleri tamsayı sınıf ID'lerine (1..N) dönüştür.
+    # reduceToVectors öncesinde görüntünün açıkça toInt() formatına cast edilmesi,
+    # sınıf dışı/tanımsız piksellerin maskelenmesi ve ROI ile tam kırpılması sağlanır.
+    if index not in LULC_CLASS_DEFS and index != 'TOPO_ASPECT' and index not in _NATIVE_CATEGORICAL_RASTER_INDICES:
+        if isinstance(_payload_breaks, list) and _payload_breaks:
             try:
-                vmin=float(vis.get('min',0)); vmax=float(vis.get('max',1)); n=min(len(pal),24)
-                vector_img=result.subtract(vmin).divide(vmax-vmin).multiply(n).floor().add(1).clamp(1,n).toInt().updateMask(result.mask())
-            except Exception:
-                pass
-    if index == 'TOPO_ASPECT' and not (isinstance(data.get('classBreaks'), list) and data.get('classBreaks')):
-        a=result
-        vector_img=(ee.Image(1).where(a.gte(0).And(a.lt(12.5)),2)
-            .where(a.gte(12.5).And(a.lt(57.5)),3)
-            .where(a.gte(57.5).And(a.lt(102.5)),4)
-            .where(a.gte(102.5).And(a.lt(147.5)),5)
-            .where(a.gte(147.5).And(a.lt(192.5)),6)
-            .where(a.gte(192.5).And(a.lt(237.5)),7)
-            .where(a.gte(237.5).And(a.lt(282.5)),8)
-            .where(a.gte(282.5).And(a.lt(327.5)),9)
-            .where(a.gte(327.5),2).updateMask(a.mask()))
-        vector_img=vector_img.where(a.lt(0),1)
+                _valid_breaks = []
+                for _b in _payload_breaks:
+                    _sylva_check_cancelled()
+                    if not isinstance(_b, dict): continue
+                    _sylva_check_cancelled()
+                    _lo = float(_b.get('min'))
+                    _sylva_check_cancelled()
+                    _hi = float(_b.get('max'))
+                    if _hi < _lo: _lo, _hi = _hi, _lo
+                    _valid_breaks.append((_lo, _hi))
+                if _valid_breaks:
+                    _cls = ee.Image.constant(0).toInt()
+                    for _i, (_lo, _hi) in enumerate(_valid_breaks, 1):
+                        _sylva_check_cancelled()
+                        _cond = result.eq(_lo) if _lo == _hi else result.gte(_lo).And(result.lte(_hi) if _i == len(_valid_breaks) else result.lt(_hi))
+                        _cls = _cls.where(_cond.And(_cls.eq(0)), _i)
+                    # Sadece geçerli sınıf atanan (1..N) ve geçerli maskesi olan pikselleri koru
+                    vector_img = _cls.updateMask(result.mask().And(_cls.gt(0))).toInt().clip(roi)
+                else:
+                    vector_img = (final_display if final_display is not None else result).toInt().updateMask(result.mask()).clip(roi)
+            except Exception as _cls_err:
+                raise ValueError(f'Vektör sınıflandırması oluşturulamadı: {_cls_err}') from _cls_err
+        else:
+            _sylva_check_cancelled()
+            pal = (vis or {}).get('palette') if isinstance(vis, dict) else None
+            if isinstance(pal, list) and len(pal) > 1:
+                try:
+                    _sylva_check_cancelled()
+                    vmin = float(vis.get('min', 0))
+                    _sylva_check_cancelled()
+                    vmax = float(vis.get('max', 1))
+                    if vmax <= vmin:
+                        vmax = vmin + 1.0
+                    n = min(len(pal), 24)
+                    step = (vmax - vmin) / n
+                    _cls = ee.Image.constant(0).toInt()
+                    for _i in range(1, n + 1):
+                        _sylva_check_cancelled()
+                        _lo = vmin + (_i - 1) * step
+                        _hi = vmax if _i == n else vmin + _i * step
+                        _cond = result.gte(_lo).And(result.lte(_hi) if _i == n else result.lt(_hi))
+                        _cls = _cls.where(_cond, _i)
+                    vector_img = _cls.updateMask(result.mask().And(_cls.gt(0))).toInt().clip(roi)
+                except Exception:
+                    vector_img = (final_display if final_display is not None else result).toInt().updateMask(result.mask()).clip(roi)
+            else:
+                vector_img = (final_display if final_display is not None else result).toInt().updateMask(result.mask()).clip(roi)
+    elif index == 'TOPO_ASPECT' and not (isinstance(data.get('classBreaks'), list) and data.get('classBreaks')):
+        a = result
+        vector_img = (ee.Image(1).where(a.gte(0).And(a.lt(12.5)), 2)
+            .where(a.gte(12.5).And(a.lt(57.5)), 3)
+            .where(a.gte(57.5).And(a.lt(102.5)), 4)
+            .where(a.gte(102.5).And(a.lt(147.5)), 5)
+            .where(a.gte(147.5).And(a.lt(192.5)), 6)
+            .where(a.gte(192.5).And(a.lt(237.5)), 7)
+            .where(a.gte(237.5).And(a.lt(282.5)), 8)
+            .where(a.gte(282.5).And(a.lt(327.5)), 9)
+            .where(a.gte(327.5), 2).updateMask(a.mask()))
+        vector_img = vector_img.where(a.lt(0), 1).toInt().clip(roi)
+    else:
+        # LULC, FOREST_LOSS, URBAN_GROWTH vb.
+        vector_img = (final_display if final_display is not None else result).toInt().updateMask(result.mask()).clip(roi)
+
+    # 3. Alan Büyüklüğüne Göre Dinamik ve Güvenli Ölçek (Scale) Seçimi
+    aoi_m2 = 0.0
+    try:
+        _sylva_check_cancelled()
+        raw_geom = data.get('geometry') or data.get('roi')
+        if raw_geom:
+            aoi_m2 = _geojson_area_m2(raw_geom if isinstance(raw_geom, dict) else {'type': 'Polygon', 'coordinates': raw_geom})
+    except Exception:
+        aoi_m2 = 0.0
 
     if index in LULC_CLASS_DEFS:
-        scale=100 if index in ('LULC','LULC_ESA','LULC_CORINE') else 500 if index=='LULC_MODIS' else 100
-    elif index.startswith('TOPO'):
-        scale=90
+        scale = 100 if index in ('LULC', 'LULC_ESA', 'LULC_CORINE') else 500 if index == 'LULC_MODIS' else 100
     elif index in ('FOREST_LOSS', 'URBAN_GROWTH', 'IMPERVIOUS_CHANGE'):
-        # 🛠️ BUG FİX (kullanıcı bildirimi — Çevresel/Kentsel Analizler'de
-        # FOREST_LOSS vektör indirmesi 2 yeniden denemeden sonra bile
-        # kalıcı olarak "Failed to fetch" ile başarısız oluyordu): KÖK
-        # NEDEN — bu katmanlarda "Değişmeyen/Unchanged" sınıfı (kod 0)
-        # neredeyse TÜM çalışma alanını kaplayan, tek büyük ve çok
-        # köşeli/karmaşık bir bölgedir. 22. paketteki "kayıp sınıf"
-        # düzeltmesiyle her sınıf artık kendi reduceToVectors() çağrısını
-        # aldığından, bu devasa "Değişmeyen" sınıfının 300 m ölçekte
-        # vektörleştirilmesi tek başına çok uzun sürebiliyor ve isteği
-        # zaman aşımına uğratabiliyordu — bu GEÇİCİ bir ağ sorunu değildi,
-        # bu yüzden otomatik yeniden deneme de (24. paket) yardımcı
-        # olamıyordu. ÇÖZÜM: bu üç değişim-tespiti katmanı için vektör
-        # ölçeği 300 m'den 600 m'ye çıkarıldı — piksel/köşe sayısı ~4 kat
-        # azalır, hesaplama süresi buna bağlı olarak düşer. Değişim
-        # alanlarının (kayıp/kazanım, yeni kentsel alan) genel dağılımı ve
-        # sınıf renkleri/isimleri AYNEN korunur; yalnızca çok ince/tekli
-        # piksel detayları biraz daha genelleştirilir (bu tür değişim
-        # katmanları zaten genel eğilim göstergesi olarak kullanılır, ince
-        # piksel hassasiyeti gerektirmez). Raster (GeoTIFF) indirmesi bu
-        # değişiklikten ETKİLENMEZ — yalnızca vektör (KML/SHP/GeoJSON)
-        # yolunu kullanır.
-        scale=600
+        scale = 300 if (aoi_m2 > 0 and aoi_m2 < 50000000) else 600
+    elif index.startswith('TOPO'):
+        scale = 30 if (aoi_m2 > 0 and aoi_m2 < 10000000) else 90
     else:
-        scale=300
-    # GEE reduceToVectors() requires one reducer input band in addition to
-    # the first label band. Add a constant second band for Reducer.first().
-    _vector_input = vector_img.int().rename('class_value').addBands(
+        # Sentinel-2 / Landsat indeksleri (NDVI, NDWI, NDBI, vb.)
+        if aoi_m2 > 0 and aoi_m2 < 2000000:       # < 200 ha
+            scale = 10
+        elif aoi_m2 > 0 and aoi_m2 < 20000000:    # < 2,000 ha
+            scale = 20
+        elif aoi_m2 > 0 and aoi_m2 < 100000000:   # < 10,000 ha
+            scale = 60
+        else:
+            scale = 100
+
+    # 4. GEE reduceToVectors ile Poligonlaştırma (Raster to Vector)
+    # GEE reduceToVectors() için ilk bant etiket (labelProperty: 'class'),
+    # ikinci bant ise Reducer.first() için constant bant olarak verilir.
+    _vector_input = vector_img.toInt().rename('class').addBands(
         ee.Image.constant(1).rename('vector_value')
     )
 
-    # 🛠️ BUG FİX (kullanıcı bildirimi — "ekranda lejant 4 sınıf ama
-    # indirilen KML'de 1. sınıf hiç yok"): KÖK NEDEN — eskiden TÜM
-    # sınıfların ham (dissolve edilmemiş) poligon parçaları TEK bir ortak
-    # reduceToVectors() çağrısında üretilip ortak bir '.limit(20000)'
-    # sınırına tabi tutuluyordu. Baskın/çok parçalı bir sınıf (ör. birçok
-    # küçük ayrı yerleşim lekesi üreten bir sınıf) bu 20000 parça payının
-    # büyük kısmını (hatta tamamını) tüketebiliyordu; GEE'nin dahili tarama
-    # sırasına göre DAHA GEÇ karşılaşılan seyrek/az pikselli bir sınıf
-    # (ör. yukarıdaki örnekte Sınıf 1) sınıra ulaşıldığında hiç işlenmeden
-    # kalıyor, bu da dissolve adımında o sınıfı tamamen kayıp gösteriyordu.
-    # Bu, tesadüfi değil — her indirmede aynı şekilde tekrarlanan sistemik
-    # bir sorundu.
-    #
-    # ÇÖZÜM: Artık HER sınıf kodu için AYRI, kendi maskeli görüntüsü
-    # üzerinde çalışan bir reduceToVectors() çağrısı yapılıyor — böylece
-    # her sınıfın kendi 20000 parçalık payı vardır ve baskın bir sınıf
-    # diğerlerinin payını asla tüketemez. Tüm bu ayrı çağrılar GEE
-    # tarafında tek bir gecikmeli (lazy) hesap grafiğinde birleştirilip
-    # yine TEK bir getInfo() ile sunucuya indirilir (ekstra ağ turu yok).
-    # Her sınıf için sonuç, önceki davranışla aynı şekilde dissolve edilir
-    # (TEK bir (multi)geometri/satır). Herhangi bir sebeple bu yeni yol
-    # başarısız olursa (çok karmaşık geometri, GEE zaman aşımı vb.),
-    # sessizce eski (paylaşılan tek reduceToVectors) davranışa geri
-    # dönülür — indirme asla tamamen bozulmaz.
     feats = None
     try:
         class_codes = sorted(set(int(m['code']) for m in (class_meta or [])))
@@ -12305,22 +12931,32 @@ def _vectorize_analysis_payload(data, crs='EPSG:4326'):
             def _merge_one_class(code):
                 code_num = ee.Number(code)
                 class_input = vector_img.eq(code_num).selfMask() \
-                    .multiply(0).add(code_num).rename('class_value') \
+                    .multiply(0).add(code_num).rename('class') \
                     .addBands(ee.Image.constant(1).rename('vector_value'))
                 class_fc = class_input.reduceToVectors(
-                    reducer=ee.Reducer.first(), geometry=roi, scale=scale, maxPixels=1e8,
-                    geometryType='polygon', eightConnected=False, labelProperty='class_value',
-                    crs=crs if str(crs).upper().startswith('EPSG:') else 'EPSG:4326').limit(20000)
+                    reducer=ee.Reducer.first(),
+                    geometry=roi,
+                    scale=scale,
+                    maxPixels=1e8,
+                    tileScale=8,
+                    bestEffort=True,
+                    geometryType='polygon',
+                    eightConnected=False,
+                    labelProperty='class',
+                    crs=crs if str(crs).upper().startswith('EPSG:') else 'EPSG:4326'
+                ).limit(20000)
                 return ee.Algorithms.If(
                     class_fc.size().gt(0),
-                    ee.Feature(class_fc.geometry(1)).set('class_value', code_num),
+                    ee.Feature(class_fc.geometry(1)).set('class', code_num).set('class_value', code_num),
                     None
                 )
 
             merged_list = codes_list.map(_merge_one_class, True)
             merged_fc = ee.FeatureCollection(merged_list)
+            _sylva_check_cancelled()
             merged_info = _call_with_retry(lambda: merged_fc.getInfo()) or {}
-            merged_feats = merged_info.get('features') or []
+            _sylva_check_cancelled()
+            merged_feats = [f for f in (merged_info.get('features') or []) if f and f.get('geometry') and f.get('geometry', {}).get('coordinates')]
             if merged_feats:
                 feats = merged_feats
     except Exception as dissolve_error:
@@ -12328,16 +12964,51 @@ def _vectorize_analysis_payload(data, crs='EPSG:4326'):
         feats = None
 
     if not feats:
-        # Eski (paylaşılan tek çağrı) davranışına güvenli geri dönüş.
-        fc=_call_with_retry(lambda: _vector_input.reduceToVectors(
-            reducer=ee.Reducer.first(), geometry=roi, scale=scale, maxPixels=1e8,
-            geometryType='polygon', eightConnected=False, labelProperty='class_value',
-            crs=crs if str(crs).upper().startswith('EPSG:') else 'EPSG:4326').limit(20000))
-        info=_call_with_retry(lambda: fc.getInfo()) or {}
-        feats=info.get('features') or []
+        # Eski (paylaşılan tek çağrı) davranışına güvenli geri dönüş
+        fc = _call_with_retry(lambda: _vector_input.reduceToVectors(
+            reducer=ee.Reducer.first(),
+            geometry=roi,
+            scale=scale,
+            maxPixels=1e8,
+            tileScale=8,
+            bestEffort=True,
+            geometryType='polygon',
+            eightConnected=False,
+            labelProperty='class',
+            crs=crs if str(crs).upper().startswith('EPSG:') else 'EPSG:4326'
+        ).limit(20000))
+        _sylva_check_cancelled()
+        info = _call_with_retry(lambda: fc.getInfo()) or {}
+        _sylva_check_cancelled()
+        feats = [f for f in (info.get('features') or []) if f and f.get('geometry') and f.get('geometry', {}).get('coordinates')]
+
+    if not feats and scale > 20:
+        # Küçük alanlarda kaba ölçek nedeniyle piksel atlanmış olabilir; ince ölçekle kurtarma dene
+        try:
+            retry_scale = 10 if scale > 30 else 5
+            fc_retry = _call_with_retry(lambda: _vector_input.reduceToVectors(
+                reducer=ee.Reducer.first(),
+                geometry=roi,
+                scale=retry_scale,
+                maxPixels=1e8,
+                tileScale=8,
+                bestEffort=True,
+                geometryType='polygon',
+                eightConnected=False,
+                labelProperty='class',
+                crs=crs if str(crs).upper().startswith('EPSG:') else 'EPSG:4326'
+            ).limit(20000))
+            _sylva_check_cancelled()
+            info_retry = _call_with_retry(lambda: fc_retry.getInfo()) or {}
+            _sylva_check_cancelled()
+            feats = [f for f in (info_retry.get('features') or []) if f and f.get('geometry') and f.get('geometry', {}).get('coordinates')]
+        except Exception as retry_err:
+            print('[SylvaGIS] İnce ölçekli kurtarma denemesi hatası:', retry_err)
+
     if not feats:
         raise ValueError('Vektör geometri üretilemedi; veri boş olabilir.')
-    return _enrich_vector_features(feats,class_meta),class_meta
+
+    return _enrich_vector_features(feats, class_meta), class_meta
 
 
 def _make_vector_response(fmt, features, safe_name):
@@ -12345,6 +13016,7 @@ def _make_vector_response(fmt, features, safe_name):
         return _features_to_kml(features,safe_name),f'{safe_name}.kml'
     if fmt=='kmz':
         kb=_features_to_kml(features,safe_name); b=io.BytesIO()
+        _sylva_check_cancelled()
         with zipfile.ZipFile(b,'w',zipfile.ZIP_DEFLATED) as z: z.writestr(f'{safe_name}.kml',kb)
         return b.getvalue(),f'{safe_name}.kmz'
     if fmt=='shp':
@@ -12357,6 +13029,7 @@ def _make_vector_response(fmt, features, safe_name):
 @app.route('/api/vector-download-batch', methods=['POST'])
 def vector_download_batch():
     req=request.get_json(silent=True) or {}
+    _sylva_check_cancelled()
     fmt=str(req.get('format') or 'kml').lower().strip(); items=req.get('items') or []
     if fmt not in ('kml','kmz','shp','geojson'):
         return jsonify({'success':False,'error':'Geçersiz vektör formatı.'}),400
@@ -12364,38 +13037,60 @@ def vector_download_batch():
         return jsonify({'success':False,'error':'Toplu vektör indirme için en az bir katman gerekir.'}),400
     if len(items)>25:
         return jsonify({'success':False,'error':'Tek ZIP içinde en fazla 25 katman indirilebilir.'}),400
-    master=io.BytesIO(); errors=[]; legends=[]; used=set()
-    with zipfile.ZipFile(master,'w',zipfile.ZIP_DEFLATED) as z:
-        for pos,item in enumerate(items,1):
-            try:
-                payload=item.get('payload') if isinstance(item,dict) else None
-                if not payload: raise ValueError('Katman payload bilgisi eksik.')
-                base=_sylva_safe_filename(str(item.get('filename') or f'SylvaGIS_vector_{pos}'))[:100] or f'SylvaGIS_vector_{pos}'
-                original=base; n=2
-                while base.lower() in used: base=f'{original}_{n}'; n+=1
-                used.add(base.lower())
-                feats,meta=_vectorize_analysis_payload(payload,str(req.get('crs') or 'EPSG:4326'))
-                body,name=_make_vector_response(fmt,feats,base); z.writestr(name,body)
-                legends.append(f'[{base}]')
-                for m in meta or []: legends.append(f"  {m.get('code','')} | {m.get('label','')} | {m.get('color','')}")
-            except Exception as ex:
-                errors.append((str(item.get('filename') or f'Katman {pos}'),str(ex)))
-        if errors:
-            _report_name,_report_title,_report_intro=_undownloadable_report_texts(req.get('lang'))
-            lines=[_report_title,'', _report_intro,'']
-            lines.extend(f'- {name}: {err}' for name,err in errors)
-            z.writestr(f'{_report_name}.txt','\n'.join(lines).encode('utf-8'))
-        if legends: z.writestr('LEJANTLAR.txt','\n'.join(legends).encode('utf-8'))
-    if not used:
-        return jsonify({'success':False,'error':'Hiçbir katman üretilemedi.'}),400
-    master.seek(0)
-    return Response(master.read(),headers={'Content-Type':'application/zip','Content-Disposition':'attachment; filename="SylvaGIS_vector_analyses.zip"'})
+    try:
+        master=io.BytesIO(); errors=[]; legends=[]; used=set(); exported_count=0
+        with zipfile.ZipFile(master,'w',zipfile.ZIP_DEFLATED) as z:
+            for pos,item in enumerate(items,1):
+                _sylva_check_cancelled()
+                try:
+                    _sylva_check_cancelled()
+                    payload=item.get('payload') if isinstance(item,dict) else None
+                    if not payload: raise ValueError('Katman payload bilgisi eksik.')
+                    payload = dict(payload)
+                    _sylva_check_cancelled()
+                    payload.setdefault('lang', req.get('lang') or 'en')
+                    _sylva_check_cancelled()
+                    base=_sylva_safe_filename(str(item.get('filename') or f'SylvaGIS_vector_{pos}'))[:100] or f'SylvaGIS_vector_{pos}'
+                    original=base; n=2
+                    _sylva_check_cancelled()
+                    while base.lower() in used: base=f'{original}_{n}'; n+=1
+                    used.add(base.lower())
+                    _sylva_check_cancelled()
+                    feats,meta=_vectorize_analysis_payload(payload,str(req.get('crs') or 'EPSG:4326'))
+                    _sylva_check_cancelled()
+                    if not feats: raise ValueError('Bu katmanda dışa aktarılabilir vektör geometrisi bulunamadı.')
+                    body,name=_make_vector_response(fmt,feats,base); z.writestr(name,body)
+                    exported_count += 1
+                    legends.append(f'[{base}]')
+                    _sylva_check_cancelled()
+                    for m in meta or []: legends.append(f"  {m.get('code','')} | {m.get('label','')} | {m.get('color','')}")
+                except Exception as ex:
+                    _sylva_check_cancelled()
+                    errors.append((str(item.get('filename') or f'Katman {pos}'),str(ex)))
+            if errors:
+                _sylva_check_cancelled()
+                _report_name,_report_title,_report_intro=_undownloadable_report_texts(req.get('lang'))
+                lines=[_report_title,'', _report_intro,'']
+                lines.extend(f'- {name}: {err}' for name,err in errors)
+                _sylva_check_cancelled()
+                z.writestr(f'{_report_name}.txt','\n'.join(lines).encode('utf-8'))
+            _sylva_check_cancelled()
+            if legends: z.writestr('LEJANTLAR.txt','\n'.join(legends).encode('utf-8'))
+        if not exported_count:
+            return jsonify({'success':False,'error':'Hiçbir katman üretilemedi.'}),400
+        master.seek(0)
+        _sylva_check_cancelled()
+        return Response(master.read(),headers={'Content-Type':'application/zip','Content-Disposition': _content_disposition('SylvaGIS_' + _export_labels(req.get('lang'))[1] + '.zip')})
+    except (BrokenPipeError, ConnectionResetError):
+        print('[SylvaGIS] ℹ️ İstemci bağlantıyı kesti (Toplu vektör indirme iptal edildi).')
+        return Response('', status=499)
 
 
 @app.route('/api/download-geotiff-batch', methods=['POST'])
 def download_geotiff_batch():
     """Bir aktif ekrandaki birden fazla rasteri tek ZIP içinde döndürür."""
     req_data = request.json or {}
+    _sylva_check_cancelled()
     items = req_data.get('items') or []
     if not isinstance(items, list) or len(items) < 2:
         return jsonify({'success': False, 'error': 'ZIP için en az iki raster analiz gerekir.'}), 400
@@ -12425,11 +13120,14 @@ def download_geotiff_batch():
     used_names = set()
     prepared_items = []
     for pos, item in enumerate(items, 1):
+        _sylva_check_cancelled()
         if not isinstance(item, dict):
             continue
         item = dict(item)
+        _sylva_check_cancelled()
         base = re.sub(r'[^A-Za-z0-9_.-]+', '_', str(item.get('filename') or 'SylvaGIS_{}'.format(pos))).strip('._') or 'SylvaGIS_{}'.format(pos)
         while base.lower() in used_names:
+            _sylva_check_cancelled()
             base = '{}_{}'.format(base, pos)
         used_names.add(base.lower())
         item['filename'] = base
@@ -12440,6 +13138,7 @@ def download_geotiff_batch():
     def _fetch_one(pos, base, item):
         last_err = None
         for attempt in range(3):
+            _sylva_check_cancelled()
             try:
                 with app.test_request_context('/api/download-geotiff', method='POST', json=item):
                     response = download_geotiff()
@@ -12448,7 +13147,7 @@ def download_geotiff_batch():
                 last_err = exc
                 # 429/RESOURCE_EXHAUSTED için kısa ama artan bekleme.
                 if attempt < 2 and ('429' in str(exc) or 'RESOURCE_EXHAUSTED' in str(exc).upper() or 'Too Many Requests' in str(exc)):
-                    time.sleep(5 * (attempt + 1))
+                    _sylva_cancel_wait(5 * (attempt + 1))
                     continue
                 raise
         else:
@@ -12486,6 +13185,7 @@ def download_geotiff_batch():
         # ZIP asla kısmi/karışık içerikle üretilmez).
         if 'application/json' in content_type or (body[:1] in (b'{', b'[')):
             try:
+                _sylva_check_cancelled()
                 err_msg = json.loads(body.decode('utf-8', errors='replace')).get('error')
             except Exception:
                 err_msg = None
@@ -12501,12 +13201,14 @@ def download_geotiff_batch():
     max_workers = 1
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         future_map = {
-            pool.submit(_fetch_one, pos, base, item): (pos, base)
+            _sylva_submit(pool, _fetch_one, pos, base, item): (pos, base)
             for pos, base, item in prepared_items
         }
         for future in as_completed(future_map):
+            _sylva_check_cancelled()
             pos, base = future_map[future]
             try:
+                _sylva_check_cancelled()
                 results[pos] = future.result()
             except Exception as item_err:
                 errors.append((base, str(item_err)))
@@ -12535,6 +13237,7 @@ def download_geotiff_batch():
     try:
         with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as out_zip:
             for pos, base, _item in prepared_items:
+                _sylva_check_cancelled()
                 if pos not in results:
                     continue
                 base_r, content_type, body = results[pos]
@@ -12542,12 +13245,17 @@ def download_geotiff_batch():
                     # LULC renk tablosu/RAT dosyalarını ana ZIP'e doğrudan aç.
                     with zipfile.ZipFile(io.BytesIO(body), 'r') as nested:
                         for member in nested.infolist():
+                            _sylva_check_cancelled()
                             if not member.is_dir():
+                                _sylva_check_cancelled()
                                 out_zip.writestr(member.filename, nested.read(member.filename))
                 else:
+                    _sylva_check_cancelled()
                     out_zip.writestr(base_r + '.tif', body)
             if errors:
+                _sylva_check_cancelled()
                 _report_name,_report_title,_report_intro=_undownloadable_report_texts(req_data.get('lang'))
+                _sylva_check_cancelled()
                 out_zip.writestr(
                     f'{_report_name}.txt',
                     _report_title + '\n\n' + _report_intro + '\n\n' +
@@ -12558,9 +13266,2454 @@ def download_geotiff_batch():
         response.headers['Content-Disposition'] = 'attachment; filename="SylvaGIS_raster_analizleri.zip"'
         response.headers['Content-Length'] = str(len(result))
         return response
+    except (BrokenPipeError, ConnectionResetError):
+        print('[SylvaGIS] ℹ️ İstemci bağlantıyı kesti (Toplu GeoTIFF indirme iptal edildi).')
+        return Response('', status=499)
     except Exception as exc:
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(exc)}), 500
+
+
+# ════════════════════════════════════════════════════════════════
+# 🌲💨 KARBON YUTAK ALANI SİMÜLASYONU
+# AŞAMA 3 & AŞAMA 4: Bilimsel Veri Modeli, IPCC Katsayı Sözlükleri & Çözümleme Motoru
+# ════════════════════════════════════════════════════════════════
+
+# 1. Evrensel Sabitler (Universal Forestry & Carbon Constants)
+# IPCC Tier 1 Standart Karbon Fraksiyonu: 1 ton fırın kurusu biyokütle başına 0.47 ton Karbon (tC)
+CARBON_FRACTION = 0.47
+
+# Moleküler Ağırlık Oranı: CO2 (44.01 g/mol) / C (12.011 g/mol) ≈ 3.6667
+CO2_TO_C_RATIO = 44.0 / 12.0
+
+
+# 2. Ülke → İklim Bölgesi Eşleme Tablosu (Country to Climate Zone Mapping)
+# Standart IPCC iklim bölgeleri:
+# 'mediterranean', 'temperate_continental', 'temperate_oceanic', 'boreal', 'subtropical', 'tropical_wet', 'tropical_dry'
+COUNTRY_CLIMATE_MAP = {
+    # Akdeniz & Ilıman Akdeniz Kuşağı
+    'TR': 'mediterranean',  # Türkiye (Akdeniz & Karasal geçiş kuşağı)
+    'GR': 'mediterranean',
+    'IT': 'mediterranean',
+    'ES': 'mediterranean',
+    'PT': 'mediterranean',
+    'CY': 'mediterranean',
+    'AL': 'mediterranean',
+    'HR': 'mediterranean',
+
+    # Ilıman Okyanusal (Batı & Kuzeybatı Avrupa)
+    'FR': 'temperate_oceanic',
+    'GB': 'temperate_oceanic',
+    'IE': 'temperate_oceanic',
+    'NL': 'temperate_oceanic',
+    'BE': 'temperate_oceanic',
+    'DK': 'temperate_oceanic',
+    'NZ': 'temperate_oceanic',
+
+    # Ilıman Karasal (Orta/Doğu Avrupa, Kuzey Amerika & Doğu Asya)
+    'DE': 'temperate_continental',
+    'PL': 'temperate_continental',
+    'CZ': 'temperate_continental',
+    'AT': 'temperate_continental',
+    'CH': 'temperate_continental',
+    'HU': 'temperate_continental',
+    'RO': 'temperate_continental',
+    'BG': 'temperate_continental',
+    'SK': 'temperate_continental',
+    'UA': 'temperate_continental',
+    'US': 'temperate_continental',
+    'CN': 'temperate_continental',
+    'JP': 'temperate_continental',
+    'KR': 'temperate_continental',
+
+    # Boreal (Kuzey Soğuk Kuşak / Tayga)
+    'RU': 'boreal',
+    'CA': 'boreal',
+    'SE': 'boreal',
+    'FI': 'boreal',
+    'NO': 'boreal',
+    'EE': 'boreal',
+    'LV': 'boreal',
+    'LT': 'boreal',
+
+    # Subtropikal
+    'AU': 'subtropical',
+    'ZA': 'subtropical',
+    'AR': 'subtropical',
+    'CL': 'subtropical',
+    'EG': 'subtropical',
+    'IL': 'subtropical',
+    'IR': 'subtropical',
+    'IQ': 'subtropical',
+    'DZ': 'subtropical',
+    'MA': 'subtropical',
+    'TN': 'subtropical',
+
+    # Tropikal Islak / Nemli (Tropical Wet / Rainforest)
+    'BR': 'tropical_wet',
+    'ID': 'tropical_wet',
+    'MY': 'tropical_wet',
+    'CO': 'tropical_wet',
+    'PE': 'tropical_wet',
+    'CD': 'tropical_wet',
+    'CG': 'tropical_wet',
+    'VN': 'tropical_wet',
+    'TH': 'tropical_wet',
+    'PH': 'tropical_wet',
+
+    # Tropikal Kuru / Yarı Kurak (Tropical Dry / Savanna)
+    'IN': 'tropical_dry',
+    'MX': 'tropical_dry',
+    'KE': 'tropical_dry',
+    'NG': 'tropical_dry',
+    'SA': 'tropical_dry',
+    'PK': 'tropical_dry',
+    'ET': 'tropical_dry',
+    'TZ': 'tropical_dry',
+    'SD': 'tropical_dry',
+
+    # Kafkasya & Orta Asya / Doğu Avrupa
+    'AZ': 'mediterranean',
+    'GE': 'temperate_continental',
+    'AM': 'temperate_continental',
+    'KZ': 'temperate_continental',
+    'UZ': 'subtropical',
+    'KG': 'temperate_continental',
+    'TM': 'subtropical',
+    'BY': 'temperate_continental',
+    'MD': 'temperate_continental',
+    'RS': 'mediterranean',
+    'BA': 'mediterranean',
+    'ME': 'mediterranean',
+    'MK': 'mediterranean',
+    'IS': 'boreal',
+    'LU': 'temperate_oceanic',
+}
+DEFAULT_CLIMATE_ZONE = 'temperate_continental'
+
+# 2.1 IPCC 2006 / 2019 Refinement Ekozon Büyüme ve Biyokütle Katsayı Matrisi
+# Her ekozon için MAI (büyüme hızı), temel odun yoğunluğu (D), kök/gövde (R) ve BEF çarpanları:
+IPCC_ECOZONE_FACTORS = {
+    'mediterranean': {
+        'ecozone_code': 'mediterranean',
+        'name_tr': 'Akdeniz Ekozonu (IPCC Warm Temperate Dry / Semi-Arid)',
+        'name_en': 'Mediterranean Ecozone (IPCC Warm Temperate Dry / Semi-Arid)',
+        'mai_mod': 0.90,            # Kuraklık/yaz su stresi kısıtı: yıllık artım ılıman nemli bölgelere göre daha düşüktür
+        'wood_density_mod': 1.04,   # Yavaş büyüme ve kuraklık adaptasyonu nedeniyle daha dar halkalı ve yoğun odun
+        'root_shoot_mod': 1.08,     # Kök/sürgün oranı daha yüksektir (kuraklığa karşı daha derin ve yaygın kök yatırımı)
+        'bef_mod': 1.02,            # Dallanma ve tepe çatısı kurak bölgelerde daha yayvan
+    },
+    'temperate_continental': {
+        'ecozone_code': 'temperate_continental',
+        'name_tr': 'Ilıman Karasal Ekozon (IPCC Cool Temperate / Continental)',
+        'name_en': 'Temperate Continental Ecozone (IPCC Cool Temperate / Continental)',
+        'mai_mod': 1.10,            # Orta Avrupa / iç karasal ılıman bölge artım potansiyeli
+        'wood_density_mod': 1.00,
+        'root_shoot_mod': 1.00,
+        'bef_mod': 1.00,
+    },
+    'temperate_oceanic': {
+        'ecozone_code': 'temperate_oceanic',
+        'name_tr': 'Ilıman Okyanusal Ekozon (IPCC Cool Temperate Moist / Oceanic)',
+        'name_en': 'Temperate Oceanic Ecozone (IPCC Cool Temperate Moist / Oceanic)',
+        'mai_mod': 1.25,            # Yüksek ve düzenli yağış, yumuşak kışlar: hızlı artım
+        'wood_density_mod': 0.96,   # Hızlı büyüme nedeniyle bir miktar daha düşük odun yoğunluğu
+        'root_shoot_mod': 0.92,     # Toprak nemi yeterli olduğu için gövdeye göre daha düşük kök fraksiyonu
+        'bef_mod': 0.97,
+    },
+    'boreal': {
+        'ecozone_code': 'boreal',
+        'name_tr': 'Boreal / Soğuk Tayga Ekozonu (IPCC Boreal Moist/Dry)',
+        'name_en': 'Boreal Ecozone (IPCC Boreal Moist/Dry)',
+        'mai_mod': 0.65,            # Kısa vejetasyon mevsimi ve düşük sıcaklık: sınırlı hacim artımı
+        'wood_density_mod': 0.98,
+        'root_shoot_mod': 1.14,     # Soğuk toprak ve don koşullarında yüksek kök kütlesi oranı
+        'bef_mod': 1.05,
+    },
+    'subtropical': {
+        'ecozone_code': 'subtropical',
+        'name_tr': 'Subtropikal Ekozon (IPCC Warm Temperate Moist / Subtropical)',
+        'name_en': 'Subtropical Ecozone (IPCC Warm Temperate Moist / Subtropical)',
+        'mai_mod': 1.40,            # Uzun vejetasyon ve yüksek radyasyon
+        'wood_density_mod': 0.97,
+        'root_shoot_mod': 0.90,
+        'bef_mod': 0.96,
+    },
+    'tropical_wet': {
+        'ecozone_code': 'tropical_wet',
+        'name_tr': 'Tropikal Nemli / Yağmur Ormanı Ekozonu (IPCC Tropical Wet)',
+        'name_en': 'Tropical Wet Ecozone (IPCC Tropical Wet)',
+        'mai_mod': 1.60,            # Yıl boyu kesintisiz büyüme
+        'wood_density_mod': 0.95,
+        'root_shoot_mod': 0.85,
+        'bef_mod': 0.95,
+    },
+    'tropical_dry': {
+        'ecozone_code': 'tropical_dry',
+        'name_tr': 'Tropikal Kuru / Savan Ekozonu (IPCC Tropical Dry)',
+        'name_en': 'Tropical Dry Ecozone (IPCC Tropical Dry)',
+        'mai_mod': 0.85,
+        'wood_density_mod': 1.05,
+        'root_shoot_mod': 1.06,
+        'bef_mod': 1.02,
+    }
+}
+
+# 2.2 USDOS LSIB Ülke Kodu → ISO 3166-1 alpha-2 Eşleme Tablosu
+LSIB_TO_ISO = {
+    'TU': 'TR', 'GR': 'GR', 'GM': 'DE', 'SP': 'ES', 'IT': 'IT', 'FR': 'FR',
+    'US': 'US', 'BR': 'BR', 'CA': 'CA', 'UK': 'GB', 'RU': 'RU', 'AU': 'AU',
+    'PT': 'PT', 'CY': 'CY', 'AL': 'AL', 'HR': 'HR', 'NL': 'NL', 'BE': 'BE',
+    'DK': 'DK', 'PL': 'PL', 'CZ': 'CZ', 'AT': 'AT', 'SZ': 'CH', 'HU': 'HU',
+    'RO': 'RO', 'BG': 'BG', 'SK': 'SK', 'UA': 'UA', 'SE': 'SE', 'FI': 'FI',
+    'NO': 'NO', 'EE': 'EE', 'LV': 'LV', 'LT': 'LT', 'AZ': 'AZ', 'GE': 'GE',
+    'AM': 'AM', 'KZ': 'KZ', 'UZ': 'UZ', 'KG': 'KG', 'TM': 'TM', 'IN': 'IN',
+    'CH': 'CN', 'JA': 'JP', 'KS': 'KR', 'ID': 'ID', 'MY': 'MY', 'TH': 'TH',
+    'VM': 'VN', 'RP': 'PH', 'MX': 'MX', 'ZA': 'ZA', 'EG': 'EG', 'KE': 'KE',
+    'NG': 'NG', 'SA': 'SA', 'PK': 'PK', 'AR': 'AR', 'CI': 'CL', 'CO': 'CO',
+    'PE': 'PE', 'IS': 'IS', 'IE': 'IE', 'NZ': 'NZ', 'MA': 'MA', 'DZ': 'DZ',
+    'TS': 'TN', 'IR': 'IR', 'IZ': 'IQ', 'SY': 'SY', 'JO': 'JO', 'LE': 'LB',
+    'RS': 'RS', 'BK': 'BA', 'MJ': 'ME', 'MK': 'MK', 'MD': 'MD', 'BO': 'BY'
+}
+
+COUNTRY_NAME_TO_ISO = {
+    'TURKEY': 'TR', 'GREECE': 'GR', 'GERMANY': 'DE', 'SPAIN': 'ES', 'ITALY': 'IT',
+    'FRANCE': 'FR', 'UNITED STATES': 'US', 'BRAZIL': 'BR', 'CANADA': 'CA',
+    'UNITED KINGDOM': 'GB', 'RUSSIA': 'RU', 'AUSTRALIA': 'AU', 'PORTUGAL': 'PT',
+    'CYPRUS': 'CY', 'ALBANIA': 'AL', 'CROATIA': 'HR', 'NETHERLANDS': 'NL',
+    'BELGIUM': 'BE', 'DENMARK': 'DK', 'POLAND': 'PL', 'CZECH REPUBLIC': 'CZ',
+    'CZECHIA': 'CZ', 'AUSTRIA': 'AT', 'SWITZERLAND': 'CH', 'HUNGARY': 'HU',
+    'ROMANIA': 'RO', 'BULGARIA': 'BG', 'SLOVAKIA': 'SK', 'UKRAINE': 'UA',
+    'SWEDEN': 'SE', 'FINLAND': 'FI', 'NORWAY': 'NO', 'ESTONIA': 'EE',
+    'LATVIA': 'LV', 'LITHUANIA': 'LT', 'AZERBAIJAN': 'AZ', 'GEORGIA': 'GE',
+    'ARMENIA': 'AM', 'KAZAKHSTAN': 'KZ', 'UZBEKISTAN': 'UZ', 'KYRGYZSTAN': 'KG',
+    'TURKMENISTAN': 'TM', 'INDIA': 'IN', 'CHINA': 'CN', 'JAPAN': 'JP',
+    'SOUTH KOREA': 'KR', 'INDONESIA': 'ID', 'MALAYSIA': 'MY', 'THAILAND': 'TH',
+    'VIETNAM': 'VN', 'PHILIPPINES': 'PH', 'MEXICO': 'MX', 'SOUTH AFRICA': 'ZA',
+    'EGYPT': 'EG', 'KENYA': 'KE', 'NIGERIA': 'NG', 'SAUDI ARABIA': 'SA',
+    'PAKISTAN': 'PK', 'ARGENTINA': 'AR', 'CHILE': 'CL', 'COLOMBIA': 'CO',
+    'PERU': 'PE', 'ICELAND': 'IS', 'IRELAND': 'IE', 'NEW ZEALAND': 'NZ',
+    'MOROCCO': 'MA', 'ALGERIA': 'DZ', 'TUNISIA': 'TN', 'IRAN': 'IR',
+    'IRAQ': 'IQ', 'SERBIA': 'RS', 'BOSNIA AND HERZEGOVINA': 'BA',
+    'MONTENEGRO': 'ME', 'NORTH MACEDONIA': 'MK', 'MOLDOVA': 'MD', 'BELARUS': 'BY'
+}
+
+ISO_TO_COUNTRY_NAME = {
+    'TR': 'Turkey', 'GR': 'Greece', 'DE': 'Germany', 'ES': 'Spain', 'IT': 'Italy',
+    'FR': 'France', 'US': 'United States', 'BR': 'Brazil', 'CA': 'Canada',
+    'GB': 'United Kingdom', 'RU': 'Russia', 'AU': 'Australia', 'PT': 'Portugal',
+    'CY': 'Cyprus', 'AL': 'Albania', 'HR': 'Croatia', 'NL': 'Netherlands',
+    'BE': 'Belgium', 'DK': 'Denmark', 'PL': 'Poland', 'CZ': 'Czech Republic',
+    'AT': 'Austria', 'CH': 'Switzerland', 'HU': 'Hungary', 'RO': 'Romania',
+    'BG': 'Bulgaria', 'SK': 'Slovakia', 'UA': 'Ukraine', 'SE': 'Sweden',
+    'FI': 'Finland', 'NO': 'Norway', 'EE': 'Estonia', 'LV': 'Latvia',
+    'LT': 'Lithuania', 'AZ': 'Azerbaijan', 'GE': 'Georgia', 'AM': 'Armenia',
+    'KZ': 'Kazakhstan', 'UZ': 'Uzbekistan', 'KG': 'Kyrgyzstan', 'TM': 'Turkmenistan',
+    'IN': 'India', 'CN': 'China', 'JP': 'Japan', 'KR': 'South Korea',
+    'ID': 'Indonesia', 'MY': 'Malaysia', 'TH': 'Thailand', 'VN': 'Vietnam',
+    'PH': 'Philippines', 'MX': 'Mexico', 'ZA': 'South Africa', 'EG': 'Egypt',
+    'KE': 'Kenya', 'NG': 'Nigeria', 'SA': 'Saudi Arabia', 'PK': 'Pakistan',
+    'AR': 'Argentina', 'CL': 'Chile', 'CO': 'Colombia', 'PE': 'Peru',
+    'IS': 'Iceland', 'IE': 'Ireland', 'NZ': 'New Zealand', 'MA': 'Morocco',
+    'DZ': 'Algeria', 'TN': 'Tunisia', 'IR': 'Iran', 'IQ': 'Iraq',
+    'SY': 'Syria', 'JO': 'Jordan', 'LB': 'Lebanon', 'RS': 'Serbia',
+    'BA': 'Bosnia and Herzegovina', 'ME': 'Montenegro', 'MK': 'North Macedonia',
+    'MD': 'Moldova', 'BY': 'Belarus'
+}
+
+
+def detect_ipcc_ecozone(lat: float, lon: float, temp_c: float = None, precip_mm: float = None, elev_m: float = None, country_code: str = None) -> str:
+    """
+    Kullanıcının koordinatları, WorldClim MAT (sıcaklık) ve MAP (yağış) verileri ile
+    IPCC Global Ecological Zones (GEZ) iklim kuşağını dinamik ve otonom olarak tayin eder.
+    """
+    abs_lat = abs(float(lat if lat is not None else 39.0))
+    t = float(temp_c if temp_c is not None else 13.0)
+    p = float(precip_mm if precip_mm is not None else 650.0)
+    e = float(elev_m if elev_m is not None else 500.0)
+    cc = (country_code or '').upper()
+
+    # 1. Boreal / Soğuk Kuşak (Yüksek enlem veya çok düşük sıcaklık)
+    if abs_lat >= 55.0 or t <= 3.0 or (abs_lat >= 48.0 and t <= 6.0):
+        return 'boreal'
+
+    # 2. Tropikal Kuşak (Ekvatoral / Düşük Enlem)
+    if abs_lat <= 23.5 and t >= 20.0:
+        return 'tropical_wet' if p >= 1400 else 'tropical_dry'
+
+    # 3. Batı / Kuzeybatı Avrupa Okyanusal Kuşağı
+    if cc in ('FR', 'GB', 'IE', 'NL', 'BE', 'DK', 'NZ') and p >= 650:
+        return 'temperate_oceanic'
+    if (8.0 <= t <= 15.0) and (p >= 800) and (40.0 <= abs_lat <= 58.0) and lon < 10.0:
+        return 'temperate_oceanic'
+
+    # 4. Akdeniz Kuşağı (Subtropical Mediterranean / Warm Temperate Dry)
+    is_med_geo = (28.0 <= (lat if lat is not None else 39.0) <= 46.0 and -10.0 <= (lon if lon is not None else 35.0) <= 45.0) or cc in ('TR', 'GR', 'IT', 'ES', 'PT', 'CY', 'AL', 'HR', 'ME', 'MK')
+    if is_med_geo and (11.0 <= t <= 22.0) and (p <= 1200):
+        return 'mediterranean'
+    if (12.0 <= t <= 20.0) and (p <= 900) and (28.0 <= abs_lat <= 44.0):
+        return 'mediterranean'
+
+    # 5. Subtropikal (Nemli Ilıman / Sıcak Kuşak)
+    if (15.0 <= t <= 22.0) and p >= 900:
+        return 'subtropical'
+
+    # 6. Ilıman Karasal (Temperate Continental) - Varsayılan
+    return 'temperate_continental'
+
+
+# 3. IPCC Tier 1 & Global Wood Density Katsayıları (Species Level Defaults)
+# Parametreler:
+#   wood_density: Odun yoğunluğu (t DM / m³ yaş gövde hacmi)
+#   root_shoot_ratio: Kök/Gövde oranı (R - yer altı biyokütlesi / yer üstü biyokütlesi)
+#   bef: Biyokütle Genişletme Faktörü (BEF2 - gövde hacminden toplam yer üstü biyokütleye geçiş)
+#   default_mai: Ortalama Yıllık Hacim Artımı (Mean Annual Increment - m³/ha/yıl)
+#   group: 'conifer' (iğne yapraklı) veya 'broadleaf' (geniş yapraklı)
+CARBON_SPECIES_DEFAULTS = {
+    # 🌲 İĞNE YAPRAKLILAR (CONIFERS)
+    'pinus_brutia': {
+        'sci_name': 'Pinus brutia', 'common_tr': 'Kızılçam', 'common_en': 'Calabrian Pine',
+        'wood_density': 0.51, 'root_shoot_ratio': 0.25, 'bef': 1.35, 'default_mai': 6.5,
+        'group': 'conifer',
+        'aliases': ['pinus brutia', 'kizilcam', 'kızılçam', 'calabrian pine', 'turkish pine']
+    },
+    'pinus_nigra': {
+        'sci_name': 'Pinus nigra', 'common_tr': 'Karaçam', 'common_en': 'Anatolian Black Pine',
+        'wood_density': 0.54, 'root_shoot_ratio': 0.28, 'bef': 1.30, 'default_mai': 5.5,
+        'group': 'conifer',
+        'aliases': ['pinus nigra', 'karacam', 'karaçam', 'black pine', 'anatolian black pine', 'austrian pine']
+    },
+    'pinus_sylvestris': {
+        'sci_name': 'Pinus sylvestris', 'common_tr': 'Sarıçam', 'common_en': 'Scots Pine',
+        'wood_density': 0.49, 'root_shoot_ratio': 0.27, 'bef': 1.30, 'default_mai': 5.0,
+        'group': 'conifer',
+        'aliases': ['pinus sylvestris', 'saricam', 'sarıçam', 'scots pine', 'scotch pine']
+    },
+    'pinus_pinea': {
+        'sci_name': 'Pinus pinea', 'common_tr': 'Fıstık Çamı', 'common_en': 'Stone Pine',
+        'wood_density': 0.53, 'root_shoot_ratio': 0.26, 'bef': 1.35, 'default_mai': 4.5,
+        'group': 'conifer',
+        'aliases': ['pinus pinea', 'fistik cami', 'fıstık çamı', 'stone pine', 'umbrella pine']
+    },
+    'pinus_halepensis': {
+        'sci_name': 'Pinus halepensis', 'common_tr': 'Halep Çamı', 'common_en': 'Aleppo Pine',
+        'wood_density': 0.55, 'root_shoot_ratio': 0.26, 'bef': 1.35, 'default_mai': 4.5,
+        'group': 'conifer',
+        'aliases': ['pinus halepensis', 'halep cami', 'halep çamı', 'aleppo pine']
+    },
+    'pinus_pinaster': {
+        'sci_name': 'Pinus pinaster', 'common_tr': 'Sahil Çamı', 'common_en': 'Maritime Pine',
+        'wood_density': 0.52, 'root_shoot_ratio': 0.25, 'bef': 1.30, 'default_mai': 8.0,
+        'group': 'conifer',
+        'aliases': ['pinus pinaster', 'sahil cami', 'sahil çamı', 'maritime pine']
+    },
+    'pinus_taeda': {
+        'sci_name': 'Pinus taeda', 'common_tr': 'Loblolly Çamı', 'common_en': 'Loblolly Pine',
+        'wood_density': 0.47, 'root_shoot_ratio': 0.25, 'bef': 1.25, 'default_mai': 12.0,
+        'group': 'conifer',
+        'aliases': ['pinus taeda', 'loblolly pine', 'loblolly cami']
+    },
+    'pinus_radiata': {
+        'sci_name': 'Pinus radiata', 'common_tr': 'Radiata Çamı', 'common_en': 'Monterey Pine',
+        'wood_density': 0.45, 'root_shoot_ratio': 0.23, 'bef': 1.25, 'default_mai': 16.0,
+        'group': 'conifer',
+        'aliases': ['pinus radiata', 'monterey pine', 'radiata cami', 'radiata çamı']
+    },
+    'cedrus_libani': {
+        'sci_name': 'Cedrus libani', 'common_tr': 'Toros Sediri', 'common_en': 'Lebanon Cedar',
+        'wood_density': 0.52, 'root_shoot_ratio': 0.26, 'bef': 1.30, 'default_mai': 4.5,
+        'group': 'conifer',
+        'aliases': ['cedrus libani', 'toros sediri', 'sedir', 'lebanon cedar', 'cedar']
+    },
+    'picea_orientalis': {
+        'sci_name': 'Picea orientalis', 'common_tr': 'Doğu Ladini', 'common_en': 'Oriental Spruce',
+        'wood_density': 0.43, 'root_shoot_ratio': 0.29, 'bef': 1.35, 'default_mai': 7.5,
+        'group': 'conifer',
+        'aliases': ['picea orientalis', 'dogu ladini', 'doğu ladini', 'oriental spruce', 'caucasian spruce']
+    },
+    'picea_abies': {
+        'sci_name': 'Picea abies', 'common_tr': 'Avrupa Ladini', 'common_en': 'Norway Spruce',
+        'wood_density': 0.44, 'root_shoot_ratio': 0.29, 'bef': 1.35, 'default_mai': 8.0,
+        'group': 'conifer',
+        'aliases': ['picea abies', 'avrupa ladini', 'norway spruce', 'ladin']
+    },
+    'abies_bornmuelleriana': {
+        'sci_name': 'Abies bornmuelleriana', 'common_tr': 'Uludağ Göknarı', 'common_en': 'Bornmuller Fir',
+        'wood_density': 0.42, 'root_shoot_ratio': 0.28, 'bef': 1.35, 'default_mai': 7.0,
+        'group': 'conifer',
+        'aliases': ['abies bornmuelleriana', 'uludag goknari', 'uludağ göknarı']
+    },
+    'abies_nordmanniana': {
+        'sci_name': 'Abies nordmanniana', 'common_tr': 'Doğu Karadeniz Göknarı', 'common_en': 'Nordmann Fir',
+        'wood_density': 0.42, 'root_shoot_ratio': 0.28, 'bef': 1.35, 'default_mai': 7.2,
+        'group': 'conifer',
+        'aliases': ['abies nordmanniana', 'dogu karadeniz goknari', 'doğu karadeniz göknarı', 'nordmann fir', 'caucasian fir']
+    },
+    'abies_cilicica': {
+        'sci_name': 'Abies cilicica', 'common_tr': 'Toros Göknarı', 'common_en': 'Cilician Fir',
+        'wood_density': 0.42, 'root_shoot_ratio': 0.28, 'bef': 1.35, 'default_mai': 6.8,
+        'group': 'conifer',
+        'aliases': ['abies cilicica', 'toros goknari', 'toros göknarı', 'cilician fir', 'abies spp', 'goknar', 'göknar']
+    },
+    'cupressus_sempervirens': {
+        'sci_name': 'Cupressus sempervirens', 'common_tr': 'Akdeniz Servisi', 'common_en': 'Mediterranean Cypress',
+        'wood_density': 0.55, 'root_shoot_ratio': 0.24, 'bef': 1.30, 'default_mai': 4.0,
+        'group': 'conifer',
+        'aliases': ['cupressus sempervirens', 'akdeniz servisi', 'servi', 'mediterranean cypress', 'cypress']
+    },
+    'pseudotsuga_menziesii': {
+        'sci_name': 'Pseudotsuga menziesii', 'common_tr': 'Douglas Göknarı', 'common_en': 'Douglas Fir',
+        'wood_density': 0.45, 'root_shoot_ratio': 0.26, 'bef': 1.25, 'default_mai': 11.0,
+        'group': 'conifer',
+        'aliases': ['pseudotsuga menziesii', 'douglas fir', 'douglas goknari', 'douglas göknarı']
+    },
+
+    # 🌳 GENİŞ YAPRAKLILAR (BROADLEAVES)
+    'fagus_orientalis': {
+        'sci_name': 'Fagus orientalis', 'common_tr': 'Doğu Kayını', 'common_en': 'Oriental Beech',
+        'wood_density': 0.65, 'root_shoot_ratio': 0.23, 'bef': 1.40, 'default_mai': 6.0,
+        'group': 'broadleaf',
+        'aliases': ['fagus orientalis', 'dogu kayini', 'doğu kayını', 'kayin', 'kayın', 'oriental beech']
+    },
+    'fagus_sylvatica': {
+        'sci_name': 'Fagus sylvatica', 'common_tr': 'Avrupa Kayını', 'common_en': 'European Beech',
+        'wood_density': 0.66, 'root_shoot_ratio': 0.23, 'bef': 1.40, 'default_mai': 6.5,
+        'group': 'broadleaf',
+        'aliases': ['fagus sylvatica', 'avrupa kayini', 'avrupa kayını', 'european beech', 'beech']
+    },
+    'quercus_petraea': {
+        'sci_name': 'Quercus petraea', 'common_tr': 'Sapsız Meşe', 'common_en': 'Sessile Oak',
+        'wood_density': 0.68, 'root_shoot_ratio': 0.24, 'bef': 1.45, 'default_mai': 4.0,
+        'group': 'broadleaf',
+        'aliases': ['quercus petraea', 'sapsiz mese', 'sapsız meşe', 'sessile oak']
+    },
+    'quercus_robur': {
+        'sci_name': 'Quercus robur', 'common_tr': 'Saplı Meşe', 'common_en': 'Pedunculate Oak',
+        'wood_density': 0.68, 'root_shoot_ratio': 0.24, 'bef': 1.45, 'default_mai': 4.0,
+        'group': 'broadleaf',
+        'aliases': [
+            'quercus robur', 'quercus robur / petraea', 'mese', 'meşe', 'sapli mese', 'saplı meşe',
+            'oak', 'pedunculate oak'
+        ]
+    },
+    'quercus_cerris': {
+        'sci_name': 'Quercus cerris', 'common_tr': 'Saçlı Meşe', 'common_en': 'Turkey Oak',
+        'wood_density': 0.70, 'root_shoot_ratio': 0.25, 'bef': 1.45, 'default_mai': 3.8,
+        'group': 'broadleaf',
+        'aliases': ['quercus cerris', 'sacli mese', 'saçlı meşe', 'turkey oak']
+    },
+    'castanea_sativa': {
+        'sci_name': 'Castanea sativa', 'common_tr': 'Anadolu Kestanesi', 'common_en': 'Sweet Chestnut',
+        'wood_density': 0.56, 'root_shoot_ratio': 0.24, 'bef': 1.35, 'default_mai': 6.0,
+        'group': 'broadleaf',
+        'aliases': ['castanea sativa', 'anadolu kestanesi', 'kestane', 'sweet chestnut', 'chestnut']
+    },
+    'robinia_pseudoacacia': {
+        'sci_name': 'Robinia pseudoacacia', 'common_tr': 'Yalancı Akasya', 'common_en': 'Black Locust',
+        'wood_density': 0.69, 'root_shoot_ratio': 0.22, 'bef': 1.30, 'default_mai': 7.0,
+        'group': 'broadleaf',
+        'aliases': ['robinia pseudoacacia', 'yalanci akasya', 'yalancı akasya', 'black locust', 'robinia']
+    },
+    'tectona_grandis': {
+        'sci_name': 'Tectona grandis', 'common_tr': 'Tik Ağacı', 'common_en': 'Teak',
+        'wood_density': 0.60, 'root_shoot_ratio': 0.25, 'bef': 1.30, 'default_mai': 9.0,
+        'group': 'broadleaf',
+        'aliases': ['tectona grandis', 'tik agaci', 'tik ağacı', 'teak']
+    },
+    'acacia_mangium': {
+        'sci_name': 'Acacia mangium', 'common_tr': 'Tropikal Akasya', 'common_en': 'Brown Salwood / Acacia',
+        'wood_density': 0.62, 'root_shoot_ratio': 0.23, 'bef': 1.30, 'default_mai': 14.0,
+        'group': 'broadleaf',
+        'aliases': ['acacia mangium', 'acacia spp', 'acacia mearnsii', 'akasya', 'wattle']
+    },
+    'hevea_brasiliensis': {
+        'sci_name': 'Hevea brasiliensis', 'common_tr': 'Kauçuk Ağacı', 'common_en': 'Rubber Tree',
+        'wood_density': 0.56, 'root_shoot_ratio': 0.21, 'bef': 1.30, 'default_mai': 10.0,
+        'group': 'broadleaf',
+        'aliases': ['hevea brasiliensis', 'kaucuk', 'kauçuk', 'rubber tree', 'para rubber tree']
+    },
+    'abies_alba': {
+        'sci_name': 'Abies alba', 'common_tr': 'Avrupa Beyaz Göknarı', 'common_en': 'Silver Fir',
+        'wood_density': 0.43, 'root_shoot_ratio': 0.27, 'bef': 1.35, 'default_mai': 7.5,
+        'group': 'conifer',
+        'aliases': ['abies alba', 'avrupa goknari', 'avrupa göknarı', 'silver fir', 'white fir']
+    },
+    'larix_decidua': {
+        'sci_name': 'Larix decidua', 'common_tr': 'Avrupa Melezi', 'common_en': 'European Larch',
+        'wood_density': 0.51, 'root_shoot_ratio': 0.26, 'bef': 1.30, 'default_mai': 6.5,
+        'group': 'conifer',
+        'aliases': ['larix decidua', 'avrupa melezi', 'melez', 'european larch', 'larch']
+    },
+    'larix_sibirica': {
+        'sci_name': 'Larix sibirica', 'common_tr': 'Sibirya Melezi', 'common_en': 'Siberian Larch',
+        'wood_density': 0.53, 'root_shoot_ratio': 0.28, 'bef': 1.32, 'default_mai': 4.5,
+        'group': 'conifer',
+        'aliases': ['larix sibirica', 'sibirya melezi', 'siberian larch']
+    },
+    'pinus_ponderosa': {
+        'sci_name': 'Pinus ponderosa', 'common_tr': 'Sarı Çam (Ponderosa)', 'common_en': 'Ponderosa Pine',
+        'wood_density': 0.45, 'root_shoot_ratio': 0.26, 'bef': 1.28, 'default_mai': 5.5,
+        'group': 'conifer',
+        'aliases': ['pinus ponderosa', 'ponderosa pine', 'ponderosa cami', 'western yellow pine']
+    },
+    'pinus_contorta': {
+        'sci_name': 'Pinus contorta', 'common_tr': 'Bükümlü Çam', 'common_en': 'Lodgepole Pine',
+        'wood_density': 0.43, 'root_shoot_ratio': 0.27, 'bef': 1.28, 'default_mai': 5.0,
+        'group': 'conifer',
+        'aliases': ['pinus contorta', 'lodgepole pine', 'bukumlu cam']
+    },
+    'pinus_strobus': {
+        'sci_name': 'Pinus strobus', 'common_tr': 'Doğu Beyaz Çamı', 'common_en': 'Eastern White Pine',
+        'wood_density': 0.38, 'root_shoot_ratio': 0.25, 'bef': 1.25, 'default_mai': 7.0,
+        'group': 'conifer',
+        'aliases': ['pinus strobus', 'eastern white pine', 'beyaz cam']
+    },
+    'picea_glauca': {
+        'sci_name': 'Picea glauca', 'common_tr': 'Beyaz Ladin', 'common_en': 'White Spruce',
+        'wood_density': 0.40, 'root_shoot_ratio': 0.29, 'bef': 1.35, 'default_mai': 4.5,
+        'group': 'conifer',
+        'aliases': ['picea glauca', 'white spruce', 'beyaz ladin']
+    },
+    'sequoia_sempervirens': {
+        'sci_name': 'Sequoia sempervirens', 'common_tr': 'Sahil Sekoyası', 'common_en': 'Coast Redwood',
+        'wood_density': 0.38, 'root_shoot_ratio': 0.24, 'bef': 1.20, 'default_mai': 18.0,
+        'group': 'conifer',
+        'aliases': ['sequoia sempervirens', 'coast redwood', 'sekoya', 'redwood']
+    },
+    'quercus_ilex': {
+        'sci_name': 'Quercus ilex', 'common_tr': 'Pırnal Meşe', 'common_en': 'Holm Oak',
+        'wood_density': 0.76, 'root_shoot_ratio': 0.30, 'bef': 1.48, 'default_mai': 3.0,
+        'group': 'broadleaf',
+        'aliases': ['quercus ilex', 'pirnal mese', 'pırnal meşe', 'holm oak', 'evergreen oak']
+    },
+    'quercus_suber': {
+        'sci_name': 'Quercus suber', 'common_tr': 'Mantar Meşesi', 'common_en': 'Cork Oak',
+        'wood_density': 0.72, 'root_shoot_ratio': 0.28, 'bef': 1.45, 'default_mai': 3.2,
+        'group': 'broadleaf',
+        'aliases': ['quercus suber', 'mantar mesesi', 'mantar meşesi', 'cork oak']
+    },
+    'quercus_alba': {
+        'sci_name': 'Quercus alba', 'common_tr': 'Ak Meşe', 'common_en': 'White Oak',
+        'wood_density': 0.68, 'root_shoot_ratio': 0.24, 'bef': 1.42, 'default_mai': 4.5,
+        'group': 'broadleaf',
+        'aliases': ['quercus alba', 'white oak', 'ak mese', 'ak meşe']
+    },
+    'quercus_rubra': {
+        'sci_name': 'Quercus rubra', 'common_tr': 'Kırmızı Meşe', 'common_en': 'Northern Red Oak',
+        'wood_density': 0.63, 'root_shoot_ratio': 0.23, 'bef': 1.40, 'default_mai': 5.5,
+        'group': 'broadleaf',
+        'aliases': ['quercus rubra', 'northern red oak', 'kirmizi mese', 'kırmızı meşe']
+    },
+    'betula_pendula': {
+        'sci_name': 'Betula pendula', 'common_tr': 'Siğilli Huş', 'common_en': 'Silver Birch',
+        'wood_density': 0.55, 'root_shoot_ratio': 0.24, 'bef': 1.35, 'default_mai': 6.0,
+        'group': 'broadleaf',
+        'aliases': ['betula pendula', 'betula', 'sigilli hus', 'siğilli huş', 'hus', 'huş', 'silver birch', 'birch']
+    },
+    'eucalyptus_globulus': {
+        'sci_name': 'Eucalyptus globulus', 'common_tr': 'Mavi Okaliptüs', 'common_en': 'Tasmanian Blue Gum',
+        'wood_density': 0.59, 'root_shoot_ratio': 0.20, 'bef': 1.25, 'default_mai': 18.0,
+        'group': 'broadleaf',
+        'aliases': ['eucalyptus globulus', 'tasmanian blue gum', 'mavi okaliptus', 'mavi okaliptüs', 'blue gum']
+    },
+    'eucalyptus_camaldulensis': {
+        'sci_name': 'Eucalyptus camaldulensis', 'common_tr': 'Kırmızı Okaliptüs', 'common_en': 'River Red Gum',
+        'wood_density': 0.64, 'root_shoot_ratio': 0.22, 'bef': 1.26, 'default_mai': 14.0,
+        'group': 'broadleaf',
+        'aliases': ['eucalyptus camaldulensis', 'river red gum', 'kirmizi okaliptus', 'kırmızı okaliptüs']
+    },
+    'eucalyptus_grandis': {
+        'sci_name': 'Eucalyptus grandis', 'common_tr': 'Gül Okaliptüs', 'common_en': 'Rose Gum / Flooded Gum',
+        'wood_density': 0.55, 'root_shoot_ratio': 0.19, 'bef': 1.24, 'default_mai': 22.0,
+        'group': 'broadleaf',
+        'aliases': ['eucalyptus grandis', 'flooded gum', 'rose gum', 'gul okaliptus']
+    },
+    'populus_nigra': {
+        'sci_name': 'Populus nigra', 'common_tr': 'Kara Kavak', 'common_en': 'Black Poplar',
+        'wood_density': 0.41, 'root_shoot_ratio': 0.22, 'bef': 1.25, 'default_mai': 13.0,
+        'group': 'broadleaf',
+        'aliases': ['populus nigra', 'kara kavak', 'black poplar']
+    },
+    'populus_tremula': {
+        'sci_name': 'Populus tremula', 'common_tr': 'Titrek Kavak', 'common_en': 'Eurasian Aspen',
+        'wood_density': 0.43, 'root_shoot_ratio': 0.23, 'bef': 1.26, 'default_mai': 9.0,
+        'group': 'broadleaf',
+        'aliases': ['populus tremula', 'titrek kavak', 'eurasian aspen', 'aspen']
+    },
+    'populus_alba': {
+        'sci_name': 'Populus alba', 'common_tr': 'Ak Kavak', 'common_en': 'White Poplar',
+        'wood_density': 0.42, 'root_shoot_ratio': 0.22, 'bef': 1.25, 'default_mai': 11.0,
+        'group': 'broadleaf',
+        'aliases': ['populus alba', 'ak kavak', 'white poplar']
+    },
+    'acer_pseudoplatanus': {
+        'sci_name': 'Acer pseudoplatanus', 'common_tr': 'Dağ Akçaağacı', 'common_en': 'Sycamore Maple',
+        'wood_density': 0.58, 'root_shoot_ratio': 0.24, 'bef': 1.38, 'default_mai': 5.5,
+        'group': 'broadleaf',
+        'aliases': ['acer pseudoplatanus', 'dag akcaagaci', 'dağ akçaağacı', 'akcaagac', 'akçaağaç', 'sycamore maple', 'maple']
+    },
+    'acer_saccharum': {
+        'sci_name': 'Acer saccharum', 'common_tr': 'Şeker Akçaağacı', 'common_en': 'Sugar Maple',
+        'wood_density': 0.63, 'root_shoot_ratio': 0.23, 'bef': 1.40, 'default_mai': 5.0,
+        'group': 'broadleaf',
+        'aliases': ['acer saccharum', 'sugar maple', 'seker akcaagaci', 'şeker akçaağacı']
+    },
+    'fraxinus_excelsior': {
+        'sci_name': 'Fraxinus excelsior', 'common_tr': 'Adi Dişbudak', 'common_en': 'European Ash',
+        'wood_density': 0.64, 'root_shoot_ratio': 0.24, 'bef': 1.38, 'default_mai': 6.0,
+        'group': 'broadleaf',
+        'aliases': ['fraxinus excelsior', 'disbudak', 'dişbudak', 'adi disbudak', 'adi dişbudak', 'european ash', 'ash']
+    },
+    'swietenia_macrophylla': {
+        'sci_name': 'Swietenia macrophylla', 'common_tr': 'Büyük Yapraklı Maun', 'common_en': 'Big-Leaf Mahogany',
+        'wood_density': 0.54, 'root_shoot_ratio': 0.21, 'bef': 1.30, 'default_mai': 9.0,
+        'group': 'broadleaf',
+        'aliases': ['swietenia macrophylla', 'maun', 'mahogany', 'big-leaf mahogany']
+    },
+
+    # 🍎 MEYVE VE SERT KABUKLU TARIMSAL AĞAÇLAR (FRUIT & NUT TREES - IPCC PERENNIAL CROPLAND)
+    'juglans_regia': {
+        'sci_name': 'Juglans regia', 'common_tr': 'Ceviz', 'common_en': 'Persian Walnut',
+        'wood_density': 0.55, 'root_shoot_ratio': 0.25, 'bef': 1.45, 'default_mai': 4.5,
+        'group': 'fruit_tree',
+        'aliases': ['juglans regia', 'ceviz', 'persian walnut', 'walnut', 'anadolu cevizi', 'juglans']
+    },
+    'corylus_avellana': {
+        'sci_name': 'Corylus avellana', 'common_tr': 'Fındık', 'common_en': 'Common Hazelnut',
+        'wood_density': 0.58, 'root_shoot_ratio': 0.32, 'bef': 1.50, 'default_mai': 3.2,
+        'group': 'fruit_tree',
+        'aliases': ['corylus avellana', 'findik', 'fındık', 'hazelnut', 'common hazelnut', 'corylus']
+    },
+    'malus_domestica': {
+        'sci_name': 'Malus domestica', 'common_tr': 'Elma', 'common_en': 'Apple',
+        'wood_density': 0.60, 'root_shoot_ratio': 0.24, 'bef': 1.42, 'default_mai': 3.5,
+        'group': 'fruit_tree',
+        'aliases': ['malus domestica', 'elma', 'apple', 'malus pumila', 'malus sylvestris', 'malus']
+    },
+    'pyrus_communis': {
+        'sci_name': 'Pyrus communis', 'common_tr': 'Armut', 'common_en': 'European Pear',
+        'wood_density': 0.61, 'root_shoot_ratio': 0.25, 'bef': 1.42, 'default_mai': 3.6,
+        'group': 'fruit_tree',
+        'aliases': ['pyrus communis', 'armut', 'pear', 'european pear', 'pyrus']
+    },
+    'olea_europaea': {
+        'sci_name': 'Olea europaea', 'common_tr': 'Zeytin', 'common_en': 'Olive',
+        'wood_density': 0.68, 'root_shoot_ratio': 0.35, 'bef': 1.52, 'default_mai': 2.4,
+        'group': 'fruit_tree',
+        'aliases': ['olea europaea', 'zeytin', 'olive', 'akdeniz zeytini', 'olea']
+    },
+    'prunus_dulcis': {
+        'sci_name': 'Prunus dulcis', 'common_tr': 'Badem', 'common_en': 'Almond',
+        'wood_density': 0.65, 'root_shoot_ratio': 0.28, 'bef': 1.45, 'default_mai': 3.0,
+        'group': 'fruit_tree',
+        'aliases': ['prunus dulcis', 'prunus amygdalus', 'badem', 'almond']
+    },
+    'prunus_armeniaca': {
+        'sci_name': 'Prunus armeniaca', 'common_tr': 'Kayısı', 'common_en': 'Apricot',
+        'wood_density': 0.58, 'root_shoot_ratio': 0.26, 'bef': 1.42, 'default_mai': 3.2,
+        'group': 'fruit_tree',
+        'aliases': ['prunus armeniaca', 'armeniaca vulgaris', 'kayisi', 'kayısı', 'apricot']
+    },
+    'prunus_persica': {
+        'sci_name': 'Prunus persica', 'common_tr': 'Şeftali', 'common_en': 'Peach',
+        'wood_density': 0.56, 'root_shoot_ratio': 0.25, 'bef': 1.40, 'default_mai': 3.4,
+        'group': 'fruit_tree',
+        'aliases': ['prunus persica', 'seftali', 'şeftali', 'peach', 'nectarine', 'nektarin']
+    },
+    'prunus_avium': {
+        'sci_name': 'Prunus avium', 'common_tr': 'Kiraz', 'common_en': 'Sweet Cherry',
+        'wood_density': 0.56, 'root_shoot_ratio': 0.26, 'bef': 1.42, 'default_mai': 3.8,
+        'group': 'fruit_tree',
+        'aliases': ['prunus avium', 'kiraz', 'sweet cherry', 'cherry', 'yabani kiraz']
+    },
+    'pistacia_vera': {
+        'sci_name': 'Pistacia vera', 'common_tr': 'Antep Fıstığı', 'common_en': 'Pistachio',
+        'wood_density': 0.66, 'root_shoot_ratio': 0.34, 'bef': 1.50, 'default_mai': 2.2,
+        'group': 'fruit_tree',
+        'aliases': ['pistacia vera', 'antep fistigi', 'antep fıstığı', 'pistachio', 'sam fistigi', 'şam fıstığı', 'pistacia']
+    },
+    'citrus_sinensis': {
+        'sci_name': 'Citrus sinensis', 'common_tr': 'Portakal', 'common_en': 'Orange / Citrus',
+        'wood_density': 0.60, 'root_shoot_ratio': 0.28, 'bef': 1.45, 'default_mai': 3.5,
+        'group': 'fruit_tree',
+        'aliases': ['citrus sinensis', 'portakal', 'orange', 'narenciye', 'citrus']
+    },
+}
+
+# Cins (Genus) Seviyesinde Bilimsel Parametreler (2. Seviye Çözümleme)
+CARBON_GENUS_DEFAULTS = {
+    'pinus': {'wood_density': 0.51, 'root_shoot_ratio': 0.26, 'bef': 1.30, 'default_mai': 6.0, 'group': 'conifer'},
+    'abies': {'wood_density': 0.42, 'root_shoot_ratio': 0.28, 'bef': 1.35, 'default_mai': 7.0, 'group': 'conifer'},
+    'picea': {'wood_density': 0.43, 'root_shoot_ratio': 0.29, 'bef': 1.35, 'default_mai': 7.5, 'group': 'conifer'},
+    'cedrus': {'wood_density': 0.52, 'root_shoot_ratio': 0.26, 'bef': 1.30, 'default_mai': 4.5, 'group': 'conifer'},
+    'cupressus': {'wood_density': 0.55, 'root_shoot_ratio': 0.24, 'bef': 1.30, 'default_mai': 4.0, 'group': 'conifer'},
+    'pseudotsuga': {'wood_density': 0.45, 'root_shoot_ratio': 0.26, 'bef': 1.25, 'default_mai': 11.0, 'group': 'conifer'},
+    'larix': {'wood_density': 0.51, 'root_shoot_ratio': 0.27, 'bef': 1.30, 'default_mai': 5.5, 'group': 'conifer'},
+    'sequoia': {'wood_density': 0.38, 'root_shoot_ratio': 0.24, 'bef': 1.20, 'default_mai': 18.0, 'group': 'conifer'},
+    'quercus': {'wood_density': 0.68, 'root_shoot_ratio': 0.24, 'bef': 1.45, 'default_mai': 4.0, 'group': 'broadleaf'},
+    'fagus': {'wood_density': 0.65, 'root_shoot_ratio': 0.23, 'bef': 1.40, 'default_mai': 6.0, 'group': 'broadleaf'},
+    'eucalyptus': {'wood_density': 0.58, 'root_shoot_ratio': 0.20, 'bef': 1.25, 'default_mai': 15.0, 'group': 'broadleaf'},
+    'populus': {'wood_density': 0.41, 'root_shoot_ratio': 0.22, 'bef': 1.25, 'default_mai': 12.0, 'group': 'broadleaf'},
+    'castanea': {'wood_density': 0.56, 'root_shoot_ratio': 0.24, 'bef': 1.35, 'default_mai': 6.0, 'group': 'broadleaf'},
+    'robinia': {'wood_density': 0.69, 'root_shoot_ratio': 0.22, 'bef': 1.30, 'default_mai': 7.0, 'group': 'broadleaf'},
+    'betula': {'wood_density': 0.55, 'root_shoot_ratio': 0.24, 'bef': 1.35, 'default_mai': 5.5, 'group': 'broadleaf'},
+    'acer': {'wood_density': 0.63, 'root_shoot_ratio': 0.23, 'bef': 1.40, 'default_mai': 4.5, 'group': 'broadleaf'},
+    'tectona': {'wood_density': 0.60, 'root_shoot_ratio': 0.25, 'bef': 1.30, 'default_mai': 9.0, 'group': 'broadleaf'},
+    'acacia': {'wood_density': 0.62, 'root_shoot_ratio': 0.23, 'bef': 1.30, 'default_mai': 14.0, 'group': 'broadleaf'},
+    'hevea': {'wood_density': 0.56, 'root_shoot_ratio': 0.21, 'bef': 1.30, 'default_mai': 10.0, 'group': 'broadleaf'},
+    'juglans': {'wood_density': 0.55, 'root_shoot_ratio': 0.25, 'bef': 1.45, 'default_mai': 4.5, 'group': 'fruit_tree'},
+    'corylus': {'wood_density': 0.58, 'root_shoot_ratio': 0.32, 'bef': 1.50, 'default_mai': 3.2, 'group': 'fruit_tree'},
+    'malus': {'wood_density': 0.60, 'root_shoot_ratio': 0.24, 'bef': 1.42, 'default_mai': 3.5, 'group': 'fruit_tree'},
+    'pyrus': {'wood_density': 0.61, 'root_shoot_ratio': 0.25, 'bef': 1.42, 'default_mai': 3.6, 'group': 'fruit_tree'},
+    'olea': {'wood_density': 0.68, 'root_shoot_ratio': 0.35, 'bef': 1.52, 'default_mai': 2.4, 'group': 'fruit_tree'},
+    'prunus': {'wood_density': 0.59, 'root_shoot_ratio': 0.26, 'bef': 1.42, 'default_mai': 3.4, 'group': 'fruit_tree'},
+    'pistacia': {'wood_density': 0.66, 'root_shoot_ratio': 0.34, 'bef': 1.50, 'default_mai': 2.2, 'group': 'fruit_tree'},
+    'citrus': {'wood_density': 0.60, 'root_shoot_ratio': 0.28, 'bef': 1.45, 'default_mai': 3.5, 'group': 'fruit_tree'},
+}
+
+# Bölgesel / İklim Bazlı IPCC Tier 1 Fallback Tablosu (3. Seviye Çözümleme)
+REGIONAL_CARBON_DEFAULTS = {
+    'mediterranean': {
+        'conifer': {'wood_density': 0.51, 'root_shoot_ratio': 0.26, 'bef': 1.32, 'default_mai': 5.5},
+        'broadleaf': {'wood_density': 0.66, 'root_shoot_ratio': 0.24, 'bef': 1.42, 'default_mai': 4.5},
+        'fruit_tree': {'wood_density': 0.64, 'root_shoot_ratio': 0.30, 'bef': 1.48, 'default_mai': 3.0}
+    },
+    'temperate_continental': {
+        'conifer': {'wood_density': 0.48, 'root_shoot_ratio': 0.27, 'bef': 1.30, 'default_mai': 6.0},
+        'broadleaf': {'wood_density': 0.62, 'root_shoot_ratio': 0.23, 'bef': 1.40, 'default_mai': 5.5},
+        'fruit_tree': {'wood_density': 0.58, 'root_shoot_ratio': 0.26, 'bef': 1.44, 'default_mai': 3.5}
+    },
+    'temperate_oceanic': {
+        'conifer': {'wood_density': 0.46, 'root_shoot_ratio': 0.26, 'bef': 1.28, 'default_mai': 8.0},
+        'broadleaf': {'wood_density': 0.60, 'root_shoot_ratio': 0.23, 'bef': 1.38, 'default_mai': 6.5},
+        'fruit_tree': {'wood_density': 0.56, 'root_shoot_ratio': 0.25, 'bef': 1.42, 'default_mai': 4.0}
+    },
+    'boreal': {
+        'conifer': {'wood_density': 0.45, 'root_shoot_ratio': 0.29, 'bef': 1.35, 'default_mai': 3.0},
+        'broadleaf': {'wood_density': 0.53, 'root_shoot_ratio': 0.25, 'bef': 1.40, 'default_mai': 3.5},
+        'fruit_tree': {'wood_density': 0.55, 'root_shoot_ratio': 0.28, 'bef': 1.42, 'default_mai': 2.0}
+    },
+    'subtropical': {
+        'conifer': {'wood_density': 0.48, 'root_shoot_ratio': 0.24, 'bef': 1.26, 'default_mai': 10.0},
+        'broadleaf': {'wood_density': 0.59, 'root_shoot_ratio': 0.21, 'bef': 1.28, 'default_mai': 12.0},
+        'fruit_tree': {'wood_density': 0.60, 'root_shoot_ratio': 0.27, 'bef': 1.45, 'default_mai': 4.5}
+    },
+    'tropical_wet': {
+        'conifer': {'wood_density': 0.45, 'root_shoot_ratio': 0.22, 'bef': 1.25, 'default_mai': 14.0},
+        'broadleaf': {'wood_density': 0.58, 'root_shoot_ratio': 0.20, 'bef': 1.30, 'default_mai': 12.0},
+        'fruit_tree': {'wood_density': 0.58, 'root_shoot_ratio': 0.24, 'bef': 1.40, 'default_mai': 5.0}
+    },
+    'tropical_dry': {
+        'conifer': {'wood_density': 0.48, 'root_shoot_ratio': 0.25, 'bef': 1.30, 'default_mai': 5.0},
+        'broadleaf': {'wood_density': 0.64, 'root_shoot_ratio': 0.24, 'bef': 1.35, 'default_mai': 6.0},
+        'fruit_tree': {'wood_density': 0.64, 'root_shoot_ratio': 0.32, 'bef': 1.48, 'default_mai': 2.8}
+    }
+}
+
+# Global Mutlak Fallback Değerleri
+GLOBAL_CARBON_DEFAULTS = {
+    'conifer': {'wood_density': 0.48, 'root_shoot_ratio': 0.26, 'bef': 1.30, 'default_mai': 6.0},
+    'broadleaf': {'wood_density': 0.62, 'root_shoot_ratio': 0.23, 'bef': 1.38, 'default_mai': 6.0},
+    'fruit_tree': {'wood_density': 0.60, 'root_shoot_ratio': 0.28, 'bef': 1.45, 'default_mai': 3.5}
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3.1 Tür Ekolojik Tolerans ve Niş Veritabanı (SPECIES_ECOLOGICAL_NICHES)
+# ─────────────────────────────────────────────────────────────────────────────
+# Her tür için sıcaklık (°C), yıllık yağış (mm), rakım (m) ve eğim (derece)
+# optimumları ve fizyolojik tolerans sınırları:
+SPECIES_ECOLOGICAL_NICHES = {
+    'pinus_brutia': {
+        'sci_name': 'Pinus brutia', 'common_tr': 'Kızılçam',
+        'temp_min': 11.0, 'temp_opt_min': 14.5, 'temp_opt_max': 20.0, 'temp_max': 24.5,
+        'precip_min': 380, 'precip_opt_min': 550, 'precip_opt_max': 1050, 'precip_max': 1600,
+        'elev_min': 0, 'elev_max': 1300, 'slope_max': 45.0,
+        'soil_preference': 'shallow_to_medium', 'drought_tolerance': 'high', 'frost_tolerance': 'low'
+    },
+    'pinus_nigra': {
+        'sci_name': 'Pinus nigra', 'common_tr': 'Karaçam',
+        'temp_min': 6.0, 'temp_opt_min': 9.0, 'temp_opt_max': 14.5, 'temp_max': 18.5,
+        'precip_min': 450, 'precip_opt_min': 600, 'precip_opt_max': 1200, 'precip_max': 1800,
+        'elev_min': 500, 'elev_max': 2050, 'slope_max': 50.0,
+        'soil_preference': 'medium_to_deep', 'drought_tolerance': 'moderate', 'frost_tolerance': 'high'
+    },
+    'pinus_sylvestris': {
+        'sci_name': 'Pinus sylvestris', 'common_tr': 'Sarıçam',
+        'temp_min': 1.0, 'temp_opt_min': 4.5, 'temp_opt_max': 11.0, 'temp_max': 15.5,
+        'precip_min': 400, 'precip_opt_min': 550, 'precip_opt_max': 1100, 'precip_max': 1600,
+        'elev_min': 900, 'elev_max': 2400, 'slope_max': 45.0,
+        'soil_preference': 'sandy_or_podzolic', 'drought_tolerance': 'moderate', 'frost_tolerance': 'very_high'
+    },
+    'pinus_pinea': {
+        'sci_name': 'Pinus pinea', 'common_tr': 'Fıstık Çamı',
+        'temp_min': 12.0, 'temp_opt_min': 14.5, 'temp_opt_max': 19.5, 'temp_max': 23.5,
+        'precip_min': 400, 'precip_opt_min': 600, 'precip_opt_max': 950, 'precip_max': 1400,
+        'elev_min': 0, 'elev_max': 750, 'slope_max': 35.0,
+        'soil_preference': 'sandy_deep', 'drought_tolerance': 'high', 'frost_tolerance': 'low'
+    },
+    'pinus_halepensis': {
+        'sci_name': 'Pinus halepensis', 'common_tr': 'Halep Çamı',
+        'temp_min': 12.0, 'temp_opt_min': 15.0, 'temp_opt_max': 21.0, 'temp_max': 25.0,
+        'precip_min': 300, 'precip_opt_min': 450, 'precip_opt_max': 800, 'precip_max': 1200,
+        'elev_min': 0, 'elev_max': 800, 'slope_max': 45.0,
+        'soil_preference': 'shallow_calcareous', 'drought_tolerance': 'very_high', 'frost_tolerance': 'low'
+    },
+    'pinus_pinaster': {
+        'sci_name': 'Pinus pinaster', 'common_tr': 'Sahil Çamı',
+        'temp_min': 11.0, 'temp_opt_min': 13.0, 'temp_opt_max': 18.0, 'temp_max': 22.0,
+        'precip_min': 600, 'precip_opt_min': 800, 'precip_opt_max': 1400, 'precip_max': 2000,
+        'elev_min': 0, 'elev_max': 1000, 'slope_max': 40.0,
+        'soil_preference': 'sandy_acidic', 'drought_tolerance': 'moderate', 'frost_tolerance': 'low'
+    },
+    'pinus_taeda': {
+        'sci_name': 'Pinus taeda', 'common_tr': 'Loblolly Çamı',
+        'temp_min': 13.0, 'temp_opt_min': 16.0, 'temp_opt_max': 21.0, 'temp_max': 25.0,
+        'precip_min': 800, 'precip_opt_min': 1050, 'precip_opt_max': 1600, 'precip_max': 2200,
+        'elev_min': 0, 'elev_max': 800, 'slope_max': 35.0,
+        'soil_preference': 'acidic_moist', 'drought_tolerance': 'moderate', 'frost_tolerance': 'moderate'
+    },
+    'pinus_radiata': {
+        'sci_name': 'Pinus radiata', 'common_tr': 'Radiata Çamı',
+        'temp_min': 10.0, 'temp_opt_min': 13.0, 'temp_opt_max': 18.0, 'temp_max': 22.0,
+        'precip_min': 600, 'precip_opt_min': 850, 'precip_opt_max': 1500, 'precip_max': 2200,
+        'elev_min': 0, 'elev_max': 1000, 'slope_max': 40.0,
+        'soil_preference': 'deep_loam', 'drought_tolerance': 'moderate', 'frost_tolerance': 'low'
+    },
+    'cedrus_libani': {
+        'sci_name': 'Cedrus libani', 'common_tr': 'Toros Sediri',
+        'temp_min': 5.5, 'temp_opt_min': 8.5, 'temp_opt_max': 14.0, 'temp_max': 18.0,
+        'precip_min': 500, 'precip_opt_min': 700, 'precip_opt_max': 1400, 'precip_max': 2000,
+        'elev_min': 800, 'elev_max': 2150, 'slope_max': 50.0,
+        'soil_preference': 'karstic_calcareous', 'drought_tolerance': 'high', 'frost_tolerance': 'high'
+    },
+    'picea_orientalis': {
+        'sci_name': 'Picea orientalis', 'common_tr': 'Doğu Ladini',
+        'temp_min': 4.0, 'temp_opt_min': 7.0, 'temp_opt_max': 12.5, 'temp_max': 16.5,
+        'precip_min': 850, 'precip_opt_min': 1150, 'precip_opt_max': 2200, 'precip_max': 3000,
+        'elev_min': 700, 'elev_max': 2300, 'slope_max': 45.0,
+        'soil_preference': 'deep_humic', 'drought_tolerance': 'low', 'frost_tolerance': 'high'
+    },
+    'picea_abies': {
+        'sci_name': 'Picea abies', 'common_tr': 'Avrupa Ladini',
+        'temp_min': 2.0, 'temp_opt_min': 5.0, 'temp_opt_max': 10.5, 'temp_max': 15.0,
+        'precip_min': 600, 'precip_opt_min': 800, 'precip_opt_max': 1600, 'precip_max': 2300,
+        'elev_min': 600, 'elev_max': 2200, 'slope_max': 45.0,
+        'soil_preference': 'moist_acidic', 'drought_tolerance': 'low', 'frost_tolerance': 'very_high'
+    },
+    'abies_spp': {
+        'sci_name': 'Abies spp.', 'common_tr': 'Göknarlar',
+        'temp_min': 4.0, 'temp_opt_min': 6.5, 'temp_opt_max': 13.0, 'temp_max': 17.5,
+        'precip_min': 650, 'precip_opt_min': 850, 'precip_opt_max': 1800, 'precip_max': 2500,
+        'elev_min': 650, 'elev_max': 2100, 'slope_max': 45.0,
+        'soil_preference': 'moist_deep', 'drought_tolerance': 'low', 'frost_tolerance': 'high'
+    },
+    'cupressus_sempervirens': {
+        'sci_name': 'Cupressus sempervirens', 'common_tr': 'Akdeniz Servisi',
+        'temp_min': 11.5, 'temp_opt_min': 14.0, 'temp_opt_max': 20.5, 'temp_max': 24.5,
+        'precip_min': 350, 'precip_opt_min': 500, 'precip_opt_max': 1050, 'precip_max': 1600,
+        'elev_min': 0, 'elev_max': 1250, 'slope_max': 50.0,
+        'soil_preference': 'shallow_calcareous', 'drought_tolerance': 'very_high', 'frost_tolerance': 'low'
+    },
+    'pseudotsuga_menziesii': {
+        'sci_name': 'Pseudotsuga menziesii', 'common_tr': 'Douglas Göknarı',
+        'temp_min': 6.5, 'temp_opt_min': 9.0, 'temp_opt_max': 14.5, 'temp_max': 19.0,
+        'precip_min': 650, 'precip_opt_min': 900, 'precip_opt_max': 1800, 'precip_max': 2600,
+        'elev_min': 100, 'elev_max': 1800, 'slope_max': 45.0,
+        'soil_preference': 'deep_well_drained', 'drought_tolerance': 'moderate', 'frost_tolerance': 'high'
+    },
+    'fagus_orientalis': {
+        'sci_name': 'Fagus orientalis', 'common_tr': 'Doğu Kayını',
+        'temp_min': 6.0, 'temp_opt_min': 8.5, 'temp_opt_max': 13.5, 'temp_max': 17.5,
+        'precip_min': 700, 'precip_opt_min': 900, 'precip_opt_max': 1800, 'precip_max': 2500,
+        'elev_min': 350, 'elev_max': 1950, 'slope_max': 45.0,
+        'soil_preference': 'deep_humic_loamy', 'drought_tolerance': 'low', 'frost_tolerance': 'high'
+    },
+    'fagus_sylvatica': {
+        'sci_name': 'Fagus sylvatica', 'common_tr': 'Avrupa Kayını',
+        'temp_min': 5.5, 'temp_opt_min': 8.0, 'temp_opt_max': 13.0, 'temp_max': 17.0,
+        'precip_min': 650, 'precip_opt_min': 850, 'precip_opt_max': 1700, 'precip_max': 2400,
+        'elev_min': 200, 'elev_max': 1800, 'slope_max': 45.0,
+        'soil_preference': 'deep_loamy', 'drought_tolerance': 'low', 'frost_tolerance': 'high'
+    },
+    'quercus_robur': {
+        'sci_name': 'Quercus robur / petraea', 'common_tr': 'Saplı / Sapsız Meşe',
+        'temp_min': 6.5, 'temp_opt_min': 9.5, 'temp_opt_max': 15.5, 'temp_max': 20.0,
+        'precip_min': 450, 'precip_opt_min': 650, 'precip_opt_max': 1150, 'precip_max': 1700,
+        'elev_min': 0, 'elev_max': 1650, 'slope_max': 45.0,
+        'soil_preference': 'deep_clay_loam', 'drought_tolerance': 'moderate', 'frost_tolerance': 'high'
+    },
+    'quercus_cerris': {
+        'sci_name': 'Quercus cerris', 'common_tr': 'Saçlı Meşe',
+        'temp_min': 7.0, 'temp_opt_min': 10.0, 'temp_opt_max': 16.0, 'temp_max': 21.0,
+        'precip_min': 420, 'precip_opt_min': 550, 'precip_opt_max': 1100, 'precip_max': 1600,
+        'elev_min': 0, 'elev_max': 1700, 'slope_max': 45.0,
+        'soil_preference': 'stony_calcareous', 'drought_tolerance': 'high', 'frost_tolerance': 'moderate'
+    },
+    'castanea_sativa': {
+        'sci_name': 'Castanea sativa', 'common_tr': 'Anadolu Kestanesi',
+        'temp_min': 8.5, 'temp_opt_min': 11.0, 'temp_opt_max': 16.0, 'temp_max': 20.5,
+        'precip_min': 600, 'precip_opt_min': 750, 'precip_opt_max': 1400, 'precip_max': 2000,
+        'elev_min': 50, 'elev_max': 1450, 'slope_max': 40.0,
+        'soil_preference': 'acidic_deep', 'drought_tolerance': 'moderate', 'frost_tolerance': 'moderate'
+    },
+    'robinia_pseudoacacia': {
+        'sci_name': 'Robinia pseudoacacia', 'common_tr': 'Yalancı Akasya',
+        'temp_min': 7.5, 'temp_opt_min': 10.5, 'temp_opt_max': 18.0, 'temp_max': 23.0,
+        'precip_min': 400, 'precip_opt_min': 550, 'precip_opt_max': 1100, 'precip_max': 1600,
+        'elev_min': 0, 'elev_max': 1400, 'slope_max': 45.0,
+        'soil_preference': 'poor_to_medium', 'drought_tolerance': 'high', 'frost_tolerance': 'moderate'
+    },
+    'populus_spp': {
+        'sci_name': 'Populus spp.', 'common_tr': 'Kavak',
+        'temp_min': 7.0, 'temp_opt_min': 11.0, 'temp_opt_max': 19.0, 'temp_max': 24.5,
+        'precip_min': 400, 'precip_opt_min': 600, 'precip_opt_max': 1200, 'precip_max': 1800,
+        'elev_min': 0, 'elev_max': 1500, 'slope_max': 25.0,
+        'soil_preference': 'alluvial_moist_deep', 'drought_tolerance': 'low', 'frost_tolerance': 'high'
+    },
+    'eucalyptus_spp': {
+        'sci_name': 'Eucalyptus spp.', 'common_tr': 'Okaliptüs',
+        'temp_min': 12.0, 'temp_opt_min': 15.5, 'temp_opt_max': 24.0, 'temp_max': 28.5,
+        'precip_min': 450, 'precip_opt_min': 700, 'precip_opt_max': 1500, 'precip_max': 2200,
+        'elev_min': 0, 'elev_max': 800, 'slope_max': 35.0,
+        'soil_preference': 'deep_moist', 'drought_tolerance': 'moderate', 'frost_tolerance': 'low'
+    },
+    'tectona_grandis': {
+        'sci_name': 'Tectona grandis', 'common_tr': 'Tik Ağacı',
+        'temp_min': 17.0, 'temp_opt_min': 21.0, 'temp_opt_max': 28.0, 'temp_max': 34.0,
+        'precip_min': 900, 'precip_opt_min': 1250, 'precip_opt_max': 2500, 'precip_max': 3500,
+        'elev_min': 0, 'elev_max': 900, 'slope_max': 35.0,
+        'soil_preference': 'deep_well_drained', 'drought_tolerance': 'moderate', 'frost_tolerance': 'none'
+    },
+    'acacia_spp': {
+        'sci_name': 'Acacia spp.', 'common_tr': 'Akasya (Tropikal)',
+        'temp_min': 14.0, 'temp_opt_min': 18.0, 'temp_opt_max': 27.0, 'temp_max': 33.0,
+        'precip_min': 500, 'precip_opt_min': 800, 'precip_opt_max': 1800, 'precip_max': 2800,
+        'elev_min': 0, 'elev_max': 1200, 'slope_max': 40.0,
+        'soil_preference': 'poor_acidic_clay', 'drought_tolerance': 'high', 'frost_tolerance': 'none'
+    },
+    'hevea_brasiliensis': {
+        'sci_name': 'Hevea brasiliensis', 'common_tr': 'Kauçuk Ağacı',
+        'temp_min': 20.0, 'temp_opt_min': 24.0, 'temp_opt_max': 30.0, 'temp_max': 35.0,
+        'precip_min': 1500, 'precip_opt_min': 1800, 'precip_opt_max': 3000, 'precip_max': 4000,
+        'elev_min': 0, 'elev_max': 600, 'slope_max': 25.0,
+        'soil_preference': 'deep_acidic_well_drained', 'drought_tolerance': 'low', 'frost_tolerance': 'none'
+    },
+    'abies_alba': {
+        'sci_name': 'Abies alba', 'common_tr': 'Avrupa Beyaz Göknarı',
+        'temp_min': 4.5, 'temp_opt_min': 7.0, 'temp_opt_max': 13.0, 'temp_max': 17.0,
+        'precip_min': 750, 'precip_opt_min': 1000, 'precip_opt_max': 1900, 'precip_max': 2500,
+        'elev_min': 400, 'elev_max': 1900, 'slope_max': 45.0,
+        'soil_preference': 'deep_moist', 'drought_tolerance': 'low', 'frost_tolerance': 'high'
+    },
+    'larix_decidua': {
+        'sci_name': 'Larix decidua', 'common_tr': 'Avrupa Melezi',
+        'temp_min': 1.0, 'temp_opt_min': 4.0, 'temp_opt_max': 11.0, 'temp_max': 16.0,
+        'precip_min': 500, 'precip_opt_min': 700, 'precip_opt_max': 1500, 'precip_max': 2200,
+        'elev_min': 500, 'elev_max': 2400, 'slope_max': 50.0,
+        'soil_preference': 'well_drained_rocky', 'drought_tolerance': 'moderate', 'frost_tolerance': 'very_high'
+    },
+    'larix_sibirica': {
+        'sci_name': 'Larix sibirica', 'common_tr': 'Sibirya Melezi',
+        'temp_min': -8.0, 'temp_opt_min': -2.0, 'temp_opt_max': 6.0, 'temp_max': 14.0,
+        'precip_min': 250, 'precip_opt_min': 400, 'precip_opt_max': 800, 'precip_max': 1200,
+        'elev_min': 100, 'elev_max': 2200, 'slope_max': 45.0,
+        'soil_preference': 'permafrost_podzolic', 'drought_tolerance': 'high', 'frost_tolerance': 'very_high'
+    },
+    'pinus_ponderosa': {
+        'sci_name': 'Pinus ponderosa', 'common_tr': 'Sarı Çam (Ponderosa)',
+        'temp_min': 4.0, 'temp_opt_min': 7.5, 'temp_opt_max': 14.0, 'temp_max': 19.5,
+        'precip_min': 350, 'precip_opt_min': 450, 'precip_opt_max': 900, 'precip_max': 1400,
+        'elev_min': 300, 'elev_max': 2700, 'slope_max': 50.0,
+        'soil_preference': 'shallow_to_deep_gravelly', 'drought_tolerance': 'very_high', 'frost_tolerance': 'high'
+    },
+    'pinus_contorta': {
+        'sci_name': 'Pinus contorta', 'common_tr': 'Bükümlü Çam',
+        'temp_min': 0.0, 'temp_opt_min': 3.5, 'temp_opt_max': 10.5, 'temp_max': 16.0,
+        'precip_min': 400, 'precip_opt_min': 550, 'precip_opt_max': 1200, 'precip_max': 2000,
+        'elev_min': 400, 'elev_max': 3100, 'slope_max': 45.0,
+        'soil_preference': 'poor_acidic_sandy', 'drought_tolerance': 'moderate', 'frost_tolerance': 'very_high'
+    },
+    'pinus_strobus': {
+        'sci_name': 'Pinus strobus', 'common_tr': 'Doğu Beyaz Çamı',
+        'temp_min': 3.5, 'temp_opt_min': 7.0, 'temp_opt_max': 13.0, 'temp_max': 17.5,
+        'precip_min': 650, 'precip_opt_min': 850, 'precip_opt_max': 1400, 'precip_max': 1800,
+        'elev_min': 0, 'elev_max': 1500, 'slope_max': 40.0,
+        'soil_preference': 'sandy_loam_moist', 'drought_tolerance': 'moderate', 'frost_tolerance': 'high'
+    },
+    'picea_glauca': {
+        'sci_name': 'Picea glauca', 'common_tr': 'Beyaz Ladin',
+        'temp_min': -4.0, 'temp_opt_min': 1.0, 'temp_opt_max': 8.0, 'temp_max': 14.0,
+        'precip_min': 300, 'precip_opt_min': 450, 'precip_opt_max': 900, 'precip_max': 1400,
+        'elev_min': 0, 'elev_max': 1700, 'slope_max': 40.0,
+        'soil_preference': 'alluvial_podzolic', 'drought_tolerance': 'moderate', 'frost_tolerance': 'very_high'
+    },
+    'sequoia_sempervirens': {
+        'sci_name': 'Sequoia sempervirens', 'common_tr': 'Sahil Sekoyası',
+        'temp_min': 9.0, 'temp_opt_min': 11.5, 'temp_opt_max': 16.5, 'temp_max': 21.0,
+        'precip_min': 800, 'precip_opt_min': 1200, 'precip_opt_max': 2600, 'precip_max': 3200,
+        'elev_min': 0, 'elev_max': 900, 'slope_max': 35.0,
+        'soil_preference': 'deep_alluvial_humic', 'drought_tolerance': 'low', 'frost_tolerance': 'low'
+    },
+    'quercus_ilex': {
+        'sci_name': 'Quercus ilex', 'common_tr': 'Pırnal Meşe',
+        'temp_min': 12.0, 'temp_opt_min': 14.5, 'temp_opt_max': 19.5, 'temp_max': 24.0,
+        'precip_min': 350, 'precip_opt_min': 500, 'precip_opt_max': 1000, 'precip_max': 1500,
+        'elev_min': 0, 'elev_max': 1400, 'slope_max': 50.0,
+        'soil_preference': 'calcareous_stony', 'drought_tolerance': 'very_high', 'frost_tolerance': 'low'
+    },
+    'quercus_suber': {
+        'sci_name': 'Quercus suber', 'common_tr': 'Mantar Meşesi',
+        'temp_min': 13.0, 'temp_opt_min': 15.0, 'temp_opt_max': 20.0, 'temp_max': 24.5,
+        'precip_min': 500, 'precip_opt_min': 700, 'precip_opt_max': 1200, 'precip_max': 1700,
+        'elev_min': 0, 'elev_max': 1000, 'slope_max': 40.0,
+        'soil_preference': 'siliceous_acidic', 'drought_tolerance': 'high', 'frost_tolerance': 'low'
+    },
+    'quercus_alba': {
+        'sci_name': 'Quercus alba', 'common_tr': 'Ak Meşe',
+        'temp_min': 6.0, 'temp_opt_min': 9.5, 'temp_opt_max': 16.0, 'temp_max': 21.0,
+        'precip_min': 650, 'precip_opt_min': 900, 'precip_opt_max': 1400, 'precip_max': 1800,
+        'elev_min': 0, 'elev_max': 1500, 'slope_max': 40.0,
+        'soil_preference': 'deep_moist_well_drained', 'drought_tolerance': 'moderate', 'frost_tolerance': 'high'
+    },
+    'quercus_rubra': {
+        'sci_name': 'Quercus rubra', 'common_tr': 'Kırmızı Meşe',
+        'temp_min': 5.0, 'temp_opt_min': 8.5, 'temp_opt_max': 15.0, 'temp_max': 20.0,
+        'precip_min': 600, 'precip_opt_min': 850, 'precip_opt_max': 1350, 'precip_max': 1800,
+        'elev_min': 0, 'elev_max': 1600, 'slope_max': 45.0,
+        'soil_preference': 'acidic_loam', 'drought_tolerance': 'moderate', 'frost_tolerance': 'high'
+    },
+    'betula_pendula': {
+        'sci_name': 'Betula pendula', 'common_tr': 'Siğilli Huş',
+        'temp_min': 2.0, 'temp_opt_min': 5.5, 'temp_opt_max': 12.0, 'temp_max': 17.0,
+        'precip_min': 450, 'precip_opt_min': 600, 'precip_opt_max': 1100, 'precip_max': 1600,
+        'elev_min': 100, 'elev_max': 2100, 'slope_max': 45.0,
+        'soil_preference': 'poor_acidic_sandy', 'drought_tolerance': 'moderate', 'frost_tolerance': 'very_high'
+    },
+    'eucalyptus_globulus': {
+        'sci_name': 'Eucalyptus globulus', 'common_tr': 'Mavi Okaliptüs',
+        'temp_min': 11.0, 'temp_opt_min': 14.0, 'temp_opt_max': 21.0, 'temp_max': 26.0,
+        'precip_min': 600, 'precip_opt_min': 850, 'precip_opt_max': 1600, 'precip_max': 2200,
+        'elev_min': 0, 'elev_max': 1000, 'slope_max': 35.0,
+        'soil_preference': 'deep_loam_acidic', 'drought_tolerance': 'moderate', 'frost_tolerance': 'low'
+    },
+    'eucalyptus_camaldulensis': {
+        'sci_name': 'Eucalyptus camaldulensis', 'common_tr': 'Kırmızı Okaliptüs',
+        'temp_min': 12.0, 'temp_opt_min': 16.0, 'temp_opt_max': 26.0, 'temp_max': 32.0,
+        'precip_min': 350, 'precip_opt_min': 500, 'precip_opt_max': 1200, 'precip_max': 2000,
+        'elev_min': 0, 'elev_max': 700, 'slope_max': 30.0,
+        'soil_preference': 'alluvial_floodplain', 'drought_tolerance': 'very_high', 'frost_tolerance': 'low'
+    },
+    'eucalyptus_grandis': {
+        'sci_name': 'Eucalyptus grandis', 'common_tr': 'Gül Okaliptüs',
+        'temp_min': 13.0, 'temp_opt_min': 17.0, 'temp_opt_max': 24.0, 'temp_max': 29.0,
+        'precip_min': 900, 'precip_opt_min': 1200, 'precip_opt_max': 2200, 'precip_max': 3000,
+        'elev_min': 0, 'elev_max': 900, 'slope_max': 35.0,
+        'soil_preference': 'deep_fertile_moist', 'drought_tolerance': 'moderate', 'frost_tolerance': 'none'
+    },
+    'populus_nigra': {
+        'sci_name': 'Populus nigra', 'common_tr': 'Kara Kavak',
+        'temp_min': 7.0, 'temp_opt_min': 10.5, 'temp_opt_max': 18.0, 'temp_max': 24.0,
+        'precip_min': 450, 'precip_opt_min': 650, 'precip_opt_max': 1200, 'precip_max': 1800,
+        'elev_min': 0, 'elev_max': 1500, 'slope_max': 25.0,
+        'soil_preference': 'alluvial_riparian', 'drought_tolerance': 'low', 'frost_tolerance': 'high'
+    },
+    'populus_tremula': {
+        'sci_name': 'Populus tremula', 'common_tr': 'Titrek Kavak',
+        'temp_min': 1.0, 'temp_opt_min': 4.5, 'temp_opt_max': 12.0, 'temp_max': 17.0,
+        'precip_min': 450, 'precip_opt_min': 600, 'precip_opt_max': 1150, 'precip_max': 1700,
+        'elev_min': 100, 'elev_max': 2200, 'slope_max': 45.0,
+        'soil_preference': 'pioneer_medium', 'drought_tolerance': 'moderate', 'frost_tolerance': 'very_high'
+    },
+    'populus_alba': {
+        'sci_name': 'Populus alba', 'common_tr': 'Ak Kavak',
+        'temp_min': 8.0, 'temp_opt_min': 11.5, 'temp_opt_max': 19.0, 'temp_max': 25.0,
+        'precip_min': 400, 'precip_opt_min': 600, 'precip_opt_max': 1200, 'precip_max': 1800,
+        'elev_min': 0, 'elev_max': 1400, 'slope_max': 25.0,
+        'soil_preference': 'alluvial_deep', 'drought_tolerance': 'moderate', 'frost_tolerance': 'high'
+    },
+    'acer_pseudoplatanus': {
+        'sci_name': 'Acer pseudoplatanus', 'common_tr': 'Dağ Akçaağacı',
+        'temp_min': 5.0, 'temp_opt_min': 7.5, 'temp_opt_max': 13.5, 'temp_max': 17.5,
+        'precip_min': 650, 'precip_opt_min': 850, 'precip_opt_max': 1600, 'precip_max': 2200,
+        'elev_min': 200, 'elev_max': 1800, 'slope_max': 45.0,
+        'soil_preference': 'rich_humic_deep', 'drought_tolerance': 'low', 'frost_tolerance': 'high'
+    },
+    'acer_saccharum': {
+        'sci_name': 'Acer saccharum', 'common_tr': 'Şeker Akçaağacı',
+        'temp_min': 4.0, 'temp_opt_min': 7.0, 'temp_opt_max': 13.0, 'temp_max': 17.0,
+        'precip_min': 700, 'precip_opt_min': 900, 'precip_opt_max': 1500, 'precip_max': 2000,
+        'elev_min': 100, 'elev_max': 1600, 'slope_max': 40.0,
+        'soil_preference': 'deep_fertile_moist', 'drought_tolerance': 'low', 'frost_tolerance': 'high'
+    },
+    'fraxinus_excelsior': {
+        'sci_name': 'Fraxinus excelsior', 'common_tr': 'Adi Dişbudak',
+        'temp_min': 6.0, 'temp_opt_min': 8.5, 'temp_opt_max': 14.5, 'temp_max': 18.5,
+        'precip_min': 550, 'precip_opt_min': 750, 'precip_opt_max': 1300, 'precip_max': 1800,
+        'elev_min': 0, 'elev_max': 1600, 'slope_max': 40.0,
+        'soil_preference': 'calcareous_moist_deep', 'drought_tolerance': 'moderate', 'frost_tolerance': 'high'
+    },
+    'swietenia_macrophylla': {
+        'sci_name': 'Swietenia macrophylla', 'common_tr': 'Büyük Yapraklı Maun',
+        'temp_min': 18.0, 'temp_opt_min': 22.0, 'temp_opt_max': 28.0, 'temp_max': 34.0,
+        'precip_min': 1000, 'precip_opt_min': 1400, 'precip_opt_max': 2600, 'precip_max': 3800,
+        'elev_min': 0, 'elev_max': 1000, 'slope_max': 35.0,
+        'soil_preference': 'deep_alluvial_fertile', 'drought_tolerance': 'moderate', 'frost_tolerance': 'none'
+    },
+    'juglans_regia': {
+        'sci_name': 'Juglans regia', 'common_tr': 'Ceviz',
+        'temp_min': 8.0, 'temp_opt_min': 12.0, 'temp_opt_max': 18.5, 'temp_max': 24.0,
+        'precip_min': 500, 'precip_opt_min': 700, 'precip_opt_max': 1200, 'precip_max': 1800,
+        'elev_min': 100, 'elev_max': 1700, 'slope_max': 35.0,
+        'soil_preference': 'deep_alluvial_fertile', 'drought_tolerance': 'moderate', 'frost_tolerance': 'moderate'
+    },
+    'corylus_avellana': {
+        'sci_name': 'Corylus avellana', 'common_tr': 'Fındık',
+        'temp_min': 7.0, 'temp_opt_min': 11.0, 'temp_opt_max': 16.5, 'temp_max': 22.0,
+        'precip_min': 650, 'precip_opt_min': 850, 'precip_opt_max': 1500, 'precip_max': 2200,
+        'elev_min': 0, 'elev_max': 1500, 'slope_max': 45.0,
+        'soil_preference': 'deep_humic_well_drained', 'drought_tolerance': 'low', 'frost_tolerance': 'moderate'
+    },
+    'malus_domestica': {
+        'sci_name': 'Malus domestica', 'common_tr': 'Elma',
+        'temp_min': 6.0, 'temp_opt_min': 9.5, 'temp_opt_max': 16.0, 'temp_max': 22.0,
+        'precip_min': 450, 'precip_opt_min': 650, 'precip_opt_max': 1100, 'precip_max': 1600,
+        'elev_min': 100, 'elev_max': 1800, 'slope_max': 30.0,
+        'soil_preference': 'loamy_deep_fertile', 'drought_tolerance': 'moderate', 'frost_tolerance': 'high'
+    },
+    'pyrus_communis': {
+        'sci_name': 'Pyrus communis', 'common_tr': 'Armut',
+        'temp_min': 7.0, 'temp_opt_min': 10.0, 'temp_opt_max': 17.0, 'temp_max': 23.0,
+        'precip_min': 450, 'precip_opt_min': 600, 'precip_opt_max': 1100, 'precip_max': 1600,
+        'elev_min': 50, 'elev_max': 1700, 'slope_max': 30.0,
+        'soil_preference': 'deep_permeable_clay_loam', 'drought_tolerance': 'moderate', 'frost_tolerance': 'high'
+    },
+    'olea_europaea': {
+        'sci_name': 'Olea europaea', 'common_tr': 'Zeytin',
+        'temp_min': 12.0, 'temp_opt_min': 15.0, 'temp_opt_max': 21.0, 'temp_max': 26.0,
+        'precip_min': 300, 'precip_opt_min': 450, 'precip_opt_max': 850, 'precip_max': 1300,
+        'elev_min': 0, 'elev_max': 900, 'slope_max': 40.0,
+        'soil_preference': 'calcareous_stony_permeable', 'drought_tolerance': 'very_high', 'frost_tolerance': 'low'
+    },
+    'prunus_dulcis': {
+        'sci_name': 'Prunus dulcis', 'common_tr': 'Badem',
+        'temp_min': 10.0, 'temp_opt_min': 14.0, 'temp_opt_max': 20.0, 'temp_max': 25.0,
+        'precip_min': 300, 'precip_opt_min': 450, 'precip_opt_max': 800, 'precip_max': 1200,
+        'elev_min': 50, 'elev_max': 1500, 'slope_max': 35.0,
+        'soil_preference': 'calcareous_stony_well_drained', 'drought_tolerance': 'very_high', 'frost_tolerance': 'moderate'
+    },
+    'prunus_armeniaca': {
+        'sci_name': 'Prunus armeniaca', 'common_tr': 'Kayısı',
+        'temp_min': 8.0, 'temp_opt_min': 11.5, 'temp_opt_max': 18.0, 'temp_max': 24.0,
+        'precip_min': 350, 'precip_opt_min': 500, 'precip_opt_max': 850, 'precip_max': 1300,
+        'elev_min': 200, 'elev_max': 1600, 'slope_max': 30.0,
+        'soil_preference': 'permeable_sandy_loam', 'drought_tolerance': 'high', 'frost_tolerance': 'moderate'
+    },
+    'prunus_persica': {
+        'sci_name': 'Prunus persica', 'common_tr': 'Şeftali',
+        'temp_min': 9.0, 'temp_opt_min': 13.0, 'temp_opt_max': 19.5, 'temp_max': 25.0,
+        'precip_min': 450, 'precip_opt_min': 650, 'precip_opt_max': 1100, 'precip_max': 1500,
+        'elev_min': 50, 'elev_max': 1200, 'slope_max': 25.0,
+        'soil_preference': 'deep_loamy_fertile', 'drought_tolerance': 'moderate', 'frost_tolerance': 'moderate'
+    },
+    'prunus_avium': {
+        'sci_name': 'Prunus avium', 'common_tr': 'Kiraz',
+        'temp_min': 7.5, 'temp_opt_min': 11.0, 'temp_opt_max': 17.0, 'temp_max': 22.5,
+        'precip_min': 500, 'precip_opt_min': 700, 'precip_opt_max': 1200, 'precip_max': 1600,
+        'elev_min': 100, 'elev_max': 1600, 'slope_max': 30.0,
+        'soil_preference': 'deep_fertile_well_drained', 'drought_tolerance': 'moderate', 'frost_tolerance': 'high'
+    },
+    'pistacia_vera': {
+        'sci_name': 'Pistacia vera', 'common_tr': 'Antep Fıstığı',
+        'temp_min': 12.0, 'temp_opt_min': 15.5, 'temp_opt_max': 22.5, 'temp_max': 27.5,
+        'precip_min': 250, 'precip_opt_min': 380, 'precip_opt_max': 650, 'precip_max': 1000,
+        'elev_min': 100, 'elev_max': 1400, 'slope_max': 35.0,
+        'soil_preference': 'calcareous_shallow_to_deep', 'drought_tolerance': 'very_high', 'frost_tolerance': 'moderate'
+    },
+    'citrus_sinensis': {
+        'sci_name': 'Citrus sinensis', 'common_tr': 'Portakal',
+        'temp_min': 13.0, 'temp_opt_min': 16.5, 'temp_opt_max': 23.0, 'temp_max': 28.0,
+        'precip_min': 600, 'precip_opt_min': 850, 'precip_opt_max': 1400, 'precip_max': 2000,
+        'elev_min': 0, 'elev_max': 600, 'slope_max': 25.0,
+        'soil_preference': 'deep_permeable_sandy_loam', 'drought_tolerance': 'low', 'frost_tolerance': 'none'
+    },
+    '_default_fruit_tree': {
+        'temp_min': 8.0, 'temp_opt_min': 12.0, 'temp_opt_max': 19.0, 'temp_max': 25.0,
+        'precip_min': 400, 'precip_opt_min': 600, 'precip_opt_max': 1200, 'precip_max': 1800,
+        'elev_min': 0, 'elev_max': 1600, 'slope_max': 35.0
+    },
+    '_default_conifer': {
+        'temp_min': 5.0, 'temp_opt_min': 9.0, 'temp_opt_max': 16.0, 'temp_max': 22.0,
+        'precip_min': 450, 'precip_opt_min': 600, 'precip_opt_max': 1300, 'precip_max': 2000,
+        'elev_min': 0, 'elev_max': 2200, 'slope_max': 45.0
+    },
+    '_default_broadleaf': {
+        'temp_min': 7.0, 'temp_opt_min': 10.5, 'temp_opt_max': 17.5, 'temp_max': 23.0,
+        'precip_min': 500, 'precip_opt_min': 700, 'precip_opt_max': 1400, 'precip_max': 2000,
+        'elev_min': 0, 'elev_max': 1800, 'slope_max': 40.0
+    }
+}
+
+
+# 4. Çözümleme ve Fallback Motoru (Species Resolution & Fallback Engine)
+def _normalize_species_query(name: str) -> str:
+    """Türkçe karakterleri ve noktalama işaretlerini normalize edip küçük harfe çevirir."""
+    if not name:
+        return ''
+    tr_map = str.maketrans({
+        'ç': 'c', 'Ç': 'c', 'ğ': 'g', 'Ğ': 'g', 'ı': 'i', 'I': 'i', 'İ': 'i',
+        'ö': 'o', 'Ö': 'o', 'ş': 's', 'Ş': 's', 'ü': 'u', 'Ü': 'u',
+    })
+    s = str(name).translate(tr_map).lower()
+    s = re.sub(r'[^a-z0-9\s]', ' ', s)
+    return ' '.join(s.split())
+
+
+def resolve_species_carbon_params(species_name: str, country_code: str = 'TR', climate_zone: str = None) -> dict:
+    """
+    Girilen ağaç türü adı ve ülke kodu / iklim ekozonu üzerinden bilimsel karbon katsayılarını çözümler.
+    IPCC 2006/2019 Refinement Ekozon matrisi ile ülkeye/bölgeye özel dinamik katsayı modülasyonu uygular.
+    3 Aşamalı Akıllı Fallback zinciri izler:
+      1. Adım: Tam veya eşanlamlı (alias) tür eşleşmesi (match_level='species')
+      2. Adım: Cins (genus) tespiti ve cins ortalaması (match_level='genus')
+      3. Adım: Ülke iklim bölgesi ve iğne/geniş yaprak bazlı bölgesel IPCC Tier 1 fallback (match_level='regional_fallback')
+    """
+    country = (country_code or 'TR').strip().upper()
+    if not climate_zone:
+        climate_zone = COUNTRY_CLIMATE_MAP.get(country, DEFAULT_CLIMATE_ZONE)
+    eco = IPCC_ECOZONE_FACTORS.get(climate_zone) or IPCC_ECOZONE_FACTORS.get(DEFAULT_CLIMATE_ZONE)
+    norm = _normalize_species_query(species_name)
+
+    base_sp = None
+    match_level = 'unknown'
+    matched_key = ''
+
+    # 1. Adım: Tür Seviyesi Eşleşme (Species level match)
+    if norm:
+        norm_snake = norm.replace(' ', '_')
+        if norm_snake in CARBON_SPECIES_DEFAULTS:
+            base_sp = dict(CARBON_SPECIES_DEFAULTS[norm_snake])
+            match_level = 'species'
+            matched_key = norm_snake
+        else:
+            for k, sp in CARBON_SPECIES_DEFAULTS.items():
+                for alias in sp.get('aliases', []):
+                    alias_norm = _normalize_species_query(alias)
+                    if alias_norm == norm:
+                        base_sp = dict(sp)
+                        match_level = 'species'
+                        matched_key = k
+                        break
+                if base_sp:
+                    break
+
+    # 2. Adım: Cins Seviyesi Eşleşme (Genus level match)
+    if not base_sp and norm:
+        tokens = norm.split()
+        first_token = tokens[0] if tokens else ''
+        genus = None
+        if first_token in CARBON_GENUS_DEFAULTS:
+            genus = first_token
+        else:
+            for g_candidate in CARBON_GENUS_DEFAULTS:
+                if g_candidate in tokens or any(t.startswith(g_candidate) for t in tokens):
+                    genus = g_candidate
+                    break
+
+        if genus and genus in CARBON_GENUS_DEFAULTS:
+            g_data = CARBON_GENUS_DEFAULTS[genus]
+            base_sp = {
+                'sci_name': (species_name or genus.capitalize()).strip(),
+                'common_tr': genus.capitalize(),
+                'common_en': genus.capitalize(),
+                'wood_density': g_data['wood_density'],
+                'root_shoot_ratio': g_data['root_shoot_ratio'],
+                'bef': g_data['bef'],
+                'default_mai': g_data['default_mai'],
+                'group': g_data['group']
+            }
+            match_level = 'genus'
+            matched_key = genus
+
+    # 2.1 Adım: Kısmi Tür Alias Eşleşmesi (örn. "Pinus brutia var. eldarica")
+    if not base_sp and norm:
+        for k, sp in CARBON_SPECIES_DEFAULTS.items():
+            for alias in sp.get('aliases', []):
+                alias_norm = _normalize_species_query(alias)
+                if len(alias_norm) >= 6 and (alias_norm in norm or norm in alias_norm):
+                    base_sp = dict(sp)
+                    match_level = 'species'
+                    matched_key = k
+                    break
+            if base_sp:
+                break
+
+    # 3. Adım: İklim & Bölgesel Fallback (Regional climate fallback)
+    if not base_sp:
+        conifer_keywords = [
+            'pinus', 'cam', 'pine', 'sedir', 'cedrus', 'cedar', 'ladin', 'picea',
+            'spruce', 'goknar', 'abies', 'fir', 'servi', 'cupressus', 'cypress',
+            'melez', 'larix', 'larch', 'conifer', 'igne'
+        ]
+        fruit_keywords = [
+            'ceviz', 'walnut', 'juglans', 'findik', 'fındık', 'hazelnut', 'corylus',
+            'elma', 'apple', 'malus', 'armut', 'pear', 'pyrus', 'zeytin', 'olive', 'olea',
+            'badem', 'almond', 'kayisi', 'kayısı', 'apricot', 'seftali', 'şeftali', 'peach',
+            'kiraz', 'cherry', 'fistik', 'fıstık', 'pistachio', 'pistacia', 'portakal', 'orange', 'citrus'
+        ]
+        is_conifer = any(kw in norm for kw in conifer_keywords)
+        is_fruit = any(kw in norm for kw in fruit_keywords)
+        if is_conifer:
+            group = 'conifer'
+            grp_name_tr = 'İğne Yapraklı'
+        elif is_fruit:
+            group = 'fruit_tree'
+            grp_name_tr = 'Meyve Ağacı (Perennial Cropland)'
+        else:
+            group = 'broadleaf'
+            grp_name_tr = 'Geniş Yapraklı'
+        zone_data = REGIONAL_CARBON_DEFAULTS.get(climate_zone) or REGIONAL_CARBON_DEFAULTS.get(DEFAULT_CLIMATE_ZONE) or {}
+        fallback = zone_data.get(group) or GLOBAL_CARBON_DEFAULTS.get(group) or GLOBAL_CARBON_DEFAULTS['broadleaf']
+        base_sp = {
+            'sci_name': (species_name or f'Generic {group.capitalize()}').strip(),
+            'common_tr': 'Varsayılan ' + grp_name_tr,
+            'common_en': f'Default {group.capitalize()}',
+            'wood_density': fallback['wood_density'],
+            'root_shoot_ratio': fallback['root_shoot_ratio'],
+            'bef': fallback['bef'],
+            'default_mai': fallback['default_mai'],
+            'group': group
+        }
+        match_level = 'regional_fallback'
+        matched_key = f'{climate_zone}_{group}'
+
+    # ── IPCC 2006 / 2019 Refinement Ekozon Katsayı Modülasyonu ──
+    # Aynı türün büyüme hızı (MAI), odun yoğunluğu (D), kök/sürgün (R) ve BEF katsayıları
+    # bulunulan ülkenin ekozonuna (Mediterranean, Temperate Continental, Oceanic, Boreal vb.) göre dinamik uyarlanır.
+    base_dw = float(base_sp['wood_density'])
+    base_r = float(base_sp['root_shoot_ratio'])
+    base_bef = float(base_sp['bef'])
+    base_mai = float(base_sp['default_mai'])
+    group = str(base_sp.get('group', 'conifer')).lower()
+
+    dw = round(base_dw * float(eco['wood_density_mod']), 3)
+    r = round(base_r * float(eco['root_shoot_mod']), 3)
+    bef = round(base_bef * float(eco['bef_mod']), 3)
+    mai = max(0.5, round(base_mai * float(eco['mai_mod']), 2))
+
+    # Chapman-Richards referans kalibrasyonu (30 yıllık standart rotasyon bazında)
+    calib = calibrate_growth_parameters(mai, 30, group)
+    v_max = calib['v_max']
+    k = round(calib['k'], 5)
+    p = round(calib['m'], 2)
+    asymptotic_biomass_a = round(v_max * dw * bef, 2)
+    asymptotic_biomass_bgb = round(asymptotic_biomass_a * r, 2)
+    asymptotic_total_biomass = round(asymptotic_biomass_a * (1.0 + r), 2)
+
+    return {
+        'species_name': species_name.strip() if (species_name and species_name.strip()) else base_sp.get('sci_name', species_name),
+        'wood_density': dw,
+        'base_wood_density': base_dw,
+        'root_shoot_ratio': r,
+        'base_root_shoot_ratio': base_r,
+        'bef': bef,
+        'base_bef': base_bef,
+        'default_mai': mai,
+        'base_mai': base_mai,
+        'group': group,
+        'carbon_fraction': CARBON_FRACTION,
+        'co2_to_c_ratio': CO2_TO_C_RATIO,
+        'match_level': match_level,
+        'matched_key': matched_key,
+        'country_code': country,
+        'climate_zone': climate_zone,
+        'ecozone_code': eco['ecozone_code'],
+        'ecozone_name_tr': eco['name_tr'],
+        'ecozone_name_en': eco['name_en'],
+        'asymptotic_volume_vmax': v_max,
+        'asymptotic_biomass_a': asymptotic_biomass_a,
+        'asymptotic_biomass_bgb': asymptotic_biomass_bgb,
+        'asymptotic_total_biomass': asymptotic_total_biomass,
+        'growth_k': k,
+        'shape_p': p,
+        'common_tr': base_sp.get('common_tr', ''),
+        'common_en': base_sp.get('common_en', '')
+    }
+
+
+# 5. Birim Dönüşüm Yardımcı Fonksiyonları (Unit Conversion Helpers)
+def biomass_to_carbon(biomass_tonnes: float) -> float:
+    """Kuru biyokütleyi (ton) karbon stoğuna (ton C) dönüştürür. (CF = 0.47)"""
+    return float(biomass_tonnes) * CARBON_FRACTION
+
+
+def carbon_to_co2e(carbon_tonnes: float) -> float:
+    """Karbon stoğunu (ton C) CO2 eşdeğerine (ton CO2e) dönüştürür. (Çarpan: 44/12 ≈ 3.6667)"""
+    return float(carbon_tonnes) * CO2_TO_C_RATIO
+
+
+def co2e_to_carbon(co2e_tonnes: float) -> float:
+    """CO2 eşdeğerini (ton CO2e) karbon stoğuna (ton C) dönüştürür. (Bölen: 44/12)"""
+    return float(co2e_tonnes) / CO2_TO_C_RATIO
+
+
+# 6. HTTP API Endpoint (Katsayı ve Parametre Sorgulama)
+@app.route('/api/carbon-species-params', methods=['GET', 'POST'])
+def api_carbon_species_params():
+    """
+    Belirli bir ağaç türü adı ve ülke kodu için çözümlenmiş IPCC / Wood Density parametrelerini döndürür.
+    Örnek GET / POST parametreleri:
+      species: "Pinus brutia"
+      country: "TR"
+    """
+    try:
+        if request.method == 'POST':
+            req_data = request.get_json(silent=True) or {}
+            species = req_data.get('species') or req_data.get('species_name') or ''
+            country = req_data.get('country') or req_data.get('country_code') or 'TR'
+            climate_zone = req_data.get('climate_zone') or req_data.get('ecozone')
+        else:
+            species = request.args.get('species') or request.args.get('species_name') or ''
+            country = request.args.get('country') or request.args.get('country_code') or 'TR'
+            climate_zone = request.args.get('climate_zone') or request.args.get('ecozone')
+
+        params = resolve_species_carbon_params(species, country, climate_zone=climate_zone)
+        return jsonify({
+            'success': True,
+            'params': params
+        })
+    except Exception as exc:
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+
+# ════════════════════════════════════════════════════════════════
+# 🌲💨 KARBON YUTAK ALANI SİMÜLASYONU
+# AŞAMA 5, AŞAMA 6 & AŞAMA 7: Büyüme Motoru, Aralama Mekaniği ve Simülasyon API'si
+# ════════════════════════════════════════════════════════════════
+
+def calibrate_growth_parameters(mai: float, rotation_years: int, species_group: str = "conifer") -> dict:
+    """
+    Chapman-Richards büyüme modeli parametrelerini (V_max, k, m) kalibre eder.
+    Formül: V(t) = V_max * (1 - exp(-k * t))^m
+    İdare süresinde kümülatif hacim V(rotation) ≈ mai * rotation_years olacak şekilde türetilir.
+    Meyve ve sert kabuklu tarımsal ağaçlar (fruit_tree / perennial_crop) için budama ve meyve hasadı
+    rejimlerine göre allometrik doygunluk tavanı (asymptote_ratio = 1.20) ve erken plato şekil üssü (m = 1.8) kullanılır.
+    """
+    mai = max(0.5, float(mai or 6.0))
+    rot = max(5, int(rotation_years or 30))
+    grp = str(species_group).lower()
+    if grp == "conifer":
+        m = 2.8
+        asymptote_ratio = 1.35
+    elif grp in ("fruit_tree", "perennial_crop"):
+        # IPCC Perennial Cropland allometrisi: Budanan taç ve erken plato
+        m = 1.8
+        asymptote_ratio = 1.20
+    else:
+        m = 2.2
+        asymptote_ratio = 1.35
+    target_vol_rot = mai * rot
+    v_max = target_vol_rot * asymptote_ratio
+    inner = max(0.001, min(0.999, 1.0 - math.pow(1.0 / asymptote_ratio, 1.0 / m)))
+    k = -math.log(inner) / float(rot)
+    return {
+        'v_max': round(v_max, 2),
+        'k': float(k),
+        'm': float(m),
+        'target_rot_vol': round(target_vol_rot, 2),
+        'mai': mai,
+        'rotation_years': rot
+    }
+
+
+def _calculate_tree_allometrics(vol_per_ha: float, n_trees_per_ha: int, age: int, max_height: float = 24.0) -> dict:
+    """
+    Standart ormancılık allometrik ilişkileri ile ortalama boy (H, m) ve göğüs çapı (DBH, cm) tahmin eder.
+    v_single = V / N
+    D ≈ sqrt(v_single / (0.000055 * H))
+    """
+    if age <= 0 or vol_per_ha <= 0.001 or n_trees_per_ha <= 0:
+        return {'dbh_cm': 0.8, 'height_m': 0.4}
+    h = 0.4 + (max_height - 0.4) * math.pow(max(0.0, 1.0 - math.exp(-0.065 * age)), 1.25)
+    v_single = max(0.0, vol_per_ha) / float(n_trees_per_ha)
+    d = math.sqrt(v_single / (0.000055 * max(1.0, h)))
+    d_clamped = max(0.8, min(140.0, d))
+    return {
+        'dbh_cm': round(d_clamped, 1),
+        'height_m': round(h, 1)
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. GEE Saha & İklim Katmanı Entegrasyonu ve Ekolojik Uygunluk (Aşama 11)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _parse_geojson_to_ee_geom(geojson_input):
+    """GeoJSON Feature, FeatureCollection, Geometry veya koordinat dizisini ee.Geometry nesnesine dönüştürür."""
+    if not geojson_input:
+        return None
+    geom = None
+    if isinstance(geojson_input, dict):
+        if geojson_input.get('type') == 'Feature':
+            geom = geojson_input.get('geometry')
+        elif geojson_input.get('type') == 'FeatureCollection':
+            features = geojson_input.get('features', [])
+            geom = features[0].get('geometry') if features else None
+        else:
+            geom = geojson_input
+    elif isinstance(geojson_input, list):
+        geom = {'type': 'Polygon', 'coordinates': geojson_input}
+
+    if not geom:
+        return None
+    try:
+        return ee.Geometry(geom)
+    except Exception as e:
+        print("[Carbon Site Analysis] ee.Geometry parse hatası:", e)
+        return None
+
+
+def _degrees_to_aspect_dir(deg):
+    """Bakı derecesini (0-360) 8 ana/ara pusula yönüne çevirir."""
+    if deg is None:
+        return {'tr': 'Düz / Belirsiz', 'en': 'Flat / Undefined', 'code': 'Flat'}
+    try:
+        d = float(deg) % 360.0
+    except (ValueError, TypeError):
+        return {'tr': 'Düz / Belirsiz', 'en': 'Flat / Undefined', 'code': 'Flat'}
+
+    dirs = [
+        (22.5, 'Kuzey (N)', 'North (N)', 'N'),
+        (67.5, 'Kuzeydoğu (NE)', 'Northeast (NE)', 'NE'),
+        (112.5, 'Doğu (E)', 'East (E)', 'E'),
+        (157.5, 'Güneydoğu (SE)', 'Southeast (SE)', 'SE'),
+        (202.5, 'Güney (S)', 'South (S)', 'S'),
+        (247.5, 'Güneybatı (SW)', 'Southwest (SW)', 'SW'),
+        (292.5, 'Batı (W)', 'West (W)', 'W'),
+        (337.5, 'Kuzeybatı (NW)', 'Northwest (NW)', 'NW'),
+        (360.0, 'Kuzey (N)', 'North (N)', 'N')
+    ]
+    for limit, tr, en, code in dirs:
+        if d < limit:
+            return {'tr': tr, 'en': en, 'code': code}
+    return {'tr': 'Kuzey (N)', 'en': 'North (N)', 'code': 'N'}
+
+
+# ESRI 10m Land Cover Sınıf Tanımları
+ESRI_LULC_CLASSES = {
+    1: {'name_tr': 'Su Yüzeyleri', 'name_en': 'Water', 'color': '#1A5BAB'},
+    2: {'name_tr': 'Ağaç / Orman Örtüsü', 'name_en': 'Trees & Forest', 'color': '#358221'},
+    4: {'name_tr': 'Su Altında Kalan Bitki Örtüsü', 'name_en': 'Flooded Vegetation', 'color': '#87D19E'},
+    5: {'name_tr': 'Tarım / Ekili Alan', 'name_en': 'Crops & Agriculture', 'color': '#FFDB5C'},
+    7: {'name_tr': 'Yerleşim / Yapılaşmış Alan', 'name_en': 'Built Area', 'color': '#ED022A'},
+    8: {'name_tr': 'Çıplak Toprak / Taşlık', 'name_en': 'Bare Ground', 'color': '#EDE9E4'},
+    9: {'name_tr': 'Kar / Buzul', 'name_en': 'Snow / Ice', 'color': '#F2FAFF'},
+    10: {'name_tr': 'Bulut / Gölge', 'name_en': 'Clouds', 'color': '#C8C8C8'},
+    11: {'name_tr': 'Mera / Çalı / Çayır', 'name_en': 'Rangeland & Grassland', 'color': '#C6D79E'}
+}
+
+# OpenLandMap USDA Doku Sınıfları (1..12)
+USDA_TEXTURE_CLASSES = {
+    1: {'tr': 'Kil (Clay)', 'en': 'Clay'},
+    2: {'tr': 'Siltli Kil (Silty Clay)', 'en': 'Silty Clay'},
+    3: {'tr': 'Kumlu Kil (Sandy Clay)', 'en': 'Sandy Clay'},
+    4: {'tr': 'Killi Tın (Clay Loam)', 'en': 'Clay Loam'},
+    5: {'tr': 'Siltli Killi Tın (Silty Clay Loam)', 'en': 'Silty Clay Loam'},
+    6: {'tr': 'Kumlu Killi Tın (Sandy Clay Loam)', 'en': 'Sandy Clay Loam'},
+    7: {'tr': 'Tın (Loam)', 'en': 'Loam'},
+    8: {'tr': 'Siltli Tın (Silt Loam)', 'en': 'Silt Loam'},
+    9: {'tr': 'Kumlu Tın (Sandy Loam)', 'en': 'Sandy Loam'},
+    10: {'tr': 'Silt (Silt)', 'en': 'Silt'},
+    11: {'tr': 'Tınlı Kum (Loamy Sand)', 'en': 'Loamy Sand'},
+    12: {'tr': 'Kum (Sand)', 'en': 'Sand'}
+}
+
+CLIMATE_ZONE_FULL_INFO = {
+    'mediterranean': {
+        'tr': 'Akdeniz İklim Kuşağı (Köppen: Csa/Csb — IPCC: Warm Temperate Dry)',
+        'en': 'Mediterranean Climate Zone (Köppen: Csa/Csb — IPCC: Warm Temperate Dry)',
+        'soil_default_tr': 'Cambisols (Kahverengi Orman Toprakları) & Luvisols (Terra Rossa)',
+        'soil_default_en': 'Cambisols & Luvisols (Terra Rossa)'
+    },
+    'temperate_continental': {
+        'tr': 'Ilıman Karasal İklim Kuşağı (Köppen: Dfb/Dfa — IPCC: Cool Temperate Moist)',
+        'en': 'Temperate Continental Climate Zone (Köppen: Dfb/Dfa — IPCC: Cool Temperate Moist)',
+        'soil_default_tr': 'Cambisols (Kahverengi Topraklar) & Luvisols / Phaeozems',
+        'soil_default_en': 'Cambisols & Luvisols / Phaeozems'
+    },
+    'temperate_oceanic': {
+        'tr': 'Ilıman Okyanusal İklim Kuşağı (Köppen: Cfb — IPCC: Cool Temperate Moist)',
+        'en': 'Temperate Oceanic Climate Zone (Köppen: Cfb — IPCC: Cool Temperate Moist)',
+        'soil_default_tr': 'Cambisols (Kahverengi Asit Orman Toprakları) & Luvisols',
+        'soil_default_en': 'Cambisols (Brown Forest Soils) & Luvisols'
+    },
+    'boreal': {
+        'tr': 'Boreal / Soğuk İklim Kuşağı (Köppen: Dfc/Dfb — IPCC: Boreal Moist)',
+        'en': 'Boreal / Cold Climate Zone (Köppen: Dfc/Dfb — IPCC: Boreal Moist)',
+        'soil_default_tr': 'Podzols (Asit İğne Yapraklı Orman Toprakları) & Histosols',
+        'soil_default_en': 'Podzols & Histosols'
+    },
+    'subtropical': {
+        'tr': 'Subtropikal Nemli İklim Kuşağı (Köppen: Cfa — IPCC: Warm Temperate Moist)',
+        'en': 'Subtropical Humid Climate Zone (Köppen: Cfa — IPCC: Warm Temperate Moist)',
+        'soil_default_tr': 'Acrisols & Nitisols (Kırmızımsı Subtropikal Topraklar)',
+        'soil_default_en': 'Acrisols & Nitisols'
+    },
+    'tropical_wet': {
+        'tr': 'Tropikal Nemli / Yağmur Ormanı Kuşağı (Köppen: Af/Am — IPCC: Tropical Wet)',
+        'en': 'Tropical Wet / Rainforest Zone (Köppen: Af/Am — IPCC: Tropical Wet)',
+        'soil_default_tr': 'Ferralsols & Acrisols (Derin Ayrışmış Tropikal Topraklar)',
+        'soil_default_en': 'Ferralsols & Acrisols'
+    },
+    'tropical_dry': {
+        'tr': 'Tropikal Kuru / Savan Kuşağı (Köppen: Aw/As — IPCC: Tropical Dry)',
+        'en': 'Tropical Dry / Savanna Zone (Köppen: Aw/As — IPCC: Tropical Dry)',
+        'soil_default_tr': 'Arenosols, Vertisols & Calcisols (Kuru Savan Toprakları)',
+        'soil_default_en': 'Arenosols, Vertisols & Calcisols'
+    }
+}
+
+
+def analyze_site_environmental_layers(geojson_input, country_code: str = 'TR', area_ha: float = None) -> dict:
+    """
+    Kullanıcının çizdiği veya seçtiği poligon için GEE üzerinden topoğrafya,
+    iklim, toprak ve ESRI 10m LULC katmanlarını (DEM, Eğim, Bakı, WorldClim Sıcaklık/Yağış,
+    Soil SOC, OpenLandMap USDA Doku, ESRI 10m Arazi Örtüsü Dağılımı)
+    reduceRegion ile sorgular.
+    GEE erişilemezse veya zaman aşımına uğrarsa bölgesel normallerle fallback döner.
+    """
+    country = (country_code or 'TR').strip().upper()
+    cz = COUNTRY_CLIMATE_MAP.get(country, DEFAULT_CLIMATE_ZONE)
+    cz_info = CLIMATE_ZONE_FULL_INFO.get(cz, CLIMATE_ZONE_FULL_INFO['mediterranean'])
+
+    # Bölgesel Fallback Verileri
+    fallback_defaults = {
+        'TR': {'elev': 850.0, 'slope': 14.0, 'aspect': 180.0, 'temp': 13.5, 'precip': 650.0, 'soc': 6.0},
+        'mediterranean': {'elev': 450.0, 'slope': 12.0, 'aspect': 180.0, 'temp': 16.0, 'precip': 750.0, 'soc': 5.5},
+        'temperate_continental': {'elev': 500.0, 'slope': 8.0, 'aspect': 180.0, 'temp': 10.0, 'precip': 600.0, 'soc': 7.0},
+        'temperate_oceanic': {'elev': 300.0, 'slope': 6.0, 'aspect': 180.0, 'temp': 11.5, 'precip': 900.0, 'soc': 7.5},
+        'boreal': {'elev': 350.0, 'slope': 5.0, 'aspect': 180.0, 'temp': 2.5, 'precip': 500.0, 'soc': 8.5},
+        'subtropical': {'elev': 300.0, 'slope': 8.0, 'aspect': 180.0, 'temp': 19.0, 'precip': 1100.0, 'soc': 6.0},
+        'tropical_wet': {'elev': 250.0, 'slope': 5.0, 'aspect': 180.0, 'temp': 25.0, 'precip': 2000.0, 'soc': 6.5},
+        'tropical_dry': {'elev': 350.0, 'slope': 6.0, 'aspect': 180.0, 'temp': 24.0, 'precip': 700.0, 'soc': 4.5},
+    }
+    fb = fallback_defaults.get(country) or fallback_defaults.get(cz) or fallback_defaults['mediterranean']
+
+    poly_ha = float(area_ha) if (area_ha is not None and float(area_ha) > 0) else 10.0
+
+    # Varsayılan ESRI LULC Dağılımı (Fallback)
+    fallback_esri = [
+        {'code': 11, 'name_tr': 'Mera / Çalı / Çayır', 'name_en': 'Rangeland & Grassland', 'ha': round(poly_ha * 0.65, 2), 'pct': 65.0, 'color': '#C6D79E'},
+        {'code': 2,  'name_tr': 'Ağaç / Orman Örtüsü', 'name_en': 'Trees & Forest', 'ha': round(poly_ha * 0.25, 2), 'pct': 25.0, 'color': '#358221'},
+        {'code': 8,  'name_tr': 'Çıplak Toprak / Taşlık', 'name_en': 'Bare Ground', 'ha': round(poly_ha * 0.10, 2), 'pct': 10.0, 'color': '#EDE9E4'}
+    ]
+
+    res = {
+        'data_source': 'regional_fallback',
+        'detected_country': ISO_TO_COUNTRY_NAME.get(country, country),
+        'detected_country_code': country,
+        'detected_ecozone': cz,
+        'ecozone_name_tr': IPCC_ECOZONE_FACTORS.get(cz, {}).get('name_tr', 'Akdeniz İklim Kuşağı'),
+        'ecozone_name_en': IPCC_ECOZONE_FACTORS.get(cz, {}).get('name_en', 'Subtropical Mediterranean'),
+        'elevation_m': fb['elev'],
+        'slope_deg': fb['slope'],
+        'aspect_deg': fb['aspect'],
+        'aspect_dir': _degrees_to_aspect_dir(fb['aspect']),
+        'temp_c': fb['temp'],
+        'precip_mm': fb['precip'],
+        'soc_g_kg': fb['soc'],
+        'climate_zone': cz,
+        'climate_zone_label': cz_info['tr'],
+        'climate_info': cz_info,
+        'soil_info': {
+            'group_tr': cz_info['soil_default_tr'],
+            'group_en': cz_info['soil_default_en'],
+            'texture_tr': 'Tın (Loam)',
+            'texture_en': 'Loam',
+            'soc_g_kg': fb['soc']
+        },
+        'esri_lulc': fallback_esri
+    }
+
+    if not geojson_input:
+        return res
+
+    try:
+        ee_geom = _parse_geojson_to_ee_geom(geojson_input)
+        if not ee_geom:
+            return res
+
+        # 0. Geodezik Merkez Koordinatı & USDOS LSIB Otonom Ülke Tespiti
+        center_lon = 35.0
+        center_lat = 39.0
+        try:
+            centroid = ee_geom.centroid(maxError=100)
+            _sylva_check_cancelled()
+            coords = centroid.coordinates().getInfo()
+            if coords and len(coords) >= 2:
+                center_lon = float(coords[0])
+                center_lat = float(coords[1])
+                res['center_lat'] = round(center_lat, 5)
+                res['center_lon'] = round(center_lon, 5)
+        except Exception as c_err:
+            print("[Carbon Site Analysis] Centroid hesaplama hatası:", c_err)
+
+        detected_country_name = None
+        detected_iso = None
+        try:
+            pt = ee.Geometry.Point([center_lon, center_lat])
+            lsib_feat = ee.FeatureCollection('USDOS/LSIB_SIMPLE/2017').filterBounds(pt).first()
+            _sylva_check_cancelled()
+            lsib_info = lsib_feat.getInfo()
+            if lsib_info and 'properties' in lsib_info:
+                props = lsib_info['properties']
+                c_code = (props.get('country_co') or '').upper().strip()
+                c_name = (props.get('country_na') or '').strip()
+                detected_country_name = c_name
+                detected_iso = LSIB_TO_ISO.get(c_code) or COUNTRY_NAME_TO_ISO.get(c_name.upper()) or c_code
+        except Exception as lsib_err:
+            print("[Carbon Site Analysis] LSIB ülke sorgusu hatası:", lsib_err)
+
+        if not detected_iso:
+            detected_iso = (country_code or 'TR').strip().upper()
+        if not detected_country_name:
+            detected_country_name = ISO_TO_COUNTRY_NAME.get(detected_iso, detected_iso)
+
+        res['detected_country'] = detected_country_name
+        res['detected_country_code'] = detected_iso
+
+        # 1. Topoğrafya: USGS 30m SRTM
+        dem = ee.Image('USGS/SRTMGL1_003').select(['elevation'], ['elevation'])
+        slope = ee.Terrain.slope(dem).rename('slope')
+        aspect = ee.Terrain.aspect(dem).rename('aspect')
+
+        # 2. İklim: WorldClim V1 BIO (bio01: temp * 10, bio12: precip mm)
+        climate = ee.Image('WORLDCLIM/V1/BIO').select(['bio01', 'bio12'], ['temp_raw', 'precip_annual'])
+
+        # 3. Toprak: OpenLandMap Topsoil Organic Carbon (0cm, g/kg)
+        soc = ee.Image('OpenLandMap/SOL/SOL_ORGANIC-CARBON_USDA-6A1C_M/v02').select(['b0'], ['soc_topsoil'])
+
+        combined = dem.addBands([slope, aspect, climate, soc])
+
+        _sylva_check_cancelled()
+        stats = combined.reduceRegion(
+            reducer=ee.Reducer.mean(),
+            geometry=ee_geom,
+            scale=90,
+            maxPixels=1e8,
+            bestEffort=True
+        ).getInfo() or {}
+
+        elev_val = stats.get('elevation')
+        slope_val = stats.get('slope')
+        aspect_val = stats.get('aspect')
+        temp_raw = stats.get('temp_raw')
+        precip_val = stats.get('precip_annual')
+        soc_val = stats.get('soc_topsoil')
+
+        if elev_val is not None:
+            res['elevation_m'] = round(float(elev_val), 1)
+        if slope_val is not None:
+            res['slope_deg'] = round(float(slope_val), 1)
+        if aspect_val is not None:
+            res['aspect_deg'] = round(float(aspect_val), 1)
+            res['aspect_dir'] = _degrees_to_aspect_dir(res['aspect_deg'])
+        if temp_raw is not None:
+            res['temp_c'] = round(float(temp_raw) / 10.0, 1)
+        if precip_val is not None:
+            res['precip_mm'] = round(float(precip_val), 1)
+        if soc_val is not None:
+            res['soc_g_kg'] = round(float(soc_val), 1)
+
+        # 3.1 Dinamik IPCC Global Ecological Zones (GEZ) Ekozon Tespiti
+        detected_cz = detect_ipcc_ecozone(
+            lat=center_lat,
+            lon=center_lon,
+            temp_c=res.get('temp_c'),
+            precip_mm=res.get('precip_mm'),
+            elev_m=res.get('elevation_m'),
+            country_code=detected_iso
+        )
+        cz = detected_cz
+        cz_info = CLIMATE_ZONE_FULL_INFO.get(cz, CLIMATE_ZONE_FULL_INFO['mediterranean'])
+        eco_meta = IPCC_ECOZONE_FACTORS.get(cz, IPCC_ECOZONE_FACTORS.get(DEFAULT_CLIMATE_ZONE))
+        res['detected_ecozone'] = cz
+        res['climate_zone'] = cz
+        res['climate_zone_label'] = cz_info['tr']
+        res['climate_info'] = cz_info
+        res['ecozone_name_tr'] = eco_meta.get('name_tr', cz)
+        res['ecozone_name_en'] = eco_meta.get('name_en', cz)
+
+        # 4. OpenLandMap USDA Toprak Dokusu Sınıfı (0cm mode)
+        try:
+            tex_img = ee.Image('OpenLandMap/SOL/SOL_TEXTURE-CLASS_USDA-TT_M/v02').select(['b0'])
+            _sylva_check_cancelled()
+            tex_stats = tex_img.reduceRegion(
+                reducer=ee.Reducer.mode(),
+                geometry=ee_geom,
+                scale=250,
+                maxPixels=1e8,
+                bestEffort=True
+            ).getInfo() or {}
+            tex_code = int(tex_stats.get('b0', 7) or 7)
+            tex_meta = USDA_TEXTURE_CLASSES.get(tex_code, {'tr': 'Tın (Loam)', 'en': 'Loam'})
+            
+            # Ekolojik ve topoğrafik koşullara göre FAO Dünya Toprak Grubu belirleme
+            elev_num = res['elevation_m']
+            slope_num = res['slope_deg']
+            fao_tr = cz_info['soil_default_tr']
+            fao_en = cz_info['soil_default_en']
+            if slope_num is not None and slope_num > 25.0:
+                fao_tr = 'Leptosols (Sığ / Taşlık Dağ Toprakları) & Regosols'
+                fao_en = 'Leptosols (Shallow / Stony Mountain Soils) & Regosols'
+            elif elev_num is not None and elev_num > 1600.0:
+                fao_tr = 'Podzols & Andosols / Alisols (Yüksek Dağ Toprakları)'
+                fao_en = 'Podzols & Andosols / Alisols (High Mountain Soils)'
+            
+            res['soil_info'] = {
+                'group_tr': fao_tr,
+                'group_en': fao_en,
+                'texture_tr': tex_meta['tr'],
+                'texture_en': tex_meta['en'],
+                'soc_g_kg': res['soc_g_kg']
+            }
+        except Exception as soil_err:
+            print("[Carbon Site Analysis] Toprak doku sorgusu hatası (varsayılan korundu):", soil_err)
+
+        # 5. Güncel ESRI 10m Global Land Cover Dağılımı (Histogram Analizi)
+        try:
+            esri_col = ee.ImageCollection('projects/sat-io/open-datasets/landcover/ESRI_Global-LULC_10m_TS').filterBounds(ee_geom).sort('system:time_start', False)
+            esri_img = esri_col.first()
+            if esri_img:
+                _sylva_check_cancelled()
+                esri_hist = esri_img.reduceRegion(
+                    reducer=ee.Reducer.frequencyHistogram(),
+                    geometry=ee_geom,
+                    scale=20,
+                    maxPixels=1e8,
+                    bestEffort=True
+                ).getInfo() or {}
+                b1_hist = esri_hist.get('b1', {}) or {}
+                total_pix = sum(float(v) for v in b1_hist.values())
+                if total_pix > 0:
+                    real_esri = []
+                    for k_str, val in sorted(b1_hist.items(), key=lambda item: float(item[1]), reverse=True):
+                        _sylva_check_cancelled()
+                        code = int(float(k_str))
+                        cls_meta = ESRI_LULC_CLASSES.get(code, {
+                            'name_tr': f'Sınıf {code}',
+                            'name_en': f'Class {code}',
+                            'color': '#94a3b8'
+                        })
+                        pct = round((float(val) / total_pix) * 100.0, 1)
+                        ha = round(poly_ha * (float(val) / total_pix), 2)
+                        real_esri.append({
+                            'code': code,
+                            'name_tr': cls_meta['name_tr'],
+                            'name_en': cls_meta['name_en'],
+                            'pct': pct,
+                            'ha': ha,
+                            'color': cls_meta['color']
+                        })
+                    if real_esri:
+                        res['esri_lulc'] = real_esri
+        except Exception as esri_e:
+            print("[Carbon Site Analysis] ESRI LULC sorgusu hatası (fallback korundu):", esri_e)
+
+        res['data_source'] = 'gee'
+    except Exception as e:
+        print("[Carbon Site Analysis] GEE katman sorgusu hatası (fallback devrede):", e)
+
+    return res
+
+
+def calculate_site_suitability(site_conditions: dict, species_params: dict) -> dict:
+    """
+    Saha ekolojik koşulları ile türün ekolojik tolerans sınırlarını (SPECIES_ECOLOGICAL_NICHES)
+    karşılaştırarak Saha Uygunluk Katsayısını (Sf in [0.20, 1.25]) hesaplar.
+    """
+    site = site_conditions or {}
+    sp = species_params or {}
+    matched_key = sp.get('matched_key', '')
+    group = sp.get('group', 'conifer')
+    species_name = sp.get('species_name', '')
+
+    niche = SPECIES_ECOLOGICAL_NICHES.get(matched_key)
+    if not niche:
+        for k, v in SPECIES_ECOLOGICAL_NICHES.items():
+            if matched_key.startswith(k) or k in matched_key:
+                niche = v
+                break
+    if not niche:
+        niche = SPECIES_ECOLOGICAL_NICHES.get('_default_' + group, SPECIES_ECOLOGICAL_NICHES['_default_conifer'])
+
+    temp = float(site.get('temp_c', 14.0))
+    precip = float(site.get('precip_mm', 700.0))
+    elev = float(site.get('elevation_m', 500.0))
+    slope = float(site.get('slope_deg', 10.0))
+    soc = float(site.get('soc_g_kg', 5.0))
+
+    # 1. Sıcaklık Skoru (Trapezoidal üyelik fonksiyonu)
+    t_opt_min, t_opt_max = niche['temp_opt_min'], niche['temp_opt_max']
+    t_min, t_max = niche['temp_min'], niche['temp_max']
+    if t_opt_min <= temp <= t_opt_max:
+        s_temp = 1.0
+    elif temp < t_min:
+        s_temp = max(0.05, 0.40 - (t_min - temp) * 0.10)
+    elif temp < t_opt_min:
+        s_temp = 0.40 + 0.60 * (temp - t_min) / max(0.1, t_opt_min - t_min)
+    elif temp <= t_max:
+        s_temp = 1.0 - 0.60 * (temp - t_opt_max) / max(0.1, t_max - t_opt_max)
+    else:
+        s_temp = max(0.05, 0.40 - (temp - t_max) * 0.10)
+    s_temp = max(0.05, min(1.0, s_temp))
+
+    # 2. Yağış Skoru
+    p_opt_min, p_opt_max = niche['precip_opt_min'], niche['precip_opt_max']
+    p_min, p_max = niche['precip_min'], niche['precip_max']
+    if p_opt_min <= precip <= p_opt_max:
+        s_precip = 1.0
+    elif precip < p_min:
+        s_precip = max(0.05, 0.40 * (precip / max(1.0, p_min)))
+    elif precip < p_opt_min:
+        s_precip = 0.40 + 0.60 * (precip - p_min) / max(1.0, p_opt_min - p_min)
+    elif precip <= p_max:
+        s_precip = 1.0 - 0.30 * (precip - p_opt_max) / max(1.0, p_max - p_opt_max)
+    else:
+        s_precip = max(0.50, 0.70 - (precip - p_max) / 2000.0)
+    s_precip = max(0.05, min(1.0, s_precip))
+
+    # 3. Rakım Skoru
+    e_min, e_max = niche['elev_min'], niche['elev_max']
+    if e_min <= elev <= e_max:
+        s_elev = 1.0
+    elif elev < e_min:
+        s_elev = max(0.15, 1.0 - (e_min - elev) / 600.0)
+    else:
+        s_elev = max(0.15, 1.0 - (elev - e_max) / 600.0)
+    s_elev = max(0.05, min(1.0, s_elev))
+
+    # 4. Eğim Skoru
+    slope_max = niche.get('slope_max', 45.0)
+    if slope <= 20.0:
+        s_slope = 1.0
+    elif slope <= 35.0:
+        s_slope = 1.0 - 0.20 * (slope - 20.0) / 15.0
+    elif slope <= slope_max:
+        s_slope = 0.80 - 0.30 * (slope - 35.0) / max(1.0, slope_max - 35.0)
+    else:
+        s_slope = max(0.30, 0.50 - 0.20 * (slope - slope_max) / 15.0)
+    s_slope = max(0.05, min(1.0, s_slope))
+
+    # Toprak Bonusu / Cezası (SOC)
+    soc_mod = 1.0
+    if soc >= 8.0:
+        soc_mod = 1.03
+    elif soc < 3.0:
+        soc_mod = 0.97
+
+    # Ağırlıklı Geometrik Ortalama
+    geom = (s_temp ** 0.35) * (s_precip ** 0.35) * (s_elev ** 0.20) * (s_slope ** 0.10) * soc_mod
+    sf = round(max(0.20, min(1.25, geom * 1.12)), 2)
+
+    # Uyarılar & Teşhisler
+    warnings = []
+    advisories = []
+
+    if s_temp < 0.55:
+        if temp < t_opt_min:
+            warnings.append(f"Düşük sıcaklık / don riski mevcuttur (Saha: {temp}°C, Tür optimumu: {t_opt_min}-{t_opt_max}°C).")
+        else:
+            warnings.append(f"Aşırı sıcaklık ve kuraklık stresi riski mevcuttur (Saha: {temp}°C, Tür optimumu: {t_opt_min}-{t_opt_max}°C).")
+    elif s_temp >= 0.90:
+        advisories.append("Sıcaklık rejimi türün büyümesi için son derece uygundur.")
+
+    if s_precip < 0.55:
+        if precip < p_opt_min:
+            warnings.append(f"Yetersiz yağış / kuraklık riski mevcuttur (Saha: {precip} mm/yıl, Tür optimumu: {p_opt_min}-{p_opt_max} mm).")
+        else:
+            warnings.append(f"Aşırı yağış / kök bölgesi taban suyu riski mevcuttur (Saha: {precip} mm/yıl).")
+    elif s_precip >= 0.90:
+        advisories.append("Yıllık yağış miktarı türün fizyolojik ihtiyacını tam karşılamaktadır.")
+
+    if s_elev < 0.55:
+        if elev > e_max:
+            warnings.append(f"Saha rakımı ({elev} m) türün tavan yükselti sınırının ({e_max} m) üzerindedir; vejetasyon süresi kısalabilir.")
+        else:
+            warnings.append(f"Saha rakımı ({elev} m) türün taban yükselti sınırının ({e_min} m) altındadır.")
+
+    if s_slope < 0.60:
+        warnings.append(f"Yüksek eğim ({slope}°) nedeniyle toprak erozyonu ve mekanik dikim zorluğu riski bulunmaktadır.")
+
+    ecological_warning = None
+    if sf < 0.60:
+        ecological_warning = "Dikkat: Seçilen tür bu sahanın iklim/rakım koşullarına düşük uyum göstermektedir (Kuraklık/don riski yüksek)."
+        if ecological_warning not in warnings:
+            warnings.insert(0, ecological_warning)
+
+    if sf >= 0.90:
+        status = 'excellent'
+        status_tr = 'Çok Yüksek Uyum (Optimal)'
+        status_en = 'Optimal'
+    elif sf >= 0.75:
+        status = 'good'
+        status_tr = 'İyi Uyum'
+        status_en = 'Good'
+    elif sf >= 0.60:
+        status = 'moderate'
+        status_tr = 'Orta Uyum'
+        status_en = 'Moderate'
+    else:
+        status = 'poor'
+        status_tr = 'Düşük Uyum / Riskli'
+        status_en = 'Poor / High Risk'
+
+    return {
+        'site_suitability_factor': sf,
+        'suitability_score_pct': round(min(100.0, geom * 100.0), 1),
+        'status': status,
+        'status_tr': status_tr,
+        'status_en': status_en,
+        'component_scores': {
+            'temperature': round(s_temp, 2),
+            'precipitation': round(s_precip, 2),
+            'elevation': round(s_elev, 2),
+            'slope': round(s_slope, 2)
+        },
+        'warnings': warnings,
+        'advisories': advisories,
+        'ecological_warning': ecological_warning,
+        'matched_niche': {
+            'common_tr': niche.get('common_tr', ''),
+            'temp_opt_range': f"{t_opt_min} - {t_opt_max} °C",
+            'precip_opt_range': f"{p_opt_min} - {p_opt_max} mm",
+            'elev_range': f"{e_min} - {e_max} m"
+        }
+    }
+
+
+def simulate_carbon_stand(
+    area_ha: float,
+    species_params: dict,
+    spacing_x: float,
+    spacing_y: float,
+    rotation_years: int,
+    retention_rate: float = 85.0,
+    thinning_events: list = None,
+    site_suitability_factor: float = 1.0
+) -> dict:
+    """
+    Durum takipli (stateful) yıllık karbon yutak simülasyon motoru.
+    Girdi:
+      area_ha: Proje alanı (ha)
+      species_params: Çözümlenmiş tür parametreleri sözlüğü (Dw, BEF, R, MAI vb.)
+      spacing_x, spacing_y: Dikim aralığı (m)
+      rotation_years: İdare süresi (yıl)
+      retention_rate: Fidan tutma oranı (%)
+      thinning_events: Aralama olayları listesi [{'year': 15, 'percent': 20}, ...]
+      site_suitability_factor: GEE ve saha iklim katmanlarından hesaplanan ekolojik uyum katsayısı (Sf)
+    Çıktı:
+      meta, summary (baseline & managed), yearly_series (baseline & managed)
+    """
+    try:
+        area_float = float(area_ha) if area_ha is not None else 1.0
+    except (ValueError, TypeError):
+        area_float = 1.0
+    area = max(0.001, area_float)
+    sx = max(0.5, float(spacing_x or 3.0))
+    sy = max(0.5, float(spacing_y or 3.0))
+    rot = max(5, min(150, int(rotation_years or 30)))
+    ret = max(1.0, min(100.0, float(retention_rate if retention_rate is not None else 85.0)))
+
+    sp = species_params or {}
+    dw = float(sp.get('wood_density') or 0.51)
+    bef = float(sp.get('bef') or 1.35)
+    r = float(sp.get('root_shoot_ratio') or 0.25)
+    mai_base = float(sp.get('default_mai') or 6.0)
+    sf = float(site_suitability_factor if site_suitability_factor is not None else 1.0)
+    mai = max(0.5, round(mai_base * sf, 2))
+    group = sp.get('group') or 'conifer'
+    cf = float(sp.get('carbon_fraction') or CARBON_FRACTION)
+    co2_ratio = float(sp.get('co2_to_c_ratio') or CO2_TO_C_RATIO)
+
+    biomass_factor = dw * bef * (1.0 + r)
+    carbon_factor = biomass_factor * cf
+    co2_factor = carbon_factor * co2_ratio
+
+    n0_per_ha = round((10000.0 / (sx * sy)) * (ret / 100.0))
+    n0_total = round(n0_per_ha * area)
+
+    calib = calibrate_growth_parameters(mai, rot, group)
+    v_max = calib['v_max']
+    k = calib['k']
+    m = calib['m']
+
+    annual_soc_rate = 0.35
+
+    if group in ('fruit_tree', 'perennial_crop'):
+        sp_mkey = str(sp.get('matched_key', '')).lower()
+        if 'juglans' in sp_mkey:
+            max_h = 16.0
+        elif 'corylus' in sp_mkey:
+            max_h = 6.0
+        elif 'avium' in sp_mkey:
+            max_h = 12.0
+        elif 'castanea' in sp_mkey:
+            max_h = 18.0
+        else:
+            max_h = 8.0
+    elif group == 'conifer':
+        max_h = 24.0
+        if mai >= 10.0:
+            max_h = 30.0
+    else:
+        max_h = 22.0
+        if mai >= 10.0:
+            max_h = 30.0
+
+    clean_thinnings = {}
+    if thinning_events and isinstance(thinning_events, list):
+        for ev in thinning_events:
+            _sylva_check_cancelled()
+            if isinstance(ev, dict):
+                try:
+                    y = int(ev.get('year') or 0)
+                    p = float(ev.get('percent') or 0.0)
+                    if 1 <= y <= rot and 1.0 <= p <= 90.0:
+                        clean_thinnings[y] = p
+                except (ValueError, TypeError):
+                    continue
+
+    # SENARYO 1: BASELINE (Müdahalesiz / Doğa Koruma / Sıfır Aralama)
+    baseline_series = []
+    n_base = float(n0_per_ha)
+    for t in range(rot + 1):
+        _sylva_check_cancelled()
+        v_pot = v_max * math.pow(max(0.0, 1.0 - math.exp(-k * t)), m) if t > 0 else 0.0
+        if t > 0:
+            n_base = max(n0_per_ha * 0.60, n_base * (1.0 - 0.005))
+        n_base_int = max(1, round(n_base))
+
+        c_tree_total = v_pot * carbon_factor * area
+        c_soc_total = annual_soc_rate * t * area
+        c_standing = c_tree_total + c_soc_total
+        co2_standing = c_standing * co2_ratio
+
+        dims = _calculate_tree_allometrics(v_pot, n_base_int, t, max_h)
+
+        baseline_series.append({
+            'year': t,
+            'standing_c': round(c_standing, 2),
+            'harvested_c': 0.0,
+            'standing_co2e': round(co2_standing, 2),
+            'harvested_co2e': 0.0,
+            'total_co2e': round(co2_standing, 2),
+            'trees_per_ha': n_base_int,
+            'mean_dbh_cm': dims['dbh_cm'],
+            'mean_height_m': dims['height_m'],
+            'stem_volume_m3_ha': round(v_pot, 2)
+        })
+
+    # SENARYO 2: MANAGED (Kullanıcı Tanımlı Aralamalı Silvikültür)
+    managed_series = []
+    v_curr = 0.0
+    n_curr = float(n0_per_ha)
+    cum_harvest_c = 0.0
+
+    for t in range(rot + 1):
+        _sylva_check_cancelled()
+        v_pot = v_max * math.pow(max(0.0, 1.0 - math.exp(-k * t)), m) if t > 0 else 0.0
+        v_pot_prev = v_max * math.pow(max(0.0, 1.0 - math.exp(-k * max(0, t - 1))), m) if t > 1 else 0.0
+        delta_v_pot = max(0.0, v_pot - v_pot_prev)
+
+        if t in clean_thinnings and t > 0 and v_curr > 0.0:
+            pct = clean_thinnings[t]
+            p = pct / 100.0
+            n_removed = n_curr * p
+            n_curr = max(n0_per_ha * 0.15, n_curr - n_removed)
+
+            v_harvested_ha = min(v_curr * 0.85, v_curr * p * 0.90)
+            v_curr = max(0.0, v_curr - v_harvested_ha)
+
+            harvest_c_event = v_harvested_ha * carbon_factor * area
+            cum_harvest_c += harvest_c_event
+
+        if t > 0:
+            rel_density = min(1.0, max(0.35, n_curr / float(n0_per_ha)))
+            growth_response = 0.65 + 0.35 * rel_density
+            v_curr += delta_v_pot * growth_response
+            if t not in clean_thinnings:
+                n_curr = max(n0_per_ha * 0.30, n_curr * (1.0 - 0.003))
+
+        n_curr_int = max(1, round(n_curr))
+        c_tree_total = v_curr * carbon_factor * area
+        c_soc_total = annual_soc_rate * t * area
+        c_standing = c_tree_total + c_soc_total
+        co2_standing = c_standing * co2_ratio
+        co2_harvested = cum_harvest_c * co2_ratio
+        co2_total = co2_standing + co2_harvested
+
+        dims = _calculate_tree_allometrics(v_curr, n_curr_int, t, max_h)
+
+        managed_series.append({
+            'year': t,
+            'standing_c': round(c_standing, 2),
+            'harvested_c': round(cum_harvest_c, 2),
+            'standing_co2e': round(co2_standing, 2),
+            'harvested_co2e': round(co2_harvested, 2),
+            'total_co2e': round(co2_total, 2),
+            'trees_per_ha': n_curr_int,
+            'mean_dbh_cm': dims['dbh_cm'],
+            'mean_height_m': dims['height_m'],
+            'stem_volume_m3_ha': round(v_curr, 2)
+        })
+
+    base_final = baseline_series[-1]
+    man_final = managed_series[-1]
+
+    summary = {
+        'baseline': {
+            'total_standing_c': base_final['standing_c'],
+            'total_harvested_c': 0.0,
+            'grand_total_c': base_final['standing_c'],
+            'total_standing_co2e': base_final['standing_co2e'],
+            'total_harvested_co2e': 0.0,
+            'grand_total_co2e': base_final['total_co2e'],
+            'mean_annual_sequestration_c': round(base_final['standing_c'] / float(rot), 2),
+            'mean_annual_sequestration_co2e': round(base_final['total_co2e'] / float(rot), 2),
+            'final_standing_volume_m3_ha': base_final['stem_volume_m3_ha'],
+            'final_mean_dbh_cm': base_final['mean_dbh_cm'],
+            'final_mean_height_m': base_final['mean_height_m'],
+            'final_trees_per_ha': base_final['trees_per_ha']
+        },
+        'managed': {
+            'total_standing_c': man_final['standing_c'],
+            'total_harvested_c': man_final['harvested_c'],
+            'grand_total_c': round(man_final['standing_c'] + man_final['harvested_c'], 2),
+            'total_standing_co2e': man_final['standing_co2e'],
+            'total_harvested_co2e': man_final['harvested_co2e'],
+            'grand_total_co2e': man_final['total_co2e'],
+            'mean_annual_sequestration_c': round((man_final['standing_c'] + man_final['harvested_c']) / float(rot), 2),
+            'mean_annual_sequestration_co2e': round(man_final['total_co2e'] / float(rot), 2),
+            'final_standing_volume_m3_ha': man_final['stem_volume_m3_ha'],
+            'final_mean_dbh_cm': man_final['mean_dbh_cm'],
+            'final_mean_height_m': man_final['mean_height_m'],
+            'final_trees_per_ha': man_final['trees_per_ha']
+        }
+    }
+
+    meta = {
+        'area_ha': area,
+        'spacing_x': sx,
+        'spacing_y': sy,
+        'rotation_years': rot,
+        'retention_rate': ret,
+        'initial_trees_per_ha': n0_per_ha,
+        'initial_trees_total': n0_total,
+        'wood_density': dw,
+        'base_wood_density': sp.get('base_wood_density', dw),
+        'bef': bef,
+        'base_bef': sp.get('base_bef', bef),
+        'root_shoot_ratio': r,
+        'base_root_shoot_ratio': sp.get('base_root_shoot_ratio', r),
+        'default_mai': mai,
+        'base_mai': mai_base,
+        'effective_mai': mai,
+        'site_suitability_factor': sf,
+        'species_group': group,
+        'carbon_fraction': cf,
+        'co2_to_c_ratio': co2_ratio,
+        'species_name': sp.get('species_name', ''),
+        'common_tr': sp.get('common_tr', ''),
+        'common_en': sp.get('common_en', ''),
+        'match_level': sp.get('match_level', 'unknown'),
+        'matched_key': sp.get('matched_key', ''),
+        'country_code': sp.get('country_code', ''),
+        'climate_zone': sp.get('climate_zone', ''),
+        'ecozone_code': sp.get('ecozone_code', ''),
+        'ecozone_name_tr': sp.get('ecozone_name_tr', ''),
+        'ecozone_name_en': sp.get('ecozone_name_en', ''),
+        'chapman_v_max': v_max,
+        'chapman_k': round(k, 5),
+        'chapman_p': round(m, 2),
+        'asymptotic_biomass_a': round(v_max * dw * bef, 2),
+        'asymptotic_biomass_bgb': round(v_max * dw * bef * r, 2),
+        'asymptotic_total_biomass': round(v_max * dw * bef * (1.0 + r), 2),
+        'annual_growth_k': round(k, 5),
+        'applied_thinning_events': [{'year': y, 'percent': clean_thinnings[y]} for y in sorted(clean_thinnings.keys())]
+    }
+
+    return {
+        'meta': meta,
+        'summary': summary,
+        'yearly_series': {
+            'baseline': baseline_series,
+            'managed': managed_series
+        }
+    }
+
+
+def _sanitize_for_json(obj):
+    """
+    JSON serileştirmesinde NaN, Infinity, -Infinity ve float/numpy hatalarını
+    0.0 veya JSON uyumlu güvenli değerlere dönüştürür.
+    """
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return 0.0
+        return obj
+    elif isinstance(obj, dict):
+        return {str(k): _sanitize_for_json(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_sanitize_for_json(elem) for elem in obj]
+    elif isinstance(obj, (int, str, bool)) or obj is None:
+        return obj
+    elif hasattr(obj, 'item'):  # numpy tipleri (np.float64, np.int32 vb.)
+        try:
+            val = obj.item()
+            if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
+                return 0.0
+            return val
+        except Exception:
+            return 0.0
+    return obj
+
+
+# 8. HTTP API Endpoint (Karbon Simülasyonu)
+@app.route('/api/carbon-simulation', methods=['GET', 'POST', 'OPTIONS'], strict_slashes=False)
+@app.route('/api/carbon-simulation/', methods=['GET', 'POST', 'OPTIONS'], strict_slashes=False)
+def api_carbon_simulation():
+    """
+    Karbon Yutak Alanı Simülasyonu REST API Uç Noktası.
+    POST JSON Girdisi:
+      area_ha: float (hektar)
+      species: str (örn. "Pinus brutia")
+      country: str (örn. "TR")
+      spacing_x: float (m)
+      spacing_y: float (m)
+      rotation_years: int (örn. 40)
+      retention_rate: float (örn. 85.0)
+      thinning_events: list [{'year': 15, 'percent': 25}, ...]
+      geojson: dict (GeoJSON Poligon Geometrisi - GEE Saha Analizi için opsiyonel)
+    """
+    if request.method == 'OPTIONS':
+        return ('', 204)
+    if request.method == 'GET':
+        return jsonify({'success': True, 'message': 'SylvaGIS Carbon Simulation API is ready.'})
+    try:
+        req_data = request.get_json(silent=True) or {}
+
+        try:
+            raw_area = req_data.get('area_ha')
+            area_ha = max(0.001, float(raw_area)) if raw_area is not None else 10.0
+            if math.isnan(area_ha) or math.isinf(area_ha):
+                area_ha = 10.0
+        except (ValueError, TypeError):
+            area_ha = 10.0
+
+        species_raw = str(req_data.get('species') or req_data.get('species_name') or 'Pinus brutia').strip()
+        if not species_raw:
+            species_raw = 'Pinus brutia'
+        country = str(req_data.get('country') or req_data.get('country_code') or 'TR').strip().upper()
+        if not country:
+            country = 'TR'
+
+        try:
+            spacing_x = max(0.5, float(req_data.get('spacing_x') or 3.0))
+            spacing_y = max(0.5, float(req_data.get('spacing_y') or 3.0))
+            if math.isnan(spacing_x) or math.isinf(spacing_x):
+                spacing_x = 3.0
+            if math.isnan(spacing_y) or math.isinf(spacing_y):
+                spacing_y = 3.0
+        except (ValueError, TypeError):
+            spacing_x, spacing_y = 3.0, 3.0
+
+        try:
+            rotation_years = max(5, min(150, int(req_data.get('rotation_years') or 30)))
+        except (ValueError, TypeError):
+            rotation_years = 30
+
+        try:
+            raw_ret = req_data.get('retention_rate')
+            retention_rate = max(1.0, min(100.0, float(raw_ret))) if raw_ret is not None else 85.0
+            if math.isnan(retention_rate) or math.isinf(retention_rate):
+                retention_rate = 85.0
+        except (ValueError, TypeError):
+            retention_rate = 85.0
+
+        thinning_events = req_data.get('thinning_events') or []
+        if not isinstance(thinning_events, list):
+            thinning_events = []
+
+        geojson_geom = req_data.get('geojson') or req_data.get('geometry')
+
+        site_env = None
+        suitability = None
+        site_factor = 1.0
+
+        if geojson_geom:
+            try:
+                site_env = analyze_site_environmental_layers(geojson_geom, country, area_ha=area_ha)
+            except Exception as env_err:
+                print("[Carbon Simulation API] analyze_site_environmental_layers hatası (fallback devrede):", env_err)
+                site_env = None
+
+        if site_env:
+            eff_country = site_env.get('detected_country_code') or country
+            eff_ecozone = site_env.get('detected_ecozone')
+            try:
+                sp_params = resolve_species_carbon_params(species_raw, country_code=eff_country, climate_zone=eff_ecozone)
+                suitability = calculate_site_suitability(site_env, sp_params)
+                raw_sf = suitability.get('site_suitability_factor')
+                site_factor = float(raw_sf) if raw_sf is not None else 1.0
+                if math.isnan(site_factor) or math.isinf(site_factor) or site_factor <= 0:
+                    site_factor = 1.0
+            except Exception as suit_err:
+                print("[Carbon Simulation API] suitability calculation hatası (varsayılan 1.0):", suit_err)
+                sp_params = resolve_species_carbon_params(species_raw, country_code=country)
+                site_factor = 1.0
+        else:
+            sp_params = resolve_species_carbon_params(species_raw, country_code=country)
+            site_factor = 1.0
+
+        sim_result = simulate_carbon_stand(
+            area_ha=area_ha,
+            species_params=sp_params,
+            spacing_x=spacing_x,
+            spacing_y=spacing_y,
+            rotation_years=rotation_years,
+            retention_rate=retention_rate,
+            thinning_events=thinning_events,
+            site_suitability_factor=site_factor
+        )
+
+        resp_payload = {
+            'success': True,
+            'meta': sim_result['meta'],
+            'summary': sim_result['summary'],
+            'yearly_series': sim_result['yearly_series'],
+            'site_conditions': site_env,
+            'suitability': suitability
+        }
+        if site_env is not None:
+            resp_payload['site_conditions'] = site_env
+        if suitability is not None:
+            resp_payload['suitability'] = suitability
+
+        clean_resp = _sanitize_for_json(resp_payload)
+        return jsonify(clean_resp)
+    except Exception as exc:
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(exc)}), 200
+
+
+
+# Preserve endpoint names, request contracts and the established EE/Leaflet session.
+for _sylva_endpoint in ('download_geotiff', 'download_raw_bands', 'vector_download',
+                        'vector_download_batch', 'download_geotiff_batch', 'topo_contour_vector',
+                        'analyze', 'timeseries', 'gemini_data_qa', 'api_carbon_simulation'):
+    app.view_functions[_sylva_endpoint] = _sylva_cancellable_view(app.view_functions[_sylva_endpoint])
+
 
 if __name__ == '__main__':
     # NOT: Bu blok sadece yerel (local) geliştirme/test içindir.
