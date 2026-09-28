@@ -35,6 +35,202 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
+# Cancellation is explicit: a WSGI client closing a fetch is not a GEE task cancellation.
+# Tokens also check the connected socket where the serving WSGI server exposes it.
+import select
+import socket
+from functools import wraps
+
+
+class _SylvaOperationCancelled(BaseException):
+    """Unwind export fallback/retry handlers without treating cancellation as a failure."""
+
+
+_SYLVA_OPERATION_LOCAL = threading.local()
+_SYLVA_OPERATIONS = {}
+_SYLVA_OPERATIONS_LOCK = threading.Lock()
+_SYLVA_CANCEL_DIR = os.path.join(tempfile.gettempdir(), 'sylvagis-operation-cancel')
+_SYLVA_OPERATION_ID = re.compile(r'^[A-Za-z0-9-]{16,80}$')
+
+
+class _SylvaOperation:
+    def __init__(self, operation_id, client_socket=None):
+        self.id = operation_id
+        self.event = threading.Event()
+        self.client_socket = client_socket
+        self.resources = set()
+        self.futures = set()
+        self.lock = threading.Lock()
+        self.next_marker_check = 0
+
+    def cancel(self):
+        self.event.set()
+        with self.lock:
+            resources, futures = list(self.resources), list(self.futures)
+        for future in futures:
+            future.cancel()
+        for response in resources:
+            # Interrupt a blocked streaming read before closing its connection.
+            try:
+                connection = getattr(response.raw, '_connection', None)
+                sock = getattr(connection, 'sock', None)
+                if sock is None:
+                    fp = getattr(getattr(response.raw, '_fp', None), 'fp', None)
+                    sock = getattr(getattr(fp, 'raw', None), '_sock', None)
+                if sock is not None:
+                    sock.shutdown(socket.SHUT_RDWR)
+            except (OSError, AttributeError):
+                pass
+            try:
+                response.close()
+            except Exception:
+                pass
+
+    def check(self):
+        if self.event.is_set():
+            raise _SylvaOperationCancelled()
+        now = time.monotonic()
+        if now >= self.next_marker_check:
+            self.next_marker_check = now + 0.05
+            if os.path.isfile(os.path.join(_SYLVA_CANCEL_DIR, self.id)):
+                self.cancel()
+                raise _SylvaOperationCancelled()
+            if self.client_socket is not None:
+                try:
+                    readable, _, _ = select.select([self.client_socket], [], [], 0)
+                    if readable and self.client_socket.recv(1, socket.MSG_PEEK) == b'':
+                        self.cancel()
+                        raise _SylvaOperationCancelled()
+                except (OSError, ValueError):
+                    self.cancel()
+                    raise _SylvaOperationCancelled()
+
+
+def _sylva_check_cancelled():
+    token = getattr(_SYLVA_OPERATION_LOCAL, 'token', None)
+    if token is not None:
+        token.check()
+
+
+def _sylva_cancel_wait(seconds):
+    token = getattr(_SYLVA_OPERATION_LOCAL, 'token', None)
+    if token is None:
+        time.sleep(seconds)
+        return
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        token.check()
+        token.event.wait(min(0.05, max(0, deadline - time.monotonic())))
+    token.check()
+
+
+def _sylva_submit(pool, function, *args, **kwargs):
+    token = getattr(_SYLVA_OPERATION_LOCAL, 'token', None)
+    _sylva_check_cancelled()
+    def run():
+        previous = getattr(_SYLVA_OPERATION_LOCAL, 'token', None)
+        _SYLVA_OPERATION_LOCAL.token = token
+        try:
+            _sylva_check_cancelled()
+            result = function(*args, **kwargs)
+            _sylva_check_cancelled()
+            return result
+        finally:
+            _SYLVA_OPERATION_LOCAL.token = previous
+    future = pool.submit(run)
+    if token is not None:
+        with token.lock:
+            token.futures.add(future)
+        def completed(done):
+            with token.lock:
+                token.futures.discard(done)
+        future.add_done_callback(completed)
+        if token.event.is_set():
+            future.cancel()
+    return future
+
+
+def _sylva_export_get(url, **kwargs):
+    token = getattr(_SYLVA_OPERATION_LOCAL, 'token', None)
+    if token is None:
+        return requests.get(url, **kwargs)
+    token.check()
+    kwargs['stream'] = True
+    response = requests.get(url, **kwargs)
+    with token.lock:
+        token.resources.add(response)
+    try:
+        token.check()
+        # Preserve Response.content/text behaviour expected by existing raster helpers.
+        chunks = []
+        for chunk in response.iter_content(chunk_size=65536):
+            token.check()
+            if chunk:
+                chunks.append(chunk)
+        token.check()
+        response._content = b''.join(chunks)
+        response._content_consumed = True
+        return response
+    except Exception:
+        token.check()
+        raise
+    finally:
+        with token.lock:
+            token.resources.discard(response)
+        response.close()
+
+
+@app.route('/api/cancel-operation/<operation_id>', methods=['POST'])
+def _sylva_cancel_operation(operation_id):
+    if not _SYLVA_OPERATION_ID.fullmatch(operation_id):
+        return jsonify({'success': False}), 400
+    # A marker carries cancellation across Gunicorn workers on the same host,
+    # including cancel-before-start races. Bounded retention prevents file leakage.
+    os.makedirs(_SYLVA_CANCEL_DIR, exist_ok=True)
+    marker = os.path.join(_SYLVA_CANCEL_DIR, operation_id)
+    with open(marker, 'w', encoding='ascii') as handle:
+        handle.write('cancelled')
+    with _SYLVA_OPERATIONS_LOCK:
+        token = _SYLVA_OPERATIONS.get(operation_id)
+    if token is not None:
+        token.cancel()
+    cutoff = time.time() - 3600
+    for entry in os.scandir(_SYLVA_CANCEL_DIR):
+        try:
+            if entry.is_file() and entry.stat().st_mtime < cutoff:
+                os.unlink(entry.path)
+        except OSError:
+            pass
+    return jsonify({'success': True, 'cancelled': True})
+
+
+def _sylva_cancellable_view(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        operation_id = request.headers.get('X-Sylva-Operation', '')
+        if not _SYLVA_OPERATION_ID.fullmatch(operation_id):
+            return view(*args, **kwargs)
+        client_socket = request.environ.get('werkzeug.socket') or request.environ.get('gunicorn.socket')
+        token = _SylvaOperation(operation_id, client_socket)
+        previous = getattr(_SYLVA_OPERATION_LOCAL, 'token', None)
+        _SYLVA_OPERATION_LOCAL.token = token
+        with _SYLVA_OPERATIONS_LOCK:
+            _SYLVA_OPERATIONS[operation_id] = token
+        try:
+            token.check()
+            response = view(*args, **kwargs)
+            token.check()
+            return response
+        except (_SylvaOperationCancelled, BrokenPipeError, ConnectionResetError):
+            token.cancel()
+            return Response('', status=499)
+        finally:
+            with _SYLVA_OPERATIONS_LOCK:
+                _SYLVA_OPERATIONS.pop(operation_id, None)
+            _SYLVA_OPERATION_LOCAL.token = previous
+    return wrapped
+
+
 # GEE dışa aktarma isteklerini süreç genelinde sıraya al. Earth Engine
 # Restricted Mode / 429 concurrency limit altında aynı anda birden fazla
 # GeoTIFF isteği göndermek özellikle toplu topografik analizlerde dosyaların
@@ -429,8 +625,12 @@ def _call_with_retry(fn, *args, retries=3, base_delay=1.5, **kwargs):
     last_err = None
     for attempt in range(retries + 1):
         try:
-            return fn(*args, **kwargs)
+            _sylva_check_cancelled()
+            result = fn(*args, **kwargs)
+            _sylva_check_cancelled()
+            return result
         except Exception as e:
+            _sylva_check_cancelled()
             last_err = e
             msg = str(e).lower()
             if any(m in msg for m in _non_retryable_markers):
@@ -441,7 +641,7 @@ def _call_with_retry(fn, *args, retries=3, base_delay=1.5, **kwargs):
                     delay *= 2.0
                 print('[SylvaGIS] ⚠️ Geçici hata (deneme {}/{}), {:.1f} sn sonra '
                       'tekrar denenecek: {}'.format(attempt + 1, retries + 1, delay, e))
-                time.sleep(delay)
+                _sylva_cancel_wait(delay)
             else:
                 raise
     raise last_err
@@ -2166,6 +2366,8 @@ def _sylvagis_ensure_ee_before_request():
     başarısız olduysa) burada kendini iyileştirmeyi dener — böylece
     kullanıcı "Earth Engine client library not initialized" hatasını bir
     daha görmeden önce sorun istek anında arka planda çözülmeye çalışılır."""
+    if request.endpoint == '_sylva_cancel_operation':
+        return
     if not _EE_READY:
         _ensure_ee_ready()
 
@@ -3057,6 +3259,7 @@ def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name, legend_labels=No
     import numpy as np
     from rasterio.io import MemoryFile
 
+    _sylva_check_cancelled()
     defs = LULC_CLASS_DEFS.get(index_name)
     if not defs:
         return None
@@ -3066,13 +3269,17 @@ def _build_lulc_symbology_zip(tif_bytes, index_name, safe_name, legend_labels=No
     _label_override = {}
     if isinstance(legend_labels, list):
         for item in legend_labels:
+            _sylva_check_cancelled()
             if isinstance(item, dict) and item.get('code') is not None:
+                _sylva_check_cancelled()
                 try: _label_override[int(item.get('code'))] = str(item.get('label') or '').strip()
                 except Exception: pass
     code_info = {}
     for d in defs:
+        _sylva_check_cancelled()
         hexc = d['color'].lstrip('#')
         rgb = tuple(int(hexc[i:i + 2], 16) for i in (0, 2, 4))
+        _sylva_check_cancelled()
         label = _label_override.get(int(d['code'])) or d['label']
         code_info[d['code']] = (label, rgb)
 
@@ -3314,6 +3521,7 @@ def _build_rgb_symbology_zip(tif_bytes, safe_name):
             src_nodata = src.nodata
             stats = []
             for b in range(1, count + 1):
+                _sylva_check_cancelled()
                 arr = src.read(b).astype(np.float64)
                 if src_nodata is not None:
                     valid = arr[~np.isclose(arr, float(src_nodata))]
@@ -3328,6 +3536,7 @@ def _build_rgb_symbology_zip(tif_bytes, safe_name):
 
     bands_xml = []
     for i, (bmin, bmax, bmean, bstd) in enumerate(stats, start=1):
+        _sylva_check_cancelled()
         bands_xml.append(
             '  <PAMRasterBand band="{0}">\n'
             '    <Metadata>\n'
@@ -3550,6 +3759,7 @@ def _add_internal_raster_overviews(tif_bytes, resampling='bilinear'):
                     with out.open(**profile) as dst:
                         dst.write(data)
                         for i, tg in enumerate(tags, 1):
+                            _sylva_check_cancelled()
                             if tg:
                                 dst.update_tags(i, **tg)
                         if cmap:
@@ -3583,6 +3793,7 @@ def _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=Non
             src_nodata = src.nodata if nodata_value is None else nodata_value
             stats = []
             for band in data:
+                _sylva_check_cancelled()
                 valid = np.isfinite(band.astype(np.float64))
                 if src_nodata is not None:
                     try:
@@ -3610,6 +3821,7 @@ def _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=Non
         with out_mem.open(**profile) as dst:
             dst.write(data)
             for i, (mn, mx, mean, std) in enumerate(stats, start=1):
+                _sylva_check_cancelled()
                 dst.update_tags(i,
                     STATISTICS_MINIMUM=repr(mn),
                     STATISTICS_MAXIMUM=repr(mx),
@@ -3618,6 +3830,7 @@ def _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=Non
                     STATISTICS_APPROXIMATE='NO')
             # Overview levels yalnızca raster boyutu izin veriyorsa eklenir.
             levels = [2, 4, 8, 16, 32, 64, 128, 256, 512]
+            _sylva_check_cancelled()
             levels = [lv for lv in levels if profile.get('width', 0) // lv >= 32 and profile.get('height', 0) // lv >= 32]
             if levels:
                 try:
@@ -3628,6 +3841,7 @@ def _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=Non
                     # kategorik tam sayı rasterlarda nearest korunsun. Ham
                     # piksel değerleri değişmez, yalnızca ArcMap/QGIS'in uzak
                     # zoom önizlemesi daha doğru olur.
+                    _sylva_check_cancelled()
                     _dtype = str(profile.get('dtype', '')).lower()
                     _overview_resampling = Resampling.bilinear if ('float' in _dtype or 'complex' in _dtype) else Resampling.nearest
                     dst.build_overviews(levels, _overview_resampling)
@@ -3642,6 +3856,7 @@ def _build_continuous_raster_export_files(tif_bytes, safe_name, nodata_value=Non
     # ArcMap/QGIS için gerçek istatistikleri taşıyan PAM sidecar.
     bands_xml = []
     for i, (mn, mx, mean, std) in enumerate(stats, start=1):
+        _sylva_check_cancelled()
         bands_xml.append(
             '  <PAMRasterBand band="{}">\n'
             '    <Metadata>\n'
@@ -3769,8 +3984,11 @@ def _build_classified_symbology_zip(tif_bytes, vis, safe_name, breaks=None, n_cl
             byte_band, code_info = _classify_from_visualized_rgb(band, valid, rgb_bytes)
 
         if not code_info:
+            _sylva_check_cancelled()
             vmin = vis.get('min') if isinstance(vis, dict) else None
+            _sylva_check_cancelled()
             vmax = vis.get('max') if isinstance(vis, dict) else None
+            _sylva_check_cancelled()
             palette = (vis.get('palette') if isinstance(vis, dict) else None) or ['000000', 'ffffff']
             if vmin is None or vmax is None:
                 # Vis min/max sağlanmadıysa (beklenmedik durum) veriden hesapla —
@@ -4587,11 +4805,15 @@ def gemini_data_qa():
     """
     try:
         data = request.json or {}
+        _sylva_check_cancelled()
         question = str(data.get('question') or '').strip()
+        _sylva_check_cancelled()
         datasets = data.get('datasets')
+        _sylva_check_cancelled()
         building = data.get('building') or None
         # 🆕 Faz 75: aktif arayüz dili — front-end window._sylvaLang değerini
         # gönderir; asistanın yanıt dilini belirler (bkz. _build_gemini_system_instruction).
+        _sylva_check_cancelled()
         req_lang = str(data.get('lang') or 'tr').strip().lower()
         if req_lang not in _GEMINI_LANG_NAMES:
             req_lang = 'tr'
@@ -4600,7 +4822,9 @@ def gemini_data_qa():
         # dağılımı da (yaklaşık, betimsel olarak) yorumlayabilir. Boyut/tür
         # doğrulaması aşağıda, kota kontrolünden ÖNCE yapılır (kötüye kullanım/
         # aşırı büyük istek engeli).
+        _sylva_check_cancelled()
         image_base64 = data.get('image_base64')
+        _sylva_check_cancelled()
         image_mime = str(data.get('image_mime') or 'image/jpeg').strip().lower()
         _ALLOWED_IMAGE_MIMES = ('image/jpeg', 'image/png', 'image/webp')
         if image_base64 is not None:
@@ -4618,14 +4842,19 @@ def gemini_data_qa():
         # veya aşırı büyük TEKİL öğeler isteği reddetmez — sessizce listeden
         # çıkarılır. (Yukarıdaki tekil "image_base64" alanı geriye dönük
         # uyumluluk için hâlâ katı doğrulamayla korunuyor.)
+        _sylva_check_cancelled()
         raw_images = data.get('images')
         valid_images = []
         if isinstance(raw_images, list):
             for im in raw_images[:6]:
+                _sylva_check_cancelled()
                 if not isinstance(im, dict):
                     continue
+                _sylva_check_cancelled()
                 im_b64 = im.get('base64')
+                _sylva_check_cancelled()
                 im_mime = str(im.get('mime') or 'image/jpeg').strip().lower()
+                _sylva_check_cancelled()
                 im_name = im.get('analysis_name')
                 if not isinstance(im_b64, str) or not im_b64:
                     continue
@@ -4648,6 +4877,7 @@ def gemini_data_qa():
         # içinde tutuyor) — SADECE bu veri gerçekten mevcutsa (yani o
         # analizler kullanılıyorsa) rapora dahil edilir. Ham günlük dizi çok
         # büyükse (beklenmedik/aşırı istek) sessizce göz ardı edilir.
+        _sylva_check_cancelled()
         weather_days = data.get('weather_days')
         if not isinstance(weather_days, list) or len(weather_days) > 60:
             weather_days = None
@@ -4656,9 +4886,12 @@ def gemini_data_qa():
         # Geriye dönük uyumluluk: eski tekli-veri-seti formatı gönderildiyse
         # tek elemanlı bir listeye çevir.
         if not datasets:
+            _sylva_check_cancelled()
             legacy_classes = data.get('classes') or []
+            _sylva_check_cancelled()
             legacy_pct = data.get('percentages') or []
             if legacy_classes and legacy_pct:
+                _sylva_check_cancelled()
                 datasets = [{
                     'analysis_name': data.get('analysis_name') or 'Bilinmeyen',
                     'classes': legacy_classes,
@@ -4675,12 +4908,16 @@ def gemini_data_qa():
         # En az bir geçerli veri seti VEYA bina/çatı verisi gerekli.
         valid_datasets = []
         for ds in datasets:
+            _sylva_check_cancelled()
             if not isinstance(ds, dict):
                 continue
+            _sylva_check_cancelled()
             ds_classes = ds.get('classes') or []
+            _sylva_check_cancelled()
             ds_pct = ds.get('percentages') or []
             if ds_classes and ds_pct and len(ds_classes) == len(ds_pct):
                 valid_datasets.append(ds)
+        _sylva_check_cancelled()
         has_building = bool(building and (building.get('buildingCount') or building.get('totalAreaM2')))
 
         if not valid_datasets and not has_building:
@@ -4698,6 +4935,7 @@ def gemini_data_qa():
                 'servisinizde GEMINI_API_KEY ortam değişkeni olarak tanımlayın.'
             )})
 
+        _sylva_check_cancelled()
         client_ip = (request.headers.get('X-Forwarded-For', '').split(',')[0].strip() or request.remote_addr or 'unknown')
         ok, quota_err = _gemini_check_and_increment_quota(client_ip)
         if not ok:
@@ -4713,9 +4951,13 @@ def gemini_data_qa():
 
         data_summary_blocks = []
         for idx, ds in enumerate(valid_datasets, start=1):
+            _sylva_check_cancelled()
             ds_name = str(ds.get('analysis_name') or ('%s %d' % (_L['dataset'], idx)))
+            _sylva_check_cancelled()
             ds_classes = ds.get('classes') or []
+            _sylva_check_cancelled()
             ds_pct = ds.get('percentages') or []
+            _sylva_check_cancelled()
             ds_area = ds.get('area_ha')
             lines = ['%s %d — %s' % (_L['dataset'], idx, ds_name)]
             if ds_area is not None:
@@ -4725,8 +4967,11 @@ def gemini_data_qa():
                     pass
             lines.append(_L['classes_header'])
             for c, p in zip(ds_classes, ds_pct):
+                _sylva_check_cancelled()
                 name = str((c or {}).get('name') or '?')
+                _sylva_check_cancelled()
                 cmin = (c or {}).get('min')
+                _sylva_check_cancelled()
                 cmax = (c or {}).get('max')
                 rng = ('%s - %s' % (cmin, cmax)) if (cmin is not None and cmax is not None) else '—'
                 try:
@@ -4738,8 +4983,11 @@ def gemini_data_qa():
 
         if has_building:
             b_lines = [_L['building_section']]
+            _sylva_check_cancelled()
             b_count = building.get('buildingCount')
+            _sylva_check_cancelled()
             b_area = building.get('totalAreaM2')
+            _sylva_check_cancelled()
             b_dataset = building.get('dataset')
             if b_count is not None:
                 try:
@@ -4774,6 +5022,7 @@ def gemini_data_qa():
             if weather_summary['mean_humidity_pct'] is not None:
                 w_lines.append('%s %.1f%%' % (_L['weather_humidity'], weather_summary['mean_humidity_pct']))
             if weather_summary['trend'] is not None:
+                _sylva_check_cancelled()
                 trend_word = {
                     'up': _L['weather_trend_up'],
                     'down': _L['weather_trend_down'],
@@ -4794,6 +5043,7 @@ def gemini_data_qa():
         # eklenir — Gemini'nin çok modlu (multimodal) girdi biçimi budur.
         gemini_parts = [{'text': user_prompt}]
         for _im in valid_images:
+            _sylva_check_cancelled()
             _im_label = _im['analysis_name'] or _L['general_map_view']
             gemini_parts.append({'text': _L['image_label'] % _im_label})
             gemini_parts.append({'inlineData': {'mimeType': _im['mime'], 'data': _im['base64']}})
@@ -4811,6 +5061,7 @@ def gemini_data_qa():
         try:
             # Görüntü sayısı arttıkça istek daha uzun sürebilir; zaman aşımı buna göre uzatılır.
             _gqa_timeout = 20 + (5 * len(valid_images)) if valid_images else 20
+            _sylva_check_cancelled()
             resp = requests.post(gemini_url, json=gemini_body, timeout=min(_gqa_timeout, 50))
         except Exception as _net_err:
             return jsonify({'success': False, 'error': 'Gemini API\'ye ulaşılamadı: ' + str(_net_err)})
@@ -4818,6 +5069,7 @@ def gemini_data_qa():
         if resp.status_code != 200:
             err_detail = ''
             try:
+                _sylva_check_cancelled()
                 err_detail = (resp.json().get('error') or {}).get('message', '')
             except Exception:
                 err_detail = resp.text[:300]
@@ -4827,10 +5079,13 @@ def gemini_data_qa():
 
         try:
             resp_json = resp.json()
+            _sylva_check_cancelled()
             candidates = resp_json.get('candidates') or []
             if not candidates:
                 return jsonify({'success': False, 'error': 'Gemini yanıt üretmedi (boş yanıt) — soruyu farklı bir şekilde tekrar deneyin.'})
+            _sylva_check_cancelled()
             parts = (candidates[0].get('content') or {}).get('parts') or []
+            _sylva_check_cancelled()
             answer_text = ''.join(p.get('text', '') for p in parts).strip()
             if not answer_text:
                 return jsonify({'success': False, 'error': 'Gemini yanıt üretmedi (boş yanıt) — soruyu farklı bir şekilde tekrar deneyin.'})
@@ -6153,14 +6408,23 @@ def build_result_image(data, for_export=False):
     vis sözlüğünü değiştirir) o dal for_export'tan etkilenmeden aynen
     çalışmaya devam eder.
     """
+    _sylva_check_cancelled()
     roi_coords = data.get('roi')
+    _sylva_check_cancelled()
     clip_mode  = data.get('clipMode', 'clip')
+    _sylva_check_cancelled()
     satellite  = data.get('satellite', 's2-l2a')
+    _sylva_check_cancelled()
     index      = data.get('index', 'NDVI')
+    _sylva_check_cancelled()
     start_date = data.get('startDate')
+    _sylva_check_cancelled()
     end_date   = data.get('endDate')
+    _sylva_check_cancelled()
     max_cloud  = int(data.get('maxCloud', 20))
+    _sylva_check_cancelled()
     scene_id   = data.get('sceneId')
+    _sylva_check_cancelled()
     class_breaks = data.get('classBreaks')
     if for_export:
         class_breaks = None
@@ -6272,6 +6536,7 @@ def build_result_image(data, for_export=False):
         # sonlandırıyoruz — böylece hem sorun kesin olarak teşhis edilebilir
         # hale gelir hem de olası bağlantı-düşürme senaryosu tamamen ortadan
         # kalkar.
+        _sylva_check_cancelled()
         _dw_obs_count = _call_with_retry(lambda: recent.size().getInfo())
         if not _dw_obs_count:
             raise ValueError(
@@ -6467,6 +6732,7 @@ def build_result_image(data, for_export=False):
         # NASADEM zaten tek görüntü olduğu için boşluk sorunu yaşamaz.
         _srtm_fallback = ee.Image('USGS/SRTMGL1_003').select('elevation')
 
+        _sylva_check_cancelled()
         dem_source = data.get('demSource', 'SRTM')
         if dem_source == 'ALOS':
             dem = (ee.ImageCollection('JAXA/ALOS/AW3D30/V3_2')
@@ -6701,6 +6967,7 @@ def build_result_image(data, for_export=False):
             # kalınlığında, gerçek eş yükselti çizgilerine benzeyen ince ve
             # temiz bir sonuç verir.
             try:
+                _sylva_check_cancelled()
                 _contour_interval = float(data.get('contourInterval', 50) or 50)
             except (TypeError, ValueError):
                 _contour_interval = 50.0
@@ -6759,6 +7026,7 @@ def build_result_image(data, for_export=False):
             # tut: gerçek değerler korunur, yalnızca GÖRSEL germe dengelenir.
             if index in ('TOPO_CURVATURE', 'TOPO_PLAN_CURV', 'TOPO_PROFILE_CURV'):
                 try:
+                    _sylva_check_cancelled()
                     _absmax = max(abs(float(vis.get('min', -30))), abs(float(vis.get('max', 30))))
                     if _absmax > 0 and _math.isfinite(_absmax):
                         vis['min'] = -_absmax
@@ -6779,6 +7047,7 @@ def build_result_image(data, for_export=False):
         # ÇÖZÜM: for_export=True → SADECE ham result kullan, sınıflandırma
         # ve palette/min/max TAMAMEN atlanır. Piksel değerleri değişmez.
         # for_export=False (harita önizleme) → önceki davranış aynen korunur.
+        _sylva_check_cancelled()
         custom_palette = data.get('palette')
         # Hillshade özel katmandır: harita/semboloji panelinden gelen önceki
         # renk paleti (ör. lacivert/blue-ocean) KESİNLİKLE bu veriye uygulanmaz.
@@ -6792,8 +7061,11 @@ def build_result_image(data, for_export=False):
         # yalnızca maskenin değeri 1 olan eş yükselti çizgilerine uygulanır.
         # Ayrı alan adı kullanılması, genel semboloji paletinin kontur
         # çizgisini yanlışlıkla bir dolgu/alan rengine dönüştürmesini önler.
+        _sylva_check_cancelled()
         contour_line_color = data.get('contourLineColor')
+        _sylva_check_cancelled()
         custom_min     = data.get('min')
+        _sylva_check_cancelled()
         custom_max     = data.get('max')
 
         if for_export:
@@ -6905,6 +7177,7 @@ def build_result_image(data, for_export=False):
         # önizlemesi. satellite alanı SATELLITE_DATASETS anahtarlarından biri
         # olmalıdır (s2-l1c, s2-l2a, l89-l2, l7-l2, l45-l2, l89-l1, l7-l1,
         # l45-l1, mss-l1).
+        _sylva_check_cancelled()
         ds = SATELLITE_DATASETS.get(satellite)
         if not ds:
             raise ValueError('Bilinmeyen uydu görüntüsü veri seti: ' + str(satellite))
@@ -6933,6 +7206,7 @@ def build_result_image(data, for_export=False):
 
         disp = image.select(ds['rgbBands'])
         if ds.get('scaleFactor', 1) != 1 or ds.get('offset', 0) != 0:
+            _sylva_check_cancelled()
             disp = disp.multiply(ds['scaleFactor']).add(ds.get('offset', 0))
         disp = disp.rename(['red', 'green', 'blue'])
 
@@ -6980,8 +7254,11 @@ def build_result_image(data, for_export=False):
         # aktarım (for_export=True) etkilenmez — GeoTIFF'e her zaman ham/
         # sürekli dB değerleri yazılmaya devam eder, yalnızca harita
         # önizlemesindeki renklendirme değişir.
+        _sylva_check_cancelled()
         custom_palette = data.get('palette')
+        _sylva_check_cancelled()
         custom_min = data.get('min')
+        _sylva_check_cancelled()
         custom_max = data.get('max')
         if for_export:
             display_result = result
@@ -7070,12 +7347,15 @@ def build_result_image(data, for_export=False):
         sub_data['endDate'] = e
         sub_data.pop('sceneId', None)
         if months_key is not None:
+            _sylva_check_cancelled()
             sub_data['months'] = base_data.get(months_key)
         _disp, _sub_roi, sub_result, _sub_vis, sub_crs = build_result_image(sub_data, for_export=True)
         return sub_result, sub_crs
 
     def _env_urban_require_period2(data):
+        _sylva_check_cancelled()
         s2 = data.get('startDate2')
+        _sylva_check_cancelled()
         e2 = data.get('endDate2')
         if not s2 or not e2:
             raise ValueError(
@@ -7092,6 +7372,7 @@ def build_result_image(data, for_export=False):
         # lejant -10°C..+10°C gibi DAR bir aralıkta). Mutlak LST için zaten
         # mevcut 'LST' indeksi kullanılabilir.
         lst_img, crs_probe = _env_urban_single_period_image(data, 'LST', start_date, end_date)
+        _sylva_check_cancelled()
         mean_lst = _call_with_retry(
             lambda: lst_img.reduceRegion(
                 reducer=ee.Reducer.mean(), geometry=roi, scale=_stats_scale_for('UHI_LST'),
@@ -7109,11 +7390,13 @@ def build_result_image(data, for_export=False):
         s2, e2 = _env_urban_require_period2(data)
         lst1, crs1 = _env_urban_single_period_image(data, 'LST', start_date, end_date)
         lst2, _crs2 = _env_urban_single_period_image(data, 'LST', s2, e2, months_key='months2')
+        _sylva_check_cancelled()
         mean1 = _call_with_retry(
             lambda: lst1.reduceRegion(reducer=ee.Reducer.mean(), geometry=roi,
                                        scale=_stats_scale_for('UHI_TREND'), maxPixels=1e9,
                                        bestEffort=True, tileScale=4).get('value').getInfo()
         )
+        _sylva_check_cancelled()
         mean2 = _call_with_retry(
             lambda: lst2.reduceRegion(reducer=ee.Reducer.mean(), geometry=roi,
                                        scale=_stats_scale_for('UHI_TREND'), maxPixels=1e9,
@@ -7171,6 +7454,7 @@ def build_result_image(data, for_export=False):
         water2 = ndwi2.gt(0)
         ever_water = water1.Or(water2)
         dem = ee.Image('USGS/SRTMGL1_003').select('elevation')
+        _sylva_check_cancelled()
         max_water_elev = _call_with_retry(
             lambda: dem.updateMask(ever_water).reduceRegion(
                 reducer=ee.Reducer.max(), geometry=roi, scale=30,
@@ -7276,6 +7560,7 @@ def build_result_image(data, for_export=False):
         def _dw_built_mean(s, e, period_label):
             col = (ee.ImageCollection('GOOGLE/DYNAMICWORLD/V1')
                    .filterBounds(roi).filterDate(s, e))
+            _sylva_check_cancelled()
             _obs_count = _call_with_retry(lambda: col.size().getInfo())
             if not _obs_count:
                 raise ValueError(
@@ -7333,6 +7618,7 @@ def build_result_image(data, for_export=False):
         cur_precip = chirps.filterDate(start_date, end_date).select('precipitation').sum()
         _hist_sums = []
         for _yr_back in range(1, 11):
+            _sylva_check_cancelled()
             try:
                 _hs = _d0.replace(year=_d0.year - _yr_back).isoformat()
                 _he = _d1.replace(year=_d1.year - _yr_back).isoformat()
@@ -7389,6 +7675,7 @@ def build_result_image(data, for_export=False):
         cur_precip2 = chirps2.filterDate(start_date, end_date).select('precipitation').sum()
         _hist_sums2 = []
         for _yr_back in range(1, 6):
+            _sylva_check_cancelled()
             try:
                 _hs2 = _d0c.replace(year=_d0c.year - _yr_back).isoformat()
                 _he2 = _d1c.replace(year=_d1c.year - _yr_back).isoformat()
@@ -7425,6 +7712,7 @@ def build_result_image(data, for_export=False):
         # filtresini YOK SAYIYORDU. Dönem 2 için AYNI mantıkla months2'den
         # kendi filtresi türetilir (bkz. _env_urban_single_period_image'daki
         # months_key deseni).
+        _sylva_check_cancelled()
         month_filter2 = _calendar_month_filter(_parse_months_param({'months': data.get('months2')}))
 
         def _s1_vv_mean(s, e, mf):
@@ -7495,6 +7783,7 @@ def build_result_image(data, for_export=False):
         # 🛠️ BUG FİX (tutarlılık): bkz. FLOOD_MAPPING'deki AYNI notu — mevcut
         # 'SAR' indeksiyle aynı koleksiyonu kullandığı için ay filtresi burada
         # da uygulanır.
+        _sylva_check_cancelled()
         month_filter2 = _calendar_month_filter(_parse_months_param({'months': data.get('months2')}))
 
         def _s1_vv_mean_eq(s, e, mf):
@@ -7717,6 +8006,7 @@ def build_result_image(data, for_export=False):
         col = (ee.ImageCollection('LANDSAT/LM05/C02/T1').filterBounds(roi))
         for _mss_id in ('LANDSAT/LM04/C02/T1', 'LANDSAT/LM03/C02/T1',
                          'LANDSAT/LM02/C02/T1', 'LANDSAT/LM01/C02/T1'):
+            _sylva_check_cancelled()
             col = col.merge(ee.ImageCollection(_mss_id).filterBounds(roi))
         b = {'nir': 'B3', 'red': 'B2', 'green': 'B1',
              'swir': None, 'blue': None, 'thermal': None}
@@ -8037,6 +8327,7 @@ def build_result_image(data, for_export=False):
         lulc = (ee.ImageCollection('GOOGLE/DYNAMICWORLD/V1')
                 .filterBounds(roi).filterDate(start_date, end_date)
                 .select('label').reduce(ee.Reducer.mode()).rename('lulc'))
+        _sylva_check_cancelled()
         _class_stats = _call_with_retry(
             lambda: lst_c.addBands(lulc).reduceRegion(
                 reducer=ee.Reducer.mean().group(groupField=1, groupName='lulc'),
@@ -8083,8 +8374,11 @@ def build_result_image(data, for_export=False):
     # DEM: metre, eğim: derece, vb.) — sınıflandırma veya görsel germen
     # indirilecek dosyayı ASLA etkilemez.
     # for_export=False (harita önizleme) → önceki davranış aynen korunur.
+    _sylva_check_cancelled()
     custom_palette = data.get('palette')
+    _sylva_check_cancelled()
     custom_min     = data.get('min')
+    _sylva_check_cancelled()
     custom_max     = data.get('max')
 
     if for_export:
@@ -8335,13 +8629,18 @@ def timeseries():
     try:
         data = request.get_json(silent=True) or {}
 
+        _sylva_check_cancelled()
         satellite  = (data.get('satellite') or 's2-l2a').strip()
+        _sylva_check_cancelled()
         period     = (data.get('period') or 'yearly').strip().lower()
+        _sylva_check_cancelled()
         max_cloud  = int(data.get('maxCloud', 30))
         # Birden fazla indeks seçilebilir (Kullanılabilir Analizler'deki
         # işaretli kutular) — her biri grafikte ayrı bir çizgi olur.
+        _sylva_check_cancelled()
         indices = data.get('indices')
         if not indices:
+            _sylva_check_cancelled()
             indices = [data.get('index', 'NDVI')]
 
         # 🛠️ BUG FİX (ay filtresi Zaman Serisi galerisinde yok sayılıyordu):
@@ -8352,7 +8651,9 @@ def timeseries():
         months = _parse_months_param(data)
 
         try:
+            _sylva_check_cancelled()
             start_year = int(data.get('startYear'))
+            _sylva_check_cancelled()
             end_year   = int(data.get('endYear'))
         except (TypeError, ValueError):
             return jsonify({'success': False, 'error': 'Geçersiz başlangıç/bitiş yılı.'}), 400
@@ -8372,12 +8673,15 @@ def timeseries():
                 'error': 'Seçilen aralık çok geniş (%d periyot). Daha kısa bir aralık seçin ya da Yıllık periyodu kullanın.' % len(ranges)
             }), 400
 
+        _sylva_check_cancelled()
         roi = make_roi(data.get('roi'))
 
         series = []
         for idx in indices:
+            _sylva_check_cancelled()
             pts = []
             for label, sdate, edate in ranges:
+                _sylva_check_cancelled()
                 period_data = dict(data)
                 period_data['index']     = idx
                 period_data['startDate'] = sdate
@@ -8388,6 +8692,7 @@ def timeseries():
                     _final, p_roi, p_result, _vis, _probe = _call_with_retry(
                         build_result_image, period_data, for_export=False
                     )
+                    _sylva_check_cancelled()
                     mean_val = _call_with_retry(
                         lambda: p_result.reduceRegion(
                             reducer=ee.Reducer.mean(), geometry=p_roi,
@@ -8406,6 +8711,7 @@ def timeseries():
         # tek bir sahne akışı gösterir, indeks başına ayrı galeri yoktur)
         gallery = []
         for label, sdate, edate in ranges:
+            _sylva_check_cancelled()
             scene = _sylva_least_cloud_scene(roi, satellite, sdate, edate, max_cloud, months=months)
             if scene:
                 scene['label'] = label
@@ -8419,10 +8725,12 @@ def timeseries():
         # tarayıcı GEE thumbnail adresine doğrudan erişmez (CORS/CORB sorunu yok).
         if gallery:
             def _thumb_for_scene(sc):
+                _sylva_check_cancelled()
                 return _sylva_scene_thumbnail_data_uri(roi, satellite, sc.get('sceneId'), dimensions=128)
             with ThreadPoolExecutor(max_workers=min(8, len(gallery))) as _ts_thumb_pool:
                 _thumbs = list(_ts_thumb_pool.map(_thumb_for_scene, gallery))
             for _i, _scene in enumerate(gallery):
+                _sylva_check_cancelled()
                 _scene['thumbnailUrl'] = _thumbs[_i] if _i < len(_thumbs) else None
 
         return jsonify({
@@ -8451,13 +8759,17 @@ def analyze():
         # sahne metadata'sı (tarih, sensör, bulutluluk, CRS, çözünürlük,
         # Image ID) doğrudan döndürülür.
         if data.get('index') == 'RGB':
+            _sylva_check_cancelled()
             ds = SATELLITE_DATASETS.get(data.get('satellite'))
             if not ds:
                 return jsonify({'success': False, 'error': 'Bilinmeyen uydu görüntüsü veri seti.'})
 
+            _sylva_check_cancelled()
             roi = make_roi(data.get('roi'))
+            _sylva_check_cancelled()
             max_cloud = int(data.get('maxCloud', 100))
             col = build_rgb_collection(ds, roi, max_cloud)
+            _sylva_check_cancelled()
             scene_id = data.get('sceneId')
             # 🛠️ BUG FİX (ay filtresi): bu blok yalnızca Görüntü Bilgileri
             # panelinde gösterilecek meta veriyi (tarih/bulutluluk/CRS) okumak
@@ -8470,12 +8782,14 @@ def analyze():
             if scene_id:
                 image = col.filter(ee.Filter.eq('system:index', scene_id)).first()
             else:
+                _sylva_check_cancelled()
                 _rgb_meta_dated = col.filterDate(data.get('startDate'), data.get('endDate'))
                 if _rgb_meta_month_filter is not None:
                     _rgb_meta_dated = _rgb_meta_dated.filter(_rgb_meta_month_filter)
                 image = _rgb_meta_dated.sort('system:time_start', False).first()
 
             final_display, roi, result, vis, _unused_crs_probe = build_result_image(data)
+            _sylva_check_cancelled()
             map_id = _call_with_retry(lambda: final_display.getMapId(vis))
             tile_url_direct = map_id['tile_fetcher'].url_format
 
@@ -8489,9 +8803,11 @@ def analyze():
             # varsayılanı (download_native_crs) için, coğrafi (EPSG:4326)
             # çıkması durumunda AOI merkezinden UTM dilimine yükseltilir —
             # bkz. yukarıdaki "PROJEKSİYON ÖNCELİĞİ" açıklaması.
+            _sylva_check_cancelled()
             download_native_crs = meta.get('crs')
             if not download_native_crs or download_native_crs.strip().upper() == 'EPSG:4326':
                 try:
+                    _sylva_check_cancelled()
                     _lon, _lat = _roi_center_lonlat(data.get('roi'))
                     download_native_crs = _utm_epsg_from_lonlat(_lon, _lat)
                 except Exception:
@@ -8512,6 +8828,7 @@ def analyze():
             tile_url = _tile_url_for_client(_sid, tile_url_direct)
             _analysis_sid = _register_analysis_session(data, kind='analyze', extra=_extra)
 
+            _sylva_check_cancelled()
             return jsonify({
                 'success':  True,
                 'tileUrl':  tile_url,
@@ -8544,10 +8861,12 @@ def analyze():
         # ÇÖZÜM: map id ilk sırada, istatistikler sonra. Böylece tile üretimi
         # kotanın en boş olduğu anda gerçekleşir ve istatistik hataları
         # katmanı artık düşüremez (aşağıda ayrıca güvenli varsayılana düşülür).
+        _sylva_check_cancelled()
         map_id = _call_with_retry(lambda: final_display.getMapId(vis))
         tile_url_direct = map_id['tile_fetcher'].url_format
 
         # Bu analizin doğal çözünürlüğü — tüm reduceRegion çağrıları bunu kullanır.
+        _sylva_check_cancelled()
         stats_scale = _stats_scale_for(data.get('index', 'NDVI'))
 
         # ── 🌐 Gerçek/doğal CRS tespiti ─────────────────────────────
@@ -8569,6 +8888,7 @@ def analyze():
         native_crs = None
         try:
             _crs_source = crs_probe_img if crs_probe_img is not None else result
+            _sylva_check_cancelled()
             native_crs = _call_with_retry(
                 lambda: _crs_source.projection().crs().getInfo(), retries=1
             )
@@ -8600,6 +8920,7 @@ def analyze():
         # (ve onun retry bütçesini) tamamen kaldırır.
         if not native_crs or native_crs.strip().upper() == 'EPSG:4326':
             try:
+                _sylva_check_cancelled()
                 _lon, _lat = _roi_center_lonlat(data.get('roi'))
                 native_crs = _utm_epsg_from_lonlat(_lon, _lat)
             except Exception as _centroid_err:
@@ -8640,6 +8961,7 @@ def analyze():
         # Lejant/grafik istatistiğe bağlıdır ama HARİTA KATMANI değildir;
         # istatistik alınamasa bile tile'lar gösterilebilmelidir.
         try:
+            _sylva_check_cancelled()
             stats = _call_with_retry(
                 lambda: result.reduceRegion(
                     reducer    = ee.Reducer.frequencyHistogram(),
@@ -8675,6 +8997,7 @@ def analyze():
             # uygulanarak.
             _stats_img = result
             if data.get('index') == 'TOPO_CONTOUR':
+                _sylva_check_cancelled()
                 _stats_dem_source = data.get('demSource', 'SRTM')
                 _stats_srtm_fallback = ee.Image('USGS/SRTMGL1_003').select('elevation')
                 if _stats_dem_source == 'ALOS':
@@ -8692,6 +9015,7 @@ def analyze():
                 _stats_img = _stats_dem.rename('value')
 
             try:
+                _sylva_check_cancelled()
                 mm = _call_with_retry(
                     lambda: _stats_img.reduceRegion(
                         reducer    = combined_reducer,
@@ -8718,6 +9042,7 @@ def analyze():
                 print('[SylvaGIS] ⚠️ Gerçek min/max hesaplanamadı (1. deneme) — '
                       'daha kaba ölçekle tekrar deneniyor: {}'.format(_mm_err))
                 _coarse_scale = min(max(stats_scale * 4, stats_scale + 100), 500)
+                _sylva_check_cancelled()
                 mm = _call_with_retry(
                     lambda: _stats_img.reduceRegion(
                         reducer    = combined_reducer,
@@ -8727,6 +9052,7 @@ def analyze():
                         bestEffort = True,
                     ).getInfo()
                 )
+            _sylva_check_cancelled()
             real_minmax = {
                 'min':  mm.get('value_min'),
                 'max':  mm.get('value_max'),
@@ -8744,15 +9070,21 @@ def analyze():
         # ── Zaman serisi galerisi ────────────────────────────────
         # LULC ailesi statik/tek-katmanlı veri setleridir; zaman serisi
         # galerisi kavramı bunlara uygulanamaz — bu sorguyu tamamen atlarız.
+        _sylva_check_cancelled()
         satellite  = data.get('satellite', 's2-l2a')
+        _sylva_check_cancelled()
         start_date = data.get('startDate')
+        _sylva_check_cancelled()
         end_date   = data.get('endDate')
+        _sylva_check_cancelled()
         scene_id   = data.get('sceneId')
+        _sylva_check_cancelled()
         max_cloud  = int(data.get('maxCloud', 20))
         scenes_list = []
 
         if not scene_id and data.get('index', 'NDVI') not in LULC_FAMILY_INDICES:
             try:
+                _sylva_check_cancelled()
                 roi_coords = data.get('roi')
                 roi_geo = make_roi(roi_coords)
                 # 🛠️ KÖK NEDEN DÜZELTMESİ (Faz 51 — "Sentinel-2/Landsat 8-9
@@ -8782,9 +9114,11 @@ def analyze():
                 # KESİN olarak bulunmasını garanti eder ve tüm Landsat
                 # ailelerine (7 / 4-5 / 1-5 MSS) eksiksiz çoklu-koleksiyon
                 # kapsamı (LC09/LT04/LM04-01 dahil) kazandırır.
+                _sylva_check_cancelled()
                 _ds2 = SATELLITE_DATASETS.get(satellite)
                 if _ds2:
                     col2 = build_rgb_collection(_ds2, roi_geo, max_cloud)
+                    _sylva_check_cancelled()
                     cloud_prop = _ds2.get('cloudProp')
                 else:
                     col2 = (ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
@@ -8796,7 +9130,9 @@ def analyze():
                     col2, start_date, end_date, months=months_filter,
                     per_year_limit=10, total_limit=60,
                 )
+                _sylva_check_cancelled()
                 scene_ids  = _call_with_retry(lambda: limited.aggregate_array('system:index').getInfo(), retries=1)
+                _sylva_check_cancelled()
                 timestamps = _call_with_retry(lambda: limited.aggregate_array('system:time_start').getInfo(), retries=1)
                 # mss-l1 (Landsat 1-5) gibi tutarlı bir bulutluluk özniteliği
                 # taşımayan veri setlerinde (cloud_prop None) aggregate_array
@@ -8804,6 +9140,7 @@ def analyze():
                 # TÜM galeri şeridi boşalıyordu; artık bulut % bilgisi
                 # olmadan (None) sahneler yine de listelenir.
                 if cloud_prop:
+                    _sylva_check_cancelled()
                     clouds_arr = _call_with_retry(lambda: limited.aggregate_array(cloud_prop).getInfo(), retries=1)
                 else:
                     clouds_arr = [None] * len(scene_ids)
@@ -8811,6 +9148,7 @@ def analyze():
             except Exception:
                 scenes_list = []
 
+        _sylva_check_cancelled()
         return jsonify({
             'success':   True,
             'tileUrl':   tile_url,
@@ -8940,7 +9278,9 @@ def download_geotiff():
         # hiç göndermezse (eski/güncellenmemiş istemci), önceki paylaşılan-
         # global davranış AYNEN korunur — bu değişiklik geriye dönük
         # tamamen uyumludur.
+        _sylva_check_cancelled()
         analysis_id = req_data.get('analysisId')
+        _sylva_check_cancelled()
         payload_data = req_data.get('payload')
 
         # 🆕 TOPLU İNDİRME KÖK NEDEN DÜZELTMESİ:
@@ -8961,6 +9301,7 @@ def download_geotiff():
         # dönüş yolu olarak korunur; en son çare global davranıştır.
         if isinstance(payload_data, dict) and payload_data.get('index'):
             data = dict(payload_data)
+            _sylva_check_cancelled()
             session_native_crs = (data.get('nativeCrs') or
                                   req_data.get('nativeCrs') or
                                   _last_analyze_native_crs)
@@ -8993,11 +9334,14 @@ def download_geotiff():
         # sonra uygulanmalıdır. Önceki sürümde bu atama data tanımlanmadan
         # önce yapıldığı için tüm GeoTIFF indirmelerinde:
         # "local variable 'data' referenced before assignment" oluşabiliyordu.
+        _sylva_check_cancelled()
         fresh_roi = req_data.get('roi')
         if fresh_roi is not None:
             data['roi'] = fresh_roi
 
+        _sylva_check_cancelled()
         filename = (req_data.get('filename') or 'SylvaGIS').strip() or 'SylvaGIS'
+        _sylva_check_cancelled()
         scale    = int(req_data.get('scale', 30))
 
         # 🛠️ BUG FİX (LULC indirmeleri anormal derecede büyük/bozuk dosyalar
@@ -9023,6 +9367,7 @@ def download_geotiff():
         # (download_raw_bands) istemciden HİÇ scale almayıp HER ZAMAN
         # sahnenin kendi native_scale'ini (ee.Image.projection()
         # .nominalScale()) kullanması gibi.
+        _sylva_check_cancelled()
         _dl_index_for_scale = data.get('index')
         if _dl_index_for_scale in _NATIVE_STATS_SCALE:
             # LULC ve kaba çözünürlüklü çevresel veri setleri için gerçek
@@ -9049,6 +9394,7 @@ def download_geotiff():
         # nativeCrs'e göre otomatik ön-seçip gönderir; bu yalnızca bir
         # güvenlik ağıdır. Kullanıcı seçiciden farklı bir CRS seçtiyse o
         # değer (req_data.get('crs')) her zaman önceliklidir.
+        _sylva_check_cancelled()
         crs = (req_data.get('crs') or session_native_crs or 'EPSG:4326').strip()
 
         # Güvenlik: Yalnızca EPSG:NNNNN formatına izin ver
@@ -9127,15 +9473,19 @@ def download_geotiff():
         # burada, germe hesaplanmadan HEMEN önce, erken okunup uygulanır;
         # aşağıdaki asıl `requested_vis` bloğu aynı değerleri tekrar
         # (zararsızca, idempotent) uygulamaya devam eder.
+        _sylva_check_cancelled()
         _early_requested_vis = req_data.get('visualization')
         if isinstance(_early_requested_vis, dict):
             for _early_vis_key in ('min', 'max'):
+                _sylva_check_cancelled()
                 if _early_requested_vis.get(_early_vis_key) not in (None, '', []):
                     vis[_early_vis_key] = _early_requested_vis[_early_vis_key]
 
         _is_byte_rgb_export = False
         if data.get('index') == 'RGB' and data.get('satellite') in ('s2-l1c', 's2-l2a'):
+            _sylva_check_cancelled()
             v_min = vis.get('min', 0)
+            _sylva_check_cancelled()
             v_max = vis.get('max', 0.3)
             final_display = (
                 final_display
@@ -9220,6 +9570,7 @@ def download_geotiff():
         # kodlarının olası bir CRS yeniden örneklemesinde — _ensure_output_crs
         # — bilinear yerine en_yakın_komşu kullanmasını sağlar; aksi halde
         # komşu sınıflar arasında anlamsız ondalıklı "ara" kodlar üretilebilirdi).
+        _sylva_check_cancelled()
         lulc_index = data.get('index')
         # LULC ailesi yanında, kendi sınıf kodlarını üreten çevresel/kentsel
         # rasterlar da yeniden projeksiyon/mozaik aşamasında NEAREST kullanmalı.
@@ -9302,6 +9653,7 @@ def download_geotiff():
         # son-kesme aşamasına da gönderiyoruz. Böylece tek istek veya karo-mozaik
         # sonucunda bile çalışma alanı dışındaki dikdörtgen pikseller gerçek
         # NoData olur; çalışma alanının içine alan dolu bir kare veri oluşmaz.
+        _sylva_check_cancelled()
         aoi_geom_4326 = _call_with_retry(lambda: roi.getInfo())
 
         # 🎨 ArcMap/QGIS "Siyah-Beyaz + Rakam" / "Hepsi RGB İniyor" SORUNU
@@ -9326,11 +9678,13 @@ def download_geotiff():
         # eder; çevresel/kentsel bir indeks hiçbir zaman RGB'ye dönüştürülmez.
         is_env_urban_raster = lulc_index in _ENV_URBAN_RASTER_INDICES
 
+        _sylva_check_cancelled()
         requested_vis = req_data.get('visualization')
         requested_breaks = None
         requested_legend_labels = None
         if isinstance(requested_vis, dict):
             for _vis_key in ('min', 'max', 'palette'):
+                _sylva_check_cancelled()
                 if requested_vis.get(_vis_key) not in (None, '', []):
                     vis[_vis_key] = requested_vis[_vis_key]
             # 🛠️ BUG FİX (Faz 15 — "bar olarak indirmiştim, sınıflandırılmış
@@ -9346,6 +9700,7 @@ def download_geotiff():
             if requested_vis.get('mode') == 'classified' and isinstance(requested_vis.get('breaks'), list):
                 requested_breaks = requested_vis['breaks']
             if isinstance(requested_vis.get('legendLabels'), list):
+                _sylva_check_cancelled()
                 requested_legend_labels = requested_vis.get('legendLabels')
         if requested_breaks is None and str(lulc_index or '').upper() in _native_export_breaks:
             requested_breaks = list(_native_export_breaks[str(lulc_index or '').upper()])
@@ -9357,20 +9712,26 @@ def download_geotiff():
             if isinstance(requested_legend_labels, list) and requested_legend_labels:
                 _ll_by_code = {}
                 for _ll in requested_legend_labels:
+                    _sylva_check_cancelled()
                     if not isinstance(_ll, dict):
                         continue
                     try:
+                        _sylva_check_cancelled()
                         _ll_code = int(_ll.get('code'))
                     except Exception:
                         continue
                     _ll_by_code[_ll_code] = _ll
                 for _i, _br in enumerate(requested_breaks):
+                    _sylva_check_cancelled()
                     _code = int(_br.get('code', _i))
+                    _sylva_check_cancelled()
                     _ll = _ll_by_code.get(_code) or _ll_by_code.get(_i) or _ll_by_code.get(_i + 1)
                     if _ll:
                         if str(_ll.get('label') or '').strip():
+                            _sylva_check_cancelled()
                             _br['label'] = str(_ll.get('label')).strip()
                         if str(_ll.get('color') or '').strip():
+                            _sylva_check_cancelled()
                             _br['color'] = str(_ll.get('color')).strip()
 
         # 🛠️ PAKET 85 — SUNUCU TARAFI SAVUNMA KATMANI (kullanıcının GERÇEK
@@ -9418,8 +9779,11 @@ def download_geotiff():
             _fam_key = str(lulc_index or '').upper()
             _have_codes = set()
             for _b in requested_breaks:
+                _sylva_check_cancelled()
                 try:
+                    _sylva_check_cancelled()
                     _bmin = int(round(float(_b.get('min'))))
+                    _sylva_check_cancelled()
                     _bmax = int(round(float(_b.get('max'))))
                 except (TypeError, ValueError):
                     continue
@@ -9428,9 +9792,11 @@ def download_geotiff():
             _ll_by_code2 = {}
             if isinstance(requested_legend_labels, list):
                 for _ll in requested_legend_labels:
+                    _sylva_check_cancelled()
                     if not isinstance(_ll, dict):
                         continue
                     try:
+                        _sylva_check_cancelled()
                         _ll_by_code2[int(_ll.get('code'))] = _ll
                     except Exception:
                         continue
@@ -9455,32 +9821,43 @@ def download_geotiff():
             # için de gerçekten kullanılması gerekiyordu.
             if _ll_by_code2:
                 for _br_existing in requested_breaks:
+                    _sylva_check_cancelled()
                     try:
+                        _sylva_check_cancelled()
                         _br_code = int(round(float(_br_existing.get('min'))))
                     except (TypeError, ValueError):
                         continue
+                    _sylva_check_cancelled()
                     _ll3 = _ll_by_code2.get(_br_code)
                     if _ll3:
                         if str(_ll3.get('label') or '').strip():
+                            _sylva_check_cancelled()
                             _br_existing['label'] = str(_ll3.get('label')).strip()
                         if str(_ll3.get('color') or '').strip():
+                            _sylva_check_cancelled()
                             _br_existing['color'] = str(_ll3.get('color')).strip()
 
             for _ref in _native_export_breaks[_fam_key]:
+                _sylva_check_cancelled()
                 _rc = int(_ref['min'])
                 if _rc in _have_codes:
                     continue
                 _missing_entry = dict(_ref)
+                _sylva_check_cancelled()
                 _ll2 = _ll_by_code2.get(_rc)
                 if _ll2:
                     if str(_ll2.get('label') or '').strip():
+                        _sylva_check_cancelled()
                         _missing_entry['label'] = str(_ll2.get('label')).strip()
                     if str(_ll2.get('color') or '').strip():
+                        _sylva_check_cancelled()
                         _missing_entry['color'] = str(_ll2.get('color')).strip()
                 requested_breaks.append(_missing_entry)
+                _sylva_check_cancelled()
                 print('[SylvaGIS] ⚠️ Paket 85: {} indirmesinde istemciden eksik '
                       'gelen kod {} sınıfı ("{}") sunucu tarafından '
                       'tamamlandı.'.format(_fam_key, _rc, _missing_entry.get('label')))
+            _sylva_check_cancelled()
             requested_breaks.sort(key=lambda b: float(b.get('min', 0)))
 
         is_true_color_rgb = (lulc_index == 'RGB') and not is_env_urban_raster
@@ -9705,13 +10082,16 @@ def download_geotiff():
             # flatTiff=true göndermesi artık bu kuralı delmez. Bina/Çatı
             # rasterı bu endpointte rasterEntries kuyruğuna alınmadığı için
             # burada ayrıca çıplak TIFF yolu açılmaz.
+            _sylva_check_cancelled()
             allow_flat_tiff = (str(data.get('index') or '').upper() == 'BUILDING_FOOTPRINT') and bool(req_data.get('flatTiff'))
             if allow_flat_tiff:
+                _sylva_check_cancelled()
                 tif_bytes = sym_files.get('{}.tif'.format(safe_name), tif_bytes)
             else:
                 zip_buf = io.BytesIO()
                 with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
                     for fname, fbytes in sym_files.items():
+                        _sylva_check_cancelled()
                         zf.writestr(fname, fbytes)
                 zip_bytes = zip_buf.getvalue()
                 resp = Response(zip_bytes, mimetype='application/zip')
@@ -9728,6 +10108,7 @@ def download_geotiff():
         # (bkz. Faz 14 — responseBlobNamed() BUG FİX notu).
         zip_buf = io.BytesIO()
         with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+            _sylva_check_cancelled()
             zf.writestr('{}.tif'.format(safe_name), tif_bytes)
         zip_bytes = zip_buf.getvalue()
         resp = Response(zip_bytes, mimetype='application/zip')
@@ -9735,6 +10116,9 @@ def download_geotiff():
         resp.headers['Content-Length'] = str(len(zip_bytes))
         return resp
 
+    except (BrokenPipeError, ConnectionResetError):
+        print('[SylvaGIS] ℹ️ İstemci bağlantıyı kesti (GeoTIFF indirme iptal edildi).')
+        return Response('', status=499)
     except Exception as e:
         traceback.print_exc()
         err = str(e).strip() or '{} (mesajsız hata — sunucu konsoluna bakın)'.format(type(e).__name__)
@@ -10065,6 +10449,7 @@ def _ensure_output_crs(tif_bytes, target_crs, nodata_value=None, is_categorical=
                 with MemoryFile() as out_memfile:
                     with out_memfile.open(**out_meta) as dst:
                         for band_idx in range(1, src.count + 1):
+                            _sylva_check_cancelled()
                             reproject(
                                 source=rasterio.band(src, band_idx),
                                 destination=rasterio.band(dst, band_idx),
@@ -10138,6 +10523,7 @@ def _stamp_exact_band_statistics(tif_bytes, nodata_value=None):
             with out_memfile.open(**profile) as dst:
                 dst.write(data)
                 for b_idx in range(1, data.shape[0] + 1):
+                    _sylva_check_cancelled()
                     band = data[b_idx - 1].astype('float64')
                     if src_nodata is not None:
                         valid = band[band != float(src_nodata)]
@@ -10376,8 +10762,10 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
         # DEĞİŞMEDEN kalmaya devam ediyor — o zaten yalnızca GERÇEKTEN
         # gerektiğinde (boyut sınırı aşıldığında) devreye giriyor.
 
+        _sylva_check_cancelled()
         url = _call_with_retry(lambda: img.getDownloadURL(params))
-        r = _call_with_retry(lambda: requests.get(url, timeout=180), retries=2)
+        _sylva_check_cancelled()
+        r = _call_with_retry(lambda: _sylva_export_get(url, timeout=180), retries=2)
         if not r.ok:
             # GEE bazen boyut/limit hatalarını HTTP gövdesinde (200 dışı
             # durum koduyla) döner; ayrıştırılabilmesi için mesaja dahil et.
@@ -10402,8 +10790,10 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
             ):
                 fb_params = dict(params)
                 fb_params['region'] = fallback_region_geom
+                _sylva_check_cancelled()
                 fb_url = _call_with_retry(lambda: img.getDownloadURL(fb_params))
-                fb_r = _call_with_retry(lambda: requests.get(fb_url, timeout=180), retries=2)
+                _sylva_check_cancelled()
+                fb_r = _call_with_retry(lambda: _sylva_export_get(fb_url, timeout=180), retries=2)
                 if not fb_r.ok:
                     body_snippet = (fb_r.text or '')[:500]
                     raise Exception(
@@ -10447,6 +10837,7 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
         try:
             tile_paths = []
             for idx, tile_spec in enumerate(tile_specs):
+                _sylva_check_cancelled()
                 tile_params = {
                     'name':        base_name + '_t{}'.format(idx),
                     'format':      'GEO_TIFF',
@@ -10457,8 +10848,10 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
                 if nodata_value is not None:
                     tile_params['formatOptions'] = {'noData': nodata_value}
 
+                _sylva_check_cancelled()
                 tile_url = _call_with_retry(lambda: img.getDownloadURL(tile_params))
-                tr = _call_with_retry(lambda: requests.get(tile_url, timeout=180), retries=2)
+                _sylva_check_cancelled()
+                tr = _call_with_retry(lambda: _sylva_export_get(tile_url, timeout=180), retries=2)
                 if not tr.ok:
                     body_snippet = (tr.text or '')[:500]
                     _tile_err_msg = 'GEE karo indirme isteği başarısız (karo {}, HTTP {}): {}'.format(
@@ -10497,6 +10890,7 @@ def _download_band_geotiff_bytes_impl(img, region_geom, scale, crs, base_name, n
                     out_meta['nodata'] = nodata_value
             finally:
                 for s in srcs:
+                    _sylva_check_cancelled()
                     s.close()
 
             out_path = os.path.join(tmpdir, 'merged.tif')
@@ -10532,12 +10926,19 @@ def _download_band_geotiff_bytes(img, region_geom, scale, crs, base_name, nodata
     """
     # Earth Engine Restricted Mode altında aynı anda yapılan export istekleri
     # 429 concurrency hatası verebilir. Tek süreçte indirmeleri sıraya al.
-    with _GEE_EXPORT_LOCK:
+    while not _GEE_EXPORT_LOCK.acquire(timeout=0.05):
+        _sylva_check_cancelled()
+        _sylva_check_cancelled()
+    try:
+        _sylva_check_cancelled()
         raw_bytes = _download_band_geotiff_bytes_impl(
             img, region_geom, scale, crs, base_name,
             nodata_value=nodata_value, aoi_geom_4326=aoi_geom_4326,
             fallback_region_geom=fallback_region_geom
         )
+    finally:
+        _GEE_EXPORT_LOCK.release()
+    _sylva_check_cancelled()
     # 🔒 GEE ne dönerse dönsün, kullanıcının seçtiği CRS'i kesin olarak
     # garanti eden güvence katmanı — bkz. _ensure_output_crs() docstring'i.
     raw_bytes = _ensure_output_crs(raw_bytes, crs, nodata_value=nodata_value, is_categorical=is_categorical)
@@ -10584,16 +10985,21 @@ def download_raw_bands():
     """
     try:
         data = request.json or {}
+        _sylva_check_cancelled()
         dataset_key = data.get('dataset')
+        _sylva_check_cancelled()
         ds          = SATELLITE_DATASETS.get(dataset_key)
+        _sylva_check_cancelled()
         band_groups = RAW_BAND_GROUPS.get(dataset_key)
         if not ds or not band_groups:
             return jsonify({'success': False, 'error': 'Bilinmeyen veri seti: ' + str(dataset_key)})
 
+        _sylva_check_cancelled()
         scene_id = data.get('sceneId')
         if not scene_id:
             return jsonify({'success': False, 'error': 'Önce 🛰️ Uydu Görüntüsü Galerisi üzerinden bir sahne seçin.'})
 
+        _sylva_check_cancelled()
         requested_bands = data.get('bands') or []
         if not requested_bands or not isinstance(requested_bands, list):
             return jsonify({'success': False, 'error': 'Lütfen indirmek için en az bir bant seçin.'})
@@ -10604,18 +11010,23 @@ def download_raw_bands():
         # Geçerli bant adlarını + etiketlerini + yedek (katalog) çözünürlüğünü indeksle
         band_catalog = {}
         for grp in band_groups:
+            _sylva_check_cancelled()
             for b in grp['bands']:
+                _sylva_check_cancelled()
                 band_catalog[b['name']] = {'label': b['label'], 'resolution': grp['resolution']}
 
         invalid = [b for b in requested_bands if b not in band_catalog]
         if invalid:
             return jsonify({'success': False, 'error': 'Bu veri setinde bulunmayan bant(lar): ' + ', '.join(invalid)})
 
+        _sylva_check_cancelled()
         roi = make_roi(data.get('roi'))
 
+        _sylva_check_cancelled()
         aoi_name  = (data.get('aoiName') or '').strip()
         safe_aoi  = _sylva_safe_filename(aoi_name.replace(' ', '_'), allow_dots=False) if aoi_name else ''
 
+        _sylva_check_cancelled()
         max_cloud = int(data.get('maxCloud', 100))
         col   = build_rgb_collection(ds, roi, max_cloud)
         image = col.filter(ee.Filter.eq('system:index', scene_id)).first()
@@ -10623,6 +11034,7 @@ def download_raw_bands():
 
         # Sahne gerçekten mevcut mu? (filter+first boşsa getInfo None döner)
         try:
+            _sylva_check_cancelled()
             check = image.get('system:index').getInfo()
         except Exception:
             check = None
@@ -10632,6 +11044,7 @@ def download_raw_bands():
         # Dosya adı için sahne tarihi
         date_label = 'tarihsiz'
         try:
+            _sylva_check_cancelled()
             ts = image.get('system:time_start').getInfo()
             if ts:
                 date_label = datetime.datetime.utcfromtimestamp(ts / 1000.0).strftime('%Y-%m-%d')
@@ -10650,6 +11063,7 @@ def download_raw_bands():
         # 🔒 true-clip güvencesi: bkz. _true_clip_tif_bytes() docstring'i —
         # AOI'nin gerçek poligon şeklini (EPSG:4326) bir kez alıp her bant
         # indirmesinde kullanıyoruz.
+        _sylva_check_cancelled()
         aoi_geom_4326 = _call_with_retry(lambda: roi.getInfo()) if scope == 'clip' else None
 
         # 🛠️ PAKET 88 — ÇOKLU BANT İNDİRME PARALELLEŞTİRİLDİ:
@@ -10688,10 +11102,12 @@ def download_raw_bands():
             # Orijinal (native) çözünürlük ve CRS — resampling YAPILMAZ.
             proj = band_img.projection()
             try:
+                _sylva_check_cancelled()
                 native_scale = proj.nominalScale().getInfo() or info['resolution']
             except Exception:
                 native_scale = info['resolution']
             try:
+                _sylva_check_cancelled()
                 native_crs = proj.crs().getInfo() or 'EPSG:4326'
             except Exception:
                 native_crs = 'EPSG:4326'
@@ -10771,12 +11187,14 @@ def download_raw_bands():
         _max_band_workers = min(4, len(requested_bands))
         with ThreadPoolExecutor(max_workers=_max_band_workers) as _band_pool:
             _band_future_map = {
-                _band_pool.submit(_download_one_raw_band, bn): bn
+                _sylva_submit(_band_pool, _download_one_raw_band, bn): bn
                 for bn in requested_bands
             }
             for _band_future in as_completed(_band_future_map):
+                _sylva_check_cancelled()
                 _bn = _band_future_map[_band_future]
                 try:
+                    _sylva_check_cancelled()
                     zip_entries_by_band[_bn] = _band_future.result()
                 except Exception as be:
                     traceback.print_exc()
@@ -10794,8 +11212,10 @@ def download_raw_bands():
         zip_buf = io.BytesIO()
         with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
             for arcname, tif_bytes in zip_entries:
+                _sylva_check_cancelled()
                 zf.writestr(arcname, tif_bytes)
             if errors:
+                _sylva_check_cancelled()
                 zf.writestr('HATALAR.txt', 'Bazı bantlar dışa aktarılamadı:\n' + '\n'.join(errors))
         zip_buf.seek(0)
 
@@ -10813,6 +11233,9 @@ def download_raw_bands():
             )
         return resp
 
+    except (BrokenPipeError, ConnectionResetError):
+        print('[SylvaGIS] ℹ️ İstemci bağlantıyı kesti (Ham bant indirme iptal edildi).')
+        return Response('', status=499)
     except Exception as e:
         traceback.print_exc()
         err = str(e).strip() or '{} (mesajsız hata — sunucu konsoluna bakın)'.format(type(e).__name__)
@@ -11189,17 +11612,23 @@ def _features_to_kml(features, name='SylvaGIS_vector'):
     ]
 
     def _coords_str(ring):
-        return ' '.join(f'{lon},{lat},0' for lon, lat in ring)
+        return ' '.join(f'{pt[0]},{pt[1]},{pt[2] if len(pt) > 2 else 0}' for pt in ring)
 
     for i, feat in enumerate(features, start=1):
+        _sylva_check_cancelled()
         props = feat.get('properties') or {}
+        _sylva_check_cancelled()
         geom  = feat.get('geometry') or {}
+        _sylva_check_cancelled()
         gtype = geom.get('type', '')
+        _sylva_check_cancelled()
         coords = geom.get('coordinates', [])
 
         # Placemark adı: name → class_name → label → class_value → numara
+        _sylva_check_cancelled()
         label = (props.get('name') or props.get('class_name') or props.get('label') or
                  props.get('class_value') or props.get('first') or str(i))
+        _sylva_check_cancelled()
         color_hex = (props.get('color') or 'ffffffff')
         # KML renk formatı: aabbggrr (alpha, blue, green, red)
         def _hex_to_kml(h):
@@ -11223,7 +11652,8 @@ def _features_to_kml(features, name='SylvaGIS_vector'):
         if props:
             lines.append('    <ExtendedData>')
             for k, v in props.items():
-                lines.append(f'      <Data name="{sax.escape(str(k))}"><value>{sax.escape(str(v))}</value></Data>')
+                _sylva_check_cancelled()
+                lines.append(f'      <Data name={sax.quoteattr(str(k))}><value>{sax.escape(str(v))}</value></Data>')
             lines.append('    </ExtendedData>')
 
         if gtype == 'Polygon':
@@ -11233,6 +11663,7 @@ def _features_to_kml(features, name='SylvaGIS_vector'):
                 lines.append('        ' + _coords_str(coords[0]))
                 lines.append('      </coordinates></LinearRing></outerBoundaryIs>')
                 for inner in coords[1:]:
+                    _sylva_check_cancelled()
                     lines.append('      <innerBoundaryIs><LinearRing><coordinates>')
                     lines.append('        ' + _coords_str(inner))
                     lines.append('      </coordinates></LinearRing></innerBoundaryIs>')
@@ -11240,12 +11671,14 @@ def _features_to_kml(features, name='SylvaGIS_vector'):
         elif gtype == 'MultiPolygon':
             lines.append('    <MultiGeometry>')
             for poly_coords in coords:
+                _sylva_check_cancelled()
                 lines.append('      <Polygon>')
                 if poly_coords:
                     lines.append('        <outerBoundaryIs><LinearRing><coordinates>')
                     lines.append('          ' + _coords_str(poly_coords[0]))
                     lines.append('        </coordinates></LinearRing></outerBoundaryIs>')
                     for inner in poly_coords[1:]:
+                        _sylva_check_cancelled()
                         lines.append('        <innerBoundaryIs><LinearRing><coordinates>')
                         lines.append('          ' + _coords_str(inner))
                         lines.append('        </coordinates></LinearRing></innerBoundaryIs>')
@@ -11267,7 +11700,7 @@ def _features_to_kml(features, name='SylvaGIS_vector'):
 
 def _features_to_shp_zip(features, name='SylvaGIS_vector'):
     """GeoJSON feature listesini SHP (shapefile) ZIP arşivine dönüştürür.
-    Önce pyshp (shapefile) dener; yoksa GeoJSON'u .zip içine koyar."""
+    pyshp bağımlılığı yoksa farklı bir dosya biçimini SHP olarak sunmaz."""
     try:
         import shapefile as shp  # pyshp
         import io as _io
@@ -11295,6 +11728,7 @@ def _features_to_shp_zip(features, name='SylvaGIS_vector'):
             if n < 3:
                 return 0.0
             for i in range(n):
+                _sylva_check_cancelled()
                 x1, y1 = ring[i][0], ring[i][1]
                 x2, y2 = ring[(i + 1) % n][0], ring[(i + 1) % n][1]
                 area += (x1 * y2 - x2 * y1)
@@ -11324,15 +11758,24 @@ def _features_to_shp_zip(features, name='SylvaGIS_vector'):
             return r
 
         for feat in features:
+            _sylva_check_cancelled()
             props = feat.get('properties') or {}
+            _sylva_check_cancelled()
             geom  = feat.get('geometry') or {}
+            _sylva_check_cancelled()
             gtype = geom.get('type', '')
+            _sylva_check_cancelled()
             coords = geom.get('coordinates', [])
 
-            cv   = str(props.get('class_value') or props.get('first') or props.get('label') or '')
+            _sylva_check_cancelled()
+            cv   = str(props.get('class_value') if props.get('class_value') is not None else props.get('first') if props.get('first') is not None else props.get('label') or '')
+            _sylva_check_cancelled()
             cn   = str(props.get('class_name') or props.get('label') or cv)
+            _sylva_check_cancelled()
             col  = str(props.get('color') or '')
+            _sylva_check_cancelled()
             nm   = str(props.get('name') or '')
+            _sylva_check_cancelled()
             sp   = str(props.get('species') or '')
 
             if gtype == 'Polygon':
@@ -11342,6 +11785,7 @@ def _features_to_shp_zip(features, name='SylvaGIS_vector'):
             elif gtype == 'MultiPolygon':
                 all_parts = []
                 for poly in coords:
+                    _sylva_check_cancelled()
                     all_parts.extend([_ring_for_shp(r, i > 0) for i, r in enumerate(poly)])
                 w.poly(all_parts)
                 w.record(cv, cn, col, nm, sp)
@@ -11362,22 +11806,19 @@ def _features_to_shp_zip(features, name='SylvaGIS_vector'):
 
         zip_buf = io.BytesIO()
         with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as z:
+            _sylva_check_cancelled()
             z.writestr(f'{name}.shp', shp_buf.getvalue())
+            _sylva_check_cancelled()
             z.writestr(f'{name}.shx', shx_buf.getvalue())
+            _sylva_check_cancelled()
             z.writestr(f'{name}.dbf', dbf_buf.getvalue())
+            _sylva_check_cancelled()
             z.writestr(f'{name}.prj', prj_wkt)
         zip_buf.seek(0)
         return zip_buf.read()
 
-    except ImportError:
-        # pyshp yok — GeoJSON olarak paketle
-        import json as _json
-        fc = _json.dumps({'type': 'FeatureCollection', 'features': features}, ensure_ascii=False).encode('utf-8')
-        zip_buf = io.BytesIO()
-        with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as z:
-            z.writestr(f'{name}.geojson', fc)
-        zip_buf.seek(0)
-        return zip_buf.read()
+    except ImportError as exc:
+        raise ValueError('SHP oluşturulamadı: sunucuda pyshp bağımlılığı bulunamadı.') from exc
 
 
 def _geojson_to_features(geom):
@@ -11421,6 +11862,7 @@ def _generate_contour_vectors(data):
     from rasterio.io import MemoryFile as _MemoryFile
     from shapely.geometry import shape as _shp_shape, LineString as _ShpLine
 
+    _sylva_check_cancelled()
     roi_coords = data.get('roi')
     if not roi_coords:
         return {'success': False, 'error': 'Çalışma alanı geometrisi bulunamadı. Haritada bir alan çizin.'}
@@ -11428,6 +11870,7 @@ def _generate_contour_vectors(data):
 
     # ── DEM kaynağı seç (build_result_image ile birebir aynı mantık) ──
     _srtm_fallback = ee.Image('USGS/SRTMGL1_003').select('elevation')
+    _sylva_check_cancelled()
     dem_source = data.get('demSource', 'SRTM')
     if dem_source == 'ALOS':
         dem = (ee.ImageCollection('JAXA/ALOS/AW3D30/V3_2')
@@ -11443,6 +11886,7 @@ def _generate_contour_vectors(data):
         dem = ee.Image('USGS/SRTMGL1_003').select('elevation')
 
     try:
+        _sylva_check_cancelled()
         interval = float(data.get('contourInterval', 50) or 50)
     except (TypeError, ValueError):
         interval = 50.0
@@ -11531,6 +11975,7 @@ def _generate_contour_vectors(data):
     levels = []
     lv = level_start
     while lv <= level_end + 1e-9:
+        _sylva_check_cancelled()
         if e_min < lv < e_max:   # sadece AOI içinde gerçekten geçilen seviyeler
             levels.append(round(lv, 4))
         lv += interval
@@ -11584,8 +12029,10 @@ def _generate_contour_vectors(data):
         if len(pts) < 3:
             return pts
         for _ in range(iterations):
+            _sylva_check_cancelled()
             new_pts = [pts[0]]
             for i in range(len(pts) - 1):
+                _sylva_check_cancelled()
                 p0 = pts[i]; p1 = pts[i + 1]
                 q = (0.75 * p0[0] + 0.25 * p1[0], 0.75 * p0[1] + 0.25 * p1[1])
                 r = (0.25 * p0[0] + 0.75 * p1[0], 0.25 * p0[1] + 0.75 * p1[1])
@@ -11661,6 +12108,7 @@ def _generate_contour_vectors(data):
 
         key_to_segs = {}
         for k in range(n):
+            _sylva_check_cancelled()
             a = _key(xs0[k], ys0[k]); b = _key(xs1[k], ys1[k])
             if a == b:
                 continue
@@ -11675,6 +12123,7 @@ def _generate_contour_vectors(data):
             return (float(xs1[k]), float(ys1[k])) if a == key else (float(xs0[k]), float(ys0[k]))
 
         for k in range(n):
+            _sylva_check_cancelled()
             if used[k]:
                 continue
             used[k] = True
@@ -11683,6 +12132,7 @@ def _generate_contour_vectors(data):
 
             cur_key = _key(*p1)
             while True:
+                _sylva_check_cancelled()
                 cands = [c for c in key_to_segs.get(cur_key, []) if not used[c]]
                 if not cands:
                     break
@@ -11694,6 +12144,7 @@ def _generate_contour_vectors(data):
 
             cur_key = _key(*p0)
             while True:
+                _sylva_check_cancelled()
                 cands = [c for c in key_to_segs.get(cur_key, []) if not used[c]]
                 if not cands:
                     break
@@ -11709,6 +12160,7 @@ def _generate_contour_vectors(data):
 
     features_out = []
     for level in levels:
+        _sylva_check_cancelled()
         try:
             polylines = _marching_squares_level(level)
         except Exception as e:
@@ -11716,6 +12168,7 @@ def _generate_contour_vectors(data):
             continue
 
         for pix_pts in polylines:
+            _sylva_check_cancelled()
             if len(pix_pts) < 2:
                 continue
             geo_pts = [_pixel_to_geo(c, r) for (c, r) in pix_pts]
@@ -11749,6 +12202,7 @@ def _generate_contour_vectors(data):
                 parts = []
 
             for part in parts:
+                _sylva_check_cancelled()
                 coords = list(part.coords)
                 if len(coords) < 2:
                     continue
@@ -11951,11 +12405,17 @@ def terrain_3d_data():
 def vector_download():
     req_data = request.get_json(silent=True) or {}
 
+    _sylva_check_cancelled()
     fmt         = (req_data.get('format') or 'kml').strip().lower()
+    _sylva_check_cancelled()
     raw_fname   = (req_data.get('filename') or '').strip()
+    _sylva_check_cancelled()
     crs         = (req_data.get('crs') or 'EPSG:4326').strip() or 'EPSG:4326'
+    _sylva_check_cancelled()
     data_source = (req_data.get('dataSource') or 'workspace').strip()
+    _sylva_check_cancelled()
     geom_json   = req_data.get('geometry')
+    _sylva_check_cancelled()
     lang_code   = str(req_data.get('lang') or 'en').strip()
 
     if not raw_fname or raw_fname.lower() in ('sylvagis_vector', 'sylvagis_vektor', 'sylvagis_vektor_analizleri', 'sylvagis_vector_analysis'):
@@ -11973,7 +12433,9 @@ def vector_download():
     # /api/vector-download-batch ise doğrudan API tüketicileri için de vardır.
     if req_data.get('vectorizePayload'):
         try:
+            _sylva_check_cancelled()
             payload = dict(req_data.get('payload') or {})
+            _sylva_check_cancelled()
             payload.setdefault('lang', req_data.get('lang') or 'en')
             feats, meta = _vectorize_analysis_payload(payload, crs)
             body, out_name = _make_vector_response(fmt, feats, safe_name)
@@ -11983,6 +12445,9 @@ def vector_download():
             else: ctype = 'application/geo+json; charset=utf-8'
             return Response(body, headers={'Content-Type': ctype,
                 'Content-Disposition': _content_disposition(out_name)})
+        except (BrokenPipeError, ConnectionResetError):
+            print('[SylvaGIS] ℹ️ İstemci bağlantıyı kesti (Vektör indirme iptal edildi).')
+            return Response('', status=499)
         except Exception as ex:
             traceback.print_exc()
             return jsonify({'error': str(ex)}), 500
@@ -12004,6 +12469,7 @@ def vector_download():
             # SINIRLAMA" notu. İstemci 'analysisId' gönderirse KENDİ izole
             # analiz oturumu kullanılır; göndermezse önceki paylaşılan-global
             # davranış değiştirilmeden korunur.
+            _sylva_check_cancelled()
             analysis_id = req_data.get('analysisId')
             if analysis_id:
                 _session = _get_analysis_session(analysis_id)
@@ -12047,6 +12513,7 @@ def vector_download():
             kml_bytes = _features_to_kml(features, safe_name)
             buf = io.BytesIO()
             with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
+                _sylva_check_cancelled()
                 z.writestr(f'{safe_name}.kml', kml_bytes)
             buf.seek(0)
             return Response(buf.read(), headers={
@@ -12082,6 +12549,9 @@ def vector_download():
         else:
             return jsonify({'error': f'Bilinmeyen format: {fmt}'}), 400
 
+    except (BrokenPipeError, ConnectionResetError):
+        print('[SylvaGIS] ℹ️ İstemci bağlantıyı kesti (Vektör indirme iptal edildi).')
+        return Response('', status=499)
     except Exception as ex:
         traceback.print_exc()
         return jsonify({'error': str(ex)}), 500
@@ -12266,19 +12736,60 @@ def _building_footprint_legend_labels(data):
     return roof_label, roof_color, outside_label, outside_color
 
 
+
+def _sylva_normalize_vector_breaks(data):
+    """Keep raster class IDs, vector labels and colors in the same range order."""
+    breaks = data.get('classBreaks')
+    if not breaks:
+        return
+    if not isinstance(breaks, list) or len(breaks) > 255:
+        raise ValueError('Vektör sınıfları geçerli bir liste olmalıdır (en fazla 255 sınıf).')
+    normalized = []
+    localized = data.get('localizedClassMeta') or []
+    for pos, item in enumerate(breaks):
+        if not isinstance(item, dict):
+            raise ValueError('Geçersiz vektör sınıfı.')
+        try:
+            lo, hi = float(item['min']), float(item['max'])
+        except (KeyError, TypeError, ValueError):
+            raise ValueError('Vektör sınıf sınırları geçerli sayılar olmalıdır.') from None
+        if not math.isfinite(lo) or not math.isfinite(hi):
+            raise ValueError('Vektör sınıf sınırları sonlu sayılar olmalıdır.')
+        lo, hi = min(lo, hi), max(lo, hi)
+        normalized.append((lo, hi, pos, dict(item, min=lo, max=hi)))
+    normalized.sort(key=lambda entry: (entry[0], entry[1]))
+    data['classBreaks'] = [entry[3] for entry in normalized]
+    if isinstance(localized, list) and localized:
+        ordered = []
+        for code, (lo, hi, pos, item) in enumerate(normalized, 1):
+            match = next((meta for meta in localized if isinstance(meta, dict) and
+                          meta.get('code') == pos + 1), None)
+            if match is None and pos < len(localized) and isinstance(localized[pos], dict):
+                match = localized[pos]
+            ordered.append(dict(match or {}, code=code, min=lo, max=hi,
+                                label=(match or {}).get('label') or item.get('label') or f'{lo:g} – {hi:g}',
+                                color=(match or {}).get('color') or item.get('color') or '#999999'))
+        data['localizedClassMeta'] = ordered
+
+
 def _vectorize_analysis_payload(data, crs='EPSG:4326'):
     """Bir aktif analiz payload'ını gerçek AOI üzerinde sınıflı vektöre dönüştürür."""
     data=dict(data or {})
+    _sylva_check_cancelled()
     index=str(data.get('index') or '').upper()
     if index == 'RGB':
         raise ValueError('RGB uydu görüntüsü sınıflandırılmış vektör katmanı değildir; vektör toplu indirmesine dahil edilmedi.')
     if index == 'TOPO_CONTOUR':
         result=_generate_contour_vectors(data)
         if not result.get('success'):
+            _sylva_check_cancelled()
             raise ValueError(result.get('error') or 'Eş yükselti vektörü üretilemedi.')
+        _sylva_check_cancelled()
         feats=result.get('features') or []
+        _sylva_check_cancelled()
         color=str(data.get('contourLineColor') or '#1e3a8a')
         for f in feats:
+            _sylva_check_cancelled()
             props=f.setdefault('properties',{})
             props['class_name']='Eş Yükselti'; props['color']=color
         return feats,[{'code':1,'label':'Eş Yükselti','color':color}]
@@ -12287,6 +12798,8 @@ def _vectorize_analysis_payload(data, crs='EPSG:4326'):
         # 🌲 Karbon Analizi fidan verileri Karbon Modülü içerisindeki özel KML indirme
         # butonuyla sunulduğundan genel vektör dönüştürme ve dışa aktarma hattından tamamen muaftır.
         return [], []
+    if index not in LULC_CLASS_DEFS and index not in _NATIVE_CATEGORICAL_RASTER_INDICES:
+        _sylva_normalize_vector_breaks(data)
     # 1. GEE Görüntüsünü ve Çalışma Alanı (ROI) Geometrisini Oluştur
     try:
         final_display, roi, result, vis, _ = _call_with_retry(
@@ -12302,6 +12815,7 @@ def _vectorize_analysis_payload(data, crs='EPSG:4326'):
     # Sınıf metadata'sını (renkler, etiketler, min/max aralıkları) hazırla
     class_meta = _vector_class_meta(data, vis)
 
+    _sylva_check_cancelled()
     _payload_breaks = data.get('classBreaks')
 
     # 2. Sürekli Rasterı Tamsayı Sınıflarına Dönüştür (Reclassify) ve Maskele
@@ -12312,29 +12826,35 @@ def _vectorize_analysis_payload(data, crs='EPSG:4326'):
         if isinstance(_payload_breaks, list) and _payload_breaks:
             try:
                 _valid_breaks = []
-                for _b in _payload_breaks[:24]:
+                for _b in _payload_breaks:
+                    _sylva_check_cancelled()
                     if not isinstance(_b, dict): continue
+                    _sylva_check_cancelled()
                     _lo = float(_b.get('min'))
+                    _sylva_check_cancelled()
                     _hi = float(_b.get('max'))
                     if _hi < _lo: _lo, _hi = _hi, _lo
                     _valid_breaks.append((_lo, _hi))
                 if _valid_breaks:
                     _cls = ee.Image.constant(0).toInt()
                     for _i, (_lo, _hi) in enumerate(_valid_breaks, 1):
-                        _cond = result.gte(_lo).And(result.lte(_hi) if _i == len(_valid_breaks) else result.lt(_hi))
-                        _cls = _cls.where(_cond, _i)
+                        _sylva_check_cancelled()
+                        _cond = result.eq(_lo) if _lo == _hi else result.gte(_lo).And(result.lte(_hi) if _i == len(_valid_breaks) else result.lt(_hi))
+                        _cls = _cls.where(_cond.And(_cls.eq(0)), _i)
                     # Sadece geçerli sınıf atanan (1..N) ve geçerli maskesi olan pikselleri koru
                     vector_img = _cls.updateMask(result.mask().And(_cls.gt(0))).toInt().clip(roi)
                 else:
                     vector_img = (final_display if final_display is not None else result).toInt().updateMask(result.mask()).clip(roi)
             except Exception as _cls_err:
-                print('[SylvaGIS] Vektör sınıflandırma maskeleme hatası:', _cls_err)
-                vector_img = (final_display if final_display is not None else result).toInt().updateMask(result.mask()).clip(roi)
+                raise ValueError(f'Vektör sınıflandırması oluşturulamadı: {_cls_err}') from _cls_err
         else:
+            _sylva_check_cancelled()
             pal = (vis or {}).get('palette') if isinstance(vis, dict) else None
             if isinstance(pal, list) and len(pal) > 1:
                 try:
+                    _sylva_check_cancelled()
                     vmin = float(vis.get('min', 0))
+                    _sylva_check_cancelled()
                     vmax = float(vis.get('max', 1))
                     if vmax <= vmin:
                         vmax = vmin + 1.0
@@ -12342,6 +12862,7 @@ def _vectorize_analysis_payload(data, crs='EPSG:4326'):
                     step = (vmax - vmin) / n
                     _cls = ee.Image.constant(0).toInt()
                     for _i in range(1, n + 1):
+                        _sylva_check_cancelled()
                         _lo = vmin + (_i - 1) * step
                         _hi = vmax if _i == n else vmin + _i * step
                         _cond = result.gte(_lo).And(result.lte(_hi) if _i == n else result.lt(_hi))
@@ -12370,6 +12891,7 @@ def _vectorize_analysis_payload(data, crs='EPSG:4326'):
     # 3. Alan Büyüklüğüne Göre Dinamik ve Güvenli Ölçek (Scale) Seçimi
     aoi_m2 = 0.0
     try:
+        _sylva_check_cancelled()
         raw_geom = data.get('geometry') or data.get('roi')
         if raw_geom:
             aoi_m2 = _geojson_area_m2(raw_geom if isinstance(raw_geom, dict) else {'type': 'Polygon', 'coordinates': raw_geom})
@@ -12431,7 +12953,9 @@ def _vectorize_analysis_payload(data, crs='EPSG:4326'):
 
             merged_list = codes_list.map(_merge_one_class, True)
             merged_fc = ee.FeatureCollection(merged_list)
+            _sylva_check_cancelled()
             merged_info = _call_with_retry(lambda: merged_fc.getInfo()) or {}
+            _sylva_check_cancelled()
             merged_feats = [f for f in (merged_info.get('features') or []) if f and f.get('geometry') and f.get('geometry', {}).get('coordinates')]
             if merged_feats:
                 feats = merged_feats
@@ -12453,7 +12977,9 @@ def _vectorize_analysis_payload(data, crs='EPSG:4326'):
             labelProperty='class',
             crs=crs if str(crs).upper().startswith('EPSG:') else 'EPSG:4326'
         ).limit(20000))
+        _sylva_check_cancelled()
         info = _call_with_retry(lambda: fc.getInfo()) or {}
+        _sylva_check_cancelled()
         feats = [f for f in (info.get('features') or []) if f and f.get('geometry') and f.get('geometry', {}).get('coordinates')]
 
     if not feats and scale > 20:
@@ -12472,48 +12998,12 @@ def _vectorize_analysis_payload(data, crs='EPSG:4326'):
                 labelProperty='class',
                 crs=crs if str(crs).upper().startswith('EPSG:') else 'EPSG:4326'
             ).limit(20000))
+            _sylva_check_cancelled()
             info_retry = _call_with_retry(lambda: fc_retry.getInfo()) or {}
+            _sylva_check_cancelled()
             feats = [f for f in (info_retry.get('features') or []) if f and f.get('geometry') and f.get('geometry', {}).get('coordinates')]
         except Exception as retry_err:
             print('[SylvaGIS] İnce ölçekli kurtarma denemesi hatası:', retry_err)
-
-    # 5. Boş Koleksiyon Esnetme ve Güvenli Fallback (Server-Side Geometry Handling)
-    if not feats:
-        # Boş koleksiyon kontrolü esnetildi: Kullanıcının gerçek AOI geometrisi kullanılarak
-        # geçerli bir vektör poligonu üretilir, böylece ZIP arşivi hatasız ve eksiksiz oluşur.
-        roi_geom = None
-        try:
-            raw_geom = data.get('geometry') or data.get('roi')
-            if isinstance(raw_geom, dict) and raw_geom.get('coordinates'):
-                roi_geom = raw_geom
-            elif isinstance(raw_geom, list) and len(raw_geom) >= 3:
-                roi_geom = {'type': 'Polygon', 'coordinates': [raw_geom] if isinstance(raw_geom[0][0], (int, float)) else raw_geom}
-            elif roi is not None:
-                roi_info = _call_with_retry(lambda: roi.getInfo())
-                if roi_info and roi_info.get('coordinates'):
-                    roi_geom = roi_info
-        except Exception:
-            roi_geom = None
-
-        if roi_geom:
-            first_label = (class_meta[0]['label'] if class_meta else index)
-            first_color = (class_meta[0]['color'] if class_meta else '#2ca25f')
-            first_code = (class_meta[0]['code'] if class_meta else 1)
-            fallback_props = {
-                'class': first_code,
-                'class_value': first_code,
-                'class_name': first_label,
-                'color': first_color
-            }
-            if class_meta and 'min' in class_meta[0] and 'max' in class_meta[0]:
-                fallback_props['min_val'] = class_meta[0]['min']
-                fallback_props['max_val'] = class_meta[0]['max']
-                fallback_props['range'] = f"{class_meta[0]['min']} – {class_meta[0]['max']}"
-            feats = [{
-                'type': 'Feature',
-                'geometry': roi_geom,
-                'properties': fallback_props
-            }]
 
     if not feats:
         raise ValueError('Vektör geometri üretilemedi; veri boş olabilir.')
@@ -12526,6 +13016,7 @@ def _make_vector_response(fmt, features, safe_name):
         return _features_to_kml(features,safe_name),f'{safe_name}.kml'
     if fmt=='kmz':
         kb=_features_to_kml(features,safe_name); b=io.BytesIO()
+        _sylva_check_cancelled()
         with zipfile.ZipFile(b,'w',zipfile.ZIP_DEFLATED) as z: z.writestr(f'{safe_name}.kml',kb)
         return b.getvalue(),f'{safe_name}.kmz'
     if fmt=='shp':
@@ -12538,6 +13029,7 @@ def _make_vector_response(fmt, features, safe_name):
 @app.route('/api/vector-download-batch', methods=['POST'])
 def vector_download_batch():
     req=request.get_json(silent=True) or {}
+    _sylva_check_cancelled()
     fmt=str(req.get('format') or 'kml').lower().strip(); items=req.get('items') or []
     if fmt not in ('kml','kmz','shp','geojson'):
         return jsonify({'success':False,'error':'Geçersiz vektör formatı.'}),400
@@ -12545,40 +13037,60 @@ def vector_download_batch():
         return jsonify({'success':False,'error':'Toplu vektör indirme için en az bir katman gerekir.'}),400
     if len(items)>25:
         return jsonify({'success':False,'error':'Tek ZIP içinde en fazla 25 katman indirilebilir.'}),400
-    master=io.BytesIO(); errors=[]; legends=[]; used=set()
-    with zipfile.ZipFile(master,'w',zipfile.ZIP_DEFLATED) as z:
-        for pos,item in enumerate(items,1):
-            try:
-                payload=item.get('payload') if isinstance(item,dict) else None
-                if not payload: raise ValueError('Katman payload bilgisi eksik.')
-                payload = dict(payload)
-                payload.setdefault('lang', req.get('lang') or 'en')
-                base=_sylva_safe_filename(str(item.get('filename') or f'SylvaGIS_vector_{pos}'))[:100] or f'SylvaGIS_vector_{pos}'
-                original=base; n=2
-                while base.lower() in used: base=f'{original}_{n}'; n+=1
-                used.add(base.lower())
-                feats,meta=_vectorize_analysis_payload(payload,str(req.get('crs') or 'EPSG:4326'))
-                body,name=_make_vector_response(fmt,feats,base); z.writestr(name,body)
-                legends.append(f'[{base}]')
-                for m in meta or []: legends.append(f"  {m.get('code','')} | {m.get('label','')} | {m.get('color','')}")
-            except Exception as ex:
-                errors.append((str(item.get('filename') or f'Katman {pos}'),str(ex)))
-        if errors:
-            _report_name,_report_title,_report_intro=_undownloadable_report_texts(req.get('lang'))
-            lines=[_report_title,'', _report_intro,'']
-            lines.extend(f'- {name}: {err}' for name,err in errors)
-            z.writestr(f'{_report_name}.txt','\n'.join(lines).encode('utf-8'))
-        if legends: z.writestr('LEJANTLAR.txt','\n'.join(legends).encode('utf-8'))
-    if not used:
-        return jsonify({'success':False,'error':'Hiçbir katman üretilemedi.'}),400
-    master.seek(0)
-    return Response(master.read(),headers={'Content-Type':'application/zip','Content-Disposition': _content_disposition('SylvaGIS_' + _export_labels(req.get('lang'))[1] + '.zip')})
+    try:
+        master=io.BytesIO(); errors=[]; legends=[]; used=set(); exported_count=0
+        with zipfile.ZipFile(master,'w',zipfile.ZIP_DEFLATED) as z:
+            for pos,item in enumerate(items,1):
+                _sylva_check_cancelled()
+                try:
+                    _sylva_check_cancelled()
+                    payload=item.get('payload') if isinstance(item,dict) else None
+                    if not payload: raise ValueError('Katman payload bilgisi eksik.')
+                    payload = dict(payload)
+                    _sylva_check_cancelled()
+                    payload.setdefault('lang', req.get('lang') or 'en')
+                    _sylva_check_cancelled()
+                    base=_sylva_safe_filename(str(item.get('filename') or f'SylvaGIS_vector_{pos}'))[:100] or f'SylvaGIS_vector_{pos}'
+                    original=base; n=2
+                    _sylva_check_cancelled()
+                    while base.lower() in used: base=f'{original}_{n}'; n+=1
+                    used.add(base.lower())
+                    _sylva_check_cancelled()
+                    feats,meta=_vectorize_analysis_payload(payload,str(req.get('crs') or 'EPSG:4326'))
+                    _sylva_check_cancelled()
+                    if not feats: raise ValueError('Bu katmanda dışa aktarılabilir vektör geometrisi bulunamadı.')
+                    body,name=_make_vector_response(fmt,feats,base); z.writestr(name,body)
+                    exported_count += 1
+                    legends.append(f'[{base}]')
+                    _sylva_check_cancelled()
+                    for m in meta or []: legends.append(f"  {m.get('code','')} | {m.get('label','')} | {m.get('color','')}")
+                except Exception as ex:
+                    _sylva_check_cancelled()
+                    errors.append((str(item.get('filename') or f'Katman {pos}'),str(ex)))
+            if errors:
+                _sylva_check_cancelled()
+                _report_name,_report_title,_report_intro=_undownloadable_report_texts(req.get('lang'))
+                lines=[_report_title,'', _report_intro,'']
+                lines.extend(f'- {name}: {err}' for name,err in errors)
+                _sylva_check_cancelled()
+                z.writestr(f'{_report_name}.txt','\n'.join(lines).encode('utf-8'))
+            _sylva_check_cancelled()
+            if legends: z.writestr('LEJANTLAR.txt','\n'.join(legends).encode('utf-8'))
+        if not exported_count:
+            return jsonify({'success':False,'error':'Hiçbir katman üretilemedi.'}),400
+        master.seek(0)
+        _sylva_check_cancelled()
+        return Response(master.read(),headers={'Content-Type':'application/zip','Content-Disposition': _content_disposition('SylvaGIS_' + _export_labels(req.get('lang'))[1] + '.zip')})
+    except (BrokenPipeError, ConnectionResetError):
+        print('[SylvaGIS] ℹ️ İstemci bağlantıyı kesti (Toplu vektör indirme iptal edildi).')
+        return Response('', status=499)
 
 
 @app.route('/api/download-geotiff-batch', methods=['POST'])
 def download_geotiff_batch():
     """Bir aktif ekrandaki birden fazla rasteri tek ZIP içinde döndürür."""
     req_data = request.json or {}
+    _sylva_check_cancelled()
     items = req_data.get('items') or []
     if not isinstance(items, list) or len(items) < 2:
         return jsonify({'success': False, 'error': 'ZIP için en az iki raster analiz gerekir.'}), 400
@@ -12608,11 +13120,14 @@ def download_geotiff_batch():
     used_names = set()
     prepared_items = []
     for pos, item in enumerate(items, 1):
+        _sylva_check_cancelled()
         if not isinstance(item, dict):
             continue
         item = dict(item)
+        _sylva_check_cancelled()
         base = re.sub(r'[^A-Za-z0-9_.-]+', '_', str(item.get('filename') or 'SylvaGIS_{}'.format(pos))).strip('._') or 'SylvaGIS_{}'.format(pos)
         while base.lower() in used_names:
+            _sylva_check_cancelled()
             base = '{}_{}'.format(base, pos)
         used_names.add(base.lower())
         item['filename'] = base
@@ -12623,6 +13138,7 @@ def download_geotiff_batch():
     def _fetch_one(pos, base, item):
         last_err = None
         for attempt in range(3):
+            _sylva_check_cancelled()
             try:
                 with app.test_request_context('/api/download-geotiff', method='POST', json=item):
                     response = download_geotiff()
@@ -12631,7 +13147,7 @@ def download_geotiff_batch():
                 last_err = exc
                 # 429/RESOURCE_EXHAUSTED için kısa ama artan bekleme.
                 if attempt < 2 and ('429' in str(exc) or 'RESOURCE_EXHAUSTED' in str(exc).upper() or 'Too Many Requests' in str(exc)):
-                    time.sleep(5 * (attempt + 1))
+                    _sylva_cancel_wait(5 * (attempt + 1))
                     continue
                 raise
         else:
@@ -12669,6 +13185,7 @@ def download_geotiff_batch():
         # ZIP asla kısmi/karışık içerikle üretilmez).
         if 'application/json' in content_type or (body[:1] in (b'{', b'[')):
             try:
+                _sylva_check_cancelled()
                 err_msg = json.loads(body.decode('utf-8', errors='replace')).get('error')
             except Exception:
                 err_msg = None
@@ -12684,12 +13201,14 @@ def download_geotiff_batch():
     max_workers = 1
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         future_map = {
-            pool.submit(_fetch_one, pos, base, item): (pos, base)
+            _sylva_submit(pool, _fetch_one, pos, base, item): (pos, base)
             for pos, base, item in prepared_items
         }
         for future in as_completed(future_map):
+            _sylva_check_cancelled()
             pos, base = future_map[future]
             try:
+                _sylva_check_cancelled()
                 results[pos] = future.result()
             except Exception as item_err:
                 errors.append((base, str(item_err)))
@@ -12718,6 +13237,7 @@ def download_geotiff_batch():
     try:
         with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as out_zip:
             for pos, base, _item in prepared_items:
+                _sylva_check_cancelled()
                 if pos not in results:
                     continue
                 base_r, content_type, body = results[pos]
@@ -12725,12 +13245,17 @@ def download_geotiff_batch():
                     # LULC renk tablosu/RAT dosyalarını ana ZIP'e doğrudan aç.
                     with zipfile.ZipFile(io.BytesIO(body), 'r') as nested:
                         for member in nested.infolist():
+                            _sylva_check_cancelled()
                             if not member.is_dir():
+                                _sylva_check_cancelled()
                                 out_zip.writestr(member.filename, nested.read(member.filename))
                 else:
+                    _sylva_check_cancelled()
                     out_zip.writestr(base_r + '.tif', body)
             if errors:
+                _sylva_check_cancelled()
                 _report_name,_report_title,_report_intro=_undownloadable_report_texts(req_data.get('lang'))
+                _sylva_check_cancelled()
                 out_zip.writestr(
                     f'{_report_name}.txt',
                     _report_title + '\n\n' + _report_intro + '\n\n' +
@@ -12741,6 +13266,9 @@ def download_geotiff_batch():
         response.headers['Content-Disposition'] = 'attachment; filename="SylvaGIS_raster_analizleri.zip"'
         response.headers['Content-Length'] = str(len(result))
         return response
+    except (BrokenPipeError, ConnectionResetError):
+        print('[SylvaGIS] ℹ️ İstemci bağlantıyı kesti (Toplu GeoTIFF indirme iptal edildi).')
+        return Response('', status=499)
     except Exception as exc:
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(exc)}), 500
@@ -14420,6 +14948,7 @@ def analyze_site_environmental_layers(geojson_input, country_code: str = 'TR', a
         center_lat = 39.0
         try:
             centroid = ee_geom.centroid(maxError=100)
+            _sylva_check_cancelled()
             coords = centroid.coordinates().getInfo()
             if coords and len(coords) >= 2:
                 center_lon = float(coords[0])
@@ -14434,6 +14963,7 @@ def analyze_site_environmental_layers(geojson_input, country_code: str = 'TR', a
         try:
             pt = ee.Geometry.Point([center_lon, center_lat])
             lsib_feat = ee.FeatureCollection('USDOS/LSIB_SIMPLE/2017').filterBounds(pt).first()
+            _sylva_check_cancelled()
             lsib_info = lsib_feat.getInfo()
             if lsib_info and 'properties' in lsib_info:
                 props = lsib_info['properties']
@@ -14465,6 +14995,7 @@ def analyze_site_environmental_layers(geojson_input, country_code: str = 'TR', a
 
         combined = dem.addBands([slope, aspect, climate, soc])
 
+        _sylva_check_cancelled()
         stats = combined.reduceRegion(
             reducer=ee.Reducer.mean(),
             geometry=ee_geom,
@@ -14516,6 +15047,7 @@ def analyze_site_environmental_layers(geojson_input, country_code: str = 'TR', a
         # 4. OpenLandMap USDA Toprak Dokusu Sınıfı (0cm mode)
         try:
             tex_img = ee.Image('OpenLandMap/SOL/SOL_TEXTURE-CLASS_USDA-TT_M/v02').select(['b0'])
+            _sylva_check_cancelled()
             tex_stats = tex_img.reduceRegion(
                 reducer=ee.Reducer.mode(),
                 geometry=ee_geom,
@@ -14553,6 +15085,7 @@ def analyze_site_environmental_layers(geojson_input, country_code: str = 'TR', a
             esri_col = ee.ImageCollection('projects/sat-io/open-datasets/landcover/ESRI_Global-LULC_10m_TS').filterBounds(ee_geom).sort('system:time_start', False)
             esri_img = esri_col.first()
             if esri_img:
+                _sylva_check_cancelled()
                 esri_hist = esri_img.reduceRegion(
                     reducer=ee.Reducer.frequencyHistogram(),
                     geometry=ee_geom,
@@ -14565,6 +15098,7 @@ def analyze_site_environmental_layers(geojson_input, country_code: str = 'TR', a
                 if total_pix > 0:
                     real_esri = []
                     for k_str, val in sorted(b1_hist.items(), key=lambda item: float(item[1]), reverse=True):
+                        _sylva_check_cancelled()
                         code = int(float(k_str))
                         cls_meta = ESRI_LULC_CLASSES.get(code, {
                             'name_tr': f'Sınıf {code}',
@@ -14840,6 +15374,7 @@ def simulate_carbon_stand(
     clean_thinnings = {}
     if thinning_events and isinstance(thinning_events, list):
         for ev in thinning_events:
+            _sylva_check_cancelled()
             if isinstance(ev, dict):
                 try:
                     y = int(ev.get('year') or 0)
@@ -14853,6 +15388,7 @@ def simulate_carbon_stand(
     baseline_series = []
     n_base = float(n0_per_ha)
     for t in range(rot + 1):
+        _sylva_check_cancelled()
         v_pot = v_max * math.pow(max(0.0, 1.0 - math.exp(-k * t)), m) if t > 0 else 0.0
         if t > 0:
             n_base = max(n0_per_ha * 0.60, n_base * (1.0 - 0.005))
@@ -14885,6 +15421,7 @@ def simulate_carbon_stand(
     cum_harvest_c = 0.0
 
     for t in range(rot + 1):
+        _sylva_check_cancelled()
         v_pot = v_max * math.pow(max(0.0, 1.0 - math.exp(-k * t)), m) if t > 0 else 0.0
         v_pot_prev = v_max * math.pow(max(0.0, 1.0 - math.exp(-k * max(0, t - 1))), m) if t > 1 else 0.0
         delta_v_pot = max(0.0, v_pot - v_pot_prev)
@@ -15168,6 +15705,14 @@ def api_carbon_simulation():
     except Exception as exc:
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(exc)}), 200
+
+
+
+# Preserve endpoint names, request contracts and the established EE/Leaflet session.
+for _sylva_endpoint in ('download_geotiff', 'download_raw_bands', 'vector_download',
+                        'vector_download_batch', 'download_geotiff_batch', 'topo_contour_vector',
+                        'analyze', 'timeseries', 'gemini_data_qa', 'api_carbon_simulation'):
+    app.view_functions[_sylva_endpoint] = _sylva_cancellable_view(app.view_functions[_sylva_endpoint])
 
 
 if __name__ == '__main__':
