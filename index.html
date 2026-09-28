@@ -1229,11 +1229,11 @@ tr.class-highlight-active {
         body.sylva-rulers-on #map2-gallery { top: 37px; right: 69px; }
         .map-control-box { background: rgba(255, 255, 255, 0.95); padding: 10px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); display: flex; align-items: center; gap: 10px; pointer-events: auto; }
 
-        /* Belirgin Kuzey Oku */
-        .north-arrow { width: 45px; height: 45px; background-color: rgba(255, 255, 255, 0.95); border: 2px solid #1e3a8a; border-radius: 5px; display: flex; flex-direction: column; justify-content: center; align-items: center; box-shadow: 0 3px 6px rgba(0,0,0,0.3); pointer-events: auto; flex-shrink: 0; }
+        /* Belirgin Kuzey Oku - Modern Siyah/Nötr Tasarım */
+        .north-arrow { width: 45px; height: 45px; background-color: rgba(255, 255, 255, 0.95); border: 1.5px solid #cbd5e1; border-radius: 6px; display: flex; flex-direction: column; justify-content: center; align-items: center; box-shadow: 0 2px 5px rgba(0,0,0,0.12); pointer-events: auto; flex-shrink: 0; }
         .north-arrow.hidden-element { visibility: hidden; pointer-events: none; }
-        .north-arrow-icon { color:#dc2626; font-size: 1.2rem; line-height: 0.8; font-weight: 900; }
-        .north-arrow-text { color: #1e3a8a; font-size: 0.85rem; font-weight: 900; line-height: 1; }
+        .north-arrow-icon { color: #111827; font-size: 1.2rem; line-height: 0.8; font-weight: 900; }
+        .north-arrow-text { color: #111827; font-size: 0.85rem; font-weight: 900; line-height: 1; }
 
         /* Harita İçi - Sol Orta (Yakınlaştırma) — gerçek Leaflet zoom fonksiyonlarına bağlı */
         .map-left-mid { position: absolute; top: 70px; right: 37.5px; left: auto; transform: translateX(50%); display: flex; flex-direction: column; gap: 5px; z-index: 500; pointer-events: none; }
@@ -5043,6 +5043,11 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                             📍 <span data-i18n="carbon_download_kml_btn_text">Fidan Noktalarını İndir (.KML)</span>
                         </button>
 
+                        <!-- Yıllık Karbon Tablosunu İndir (.CSV) Butonu -->
+                        <button id="btn-export-carbon-csv" type="button" onclick="carbonSimDownloadProjectionsCSV()" style="width:100%;margin-top:6px;padding:6px 10px;background:#f0f9ff;color:#0369a1;border:1px solid #bae6fd;border-radius:6px;font-size:0.72rem;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;">
+                            📊 <span data-i18n="carbon_download_csv_btn_text">Yıllık Karbon Tablosunu İndir (.CSV)</span>
+                        </button>
+
                         <!-- Standart IPCC Tier 1 Uyarısı -->
                         <div id="carbon-standard-notice" style="font-size:0.63rem;color:#64748b;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:6px 8px;margin-top:10px;line-height:1.35;" data-i18n="carbon_standard_notice">
                             📌 Not: Bu simülasyon IPCC Tier 1 varsayılan katsayıları ve matematiksel Chapman-Richards büyüme modelleri kullanır; saha ölçümüne dayalı bilimsel doğrulama, resmi karbon kredisi sertifikasyonu veya ulusal envanter verisi yerine geçmez, ön fizibilite ve planlama amaçlıdır.
@@ -5183,6 +5188,7 @@ var _CARBON_I18N = {
     "carbon_locked_warning_desc": "Haritada diğer uydu/analiz katmanları (Sentinel-2, Landsat, DEM, LULC vb.) seçiliyken Karbon Yutak Alanı Simülasyonu çalıştırılamaz. Simülasyonu aktif etmek için lütfen seçili analiz katmanlarının işaretini kaldırın.",
     "carbon_print_btn_text": "📄 Raporu İndir (PDF)",
     "carbon_download_kml_btn_text": "Fidan Noktalarını İndir (.KML)",
+    "carbon_download_csv_btn_text": "Yıllık Karbon Tablosunu İndir (.CSV)",
     "carbon_no_points_kml": "İndirilecek fidan koordinat noktası bulunamadı. Lütfen önce simülasyonu çalıştırın.",
     "carbon_per_ha_trees": "Hektar başı: {count} ağaç",
     "per_ha_trees": "Hektar başı: {count} ağaç",
@@ -5290,6 +5296,7 @@ var _CARBON_I18N = {
     "carbon_locked_warning_desc": "Carbon Sink Area Simulation cannot be run while other satellite/analysis layers (Sentinel-2, Landsat, DEM, LULC, etc.) are selected. Please uncheck active analysis layers to enable simulation.",
     "carbon_print_btn_text": "📄 Download Report (PDF)",
     "carbon_download_kml_btn_text": "Download Planting Points (.KML)",
+    "carbon_download_csv_btn_text": "Download Annual Carbon Table (.CSV)",
     "carbon_fidan_title": "Carbon Seedling Distribution (KML)",
     "vdl_cat_carbon": "Carbon & Afforestation Simulation",
     "carbon_no_points_kml": "No seedling coordinate points found to export. Please run the simulation first.",
@@ -14213,7 +14220,8 @@ function _carbonLocalizedLandCover(item,lang) {
 }
 function _carbonExportFilename(lang,format) {
     var r=_carbonPrepareReportI18n(lang), stems={ja:'SylvaGIS_炭素シミュレーションレポート',ko:'SylvaGIS_탄소_시뮬레이션_보고서',en:'SylvaGIS_Carbon_Simulation_Report',tr:'SylvaGIS_Karbon_Simulasyon_Raporu'};
-    var stem=format==='pdf' ? (stems[lang] || r.report_title.replace(/[—:]/g,'').replace(/\s+/g,'_')) : 'SylvaGIS_'+r.kml_seedling;
+    var csvStems={en:'SylvaGIS_Annual_Carbon_Table',tr:'SylvaGIS_Yillik_Karbon_Tablosu',ko:'SylvaGIS_연간_탄소_시뮬레이션'};
+    var stem=format==='pdf' ? (stems[lang] || r.report_title.replace(/[—:]/g,'').replace(/\s+/g,'_')) : (format==='csv' ? (csvStems[lang] || csvStems.en) : 'SylvaGIS_'+r.kml_seedling);
     var now=new Date(),date=now.getFullYear()+String(now.getMonth()+1).padStart(2,'0')+String(now.getDate()).padStart(2,'0');
     return stem.replace(/[<>:"/\\|?*]/g,'_')+(format==='pdf' ? '' : '_'+date)+'.'+format;
 }
@@ -14290,7 +14298,7 @@ function _getCarbonReportTitle(lang) {
 
 function _carbonGetLocalizedAspect(aspObj, deg, lang) {
     var l = (lang || _carbonGetLang()).toLowerCase();
-    var code = (aspObj && aspObj.code) ? aspObj.code : null;
+    var code = (typeof aspObj === 'string' && aspObj) ? aspObj : ((aspObj && aspObj.code) ? aspObj.code : null);
     if (!code && deg != null) {
         var d = parseFloat(deg);
         if (!isNaN(d)) {
@@ -14300,7 +14308,8 @@ function _carbonGetLocalizedAspect(aspObj, deg, lang) {
         }
     }
     if (!code) code = 'Flat';
-    var entry = _CARBON_ASPECT_NAMES[code] || _CARBON_ASPECT_NAMES['Flat'];
+    var entry = (typeof _CARBON_ASPECT_NAMES !== 'undefined' && _CARBON_ASPECT_NAMES) ? (_CARBON_ASPECT_NAMES[code] || _CARBON_ASPECT_NAMES['Flat']) : null;
+    if (!entry) return code;
     return (entry[l] || entry.en || code) + (code === 'Flat' ? '' : ' (' + code + ')');
 }
 
@@ -14690,6 +14699,9 @@ if (typeof window !== 'undefined') {
                 if (typeof _carbonRenderResultsUI === 'function') {
                     _carbonRenderResultsUI(st);
                 }
+            } else {
+                var resEl = document.getElementById('carbon-sim-results');
+                if (resEl) resEl.style.display = 'none';
             }
         } catch(e) {}
     };
@@ -15335,51 +15347,24 @@ var _CARBON_SPECIES_DB = {
                     };
                     st.pointsGeoJSON = fc;
 
-                    // 1) Global aktif katman göstergesi ve hafızası
+                    // 1) 🌲 Fidan verileri genel vektör dışa aktarım havuzundan tamamen muaf tutulur.
+                    // Karbon modülü kendi özel "KML Olarak İndir" butonuna sahip olduğundan genel vektör
+                    // dışa aktarım değişkenlerine (window._activeExportableVector / window._currentVectorAnalysis)
+                    // yazılmaz; genel vektör indirme akışında fidan noktaları dışlanır.
                     window._activeExportableVector = window._activeExportableVector || { map: null, map2: null };
-                    window._activeExportableVector[paneId] = fc;
-                    var fidanTitle = (typeof t === 'function' ? t('carbon_fidan_title', 'Karbon Fidan Dağılımı (KML)') : 'Karbon Fidan Dağılımı (KML)');
+                    window._activeExportableVector[paneId] = null;
                     window._currentVectorAnalysis = window._currentVectorAnalysis || { map: null, map2: null };
-                    window._currentVectorAnalysis[paneId] = {
-                        type: 'CARBON_SIMULATION',
-                        name: fidanTitle,
-                        geojson: fc,
-                        count: pts.length
-                    };
+                    window._currentVectorAnalysis[paneId] = null;
 
-                    // 2) Katman analiz hafızası
-                    var carbonPayload = {
-                        index: 'CARBON_SIMULATION',
-                        analysisName: fidanTitle,
-                        sensorLabel: 'Karbon Yutak Simülasyonu',
-                        species: spName,
-                        spacingX: sx,
-                        spacingY: sy,
-                        plantingPoints: pts,
-                        geojson: fc,
-                        classBreaks: [{ min: 1, max: 1, color: '#16a34a', label: 'Karbon Fidan Dağılımı' }],
-                        classificationType: 'classified'
-                    };
-                    if (typeof _sylvaRememberLayerAnalyzePayload === 'function') {
-                        _sylvaRememberLayerAnalyzePayload(paneId, 'CARBON_PLANTING', carbonPayload);
-                    }
+                    // 2) Katman görünürlük hafızası (Haritada katman açma/kapatma ve görsel kontroller için korunur)
                     window._sylvaLayerVisibleByPane = window._sylvaLayerVisibleByPane || { map: {}, map2: {} };
                     window._sylvaLayerVisibleByPane[paneId] = window._sylvaLayerVisibleByPane[paneId] || {};
                     window._sylvaLayerVisibleByPane[paneId]['CARBON_PLANTING'] = true;
 
-                    // 3) Meta veriyi güncelle
-                    window._lastAnalyzeMetaByPane = window._lastAnalyzeMetaByPane || { map: null, map2: null };
-                    window._lastAnalyzeMetaByPane[paneId] = {
-                        analysisName: fidanTitle,
-                        sensorLabel: 'Karbon Yutak Simülasyonu',
-                        index: 'CARBON_SIMULATION'
-                    };
-                    window._lastAnalyzeMeta = window._lastAnalyzeMetaByPane[paneId];
+                    // 3) Buton durumunu güncelle: Ekranda sadece karbon simülasyonu fidanları aktifse,
+                    // genel "📥 Veriyi Vektör İndir" butonu koşullu olarak pasifleştirilir.
                     if (typeof _sylvaUpdateDownloadButtonsDisabledState === 'function') {
                         _sylvaUpdateDownloadButtonsDisabledState();
-                    }
-                    if (typeof _vdlPopulateRasterSelect === 'function') {
-                        try { _vdlPopulateRasterSelect(); } catch(e) {}
                     }
                 }
                 window._sylvaRegisterCarbonVectorLayer = _sylvaRegisterCarbonVectorLayer;
@@ -15623,26 +15608,45 @@ var _CARBON_SPECIES_DB = {
                 window._CARBON_REPORT_BTN_I18N = _CARBON_REPORT_BTN_I18N;
                 _injectCarbonI18n();
 
-                window.carbonSimClearActiveResult = function () {
-                    var paneId = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
-                    window.carbonSimClearPlantingLayer(paneId);
-                    if (window._sylvaCarbonAOIBoundsByPane) window._sylvaCarbonAOIBoundsByPane[paneId] = null;
-                    var st = _getCarbonActiveState();
-                    st.resultsVisible = false;
-                    st.spacingHintResult = null;
-                    window.carbonSimUpdateSpacingHint();
-                    st.lastSimResult = null;
-                    st.lastSimResponse = null;
-                    st.rawSimResponse = null;
-                    st.rawTotalTrees = null;
-                    st.rawEffectiveTrees = null;
+                window.carbonSimClearActiveResult = function (paneId) {
+                    var targetPane = paneId || ((typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map');
+                    var panesToClear = (paneId && paneId !== 'all') ? [targetPane] : ['map', 'map2'];
+                    panesToClear.forEach(function (p) {
+                        window.carbonSimClearPlantingLayer(p);
+                        if (window._sylvaCarbonAOIBoundsByPane) window._sylvaCarbonAOIBoundsByPane[p] = null;
+                        var st = _getCarbonActiveState(p);
+                        if (st) {
+                            st.simActive = false;
+                            st.resultsVisible = false;
+                            st.spacingHintResult = null;
+                            st.lastSimResult = null;
+                            st.lastSimResponse = null;
+                            st.rawSimResponse = null;
+                            st.rawTotalTrees = null;
+                            st.rawEffectiveTrees = null;
+                            st.areaHa = 0;
+                            st.totalTrees = 0;
+                            st.effectiveTrees = 0;
+                            st.renderCount = 0;
+                            st.isSampled = false;
+                            st.plantingPoints = [];
+                            st.pointsGeoJSON = null;
+                            st.thinningEvents = [];
+                        }
+                        if (window._lastAnalyzeMetaByPane && window._lastAnalyzeMetaByPane[p] && window._lastAnalyzeMetaByPane[p].index === 'CARBON_SIMULATION') {
+                            window._lastAnalyzeMetaByPane[p] = null;
+                        }
+                    });
                     window._lastCarbonSimResult = null;
-                    st.areaHa = 0;
-                    st.totalTrees = 0;
-                    st.effectiveTrees = 0;
-                    st.renderCount = 0;
-                    st.isSampled = false;
-                    st.plantingPoints = [];
+
+                    var _carbonCb = document.getElementById('carbon-sink-sim-checkbox') ||
+                                    document.getElementById('carbon-sim-active-check') ||
+                                    document.querySelector('input[data-layer="carbon_sink_sim"]');
+                    if (_carbonCb) _carbonCb.checked = false;
+
+                    if (typeof window.carbonSimUpdateSpacingHint === 'function') {
+                        window.carbonSimUpdateSpacingHint();
+                    }
 
                     var scaleSlider = document.getElementById('carbon-density-scale');
                     if (scaleSlider) scaleSlider.value = 100;
@@ -15652,7 +15656,7 @@ var _CARBON_SPECIES_DB = {
                     var resBox = document.getElementById('carbon-sim-results');
                     if (resBox) resBox.style.display = 'none';
                     var sampleNote = document.getElementById('carbon-summary-sample-note');
-                    if (sampleNote) sampleNote.style.display = 'none';
+                    if (sampleNote) { sampleNote.style.display = 'none'; sampleNote.textContent = ''; }
                     var siteBox = document.getElementById('carbon-site-env-box');
                     if (siteBox) siteBox.style.display = 'none';
                     var warnBox = document.getElementById('carbon-site-warning-box');
@@ -15660,7 +15664,29 @@ var _CARBON_SPECIES_DB = {
                         warnBox.style.display = 'none';
                         warnBox.innerHTML = '';
                     }
+                    var chartBox = document.getElementById('carbon-sim-chart-box');
+                    if (chartBox) chartBox.innerHTML = '';
+                    var thinList = document.getElementById('carbon-thinning-list');
+                    if (thinList) thinList.innerHTML = '';
+
+                    var badge = document.getElementById('carbon-site-suitability-badge');
+                    if (badge) { badge.textContent = '—'; badge.style.background = '#dcfce7'; badge.style.color = '#15803d'; }
+                    ['carbon-site-elev-val', 'carbon-site-slope-aspect-val', 'carbon-site-temp-val', 'carbon-site-precip-val', 'carbon-site-soc-val', 'carbon-site-sf-val',
+                     'carbon-summary-area-val', 'carbon-summary-trees-val', 'carbon-summary-standing-val', 'carbon-summary-harvested-val', 'carbon-summary-total-val', 'carbon-summary-annual-val', 'carbon-summary-dims-val'
+                    ].forEach(function (id) {
+                        var el = document.getElementById(id);
+                        if (el) el.textContent = '—';
+                    });
+
+                    if (typeof _sylvaUpdateDownloadButtonsDisabledState === 'function') {
+                        _sylvaUpdateDownloadButtonsDisabledState();
+                    }
+                    if (typeof window.carbonSimUpdateLockState === 'function') {
+                        window.carbonSimUpdateLockState();
+                    }
                 };
+                window.clearCarbonSimulation = window.carbonSimClearActiveResult;
+                window.resetCarbonResults = window.carbonSimClearActiveResult;
 
                 // ───────────────────────────────────────────────────────────
                 // 📍 FİDAN GRID NOKTALARINI KML OLARAK İNDİRME FONKSİYONU
@@ -15708,6 +15734,164 @@ var _CARBON_SPECIES_DB = {
                     }
                 };
 
+                window.carbonSimDownloadProjectionsCSV = window.downloadCarbonSimulationCSV = function (paneId) {
+                    paneId = paneId || ((typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map');
+                    var st = (typeof _getCarbonActiveState === 'function') ? _getCarbonActiveState(paneId) : (window._carbonStateByPane && window._carbonStateByPane[paneId]);
+                    var curLang = (typeof _carbonGetLang === 'function')
+                        ? _carbonGetLang()
+                        : ((window._sylvaLang || (typeof sylvaCurrentLang !== 'undefined' ? sylvaCurrentLang : (window.currentLang || window._currentLang || 'tr'))).toLowerCase().split('-')[0]);
+                    var isTr = (curLang === 'tr');
+
+                    if (!st || !st.lastSimResponse || !st.lastSimResponse.yearly_series) {
+                        var warnMsg = (typeof _cTxt === 'function' && _cTxt('no_sim_to_print'))
+                            ? _cTxt('no_sim_to_print')
+                            : ((typeof t === 'function')
+                                ? t('carbon_no_sim_to_print', 'İndirilecek simülasyon sonucu bulunamadı. Lütfen önce simülasyonu çalıştırın.')
+                                : 'İndirilecek simülasyon sonucu bulunamadı. Lütfen önce simülasyonu çalıştırın.');
+                        if (typeof sylvaAlert === 'function') sylvaAlert(warnMsg, 'warning');
+                        else alert(warnMsg);
+                        return;
+                    }
+
+                    var resp = st.lastSimResponse;
+                    var series = resp.yearly_series || {};
+                    var managedList = series.managed || [];
+                    var baselineList = series.baseline || [];
+                    if (!managedList.length) {
+                        var noDataMsg = isTr ? 'İndirilecek yıllık projeksiyon verisi bulunamadı.' : 'No annual projection series data found to export.';
+                        if (typeof sylvaAlert === 'function') sylvaAlert(noDataMsg, 'warning');
+                        else alert(noDataMsg);
+                        return;
+                    }
+
+                    var meta = resp.meta || {};
+                    var areaHa = Number.isFinite(st.areaHa) && st.areaHa > 0 ? st.areaHa : (Number.isFinite(meta.area_ha) ? meta.area_ha : 1.0);
+                    var thinnings = st.thinningEvents || meta.applied_thinning_events || [];
+                    var thinningMap = {};
+                    thinnings.forEach(function (ev) {
+                        if (ev && ev.year != null) thinningMap[ev.year] = ev.percent;
+                    });
+
+                    function escapeCsv(val) {
+                        if (val === null || val === undefined) return '';
+                        var str = String(val);
+                        if (str.indexOf(',') !== -1 || str.indexOf('"') !== -1 || str.indexOf('\n') !== -1 || str.indexOf('\r') !== -1 || str.indexOf(';') !== -1) {
+                            return '"' + str.replace(/"/g, '""') + '"';
+                        }
+                        return str;
+                    }
+
+                    var headers = isTr ? [
+                        'Yıl',
+                        'Meşcere Sıklığı (Ağaç/ha)',
+                        'Efektif Ağaç Sayısı (Adet)',
+                        'Gövde Hacmi (m3/ha)',
+                        'Duran Karbon Stoğu (tC)',
+                        'Hasat Edilen Karbon (tC)',
+                        'Toplam Karbon Stoğu (tC)',
+                        'Yıllık Karbon Tutumu (tC/yıl)',
+                        'Duran Karbon (tCO2e)',
+                        'Hasat Edilen Karbon (tCO2e)',
+                        'Toplam Kümülatif Karbon (tCO2e)',
+                        'Yıllık CO2e Tutumu (tCO2e/yıl)',
+                        'Ortalama Çap - DBH (cm)',
+                        'Ortalama Boy (m)',
+                        'Aralama Müdahalesi (%)',
+                        'Müdahalesiz Toplam Karbon - Baseline (tCO2e)'
+                    ] : [
+                        'Year',
+                        'Stand Density (trees/ha)',
+                        'Effective Trees (count)',
+                        'Stem Volume (m3/ha)',
+                        'Standing Carbon Stock (tC)',
+                        'Harvested Carbon (tC)',
+                        'Total Carbon Stock (tC)',
+                        'Annual Carbon Sequestration (tC/yr)',
+                        'Standing Carbon (tCO2e)',
+                        'Harvested Carbon (tCO2e)',
+                        'Total Cumulative CO2e (tCO2e)',
+                        'Annual CO2e Sequestration (tCO2e/yr)',
+                        'Mean DBH (cm)',
+                        'Mean Height (m)',
+                        'Thinning Intervention (%)',
+                        'Baseline Total CO2e (tCO2e)'
+                    ];
+
+                    var rows = [headers.map(escapeCsv).join(',')];
+
+                    for (var i = 0; i < managedList.length; i++) {
+                        var pt = managedList[i];
+                        var prevPt = i > 0 ? managedList[i - 1] : null;
+
+                        var standC = Number.isFinite(pt.standing_c) ? pt.standing_c : 0;
+                        var harvC = Number.isFinite(pt.harvested_c) ? pt.harvested_c : 0;
+                        var totC = +(standC + harvC).toFixed(2);
+
+                        var prevTotC = prevPt ? +((Number.isFinite(prevPt.standing_c) ? prevPt.standing_c : 0) + (Number.isFinite(prevPt.harvested_c) ? prevPt.harvested_c : 0)).toFixed(2) : 0;
+                        var annualC = (i === 0) ? totC : +(totC - prevTotC).toFixed(2);
+
+                        var standCo2e = Number.isFinite(pt.standing_co2e) ? pt.standing_co2e : 0;
+                        var harvCo2e = Number.isFinite(pt.harvested_co2e) ? pt.harvested_co2e : 0;
+                        var totCo2e = Number.isFinite(pt.total_co2e) ? pt.total_co2e : +(standCo2e + harvCo2e).toFixed(2);
+
+                        var prevTotCo2e = prevPt ? (Number.isFinite(prevPt.total_co2e) ? prevPt.total_co2e : 0) : 0;
+                        var annualCo2e = (i === 0) ? totCo2e : +(totCo2e - prevTotCo2e).toFixed(2);
+
+                        var nHa = Number.isFinite(pt.trees_per_ha) ? Math.round(pt.trees_per_ha) : 0;
+                        var effTrees = Math.round(nHa * areaHa);
+                        var stemVol = Number.isFinite(pt.stem_volume_m3_ha) ? pt.stem_volume_m3_ha.toFixed(2) : '';
+                        var dbh = Number.isFinite(pt.mean_dbh_cm) ? pt.mean_dbh_cm.toFixed(1) : '';
+                        var height = Number.isFinite(pt.mean_height_m) ? pt.mean_height_m.toFixed(1) : '';
+
+                        var thinPct = thinningMap[pt.year] != null ? '%' + thinningMap[pt.year] : (isTr ? 'Yok' : 'None');
+
+                        var basePt = baselineList.filter(function (b) { return b && b.year === pt.year; })[0];
+                        var baseTotCo2e = basePt && Number.isFinite(basePt.total_co2e) ? basePt.total_co2e.toFixed(2) : '';
+
+                        var rowData = [
+                            pt.year,
+                            nHa,
+                            effTrees,
+                            stemVol,
+                            standC.toFixed(2),
+                            harvC.toFixed(2),
+                            totC.toFixed(2),
+                            annualC.toFixed(2),
+                            standCo2e.toFixed(2),
+                            harvCo2e.toFixed(2),
+                            totCo2e.toFixed(2),
+                            annualCo2e.toFixed(2),
+                            dbh,
+                            height,
+                            thinPct,
+                            baseTotCo2e
+                        ];
+                        rows.push(rowData.map(escapeCsv).join(','));
+                    }
+
+                    var csvContent = '\uFEFF' + rows.join('\r\n');
+                    var fileName = (typeof _carbonExportFilename === 'function')
+                        ? _carbonExportFilename(curLang, 'csv')
+                        : ((isTr ? 'SylvaGIS_Yillik_Karbon_Tablosu' : 'SylvaGIS_Annual_Carbon_Table') + '_' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '.csv');
+                    var blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+
+                    if (typeof _vdlFallbackDownload === 'function') {
+                        _vdlFallbackDownload(blob, fileName);
+                    } else {
+                        var a = document.createElement('a');
+                        a.href = URL.createObjectURL(blob);
+                        a.download = fileName;
+                        a.style.display = 'none';
+                        document.body.appendChild(a);
+                        a.click();
+                        setTimeout(function () {
+                            URL.revokeObjectURL(a.href);
+                            if (a.parentNode) a.parentNode.removeChild(a);
+                        }, 2000);
+                    }
+                };
+                window.downloadCarbonSimulationCSV = window.carbonSimDownloadProjectionsCSV;
+
                 // ───────────────────────────────────────────────────────────
                 // 📊 ÇOKLU ÇİZGİ SVG GRAFİK OLUŞTURUCU (AŞAMA 9)
                 // Baseline (Müdahalesiz) vs Managed (Aralamalı) & Aralama İşaretçileri
@@ -15722,18 +15906,25 @@ var _CARBON_SPECIES_DB = {
 
                     var allVals = [];
                     baselinePoints.forEach(function (p) {
-                        allVals.push(p.total_co2e != null ? p.total_co2e : (p.value || 0));
+                        var v = p.total_co2e != null ? p.total_co2e : (p.value != null ? p.value : null);
+                        if (v != null && Number.isFinite(Number(v))) allVals.push(Number(v));
                     });
                     managedPoints.forEach(function (p) {
-                        allVals.push(p.total_co2e != null ? p.total_co2e : (p.value || 0));
-                        allVals.push(p.standing_co2e != null ? p.standing_co2e : 0);
+                        var vTot = p.total_co2e != null ? p.total_co2e : (p.value != null ? p.value : null);
+                        if (vTot != null && Number.isFinite(Number(vTot))) allVals.push(Number(vTot));
+                        if (p.standing_co2e != null && Number.isFinite(Number(p.standing_co2e))) allVals.push(Number(p.standing_co2e));
                     });
-                    var maxV = Math.max.apply(null, allVals) || 1;
+                    var maxV = allVals.length > 0 ? Math.max.apply(null, allVals) : 1;
+                    if (!Number.isFinite(maxV) || maxV <= 0) maxV = 1;
                     maxV = maxV * 1.12; // %12 üst marj
 
                     var maxYr = 1;
-                    if (managedPoints.length > 0) maxYr = managedPoints[managedPoints.length - 1].year || 1;
-                    else if (baselinePoints.length > 0) maxYr = baselinePoints[baselinePoints.length - 1].year || 1;
+                    if (managedPoints.length > 0 && Number.isFinite(managedPoints[managedPoints.length - 1].year) && managedPoints[managedPoints.length - 1].year > 0) {
+                        maxYr = managedPoints[managedPoints.length - 1].year;
+                    } else if (baselinePoints.length > 0 && Number.isFinite(baselinePoints[baselinePoints.length - 1].year) && baselinePoints[baselinePoints.length - 1].year > 0) {
+                        maxYr = baselinePoints[baselinePoints.length - 1].year;
+                    }
+                    if (!Number.isFinite(maxYr) || maxYr <= 0) maxYr = 1;
 
                     function xAt(yr) { return padL + (yr / maxYr) * (w - padL - padR); }
                     function yAt(v) { return (h - padB) - (v / maxV) * (h - padB - padT); }
@@ -15839,7 +16030,7 @@ var _CARBON_SPECIES_DB = {
                     var annualVal = document.getElementById('carbon-summary-annual-val');
                     var dimsVal = document.getElementById('carbon-summary-dims-val');
 
-                    var areaHa = st.areaHa || 0;
+                    var areaHa = Number.isFinite(st.areaHa) ? Math.max(0, st.areaHa) : 0;
                     var areaDa = areaHa * 10;
 
                     if (areaVal) {
@@ -15847,7 +16038,11 @@ var _CARBON_SPECIES_DB = {
                     }
 
                     if (treesVal) {
-                        treesVal.textContent = (st.totalTrees || 0).toLocaleString(curLang) + (' (' + _cTxt('lbl_effective')) + (st.effectiveTrees || 0).toLocaleString(curLang) + ')';
+                        var totalTrees = (Number.isFinite(st.totalTrees) && st.totalTrees >= 0) ? st.totalTrees : 0;
+                        var effectiveTrees = (Number.isFinite(st.effectiveTrees) && st.effectiveTrees >= 0) ? st.effectiveTrees : 0;
+                        var effLbl = _cTxt('lbl_effective', 'Effective: ', 'Etkin: ');
+                        if (!/\s$/.test(effLbl) && !/:$/.test(effLbl)) effLbl += ' ';
+                        treesVal.textContent = totalTrees.toLocaleString(curLang) + ' (' + effLbl + effectiveTrees.toLocaleString(curLang) + ')';
                     }
 
                     if (st.lastSimResponse && st.lastSimResponse.summary) {
@@ -15855,23 +16050,35 @@ var _CARBON_SPECIES_DB = {
                         var series = st.lastSimResponse.yearly_series || {};
                         var mManaged = sum.managed || {};
 
+                        var standCo2 = Number.isFinite(mManaged.total_standing_co2e) ? mManaged.total_standing_co2e.toFixed(1) : '—';
+                        var standC = Number.isFinite(mManaged.total_standing_c) ? mManaged.total_standing_c.toFixed(1) : null;
                         if (standingVal) {
-                            standingVal.textContent = mManaged.total_standing_co2e.toFixed(1) + ' tCO2e (' + (mManaged.total_standing_c != null ? mManaged.total_standing_c.toFixed(1) : '—') + ' tC)';
+                            standingVal.textContent = standCo2 + ' tCO2e' + (standC !== null ? ' (' + standC + ' tC)' : '');
                         }
+
+                        var harvCo2 = Number.isFinite(mManaged.total_harvested_co2e) ? mManaged.total_harvested_co2e.toFixed(1) : '—';
+                        var harvC = Number.isFinite(mManaged.total_harvested_c) ? mManaged.total_harvested_c.toFixed(1) : null;
                         if (harvestedVal) {
-                            harvestedVal.textContent = mManaged.total_harvested_co2e.toFixed(1) + ' tCO2e (' + (mManaged.total_harvested_c != null ? mManaged.total_harvested_c.toFixed(1) : '—') + ' tC)';
+                            harvestedVal.textContent = harvCo2 + ' tCO2e' + (harvC !== null ? ' (' + harvC + ' tC)' : '');
                         }
+
+                        var totCo2 = Number.isFinite(mManaged.grand_total_co2e) ? mManaged.grand_total_co2e.toFixed(1) : '—';
                         if (totalVal) {
-                            totalVal.textContent = mManaged.grand_total_co2e.toFixed(1) + ' tCO2e';
+                            totalVal.textContent = totCo2 + ' tCO2e';
                         }
+
+                        var annCo2 = Number.isFinite(mManaged.mean_annual_sequestration_co2e) ? mManaged.mean_annual_sequestration_co2e.toFixed(2) : '—';
                         if (annualVal) {
-                            annualVal.textContent = mManaged.mean_annual_sequestration_co2e.toFixed(2) + (' ' + _cTxt('unit_tco2e_yr'));
+                            annualVal.textContent = annCo2 + ' ' + _cTxt('unit_tco2e_yr', 'tCO2e/yr', 'tCO2e/yıl');
                         }
+
                         if (dimsVal) {
-                            var dbh = mManaged.final_mean_dbh_cm != null ? mManaged.final_mean_dbh_cm.toFixed(1) : '—';
-                            var h = mManaged.final_mean_height_m != null ? mManaged.final_mean_height_m.toFixed(1) : '—';
-                            var n = mManaged.final_trees_per_ha != null ? Math.round(mManaged.final_trees_per_ha) : '—';
-                            dimsVal.textContent = 'DBH: ' + dbh + ' cm | ' + _cTxt('lbl_height') + h + ' m (' + n + (' ' + _cTxt('unit_trees_ha') + ')');
+                            var dbh = Number.isFinite(mManaged.final_mean_dbh_cm) ? mManaged.final_mean_dbh_cm.toFixed(1) : '—';
+                            var h = Number.isFinite(mManaged.final_mean_height_m) ? mManaged.final_mean_height_m.toFixed(1) : '—';
+                            var n = Number.isFinite(mManaged.final_trees_per_ha) ? Math.round(mManaged.final_trees_per_ha) : '—';
+                            var hLbl = _cTxt('lbl_height', 'Height: ', 'Boy: ');
+                            if (!/\s$/.test(hLbl)) hLbl += ' ';
+                            dimsVal.textContent = 'DBH: ' + dbh + ' cm | ' + hLbl + h + ' m (' + n + ' ' + _cTxt('unit_trees_ha', 'trees/ha', 'ağaç/ha') + ')';
                         }
 
                         if (chartBox) {
@@ -15879,14 +16086,17 @@ var _CARBON_SPECIES_DB = {
                         }
                     } else if (st.lastSimResult) {
                         var result = st.lastSimResult;
-                        var standingT = result.standingFinal * (areaHa > 0 ? areaHa : 1);
-                        var harvestT = result.harvestTotal * (areaHa > 0 ? areaHa : 1);
+                        var standFinal = Number.isFinite(result.standingFinal) ? result.standingFinal : 0;
+                        var harvTot = Number.isFinite(result.harvestTotal) ? result.harvestTotal : 0;
+                        var standingT = standFinal * (areaHa > 0 ? areaHa : 1);
+                        var harvestT = harvTot * (areaHa > 0 ? areaHa : 1);
                         var totalT = standingT + harvestT;
+                        var rot = (Number.isFinite(st.rotation) && st.rotation > 0) ? st.rotation : 30;
 
-                        if (standingVal) standingVal.textContent = standingT.toFixed(1) + ' tC' + (areaHa > 0 ? ' (' + result.standingFinal.toFixed(1) + ' tC/ha)' : '');
-                        if (harvestedVal) harvestedVal.textContent = harvestT.toFixed(1) + ' tC' + (areaHa > 0 ? ' (' + result.harvestTotal.toFixed(1) + ' tC/ha)' : '');
+                        if (standingVal) standingVal.textContent = standingT.toFixed(1) + ' tC' + (areaHa > 0 ? ' (' + standFinal.toFixed(1) + ' tC/ha)' : '');
+                        if (harvestedVal) harvestedVal.textContent = harvestT.toFixed(1) + ' tC' + (areaHa > 0 ? ' (' + harvTot.toFixed(1) + ' tC/ha)' : '');
                         if (totalVal) totalVal.textContent = totalT.toFixed(1) + ' tC';
-                        if (annualVal) annualVal.textContent = (totalT / (st.rotation || 30)).toFixed(2) + (' tC/' + _cTxt('unit_year'));
+                        if (annualVal) annualVal.textContent = (totalT / rot).toFixed(2) + ' tC/' + _cTxt('unit_year', 'yr', 'yıl');
                         if (dimsVal) dimsVal.textContent = '—';
 
                         if (chartBox) {
@@ -15910,29 +16120,30 @@ var _CARBON_SPECIES_DB = {
                         var suit = st.lastSimResponse.suitability || {};
 
                         if (siteElev) {
-                            siteElev.textContent = sc.elevation_m != null ? Math.round(sc.elevation_m) + ' m' : '—';
+                            siteElev.textContent = Number.isFinite(sc.elevation_m) ? Math.round(sc.elevation_m) + ' m' : '—';
                         }
                         if (siteSlopeAspect) {
                             var aspStr = '';
                             if (sc.aspect_dir) {
                                 aspStr = _carbonGetLocalizedAspect(sc.aspect_dir, sc.aspect_deg, curLang);
-                            } else if (sc.aspect_deg != null) {
+                            } else if (Number.isFinite(sc.aspect_deg)) {
                                 aspStr = _carbonGetLocalizedAspect(null, sc.aspect_deg, curLang);
                             }
-                            siteSlopeAspect.textContent = (sc.slope_deg != null ? sc.slope_deg.toFixed(1) + '°' : '—') + (aspStr ? ' (' + aspStr + ')' : '');
+                            var slopeStr = Number.isFinite(sc.slope_deg) ? sc.slope_deg.toFixed(1) + '°' : '—';
+                            siteSlopeAspect.textContent = slopeStr + (aspStr ? ' (' + aspStr + ')' : '');
                         }
                         if (siteTemp) {
-                            siteTemp.textContent = sc.temp_c != null ? sc.temp_c.toFixed(1) + ' °C' : '—';
+                            siteTemp.textContent = Number.isFinite(sc.temp_c) ? sc.temp_c.toFixed(1) + ' °C' : '—';
                         }
                         if (sitePrecip) {
-                            sitePrecip.textContent = sc.precip_mm != null ? Math.round(sc.precip_mm) + (' ' + _cTxt('unit_mm_yr')) : '—';
+                            sitePrecip.textContent = Number.isFinite(sc.precip_mm) ? Math.round(sc.precip_mm) + ' ' + _cTxt('unit_mm_yr', 'mm/yr', 'mm/yıl') : '—';
                         }
                         if (siteSoc) {
-                            siteSoc.textContent = sc.soc_g_kg != null ? sc.soc_g_kg.toFixed(1) + ' g/kg' : '—';
+                            siteSoc.textContent = Number.isFinite(sc.soc_g_kg) ? sc.soc_g_kg.toFixed(1) + ' g/kg' : '—';
                         }
                         if (siteSf) {
-                            var sfVal = suit.site_suitability_factor != null ? suit.site_suitability_factor.toFixed(2) : '1.00';
-                            var sfPct = suit.suitability_score_pct != null ? suit.suitability_score_pct.toFixed(0) : '100';
+                            var sfVal = Number.isFinite(suit.site_suitability_factor) ? suit.site_suitability_factor.toFixed(2) : '1.00';
+                            var sfPct = Number.isFinite(suit.suitability_score_pct) ? suit.suitability_score_pct.toFixed(0) : '100';
                             siteSf.textContent = sfVal + (isEn ? ' (' + sfPct + '%)' : ' (%' + sfPct + ')');
                         }
                         if (siteBadge) {
@@ -15956,7 +16167,7 @@ var _CARBON_SPECIES_DB = {
 
                         if (siteWarnBox) {
                             var allWarns = [];
-                            if (suit.warnings && suit.warnings.length > 0) {
+                            if (Array.isArray(suit.warnings) && suit.warnings.length > 0) {
                                 allWarns = suit.warnings;
                             } else if (suit.ecological_warning) {
                                 allWarns = [suit.ecological_warning];
@@ -15985,8 +16196,8 @@ var _CARBON_SPECIES_DB = {
 
                     if (sampleNote) {
                         if (st.isSampled) {
-                            var noteTmpl = _cTxt('sample_note');
-                            sampleNote.textContent = noteTmpl.replace('{n}', (st.renderCount || 0).toLocaleString());
+                            var noteTmpl = _cTxt('sample_note', 'Rendering {n} sample points for performance.', 'Performans için {n} örnekleme noktası gösteriliyor.');
+                            sampleNote.textContent = noteTmpl.replace('{n}', (st.renderCount || 0).toLocaleString(curLang));
                             sampleNote.style.display = 'block';
                         } else {
                             sampleNote.style.display = 'none';
@@ -17014,8 +17225,14 @@ var _CARBON_SPECIES_DB = {
                                 }
                             }
                         } else {
-                            window.carbonSimClearPlantingLayer(curPane);
-                            window.carbonSimUpdateLockState();
+                            if (typeof window.clearCarbonSimulation === 'function') {
+                                window.clearCarbonSimulation(curPane);
+                            } else {
+                                window.carbonSimClearPlantingLayer(curPane);
+                                var resEl = document.getElementById('carbon-sim-results');
+                                if (resEl) resEl.style.display = 'none';
+                                window.carbonSimUpdateLockState();
+                            }
                         }
                         _saveCarbonPaneInputs(curPane);
                     } else {
@@ -17028,11 +17245,10 @@ var _CARBON_SPECIES_DB = {
                             var _carbonCbNow = document.getElementById('carbon-sink-sim-checkbox') || document.getElementById('carbon-sim-active-check') || document.querySelector('input[data-layer="carbon_sink_sim"]');
                             if (_carbonCbNow && _carbonCbNow.checked) {
                                 _carbonCbNow.checked = false;
-                                var curPane = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
-                                var stNow = _getCarbonActiveState(curPane);
-                                if (stNow) stNow.simActive = false;
-                                window.carbonSimClearPlantingLayer(curPane);
-                                try { _carbonCbNow.dispatchEvent(new Event('change', { bubbles: true })); } catch (e2) {}
+                            }
+                            var curPane = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
+                            if (typeof window.clearCarbonSimulation === 'function') {
+                                window.clearCarbonSimulation(curPane);
                             }
                         }
                         window.carbonSimUpdateLockState();
@@ -17492,14 +17708,34 @@ function _sylvaHasMixedStackCategories(paneId) {
                 btn.style.cursor = isMixedStacked ? 'not-allowed' : '';
                 btn.title = isMixedStacked ? _titleTxt : '';
             });
+            // 🌲 Karbon Analizi İzolasyonu: Haritada yalnızca karbon analizi ve fidan dağılımı mevcutsa;
+            // fidan noktaları genel vektör indirme akışından muaf tutulup Karbon Modülü içinde kendi özel
+            // "KML Olarak İndir" butonuna sahip olduğundan, genel "📥 Veriyi Vektör İndir" butonu devre dışı bırakılır.
+            var isCarbonOnlyVectorLocked = false;
+            try {
+                var _chkPane = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
+                var _cSt = window._carbonStateByPane && window._carbonStateByPane[_chkPane];
+                var _hasCarbon = !!(_cSt && (_cSt.plantingLayer || (_cSt.simActive && _cSt.plantingPoints && _cSt.plantingPoints.length > 0)));
+                if (_hasCarbon) {
+                    var _vEntries = (typeof vectorEntries === 'function') ? vectorEntries(_chkPane) : [];
+                    if (!_vEntries || _vEntries.length === 0) {
+                        isCarbonOnlyVectorLocked = true;
+                    }
+                }
+            } catch (e) {}
+
+            var _carbonVectorTitleTxt = (typeof t === 'function')
+                ? t('download_disabled_carbon_vector', 'Fidan verileri Karbon Analizi modülü içindeki özel KML butonuyla indirilebilir — Genel vektör indirmede kullanılamaz')
+                : 'Fidan verileri Karbon Analizi modülü içindeki özel KML butonuyla indirilebilir — Genel vektör indirmede kullanılamaz';
+
             vecIds.forEach(function (id) {
                 var btn = document.getElementById(id);
                 if (!btn) return;
-                var isDisabled = isMixedStacked || isTsVectorLocked || isEnvUrbanStretched || isRgbGalleryActive;
+                var isDisabled = isMixedStacked || isTsVectorLocked || isEnvUrbanStretched || isRgbGalleryActive || isCarbonOnlyVectorLocked;
                 btn.disabled = isDisabled;
                 btn.style.opacity = isDisabled ? '0.45' : '';
                 btn.style.cursor = isDisabled ? 'not-allowed' : '';
-                btn.title = isDisabled ? (isMixedStacked ? _titleTxt : (isTsVectorLocked ? _tsVectorTitleTxt : (isEnvUrbanStretched ? _envStretchedVectorTitleTxt : _rgbVectorTitleTxt))) : '';
+                btn.title = isDisabled ? (isMixedStacked ? _titleTxt : (isTsVectorLocked ? _tsVectorTitleTxt : (isEnvUrbanStretched ? _envStretchedVectorTitleTxt : (isRgbGalleryActive ? _rgbVectorTitleTxt : _carbonVectorTitleTxt)))) : '';
             });
         } catch (e) {}
     }
@@ -33703,53 +33939,36 @@ function selectRamp(name) {
              // gelmesini istedi. meta.chartType TAŞIMAYAN mevcut analizlerin
              // (NDVI vb.) davranışı DEĞİŞMEDİ — onlar hâlâ yalnızca
              // "Sınıflandırılmış" mod açıkken grafik gösterir.
-             var _hasOwnChartType = !!(meta && meta.chartType);
-             if (!_hasOwnChartType && typeof currentClassificationType !== 'undefined' && currentClassificationType !== 'classified') return;
-            var hist = (stats && stats.value) ? stats.value : null;
-            if (!hist) return;
-            var keys = Object.keys(hist).map(Number).sort(function(a, b) { return a - b; });
-            if (!keys.length) return;
+            // ── Sınıflandırılmamış Sürekli / Rampa (Stretch) Katman Denetimi ──
+            // Sürekli raster katmanlarda (Eğim, DEM, NDVI vb.) kullanıcı "Lejant ve Semboloji"
+            // panelinden katmanı açıkça "Sınıflandırılmış" (Classified) moduna alıp "Lejantı Uygula"
+            // butonuna basmadığı sürece yapay 7 sınıflı histogram üretilmez; Veri Grafikleri boş kalır.
+            var _chartPane = (paneId === 'map2' || paneId === 'map') ? paneId : ((typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map');
+            var _chkPaneKey = (_chartPane === 'map2') ? 'map2' : 'map';
+            var _topLayerKey = window._sylvaTopGeeLayerByPane && window._sylvaTopGeeLayerByPane[_chkPaneKey];
+            var _lyrPayload = window._sylvaLayerAnalyzePayloadByPane && window._sylvaLayerAnalyzePayloadByPane[_chkPaneKey] && _topLayerKey ? window._sylvaLayerAnalyzePayloadByPane[_chkPaneKey][_topLayerKey] : null;
+            var _edState = window._sylvaEditorStateByPane && window._sylvaEditorStateByPane[_chkPaneKey] && _topLayerKey ? window._sylvaEditorStateByPane[_chkPaneKey][_topLayerKey] : null;
 
-            var minVal  = keys[0];
-            var maxVal  = keys[keys.length - 1];
-            var numBins = 7;
-            var binSize = (maxVal - minVal) / numBins || 1;
-
-            var rampPalette = {
-                'viridis':         ['#440154','#31688e','#35b779','#fde725'],
-                'blue-ocean':      ['#08306b','#2171b5','#6baed6','#c6dbef'],
-                'heat':            ['#313695','#4575b4','#fdae61','#d73027','#a50026'],
-                'green':           ['#f7fcf5','#74c476','#238b45','#00441b'],
-                'red-yellow-green':['#d73027','#fc8d59','#fee08b','#d9ef8b','#1a9850'],
-                'brown':           ['#f5f5dc','#c8a96e','#8b5e2d','#4a3000']
-            };
-            var palette = (meta && rampPalette[meta.rampKey]) ? rampPalette[meta.rampKey] : (['#000000', '#ffffff']);
-
-            var bins = [];
-            for (var i = 0; i < numBins; i++) {
-                var bMin = minVal + i * binSize;
-                var bMax = minVal + (i + 1) * binSize;
-                var count = 0;
-                keys.forEach(function(k) {
-                    if (k >= bMin && (i === numBins - 1 ? k <= bMax : k < bMax)) count += hist[k];
-                });
-                var palettePosition = (i + 0.5) / numBins;
-                var ci = Math.round(palettePosition * (palette.length - 1));
-                bins.push({
-                    color: palette[ci],
-                    name:  _sylvaLocalizedContinuousClassName(meta && meta.analysisName, i) || (bMin.toFixed(2) + ' – ' + bMax.toFixed(2)),
-                    min:   bMin.toFixed(2),
-                    max:   bMax.toFixed(2),
-                    count: count
-                });
+            var userAppliedClasses = null;
+            if (_lyrPayload && _lyrPayload.classificationType === 'classified' && Array.isArray(_lyrPayload.classBreaks) && _lyrPayload.classBreaks.length > 0) {
+                userAppliedClasses = _lyrPayload.classBreaks;
+            } else if (_edState && _edState.classificationType === 'classified' && Array.isArray(_edState.classes) && _edState.classes.length > 0) {
+                userAppliedClasses = _edState.classes;
             }
-            var totalCount = bins.reduce(function(s, b) { return s + b.count; }, 0) || 1;
+
+            if (!userAppliedClasses || !userAppliedClasses.length) {
+                // Katman henüz kullanıcı tarafından sınıflandırılmamış (Stretch modunda)
+                renderStatsChart(null, _chartPane);
+                return;
+            }
+
+            // Yalnızca kullanıcı sınıflandırma uyguladığında istatistikler hesaplanır ve çizilir
+            var hist = (stats && stats.value) ? stats.value : null;
+            var percentages = hist ? computeClassPercentagesFromHistogram(userAppliedClasses, hist) : null;
             var areaHa = null;
-            var _chartAoiPane = (paneId === 'map2' || paneId === 'map') ? paneId : ((typeof _sylvaActivePaneId === 'function') ? _sylvaActivePaneId() : 'map');
-            var _chartAoiLayer = (_chartAoiPane === 'map2') ? currentLayer2 : currentLayer;
+            var _chartAoiLayer = (_chartPane === 'map2') ? currentLayer2 : currentLayer;
             try { if (_chartAoiLayer) areaHa = turf.area(_chartAoiLayer.toGeoJSON()) / 10000; } catch(e) {}
-            var percentages = bins.map(function(b) { return (b.count / totalCount) * 100; });
-            renderStatsChart({ classes: bins, percentages: percentages, areaHa: areaHa }, _chartAoiPane);
+            renderStatsChart(percentages ? { classes: userAppliedClasses, percentages: percentages, areaHa: areaHa } : null, _chartPane);
             playSylvaChime('analysis');
         }
 
@@ -33975,11 +34194,14 @@ function selectRamp(name) {
 
         function _sylvaSyncChartExportButtons(type) {
             var isLine = (type || currentChartType) === 'line';
+            var hasData = !!(lastChartData && lastChartData.classes && lastChartData.classes.length);
             document.querySelectorAll('#chart-download-buttons-row button').forEach(function (button) {
                 var key = button.getAttribute('data-i18n');
-                var disabled = isLine && (key === 'btn_csv' || key === 'btn_pdf');
+                var disabled = !hasData || (isLine && (key === 'btn_csv' || key === 'btn_pdf'));
                 button.disabled = disabled;
                 button.setAttribute('aria-disabled', String(disabled));
+                button.style.opacity = disabled ? '0.45' : '';
+                button.style.cursor = disabled ? 'not-allowed' : '';
             });
         }
 
@@ -34357,11 +34579,19 @@ function selectRamp(name) {
             }
             data = _sylvaSafeChartData(data);
             lastChartData = data;
-            if (!data) {
-                ["stats-chart-svg-wrap", "stats-chart-table"].forEach(function (id) {
-                    var element = document.getElementById(id);
-                    if (element) element.textContent = "";
-                });
+            if (!data || !data.classes || !data.classes.length) {
+                lastChartData = null;
+                _sylvaSyncChartExportButtons();
+                var wrap = document.getElementById('stats-chart-svg-wrap');
+                var tableWrap = document.getElementById('stats-chart-table');
+                if (wrap) {
+                    wrap.className = 'chart-placeholder';
+                    wrap.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;min-height:90px;color:#94a3b8;font-size:0.75rem;padding:16px;text-align:center;line-height:1.4;">' +
+                        '📊 <span data-i18n="chart_unclassified_hint">' +
+                        (typeof t === 'function' ? t('chart_unclassified_hint', 'Sürekli (Stretch) raster katmanı aktif. Sınıf istatistikleri ve grafik için lütfen "Lejant ve Semboloji" panelinden katmanı sınıflandırıp "Lejantı Uygula"ya basınız.') : 'Sürekli (Stretch) raster katmanı aktif. Sınıf istatistikleri ve grafik için lütfen "Lejant ve Semboloji" panelinden katmanı sınıflandırıp "Lejantı Uygula"ya basınız.') +
+                        '</span></div>';
+                }
+                if (tableWrap) tableWrap.innerHTML = '';
                 return;
             }
             _sylvaSyncChartExportButtons();
@@ -39359,23 +39589,23 @@ function selectRamp(name) {
                         var cx = nX + nW / 2;
                         var cy = nY + nH / 2;
                         ctx.save();
-                        // Arka plan kutusu — DOM boyutunda, tam üst üste
-                        ctx.fillStyle = 'rgba(255,255,255,0.95)';
-                        ctx.strokeStyle = '#1e3a8a';
-                        ctx.lineWidth = 2 * scale;
+                        // Arka plan kutusu — DOM boyutunda, nötr/temiz kart yapısı
+                        ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+                        ctx.strokeStyle = '#cbd5e1';
+                        ctx.lineWidth = 1.5 * scale;
                         ctx.beginPath();
-                        if (ctx.roundRect) ctx.roundRect(nX, nY, nW, nH, 5 * scale);
+                        if (ctx.roundRect) ctx.roundRect(nX, nY, nW, nH, 6 * scale);
                         else ctx.rect(nX, nY, nW, nH);
                         ctx.fill(); ctx.stroke();
                         // textBaseline:'middle' → y = metnin tam dikey ortası, kayma yok
                         ctx.textAlign    = 'center';
                         ctx.textBaseline = 'middle';
-                        // ▲ kuzey oku — kutunun üst %40'ı
-                        ctx.fillStyle = '#ef4444';
+                        // ▲ kuzey oku — modern koyu/siyah ton (#111827)
+                        ctx.fillStyle = '#111827';
                         ctx.font = 'bold ' + Math.round(nH * 0.38) + 'px sans-serif';
                         ctx.fillText('▲', cx, cy - nH * 0.14);
-                        // N harfi — kutunun alt %35'i
-                        ctx.fillStyle = '#1e3a8a';
+                        // N harfi — modern koyu/siyah ton (#111827)
+                        ctx.fillStyle = '#111827';
                         ctx.font = 'bold ' + Math.round(nH * 0.28) + 'px sans-serif';
                         ctx.fillText('N', cx, cy + nH * 0.28);
                         ctx.restore();
@@ -66775,6 +67005,18 @@ function selectVdlSource(src) {
 
 function _vdlUpdateSourceInfoBox() { /* Bilgi metni kaldırıldı. */ }
 function openVectorDownloadDialog() {
+    // 🌲 Karbon İzolasyonu: Haritada yalnızca karbon fidan dağılımı mevcutsa
+    // genel vektör indirme penceresi açılmaz; fidanlar karbon modülünün KML butonu ile indirilir.
+    var _curPaneForVdl = (typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map';
+    var _cStForVdl = window._carbonStateByPane && window._carbonStateByPane[_curPaneForVdl];
+    var _hasCarbonForVdl = !!(_cStForVdl && (_cStForVdl.plantingLayer || (_cStForVdl.simActive && _cStForVdl.plantingPoints && _cStForVdl.plantingPoints.length > 0)));
+    if (_hasCarbonForVdl) {
+        var _curVEntries = (typeof vectorEntries === 'function') ? vectorEntries(_curPaneForVdl) : [];
+        if (!_curVEntries || !_curVEntries.length) {
+            return;
+        }
+    }
+
     // 🆕 Pencere açılır açılmaz aktif ekranın son analizini sunucuyla
     // senkronize etmeye başla (arka planda; kullanıcı formu doldururken biter).
     // GeoTIFF penceresiyle aynı senkronizasyon yardımcı fonksiyonu kullanılır.
@@ -83557,7 +83799,7 @@ refresh();
             var p = _sylvaLocalizedVectorPayload(_sylvaPayloadWithDownloadGeometry(byLayer[key], pane));
             if (!p || !p.index) return;
             var idx = String(p.index).toUpperCase();
-            if (idx !== 'TOPO_CONTOUR' && idx !== 'CARBON_SIMULATION' && idx !== 'CARBON_PLANTING' && idx !== 'CARBON_SINK') return;
+            if (idx !== 'TOPO_CONTOUR') return;
             var fp = JSON.stringify(p);
             if (seen[fp] || seen[key]) return;
             seen[fp] = true;
@@ -83590,34 +83832,9 @@ refresh();
                 result.push({ key: 'building_footprint', payload: _bp, index: 'BUILDING_FOOTPRINT' });
             }
         }
-        // 🌲 Karbon Fidan Dağılımı (KML/Vektör): Simülasyon çalıştırıldığında üretilen
-        // fidan koordinat noktalarını doğrudan vektör indirme kuyruğuna ekle.
-        var _carbonState = window._carbonStateByPane && window._carbonStateByPane[pane];
-        var _carbonVisible = visible['CARBON_PLANTING'] !== false && visible['carbon_planting'] !== false;
-        if (_carbonState && _carbonState.plantingPoints && _carbonState.plantingPoints.length && _carbonVisible) {
-            var fidanTitle = (typeof t === 'function' ? t('carbon_fidan_title', 'Karbon Fidan Dağılımı (KML)') : 'Karbon Fidan Dağılımı (KML)');
-            var _cp = {
-                index: 'CARBON_SIMULATION',
-                lang: window._sylvaLang || 'en',
-                seedling_label: _sylvaSeedlingLabel(),
-                analysisName: fidanTitle,
-                sensorLabel: 'Karbon Yutak Simülasyonu',
-                species: (_carbonState.species || 'Fidan').trim(),
-                spacingX: _carbonState.spacingX || 3,
-                spacingY: _carbonState.spacingY || 3,
-                plantingPoints: _carbonState.plantingPoints,
-                geojson: _carbonState.pointsGeoJSON,
-                color: '#16a34a',
-                classBreaks: [{ min: 1, max: 1, color: '#16a34a', label: fidanTitle }],
-                classificationType: 'classified'
-            };
-            var _cfp = JSON.stringify({ index: _cp.index, pointsCount: _carbonState.plantingPoints.length, species: _cp.species });
-            if (!seen['CARBON_PLANTING'] && !seen['carbon_planting'] && !seen[_cfp]) {
-                seen['CARBON_PLANTING'] = true;
-                seen[_cfp] = true;
-                result.push({ key: 'CARBON_PLANTING', payload: _cp, index: 'CARBON_SIMULATION' });
-            }
-        }
+        // 🌲 Fidan Noktaları İstisnası: Karbon analizi fidan verileri Karbon Modülü içinde
+        // kendi bağımsız "KML Olarak İndir" butonuna sahip olduğundan genel vektör indirme
+        // döngüsünden tamamen hariç tutulmuştur; genel indirme kuyruğuna ASLA dahil edilmez.
         return result;
     }
     // 🛠️ BUG FİX (KÖK NEDEN): Bu fonksiyon (ve rasterEntries/
@@ -134295,11 +134512,24 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
   };
   function syncFixedLulcPanel(panel,locked){
     var root=document.getElementById('legend-symbology-panel')||panel;
+    var body=document.getElementById('legend-symbology-body')||panel;
     if(root.classList.contains('sylva-lulc-standard-passive')!==locked)root.classList.toggle('sylva-lulc-standard-passive',locked);
-    if(root!==panel && root.inert!==locked)root.inert=locked;
-    if(locked){if(root.getAttribute('aria-disabled')!=='true')root.setAttribute('aria-disabled','true');}
-    else if(root!==panel && root.hasAttribute('aria-disabled'))root.removeAttribute('aria-disabled');
-    root.querySelectorAll('input,select,button').forEach(function(control){
+    if(body.classList.contains('sylva-lulc-standard-passive')!==locked)body.classList.toggle('sylva-lulc-standard-passive',locked);
+    // Başlık çubuğunun ve ok simgesinin tıklanabilirliğini korumak için root ASLA inert yapılmaz;
+    // kilit ve inert yalnızca akordiyon gövdesine (body) uygulanır.
+    if(root.inert) root.inert=false;
+    if(body.inert!==locked) body.inert=locked;
+    if(locked){if(body.getAttribute('aria-disabled')!=='true')body.setAttribute('aria-disabled','true');}
+    else if(body.hasAttribute('aria-disabled'))body.removeAttribute('aria-disabled');
+    if(root.hasAttribute('aria-disabled'))root.removeAttribute('aria-disabled');
+
+    // Başlık çubuğu ve ok simgesi her zaman tıklanabilir ve net tutulur
+    var arrow = document.getElementById('legend-symbology-arrow');
+    if(arrow){ arrow.disabled=false; arrow.removeAttribute('data-sylva-lulc-disabled'); }
+
+    // Yalnızca akordiyon gövdesi içindeki düzenleme elemanları (palet, sınıf sayısı/satırları, min/maks, Lejantı Uygula butonu) kilitlenir
+    body.querySelectorAll('input,select,button').forEach(function(control){
+      if(control.id==='legend-symbology-arrow') return;
       if(locked){
         var managed=['data-sylva-no-analysis-disabled','data-native-symbol-disabled','data-sylva-passive-disabled','data-sylva-hillshade-disabled','data-sylva-env-disabled','data-sylva-rgb-passive'].some(function(flag){return control.hasAttribute(flag);});
         if((!control.disabled||managed) && !control.hasAttribute('data-sylva-lulc-disabled'))control.setAttribute('data-sylva-lulc-disabled','1');
@@ -134384,7 +134614,10 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
   function fixedInteraction(event){
     if(!window._sylvaIsFixedLulcLayer())return;
     var target=event.target;
-    if(target&&target.closest&&target.closest('#legend-symbology-panel, #legend-symbology-body')){
+    // Başlık çubuğuna ve açılır/kapanır ok simgesine yapılan tıklamalara izin ver; akordiyonun açılıp kapanmasını engelleme
+    if(target&&target.closest&&target.closest('.sylva-sec-hdr, #legend-symbology-arrow'))return;
+    // Yalnızca akordiyon gövdesi (#legend-symbology-body) içerisindeki düzenleme elemanlarının etkileşimini kısıtla
+    if(target&&target.closest&&target.closest('#legend-symbology-body')){
       event.preventDefault();event.stopImmediatePropagation();syncLegendDataAvailability();
     }
   }
@@ -134450,14 +134683,36 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
 /* Uydu görüntüsü aktifken Lejant ve Semboloji panosu da ekran görüntüsündeki
    gibi soluk/şeffaf ve pasiftir. Analiz lejantının kendisi etkilenmez. */
 
-/* Only fixed LULC palettes disable the entire legend/symbology accordion. */
+/* LULC analizlerinde akordiyon başlık çubuğu, isim metni ve açılır/kapanır ok (▼) simgesi
+   normal görünümde (opaklık: 1, net kontrast) ve tıklanabilir kalır;
+   pasiflik ve kilit durumu yalnızca akordiyon gövdesine (#legend-symbology-body) uygulanır. */
 #legend-symbology-panel.sylva-lulc-standard-passive {
-  opacity: .5 !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  user-select: auto !important;
+}
+#legend-symbology-panel.sylva-lulc-standard-passive > .sylva-sec-hdr,
+#legend-symbology-panel.sylva-lulc-standard-passive > .sylva-sec-hdr > span,
+#legend-symbology-panel.sylva-lulc-standard-passive #legend-symbology-arrow,
+#legend-symbology-arrow {
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  cursor: pointer !important;
+}
+#legend-symbology-panel.sylva-lulc-standard-passive #legend-symbology-body,
+#legend-symbology-body.sylva-lulc-standard-passive {
+  opacity: .45 !important;
   pointer-events: none !important;
   user-select: none !important;
 }
-#legend-symbology-panel.sylva-lulc-standard-passive #legend-symbology-body {
-  opacity: 1 !important;
+#legend-symbology-panel.sylva-lulc-standard-passive #legend-symbology-body input,
+#legend-symbology-panel.sylva-lulc-standard-passive #legend-symbology-body select,
+#legend-symbology-panel.sylva-lulc-standard-passive #legend-symbology-body button,
+#legend-symbology-body.sylva-lulc-standard-passive input,
+#legend-symbology-body.sylva-lulc-standard-passive select,
+#legend-symbology-body.sylva-lulc-standard-passive button {
+  cursor: not-allowed !important;
+  pointer-events: none !important;
 }
 #legend-symbology-body.sylva-satellite-passive {
   opacity: .35 !important;
