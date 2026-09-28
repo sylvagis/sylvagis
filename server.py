@@ -12018,60 +12018,9 @@ def vector_download():
                     return jsonify({'error': 'Henüz bir analiz yapılmadı. Önce haritada bir analiz çalıştırın.'}), 400
                 data = dict(_last_analyze_params)
 
-            # Vektörizasyon için sınıflandırılmış görüntüyü al
+            # Vektörizasyon için _vectorize_analysis_payload kullan
             try:
-                final_display, roi, result, vis, _ = _call_with_retry(
-                    build_result_image, data, for_export=False  # sınıf renkleri korunur
-                )
-            except Exception as e:
-                traceback.print_exc()
-                return jsonify({'error': f'Analiz yeniden hesaplanamadı: {str(e)}'}), 500
-
-            # Ölçek: çok küçük ölçek → çok fazla piksel → timeout
-            # Güvenli alt sınır: analiz tipine göre otomatik seç
-            index = data.get('index', 'NDVI')
-            if index in ('LULC', 'LULC_ESA'):
-                vec_scale = 100   # Dynamic World / ESA 10 m → 100 m güvenli
-            elif index.startswith('TOPO'):
-                vec_scale = 90    # SRTM 30 m → 90 m güvenli
-            elif index == 'LULC_MODIS':
-                vec_scale = 500
-            else:
-                vec_scale = 300   # Uydu indeksleri (NDVI vb.) → 300 m
-
-            print(f'[SylvaGIS] Vektörizasyon başlatılıyor: index={index} scale={vec_scale}')
-            try:
-                # reduceToVectors: pikselleri poligona çevir
-                # GEE reduceToVectors() uses the first band as the integer
-                # label band. Reducer.first() consumes one additional band;
-                # a one-band image therefore raises:
-                # "Need 1+1 bands for Reducer.first, image has 1".
-                _vector_input = final_display.int().rename('class_value').addBands(
-                    ee.Image.constant(1).rename('vector_value')
-                )
-                vec_fc = _call_with_retry(
-                    lambda: _vector_input.reduceToVectors(
-                        reducer=ee.Reducer.first(),
-                        # 🛠️ BUG FİX (Görsel 5 - "Geometry.bounds: ... non-zero
-                        # error margin"): bkz. _split_bbox_grid_aligned içindeki
-                        # aynı düzeltme notu — maxError açıkça verilmeden .bounds()
-                        # çağrısı GEE tarafından reddediliyordu.
-                        # ÇALIŞMA ALANI SINIRINI KORU: Daha önce roi.bounds() kullanıldığı için
-                        # reduceToVectors kare bounding-box üzerinde çalışıyor ve KML/SHP/KMZ
-                        # Google Earth'te çalışma alanını dikkate almayan büyük bir kare olarak
-                        # görünüyordu. Artık gerçek AOI geometrisi kullanılıyor; vektörler çalışma
-                        # alanının gerçek poligon sınırı içinde üretiliyor.
-                        geometry=roi,
-                        scale=vec_scale,
-                        maxPixels=1e8,
-                        geometryType='polygon',
-                        eightConnected=False,
-                        labelProperty='class_value',
-                        crs=crs if crs.upper().startswith('EPSG:') else 'EPSG:4326',
-                    ).limit(4000)
-                )
-                fc_info = _call_with_retry(lambda: vec_fc.getInfo())
-                features = fc_info.get('features', []) if fc_info else []
+                features, class_meta = _vectorize_analysis_payload(data, crs)
             except Exception as e:
                 traceback.print_exc()
                 return jsonify({'error': f'Vektöre dönüştürme başarısız: {str(e)}'}), 500
@@ -12154,11 +12103,18 @@ def _vector_class_meta(data, vis):
         for i, item in enumerate(localized):
             if not isinstance(item, dict):
                 continue
-            out.append({
+            entry = {
                 'code': item.get('code', i+1),
                 'label': str(item.get('label') or f'Class {i+1}'),
                 'color': str(item.get('color') or '#999999')
-            })
+            }
+            if 'min' in item and 'max' in item:
+                try:
+                    entry['min'] = float(item['min'])
+                    entry['max'] = float(item['max'])
+                except Exception:
+                    pass
+            out.append(entry)
         if out:
             return out
     breaks = data.get('classBreaks')
@@ -12170,7 +12126,8 @@ def _vector_class_meta(data, vis):
             except Exception:
                 continue
             out.append({'code': i, 'label': str(b.get('label') or f'{lo:g} – {hi:g}'),
-                        'color': str(b.get('color') or '#999999')})
+                        'color': str(b.get('color') or '#999999'),
+                        'min': lo, 'max': hi})
         if out:
             return out
     native = {
@@ -12208,11 +12165,15 @@ def _vector_class_meta(data, vis):
         vmin=float((vis or {}).get('min',0)); vmax=float((vis or {}).get('max',len(pal)))
     except Exception:
         vmin, vmax = 0.0, float(len(pal))
+    if vmax <= vmin:
+        vmax = vmin + 1.0
     n=max(2,min(len(pal),24)) if len(pal)>1 else 1
     step=(vmax-vmin)/n if n else 1
     return [{'code':i+1,
              'label':f'{vmin+i*step:.4g} – {(vmax if i==n-1 else vmin+(i+1)*step):.4g}',
-             'color':'#'+str(pal[min(i,len(pal)-1)]).lstrip('#')}
+             'color':'#'+str(pal[min(i,len(pal)-1)]).lstrip('#'),
+             'min': round(vmin+i*step, 4),
+             'max': round(vmax if i==n-1 else vmin+(i+1)*step, 4)}
             for i in range(n)]
 
 
@@ -12220,8 +12181,10 @@ def _enrich_vector_features(features, class_meta):
     by_code={str(x['code']):x for x in (class_meta or [])}
     out=[]
     for feat in features or []:
+        if not feat or not feat.get('geometry'):
+            continue
         f=dict(feat); props=dict(f.get('properties') or {})
-        raw=props.get('class_value', props.get('first', props.get('label','')))
+        raw=props.get('class_value', props.get('class', props.get('first', props.get('label',''))))
         try: code=int(float(raw))
         except Exception: code=None
         meta=by_code.get(str(code)) if code is not None else None
@@ -12232,7 +12195,29 @@ def _enrich_vector_features(features, class_meta):
         if meta is None and code is not None:
             meta = by_code.get(str(code + 1)) if str(code + 1) in by_code else None
         if meta:
-            props['class_value']=meta['code']; props['class_name']=meta['label']; props['color']=meta['color']
+            props['class']=meta['code']
+            props['class_value']=meta['code']
+            props['class_name']=meta['label']
+            props['color']=meta.get('color', '#999999')
+            if 'min' in meta and 'max' in meta:
+                props['min_val']=meta['min']
+                props['max_val']=meta['max']
+                props['range']=f"{meta['min']} – {meta['max']}"
+        elif code is not None:
+            props['class']=code
+            props['class_value']=code
+            props['class_name']=f'Class {code}'
+            props['color']=props.get('color', '#999999')
+
+        geom = f.get('geometry')
+        if geom:
+            try:
+                area_m2 = _geojson_area_m2(geom)
+                props['area_ha'] = round(area_m2 / 10000.0, 4)
+                props['area_m2'] = round(area_m2, 2)
+            except Exception:
+                pass
+
         f['properties']=props; out.append(f)
     return out
 
@@ -12299,241 +12284,122 @@ def _vectorize_analysis_payload(data, crs='EPSG:4326'):
         return feats,[{'code':1,'label':'Eş Yükselti','color':color}]
 
     if index in ('CARBON_SIMULATION', 'CARBON_SINK', 'CARBON_PLANTING'):
-        lang_code = str(data.get('lang') or 'en').strip()
-        seedling_label = str(data.get('seedling_label') or _export_labels(lang_code)[0])
-        label = str(data.get('analysisName') or ('SylvaGIS ' + seedling_label))
-        color = str(data.get('color') or '#16a34a')
-        supplied_geojson = data.get('geojson') or data.get('pointsGeoJSON')
-        if isinstance(supplied_geojson, str):
-            try:
-                supplied_geojson = json.loads(supplied_geojson)
-            except Exception:
-                supplied_geojson = None
-        feats = []
-        if isinstance(supplied_geojson, dict):
-            feats = supplied_geojson.get('features') or []
-        elif isinstance(supplied_geojson, list):
-            feats = supplied_geojson
-        if not feats:
-            feats = data.get('features') or []
-        if not feats:
-            pts = data.get('plantingPoints') or data.get('planting_points') or data.get('points') or []
-            if pts:
-                feats = [{
-                    'type': 'Feature',
-                    'geometry': {'type': 'Point', 'coordinates': [float(pt[1]), float(pt[0]), 0]},
-                    'properties': {
-                        'name': f'{seedling_label} #{i+1}',
-                        'seedling_index': i + 1,
-                        'species': str(data.get('species') or ''),
-                        'class_name': label,
-                        'color': color
-                    }
-                } for i, pt in enumerate(pts)]
-        if feats:
-            out = []
-            for i, f in enumerate(feats, start=1):
-                if not isinstance(f, dict) or not f.get('geometry'):
-                    continue
-                nf = copy.deepcopy(f)
-                props = dict(nf.get('properties') or {})
-                # Re-localize generated names at download time, preserving custom names.
-                old_name = str(props.get('name') or '')
-                generated = props.get('seedling_index') is not None or any(
-                    re.fullmatch(re.escape(labels[0]) + r'\s*#\d+', old_name)
-                    for labels in _EXPORT_LABELS.values()
-                )
-                if not old_name or generated:
-                    props['name'] = f'{seedling_label} #{props.get("seedling_index") or i}'
-                props.setdefault('class_name', label)
-                props.setdefault('color', color)
-                if 'species' not in props and data.get('species'):
-                    props['species'] = str(data.get('species'))
-                nf['properties'] = props
-                out.append(nf)
-            if out:
-                return out, [{'code': 1, 'label': label, 'color': color}]
-        raise ValueError('Karbon Fidan Dağılımı için aktarılabilir nokta verisi bulunamadı.')
+        # 🌲 Karbon Analizi fidan verileri Karbon Modülü içerisindeki özel KML indirme
+        # butonuyla sunulduğundan genel vektör dönüştürme ve dışa aktarma hattından tamamen muaftır.
+        return [], []
+    # 1. GEE Görüntüsünü ve Çalışma Alanı (ROI) Geometrisini Oluştur
+    try:
+        final_display, roi, result, vis, _ = _call_with_retry(
+            build_result_image, data, for_export=False  # sınıf renkleri ve etiketleri korunur
+        )
+    except Exception as e:
+        traceback.print_exc()
+        raise ValueError(f'Analiz görüntüsü oluşturulamadı: {str(e)}')
 
-    if index == 'BUILDING_FOOTPRINT':
-        # Öncelik: analiz ekranında zaten başarıyla üretilmiş gerçek GeoJSON.
-        # Böylece indirme aşamasında aynı bina sorgusunu ikinci kez çalıştırıp
-        # farklı/boş bir kapsam dönmesi engellenir.
-        roof_label, roof_color, outside_label, outside_color = _building_footprint_legend_labels(data)
-        supplied_geojson=data.get('geojson')
-        if isinstance(supplied_geojson, dict):
-            feats=supplied_geojson.get('features') or []
-            if feats:
-                out=[]
-                for f in feats:
-                    if not isinstance(f, dict) or not f.get('geometry'):
-                        continue
-                    nf=dict(f)
-                    props=dict(nf.get('properties') or {})
-                    props.update({'class_value':1,'class_name':roof_label,'color':roof_color})
-                    nf['properties']=props
-                    out.append(nf)
-                if out:
-                    return out,[{'code':1,'label':roof_label,'color':roof_color},
-                                {'code':0,'label':outside_label,'color':outside_color}]
+    if roi is None:
+        raise ValueError('Çalışma alanı (ROI) bulunamadı.')
 
-        # Geriye dönük uyumluluk: eski istemciler GeoJSON göndermiyorsa
-        # mevcut asenkron/OSM yedekli bina hattını yeniden kullan.
-        geom=data.get('roi') or data.get('geometry')
-        if not geom:
-            raise ValueError('Bina Çatı Tespiti için çalışma alanı geometrisi bulunamadı.')
-        with app.test_request_context('/api/building-footprints', method='POST', json={'geometry': geom}):
-            resp=building_footprints()
-        if isinstance(resp, tuple):
-            resp=resp[0]
-        if not isinstance(resp, Response) or resp.status_code >= 400:
-            raise ValueError('Bina verileri alınamadı.')
-        payload=resp.get_json(silent=True) or {}
-        if not payload.get('success'):
-            raise ValueError(payload.get('error') or 'Bina verileri alınamadı.')
-        feats=(payload.get('geojson') or {}).get('features') or []
-        if not feats:
-            raise ValueError('Bina Çatı Tespiti sonucunda dışa aktarılabilir poligon bulunamadı.')
-        for f in feats:
-            props=dict(f.get('properties') or {})
-            props.update({'class_value':1,'class_name':roof_label,'color':roof_color})
-            f['properties']=props
-        return feats,[{'code':1,'label':roof_label,'color':roof_color},
-                      {'code':0,'label':outside_label,'color':outside_color}]
+    # Sınıf metadata'sını (renkler, etiketler, min/max aralıkları) hazırla
+    class_meta = _vector_class_meta(data, vis)
 
-    final_display, roi, result, vis, _ = _call_with_retry(build_result_image, data, for_export=False)
-    class_meta=_vector_class_meta(data, vis)
-    if not class_meta:
-        raise ValueError('Bu katman için vektöre aktarılabilir sınıf/lejant bilgisi bulunamadı.')
-    vector_img=final_display
-    # Kullanıcı sınıflandırması varsa continuous sonucu sınıf kodlarına
-    # dönüştür. Böylece NDVI/Eğim/TWI/BSI vb. sınıflandırılmış katmanlarda
-    # vektör özellikleri gerçek class_name + color ile eşleşir.
     _payload_breaks = data.get('classBreaks')
-    # 🛠️ BUG FİX (kullanıcı bildirimi — Çevresel/Kentsel Analizler'de Orman
-    # Kaybı ekranda 3 sınıf (Orman/Değişmeyen, Kayıp, Kazanım) gösterirken
-    # indirilen vektörde (KML/SHP/GeoJSON) yalnızca 2, eksik ve YANLIŞ
-    # etiketli sınıf olarak geliyordu): KÖK NEDEN — FOREST_LOSS/URBAN_GROWTH
-    # zaten build_result_image() içinde native 0/1/2 (ya da 0/1) sınıf
-    # kodlarını üretir (bkz. _NATIVE_CATEGORICAL_RASTER_INDICES ve raster
-    # dışa aktarımdaki eşdeğer düzeltme, ~satır 7863). Ancak bu iki koşul
-    # yalnızca `index not in LULC_CLASS_DEFS` kontrolü yaptığından (FOREST_LOSS/
-    # URBAN_GROWTH bu sözlükte YOKTUR — ayrı bir "native" aile), istemciden
-    # classBreaks gelmediğinde aşağıdaki `elif` dalı devreye giriyor ve
-    # zaten kategorik olan 0/1/2 değerlerini SANKİ SÜREKLİ bir değişkenmiş
-    # gibi palette uzunluğuna göre yeniden kutuluyordu (0→1, 1→2, 2→3).
-    # Sonuç: _vector_class_meta()'nın native sözlüğü (kod 0/1/2) artık
-    # üretilen kodlarla (1/2/3) EŞLEŞMİYORDU — kod 0 (Orman/Değişmeyen)
-    # hiç eşleşmediği için TAMAMEN KAYBOLUYOR, kod 1 (gerçek Orman Kaybı)
-    # "Orman (Değişmeyen)" pikselleriyle karışıp yanlışlıkla "Orman Kaybı"
-    # etiketiyle çıkıyor, kod 2 (gerçek Orman Kazanımı) da yanlışlıkla
-    # gerçek kayıp pikselleriyle eşleşiyor, ve gerçek kazanım (kayan kod 3)
-    # hiçbir sınıf koduna karşılık gelmediği için sessizce dışa aktarımdan
-    # DÜŞÜYORDU. ÇÖZÜM: bu native kategorik katmanlar
-    # (_NATIVE_CATEGORICAL_RASTER_INDICES) her iki dalda da LULC_CLASS_DEFS
-    # ile AYNI şekilde hariç tutulur — vector_img, üstteki `final_display`
-    # (native 0/1/2 kodları) olarak KALIR ve _vector_class_meta ile birebir
-    # eşleşir. IMPERVIOUS_CHANGE gibi GERÇEKTEN sürekli (continuous) değişim
-    # katmanları bu istisnaya DAHİL DEĞİLDİR — onlar için palette tabanlı
-    # kutulama davranışı (doğru şekilde) aynen sürüyor.
-    if index not in LULC_CLASS_DEFS and index != 'TOPO_ASPECT' and index not in _NATIVE_CATEGORICAL_RASTER_INDICES and isinstance(_payload_breaks, list) and _payload_breaks:
-        try:
-            _valid_breaks=[]
-            for _b in _payload_breaks[:24]:
-                if not isinstance(_b, dict): continue
-                _lo=float(_b.get('min')); _hi=float(_b.get('max'))
-                if _hi < _lo: _lo,_hi=_hi,_lo
-                _valid_breaks.append((_lo,_hi))
-            if _valid_breaks:
-                _cls=ee.Image.constant(0).rename('class_value')
-                for _i,(_lo,_hi) in enumerate(_valid_breaks,1):
-                    _cond=result.gte(_lo).And(result.lte(_hi))
-                    _cls=_cls.where(_cond,_i)
-                vector_img=_cls.updateMask(result.mask())
-        except Exception:
-            # Sınıf aralıkları hatalıysa aşağıdaki palette fallback'i devreye
-            # girer; indirme tamamen sessizce bozulmaz.
-            vector_img=final_display
-    elif index not in LULC_CLASS_DEFS and index != 'TOPO_ASPECT' and index not in _NATIVE_CATEGORICAL_RASTER_INDICES and not (isinstance(_payload_breaks, list) and _payload_breaks):
-        pal=(vis or {}).get('palette') if isinstance(vis,dict) else None
-        if isinstance(pal,list) and len(pal)>1:
+
+    # 2. Sürekli Rasterı Tamsayı Sınıflarına Dönüştür (Reclassify) ve Maskele
+    # NDVI, NDBI, NDWI, Eğim (Slope), DEM vb. sürekli indeksleri tamsayı sınıf ID'lerine (1..N) dönüştür.
+    # reduceToVectors öncesinde görüntünün açıkça toInt() formatına cast edilmesi,
+    # sınıf dışı/tanımsız piksellerin maskelenmesi ve ROI ile tam kırpılması sağlanır.
+    if index not in LULC_CLASS_DEFS and index != 'TOPO_ASPECT' and index not in _NATIVE_CATEGORICAL_RASTER_INDICES:
+        if isinstance(_payload_breaks, list) and _payload_breaks:
             try:
-                vmin=float(vis.get('min',0)); vmax=float(vis.get('max',1)); n=min(len(pal),24)
-                vector_img=result.subtract(vmin).divide(vmax-vmin).multiply(n).floor().add(1).clamp(1,n).toInt().updateMask(result.mask())
-            except Exception:
-                pass
-    if index == 'TOPO_ASPECT' and not (isinstance(data.get('classBreaks'), list) and data.get('classBreaks')):
-        a=result
-        vector_img=(ee.Image(1).where(a.gte(0).And(a.lt(12.5)),2)
-            .where(a.gte(12.5).And(a.lt(57.5)),3)
-            .where(a.gte(57.5).And(a.lt(102.5)),4)
-            .where(a.gte(102.5).And(a.lt(147.5)),5)
-            .where(a.gte(147.5).And(a.lt(192.5)),6)
-            .where(a.gte(192.5).And(a.lt(237.5)),7)
-            .where(a.gte(237.5).And(a.lt(282.5)),8)
-            .where(a.gte(282.5).And(a.lt(327.5)),9)
-            .where(a.gte(327.5),2).updateMask(a.mask()))
-        vector_img=vector_img.where(a.lt(0),1)
+                _valid_breaks = []
+                for _b in _payload_breaks[:24]:
+                    if not isinstance(_b, dict): continue
+                    _lo = float(_b.get('min'))
+                    _hi = float(_b.get('max'))
+                    if _hi < _lo: _lo, _hi = _hi, _lo
+                    _valid_breaks.append((_lo, _hi))
+                if _valid_breaks:
+                    _cls = ee.Image.constant(0).toInt()
+                    for _i, (_lo, _hi) in enumerate(_valid_breaks, 1):
+                        _cond = result.gte(_lo).And(result.lte(_hi) if _i == len(_valid_breaks) else result.lt(_hi))
+                        _cls = _cls.where(_cond, _i)
+                    # Sadece geçerli sınıf atanan (1..N) ve geçerli maskesi olan pikselleri koru
+                    vector_img = _cls.updateMask(result.mask().And(_cls.gt(0))).toInt().clip(roi)
+                else:
+                    vector_img = (final_display if final_display is not None else result).toInt().updateMask(result.mask()).clip(roi)
+            except Exception as _cls_err:
+                print('[SylvaGIS] Vektör sınıflandırma maskeleme hatası:', _cls_err)
+                vector_img = (final_display if final_display is not None else result).toInt().updateMask(result.mask()).clip(roi)
+        else:
+            pal = (vis or {}).get('palette') if isinstance(vis, dict) else None
+            if isinstance(pal, list) and len(pal) > 1:
+                try:
+                    vmin = float(vis.get('min', 0))
+                    vmax = float(vis.get('max', 1))
+                    if vmax <= vmin:
+                        vmax = vmin + 1.0
+                    n = min(len(pal), 24)
+                    step = (vmax - vmin) / n
+                    _cls = ee.Image.constant(0).toInt()
+                    for _i in range(1, n + 1):
+                        _lo = vmin + (_i - 1) * step
+                        _hi = vmax if _i == n else vmin + _i * step
+                        _cond = result.gte(_lo).And(result.lte(_hi) if _i == n else result.lt(_hi))
+                        _cls = _cls.where(_cond, _i)
+                    vector_img = _cls.updateMask(result.mask().And(_cls.gt(0))).toInt().clip(roi)
+                except Exception:
+                    vector_img = (final_display if final_display is not None else result).toInt().updateMask(result.mask()).clip(roi)
+            else:
+                vector_img = (final_display if final_display is not None else result).toInt().updateMask(result.mask()).clip(roi)
+    elif index == 'TOPO_ASPECT' and not (isinstance(data.get('classBreaks'), list) and data.get('classBreaks')):
+        a = result
+        vector_img = (ee.Image(1).where(a.gte(0).And(a.lt(12.5)), 2)
+            .where(a.gte(12.5).And(a.lt(57.5)), 3)
+            .where(a.gte(57.5).And(a.lt(102.5)), 4)
+            .where(a.gte(102.5).And(a.lt(147.5)), 5)
+            .where(a.gte(147.5).And(a.lt(192.5)), 6)
+            .where(a.gte(192.5).And(a.lt(237.5)), 7)
+            .where(a.gte(237.5).And(a.lt(282.5)), 8)
+            .where(a.gte(282.5).And(a.lt(327.5)), 9)
+            .where(a.gte(327.5), 2).updateMask(a.mask()))
+        vector_img = vector_img.where(a.lt(0), 1).toInt().clip(roi)
+    else:
+        # LULC, FOREST_LOSS, URBAN_GROWTH vb.
+        vector_img = (final_display if final_display is not None else result).toInt().updateMask(result.mask()).clip(roi)
+
+    # 3. Alan Büyüklüğüne Göre Dinamik ve Güvenli Ölçek (Scale) Seçimi
+    aoi_m2 = 0.0
+    try:
+        raw_geom = data.get('geometry') or data.get('roi')
+        if raw_geom:
+            aoi_m2 = _geojson_area_m2(raw_geom if isinstance(raw_geom, dict) else {'type': 'Polygon', 'coordinates': raw_geom})
+    except Exception:
+        aoi_m2 = 0.0
 
     if index in LULC_CLASS_DEFS:
-        scale=100 if index in ('LULC','LULC_ESA','LULC_CORINE') else 500 if index=='LULC_MODIS' else 100
-    elif index.startswith('TOPO'):
-        scale=90
+        scale = 100 if index in ('LULC', 'LULC_ESA', 'LULC_CORINE') else 500 if index == 'LULC_MODIS' else 100
     elif index in ('FOREST_LOSS', 'URBAN_GROWTH', 'IMPERVIOUS_CHANGE'):
-        # 🛠️ BUG FİX (kullanıcı bildirimi — Çevresel/Kentsel Analizler'de
-        # FOREST_LOSS vektör indirmesi 2 yeniden denemeden sonra bile
-        # kalıcı olarak "Failed to fetch" ile başarısız oluyordu): KÖK
-        # NEDEN — bu katmanlarda "Değişmeyen/Unchanged" sınıfı (kod 0)
-        # neredeyse TÜM çalışma alanını kaplayan, tek büyük ve çok
-        # köşeli/karmaşık bir bölgedir. 22. paketteki "kayıp sınıf"
-        # düzeltmesiyle her sınıf artık kendi reduceToVectors() çağrısını
-        # aldığından, bu devasa "Değişmeyen" sınıfının 300 m ölçekte
-        # vektörleştirilmesi tek başına çok uzun sürebiliyor ve isteği
-        # zaman aşımına uğratabiliyordu — bu GEÇİCİ bir ağ sorunu değildi,
-        # bu yüzden otomatik yeniden deneme de (24. paket) yardımcı
-        # olamıyordu. ÇÖZÜM: bu üç değişim-tespiti katmanı için vektör
-        # ölçeği 300 m'den 600 m'ye çıkarıldı — piksel/köşe sayısı ~4 kat
-        # azalır, hesaplama süresi buna bağlı olarak düşer. Değişim
-        # alanlarının (kayıp/kazanım, yeni kentsel alan) genel dağılımı ve
-        # sınıf renkleri/isimleri AYNEN korunur; yalnızca çok ince/tekli
-        # piksel detayları biraz daha genelleştirilir (bu tür değişim
-        # katmanları zaten genel eğilim göstergesi olarak kullanılır, ince
-        # piksel hassasiyeti gerektirmez). Raster (GeoTIFF) indirmesi bu
-        # değişiklikten ETKİLENMEZ — yalnızca vektör (KML/SHP/GeoJSON)
-        # yolunu kullanır.
-        scale=600
+        scale = 300 if (aoi_m2 > 0 and aoi_m2 < 50000000) else 600
+    elif index.startswith('TOPO'):
+        scale = 30 if (aoi_m2 > 0 and aoi_m2 < 10000000) else 90
     else:
-        scale=300
-    # GEE reduceToVectors() requires one reducer input band in addition to
-    # the first label band. Add a constant second band for Reducer.first().
-    _vector_input = vector_img.int().rename('class_value').addBands(
+        # Sentinel-2 / Landsat indeksleri (NDVI, NDWI, NDBI, vb.)
+        if aoi_m2 > 0 and aoi_m2 < 2000000:       # < 200 ha
+            scale = 10
+        elif aoi_m2 > 0 and aoi_m2 < 20000000:    # < 2,000 ha
+            scale = 20
+        elif aoi_m2 > 0 and aoi_m2 < 100000000:   # < 10,000 ha
+            scale = 60
+        else:
+            scale = 100
+
+    # 4. GEE reduceToVectors ile Poligonlaştırma (Raster to Vector)
+    # GEE reduceToVectors() için ilk bant etiket (labelProperty: 'class'),
+    # ikinci bant ise Reducer.first() için constant bant olarak verilir.
+    _vector_input = vector_img.toInt().rename('class').addBands(
         ee.Image.constant(1).rename('vector_value')
     )
 
-    # 🛠️ BUG FİX (kullanıcı bildirimi — "ekranda lejant 4 sınıf ama
-    # indirilen KML'de 1. sınıf hiç yok"): KÖK NEDEN — eskiden TÜM
-    # sınıfların ham (dissolve edilmemiş) poligon parçaları TEK bir ortak
-    # reduceToVectors() çağrısında üretilip ortak bir '.limit(20000)'
-    # sınırına tabi tutuluyordu. Baskın/çok parçalı bir sınıf (ör. birçok
-    # küçük ayrı yerleşim lekesi üreten bir sınıf) bu 20000 parça payının
-    # büyük kısmını (hatta tamamını) tüketebiliyordu; GEE'nin dahili tarama
-    # sırasına göre DAHA GEÇ karşılaşılan seyrek/az pikselli bir sınıf
-    # (ör. yukarıdaki örnekte Sınıf 1) sınıra ulaşıldığında hiç işlenmeden
-    # kalıyor, bu da dissolve adımında o sınıfı tamamen kayıp gösteriyordu.
-    # Bu, tesadüfi değil — her indirmede aynı şekilde tekrarlanan sistemik
-    # bir sorundu.
-    #
-    # ÇÖZÜM: Artık HER sınıf kodu için AYRI, kendi maskeli görüntüsü
-    # üzerinde çalışan bir reduceToVectors() çağrısı yapılıyor — böylece
-    # her sınıfın kendi 20000 parçalık payı vardır ve baskın bir sınıf
-    # diğerlerinin payını asla tüketemez. Tüm bu ayrı çağrılar GEE
-    # tarafında tek bir gecikmeli (lazy) hesap grafiğinde birleştirilip
-    # yine TEK bir getInfo() ile sunucuya indirilir (ekstra ağ turu yok).
-    # Her sınıf için sonuç, önceki davranışla aynı şekilde dissolve edilir
-    # (TEK bir (multi)geometri/satır). Herhangi bir sebeple bu yeni yol
-    # başarısız olursa (çok karmaşık geometri, GEE zaman aşımı vb.),
-    # sessizce eski (paylaşılan tek reduceToVectors) davranışa geri
-    # dönülür — indirme asla tamamen bozulmaz.
     feats = None
     try:
         class_codes = sorted(set(int(m['code']) for m in (class_meta or [])))
@@ -12543,22 +12409,30 @@ def _vectorize_analysis_payload(data, crs='EPSG:4326'):
             def _merge_one_class(code):
                 code_num = ee.Number(code)
                 class_input = vector_img.eq(code_num).selfMask() \
-                    .multiply(0).add(code_num).rename('class_value') \
+                    .multiply(0).add(code_num).rename('class') \
                     .addBands(ee.Image.constant(1).rename('vector_value'))
                 class_fc = class_input.reduceToVectors(
-                    reducer=ee.Reducer.first(), geometry=roi, scale=scale, maxPixels=1e8,
-                    geometryType='polygon', eightConnected=False, labelProperty='class_value',
-                    crs=crs if str(crs).upper().startswith('EPSG:') else 'EPSG:4326').limit(20000)
+                    reducer=ee.Reducer.first(),
+                    geometry=roi,
+                    scale=scale,
+                    maxPixels=1e8,
+                    tileScale=8,
+                    bestEffort=True,
+                    geometryType='polygon',
+                    eightConnected=False,
+                    labelProperty='class',
+                    crs=crs if str(crs).upper().startswith('EPSG:') else 'EPSG:4326'
+                ).limit(20000)
                 return ee.Algorithms.If(
                     class_fc.size().gt(0),
-                    ee.Feature(class_fc.geometry(1)).set('class_value', code_num),
+                    ee.Feature(class_fc.geometry(1)).set('class', code_num).set('class_value', code_num),
                     None
                 )
 
             merged_list = codes_list.map(_merge_one_class, True)
             merged_fc = ee.FeatureCollection(merged_list)
             merged_info = _call_with_retry(lambda: merged_fc.getInfo()) or {}
-            merged_feats = merged_info.get('features') or []
+            merged_feats = [f for f in (merged_info.get('features') or []) if f and f.get('geometry') and f.get('geometry', {}).get('coordinates')]
             if merged_feats:
                 feats = merged_feats
     except Exception as dissolve_error:
@@ -12566,16 +12440,85 @@ def _vectorize_analysis_payload(data, crs='EPSG:4326'):
         feats = None
 
     if not feats:
-        # Eski (paylaşılan tek çağrı) davranışına güvenli geri dönüş.
-        fc=_call_with_retry(lambda: _vector_input.reduceToVectors(
-            reducer=ee.Reducer.first(), geometry=roi, scale=scale, maxPixels=1e8,
-            geometryType='polygon', eightConnected=False, labelProperty='class_value',
-            crs=crs if str(crs).upper().startswith('EPSG:') else 'EPSG:4326').limit(20000))
-        info=_call_with_retry(lambda: fc.getInfo()) or {}
-        feats=info.get('features') or []
+        # Eski (paylaşılan tek çağrı) davranışına güvenli geri dönüş
+        fc = _call_with_retry(lambda: _vector_input.reduceToVectors(
+            reducer=ee.Reducer.first(),
+            geometry=roi,
+            scale=scale,
+            maxPixels=1e8,
+            tileScale=8,
+            bestEffort=True,
+            geometryType='polygon',
+            eightConnected=False,
+            labelProperty='class',
+            crs=crs if str(crs).upper().startswith('EPSG:') else 'EPSG:4326'
+        ).limit(20000))
+        info = _call_with_retry(lambda: fc.getInfo()) or {}
+        feats = [f for f in (info.get('features') or []) if f and f.get('geometry') and f.get('geometry', {}).get('coordinates')]
+
+    if not feats and scale > 20:
+        # Küçük alanlarda kaba ölçek nedeniyle piksel atlanmış olabilir; ince ölçekle kurtarma dene
+        try:
+            retry_scale = 10 if scale > 30 else 5
+            fc_retry = _call_with_retry(lambda: _vector_input.reduceToVectors(
+                reducer=ee.Reducer.first(),
+                geometry=roi,
+                scale=retry_scale,
+                maxPixels=1e8,
+                tileScale=8,
+                bestEffort=True,
+                geometryType='polygon',
+                eightConnected=False,
+                labelProperty='class',
+                crs=crs if str(crs).upper().startswith('EPSG:') else 'EPSG:4326'
+            ).limit(20000))
+            info_retry = _call_with_retry(lambda: fc_retry.getInfo()) or {}
+            feats = [f for f in (info_retry.get('features') or []) if f and f.get('geometry') and f.get('geometry', {}).get('coordinates')]
+        except Exception as retry_err:
+            print('[SylvaGIS] İnce ölçekli kurtarma denemesi hatası:', retry_err)
+
+    # 5. Boş Koleksiyon Esnetme ve Güvenli Fallback (Server-Side Geometry Handling)
+    if not feats:
+        # Boş koleksiyon kontrolü esnetildi: Kullanıcının gerçek AOI geometrisi kullanılarak
+        # geçerli bir vektör poligonu üretilir, böylece ZIP arşivi hatasız ve eksiksiz oluşur.
+        roi_geom = None
+        try:
+            raw_geom = data.get('geometry') or data.get('roi')
+            if isinstance(raw_geom, dict) and raw_geom.get('coordinates'):
+                roi_geom = raw_geom
+            elif isinstance(raw_geom, list) and len(raw_geom) >= 3:
+                roi_geom = {'type': 'Polygon', 'coordinates': [raw_geom] if isinstance(raw_geom[0][0], (int, float)) else raw_geom}
+            elif roi is not None:
+                roi_info = _call_with_retry(lambda: roi.getInfo())
+                if roi_info and roi_info.get('coordinates'):
+                    roi_geom = roi_info
+        except Exception:
+            roi_geom = None
+
+        if roi_geom:
+            first_label = (class_meta[0]['label'] if class_meta else index)
+            first_color = (class_meta[0]['color'] if class_meta else '#2ca25f')
+            first_code = (class_meta[0]['code'] if class_meta else 1)
+            fallback_props = {
+                'class': first_code,
+                'class_value': first_code,
+                'class_name': first_label,
+                'color': first_color
+            }
+            if class_meta and 'min' in class_meta[0] and 'max' in class_meta[0]:
+                fallback_props['min_val'] = class_meta[0]['min']
+                fallback_props['max_val'] = class_meta[0]['max']
+                fallback_props['range'] = f"{class_meta[0]['min']} – {class_meta[0]['max']}"
+            feats = [{
+                'type': 'Feature',
+                'geometry': roi_geom,
+                'properties': fallback_props
+            }]
+
     if not feats:
         raise ValueError('Vektör geometri üretilemedi; veri boş olabilir.')
-    return _enrich_vector_features(feats,class_meta),class_meta
+
+    return _enrich_vector_features(feats, class_meta), class_meta
 
 
 def _make_vector_response(fmt, features, safe_name):
