@@ -28,7 +28,6 @@
             ctrl.type = type; ctrl.cleanups = new Set();
             ctrl.check = function () { window._sylvaCheckDownload(ctrl); };
             ctrl.finish = function (status) {
-                if (ctrl.downloadId) window._sylvaFinishDownload(ctrl.downloadId, status || 'completed');
                 if (window._sylvaDownloadAbort._controllers[type] === ctrl) delete window._sylvaDownloadAbort._controllers[type];
                 ctrl.cleanups.clear();
             };
@@ -37,9 +36,6 @@
                 ctrl.finish('cancelled');
             }, { once:true });
             this._controllers[type] = ctrl;
-            if (filename && typeof window._sylvaRegisterDownload === 'function') {
-                ctrl.downloadId = window._sylvaRegisterDownload(null, { filename:filename, title:filename, type:type, controller:ctrl });
-            }
             return ctrl;
         },
         get: function (type) { return this._controllers[type === 'raster' ? 'geotiff' : type] || null; },
@@ -70,13 +66,10 @@
     };
 
     /* ══════════════════════════════════════════════════════════════════════════
-       📥 SYLVAGIS UNIVERSAL DOWNLOAD & EXPORT MANAGER
+       📥 SYLVAGIS DIRECT BROWSER DOWNLOAD HELPERS
        - Direct Blob downloads through browser download settings
        - Standard browser download fallback
-       - Passive download status and progress
        ══════════════════════════════════════════════════════════════════════════ */
-    window._sylvaDownloads = {};
-
     function _sylvaGetMimeTypes(name, customTypes) {
         if (customTypes && customTypes.length) return customTypes;
         var ext = (name.indexOf('.') !== -1) ? name.split('.').pop().toLowerCase() : '';
@@ -113,169 +106,6 @@
         return [];
     }
 
-    function _sylvaGetDownloadIcon(type, filename) {
-        var t = (type || '').toLowerCase();
-        var f = (filename || '').toLowerCase();
-        if (t.indexOf('geotiff') !== -1 || f.endsWith('.tif') || f.endsWith('.tiff')) return '🗺️';
-        if (t.indexOf('pdf') !== -1 || f.endsWith('.pdf')) return '📄';
-        if (t.indexOf('xlsx') !== -1 || f.endsWith('.xlsx')) return '📊';
-        if (t.indexOf('csv') !== -1 || f.endsWith('.csv')) return '📋';
-        if (t.indexOf('vector') !== -1 || f.endsWith('.kml') || f.endsWith('.kmz') || f.endsWith('.geojson') || f.endsWith('.shp')) return '📐';
-        if (f.endsWith('.png') || f.endsWith('.jpg') || f.endsWith('.jpeg') || f.endsWith('.svg')) return '🖼️';
-        if (f.endsWith('.zip')) return '📦';
-        return '⬇️';
-    }
-
-    function _sylvaEnsureDownloadManagerDOM() {
-        var el = document.getElementById('sylva-download-manager');
-        if (!el) {
-            el = document.createElement('div');
-            el.id = 'sylva-download-manager';
-            document.body.appendChild(el);
-        }
-        return el;
-    }
-
-    function _sylvaDownloadTextKey(text, fallback) {
-        var keys = ['download_title', 'download_raster_title', 'download_preparing', 'download_preparing_file', 'download_preparing_layer', 'download_downloading', 'download_saving', 'download_error', 'download_save_error', 'download_failed', 'download_no_workspace', 'download_completed'];
-        if (keys.indexOf(text) !== -1) return text;
-        if (text && typeof SYLVA_TRANSLATIONS !== 'undefined') {
-            var langs = Object.keys(SYLVA_TRANSLATIONS);
-            for (var i = 0; i < langs.length; i++) {
-                for (var j = 0; j < keys.length; j++) {
-                    if (SYLVA_TRANSLATIONS[langs[i]][keys[j]] === text) return keys[j];
-                }
-            }
-        }
-        return fallback || null;
-    }
-
-    window._sylvaRegisterDownload = function(id, opts) {
-        opts = opts || {};
-        var dlId = id || ('dl_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5));
-        var status = opts.status || 'pending';
-        var defaultKey = status === 'completed' ? 'download_completed' : status === 'error' ? 'download_error' : status === 'downloading' ? 'download_downloading' : 'download_preparing';
-        var item = {
-            id: dlId,
-            title: opts.title || '',
-            titleKey: opts.titleKey || _sylvaDownloadTextKey(opts.title, opts.title ? null : 'download_title'),
-            filename: opts.filename || 'download',
-            type: opts.type || '',
-            status: status,
-            progress: (typeof opts.progress === 'number') ? opts.progress : null,
-            statusText: opts.statusText || '',
-            statusKey: _sylvaDownloadTextKey(opts.statusText, defaultKey),
-            controller: opts.controller || null,
-            startTime: Date.now()
-        };
-        window._sylvaDownloads[dlId] = item;
-        _sylvaRenderDownloadCard(item);
-        return dlId;
-    };
-
-    window._sylvaUpdateDownloadProgress = function(id, progress, statusText) {
-        var item = window._sylvaDownloads[id];
-        if (!item) return;
-        if (typeof progress === 'number') item.progress = Math.max(0, Math.min(100, Math.round(progress)));
-        item.statusText = statusText || '';
-        item.statusKey = _sylvaDownloadTextKey(statusText, 'download_downloading');
-        item.status = 'downloading';
-        _sylvaRenderDownloadCard(item);
-    };
-
-    window._sylvaFinishDownload = function(id, status, message) {
-        var item = window._sylvaDownloads[id];
-        if (!item) return;
-        item.status = status || 'completed';
-        if (item.status === 'completed') {
-            item.progress = 100;
-            item.statusText = message || '';
-            item.statusKey = 'download_completed';
-            if (typeof playSylvaChime === 'function') {
-                try { playSylvaChime('download'); } catch(e) {}
-            }
-
-        } else {
-            item.status = 'error';
-            item.statusText = message || '';
-            item.statusKey = _sylvaDownloadTextKey(message, 'download_error');
-        }
-        _sylvaRenderDownloadCard(item);
-
-        var dismissTimeout = (item.status === 'completed') ? 4000 : 6000;
-        setTimeout(function() {
-            window._sylvaDismissDownload(id);
-        }, dismissTimeout);
-    };
-
-    window._sylvaDismissDownload = function(id) {
-        var item=window._sylvaDownloads[id];
-        if(item && (item.status==='pending'||item.status==='downloading')) return;
-        var card = document.getElementById('sylva-dl-card-' + id);
-        if (card) {
-            card.classList.add('sylva-dl-fade-out');
-            setTimeout(function() {
-                if (card.parentNode) card.parentNode.removeChild(card);
-            }, 300);
-        }
-        delete window._sylvaDownloads[id];
-    };
-
-    function _sylvaRenderDownloadCard(item) {
-        if (!document.body) {
-            document.addEventListener('DOMContentLoaded', function() { _sylvaRenderDownloadCard(item); });
-            return;
-        }
-        var container = _sylvaEnsureDownloadManagerDOM();
-        var card = document.getElementById('sylva-dl-card-' + item.id);
-        var isNew = !card;
-        if (isNew) {
-            card = document.createElement('div');
-            card.id = 'sylva-dl-card-' + item.id;
-            card.className = 'sylva-dl-card';
-            container.appendChild(card);
-        }
-
-        card.className = 'sylva-dl-card status-' + item.status;
-        var icon = _sylvaGetDownloadIcon(item.type, item.filename);
-        var isIndeterminate = (item.progress === null || item.progress === undefined) && (item.status === 'pending' || item.status === 'downloading');
-        var progressPercent = (typeof item.progress === 'number') ? item.progress : (item.status === 'completed' ? 100 : 0);
-        var barClass = isIndeterminate ? 'indeterminate' : (item.status === 'completed' ? 'completed' : item.status === 'error' ? 'error' : '');
-        var statusKey = item.status === 'completed' ? 'download_completed' : item.statusKey;
-        var statusText = typeof t === 'function' ? t(statusKey) : '';
-        var titleText = item.titleKey && typeof t === 'function' ? t(item.titleKey) : item.title;
-
-        var html = '<div class="sylva-dl-header">' +
-            '<div class="sylva-dl-icon">' + icon + '</div>' +
-            '<div class="sylva-dl-info">' +
-                '<div class="sylva-dl-title"' + (item.titleKey ? ' data-i18n="' + item.titleKey + '" data-i18n-title="' + item.titleKey + '"' : '') + ' title="' + (titleText || '') + '">' + (titleText || '') + '</div>' +
-                '<div class="sylva-dl-filename" title="' + (item.filename || '') + '">' + (item.filename || '') + '</div>' +
-            '</div>' +
-            '</div>' +
-        '<div class="sylva-dl-progress-track">' +
-            '<div class="sylva-dl-progress-bar ' + barClass + '" style="width:' + (isIndeterminate ? '100%' : progressPercent + '%') + '"></div>' +
-        '</div>' +
-        '<div class="sylva-dl-status">' +
-            '<span data-i18n="' + statusKey + '">' + statusText + '</span>' +
-            '<span>' + (!isIndeterminate && typeof item.progress === 'number' ? item.progress + '%' : '') + '</span>' +
-        '</div>';
-
-        card.innerHTML = html;
-        if (item.status !== 'completed' && item.statusText &&
-            !_sylvaDownloadTextKey(item.statusText, null) &&
-            typeof window._sylvaLocalizeDynamicMessage === 'function') {
-            var source = item.statusText;
-            var lang = window._sylvaLang || window._sylvaEarlyLang || 'en';
-            window._sylvaLocalizeDynamicMessage(source, function(translated) {
-                if (window._sylvaDownloads[item.id] === item && item.statusText === source &&
-                    lang === (window._sylvaLang || window._sylvaEarlyLang || 'en') &&
-                    document.body.contains(card)) {
-                    card.querySelector('.sylva-dl-status > span').textContent = translated;
-                }
-            });
-        }
-    }
-
     /* ── Retain filename metadata; downloads use browser settings directly ── */
     window.selectSaveFile = function(suggestedName, customTypes) {
         return Promise.resolve({ isFallback:true, name:suggestedName || 'download', method:'anchor' });
@@ -295,12 +125,12 @@
         } catch(error) { controller.finish('error');throw error; }
     }
     function _sylvaStandardAnchorDownload(blob,name,existingDlId,controller) {
-        controller=controller || (window._sylvaDownloads[existingDlId]||{}).controller || window._sylvaDownloadAbort.create('save-'+Date.now()+'-'+Math.random().toString(36).slice(2),name);
+        controller=controller || window._sylvaDownloadAbort.create('save-'+Date.now()+'-'+Math.random().toString(36).slice(2),name);
         return _sylvaSaveBlob(blob,name,controller,null);
     }
     window.saveFileWithPicker = async function(blob,suggestedName,customTypes,existingDlId,controller) {
         var name=suggestedName||'download';
-        controller=controller || (window._sylvaDownloads[existingDlId]||{}).controller || window._sylvaDownloadAbort.create('save-'+Date.now()+'-'+Math.random().toString(36).slice(2),name);
+        controller=controller || window._sylvaDownloadAbort.create('save-'+Date.now()+'-'+Math.random().toString(36).slice(2),name);
         try {
             if(!blob)throw new Error('No blob provided');
             if(!(blob instanceof Blob))blob=new Blob([blob],{type:typeof blob==='string'?'text/plain;charset=utf-8':''});
@@ -308,159 +138,7 @@
         } catch(error) { controller.finish('error');throw error; }
     };
 
-    /* ── Global SylvaDownloadManager Controller ── */
-    window.SylvaDownloadManager = {
-        register: function(id, opts) {
-            return (typeof window._sylvaRegisterDownload === 'function') ? window._sylvaRegisterDownload(id, opts) : id;
-        },
-        update: function(id, progress, statusText) {
-            if (typeof window._sylvaUpdateDownloadProgress === 'function') window._sylvaUpdateDownloadProgress(id, progress, statusText);
-        },
-        finish: function(id, status, message) {
-            if (typeof window._sylvaFinishDownload === 'function') window._sylvaFinishDownload(id, status, message);
-        },
-        notify: function(filename, status, msg) {
-            var dlId = (typeof window._sylvaRegisterDownload === 'function') ? window._sylvaRegisterDownload(null, {
-                filename: filename,
-                title: filename,
-                type: (filename || '').split('.').pop().toLowerCase(),
-                status: status || 'completed',
-                progress: 100,
-                statusText: msg || ''
-            }) : null;
-            if (dlId && typeof window._sylvaFinishDownload === 'function') {
-                window._sylvaFinishDownload(dlId, status || 'completed', msg);
-            }
-            return dlId;
-        }
-    };
     </script>
-    <style id="sylva-download-manager-styles">
-    #sylva-download-manager {
-        position: fixed;
-        bottom: 24px;
-        right: 24px;
-        z-index: 999999;
-        max-width: 360px;
-        width: calc(100vw - 48px);
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-        pointer-events: none;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    }
-    .sylva-dl-card {
-        pointer-events: auto;
-        background: #ffffff;
-        border-radius: 12px;
-        box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.18), 0 8px 10px -6px rgba(15, 23, 42, 0.1);
-        border: 1px solid #cbd5e1;
-        padding: 12px 14px;
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-        animation: sylvaDlIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) both;
-        transition: opacity 0.3s ease, transform 0.3s ease;
-    }
-    .sylva-dl-card.sylva-dl-fade-out {
-        opacity: 0;
-        transform: translateY(10px) scale(0.96);
-    }
-    @keyframes sylvaDlIn {
-        from { opacity: 0; transform: translateY(16px) scale(0.96); }
-        to { opacity: 1; transform: translateY(0) scale(1); }
-    }
-    .sylva-dl-header {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-    }
-    .sylva-dl-icon {
-        width: 32px;
-        height: 32px;
-        border-radius: 8px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 1.15rem;
-        flex-shrink: 0;
-        background: #eff6ff;
-    }
-    .sylva-dl-info {
-        flex: 1;
-        min-width: 0;
-    }
-    .sylva-dl-title {
-        font-size: 13px;
-        font-weight: 700;
-        color: #0f172a;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        line-height: 1.25;
-    }
-    .sylva-dl-filename {
-        font-size: 11px;
-        color: #64748b;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        margin-top: 2px;
-    }
-    .sylva-dl-progress-track {
-        width: 100%;
-        height: 5px;
-        background: #f1f5f9;
-        border-radius: 999px;
-        overflow: hidden;
-        position: relative;
-    }
-    .sylva-dl-progress-bar {
-        height: 100%;
-        border-radius: 999px;
-        transition: width 0.25s ease, background-color 0.25s ease;
-    }
-    .sylva-dl-progress-bar.indeterminate {
-        width: 100% !important;
-        background: linear-gradient(90deg, #0d9488 0%, #38bdf8 50%, #0d9488 100%);
-        background-size: 200% 100%;
-        animation: sylvaDlIndeterminate 1.5s linear infinite;
-    }
-    @keyframes sylvaDlIndeterminate {
-        0% { background-position: 200% 0; }
-        100% { background-position: -200% 0; }
-    }
-    .sylva-dl-progress-bar.completed {
-        background: #16a34a !important;
-        width: 100% !important;
-    }
-    .sylva-dl-progress-bar.error {
-        background: #dc2626 !important;
-        width: 100% !important;
-    }
-    .sylva-dl-status {
-        font-size: 11px;
-        color: #64748b;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        line-height: 1.3;
-    }
-    .sylva-dl-card.status-completed {
-        border-color: #86efac;
-        background: #f0fdf4;
-    }
-    .sylva-dl-card.status-completed .sylva-dl-icon {
-        background: #dcfce7;
-    }
-    .sylva-dl-card.status-error {
-        border-color: #fca5a5;
-        background: #fff1f2;
-    }
-    .sylva-dl-card.status-error .sylva-dl-icon {
-        background: #fee2e2;
-    }
-    </style>
     <script>
     </script>
     <style id="sylva-i18n-first-paint">
@@ -15112,18 +14790,13 @@ function _carbonDownloadPDF(reportHtml, fileName) {
                 }
                 if(disposed) throw new Error('PDF export already disposed');
                 var _pdfBlob = pdf.output('blob');
-                var _carbonDlId = downloadOp.downloadId;
                 if (typeof window.saveFileWithPicker === 'function') {
                     var saveRes = await window.saveFileWithPicker(_pdfBlob, fileName, [{ description: 'PDF Document', accept: { 'application/pdf': ['.pdf'] } }],null,downloadOp);
-                    if (_carbonDlId && typeof window._sylvaFinishDownload === 'function') {
-                        window._sylvaFinishDownload(_carbonDlId, 'completed');
-                    }
                 } else {
                     var url=URL.createObjectURL(_pdfBlob),link=document.createElement('a');
                     link.href=url;link.download=fileName;link.style.display='none';
                     document.body.appendChild(link);
                     try{link.click();}finally{link.remove();setTimeout(function(){URL.revokeObjectURL(url);},30000);}
-                    if (_carbonDlId && typeof window._sylvaFinishDownload === 'function') window._sylvaFinishDownload(_carbonDlId, true);
                 }
             }).then(resolve,reject);
         };
@@ -43520,16 +43193,6 @@ function _executeGeoTiffDownloadCore() {
 
     _geotiffDownloadOperation = window._sylvaDownloadAbort.create('geotiff');
     var downloadOp=_geotiffDownloadOperation;
-    var _gtiffDlId = 'geotiff_' + Date.now();
-    if (typeof window._sylvaRegisterDownload === 'function') {
-        window._sylvaRegisterDownload(_gtiffDlId, {
-            controller:downloadOp,
-            titleKey: 'download_raster_title',
-            filename: (filename || 'SylvaGIS') + '.tif',
-            type: 'geotiff',
-            statusText: 'download_preparing_layer'
-        });
-    }
 
     var _dlViewMode = 'clip';
     var _dlSelectedIndex = (window._lastAnalyzeMetaByPane && window._lastAnalyzeMetaByPane[_gtiffPane] && window._lastAnalyzeMetaByPane[_gtiffPane].analysisName) || '';
@@ -43553,7 +43216,6 @@ function _executeGeoTiffDownloadCore() {
         if (btn) { btn.disabled = false; btn.textContent = t('gtiff_btn_download'); }
         if (cancelBtn) cancelBtn.disabled = false;
         _geotiffDownloadOperation = null;
-        if (typeof window._sylvaFinishDownload === 'function') window._sylvaFinishDownload(_gtiffDlId, 'error', 'download_no_workspace');
         status.style.color   = '#991b1b';
         status.style.background = '#fee2e2';
         status.style.borderColor = '#fca5a5';
@@ -43642,19 +43304,8 @@ function _executeGeoTiffDownloadCore() {
         status.style.display = 'none';
         status.innerHTML = '';
 
-        if (typeof window._sylvaUpdateDownloadProgress === 'function') {
-            window._sylvaUpdateDownloadProgress(_gtiffDlId, 95, 'download_saving');
-        }
-
-        window.saveFileWithPicker(res.blob, res.tifName, null, _gtiffDlId, downloadOp).then(function(saveRes) {
-        downloadOp.check();
-            if (typeof window._sylvaFinishDownload === 'function') {
-                window._sylvaFinishDownload(_gtiffDlId, 'completed', 'download_completed');
-            }
-        }).catch(function() {
-            if (typeof window._sylvaFinishDownload === 'function') {
-                window._sylvaFinishDownload(_gtiffDlId, 'error', 'download_save_error');
-            }
+        window.saveFileWithPicker(res.blob, res.tifName, null, null, downloadOp).catch(function(error) {
+            console.warn('[SylvaGIS] GeoTIFF save failed:', error);
         });
 
         // 🆕 BUG FİX (Arazi Kullanımı/LULC indirmesi ArcMap'te "Could not
@@ -43675,9 +43326,6 @@ function _executeGeoTiffDownloadCore() {
         }
     })
     .catch(function(err) {
-        if (typeof window._sylvaFinishDownload === 'function') {
-            window._sylvaFinishDownload(_gtiffDlId, 'error', 'download_failed');
-        }
         _geotiffDownloadOperation = null;
         status.style.color      = '#991b1b';
         status.style.background = '#fee2e2';
@@ -63361,13 +63009,6 @@ function applySylvaLang(lang) {
 
   // Refresh date picker locale
   if (typeof window._sylvaDPRefresh === "function") window._sylvaDPRefresh(lang);
-
-  // Reformat live download descriptions without restarting their lifecycle.
-  if (typeof _sylvaRenderDownloadCard === 'function') {
-    Object.keys(window._sylvaDownloads || {}).forEach(function(id) {
-      _sylvaRenderDownloadCard(window._sylvaDownloads[id]);
-    });
-  }
 
   // Refresh user-profile modal profession dropdown when language changes
   if (typeof window._sylvaRefreshProfDropdown === 'function') window._sylvaRefreshProfDropdown(lang);
