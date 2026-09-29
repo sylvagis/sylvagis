@@ -51,8 +51,7 @@
         }
     };
     window._sylvaDownloadFetch = function (url, options, controller) {
-        controller.check();
-        options = Object.assign({}, options, { signal:controller.signal });
+        options = Object.assign({}, options, { signal:controller && controller.signal ? controller.signal : (options && options.signal) });
         var id = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : Date.now().toString(36)+'-'+Math.random().toString(36).slice(2);
         var headers = new Headers(options.headers || {}); headers.set('X-Sylva-Operation', id); options.headers = headers;
         return fetch(url, options);
@@ -20137,18 +20136,18 @@ function _sylvaHasMixedStackCategories(paneId) {
                 // lyrs=h → şeffaf etiket/yol overlay; hl=en-GB&gl=GB dil+bölgeyi zorlar.
                 basemapInstances[key] = L.layerGroup([
                     L.tileLayer('https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
-                                { attribution: 'Map data &copy; Google', maxZoom: 20 }),
+                                { attribution: 'Map data &copy; Google', maxZoom: 20, crossOrigin: 'anonymous' }),
                     L.tileLayer('https://mt1.google.com/vt/lyrs=h&hl=en-GB&gl=GB&x={x}&y={y}&z={z}',
-                                { attribution: '', maxZoom: 20 })
+                                { attribution: '', maxZoom: 20, crossOrigin: 'anonymous' })
                 ]);
             } else if (key === 'imagery-labels') {
                 basemapInstances[key] = L.layerGroup([
-                    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19 }),
-                    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19 })
+                    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, crossOrigin: 'anonymous' }),
+                    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, crossOrigin: 'anonymous' })
                 ]);
             } else {
                 var cfg = BASEMAP_CONFIGS[key];
-                basemapInstances[key] = L.tileLayer(cfg.url, { attribution: cfg.attr, maxZoom: cfg.maxZoom });
+                basemapInstances[key] = L.tileLayer(cfg.url, { attribution: cfg.attr, maxZoom: cfg.maxZoom, crossOrigin: 'anonymous' });
             }
         });
 
@@ -21514,19 +21513,19 @@ function _sylvaHasMixedStackCategories(paneId) {
             if (key === 'google-labels') {
                 return L.layerGroup([
                     L.tileLayer('https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
-                                { attribution: 'Map data &copy; Google', maxZoom: 20 }),
+                                { attribution: 'Map data &copy; Google', maxZoom: 20, crossOrigin: 'anonymous' }),
                     L.tileLayer('https://mt1.google.com/vt/lyrs=h&hl=en-GB&gl=GB&x={x}&y={y}&z={z}',
-                                { attribution: '', maxZoom: 20 })
+                                { attribution: '', maxZoom: 20, crossOrigin: 'anonymous' })
                 ]);
             } else if (key === 'imagery-labels') {
                 return L.layerGroup([
-                    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19 }),
-                    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19 })
+                    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, crossOrigin: 'anonymous' }),
+                    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, crossOrigin: 'anonymous' })
                 ]);
             }
             var cfg = BASEMAP_CONFIGS[key];
             if (!cfg) return null;
-            return L.tileLayer(cfg.url, { attribution: cfg.attr, maxZoom: cfg.maxZoom });
+            return L.tileLayer(cfg.url, { attribution: cfg.attr, maxZoom: cfg.maxZoom, crossOrigin: 'anonymous' });
         }
 
         function _sylvaEnsureMap2() {
@@ -40336,16 +40335,23 @@ function selectRamp(name) {
             // --- Harita canvas'ını döndürür (GEE tile dahil) ---
             // Önce html2canvas denenir; başarısız olursa leaflet-image'a düşer.
             function waitForExportImages(mapEl, downloadOp) {
+                if (!mapEl) return Promise.reject(new Error('Missing export map'));
+                function check() { if (downloadOp && downloadOp.signal && downloadOp.signal.aborted) throw window._sylvaAbortError(); }
                 function waitForImage(img, source) {
                     return new Promise(function(resolve, reject) {
-                        var timer;
+                        var timer, finished = false;
                         function done(error) {
+                            if (finished) return;
+                            finished = true;
                             clearTimeout(timer);
                             img.removeEventListener('load', loaded);
                             img.removeEventListener('error', failed);
-                            if (error) reject(error); else resolve();
+                            if (error) reject(error); else resolve(img);
                         }
-                        function loaded() { done(img.naturalWidth > 0 && img.naturalHeight > 0 ? null : new Error('Empty export image')); }
+                        function loaded() {
+                            if (!img.naturalWidth || !img.naturalHeight) { failed(); return; }
+                            Promise.resolve(typeof img.decode === 'function' ? img.decode() : undefined).then(function() { done(); }, done);
+                        }
                         function failed() { done(new Error('Export image could not be loaded with CORS')); }
                         img.addEventListener('load', loaded, {once:true});
                         img.addEventListener('error', failed, {once:true});
@@ -40354,41 +40360,87 @@ function selectRamp(name) {
                         if (img.complete) loaded();
                     });
                 }
-                var rect = mapEl.getBoundingClientRect();
-                var images = Array.from(mapEl.querySelectorAll('img')).filter(function(img) {
-                    var r = img.getBoundingClientRect();
-                    return r.width > 0 && r.height > 0 && r.right > rect.left && r.left < rect.right && r.bottom > rect.top && r.top < rect.bottom;
+                var targetMap = mapEl.id === 'map2' ? (typeof map2 !== 'undefined' ? map2 : null) : (typeof map !== 'undefined' ? map : null);
+                var layers = [];
+                if (targetMap && typeof targetMap.eachLayer === 'function') targetMap.eachLayer(function(layer) {
+                    if (typeof layer.isLoading === 'function') layers.push(layer);
                 });
-                var logo = document.querySelector('.logo-container img');
-                if (logo) images.push(logo);
-                return Promise.all(images.map(function(img) { return waitForImage(img); })).then(function() {
-                    downloadOp.check();
-                    var sources = new Set();
-                    images.forEach(function(img) {
-                        var url = new URL(img.currentSrc || img.src, document.baseURI);
-                        if (/^https?:$/.test(url.protocol) && url.origin !== location.origin) sources.add(url.href);
+                return Promise.all(layers.map(function(layer) {
+                    return new Promise(function(resolve, reject) {
+                        var timer, finished = false;
+                        function done(error) {
+                            if (finished) return;
+                            finished = true;
+                            clearTimeout(timer);
+                            layer.off('load tileload tileerror', ready);
+                            if (error) reject(error); else resolve();
+                        }
+                        function ready(event) {
+                            if (event && event.type === 'tileerror') { done(new Error('Export tile could not be loaded with CORS')); return; }
+                            if (!layer.isLoading()) done();
+                        }
+                        layer.on('load tileload tileerror', ready);
+                        timer = setTimeout(function() { done(new Error('Export tiles did not finish loading')); }, 30000);
+                        ready();
                     });
-                    return Promise.all(Array.from(sources).map(function(src) {
-                        var img = new Image();
-                        img.crossOrigin = 'anonymous';
-                        return waitForImage(img, src);
-                    }));
+                })).then(function() {
+                    check();
+                    return new Promise(function(resolve, reject) {
+                        var deadline = Date.now() + 30000;
+                        function painted() {
+                            try { check(); } catch (error) { reject(error); return; }
+                            var pending = targetMap && (targetMap._animatingZoom || (targetMap._panAnim && targetMap._panAnim._inProgress));
+                            var failed = false;
+                            layers.forEach(function(layer) {
+                                if (layer.isLoading()) pending = true;
+                                Object.keys(layer._tiles || {}).forEach(function(key) {
+                                    var tile = layer._tiles[key], img = tile.el;
+                                    if (tile.current === false) return;
+                                    if (img && img.tagName === 'IMG' && img.complete && !img.naturalWidth) failed = true;
+                                    if (tile.active === false) pending = true;
+                                });
+                            });
+                            if (failed) { reject(new Error('Export tile could not be loaded with CORS')); return; }
+                            if (!pending) { requestAnimationFrame(resolve); return; }
+                            if (Date.now() >= deadline) { reject(new Error('Export tiles did not finish painting')); return; }
+                            requestAnimationFrame(painted);
+                        }
+                        requestAnimationFrame(painted);
+                    });
                 }).then(function() {
-                    return new Promise(function(resolve) { requestAnimationFrame(function() { requestAnimationFrame(resolve); }); });
-                }).then(function() { downloadOp.check(); });
+                    var rect = mapEl.getBoundingClientRect();
+                    var images = Array.from(mapEl.querySelectorAll('img')).filter(function(img) {
+                        var r = img.getBoundingClientRect(), style = getComputedStyle(img);
+                        return style.visibility !== 'hidden' && style.display !== 'none' && r.width > 0 && r.height > 0 && r.right > rect.left && r.left < rect.right && r.bottom > rect.top && r.top < rect.bottom;
+                    });
+                    var logo = document.querySelector('.logo-container img');
+                    if (logo) images.push(logo);
+                    return Promise.all(images.map(function(img) { return waitForImage(img); })).then(function() {
+                        check();
+                        var sources = new Set(), snapshots = new Map();
+                        images.forEach(function(img) { sources.add(img.currentSrc || img.src); });
+                        return Promise.all(Array.from(sources).map(function(src) {
+                            var img = new Image();
+                            img.crossOrigin = 'anonymous';
+                            return waitForImage(img, src).then(function() {
+                                var canvas = document.createElement('canvas');
+                                canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
+                                canvas.getContext('2d').drawImage(img, 0, 0);
+                                snapshots.set(src, canvas.toDataURL('image/png'));
+                            });
+                        })).then(function() { check(); return snapshots; });
+                    });
+                });
             }
 
             function getLeafletCanvas(scaleFactor, paneIdOverride, imageExportOp) {
-                if (imageExportOp) {
-                    var readyPane = paneIdOverride || ((typeof _sylvaActivePaneId === 'function' && _sylvaActivePaneId() === 'map2') ? 'map2' : 'map');
-                    return waitForExportImages(document.getElementById(readyPane), imageExportOp).then(function() {
-                        return captureLeafletCanvas(scaleFactor, readyPane, imageExportOp);
-                    });
-                }
-                return captureLeafletCanvas(scaleFactor, paneIdOverride);
+                var readyPane = paneIdOverride || ((typeof _sylvaActivePaneId === 'function' && _sylvaActivePaneId() === 'map2') ? 'map2' : 'map');
+                return waitForExportImages(document.getElementById(readyPane), imageExportOp).then(function(snapshots) {
+                    return captureLeafletCanvas(scaleFactor, readyPane, imageExportOp, snapshots);
+                });
             }
 
-            function captureLeafletCanvas(scaleFactor, paneIdOverride, imageExportOp) {
+            function captureLeafletCanvas(scaleFactor, paneIdOverride, imageExportOp, snapshots) {
                 return new Promise(function(resolve, reject) {
                     var targetPaneId = paneIdOverride || ((typeof _sylvaActivePaneId === 'function' && _sylvaActivePaneId() === 'map2') ? 'map2' : 'map');
                     var mapEl = document.getElementById(targetPaneId);
@@ -40399,7 +40451,7 @@ function selectRamp(name) {
                         var _h2cH = mapEl.offsetHeight || mapEl.getBoundingClientRect().height || 600;
                         html2canvas(mapEl, {
                             useCORS:        true,
-                            allowTaint:     !imageExportOp,
+                            allowTaint:     false,
                             scale:          scaleFactor || 1,
                             logging:        false,
                             backgroundColor: null,
@@ -40419,8 +40471,14 @@ function selectRamp(name) {
                             //      canlı DOM'a dokunulmaz.
                             // ──────────────────────────────────────────────────────────
                             onclone: function(clonedDoc) {
-                                if (imageExportOp) clonedDoc.querySelectorAll('#' + targetPaneId + ' img').forEach(function(img) {
-                                    img.crossOrigin = 'anonymous';
+                                var clonedImages = Array.from(clonedDoc.querySelectorAll('#' + targetPaneId + ' img')), readyImages = [];
+                                clonedImages.forEach(function(img) {
+                                    var source = img.currentSrc || img.src;
+                                    if (snapshots && snapshots.has(source)) {
+                                        img.removeAttribute('srcset');
+                                        img.src = snapshots.get(source);
+                                        readyImages.push(img);
+                                    }
                                 });
                                 // ──────────────────────────────────────────────────────────
                                 // Sadece html2canvas'ın GERÇEKTEN render edeceği öğeler
@@ -40453,6 +40511,9 @@ function selectRamp(name) {
                                     '}'
                                 ].join('\n');
                                 clonedDoc.head.appendChild(s);
+                                return Promise.all(readyImages.map(function(img) {
+                                    return typeof img.decode === 'function' ? img.decode() : Promise.resolve();
+                                }));
                             },
                             ignoreElements: function(el) {
                                 if (!el || !el.classList) return false;
@@ -40686,8 +40747,8 @@ function selectRamp(name) {
                     }
                 });
                 Promise.all([
-                    composeMapCanvas('map', scale, false, fmt === 'pdf' ? null : downloadOp),
-                    composeMapCanvas('map2', scale, false, fmt === 'pdf' ? null : downloadOp)
+                    composeMapCanvas('map', scale, false, downloadOp),
+                    composeMapCanvas('map2', scale, false, downloadOp)
                 ]).then(function(results) {
                     downloadOp.check();
                     var c1 = results[0], c2 = results[1];
@@ -40905,31 +40966,11 @@ function selectRamp(name) {
                 // html2canvas her zaman scale=1 ile çağrılır (hizalama hatasından
                 // kaçınmak için); nihai çözünürlük artışı buildFinalCanvas() içindeki
                 // final canvas'ın W*scale × H*scale boyutuna çizilmesiyle sağlanır.
-                getLeafletCanvas(1, null, fmt === 'pdf' ? null : downloadOp).then(function(canvas) {
+                getLeafletCanvas(1, null, downloadOp).then(function(canvas) {
                     downloadOp.check();
                     buildFinalCanvas(canvas);
                 }).catch(function(error) {
-                    if (fmt !== 'pdf') { failImageExport(error, downloadOp); return; }
-                    // Son çare: Leaflet tile canvas'larını/img'lerini manuel topla
-                    var tileCanvas = document.createElement('canvas');
-                    tileCanvas.width  = W * scale;
-                    tileCanvas.height = H * scale;
-                    var tctx = tileCanvas.getContext('2d');
-                    var tilePanes = mapEl.querySelectorAll('.leaflet-tile-pane canvas, .leaflet-tile img');
-                    tilePanes.forEach(function(tile) {
-                        try {
-                            if (tile.tagName === 'CANVAS') {
-                                tctx.drawImage(tile, 0, 0, W * scale, H * scale);
-                            } else if (tile.tagName === 'IMG' && tile.complete) {
-                                var t = tile.getBoundingClientRect();
-                                var m = mapEl.getBoundingClientRect();
-                                tctx.drawImage(tile,
-                                    (t.left - m.left) * scale, (t.top - m.top) * scale,
-                                    t.width * scale, t.height * scale);
-                            }
-                        } catch(e) {} // cross-origin tile'lar atlanır
-                    });
-                    buildFinalCanvas(tileCanvas);
+                    failImageExport(error, downloadOp);
                 });
             });
 
