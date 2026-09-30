@@ -14732,7 +14732,9 @@ def _calculate_tree_allometrics(vol_per_ha: float, n_trees_per_ha: int, age: int
     v_single = V / N
     D ≈ sqrt(v_single / (0.000055 * H))
     """
-    if age <= 0 or vol_per_ha <= 0.001 or n_trees_per_ha <= 0:
+    if n_trees_per_ha <= 0:
+        return {'dbh_cm': 0.0, 'height_m': 0.0}
+    if age <= 0 or vol_per_ha <= 0.001:
         return {'dbh_cm': 0.8, 'height_m': 0.4}
     h = 0.4 + (max_height - 0.4) * math.pow(max(0.0, 1.0 - math.exp(-0.065 * age)), 1.25)
     v_single = max(0.0, vol_per_ha) / float(n_trees_per_ha)
@@ -15340,8 +15342,14 @@ def simulate_carbon_stand(
     carbon_factor = biomass_factor * cf
     co2_factor = carbon_factor * co2_ratio
 
-    n0_per_ha = round((10000.0 / (sx * sy)) * (ret / 100.0))
-    n0_total = round(n0_per_ha * area)
+    # Keep density continuous until the whole-area count is known. A sparse
+    # planting can have fewer than one tree per hectare but many trees in total.
+    planting_area = max(sx * sy, 1e-6)
+    n0_total = round((area * 10000.0 / planting_area) * (ret / 100.0))
+    n0_per_ha = n0_total / area if n0_total > 0 else 0.0
+    # The stand-volume curve represents a stocked forest; sparse planting
+    # occupies only the corresponding share of that stand.
+    planted_fraction = min(1.0, n0_per_ha / 500.0)
 
     calib = calibrate_growth_parameters(mai, rot, group)
     v_max = calib['v_max']
@@ -15389,13 +15397,13 @@ def simulate_carbon_stand(
     n_base = float(n0_per_ha)
     for t in range(rot + 1):
         _sylva_check_cancelled()
-        v_pot = v_max * math.pow(max(0.0, 1.0 - math.exp(-k * t)), m) if t > 0 else 0.0
+        v_pot = v_max * math.pow(max(0.0, 1.0 - math.exp(-k * t)), m) * planted_fraction if t > 0 else 0.0
         if t > 0:
             n_base = max(n0_per_ha * 0.60, n_base * (1.0 - 0.005))
-        n_base_int = max(1, round(n_base))
+        n_base_int = round(n_base, 3) if 0 < n_base < 1 else round(n_base)
 
         c_tree_total = v_pot * carbon_factor * area
-        c_soc_total = annual_soc_rate * t * area
+        c_soc_total = annual_soc_rate * t * area * planted_fraction
         c_standing = c_tree_total + c_soc_total
         co2_standing = c_standing * co2_ratio
 
@@ -15422,8 +15430,8 @@ def simulate_carbon_stand(
 
     for t in range(rot + 1):
         _sylva_check_cancelled()
-        v_pot = v_max * math.pow(max(0.0, 1.0 - math.exp(-k * t)), m) if t > 0 else 0.0
-        v_pot_prev = v_max * math.pow(max(0.0, 1.0 - math.exp(-k * max(0, t - 1))), m) if t > 1 else 0.0
+        v_pot = v_max * math.pow(max(0.0, 1.0 - math.exp(-k * t)), m) * planted_fraction if t > 0 else 0.0
+        v_pot_prev = v_max * math.pow(max(0.0, 1.0 - math.exp(-k * max(0, t - 1))), m) * planted_fraction if t > 1 else 0.0
         delta_v_pot = max(0.0, v_pot - v_pot_prev)
 
         if t in clean_thinnings and t > 0 and v_curr > 0.0:
@@ -15439,15 +15447,15 @@ def simulate_carbon_stand(
             cum_harvest_c += harvest_c_event
 
         if t > 0:
-            rel_density = min(1.0, max(0.35, n_curr / float(n0_per_ha)))
+            rel_density = min(1.0, max(0.35, n_curr / max(n0_per_ha, 1e-6))) if n0_total > 0 else 0.0
             growth_response = 0.65 + 0.35 * rel_density
             v_curr += delta_v_pot * growth_response
             if t not in clean_thinnings:
                 n_curr = max(n0_per_ha * 0.30, n_curr * (1.0 - 0.003))
 
-        n_curr_int = max(1, round(n_curr))
+        n_curr_int = round(n_curr, 3) if 0 < n_curr < 1 else round(n_curr)
         c_tree_total = v_curr * carbon_factor * area
-        c_soc_total = annual_soc_rate * t * area
+        c_soc_total = annual_soc_rate * t * area * planted_fraction
         c_standing = c_tree_total + c_soc_total
         co2_standing = c_standing * co2_ratio
         co2_harvested = cum_harvest_c * co2_ratio
