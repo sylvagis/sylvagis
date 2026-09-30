@@ -15299,7 +15299,7 @@ var _CARBON_SPECIES_DB = {
                 // ───────────────────────────────────────────────────────────
                 // 🌲 GRID FİDAN NOKTALARI ÜRETİMİ & GÖRSEL ÖRNEKLEME MOTORU
                 // ───────────────────────────────────────────────────────────
-                function _carbonCalculatePlantingGrid(geom, spacingX, spacingY, retentionRate) {
+                function _carbonCalculatePlantingGrid(geom, spacingX, spacingY, retentionRate, viewBounds) {
                     var polyList = _carbonNormalizePolyList(geom);
                     if (!polyList.length) {
                         return { areaHa: 0, totalTrees: 0, effectiveTrees: 0, renderPoints: [], isSampled: false };
@@ -15329,59 +15329,112 @@ var _CARBON_SPECIES_DB = {
                     var renderPoints = [];
                     var maxRenderPoints = 12000;
                     if (theoreticalTrees > 0) {
-                        // Each polygon receives its own spatial budget, so a large or
-                        // distant part of a MultiPolygon cannot disappear at the cap.
-                        var parts = [];
-                        var partAreaSum = 0;
-                        for (var p = 0; p < polyList.length; p++) {
-                            var part = polyList[p];
-                            if (!part || !part.length) continue;
-                            var partBox = _carbonGetPolyListBBox([part]);
-                            if (!partBox) continue;
-                            var meanLat = (partBox.minLat + partBox.maxLat) * Math.PI / 360;
-                            var partArea = _carbonEstimateRingAreaM2(part[0], meanLat);
-                            for (var h = 1; h < part.length; h++) partArea -= _carbonEstimateRingAreaM2(part[h], meanLat);
-                            partArea = Math.max(0, partArea);
-                            if (partArea <= 0) continue;
-                            parts.push({ rings: part, box: partBox, area: partArea });
-                            partAreaSum += partArea;
-                        }
-                        var budget = Math.min(maxRenderPoints, theoreticalTrees);
-                        var remainingBudget = budget;
-                        for (var q = 0; q < parts.length; q++) {
-                            if (remainingBudget <= 0) break;
-                            var item = parts[q];
-                            var remainingArea = 0;
-                            for (var a = q; a < parts.length; a++) remainingArea += parts[a].area;
-                            var reservedForLater = Math.min(parts.length - q - 1, Math.max(0, remainingBudget - 1));
-                            var quota = Math.min(remainingBudget - reservedForLater, Math.max(1, Math.round(remainingBudget * item.area / remainingArea)));
-                            var box = item.box;
-                            var latStep = sy / 111320.0;
-                            var lngStep = sx / (111320.0 * Math.max(0.01, Math.cos((box.minLat + box.maxLat) * Math.PI / 360)));
-                            var bboxCells = ((box.maxLat - box.minLat) / latStep + 1) * ((box.maxLng - box.minLng) / lngStep + 1);
-                            var stride = Math.max(1, Math.sqrt(bboxCells / Math.max(1, quota * 4)));
-                            latStep *= stride;
-                            lngStep *= stride;
-                            var candidates = [];
-                            var rows = Math.max(1, Math.ceil((box.maxLat - box.minLat) / latStep));
-                            var cols = Math.max(1, Math.ceil((box.maxLng - box.minLng) / lngStep));
-                            for (var row = 0; row < rows; row++) {
-                                var lat = box.minLat + (row + 0.5) * (box.maxLat - box.minLat) / rows;
-                                for (var col = 0; col < cols; col++) {
-                                    var lng = box.minLng + (col + 0.5) * (box.maxLng - box.minLng) / cols;
-                                    if (_carbonPointInPolyWithHoles(lng, lat, item.rings, 0)) candidates.push([lat, lng]);
+                        // A single local metre plane and one origin keep every preview
+                        // coordinate on the same planting lattice as the full export.
+                        var radius = 6378137.0;
+                        var lat0 = (bbox.minLat + bbox.maxLat) * Math.PI / 360;
+                        var lon0 = (bbox.minLng + bbox.maxLng) * Math.PI / 360;
+                        var eccentricitySq = 0.00669437999014;
+                        var normal = Math.sqrt(1 - eccentricitySq * Math.pow(Math.sin(lat0), 2));
+                        var eastScale = radius * Math.max(0.01, Math.cos(lat0)) / normal;
+                        var northScale = radius * (1 - eccentricitySq) / Math.pow(normal, 3);
+                        var toX = function (lon) { return eastScale * (lon * Math.PI / 180 - lon0); };
+                        var toY = function (lat) { return northScale * (lat * Math.PI / 180 - lat0); };
+                        var toLon = function (x) { return (lon0 + x / eastScale) * 180 / Math.PI; };
+                        var toLat = function (y) { return (lat0 + y / northScale) * 180 / Math.PI; };
+                        var originX = toX(bbox.minLng) + sx / 2;
+                        var originY = toY(bbox.minLat) + sy / 2;
+                        // Count lattice intersections by scanline. This stays exact
+                        // without allocating a point object for every seedling.
+                        function countRing(ring) {
+                            var ys = ring.map(function (point) { return toY(point[1]); });
+                            if (!ys.length) return 0;
+                            var minY = Infinity, maxY = -Infinity;
+                            for (var vertex = 0; vertex < ys.length; vertex++) {
+                                minY = Math.min(minY, ys[vertex]);
+                                maxY = Math.max(maxY, ys[vertex]);
+                            }
+                            var firstRow = Math.max(0, Math.ceil((minY - originY) / sy));
+                            var lastRow = Math.floor((maxY - originY) / sy);
+                            var count = 0;
+                            for (var row = firstRow; row <= lastRow; row++) {
+                                var y = originY + row * sy;
+                                var crossings = [];
+                                for (var edge = 0, prev = ring.length - 1; edge < ring.length; prev = edge++) {
+                                    var y1 = ys[prev], y2 = ys[edge];
+                                    if ((y1 > y) !== (y2 > y)) {
+                                        crossings.push(toX(ring[prev][0]) + (toX(ring[edge][0]) - toX(ring[prev][0])) * (y - y1) / (y2 - y1));
+                                    }
+                                }
+                                crossings.sort(function (a, b) { return a - b; });
+                                for (var pair = 0; pair + 1 < crossings.length; pair += 2) {
+                                    var firstCol = Math.max(0, Math.floor((crossings[pair] - originX) / sx) + 1);
+                                    var lastCol = Math.ceil((crossings[pair + 1] - originX) / sx) - 1;
+                                    count += Math.max(0, lastCol - firstCol + 1);
                                 }
                             }
-                            if (!candidates.length) {
-                                // Narrow fragments may miss every coarse cell centre.
-                                var anchor = item.rings[0][0];
-                                if (_carbonPointInPolyWithHoles(anchor[0], anchor[1], item.rings, 1e-16)) candidates.push([anchor[1], anchor[0]]);
+                            return count;
+                        }
+                        var exactTrees = 0;
+                        for (var c = 0; c < polyList.length; c++) {
+                            if (!polyList[c].length) continue;
+                            exactTrees += countRing(polyList[c][0]);
+                            for (var holeIndex = 1; holeIndex < polyList[c].length; holeIndex++) exactTrees -= countRing(polyList[c][holeIndex]);
+                        }
+                        theoreticalTrees = Math.max(0, exactTrees);
+                        effectiveTrees = Math.round(theoreticalTrees * (ret / 100));
+                        var parts = [];
+                        var areaSum = 0;
+                        for (var p = 0; p < polyList.length; p++) {
+                            var rings = polyList[p];
+                            var box = _carbonGetPolyListBBox([rings]);
+                            if (!box) continue;
+                            var partArea = _carbonEstimateRingAreaM2(rings[0], lat0);
+                            for (var h = 1; h < rings.length; h++) partArea -= _carbonEstimateRingAreaM2(rings[h], lat0);
+                            if (partArea <= 0) continue;
+                            parts.push({ rings: rings, box: box, area: partArea });
+                            areaSum += partArea;
+                        }
+                        var remaining = maxRenderPoints;
+                        for (var q = 0; q < parts.length && remaining > 0; q++) {
+                            var item = parts[q], box = item.box;
+                            var west = viewBounds ? Math.max(box.minLng, viewBounds.minLng) : box.minLng;
+                            var east = viewBounds ? Math.min(box.maxLng, viewBounds.maxLng) : box.maxLng;
+                            var south = viewBounds ? Math.max(box.minLat, viewBounds.minLat) : box.minLat;
+                            var north = viewBounds ? Math.min(box.maxLat, viewBounds.maxLat) : box.maxLat;
+                            if (west > east || south > north) continue;
+                            var minI = Math.max(0, Math.ceil((toX(west) - originX) / sx));
+                            var maxI = Math.floor((toX(east) - originX) / sx);
+                            var minJ = Math.max(0, Math.ceil((toY(south) - originY) / sy));
+                            var maxJ = Math.floor((toY(north) - originY) / sy);
+                            if (maxI < minI || maxJ < minJ) continue;
+                            var areaLeft = 0;
+                            for (var a = q; a < parts.length; a++) areaLeft += parts[a].area;
+                            var reserve = Math.min(parts.length - q - 1, Math.max(0, remaining - 1));
+                            var quota = Math.min(remaining - reserve, Math.max(1, Math.round(remaining * item.area / areaLeft)));
+                            var cells = (maxI - minI + 1) * (maxJ - minJ + 1);
+                            var stride = 1;
+                            if (cells > maxRenderPoints) {
+                                while (cells / (stride * stride) > quota) stride *= 2;
                             }
-                            var take = Math.min(quota, candidates.length);
-                            for (var k = 0; k < take; k++) {
-                                renderPoints.push(candidates[Math.floor((k + 0.5) * candidates.length / take)]);
-                            }
-                            remainingBudget -= take;
+                            var points = [];
+                            // Stride always selects integer indices of the full grid.
+                            // Doubling preserves its origin and regular row/column order.
+                            do {
+                                points = [];
+                                var firstJ = Math.ceil(minJ / stride) * stride;
+                                var firstI = Math.ceil(minI / stride) * stride;
+                                for (var j = firstJ; j <= maxJ; j += stride) {
+                                    var lat = toLat(originY + j * sy);
+                                    for (var i = firstI; i <= maxI; i += stride) {
+                                        var lng = toLon(originX + i * sx);
+                                        if (_carbonPointInPolyWithHoles(lng, lat, item.rings, 0)) points.push([lat, lng]);
+                                    }
+                                }
+                                if (points.length > quota) stride *= 2;
+                            } while (points.length > quota);
+                            for (var k = 0; k < points.length; k++) renderPoints.push(points[k]);
+                            remaining -= points.length;
                         }
                     }
 
@@ -15528,6 +15581,50 @@ var _CARBON_SPECIES_DB = {
                 }
                 window._sylvaRegisterCarbonVectorLayer = _sylvaRegisterCarbonVectorLayer;
 
+                function _carbonMapViewBounds(targetMap) {
+                    if (!targetMap || !targetMap.getBounds) return null;
+                    var bounds = targetMap.getBounds();
+                    return { minLng: bounds.getWest(), maxLng: bounds.getEast(), minLat: bounds.getSouth(), maxLat: bounds.getNorth() };
+                }
+
+                function _carbonRefreshPlantingPreview(paneId, targetMap) {
+                    var st = window._carbonStateByPane && window._carbonStateByPane[paneId];
+                    if (!st || !st.plantingGeometry || !st.rawTotalTrees || !targetMap || typeof L === 'undefined') return;
+                    var grid = _carbonCalculatePlantingGrid(st.plantingGeometry, st.spacingX, st.spacingY, st.retention, _carbonMapViewBounds(targetMap));
+                    var wasVisible = !st.plantingLayer || targetMap.hasLayer(st.plantingLayer);
+                    if (st.plantingLayer && targetMap.hasLayer(st.plantingLayer)) targetMap.removeLayer(st.plantingLayer);
+                    var factor = Math.max(0.01, Math.min(1, (st.densityScale || 100) / 100));
+                    var source = grid.renderPoints;
+                    var count = factor >= 0.999 ? source.length : Math.round(source.length * factor);
+                    var points = [];
+                    for (var i = 0; i < count; i++) points.push(source[Math.floor((i + 0.5) * source.length / count)]);
+                    st.rawPlantingPoints = source;
+                    st.plantingPoints = points;
+                    st.renderCount = points.length;
+                    st.isSampled = grid.isSampled;
+                    var renderer = _carbonGetCanvasRenderer(targetMap);
+                    var markers = points.map(function (point) {
+                        return L.circleMarker(point, { renderer: renderer, radius: 3.5, fillColor: '#16a34a', fillOpacity: 0.85, stroke: false, interactive: false });
+                    });
+                    st.plantingLayer = L.layerGroup(markers);
+                    if (wasVisible) {
+                        st.plantingLayer.addTo(targetMap);
+                        if (points.length && typeof _sylvaRegisterCarbonVectorLayer === 'function') _sylvaRegisterCarbonVectorLayer(paneId);
+                    }
+                }
+
+                function _carbonBindPlantingLOD(paneId, targetMap) {
+                    if (!targetMap || targetMap._carbonGridLodBound) return;
+                    targetMap._carbonGridLodBound = true;
+                    var timer = null;
+                    var refresh = function () {
+                        clearTimeout(timer);
+                        timer = setTimeout(function () { _carbonRefreshPlantingPreview(paneId, targetMap); }, 100);
+                    };
+                    targetMap.on('zoomend moveend', refresh);
+                    targetMap.once('unload', function () { clearTimeout(timer); targetMap.off('zoomend moveend', refresh); });
+                }
+
                 window.carbonSimClearPlantingLayer = function (paneId) {
                     paneId = paneId || ((typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map');
                     var st = window._carbonStateByPane && window._carbonStateByPane[paneId];
@@ -15605,90 +15702,43 @@ var _CARBON_SPECIES_DB = {
                     window._sylvaLayerVisibleByPane[paneId]['CARBON_PLANTING'] = !!visible;
                 };
 
-                window.carbonSimDownloadGeoJSON = function (paneId) {
+                function _carbonDownloadFullLattice(paneId, format) {
                     paneId = paneId || ((typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map');
                     var st = window._carbonStateByPane && window._carbonStateByPane[paneId];
-                    if (!st || !st.plantingPoints || !st.plantingPoints.length || !st.pointsGeoJSON) {
+                    var aoi = _carbonGetActiveAOI(paneId);
+                    if (!st || !aoi || !aoi.geometry || !st.rawTotalTrees) {
                         var warnMsg = (typeof t === 'function' ? t('carbon_no_points_kml', 'İndirilecek fidan koordinat noktası bulunamadı. Lütfen önce simülasyonu çalıştırın.') : 'İndirilecek fidan koordinat noktası bulunamadı. Lütfen önce simülasyonu çalıştırın.');
                         if (typeof sylvaAlert === 'function') sylvaAlert(warnMsg, 'warning');
                         else alert(warnMsg);
                         return;
                     }
-                    var curLang = window._sylvaLang || (typeof sylvaCurrentLang !== 'undefined' ? sylvaCurrentLang : 'tr');
-                    var seedLabel = (typeof window._sylvaSeedlingLabel === 'function') ? window._sylvaSeedlingLabel(curLang) : 'Seedling';
-                    var cleanSpecies = (st.species || 'carbon').replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
-                    var dateStr = new Date().toISOString().slice(0, 10);
-                    var fileName = 'SylvaGIS_' + seedLabel.replace(/\s+/g, '_') + '_' + cleanSpecies + '_' + dateStr + '.geojson';
-                    var exportGeoJSON = Object.assign({}, st.pointsGeoJSON, {
-                        features: st.pointsGeoJSON.features.map(function(feature, i) {
-                            var spTitle = (st.species && st.species !== 'Fidan') ? st.species : seedLabel;
-                            return Object.assign({}, feature, {properties: Object.assign({}, feature.properties, {
-                                name: spTitle + ' #' + (i + 1),
-                                species: st.species || feature.properties.species || 'Planted_Species',
-                                seedling_id: i + 1,
-                                spacing_x: st.spacingX || 3,
-                                spacing_y: st.spacingY || 3
-                            })});
-                        })
-                    });
-                    var blob = new Blob([JSON.stringify(exportGeoJSON, null, 2)], { type: 'application/geo+json;charset=utf-8' });
-                    if (typeof window.saveFileWithPicker === 'function') {
-                        window.saveFileWithPicker(blob, fileName, [{ description: 'GeoJSON Document', accept: { 'application/geo+json': ['.geojson'] } }]);
-                    } else if (typeof _vdlFallbackDownload === 'function') {
-                        _vdlFallbackDownload(blob, fileName);
-                    } else {
-                        var a = document.createElement('a');
-                        a.href = URL.createObjectURL(blob);
-                        a.download = fileName;
-                        document.body.appendChild(a);
-                        a.click();
-                        setTimeout(function () { URL.revokeObjectURL(a.href); if (a.parentNode) a.parentNode.removeChild(a); }, 2000);
-                    }
+                    // Native form download lets the browser write a large streamed
+                    // response to disk without building a multi-million point Blob.
+                    var frame = document.createElement('iframe');
+                    frame.name = 'carbon-grid-export-frame-' + paneId + '-' + Date.now();
+                    frame.style.display = 'none';
+                    document.body.appendChild(frame);
+                    var form = document.createElement('form');
+                    form.method = 'POST';
+                    form.action = '/api/carbon-planting-export';
+                    form.target = frame.name;
+                    form.style.display = 'none';
+                    var field = document.createElement('input');
+                    field.type = 'hidden';
+                    field.name = 'payload';
+                    field.value = JSON.stringify({ geometry: aoi.geometry, spacing_x: st.spacingX, spacing_y: st.spacingY, species: st.species, format: format });
+                    form.appendChild(field);
+                    document.body.appendChild(form);
+                    form.submit();
+                    form.remove();
+                }
+
+                window.carbonSimDownloadGeoJSON = function (paneId) {
+                    _carbonDownloadFullLattice(paneId, 'geojson');
                 };
 
                 window.carbonSimDownloadCSV = function (paneId) {
-                    paneId = paneId || ((typeof window._sylvaActivePaneId === 'function') ? window._sylvaActivePaneId() : 'map');
-                    var st = window._carbonStateByPane && window._carbonStateByPane[paneId];
-                    if (!st || !st.plantingPoints || !st.plantingPoints.length) {
-                        var warnMsg = (typeof t === 'function' ? t('carbon_no_points_kml', 'İndirilecek fidan koordinat noktası bulunamadı. Lütfen önce simülasyonu çalıştırın.') : 'İndirilecek fidan koordinat noktası bulunamadı. Lütfen önce simülasyonu çalıştırın.');
-                        if (typeof sylvaAlert === 'function') sylvaAlert(warnMsg, 'warning');
-                        else alert(warnMsg);
-                        return;
-                    }
-                    var pts = st.plantingPoints;
-                    var spName = (st.species || 'Fidan').trim();
-                    var sx = st.spacingX || 3;
-                    var sy = st.spacingY || 3;
-                    var rows = ['id,latitude,longitude,species,spacing,class_name'];
-                    for (var i = 0; i < pts.length; i++) {
-                        rows.push([
-                            (i + 1),
-                            pts[i][0].toFixed(6),
-                            pts[i][1].toFixed(6),
-                            '"' + spName.replace(/"/g, '""') + '"',
-                            '"' + sx + 'x' + sy + 'm"',
-                            '"Karbon Fidan Dağılımı"'
-                        ].join(','));
-                    }
-                    var csvContent = '\uFEFF' + rows.join('\r\n');
-                    var curLang = window._sylvaLang || (typeof sylvaCurrentLang !== 'undefined' ? sylvaCurrentLang : 'tr');
-                    var seedLabel = (typeof window._sylvaSeedlingLabel === 'function') ? window._sylvaSeedlingLabel(curLang) : 'Seedling';
-                    var cleanSpecies = spName.replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
-                    var dateStr = new Date().toISOString().slice(0, 10);
-                    var fileName = 'SylvaGIS_' + seedLabel.replace(/\s+/g, '_') + '_' + cleanSpecies + '_' + dateStr + '.csv';
-                    var blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8' });
-                    if (typeof window.saveFileWithPicker === 'function') {
-                        window.saveFileWithPicker(blob, fileName, [{ description: 'CSV Document', accept: { 'text/csv': ['.csv'] } }]);
-                    } else if (typeof _vdlFallbackDownload === 'function') {
-                        _vdlFallbackDownload(blob, fileName);
-                    } else {
-                        var a = document.createElement('a');
-                        a.href = URL.createObjectURL(blob);
-                        a.download = fileName;
-                        document.body.appendChild(a);
-                        a.click();
-                        setTimeout(function () { URL.revokeObjectURL(a.href); if (a.parentNode) a.parentNode.removeChild(a); }, 2000);
-                    }
+                    _carbonDownloadFullLattice(paneId, 'csv');
                 };
 
                 // ───────────────────────────────────────────────────────────
@@ -15789,6 +15839,7 @@ var _CARBON_SPECIES_DB = {
                             st.rawSimResponse = null;
                             st.rawTotalTrees = null;
                             st.rawEffectiveTrees = null;
+                            st.plantingGeometry = null;
                             st.areaHa = 0;
                             st.totalTrees = 0;
                             st.effectiveTrees = 0;
@@ -15886,28 +15937,7 @@ var _CARBON_SPECIES_DB = {
 
                 window.carbonSimDownloadKML = function () {
                     var paneId=typeof window._sylvaActivePaneId==='function' ? window._sylvaActivePaneId() : 'map';
-                    var st=window._carbonStateByPane && window._carbonStateByPane[paneId];
-                    var button=document.getElementById('btn-export-carbon-kml');
-                    if(!st || !st.plantingPoints || !st.plantingPoints.length) {
-                        if(button)button.title=_cTxt('carbon_no_points_kml');
-                        return;
-                    }
-                    try {
-                        var content=_sylvaCarbonPointsToKML(st.plantingPoints,st.species,st.spacingX,st.spacingY);
-                        var fileName = _carbonExportFilename(_carbonGetLang(),'kml');
-                        var blob = new Blob([content],{type:'application/vnd.google-earth.kml+xml;charset=utf-8'});
-                        if (typeof window.saveFileWithPicker === 'function') {
-                            window.saveFileWithPicker(blob, fileName, [{ description: 'KML Document', accept: { 'application/vnd.google-earth.kml+xml': ['.kml'] } }]);
-                        } else if (typeof _vdlFallbackDownload === 'function') {
-                            _vdlFallbackDownload(blob, fileName);
-                        } else {
-                            var link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=fileName;
-                            link.style.display='none';document.body.appendChild(link);link.click();link.remove();
-                        }
-                    } catch(err) {
-                        console.error('Carbon KML export:',err);
-                        if(button)button.title=_carbonReportText(_carbonGetLang(),'export_error');
-                    }
+                    _carbonDownloadFullLattice(paneId, 'kml');
                 };
 
                 window.carbonSimDownloadProjectionsCSV = window.downloadCarbonSimulationCSV = function (paneId) {
@@ -16613,7 +16643,7 @@ var _CARBON_SPECIES_DB = {
                     window.carbonSimUpdateSpacingHint(paneId);
 
                     // 2. Grid Fidan Noktaları ve Alan Hesabı
-                    var grid = _carbonCalculatePlantingGrid(aoiInfo.geometry, st.spacingX, st.spacingY, st.retention);
+                    var grid = _carbonCalculatePlantingGrid(aoiInfo.geometry, st.spacingX, st.spacingY, st.retention, _carbonMapViewBounds(aoiInfo.paneMap));
 
                     // 3. Harita Üzerine Render (L.canvas & L.circleMarker)
                     window.carbonSimClearPlantingLayer(paneId);
@@ -16647,6 +16677,8 @@ var _CARBON_SPECIES_DB = {
                     st.rawTotalTrees = grid.totalTrees;
                     st.rawEffectiveTrees = grid.effectiveTrees;
                     st.rawPlantingPoints = (grid.renderPoints && grid.renderPoints.length > 0) ? grid.renderPoints.slice(0) : [];
+                    st.plantingGeometry = aoiInfo.geometry;
+                    _carbonBindPlantingLOD(paneId, aoiInfo.paneMap);
 
                     if (typeof _sylvaRegisterCarbonVectorLayer === 'function') {
                         _sylvaRegisterCarbonVectorLayer(paneId);
@@ -16693,6 +16725,7 @@ var _CARBON_SPECIES_DB = {
                         spacing_y: cleanSy,
                         rotation_years: cleanRot,
                         retention_rate: cleanRet,
+                        initial_trees_total: grid.effectiveTrees,
                         thinning_events: cleanThinning,
                         geojson: cleanGeojson
                     };
