@@ -19,6 +19,7 @@ import base64
 import zlib
 import json
 import math
+import itertools
 import time
 import shutil
 import threading
@@ -15302,7 +15303,8 @@ def simulate_carbon_stand(
     rotation_years: int,
     retention_rate: float = 85.0,
     thinning_events: list = None,
-    site_suitability_factor: float = 1.0
+    site_suitability_factor: float = 1.0,
+    initial_trees_total: int = None
 ) -> dict:
     """
     Durum takipli (stateful) yıllık karbon yutak simülasyon motoru.
@@ -15346,6 +15348,8 @@ def simulate_carbon_stand(
     # planting can have fewer than one tree per hectare but many trees in total.
     planting_area = max(sx * sy, 1e-6)
     n0_total = round((area * 10000.0 / planting_area) * (ret / 100.0))
+    if initial_trees_total is not None:
+        n0_total = max(0, int(initial_trees_total))
     n0_per_ha = n0_total / area if n0_total > 0 else 0.0
     # The stand-volume curve represents a stocked forest; sparse planting
     # occupies only the corresponding share of that stand.
@@ -15588,6 +15592,125 @@ def _sanitize_for_json(obj):
 
 
 # 8. HTTP API Endpoint (Karbon Simülasyonu)
+def _carbon_export_lattice_points(geometry, spacing_x, spacing_y):
+    """Yield the complete planting lattice in a local metric plane, clipped to the AOI."""
+    kind = geometry.get('type')
+    polygons = [geometry.get('coordinates', [])] if kind == 'Polygon' else geometry.get('coordinates', [])
+    if kind not in ('Polygon', 'MultiPolygon') or not polygons:
+        raise ValueError('A Polygon or MultiPolygon is required.')
+    vertices = [point for polygon in polygons for ring in polygon for point in ring]
+    if not vertices:
+        raise ValueError('The planting polygon is empty.')
+    west = min(point[0] for point in vertices)
+    east = max(point[0] for point in vertices)
+    south = min(point[1] for point in vertices)
+    north = max(point[1] for point in vertices)
+    radius = 6378137.0
+    lat0 = math.radians((south + north) / 2)
+    lon0 = math.radians((west + east) / 2)
+    eccentricity_sq = 0.00669437999014
+    normal = math.sqrt(1 - eccentricity_sq * math.sin(lat0) ** 2)
+    east_scale = radius * max(0.01, math.cos(lat0)) / normal
+    north_scale = radius * (1 - eccentricity_sq) / normal ** 3
+    def to_x(lon):
+        return east_scale * (math.radians(lon) - lon0)
+    def to_y(lat):
+        return north_scale * (math.radians(lat) - lat0)
+    origin_x = to_x(west) + spacing_x / 2
+    origin_y = to_y(south) + spacing_y / 2
+
+    def in_ring(lon, lat, ring):
+        inside = False
+        previous = ring[-1]
+        for current in ring:
+            x1, y1 = previous[:2]
+            x2, y2 = current[:2]
+            if (y1 > lat) != (y2 > lat) and lon < (x2 - x1) * (lat - y1) / (y2 - y1) + x1:
+                inside = not inside
+            previous = current
+        return inside
+
+    for polygon in polygons:
+        if not polygon or not polygon[0]:
+            continue
+        outer = polygon[0]
+        p_west = min(point[0] for point in outer)
+        p_east = max(point[0] for point in outer)
+        p_south = min(point[1] for point in outer)
+        p_north = max(point[1] for point in outer)
+        first_i = max(0, math.ceil((to_x(p_west) - origin_x) / spacing_x))
+        last_i = math.floor((to_x(p_east) - origin_x) / spacing_x)
+        first_j = max(0, math.ceil((to_y(p_south) - origin_y) / spacing_y))
+        last_j = math.floor((to_y(p_north) - origin_y) / spacing_y)
+        for j in range(first_j, last_j + 1):
+            lat = math.degrees(lat0 + (origin_y + j * spacing_y) / north_scale)
+            for i in range(first_i, last_i + 1):
+                lon = math.degrees(lon0 + (origin_x + i * spacing_x) / east_scale)
+                if in_ring(lon, lat, outer) and not any(in_ring(lon, lat, hole) for hole in polygon[1:]):
+                    yield lon, lat
+
+
+@app.route('/api/carbon-planting-export', methods=['POST'])
+def api_carbon_planting_export():
+    """Stream every true grid point without collecting millions of features in RAM."""
+    try:
+        payload = json.loads(request.form.get('payload', '{}'))
+        geometry = payload.get('geometry') or {}
+        spacing_x = float(payload.get('spacing_x'))
+        spacing_y = float(payload.get('spacing_y'))
+        if not all(math.isfinite(v) and v >= 0.5 for v in (spacing_x, spacing_y)):
+            raise ValueError('Planting spacing must be positive and finite.')
+        if not isinstance(geometry, dict) or geometry.get('type') not in ('Polygon', 'MultiPolygon'):
+            raise ValueError('A Polygon or MultiPolygon is required.')
+        fmt = str(payload.get('format', 'kml')).lower()
+        if fmt not in ('kml', 'geojson', 'csv'):
+            raise ValueError('Unsupported planting export format.')
+        species = str(payload.get('species') or 'Seedling')
+        points = _carbon_export_lattice_points(geometry, spacing_x, spacing_y)
+        first_point = next(points, None)
+        points = itertools.chain((first_point,) if first_point is not None else (), points)
+
+        def pieces():
+            if fmt == 'csv':
+                yield 'id,latitude,longitude,species,spacing_x,spacing_y\r\n'
+                safe_species = '"' + species.replace('"', '""') + '"'
+                for number, (lon, lat) in enumerate(points, 1):
+                    yield f'{number},{lat:.9f},{lon:.9f},{safe_species},{spacing_x},{spacing_y}\r\n'
+            elif fmt == 'geojson':
+                yield '{"type":"FeatureCollection","features":['
+                first = True
+                for number, (lon, lat) in enumerate(points, 1):
+                    if not first:
+                        yield ','
+                    first = False
+                    yield json.dumps({'type': 'Feature', 'geometry': {'type': 'Point', 'coordinates': [round(lon, 9), round(lat, 9)]}, 'properties': {'id': number, 'species': species, 'spacing_x': spacing_x, 'spacing_y': spacing_y}}, ensure_ascii=False, separators=(',', ':'))
+                yield ']}'
+            else:
+                safe_species = html.escape(species, quote=True)
+                yield '<?xml version="1.0" encoding="UTF-8"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document>'
+                for number, (lon, lat) in enumerate(points, 1):
+                    yield f'<Placemark><name>{safe_species} #{number}</name><Point><coordinates>{lon:.9f},{lat:.9f},0</coordinates></Point></Placemark>'
+                yield '</Document></kml>'
+
+        def chunks():
+            batch = []
+            for piece in pieces():
+                batch.append(piece)
+                if len(batch) >= 1024:
+                    yield ''.join(batch)
+                    batch.clear()
+            if batch:
+                yield ''.join(batch)
+
+        mimetype = {'geojson': 'application/geo+json', 'kml': 'application/vnd.google-earth.kml+xml', 'csv': 'text/csv'}[fmt]
+        return Response(chunks(), mimetype=mimetype, headers={
+            'Content-Disposition': f'attachment; filename="SylvaGIS_Carbon_Planting_Grid.{fmt}"',
+            'Cache-Control': 'no-store'
+        })
+    except (ValueError, TypeError, KeyError) as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+
+
 @app.route('/api/carbon-simulation', methods=['GET', 'POST', 'OPTIONS'], strict_slashes=False)
 @app.route('/api/carbon-simulation/', methods=['GET', 'POST', 'OPTIONS'], strict_slashes=False)
 def api_carbon_simulation():
@@ -15653,6 +15776,12 @@ def api_carbon_simulation():
         if not isinstance(thinning_events, list):
             thinning_events = []
 
+        initial_trees_total = req_data.get('initial_trees_total')
+        try:
+            initial_trees_total = max(0, int(initial_trees_total)) if initial_trees_total is not None else None
+        except (ValueError, TypeError, OverflowError):
+            initial_trees_total = None
+
         geojson_geom = req_data.get('geojson') or req_data.get('geometry')
 
         site_env = None
@@ -15692,7 +15821,8 @@ def api_carbon_simulation():
             rotation_years=rotation_years,
             retention_rate=retention_rate,
             thinning_events=thinning_events,
-            site_suitability_factor=site_factor
+            site_suitability_factor=site_factor,
+            initial_trees_total=initial_trees_total
         )
 
         resp_payload = {
