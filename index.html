@@ -15318,7 +15318,7 @@ var _CARBON_SPECIES_DB = {
                     var sy = Math.max(0.5, parseFloat(spacingY) || 3);
                     var ret = (retentionRate != null) ? (parseFloat(retentionRate) || 85) : 85;
 
-                    var theoreticalTrees = Math.max(1, Math.round(areaM2 / (sx * sy)));
+                    var theoreticalTrees = Math.max(0, Math.round(areaM2 / (sx * sy)));
                     var effectiveTrees = Math.round(theoreticalTrees * (ret / 100));
 
                     var bbox = _carbonGetPolyListBBox(polyList);
@@ -15326,42 +15326,71 @@ var _CARBON_SPECIES_DB = {
                         return { areaHa: areaHa, totalTrees: theoreticalTrees, effectiveTrees: effectiveTrees, renderPoints: [], isSampled: false };
                     }
 
-                    var midLat = (bbox.minLat + bbox.maxLat) / 2;
-                    var latRad = midLat * Math.PI / 180;
-                    var mPerDegLat = 111320.0;
-                    var mPerDegLng = 111320.0 * Math.max(0.01, Math.cos(latRad));
-
-                    var deltaLat = sy / mPerDegLat;
-                    var deltaLng = sx / mPerDegLng;
-
-                    var eps = Math.max(1e-6, Math.min(deltaLat, deltaLng) * 0.12);
-                    var epsSq = eps * eps;
-
-                    var tolLat = deltaLat * 0.1;
-                    var tolLng = deltaLng * 0.1;
-
                     var renderPoints = [];
-                    var maxRenderCap = 600000;
-
-                    for (var lat = bbox.minLat; lat <= bbox.maxLat + tolLat; lat += deltaLat) {
-                        for (var lng = bbox.minLng; lng <= bbox.maxLng + tolLng; lng += deltaLng) {
-                            if (_carbonPointInGeom(lng, lat, polyList, epsSq)) {
-                                renderPoints.push([lat, lng]);
-                                if (renderPoints.length >= maxRenderCap) break;
-                            }
+                    var maxRenderPoints = 12000;
+                    if (theoreticalTrees > 0) {
+                        // Each polygon receives its own spatial budget, so a large or
+                        // distant part of a MultiPolygon cannot disappear at the cap.
+                        var parts = [];
+                        var partAreaSum = 0;
+                        for (var p = 0; p < polyList.length; p++) {
+                            var part = polyList[p];
+                            if (!part || !part.length) continue;
+                            var partBox = _carbonGetPolyListBBox([part]);
+                            if (!partBox) continue;
+                            var meanLat = (partBox.minLat + partBox.maxLat) * Math.PI / 360;
+                            var partArea = _carbonEstimateRingAreaM2(part[0], meanLat);
+                            for (var h = 1; h < part.length; h++) partArea -= _carbonEstimateRingAreaM2(part[h], meanLat);
+                            partArea = Math.max(0, partArea);
+                            if (partArea <= 0) continue;
+                            parts.push({ rings: part, box: partBox, area: partArea });
+                            partAreaSum += partArea;
                         }
-                        if (renderPoints.length >= maxRenderCap) break;
+                        var budget = Math.min(maxRenderPoints, theoreticalTrees);
+                        var remainingBudget = budget;
+                        for (var q = 0; q < parts.length; q++) {
+                            if (remainingBudget <= 0) break;
+                            var item = parts[q];
+                            var remainingArea = 0;
+                            for (var a = q; a < parts.length; a++) remainingArea += parts[a].area;
+                            var reservedForLater = Math.min(parts.length - q - 1, Math.max(0, remainingBudget - 1));
+                            var quota = Math.min(remainingBudget - reservedForLater, Math.max(1, Math.round(remainingBudget * item.area / remainingArea)));
+                            var box = item.box;
+                            var latStep = sy / 111320.0;
+                            var lngStep = sx / (111320.0 * Math.max(0.01, Math.cos((box.minLat + box.maxLat) * Math.PI / 360)));
+                            var bboxCells = ((box.maxLat - box.minLat) / latStep + 1) * ((box.maxLng - box.minLng) / lngStep + 1);
+                            var stride = Math.max(1, Math.sqrt(bboxCells / Math.max(1, quota * 4)));
+                            latStep *= stride;
+                            lngStep *= stride;
+                            var candidates = [];
+                            var rows = Math.max(1, Math.ceil((box.maxLat - box.minLat) / latStep));
+                            var cols = Math.max(1, Math.ceil((box.maxLng - box.minLng) / lngStep));
+                            for (var row = 0; row < rows; row++) {
+                                var lat = box.minLat + (row + 0.5) * (box.maxLat - box.minLat) / rows;
+                                for (var col = 0; col < cols; col++) {
+                                    var lng = box.minLng + (col + 0.5) * (box.maxLng - box.minLng) / cols;
+                                    if (_carbonPointInPolyWithHoles(lng, lat, item.rings, 0)) candidates.push([lat, lng]);
+                                }
+                            }
+                            if (!candidates.length) {
+                                // Narrow fragments may miss every coarse cell centre.
+                                var anchor = item.rings[0][0];
+                                if (_carbonPointInPolyWithHoles(anchor[0], anchor[1], item.rings, 1e-16)) candidates.push([anchor[1], anchor[0]]);
+                            }
+                            var take = Math.min(quota, candidates.length);
+                            for (var k = 0; k < take; k++) {
+                                renderPoints.push(candidates[Math.floor((k + 0.5) * candidates.length / take)]);
+                            }
+                            remainingBudget -= take;
+                        }
                     }
-
-                    var totalTrees = renderPoints.length || theoreticalTrees;
-                    effectiveTrees = Math.round(totalTrees * (ret / 100));
 
                     return {
                         areaHa: areaHa,
-                        totalTrees: totalTrees,
+                        totalTrees: theoreticalTrees,
                         effectiveTrees: effectiveTrees,
                         renderPoints: renderPoints,
-                        isSampled: false
+                        isSampled: renderPoints.length < theoreticalTrees
                     };
                 }
 
@@ -16224,7 +16253,7 @@ var _CARBON_SPECIES_DB = {
                         if (dimsVal) {
                             var dbh = Number.isFinite(mManaged.final_mean_dbh_cm) ? mManaged.final_mean_dbh_cm.toFixed(1) : '—';
                             var h = Number.isFinite(mManaged.final_mean_height_m) ? mManaged.final_mean_height_m.toFixed(1) : '—';
-                            var n = Number.isFinite(mManaged.final_trees_per_ha) ? Math.round(mManaged.final_trees_per_ha) : '—';
+                            var n = Number.isFinite(mManaged.final_trees_per_ha) ? (mManaged.final_trees_per_ha > 0 && mManaged.final_trees_per_ha < 1 ? mManaged.final_trees_per_ha.toFixed(3) : Math.round(mManaged.final_trees_per_ha)) : '—';
                             var hLbl = _cTxt('lbl_height', 'Height: ', 'Boy: ');
                             if (!/\s$/.test(hLbl)) hLbl += ' ';
                             dimsVal.textContent = 'DBH: ' + dbh + ' cm | ' + hLbl + h + ' m (' + n + ' ' + _cTxt('unit_trees_ha', 'trees/ha', 'ağaç/ha') + ')';
