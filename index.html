@@ -22422,17 +22422,24 @@ function _sylvaHasMixedStackCategories(paneId) {
                 // yoktu — yani Ekran 2 aktifken bir uçuş rotası çizilirse,
                 // çizilen çizgi yanlışlıkla bir çalışma alanı katmanı olarak
                 // işleniyordu. Ekran 1 ile birebir aynı davranış eklendi.
-                                window._sylvaSetActiveMap('map2');
-                if (window._sylvaWorkspaceSyncActive) {
-                    setCurrentLayer(e.layer);
-                } else {
-                    setCurrentLayer(e.layer);
+                window._sylvaSetActiveMap('map2');
+                try { setCurrentLayer(e.layer); }
+                catch (err) { console.error('[Workspace] Map 2 drawing layer could not be activated:', err); }
+                var createdGeoJSON = null;
+                try { createdGeoJSON = e.layer && e.layer.toGeoJSON(); } catch (geoErr) {}
+                var createdFeatures = createdGeoJSON && createdGeoJSON.type === 'FeatureCollection' ? (createdGeoJSON.features || []) : [createdGeoJSON];
+                var containsPolygon = createdFeatures.some(function(f){ return f && f.geometry && (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon'); });
+                var createdWorkspace = null;
+                if (window.SylvaVAW && typeof window.SylvaVAW._onLayerSet === 'function') {
+                    createdWorkspace = window.SylvaVAW._onLayerSet(e.layer, null, 'map2');
+                }
+                if (createdWorkspace) {
+                    try { if (map2.hasLayer(e.layer)) map2.removeLayer(e.layer); } catch(_e) {}
+                } else if (!containsPolygon) {
+                    try { setCurrentLayer(e.layer); }
+                    catch (err) { console.error('[Workspace] Ekran 2 çizim katmanı etkinleştirilemedi:', err); }
                     // Sol panelle birebir aynı: yeni çizilen alanı da VAW çoklu
                     // çalışma alanı listesine ekle, ham katmanı haritadan kaldır.
-                    if (window.SylvaVAW && typeof window.SylvaVAW._onLayerSet === 'function') {
-                        window.SylvaVAW._onLayerSet(e.layer, null);
-                        try { map2.removeLayer(e.layer); } catch(_e) {}
-                    }
                 }
                 if (typeof window._sylvaSyncActivePaneControls === 'function') window._sylvaSyncActivePaneControls();
             });
@@ -23468,7 +23475,9 @@ function _sylvaHasMixedStackCategories(paneId) {
             }
             var targetMap = paneId === 'map2' && map2 ? map2 : map;
             var previous = paneId === 'map2' ? currentLayer2 : currentLayer;
-            if (previous && targetMap && targetMap.hasLayer(previous)) targetMap.removeLayer(previous);
+            var previousIsManagedWorkspace = !!(previous && window.SylvaVAW && Array.isArray(window.SylvaVAW.workspaces) &&
+                window.SylvaVAW.workspaces.some(function(ws){ return ws && ws.layer === previous; }));
+            if (previous && !previousIsManagedWorkspace && targetMap && targetMap.hasLayer(previous)) targetMap.removeLayer(previous);
             if (paneId === 'map2') { currentLayer2 = layer; window._workspaceLayer2 = layer; }
             else { currentLayer = layer; window._workspaceLayer = layer; }
             if (window._sylvaCarbonAOIBoundsByPane[paneId]) _sylvaRememberCarbonAOIBounds(paneId, layer);
@@ -26046,15 +26055,30 @@ document.getElementById('basemapOpacity').addEventListener('input', function() {
         // Çizim tamamlandığında: tek çalışma alanı olarak ayarla
         // + "Çalışma Alanı" göster/gizle checkbox'ını otomatik işaretle
         map.on('pm:create', function (e) {
-            _sylvaActivePaneMap().pm.disableDraw();
+            var createdLayer = e && e.layer;
+            if (!createdLayer) return;
+            // This event belongs to the primary map; do not inherit a stale secondary-pane selection.
+            if (typeof window._sylvaSetActiveMap === 'function') window._sylvaSetActiveMap('map');
+            var activeDrawMap = map;
+            try { if (activeDrawMap && activeDrawMap.pm) activeDrawMap.pm.disableDraw(); } catch (drawErr) {}
             setActiveTool(null);
-            // 3B rota çizimi tamamlandıysa parametreleri göster
-                        setCurrentLayer(e.layer);
-            // Otomatik VAW çalışma alanı ekle
+            try { setCurrentLayer(createdLayer); }
+            catch (err) { console.error('[Workspace] Drawn layer could not be activated:', err); }
+            var createdGeoJSON = null;
+            try { createdGeoJSON = createdLayer.toGeoJSON(); } catch (geoErr) {}
+            var createdFeatures = createdGeoJSON && createdGeoJSON.type === 'FeatureCollection' ? (createdGeoJSON.features || []) : [createdGeoJSON];
+            var containsPolygon = createdFeatures.some(function(f){ return f && f.geometry && (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon'); });
+            // GeoJSON türünü burada tahmin etmeyip Geoman çıktısını VAW
+            // dönüştürücüsüne ver; FeatureCollection ve Feature ikisi de desteklenir.
+            var createdWorkspace = null;
             if (window.SylvaVAW && typeof window.SylvaVAW._onLayerSet === 'function') {
-                window.SylvaVAW._onLayerSet(e.layer, null);
-                // VAW mergedLayer görünümü yönetir; orijinal layer'ı haritadan kaldır
-                try { map.removeLayer(e.layer); } catch (_e) {}
+                createdWorkspace = window.SylvaVAW._onLayerSet(createdLayer, null, 'map');
+            }
+            if (createdWorkspace) {
+                try { if (map.hasLayer(createdLayer)) map.removeLayer(createdLayer); } catch (_e) {}
+            } else if (!containsPolygon) {
+                try { setCurrentLayer(createdLayer); }
+                catch (err) { console.error('[Workspace] Çizim katmanı etkinleştirilemedi:', err); }
             }
             // 🛠️ BUG FİX: Bu adım eskiden yalnızca Ekran 2'de çalışıyordu.
             if (typeof window._sylvaSyncActivePaneControls === 'function') window._sylvaSyncActivePaneControls();
@@ -61118,6 +61142,54 @@ function _vdlFallbackDownload(blob, name, customTypes, downloadOp) {
         palette: ['#1e3a8a','#dc2626','#16a34a','#d97706','#7c3aed','#0891b2','#be185d','#4d7c0f','#b45309','#0f766e']
     };
     window.SylvaVAW = VAW;
+    // Install the draw bridge immediately. Drawing can happen even if a later
+    // optional vector-panel initializer encounters an unrelated runtime error.
+    VAW._onLayerSet = function(layer, name, paneId){
+        try {
+            if (!layer || typeof layer.toGeoJSON !== 'function') throw new Error('Drawn layer cannot be converted to GeoJSON.');
+            var features = toFeatureArray(layer.toGeoJSON());
+            if (!features.length) throw new Error('Drawn geometry did not contain a polygon workspace.');
+            return addWorkspace(features, name || null, '', paneId || null);
+        } catch (error) {
+            console.error('[Workspace] Unable to register drawn area:', error);
+            return null;
+        }
+    };
+    window.SylvaVAW._onLayerSet = VAW._onLayerSet;
+    // Delegate vector-tool actions at document level as a resilient fallback.
+    // This preserves the existing tool logic while avoiding dependence on a
+    // per-button listener that may not have been attached during UI bootstrap.
+    document.addEventListener('click', function(event){
+        var target = event.target && event.target.closest ? event.target : null;
+        if (!target) return;
+        var toolButton = target.closest('.vaw-tool-grid button[data-tool]');
+        if (toolButton) {
+            event.preventDefault();
+            event.__sylvaVectorHandled = true;
+            try {
+                moveToolFormToPane();
+                document.querySelectorAll('.vaw-tool-grid button').forEach(function(button){
+                    var selected = button.getAttribute('data-tool') === toolButton.getAttribute('data-tool');
+                    button.classList.toggle('active', selected);
+                    button.setAttribute('aria-pressed', String(selected));
+                });
+                VAW.activeTool = toolButton.getAttribute('data-tool');
+                if (typeof window.sylvaToggleSec === 'function') window.sylvaToggleSec('vaw-tools-body', false);
+                renderToolForm();
+            } catch (toolUiErr) {
+                console.error('[Workspace] Vector tool could not be opened:', toolUiErr);
+            }
+            return;
+        }
+        var runButton = target.closest('#vaw-run-btn');
+        if (runButton) {
+            event.preventDefault();
+            event.__sylvaVectorHandled = true;
+            var form = document.getElementById('vaw-tool-form');
+            var selectedTool = form && form.getAttribute('data-tool');
+            if (selectedTool) runTool(selectedTool);
+        }
+    }, true);
 
     // Static additions to the existing 30-language vector-form dictionary.
     var sameScreenWarnings = {
@@ -61179,17 +61251,14 @@ function _vdlFallbackDownload(blob, name, customTypes, downloadOp) {
 
     /* ── Coğrafi yardımcı fonksiyonlar (Turf.js) ─────────────── */
     function toFeatureArray(geojson){
-        try{
-            var fc;
-            if (!geojson) return [];
-            if (geojson.type === 'FeatureCollection') fc = geojson;
-            else if (geojson.type === 'Feature') fc = turf.featureCollection([geojson]);
-            else fc = turf.featureCollection([turf.feature(geojson)]);
-            var flat = turf.flatten(fc);
-            return flat.features.filter(function(f){
-                return f && f.geometry && (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon');
-            });
-        }catch(e){ return []; }
+        if (!geojson) return [];
+        var candidates = geojson.type === 'FeatureCollection' ? (geojson.features || [])
+            : geojson.type === 'Feature' ? [geojson]
+            : [{ type: 'Feature', properties: {}, geometry: geojson }];
+        return candidates.filter(function(f){
+            return f && f.type === 'Feature' && f.geometry &&
+                (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon');
+        });
     }
 
     function unionAll(feats){
@@ -61327,24 +61396,21 @@ function _vdlFallbackDownload(blob, name, customTypes, downloadOp) {
         // Ekran 2'de sonuç üretirken Ekran 1'in çalışma alanına dokunma.
         var targetPaneId = forcedPaneId ||
             ((typeof map2 !== 'undefined' && map2 && lmap === map2) ? 'map2' : 'map');
+        // Optional downstream analysis hooks must never prevent workspace registration.
         if (typeof window._sylvaInvalidateBuildingAnalysis === 'function') {
-            window._sylvaInvalidateBuildingAnalysis(targetPaneId, targetPaneId === 'map');
-        }
-        var previousWorkspace = targetPaneId === 'map2'
-            ? (window._workspaceLayer2 || (typeof currentLayer2 !== 'undefined' ? currentLayer2 : null))
-            : (window._workspaceLayer || (typeof currentLayer !== 'undefined' ? currentLayer : null));
-        if (previousWorkspace) {
-            try { if (lmap.hasLayer(previousWorkspace)) lmap.removeLayer(previousWorkspace); } catch(e) {}
+            try { window._sylvaInvalidateBuildingAnalysis(targetPaneId, targetPaneId === 'map'); }
+            catch (invalidateErr) { console.warn('[Workspace] Building-analysis invalidation skipped:', invalidateErr); }
         }
         var id = VAW.nextId++;
         // Hangi panelde (sol=map/Sayfa 1, sağ=map2/Sayfa 2) oluşturulduğunu belirle
         // ve o panele özel "Alan N" sıra numarasını ata.
         var paneId = targetPaneId;
+        VAW.activePaneId = paneId;
         if (VAW.paneCounters[paneId] === undefined) VAW.paneCounters[paneId] = 0;
         var paneAreaNum = ++VAW.paneCounters[paneId];
         // Tüm çalışma alanları aynı mavi dış kenarla ve dolgusuz açılır.
         var color = '#1e3a8a';
-        var fc = turf.featureCollection(features);
+        var fc = { type: 'FeatureCollection', features: features };
         var ws = {
             id: id,
             name: name || null,
@@ -61360,9 +61426,11 @@ function _vdlFallbackDownload(blob, name, customTypes, downloadOp) {
                 style: { color: color, weight: 2.5, fill: true, fillColor: color, fillOpacity: 0.001 }
             }).addTo(lmap)
         };
+        VAW.workspaces.push(ws);
         ws.layer._sylvaWsId = ws.id;
-        ws.layer.bindTooltip(wsDisplayName(ws), {sticky: true});
-        ws.layer.on('click', function(){
+        try { ws.layer.bindTooltip(wsDisplayName(ws), {sticky: true}); }
+        catch (tooltipErr) { console.warn('[Workspace] Tooltip setup skipped:', tooltipErr); }
+        try { ws.layer.on('click', function(){
             if (typeof window.showGeometryInfo === 'function') {
                 window.showGeometryInfo(ws.fc);
             }
@@ -61373,9 +61441,8 @@ function _vdlFallbackDownload(blob, name, customTypes, downloadOp) {
             flashWorkspace(ws);
             // 🎨 En son tıklanan alan, renk paletinin hedefi olur.
             window._sylvaActiveColorWs = ws;
-        });
+        }); } catch (clickErr) { console.warn('[Workspace] Click integration skipped:', clickErr); }
         window._sylvaActiveColorWs = ws; // yeni çizilen alan varsayılan hedef
-        VAW.workspaces.push(ws);
 // 🛠️ BUG FİX: currentLayer/currentLayer2 (window._workspaceLayer[2]) artık
 // silinmiş ham çizim katmanını değil, haritada GERÇEKTEN duran ve "Çalışma
 // Alanı" kutusunun rengini/tikini takip eden VAW katmanını (ws.layer)
@@ -61390,15 +61457,49 @@ if (ws.paneId === 'map2') {
     window._workspaceLayer = ws.layer;
 }
 if (window._sylvaCarbonAOIBoundsByPane && window._sylvaCarbonAOIBoundsByPane[ws.paneId] && typeof window._sylvaRememberCarbonAOIBounds === 'function') {
-    window._sylvaRememberCarbonAOIBounds(ws.paneId, ws.layer);
+    try { window._sylvaRememberCarbonAOIBounds(ws.paneId, ws.layer); }
+    catch (boundsErr) { console.warn('[Workspace] Carbon AOI bounds sync skipped:', boundsErr); }
 }
-renderWorkspaceList();
-        renderToolForm();
-        showWsClickInfo(ws);
+// Render the list first so optional tool/metrics hooks cannot leave the empty-state message visible.
+try { renderWorkspaceList(); }
+catch (listErr) {
+    console.error('[Workspace] Workspace list render failed:', listErr);
+    // Minimal DOM fallback: keep drawn workspaces visible and usable if a label/i18n helper fails.
+    try {
+        var listBox = document.getElementById('vaw-workspace-list');
+        if (listBox) {
+            var fallbackRow = document.createElement('div');
+            fallbackRow.className = 'vaw-ws-row';
+            fallbackRow.setAttribute('data-ws', String(ws.id));
+            var visBox = document.createElement('input');
+            visBox.type = 'checkbox'; visBox.className = 'vaw-vis-cb'; visBox.checked = true;
+            var swatch = document.createElement('span'); swatch.className = 'vaw-ws-swatch'; swatch.style.background = ws.color;
+            var title = document.createElement('span'); title.className = 'vaw-ws-name'; title.textContent = wsDisplayName(ws);
+            var deleteButton = document.createElement('button'); deleteButton.type = 'button'; deleteButton.textContent = '🗑️';
+            deleteButton.setAttribute('data-act', 'del');
+            fallbackRow.appendChild(visBox); fallbackRow.appendChild(swatch); fallbackRow.appendChild(title); fallbackRow.appendChild(deleteButton);
+            var emptyHint = listBox.querySelector('.vaw-empty-hint');
+            if (emptyHint) emptyHint.remove();
+            var existingRow = listBox.querySelector('.vaw-ws-row[data-ws="' + ws.id + '"]');
+            if (existingRow) existingRow.replaceWith(fallbackRow); else listBox.appendChild(fallbackRow);
+            visBox.addEventListener('change', function(){
+                ws.visible = visBox.checked;
+                try { if (ws.visible) ws.layer.addTo(ws.map); else ws.map.removeLayer(ws.layer); } catch (visibilityErr) {}
+                fallbackRow.style.opacity = ws.visible ? '1' : '0.45';
+            });
+            deleteButton.addEventListener('click', function(){ removeWorkspace(ws.id); });
+        }
+    } catch (fallbackErr) { console.error('[Workspace] Fallback list render failed:', fallbackErr); }
+}
+try { renderToolForm(); }
+catch (toolErr) { console.warn('[Workspace] Vector-tool form refresh skipped:', toolErr); }
+try { showWsClickInfo(ws); }
+catch (metricsErr) { console.warn('[Workspace] Workspace metrics refresh skipped:', metricsErr); }
         // Çalışma alanı çizildikten sonra (Ekran 1 ya da Ekran 2 fark etmez)
         // "Çalışma Alanları & Vektör Analiz" paneli otomatik olarak açılsın.
         if (typeof sylvaToggleSec === 'function') {
-            sylvaToggleSec('vaw-panel', false);
+            try { sylvaToggleSec('vaw-panel', false); }
+            catch (panelErr) { console.warn('[Workspace] Workspace panel could not be expanded:', panelErr); }
         }
         try{ lmap.fitBounds(ws.layer.getBounds(), {maxZoom: 16}); }catch(e){}
         return ws;
@@ -61473,13 +61574,22 @@ renderWorkspaceList();
         _removeWsLayerEverywhere(removedWs);
         VAW.workspaces.splice(idx, 1);
         _sweepOrphanWorkspaceLayers(VAW.workspaces.map(function(w){ return w.id; }));
-        if (typeof window._sylvaClearRawWorkspaceRef === 'function') {
+        var paneReplacement = VAW.workspaces.slice().reverse().find(function(w){ return w.paneId === removedWs.paneId; }) || null;
+        if (paneReplacement) {
+            if (removedWs.paneId === 'map2') { currentLayer2 = paneReplacement.layer; window._workspaceLayer2 = paneReplacement.layer; }
+            else { currentLayer = paneReplacement.layer; window._workspaceLayer = paneReplacement.layer; }
+        } else if (typeof window._sylvaClearRawWorkspaceRef === 'function') {
             window._sylvaClearRawWorkspaceRef(removedWs.paneId);
         }
         var boxId = removedWs.paneId === 'map2' ? 'ws-click-info-map2' : 'ws-click-info-map';
         var box = document.getElementById(boxId);
-        if (box) { box.style.display = 'none'; box.innerHTML = ''; }
-        if (typeof window._sylvaSetGeomInfoName === 'function') window._sylvaSetGeomInfoName(null);
+        if (paneReplacement) {
+            showWsClickInfo(paneReplacement);
+            if (typeof window._sylvaSetGeomInfoName === 'function') window._sylvaSetGeomInfoName(wsDisplayName(paneReplacement));
+        } else {
+            if (box) { box.style.display = 'none'; box.innerHTML = ''; }
+            if (typeof window._sylvaSetGeomInfoName === 'function') window._sylvaSetGeomInfoName(null);
+        }
         renderWorkspaceList();
         renderToolForm();
     }
@@ -61574,10 +61684,42 @@ renderWorkspaceList();
         var box = document.getElementById(boxId);
         if (!box) return;
         try{
-            var areaSqMeters = turf.area(ws.fc);
+            var areaSqMeters = 0;
+            var perimeterMeters = 0;
+            var earthRadius = 6371008.8;
+            function ringMetrics(ring){
+                var ringArea = 0, ringLength = 0;
+                for (var i = 0; i < ring.length - 1; i++) {
+                    var a = ring[i], b = ring[i + 1];
+                    var lat1 = Number(a[1]) * Math.PI / 180, lat2 = Number(b[1]) * Math.PI / 180;
+                    var dLat = lat2 - lat1, dLon = (Number(b[0]) - Number(a[0])) * Math.PI / 180;
+                    var h = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+                    ringLength += 2 * earthRadius * Math.asin(Math.min(1, Math.sqrt(h)));
+                    ringArea += dLon * (2 + Math.sin(lat1) + Math.sin(lat2));
+                }
+                return { area: Math.abs(ringArea * earthRadius * earthRadius / 2), length: ringLength };
+            }
+            function polygonMetrics(rings){
+                var polyArea = 0, polyLength = 0;
+                (rings || []).forEach(function(ring, index){
+                    var m = ringMetrics(ring);
+                    polyArea += index === 0 ? m.area : -m.area;
+                    polyLength += m.length;
+                });
+                return { area: Math.max(0, polyArea), length: polyLength };
+            }
+            (ws.fc.features || []).forEach(function(feature){
+                var g = feature && feature.geometry;
+                if (!g) return;
+                var polygons = g.type === 'Polygon' ? [g.coordinates] : (g.type === 'MultiPolygon' ? g.coordinates : []);
+                polygons.forEach(function(rings){ var m = polygonMetrics(rings); areaSqMeters += m.area; perimeterMeters += m.length; });
+            });
+            if (typeof turf !== 'undefined' && turf.area && turf.length) {
+                try { areaSqMeters = turf.area(ws.fc); perimeterMeters = turf.length(ws.fc, { units: 'meters' }); } catch(metricErr) {}
+            }
             var areaKm2 = (areaSqMeters / 1000000).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
             var areaHa = (areaSqMeters / 10000).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
-            var lengthKm = turf.length(ws.fc, { units: 'kilometers' }).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
+            var lengthKm = (perimeterMeters / 1000).toLocaleString('tr-TR', { maximumFractionDigits: 2 });
             box.innerHTML =
                 '<div class="geom-details">' +
                     '<span style="font-weight:700;color:#1e3a8a;">' + esc(wsDisplayName(ws)) + '</span>' +
@@ -62031,7 +62173,10 @@ renderWorkspaceList();
         });
 
         var runBtn = document.getElementById('vaw-run-btn');
-        if (runBtn) runBtn.addEventListener('click', function(){ runTool(tool); });
+        if (runBtn) runBtn.addEventListener('click', function(event){
+            if (event.__sylvaVectorHandled) return;
+            runTool(tool);
+        });
         bindVawScreenSelectionLocks();
     }
 
@@ -62152,6 +62297,7 @@ renderWorkspaceList();
             if(btn._sylvaVectorFormBound)return;
             btn._sylvaVectorFormBound=true;
             btn.addEventListener('click', function(e){
+                if (e.__sylvaVectorHandled) return;
                 e.preventDefault();
                 moveToolFormToPane();
                 if(typeof window.sylvaToggleSec==='function')window.sylvaToggleSec('vaw-tools-body',false);
@@ -62167,15 +62313,6 @@ renderWorkspaceList();
 
         // Çizim ve yükleme, sol paneldeki araçlardan (KML/SHP, Polygon, Rectangle)
         // otomatik olarak tetiklenir; _onLayerSet ile VAW listesine eklenir.
-        VAW._onLayerSet = function(layer, name){
-            try{
-                var gj = layer.toGeoJSON();
-                var feats = toFeatureArray(gj);
-                if (feats && feats.length) addWorkspace(feats, name || null);
-            }catch(e){}
-        };
-        window.SylvaVAW._onLayerSet = VAW._onLayerSet;
-
         /* ── dil değişince alan isimlerini güncelle ── */
         (function(){
             var _prevApply = (typeof window.applySylvaLang === 'function') ? window.applySylvaLang : null;
