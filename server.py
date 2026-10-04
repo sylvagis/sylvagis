@@ -16299,11 +16299,13 @@ def api_climate_suitability():
         return ('', 204)
 
     try:
-        data = request.get_json(silent=True) or {}
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({'success': False, 'error': 'İstek gövdesi geçerli bir JSON nesnesi olmalıdır.'}), 400
         _sylva_check_cancelled()
 
         # 1. Girdi parametreleri
-        roi_raw = data.get('geometry') or data.get('roi') or data.get('polygon')
+        roi_raw = data.get('geometry') or data.get('aoi') or data.get('roi') or data.get('polygon')
         if not roi_raw:
             return jsonify({'success': False, 'error': 'Geometri (geometry veya roi) parametresi zorunludur.'}), 400
 
@@ -16328,7 +16330,7 @@ def api_climate_suitability():
         else:
             landsat_scale = 120
 
-        species_value = data.get('species') or 'fagus_orientalis'
+        species_value = data.get('species') or data.get('tree_species') or 'fagus_orientalis'
         if not isinstance(species_value, str):
             return jsonify({'success': False, 'error': 'Ağaç türü geçersiz.'}), 400
         species_key = species_value.strip().lower()
