@@ -7256,19 +7256,23 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                 window._CLIMATE_INFO_I18N = _CLIMATE_INFO_I18N;
                 function _injectClimateI18n() {
                     var translations = (typeof SYLVA_TRANSLATIONS !== 'undefined') ? SYLVA_TRANSLATIONS : ((typeof window.SYLVA_TRANSLATIONS !== 'undefined') ? window.SYLVA_TRANSLATIONS : null);
-                    if (!translations) return;
-                    Object.keys(_CLIMATE_I18N).forEach(function (lang) {
+                    if (!translations || typeof translations !== 'object' || Array.isArray(translations)) return;
+                    var climateDicts = (_CLIMATE_I18N && typeof _CLIMATE_I18N === 'object' && !Array.isArray(_CLIMATE_I18N)) ? _CLIMATE_I18N : {};
+                    Object.keys(climateDicts).forEach(function (lang) {
                         if (!translations[lang]) translations[lang] = {};
-                        var dict = _CLIMATE_I18N[lang];
-                        if (!dict) return;
+                        var dict = climateDicts[lang];
+                        if (!dict || typeof dict !== 'object' || Array.isArray(dict)) return;
                         Object.keys(dict).forEach(function (k) {
                             translations[lang][k] = dict[k];
                         });
                     });
-                    Object.keys(_CLIMATE_INFO_I18N).forEach(function (lang) {
+                    var infoDicts = (_CLIMATE_INFO_I18N && typeof _CLIMATE_INFO_I18N === 'object' && !Array.isArray(_CLIMATE_INFO_I18N)) ? _CLIMATE_INFO_I18N : {};
+                    Object.keys(infoDicts).forEach(function (lang) {
                         if (!translations[lang]) translations[lang] = {};
-                        Object.keys(_CLIMATE_INFO_I18N[lang]).forEach(function (k) {
-                            translations[lang][k] = _CLIMATE_INFO_I18N[lang][k];
+                        var infoDict = infoDicts[lang];
+                        if (!infoDict || typeof infoDict !== 'object' || Array.isArray(infoDict)) return;
+                        Object.keys(infoDict).forEach(function (k) {
+                            translations[lang][k] = infoDict[k];
                         });
                     });
                 }
@@ -7424,14 +7428,28 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                         signal: controller ? controller.signal : undefined
                     })
                     .then(function (res) {
-                        return res.json().catch(function () { return {}; }).then(function (data) {
-                            if (!res.ok) throw new Error((data && data.error) ? data.error : ('Status: ' + res.status));
+                        return res.text().then(function (body) {
+                            var data = null;
+                            if (body) {
+                                try { data = JSON.parse(body); } catch (parseError) { data = null; }
+                            }
+                            if (!res.ok) {
+                                var detail = data && typeof data === 'object' && data.error ? data.error : ('HTTP ' + res.status);
+                                if (res.status === 404) detail += ' — /api/climate-suitability bulunamadı. Bu arayüzü SylvaGIS Flask sunucusunun adresinden açın ve çalışan sunucuyu güncelleyin.';
+                                throw new Error(detail);
+                            }
+                            if (!data || typeof data !== 'object' || Array.isArray(data)) {
+                                throw new Error('İklim API yanıtı geçerli bir JSON nesnesi değil.');
+                            }
                             return data;
                         });
                     })
                     .then(function (data) {
                         if (!data || !data.success) {
                             throw new Error((data && data.error) ? data.error : 'Error');
+                        }
+                        if (!data.metrics || typeof data.metrics !== 'object' || Array.isArray(data.metrics)) {
+                            throw new Error('İklim API yanıtında geçerli metrics nesnesi bulunamadı.');
                         }
                         // Matematiksel sınır güvenliği (0-100 clamping)
                         if (data.metrics && data.metrics.stress_score !== undefined) {
@@ -7481,7 +7499,7 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                 // ═══════════════════════════════════════════════════════════
                 function renderClimateSuitabilityResults(data) {
                     var resBox = document.getElementById('climate-sim-results');
-                    if (!resBox) return;
+                    if (!resBox || !data || typeof data !== 'object' || !data.metrics || typeof data.metrics !== 'object') return;
                     resBox.style.display = 'block';
 
                     var lang = (typeof _sylvaLang !== 'undefined' && _sylvaLang) ? _sylvaLang : 'tr';
@@ -8698,6 +8716,10 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                     var url = (kind === 'ndwi') ? (data.tile_urls.ndwi_anomaly || data.tile_urls.ndwi) : data.tile_urls.suitability_map;
                     if (!url) return;
 
+                    if (!window._climateActiveLayers || typeof window._climateActiveLayers !== 'object' || Array.isArray(window._climateActiveLayers)) {
+                        window._climateActiveLayers = {};
+                    }
+                    if (typeof window._climateActiveLayers !== 'object' || !window._climateActiveLayers) return;
                     var isCurrentlyActive = !!window._climateActiveLayers[kind];
 
                     // Zaten aktifse ve force değilse kapat
@@ -8726,6 +8748,9 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                 };
 
                 function updateClimateLayerButtonStyles() {
+                    if (!window._climateActiveLayers || typeof window._climateActiveLayers !== 'object' || Array.isArray(window._climateActiveLayers)) {
+                        window._climateActiveLayers = {};
+                    }
                     var isSuit = !!window._climateActiveLayers['suitability'];
                     var isNdwi = !!window._climateActiveLayers['ndwi'];
 
@@ -8760,7 +8785,7 @@ input[name="raw-bands-scope"][value="full"], input[name="geotiff-scope"][value="
                     var resBox = document.getElementById('climate-sim-results');
                     if (resBox) resBox.style.display = 'none';
                     var targetMap = (typeof window.map !== 'undefined') ? window.map : null;
-                    if (targetMap && window._climateActiveLayers) {
+                    if (targetMap && window._climateActiveLayers && typeof window._climateActiveLayers === 'object' && !Array.isArray(window._climateActiveLayers)) {
                         Object.keys(window._climateActiveLayers).forEach(function (k) {
                             try { targetMap.removeLayer(window._climateActiveLayers[k]); } catch (e) {}
                             delete window._climateActiveLayers[k];
@@ -113996,7 +114021,10 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
                         header.appendChild(arrow);
                     }
                     arrow.id = body.id === 'date-selection-body' ? 'date-selection-arrow' : 'map-layout-arrow';
-                    arrow.textContent = open ? '▲' : '▼';
+                    // Derive the chevron from the restored body state so storage,
+                    // visibility and arrow direction cannot drift apart.
+                    var restoredOpen = !body.classList.contains('sec-collapsed');
+                    arrow.textContent = restoredOpen ? '▲' : '▼';
                     header.setAttribute('role', 'button');
                     header.setAttribute('tabindex', '0');
                     header.setAttribute('aria-expanded', open ? 'true' : 'false');
@@ -114004,9 +114032,10 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){var x=docum
                         if (e.target.closest && e.target.closest('input, select, button, a')) return;
                         var nextOpen = body.classList.contains('sec-collapsed');
                         sylvaToggleSec(body.id, !nextOpen);
-                        arrow.textContent = nextOpen ? '▼' : '▲';
-                        header.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
-                        try { localStorage.setItem(panelKey, nextOpen ? 'open' : 'closed'); } catch (err) {}
+                        var actualOpen = !body.classList.contains('sec-collapsed');
+                        arrow.textContent = actualOpen ? '▲' : '▼';
+                        header.setAttribute('aria-expanded', actualOpen ? 'true' : 'false');
+                        try { localStorage.setItem(panelKey, actualOpen ? 'open' : 'closed'); } catch (err) {}
                     });
                     header.addEventListener('keydown', function(e) {
                         if (e.key === 'Enter' || e.key === ' ') {
