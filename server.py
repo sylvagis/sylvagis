@@ -16382,7 +16382,9 @@ def api_climate_suitability():
                 return ndvi.addBands(ndwi).addBands(bsi).addBands(lst)
 
             med = merged.map(calc_indices).median()
-            stats = med.reduceRegion(
+            valid_pct = (med.select('ndvi').mask().unmask(0).clip(roi)
+                         .rename('valid_pct').multiply(100.0))
+            stats = med.addBands(valid_pct).reduceRegion(
                 reducer=ee.Reducer.mean(),
                 geometry=roi,
                 scale=landsat_scale,
@@ -16390,7 +16392,12 @@ def api_climate_suitability():
                 bestEffort=True,
                 tileScale=4
             )
-            return ee.Feature(None, stats.set('year', y_num))
+            return ee.Feature(None, stats
+                              .set('year', y_num)
+                              .set('landsat8_scene_count', col8.size())
+                              .set('landsat9_scene_count', col9.size())
+                              .set('acquisition_dates_millis', merged.aggregate_array('system:time_start'))
+                              .set('scene_cloud_cover_mean_pct', merged.aggregate_mean('CLOUD_COVER')))
 
         fc_hist = ee.FeatureCollection(ee.List(years).map(prep_landsat_year))
         hist_raw = _call_with_retry(lambda: fc_hist.getInfo()['features'])
@@ -16404,7 +16411,17 @@ def api_climate_suitability():
                     'ndvi': round(float(p['ndvi']), 3),
                     'ndwi': round(float(p.get('ndwi', 0.0)), 3),
                     'lst': round(float(p['lst']), 1),
-                    'bsi': round(float(p.get('bsi', 0.0)), 3)
+                    'bsi': round(float(p.get('bsi', 0.0)), 3),
+                    'valid_pixel_pct': round(float(p.get('valid_pct', 0.0)), 1),
+                    'qa_masked_pixel_pct': round(max(0.0, 100.0 - float(p.get('valid_pct', 0.0))), 1),
+                    'scene_cloud_cover_mean_pct': (round(float(p['scene_cloud_cover_mean_pct']), 1)
+                                                   if p.get('scene_cloud_cover_mean_pct') is not None else None),
+                    'landsat8_scene_count': int(p.get('landsat8_scene_count') or 0),
+                    'landsat9_scene_count': int(p.get('landsat9_scene_count') or 0),
+                    'acquisition_dates': sorted({
+                        datetime.datetime.fromtimestamp(float(ts) / 1000.0, datetime.timezone.utc).strftime('%Y-%m-%d')
+                        for ts in (p.get('acquisition_dates_millis') or []) if ts is not None
+                    })
                 })
 
         # Use only observed years; missing/cloudy years must not be replaced by synthetic values.
@@ -16610,6 +16627,43 @@ def api_climate_suitability():
             'ndwi_map': tile_ndwi
         }
 
+        # AOI-wide terrain summary for the inline report and downloadable PDF.
+        # Aspect is circular, so its mean is calculated from the mean sine/cosine.
+        topography = {
+            'dataset': 'USGS/SRTMGL1_003',
+            'nominal_scale_m': 30,
+            'elevation_m': {},
+            'slope_deg': {},
+            'aspect_circular_mean_deg': None
+        }
+        try:
+            terrain_img = ee.Algorithms.Terrain(ee.Image('USGS/SRTMGL1_003').select('elevation').clip(roi))
+            aspect_rad = terrain_img.select('aspect').multiply(math.pi / 180.0)
+            terrain_stats_img = (terrain_img.select('elevation').rename('elevation')
+                                 .addBands(terrain_img.select('slope').rename('slope'))
+                                 .addBands(aspect_rad.sin().rename('aspect_sin'))
+                                 .addBands(aspect_rad.cos().rename('aspect_cos')))
+            terrain_stats = _call_with_retry(lambda: terrain_stats_img.reduceRegion(
+                reducer=ee.Reducer.minMax().combine(ee.Reducer.mean(), sharedInputs=True),
+                geometry=roi,
+                scale=30,
+                maxPixels=1e9,
+                bestEffort=True,
+                tileScale=4
+            ).getInfo()) or {}
+            for band, target in (('elevation', 'elevation_m'), ('slope', 'slope_deg')):
+                topography[target] = {
+                    'min': terrain_stats.get(band + '_min'),
+                    'mean': terrain_stats.get(band + '_mean'),
+                    'max': terrain_stats.get(band + '_max')
+                }
+            sin_mean = terrain_stats.get('aspect_sin_mean')
+            cos_mean = terrain_stats.get('aspect_cos_mean')
+            if sin_mean is not None and cos_mean is not None and (abs(sin_mean) + abs(cos_mean)) > 1e-8:
+                topography['aspect_circular_mean_deg'] = round((math.degrees(math.atan2(sin_mean, cos_mean)) + 360.0) % 360.0, 1)
+        except Exception as topo_err:
+            print('[Climate Suitability API] SRTM terrain summary unavailable:', topo_err)
+
         # 6. Advisory Metni ve Yapılandırılmış JSON Yanıtı
         advisory_text = _generate_climate_advisory(
             species_key=species_key,
@@ -16645,6 +16699,37 @@ def api_climate_suitability():
                 'cmip6_models': cmip6_models,
                 'cmip6_baseline': '1995-2014 July-August ensemble mean',
                 'cmip6_target_window': f'{max(2015, target_year - 4)}-{min(2100, target_year + 4)} July-August ensemble mean',
+                'landsat_scale_m': landsat_scale,
+                'landsat_nominal_resolution_m': 30,
+                'cmip6_nominal_resolution_deg': 0.25,
+                'cmip6_nominal_resolution_km': 25,
+                'srtm_nominal_resolution_arcsec': 1,
+                'srtm_nominal_resolution_m': 30,
+                'topography': topography,
+                'historical_reference_year': timeline_hist[0]['year'] if timeline_hist else None,
+                'historical_reference_rule': 'first valid Landsat summer composite; calendar years with no valid observation are omitted, never interpolated',
+                'historical_composite_rule': 'annual median of valid Landsat 8/9 Collection 2 Tier 1 Level-2 scenes acquired July 1 through August 31 after QA_PIXEL cloud, cloud-shadow, cirrus and snow masking',
+                'indices': {
+                    'ndvi': '(NIR - RED) / (NIR + RED)',
+                    'ndwi': '(NIR - SWIR1) / (NIR + SWIR1)',
+                    'bsi': '((SWIR1 + RED) - (NIR + BLUE)) / ((SWIR1 + RED) + (NIR + BLUE))',
+                    'lst_celsius': 'ST_B10 * 0.00341802 + 149.0 - 273.15'
+                },
+                'stress_formula': {
+                    'past_lst': '60% normalized recent-temperature proximity + 40% normalized early-to-recent LST change',
+                    'past_ndwi': '60% normalized recent-moisture proximity + 40% normalized NDWI decline',
+                    'past_stress': '50% past LST stress + 50% past NDWI stress',
+                    'future_temperature': 'clamp(70 * Δtasmax / species temperature-stress threshold, 0, 100)',
+                    'future_precipitation': 'clamp(70 * max(0, -Δprecipitation%) / abs(species precipitation threshold), 0, 100)',
+                    'future_stress': '55% future-temperature stress + 45% future-precipitation stress',
+                    'csi': 'clamp(0.40 * past_stress + 0.60 * future_stress, 0, 100)',
+                    'topography': 'clamp(CSI + 15 * clamp(cos(aspect - 180°) * slope / 45°, -1, 1), 0, 100) for the mapped pixel layer'
+                },
+                'species_thresholds': {
+                    'lst_opt_c': lst_opt, 'lst_critical_c': lst_crit,
+                    'ndwi_opt': ndwi_opt, 'ndwi_critical': ndwi_crit,
+                    'delta_t_critical_c': dt_crit, 'delta_precipitation_critical_pct': dp_crit
+                },
                 'projected_lst_method': 'Landsat recent LST baseline plus CMIP6 tasmax anomaly; approximation, not direct CMIP6 LST',
                 'interpretation': 'screening-level climate stress projection; not a validated species distribution model'
             },
