@@ -865,6 +865,31 @@ def _remember_rebuilt_url(sid, url):
             _rebuilt_url_cache.pop(next(iter(_rebuilt_url_cache)), None)
 
 
+def _sylva_strip_gee_cache_query(url):
+    """Remove unsupported cache query parameters from Earth Engine tile URLs.
+
+    Earth Engine's REST tile endpoint rejects a query parameter named cache
+    (HTTP 400). The map id in the path already identifies a tile generation,
+    so this cache-buster is unnecessary.
+    """
+    if not isinstance(url, str) or not url:
+        return url
+    try:
+        parts = urllib.parse.urlsplit(url)
+        if (parts.hostname or '').lower() != 'earthengine.googleapis.com':
+            return url
+        query = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+        clean_query = [(key, value) for key, value in query if key.lower() != 'cache']
+        if len(clean_query) == len(query):
+            return url
+        return urllib.parse.urlunsplit((
+            parts.scheme, parts.netloc, parts.path,
+            urllib.parse.urlencode(clean_query, doseq=True), parts.fragment
+        ))
+    except Exception:
+        return url
+
+
 def _register_tile_session(url_format, params=None, kind='analyze', extra=None):
     """
     Bir GEE map id (tile url_format) için KARO SUNUMUNDA kullanılacak
@@ -882,7 +907,7 @@ def _register_tile_session(url_format, params=None, kind='analyze', extra=None):
     _register_analysis_session() kullanılır.
     """
     payload = {
-        'url_format': url_format,
+        'url_format': _sylva_strip_gee_cache_query(url_format),
         'kind': kind,
         'extra': dict(extra) if extra else {},
         'created': time.time(),
@@ -978,7 +1003,7 @@ def _rebuild_tile_session_url(session):
     else:
         image = final_display
     map_id = _call_with_retry(lambda: image.getMapId(vis), retries=1)
-    return map_id['tile_fetcher'].url_format
+    return _sylva_strip_gee_cache_query(map_id['tile_fetcher'].url_format)
 
 
 def _cache_get_tile(key):
@@ -8792,7 +8817,7 @@ def analyze():
             final_display, roi, result, vis, _unused_crs_probe = build_result_image(data)
             _sylva_check_cancelled()
             map_id = _call_with_retry(lambda: final_display.getMapId(vis))
-            tile_url_direct = map_id['tile_fetcher'].url_format
+            tile_url_direct = _sylva_strip_gee_cache_query(map_id['tile_fetcher'].url_format)
 
             meta = _rgb_scene_metadata(data, roi, image, ds)
 
@@ -8864,7 +8889,7 @@ def analyze():
         # katmanı artık düşüremez (aşağıda ayrıca güvenli varsayılana düşülür).
         _sylva_check_cancelled()
         map_id = _call_with_retry(lambda: final_display.getMapId(vis))
-        tile_url_direct = map_id['tile_fetcher'].url_format
+        tile_url_direct = _sylva_strip_gee_cache_query(map_id['tile_fetcher'].url_format)
 
         # Bu analizin doğal çözünürlüğü — tüm reduceRegion çağrıları bunu kullanır.
         _sylva_check_cancelled()
@@ -16598,7 +16623,7 @@ def api_climate_suitability():
             recent_lst_img = recent_median.select('ST_B10').multiply(0.00341802).add(149.0).subtract(273.15).clip(roi)
             vis_ndwi = {'min': -0.1, 'max': 0.4, 'palette': ['#d7191c', '#fdae61', '#ffffbf', '#a6d96a', '#1a9641']}
             map_ndwi = _call_with_retry(lambda: ndwi_img.getMapId(vis_ndwi), retries=1)
-            tile_ndwi = map_ndwi['tile_fetcher'].url_format
+            tile_ndwi = _sylva_strip_gee_cache_query(map_ndwi['tile_fetcher'].url_format)
 
             # 2. Topoğrafik bakı ve eğim düzeltmeli Gelecek Uygunluk Riski Katmanı
             srtm = ee.Image('USGS/SRTMGL1_003').clip(roi)
@@ -16614,7 +16639,7 @@ def api_climate_suitability():
             suit_raster = pixel_historical_stress.multiply(0.40).add(ee.Image.constant(fut_stress).multiply(0.60)).add(topo_mod.multiply(15.0)).clamp(0, 100).clip(roi)
             vis_suit = {'min': 0, 'max': 100, 'palette': ['#1a9850', '#91cf60', '#d9ef8b', '#fee08b', '#fc8d59', '#d73027']}
             map_suit = _call_with_retry(lambda: suit_raster.getMapId(vis_suit), retries=1)
-            tile_suit = map_suit['tile_fetcher'].url_format
+            tile_suit = _sylva_strip_gee_cache_query(map_suit['tile_fetcher'].url_format)
         except Exception as tile_err:
             print("[Climate Suitability API] Tile URL generation error:", tile_err)
             tile_ndwi = None
