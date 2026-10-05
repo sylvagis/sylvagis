@@ -16496,13 +16496,12 @@ def api_climate_suitability():
 
         def prep_fut(y):
             y_num = ee.Number(y)
-            fut_m = (gddp.filter(ee.Filter.eq('scenario', scenario))
-                     .filter(ee.Filter.calendarRange(y_num.subtract(4).max(2015), y_num.add(4).min(2100), 'year'))
-                     .filter(ee.Filter.calendarRange(7, 8, 'month'))
-                     .filterBounds(cmip_roi)
-                     .select(['tasmax', 'pr'])
-                     .mean())
-            stats = fut_m.reduceRegion(
+            fut_col = (gddp.filter(ee.Filter.eq('scenario', scenario))
+                       .filter(ee.Filter.calendarRange(y_num.subtract(4).max(2015), y_num.add(4).min(2100), 'year'))
+                       .filter(ee.Filter.calendarRange(7, 8, 'month'))
+                       .filterBounds(cmip_roi)
+                       .select(['tasmax', 'pr']))
+            ensemble_stats = fut_col.mean().reduceRegion(
                 reducer=ee.Reducer.mean(),
                 geometry=cmip_roi,
                 scale=25000,
@@ -16510,9 +16509,27 @@ def api_climate_suitability():
                 bestEffort=True,
                 tileScale=2
             )
-            return ee.Feature(None, stats.set('year', y_num))
+            model_ids = ee.List(fut_col.aggregate_array('model')).distinct()
 
-        fc_fut = ee.FeatureCollection(ee.List(milestones).map(prep_fut))
+            def prep_model(model):
+                model_stats = (fut_col.filter(ee.Filter.eq('model', model)).mean().reduceRegion(
+                    reducer=ee.Reducer.mean(),
+                    geometry=cmip_roi,
+                    scale=25000,
+                    maxPixels=1e9,
+                    bestEffort=True,
+                    tileScale=2
+                ))
+                return ee.Feature(None, model_stats
+                                  .set('year', y_num)
+                                  .set('model', model)
+                                  .set('ensemble_tasmax', ensemble_stats.get('tasmax'))
+                                  .set('ensemble_pr', ensemble_stats.get('pr')))
+
+            return ee.FeatureCollection(model_ids.map(prep_model))
+
+        # Keep the existing ensemble mean and add per-model regional values for P5-P95.
+        fc_fut = ee.FeatureCollection(ee.List(milestones).map(prep_fut)).flatten()
         fut_raw = _call_with_retry(lambda: fc_fut.getInfo()['features'])
 
         timeline_proj = []
@@ -16520,28 +16537,57 @@ def api_climate_suitability():
         delta_t_target = None
         delta_p_pct_target = None
 
-        for f in fut_raw:
-            p = f.get('properties') or {}
-            if p.get('year') is None:
+        fut_by_year = {}
+        for feature in fut_raw:
+            props = feature.get('properties') or {}
+            if props.get('year') is None:
                 continue
-            m_year = int(p['year'])
-            f_tasmax = p.get('tasmax')
-            f_pr = p.get('pr')
-            if f_tasmax is None or f_pr is None:
+            model_year = int(float(props['year']))
+            fut_by_year.setdefault(model_year, []).append(props)
+
+        def climate_percentile(values, percentile):
+            ordered = sorted(float(value) for value in values if value is not None and math.isfinite(float(value)))
+            if not ordered:
+                return None
+            position = (len(ordered) - 1) * percentile / 100.0
+            lower_index = int(math.floor(position))
+            upper_index = min(len(ordered) - 1, lower_index + 1)
+            fraction = position - lower_index
+            return ordered[lower_index] + (ordered[upper_index] - ordered[lower_index]) * fraction
+
+        for m_year in milestones:
+            model_rows = fut_by_year.get(m_year) or []
+            if not model_rows:
                 continue
-            d_t = float(f_tasmax) - float(base_tasmax)
-            d_p_pct = ((float(f_pr) - float(base_pr)) / float(base_pr)) * 100.0
+            ensemble_tasmax = next((row.get('ensemble_tasmax') for row in model_rows if row.get('ensemble_tasmax') is not None), None)
+            ensemble_pr = next((row.get('ensemble_pr') for row in model_rows if row.get('ensemble_pr') is not None), None)
+            if ensemble_tasmax is None or ensemble_pr is None:
+                continue
+
+            d_t = float(ensemble_tasmax) - float(base_tasmax)
+            d_p_pct = ((float(ensemble_pr) - float(base_pr)) / float(base_pr)) * 100.0
+            model_projected_lst = [
+                recent_lst_base + (float(row['tasmax']) - float(base_tasmax))
+                for row in model_rows if row.get('tasmax') is not None
+            ]
+            lower90 = climate_percentile(model_projected_lst, 5)
+            upper90 = climate_percentile(model_projected_lst, 95)
 
             if m_year == target_year:
                 delta_t_target = d_t
                 delta_p_pct_target = d_p_pct
 
-            timeline_proj.append({
+            projection_item = {
                 'year': m_year,
                 'temp_increase': round(d_t, 2),
                 'pr_anomaly_pct': round(d_p_pct, 1),
                 'projected_lst': round(recent_lst_base + d_t, 1)
-            })
+            }
+            if lower90 is not None and upper90 is not None:
+                projection_item['projected_lst_p05'] = round(lower90, 1)
+                projection_item['projected_lst_p95'] = round(upper90, 1)
+                projection_item['cmip6_model_count'] = len(model_projected_lst)
+            timeline_proj.append(projection_item)
 
         if delta_t_target is None or delta_p_pct_target is None:
             return jsonify({
