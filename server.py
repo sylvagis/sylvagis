@@ -13586,7 +13586,7 @@ CARBON_SPECIES_DEFAULTS = {
     },
     'pinus_sylvestris': {
         'sci_name': 'Pinus sylvestris', 'common_tr': 'Sarıçam', 'common_en': 'Scots Pine',
-        'wood_density': 0.49, 'root_shoot_ratio': 0.27, 'bef': 1.30, 'default_mai': 5.0,
+        'wood_density': 0.42, 'root_shoot_ratio': 0.23, 'bef': 1.25, 'carbon_fraction': 0.51, 'default_mai': 5.0,
         'group': 'conifer',
         'aliases': ['pinus sylvestris', 'saricam', 'sarıçam', 'scots pine', 'scotch pine']
     },
@@ -13610,7 +13610,7 @@ CARBON_SPECIES_DEFAULTS = {
     },
     'pinus_taeda': {
         'sci_name': 'Pinus taeda', 'common_tr': 'Loblolly Çamı', 'common_en': 'Loblolly Pine',
-        'wood_density': 0.47, 'root_shoot_ratio': 0.25, 'bef': 1.25, 'default_mai': 12.0,
+        'wood_density': 0.47, 'root_shoot_ratio': 0.22, 'bef': 1.28, 'carbon_fraction': 0.50, 'default_mai': 12.0,
         'group': 'conifer',
         'aliases': ['pinus taeda', 'loblolly pine', 'loblolly cami']
     },
@@ -13634,7 +13634,7 @@ CARBON_SPECIES_DEFAULTS = {
     },
     'picea_abies': {
         'sci_name': 'Picea abies', 'common_tr': 'Avrupa Ladini', 'common_en': 'Norway Spruce',
-        'wood_density': 0.44, 'root_shoot_ratio': 0.29, 'bef': 1.35, 'default_mai': 8.0,
+        'wood_density': 0.38, 'root_shoot_ratio': 0.25, 'bef': 1.30, 'carbon_fraction': 0.51, 'default_mai': 8.0,
         'group': 'conifer',
         'aliases': ['picea abies', 'avrupa ladini', 'norway spruce', 'ladin']
     },
@@ -13664,7 +13664,7 @@ CARBON_SPECIES_DEFAULTS = {
     },
     'pseudotsuga_menziesii': {
         'sci_name': 'Pseudotsuga menziesii', 'common_tr': 'Douglas Göknarı', 'common_en': 'Douglas Fir',
-        'wood_density': 0.45, 'root_shoot_ratio': 0.26, 'bef': 1.25, 'default_mai': 11.0,
+        'wood_density': 0.45, 'root_shoot_ratio': 0.20, 'bef': 1.22, 'carbon_fraction': 0.51, 'default_mai': 11.0,
         'group': 'conifer',
         'aliases': ['pseudotsuga menziesii', 'douglas fir', 'douglas goknari', 'douglas göknarı']
     },
@@ -13678,7 +13678,7 @@ CARBON_SPECIES_DEFAULTS = {
     },
     'fagus_sylvatica': {
         'sci_name': 'Fagus sylvatica', 'common_tr': 'Avrupa Kayını', 'common_en': 'European Beech',
-        'wood_density': 0.66, 'root_shoot_ratio': 0.23, 'bef': 1.40, 'default_mai': 6.5,
+        'wood_density': 0.58, 'root_shoot_ratio': 0.21, 'bef': 1.35, 'carbon_fraction': 0.48, 'default_mai': 6.5,
         'group': 'broadleaf',
         'aliases': ['fagus sylvatica', 'avrupa kayini', 'avrupa kayını', 'european beech', 'beech']
     },
@@ -13690,7 +13690,7 @@ CARBON_SPECIES_DEFAULTS = {
     },
     'quercus_robur': {
         'sci_name': 'Quercus robur', 'common_tr': 'Saplı Meşe', 'common_en': 'Pedunculate Oak',
-        'wood_density': 0.68, 'root_shoot_ratio': 0.24, 'bef': 1.45, 'default_mai': 4.0,
+        'wood_density': 0.57, 'root_shoot_ratio': 0.24, 'bef': 1.40, 'carbon_fraction': 0.48, 'default_mai': 4.0,
         'group': 'broadleaf',
         'aliases': [
             'quercus robur', 'quercus robur / petraea', 'mese', 'meşe', 'sapli mese', 'saplı meşe',
@@ -13717,7 +13717,7 @@ CARBON_SPECIES_DEFAULTS = {
     },
     'tectona_grandis': {
         'sci_name': 'Tectona grandis', 'common_tr': 'Tik Ağacı', 'common_en': 'Teak',
-        'wood_density': 0.60, 'root_shoot_ratio': 0.25, 'bef': 1.30, 'default_mai': 9.0,
+        'wood_density': 0.55, 'root_shoot_ratio': 0.23, 'bef': 1.30, 'carbon_fraction': 0.48, 'default_mai': 9.0,
         'group': 'broadleaf',
         'aliases': ['tectona grandis', 'tik agaci', 'tik ağacı', 'teak']
     },
@@ -13825,9 +13825,68 @@ CARBON_SPECIES_DEFAULTS = {
     },
     'eucalyptus_grandis': {
         'sci_name': 'Eucalyptus grandis', 'common_tr': 'Gül Okaliptüs', 'common_en': 'Rose Gum / Flooded Gum',
-        'wood_density': 0.55, 'root_shoot_ratio': 0.19, 'bef': 1.24, 'default_mai': 22.0,
+        'wood_density': 0.50, 'root_shoot_ratio': 0.18, 'bef': 1.20, 'carbon_fraction': 0.48, 'default_mai': 22.0,
         'group': 'broadleaf',
         'aliases': ['eucalyptus grandis', 'flooded gum', 'rose gum', 'gul okaliptus']
+    },
+    # Tür düzeyindeki ilave varsayılanlar literatür temelli projeksiyon girdileridir.
+    # MAI değerleri saha ölçümü değil; yayımlanmış tür/yetişme ortamı verilerinden
+    # seçilmiş planlama referanslarıdır. Parametre kaynakları UI'da Latince adla kalır.
+    'araucaria_angustifolia': {
+        'sci_name': 'Araucaria angustifolia', 'common_tr': 'Parana Çamı', 'common_en': 'Brazilian Pine',
+        'wood_density': 0.44, 'root_shoot_ratio': 0.22, 'bef': 1.26, 'carbon_fraction': 0.50,
+        'default_mai': 12.0, 'group': 'conifer',
+        'aliases': ['araucaria angustifolia', 'parana pine', 'brazilian pine'],
+        'growth_source': 'FAO planted-forest MAI range; representative value for screening.'
+    },
+    'cunninghamia_lanceolata': {
+        'sci_name': 'Cunninghamia lanceolata', 'common_tr': 'Çin Köknarı', 'common_en': 'Chinese Fir',
+        'wood_density': 0.35, 'root_shoot_ratio': 0.21, 'bef': 1.25, 'carbon_fraction': 0.50,
+        'default_mai': 28.0, 'group': 'conifer',
+        'aliases': ['cunninghamia lanceolata', 'chinese fir'],
+        'growth_source': 'Published southern Brazil plantation increment at age 21; regional estimate.'
+    },
+    'cryptomeria_japonica': {
+        'sci_name': 'Cryptomeria japonica', 'common_tr': 'Japon Kriptomeryası', 'common_en': 'Japanese Cedar',
+        'wood_density': 0.32, 'root_shoot_ratio': 0.24, 'bef': 1.28, 'carbon_fraction': 0.51,
+        'default_mai': 8.0, 'group': 'conifer',
+        'aliases': ['cryptomeria japonica', 'sugi', 'japanese cedar'],
+        'growth_source': 'FAO planted-forest database species MAI.'
+    },
+    'larix_gmelinii': {
+        'sci_name': 'Larix gmelinii', 'common_tr': 'Dahurya Melezi', 'common_en': 'Dahurian Larch',
+        'wood_density': 0.49, 'root_shoot_ratio': 0.26, 'bef': 1.24, 'carbon_fraction': 0.51,
+        'default_mai': 2.3, 'group': 'conifer',
+        'aliases': ['larix gmelinii', 'dahurian larch'],
+        'growth_source': 'Derived from published regional plantation mean stand volume / mean age; screening estimate.'
+    },
+    'acacia_senegal': {
+        'sci_name': 'Acacia senegal', 'common_tr': 'Arap Zamkı Ağacı', 'common_en': 'Gum Arabic Tree',
+        'wood_density': 0.65, 'root_shoot_ratio': 0.38, 'bef': 1.45, 'carbon_fraction': 0.47,
+        'default_mai': 2.64, 'group': 'broadleaf',
+        'aliases': ['acacia senegal', 'senegalia senegal', 'gum arabic tree', 'gum acacia'],
+        'growth_source': 'Published 15-year farmer plantation volume estimate in northern Cameroon.'
+    },
+    'senegalia_senegal': {
+        'sci_name': 'Senegalia senegal', 'common_tr': 'Arap Zamkı Ağacı', 'common_en': 'Gum Arabic Tree',
+        'wood_density': 0.65, 'root_shoot_ratio': 0.38, 'bef': 1.45, 'carbon_fraction': 0.47,
+        'default_mai': 2.64, 'group': 'broadleaf',
+        'aliases': ['senegalia senegal', 'acacia senegal', 'gum arabic tree', 'gum acacia'],
+        'growth_source': 'Published 15-year farmer plantation volume estimate in northern Cameroon.'
+    },
+    'pinus_patula': {
+        'sci_name': 'Pinus patula', 'common_tr': 'Patula Çamı', 'common_en': 'Patula Pine',
+        'wood_density': 0.40, 'root_shoot_ratio': 0.20, 'bef': 1.25, 'carbon_fraction': 0.50,
+        'default_mai': 20.0, 'group': 'conifer',
+        'aliases': ['pinus patula', 'patula pine'],
+        'growth_source': 'FAO planted-forest MAI range; representative value for screening.'
+    },
+    'khaya_senegalensis': {
+        'sci_name': 'Khaya senegalensis', 'common_tr': 'Afrika Maunu', 'common_en': 'African Mahogany',
+        'wood_density': 0.60, 'root_shoot_ratio': 0.25, 'bef': 1.38, 'carbon_fraction': 0.48,
+        'default_mai': 3.31, 'group': 'broadleaf',
+        'aliases': ['khaya senegalensis', 'african mahogany'],
+        'growth_source': 'Published four-year Brazilian plantation mean annual increment.'
     },
     'populus_nigra': {
         'sci_name': 'Populus nigra', 'common_tr': 'Kara Kavak', 'common_en': 'Black Poplar',
@@ -14594,6 +14653,7 @@ def resolve_species_carbon_params(species_name: str, country_code: str = 'TR', c
     base_r = float(base_sp['root_shoot_ratio'])
     base_bef = float(base_sp['bef'])
     base_mai = float(base_sp['default_mai'])
+    species_cf = float(base_sp.get('carbon_fraction') or CARBON_FRACTION)
     group = str(base_sp.get('group', 'conifer')).lower()
 
     dw = round(base_dw * float(eco['wood_density_mod']), 3)
@@ -14621,7 +14681,7 @@ def resolve_species_carbon_params(species_name: str, country_code: str = 'TR', c
         'default_mai': mai,
         'base_mai': base_mai,
         'group': group,
-        'carbon_fraction': CARBON_FRACTION,
+        'carbon_fraction': species_cf,
         'co2_to_c_ratio': CO2_TO_C_RATIO,
         'match_level': match_level,
         'matched_key': matched_key,
@@ -14636,6 +14696,7 @@ def resolve_species_carbon_params(species_name: str, country_code: str = 'TR', c
         'asymptotic_total_biomass': asymptotic_total_biomass,
         'growth_k': k,
         'shape_p': p,
+        'growth_source': base_sp.get('growth_source', 'Species MAI with class-calibrated Chapman-Richards curve; no species-specific fitted curve recorded.'),
         'common_tr': base_sp.get('common_tr', ''),
         'common_en': base_sp.get('common_en', '')
     }
@@ -15540,6 +15601,7 @@ def simulate_carbon_stand(
         'common_en': sp.get('common_en', ''),
         'match_level': sp.get('match_level', 'unknown'),
         'matched_key': sp.get('matched_key', ''),
+        'growth_source': sp.get('growth_source', 'Species MAI with class-calibrated Chapman-Richards curve; no species-specific fitted curve recorded.'),
         'country_code': sp.get('country_code', ''),
         'climate_zone': sp.get('climate_zone', ''),
         'ecozone_code': sp.get('ecozone_code', ''),
@@ -15840,16 +15902,892 @@ def api_carbon_simulation():
 
         clean_resp = _sanitize_for_json(resp_payload)
         return jsonify(clean_resp)
+    except ee.EEException as ee_err:
+        traceback.print_exc()
+        err_msg = str(ee_err)
+        if 'User memory limit exceeded' in err_msg:
+            user_err = 'Çalışma alanı Earth Engine bellek sınırını aştı. Lütfen daha küçük bir alan seçin veya analizi tekrarlayın.'
+        elif 'computation timed out' in err_msg.lower():
+            user_err = 'Earth Engine hesaplama zaman aşımına uğradı. Lütfen birkaç saniye sonra tekrar deneyin.'
+        else:
+            user_err = f'Earth Engine hatası: {err_msg}'
+        return jsonify({'success': False, 'error': user_err}), 503
     except Exception as exc:
         traceback.print_exc()
-        return jsonify({'success': False, 'error': str(exc)}), 200
+        return jsonify({'success': False, 'error': f'Simülasyon hesaplanırken bir hata oluştu: {str(exc)}'}), 200
 
+
+
+# ==============================================================================
+# 🌲 İKLİM UYGUNLUĞU VE SİLVİKÜLTÜREL KARAR DESTEK SİSTEMİ (CLIMATE SUITABILITY)
+# ==============================================================================
+
+SPECIES_CLIMATE_THRESHOLDS = {
+    # ── A. İbreli (Gymnosperm / Coniferous) Türler ──
+    'abies_alba': {
+        'name': 'Abies alba',
+        'lst_opt': 21.0, 'lst_crit': 28.0,
+        'ndwi_opt': 0.32, 'ndwi_crit': 0.14,
+        'p_min': 800, 'delta_t_crit': 1.7, 'delta_p_crit': -15.0,
+        'tolerance_note': 'Yarı nemli montan zon; sıcak hava dalgalarına ve kuraklığa hassas.'
+    },
+    'abies_nordmanniana': {
+        'name': 'Abies nordmanniana',
+        'lst_opt': 22.0, 'lst_crit': 28.0,
+        'ndwi_opt': 0.30, 'ndwi_crit': 0.12,
+        'p_min': 900, 'delta_t_crit': 1.6, 'delta_p_crit': -12.0,
+        'tolerance_note': 'Yüksek hava nemi bağımlısı, derin nemli toprak istekli, kuraklık hassasiyeti yüksek.'
+    },
+    'araucaria_angustifolia': {
+        'name': 'Araucaria angustifolia',
+        'lst_opt': 22.0, 'lst_crit': 29.0,
+        'ndwi_opt': 0.32, 'ndwi_crit': 0.15,
+        'p_min': 1200, 'delta_t_crit': 1.8, 'delta_p_crit': -15.0,
+        'tolerance_note': 'Subtropikal nemli yüksek platolar; kuraklık stresi toleransı düşük.'
+    },
+    'cedrus_atlantica': {
+        'name': 'Cedrus atlantica',
+        'lst_opt': 27.0, 'lst_crit': 35.0,
+        'ndwi_opt': 0.20, 'ndwi_crit': 0.04,
+        'p_min': 500, 'delta_t_crit': 3.0, 'delta_p_crit': -28.0,
+        'tolerance_note': 'Kuzey Afrika Atlas Dağları; kurak ve taşlık dağ yamaçlarına dayanıklı.'
+    },
+    'cedrus_libani': {
+        'name': 'Cedrus libani',
+        'lst_opt': 26.0, 'lst_crit': 34.0,
+        'ndwi_opt': 0.20, 'ndwi_crit': 0.05,
+        'p_min': 550, 'delta_t_crit': 2.8, 'delta_p_crit': -25.0,
+        'tolerance_note': 'Yarı kurak kireçli dağlık arazi adaptasyonu yüksek, derin köklenme.'
+    },
+    'cryptomeria_japonica': {
+        'name': 'Cryptomeria japonica',
+        'lst_opt': 23.0, 'lst_crit': 29.0,
+        'ndwi_opt': 0.34, 'ndwi_crit': 0.16,
+        'p_min': 1100, 'delta_t_crit': 1.8, 'delta_p_crit': -12.0,
+        'tolerance_note': 'Doğu Asya montan kuşak; yüksek nem ve düzenli bol yağış isteyen tür.'
+    },
+    'cupressus_sempervirens': {
+        'name': 'Cupressus sempervirens',
+        'lst_opt': 32.0, 'lst_crit': 40.0,
+        'ndwi_opt': 0.16, 'ndwi_crit': 0.01,
+        'p_min': 350, 'delta_t_crit': 4.0, 'delta_p_crit': -35.0,
+        'tolerance_note': 'Akdeniz Havzası; aşırı kuraklık, yüksek sıcaklık ve taşlık yamaç direnci çok yüksek.'
+    },
+    'larix_gmelinii': {
+        'name': 'Larix gmelinii',
+        'lst_opt': 19.0, 'lst_crit': 26.0,
+        'ndwi_opt': 0.26, 'ndwi_crit': 0.08,
+        'p_min': 250, 'delta_t_crit': 2.0, 'delta_p_crit': -18.0,
+        'tolerance_note': 'Kuzey Asya Sibirya Taygası; aşırı soğuk karasal iklim ve permafrost uyumlu.'
+    },
+    'picea_abies': {
+        'name': 'Picea abies',
+        'lst_opt': 20.0, 'lst_crit': 27.0,
+        'ndwi_opt': 0.30, 'ndwi_crit': 0.14,
+        'p_min': 650, 'delta_t_crit': 1.5, 'delta_p_crit': -12.0,
+        'tolerance_note': 'Kuzey ve Orta Avrupa; yüzeysel köklü, kuraklık ve kabuk böceği baskısına aşırı duyarlı.'
+    },
+    'picea_glauca': {
+        'name': 'Picea glauca',
+        'lst_opt': 19.0, 'lst_crit': 26.0,
+        'ndwi_opt': 0.28, 'ndwi_crit': 0.12,
+        'p_min': 400, 'delta_t_crit': 1.6, 'delta_p_crit': -14.0,
+        'tolerance_note': 'Kuzey Amerika Boreal kuşağı; soğuk karasal biyom, ani sıcaklık artışlarına hassas.'
+    },
+    'picea_orientalis': {
+        'name': 'Picea orientalis',
+        'lst_opt': 21.0, 'lst_crit': 27.0,
+        'ndwi_opt': 0.32, 'ndwi_crit': 0.15,
+        'p_min': 1000, 'delta_t_crit': 1.5, 'delta_p_crit': -10.0,
+        'tolerance_note': 'Kafkaslar ve Doğu Karadeniz; sürekli nem ve serin iklim, yüksek LST tepe kuruması riski.'
+    },
+    'pinus_brutia': {
+        'name': 'Pinus brutia',
+        'lst_opt': 31.0, 'lst_crit': 38.0,
+        'ndwi_opt': 0.18, 'ndwi_crit': 0.02,
+        'p_min': 400, 'delta_t_crit': 3.5, 'delta_p_crit': -30.0,
+        'tolerance_note': 'Doğu Akdeniz klimaks türü; yüksek sıcaklık, yaz kuraklığı ve yangın adaptasyonu yüksek.'
+    },
+    'pinus_caribaea': {
+        'name': 'Pinus caribaea',
+        'lst_opt': 30.0, 'lst_crit': 37.0,
+        'ndwi_opt': 0.24, 'ndwi_crit': 0.06,
+        'p_min': 900, 'delta_t_crit': 3.0, 'delta_p_crit': -25.0,
+        'tolerance_note': 'Orta Amerika ve Tropikal Kuşak; düşük rakım çamı, yüksek sıcaklığa dayanıklı.'
+    },
+    'pinus_kesiya': {
+        'name': 'Pinus kesiya',
+        'lst_opt': 26.0, 'lst_crit': 33.0,
+        'ndwi_opt': 0.24, 'ndwi_crit': 0.06,
+        'p_min': 800, 'delta_t_crit': 2.5, 'delta_p_crit': -22.0,
+        'tolerance_note': 'Güneydoğu Asya; montan subtropikal kuşak, mevsimlik kuraklığa toleranslı.'
+    },
+    'pinus_koraiensis': {
+        'name': 'Pinus koraiensis',
+        'lst_opt': 21.0, 'lst_crit': 28.0,
+        'ndwi_opt': 0.28, 'ndwi_crit': 0.11,
+        'p_min': 600, 'delta_t_crit': 1.9, 'delta_p_crit': -16.0,
+        'tolerance_note': 'Kuzeydoğu Asya Kore/Mançurya; soğuk ılıman iklim, karışık orman kuşağı.'
+    },
+    'pinus_nigra': {
+        'name': 'Pinus nigra',
+        'lst_opt': 26.0, 'lst_crit': 33.0,
+        'ndwi_opt': 0.22, 'ndwi_crit': 0.08,
+        'p_min': 500, 'delta_t_crit': 2.5, 'delta_p_crit': -20.0,
+        'tolerance_note': 'Güney Avrupa ve Anadolu; karasal iklim, kalkerli topraklar ve kuraklık direnci iyi.'
+    },
+    'pinus_ponderosa': {
+        'name': 'Pinus ponderosa',
+        'lst_opt': 28.0, 'lst_crit': 35.0,
+        'ndwi_opt': 0.20, 'ndwi_crit': 0.04,
+        'p_min': 400, 'delta_t_crit': 3.0, 'delta_p_crit': -25.0,
+        'tolerance_note': 'Kuzey Amerika Batı kuşağı; kurak dağ etekleri ve yangın baskısına dayanıklı kalın kabuk.'
+    },
+    'pinus_radiata': {
+        'name': 'Pinus radiata',
+        'lst_opt': 24.0, 'lst_crit': 31.0,
+        'ndwi_opt': 0.26, 'ndwi_crit': 0.08,
+        'p_min': 650, 'delta_t_crit': 2.2, 'delta_p_crit': -18.0,
+        'tolerance_note': 'Kuzey Amerika kıyı ve küresel plantasyonlar; ılıman kıyı iklimi, hızlı gelişim.'
+    },
+    'pinus_sylvestris': {
+        'name': 'Pinus sylvestris',
+        'lst_opt': 23.0, 'lst_crit': 29.0,
+        'ndwi_opt': 0.25, 'ndwi_crit': 0.10,
+        'p_min': 450, 'delta_t_crit': 1.8, 'delta_p_crit': -15.0,
+        'tolerance_note': 'Avrasya Boreal ve Dağ Kuşağı; güney sınırlarında kuraklık ve sıcaklık artışına duyarlı.'
+    },
+    'pinus_taeda': {
+        'name': 'Pinus taeda',
+        'lst_opt': 28.0, 'lst_crit': 35.0,
+        'ndwi_opt': 0.26, 'ndwi_crit': 0.08,
+        'p_min': 1000, 'delta_t_crit': 2.8, 'delta_p_crit': -20.0,
+        'tolerance_note': 'Kuzey Amerika Güneydoğu; sıcak nemli subtropikal biyom, endüstriyel plantasyon standardı.'
+    },
+    'pseudotsuga_menziesii': {
+        'name': 'Pseudotsuga menziesii',
+        'lst_opt': 23.0, 'lst_crit': 30.0,
+        'ndwi_opt': 0.28, 'ndwi_crit': 0.10,
+        'p_min': 750, 'delta_t_crit': 2.0, 'delta_p_crit': -16.0,
+        'tolerance_note': 'Kuzey Amerika Pasifik ve küresel ormanlar; ılıman derin topraklar, aşırı yaz kuraklığına duyarlı.'
+    },
+
+    # ── B. Geniş Yapraklı (Angiosperm / Broadleaved) Türler ──
+    'acacia_senegal': {
+        'name': 'Acacia senegal',
+        'lst_opt': 36.0, 'lst_crit': 44.0,
+        'ndwi_opt': 0.12, 'ndwi_crit': -0.05,
+        'p_min': 200, 'delta_t_crit': 4.5, 'delta_p_crit': -40.0,
+        'tolerance_note': 'Afrika Sahel Kuşağı; ekstrem kuraklık, çölleşme bariyeri ve yüksek sıcaklık adaptasyonu.'
+    },
+    'senegalia_senegal': {
+        'name': 'Acacia senegal',
+        'lst_opt': 36.0, 'lst_crit': 44.0,
+        'ndwi_opt': 0.12, 'ndwi_crit': -0.05,
+        'p_min': 200, 'delta_t_crit': 4.5, 'delta_p_crit': -40.0,
+        'tolerance_note': 'Afrika Sahel Kuşağı; ekstrem kuraklık, çölleşme bariyeri ve yüksek sıcaklık adaptasyonu.'
+    },
+    'acer_saccharum': {
+        'name': 'Acer saccharum',
+        'lst_opt': 22.0, 'lst_crit': 29.0,
+        'ndwi_opt': 0.32, 'ndwi_crit': 0.12,
+        'p_min': 800, 'delta_t_crit': 1.8, 'delta_p_crit': -14.0,
+        'tolerance_note': 'Kuzey Amerika Doğu; ılıman zengin nemli topraklar, yaz sıcak dalgalarına duyarlı.'
+    },
+    'alnus_glutinosa': {
+        'name': 'Alnus glutinosa',
+        'lst_opt': 22.0, 'lst_crit': 28.0,
+        'ndwi_opt': 0.36, 'ndwi_crit': 0.18,
+        'p_min': 600, 'delta_t_crit': 1.5, 'delta_p_crit': -10.0,
+        'tolerance_note': 'Avrasya; yüksek taban suyu ve akarsu boyları, kuraklık toleransı en düşük taksonlardan.'
+    },
+    'betula_pendula': {
+        'name': 'Betula pendula',
+        'lst_opt': 21.0, 'lst_crit': 27.0,
+        'ndwi_opt': 0.28, 'ndwi_crit': 0.11,
+        'p_min': 450, 'delta_t_crit': 1.7, 'delta_p_crit': -14.0,
+        'tolerance_note': 'Avrasya Soğuk ve Ilıman Kuşağı; öncü tür, aşırı sıcaklık ve kuraklıkta erken yaprak dökümü.'
+    },
+    'castanea_sativa': {
+        'name': 'Castanea sativa',
+        'lst_opt': 25.0, 'lst_crit': 32.0,
+        'ndwi_opt': 0.28, 'ndwi_crit': 0.09,
+        'p_min': 700, 'delta_t_crit': 2.2, 'delta_p_crit': -18.0,
+        'tolerance_note': 'Güney Avrupa ve Batı Asya; asidik toprak, serin nemli yamaçlar, kuraklık stresi mürekkep riski.'
+    },
+    'eucalyptus_camaldulensis': {
+        'name': 'Eucalyptus camaldulensis',
+        'lst_opt': 32.0, 'lst_crit': 41.0,
+        'ndwi_opt': 0.18, 'ndwi_crit': 0.02,
+        'p_min': 300, 'delta_t_crit': 3.8, 'delta_p_crit': -32.0,
+        'tolerance_note': 'Avustralya, Afrika ve Akdeniz; yüksek sıcaklık ve kurak mevsime dayanıklı derin kök.'
+    },
+    'eucalyptus_grandis': {
+        'name': 'Eucalyptus grandis',
+        'lst_opt': 27.0, 'lst_crit': 34.0,
+        'ndwi_opt': 0.28, 'ndwi_crit': 0.09,
+        'p_min': 1000, 'delta_t_crit': 2.4, 'delta_p_crit': -20.0,
+        'tolerance_note': 'Güney Amerika ve Afrika plantasyonları; hızlı büyüyen subtropikal tür, don hassasiyeti yüksek.'
+    },
+    'fagus_grandifolia': {
+        'name': 'Fagus grandifolia',
+        'lst_opt': 23.0, 'lst_crit': 30.0,
+        'ndwi_opt': 0.30, 'ndwi_crit': 0.12,
+        'p_min': 850, 'delta_t_crit': 1.8, 'delta_p_crit': -14.0,
+        'tolerance_note': 'Kuzey Amerika Doğu; ılıman karışık ormanlar, derin nemli toprak istekli.'
+    },
+    'fagus_orientalis': {
+        'name': 'Fagus orientalis',
+        'lst_opt': 24.0, 'lst_crit': 31.0,
+        'ndwi_opt': 0.28, 'ndwi_crit': 0.10,
+        'p_min': 750, 'delta_t_crit': 2.0, 'delta_p_crit': -15.0,
+        'tolerance_note': 'Karadeniz, Hazar ve Kafkaslar; yüksek bağıl nem ve sis bağımlısı, NDWI kaybına aşırı duyarlı.'
+    },
+    'fagus_sylvatica': {
+        'name': 'Fagus sylvatica',
+        'lst_opt': 23.0, 'lst_crit': 30.0,
+        'ndwi_opt': 0.30, 'ndwi_crit': 0.12,
+        'p_min': 650, 'delta_t_crit': 1.8, 'delta_p_crit': -12.0,
+        'tolerance_note': 'Orta ve Batı Avrupa; mezofit nemli orman türü, kuraklık stresi ve yaz ısı dalgalarına hassas.'
+    },
+    'khaya_senegalensis': {
+        'name': 'Khaya senegalensis',
+        'lst_opt': 33.0, 'lst_crit': 41.0,
+        'ndwi_opt': 0.20, 'ndwi_crit': 0.03,
+        'p_min': 650, 'delta_t_crit': 3.5, 'delta_p_crit': -28.0,
+        'tolerance_note': 'Afrika Sudan ve Gine Savan Kuşağı; kurak mevsimi belirgin tropikal ağaç, yüksek sıcaklığa dayanıklı.'
+    },
+    'milicia_excelsa': {
+        'name': 'Milicia excelsa',
+        'lst_opt': 28.0, 'lst_crit': 34.0,
+        'ndwi_opt': 0.32, 'ndwi_crit': 0.12,
+        'p_min': 1200, 'delta_t_crit': 2.2, 'delta_p_crit': -18.0,
+        'tolerance_note': 'Tropikal Afrika İroko Kuşağı; nemli tropikal yaprak döken ormanlar, kuraklaşmaya duyarlı.'
+    },
+    'olea_europaea': {
+        'name': 'Olea europaea',
+        'lst_opt': 33.0, 'lst_crit': 42.0,
+        'ndwi_opt': 0.15, 'ndwi_crit': -0.02,
+        'p_min': 300, 'delta_t_crit': 4.2, 'delta_p_crit': -38.0,
+        'tolerance_note': 'Akdeniz Havzası; ekstrem yaz kuraklığı, düşük su içeriği ve yüksek LST toleransı.'
+    },
+    'populus_tremuloides': {
+        'name': 'Populus tremuloides',
+        'lst_opt': 21.0, 'lst_crit': 28.0,
+        'ndwi_opt': 0.28, 'ndwi_crit': 0.10,
+        'p_min': 400, 'delta_t_crit': 1.7, 'delta_p_crit': -15.0,
+        'tolerance_note': 'Kuzey Amerika Boreal/Montan; klonlaşan öncü tür, ani hidrolik bozulmaya duyarlı.'
+    },
+    'quercus_alba': {
+        'name': 'Quercus alba',
+        'lst_opt': 25.0, 'lst_crit': 33.0,
+        'ndwi_opt': 0.26, 'ndwi_crit': 0.08,
+        'p_min': 800, 'delta_t_crit': 2.5, 'delta_p_crit': -20.0,
+        'tolerance_note': 'Kuzey Amerika Doğu; geniş yayılışlı sert odunlu tür, ılıman nem dengesi.'
+    },
+    'quercus_cerris': {
+        'name': 'Quercus cerris',
+        'lst_opt': 28.0, 'lst_crit': 36.0,
+        'ndwi_opt': 0.20, 'ndwi_crit': 0.04,
+        'p_min': 450, 'delta_t_crit': 3.0, 'delta_p_crit': -25.0,
+        'tolerance_note': 'Güney Avrupa ve Anadolu; yarı kurak karasal geçiş kuşakları, kuraklık adaptasyonu yüksek.'
+    },
+    'quercus_ilex': {
+        'name': 'Quercus ilex',
+        'lst_opt': 30.0, 'lst_crit': 38.0,
+        'ndwi_opt': 0.18, 'ndwi_crit': 0.02,
+        'p_min': 400, 'delta_t_crit': 3.5, 'delta_p_crit': -30.0,
+        'tolerance_note': 'Akdeniz Havzası; sklerofil herdem yeşil, aşırı sıcaklık ve kuraklık dayanımı yüksek.'
+    },
+    'quercus_petraea': {
+        'name': 'Quercus petraea',
+        'lst_opt': 26.0, 'lst_crit': 33.0,
+        'ndwi_opt': 0.24, 'ndwi_crit': 0.07,
+        'p_min': 550, 'delta_t_crit': 2.6, 'delta_p_crit': -20.0,
+        'tolerance_note': 'Avrupa ve Ön Asya; montan kuşak meşesi, ılıman nem dengesi, derin köklenme.'
+    },
+    'quercus_robur': {
+        'name': 'Quercus robur',
+        'lst_opt': 24.0, 'lst_crit': 31.0,
+        'ndwi_opt': 0.28, 'ndwi_crit': 0.10,
+        'p_min': 600, 'delta_t_crit': 2.0, 'delta_p_crit': -16.0,
+        'tolerance_note': 'Avrasya Ilıman Kuşağı; alüvyal taban araziler ve derin topraklar, kuraklaşan taban suyuna duyarlı.'
+    },
+    'quercus_suber': {
+        'name': 'Quercus suber',
+        'lst_opt': 30.0, 'lst_crit': 38.0,
+        'ndwi_opt': 0.18, 'ndwi_crit': 0.03,
+        'p_min': 450, 'delta_t_crit': 3.3, 'delta_p_crit': -28.0,
+        'tolerance_note': 'Batı Akdeniz, İberya ve Kuzey Afrika; sıcak ılıman, yangın ve kuraklık adaptasyonlu mantar meşesi.'
+    },
+    'shorea_robusta': {
+        'name': 'Shorea robusta',
+        'lst_opt': 32.0, 'lst_crit': 40.0,
+        'ndwi_opt': 0.26, 'ndwi_crit': 0.06,
+        'p_min': 1000, 'delta_t_crit': 3.0, 'delta_p_crit': -25.0,
+        'tolerance_note': 'Güney Asya Hindistan/Nepal; muson iklimine bağımlı, kuru mevsime kısmi yaprak dökerek uyumlu.'
+    },
+    'swietenia_macrophylla': {
+        'name': 'Swietenia macrophylla',
+        'lst_opt': 29.0, 'lst_crit': 35.0,
+        'ndwi_opt': 0.32, 'ndwi_crit': 0.12,
+        'p_min': 1400, 'delta_t_crit': 2.2, 'delta_p_crit': -18.0,
+        'tolerance_note': 'Orta ve Güney Amerika Neotropikal; yağmur ormanları, nem kaybı ve kuraklığa hassas.'
+    },
+    'tectona_grandis': {
+        'name': 'Tectona grandis',
+        'lst_opt': 31.0, 'lst_crit': 39.0,
+        'ndwi_opt': 0.24, 'ndwi_crit': 0.05,
+        'p_min': 1200, 'delta_t_crit': 3.2, 'delta_p_crit': -26.0,
+        'tolerance_note': 'Güney ve Güneydoğu Asya; mevsimsel kuru tropikal iklim, yüksek sıcaklığa dayanıklı.'
+    }
+}
+
+SPECIES_THRESHOLDS = SPECIES_CLIMATE_THRESHOLDS
+
+
+def _generate_climate_advisory(species_key, species_info, delta_lst, delta_ndwi_pct, delta_t, delta_p_pct, stress_score, suitability, target_year, scenario):
+    sci_name = species_info.get('name', species_key)
+    scen_str = 'SSP2-4.5 (Orta Emisyon)' if '245' in scenario.lower() else 'SSP5-8.5 (Yüksek Emisyon)'
+
+    lst_sign = '+' if delta_lst >= 0 else ''
+    ndwi_sign = '+' if delta_ndwi_pct >= 0 else ''
+    dt_sign = '+' if delta_t >= 0 else ''
+    dp_sign = '+' if delta_p_pct >= 0 else ''
+
+    advisory_lines = [
+        f'**Silvikültürel Karar Destek ve İklim Projeksiyon Değerlendirmesi ({sci_name}):**',
+        '',
+        f'• **Geçmiş Uydu Gözlemleri (2013-Günümüz Landsat 8/9):** İnceleme alanında yaz pik dönemi (1 Temmuz - 31 Ağustos) yüzey sıcaklığı trendi {lst_sign}{delta_lst:.1f}°C, NDWI bitki su stresi göstergesi ise {ndwi_sign}{round(delta_ndwi_pct)}% olarak hesaplanmıştır.',
+        f'• **Gelecek İklim Projeksiyonu (NASA GDDP-CMIP6 - {scen_str}, Hedef: {target_year}):** 1995-2014 Temmuz-Ağustos referans dönemine kıyasla yaz sıcaklıklarında ortalama {dt_sign}{delta_t:.1f}°C artış ve yaz yağışlarında {dp_sign}{round(delta_p_pct)}% değişim öngörülmektedir.',
+        f'• **Klimatik Stres İndeksi:** {stress_score}/100 — Uygunluk Sınıfı: **{suitability}**.',
+        ''
+    ]
+
+    if stress_score < 35:
+        advisory_lines.extend([
+            '**Silvikültürel Uygulama Tavsiyesi (Düşük Risk / Yüksek Uygunluk):**',
+            f'Seçilen tür ({sci_name}) meşcere bazında optimal fizyolojik tolerans sınırları içerisindedir. '
+            'Doğal gençleştirme süreçleri desteklenmeli, biyolojik çeşitlilik ve kapalılık dengesi korunmalıdır. '
+            'Gelecek projeksiyonlarında türün mevcut yetişme ortamı şartlarını muhafaza edeceği öngörülmektedir.'
+        ])
+    elif stress_score <= 65:
+        advisory_lines.extend([
+            '**Silvikültürel Uygulama Tavsiyesi (Orta Risk / Şarta Bağlı Uygun):**',
+            f'Artan yaz sıcaklığı ve buharlaşma stresi nedeniyle {sci_name} türünde özellikle güney ve batı bakılarda kurağa bağlı tepe kurumaları ve gençlik getirmede güçlük riski belirmektedir.',
+            '1. Tıraşlama kesimlerinden kesinlikle kaçınılmalı; siper işletmeciliği (büyük alanlı koruma gölgesi) uygulanmalıdır.',
+            '2. Meşcere kapalılığı aşırı kırılmamalı, toprak nemini muhafaza eden mikro-iklimsel örtü korunmalıdır.',
+            '3. Güneye ve kurak yamaçlara bakan eğimli zonlarda kuraklığa daha mukavim yerel türlerle (örn. Quercus spp. / Pinus nigra) kademeli karışık meşcere yapısına geçilmelidir.',
+            '4. Vadi tabanları, kuzey bakılı nemli dereler ve mikro-sığınak (microrefugia) alanları silvikültürel koruma odağı yapılmalıdır.'
+        ])
+    else:
+        advisory_lines.extend([
+            '**Silvikültürel Uygulama Tavsiyesi (Yüksek Risk / Kritik Eşik):**',
+            f'Öngörülen sıcaklık artışı ({dt_sign}{delta_t:.1f}°C) ve su stresi {sci_name} türünün kritik fizyolojik sınırlarını (LST kritik: {species_info.get("lst_crit", 31)}°C, NDWI kritik: {species_info.get("ndwi_crit", 0.10)}) aşmaktadır.',
+            '1. Bu alanda monokültür veya saf plantasyon kurulumu yüksek kuruma ve başarısızlık riski taşımaktadır.',
+            '2. Geleceğe uyum (iklim adaptasyonu) kapsamında kuraklığa dayanıklı alternatif ekotipler ve yardımcı göç (assisted migration) olanakları araştırılmalıdır.',
+            '3. Mevcut meşcerede yangın emniyet zonları genişletilmeli, kuruyan yanıcı materyal aşamalı olarak sahadan uzaklaştırılmalıdır.',
+            '4. Toprak muhafaza ve erozyon kontrolü amacıyla derin köklü kurakçıl türlerin fidan dikimiyle sahaya entegrasyonu önerilir.'
+        ])
+
+    return chr(10).join(advisory_lines)
+
+
+@app.route('/api/climate-suitability', methods=['POST', 'OPTIONS'])
+def api_climate_suitability():
+    if request.method == 'OPTIONS':
+        return ('', 204)
+
+    try:
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({'success': False, 'error': 'İstek gövdesi geçerli bir JSON nesnesi olmalıdır.'}), 400
+        _sylva_check_cancelled()
+
+        # 1. Girdi parametreleri
+        roi_raw = data.get('geometry') or data.get('aoi') or data.get('roi') or data.get('polygon')
+        if not roi_raw:
+            return jsonify({'success': False, 'error': 'Geometri (geometry veya roi) parametresi zorunludur.'}), 400
+
+        _ensure_ee_ready()
+        _sylva_check_cancelled()
+
+        # 🛡️ 1. Geometri Temizleme ve Self-Intersection Koruması (make_roi shapely make_valid işletir)
+        roi = make_roi(roi_raw)
+
+        # 🛡️ 2. Poligon Boyutu Denetimi ve Dinamik Ölçekleme (30m - 120m)
+        try:
+            area_ha = float(roi.area(maxError=100).divide(10000).getInfo())
+        except Exception:
+            area_ha = 500.0
+
+        if area_ha < 100.0:
+            landsat_scale = 30
+        elif area_ha < 5000.0:
+            landsat_scale = 60
+        elif area_ha < 30000.0:
+            landsat_scale = 90
+        else:
+            landsat_scale = 120
+
+        species_value = data.get('species') or data.get('tree_species') or 'fagus_orientalis'
+        if not isinstance(species_value, str):
+            return jsonify({'success': False, 'error': 'Ağaç türü geçersiz.'}), 400
+        species_key = species_value.strip().lower()
+        species_info = SPECIES_CLIMATE_THRESHOLDS.get(species_key)
+        if not species_info:
+            return jsonify({
+                'success': False,
+                'error': 'Seçilen tür için iklim tolerans kaydı bulunamadı. Lütfen desteklenen türlerden birini seçin.'
+            }), 400
+        scenario_value = data.get('scenario') or 'ssp245'
+        if not isinstance(scenario_value, str):
+            return jsonify({'success': False, 'error': 'İklim senaryosu geçersiz.'}), 400
+        scenario = scenario_value.strip().lower()
+        if scenario not in ('ssp245', 'ssp585'):
+            return jsonify({'success': False, 'error': 'Desteklenmeyen iklim senaryosu; SSP2-4.5 veya SSP5-8.5 seçin.'}), 400
+
+        try:
+            target_year = int(data.get('target_year') or data.get('targetYear') or 2060)
+        except (ValueError, TypeError):
+            return jsonify({'success': False, 'error': 'Hedef yıl geçersiz.'}), 400
+        if target_year not in (2040, 2060, 2080, 2100):
+            return jsonify({'success': False, 'error': 'Hedef yıl 2040, 2060, 2080 veya 2100 olmalıdır.'}), 400
+
+        # 2. Geçmiş Zaman Serisi Hesabı (Landsat 8/9 — 2013-2024)
+        _sylva_check_cancelled()
+        years = list(range(2013, 2025))
+
+        def prep_landsat_year(y):
+            y_num = ee.Number(y)
+            s_date = ee.Date.fromYMD(y_num, 7, 1)
+            e_date = ee.Date.fromYMD(y_num, 9, 1)
+            # Erken bant seçimi (select) ile bellek ve transfer optimizasyonu
+            target_bands = ['SR_B2', 'SR_B4', 'SR_B5', 'SR_B6', 'ST_B10', 'QA_PIXEL']
+            col8 = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2').filterBounds(roi).filterDate(s_date, e_date).select(target_bands)
+            col9 = ee.ImageCollection('LANDSAT/LC09/C02/T1_L2').filterBounds(roi).filterDate(s_date, e_date).select(target_bands)
+            merged = col8.merge(col9).map(lambda img: _mask_clouds(img, 'l89-l2'))
+
+            def calc_indices(img):
+                opt = img.select(['SR_B2', 'SR_B4', 'SR_B5', 'SR_B6']).multiply(0.0000275).add(-0.2)
+                blue = opt.select('SR_B2')
+                red  = opt.select('SR_B4')
+                nir  = opt.select('SR_B5')
+                swir = opt.select('SR_B6')
+
+                ndvi = nir.subtract(red).divide(nir.add(red)).rename('ndvi')
+                ndwi = nir.subtract(swir).divide(nir.add(swir)).rename('ndwi')
+                bsi  = swir.add(red).subtract(nir.add(blue)).divide(swir.add(red).add(nir.add(blue))).rename('bsi')
+                lst  = img.select('ST_B10').multiply(0.00341802).add(149.0).subtract(273.15).rename('lst')
+                return ndvi.addBands(ndwi).addBands(bsi).addBands(lst)
+
+            med = merged.map(calc_indices).median()
+            valid_pct = (med.select('ndvi').mask().unmask(0).clip(roi)
+                         .rename('valid_pct').multiply(100.0))
+            stats = med.addBands(valid_pct).reduceRegion(
+                reducer=ee.Reducer.mean(),
+                geometry=roi,
+                scale=landsat_scale,
+                maxPixels=1e9,
+                bestEffort=True,
+                tileScale=4
+            )
+            return ee.Feature(None, stats
+                              .set('year', y_num)
+                              .set('landsat8_scene_count', col8.size())
+                              .set('landsat9_scene_count', col9.size())
+                              .set('acquisition_dates_millis', merged.aggregate_array('system:time_start'))
+                              .set('scene_cloud_cover_mean_pct', merged.aggregate_mean('CLOUD_COVER')))
+
+        fc_hist = ee.FeatureCollection(ee.List(years).map(prep_landsat_year))
+        hist_raw = _call_with_retry(lambda: fc_hist.getInfo()['features'])
+
+        timeline_hist = []
+        for f in hist_raw:
+            p = f.get('properties') or {}
+            if p.get('ndvi') is not None and p.get('lst') is not None:
+                timeline_hist.append({
+                    'year': int(p['year']),
+                    'ndvi': round(float(p['ndvi']), 3),
+                    'ndwi': round(float(p.get('ndwi', 0.0)), 3),
+                    'lst': round(float(p['lst']), 1),
+                    'bsi': round(float(p.get('bsi', 0.0)), 3),
+                    'valid_pixel_pct': round(float(p.get('valid_pct', 0.0)), 1),
+                    'qa_masked_pixel_pct': round(max(0.0, 100.0 - float(p.get('valid_pct', 0.0))), 1),
+                    'scene_cloud_cover_mean_pct': (round(float(p['scene_cloud_cover_mean_pct']), 1)
+                                                   if p.get('scene_cloud_cover_mean_pct') is not None else None),
+                    'landsat8_scene_count': int(p.get('landsat8_scene_count') or 0),
+                    'landsat9_scene_count': int(p.get('landsat9_scene_count') or 0),
+                    'acquisition_dates': sorted({
+                        datetime.datetime.fromtimestamp(float(ts) / 1000.0, datetime.timezone.utc).strftime('%Y-%m-%d')
+                        for ts in (p.get('acquisition_dates_millis') or []) if ts is not None
+                    })
+                })
+
+        # Use only observed years; missing/cloudy years must not be replaced by synthetic values.
+        timeline_hist.sort(key=lambda item: item['year'])
+        if len(timeline_hist) < 4:
+            return jsonify({
+                'success': False,
+                'error': 'Bu çalışma alanında güvenilir geçmiş Landsat gözlemi yetersiz (en az 4 geçerli yaz kompoziti gerekli).'
+            }), 422
+
+        _sylva_check_cancelled()
+
+        # 3. Gelecek İklim Projeksiyon Verilerinin Çekilmesi (NASA GDDP-CMIP6)
+        # CMIP6 25 km grid çözünürlüğü için mikro alanlarda centroid tamponu garantisi
+        cmip_roi = roi if area_ha >= 10000.0 else roi.centroid(100).buffer(15000, 100)
+
+        cmip6_models = ['ACCESS-CM2', 'EC-Earth3', 'MIROC6', 'MPI-ESM1-2-HR']
+        gddp = ee.ImageCollection('NASA/GDDP-CMIP6').filter(ee.Filter.inList('model', cmip6_models))
+
+        # Baseline: 1995-2014, summer (July-August)
+        base_col = (gddp.filter(ee.Filter.eq('scenario', 'historical'))
+                    .filter(ee.Filter.calendarRange(1995, 2014, 'year'))
+                    .filter(ee.Filter.calendarRange(7, 8, 'month'))
+                    .filterBounds(cmip_roi)
+                    .select(['tasmax', 'pr']))
+        base_mean = base_col.mean()
+
+        base_stats = _call_with_retry(lambda: base_mean.reduceRegion(
+            reducer=ee.Reducer.mean(),
+            geometry=cmip_roi,
+            scale=25000,
+            maxPixels=1e9,
+            bestEffort=True,
+            tileScale=2
+        ).getInfo())
+
+        base_tasmax = base_stats.get('tasmax')
+        base_pr = base_stats.get('pr')
+        if base_tasmax is None or base_pr is None:
+            return jsonify({
+                'success': False,
+                'error': 'Seçilen alanda CMIP6 tarihsel referans verisi bulunamadı; iklim projeksiyonu hesaplanamadı.'
+            }), 422
+
+        # Projeksiyon milestone yılları
+        milestones = sorted(list({2040, 2060, 2080, 2100, target_year}))
+
+        def prep_fut(y):
+            y_num = ee.Number(y)
+            fut_m = (gddp.filter(ee.Filter.eq('scenario', scenario))
+                     .filter(ee.Filter.calendarRange(y_num.subtract(4).max(2015), y_num.add(4).min(2100), 'year'))
+                     .filter(ee.Filter.calendarRange(7, 8, 'month'))
+                     .filterBounds(cmip_roi)
+                     .select(['tasmax', 'pr'])
+                     .mean())
+            stats = fut_m.reduceRegion(
+                reducer=ee.Reducer.mean(),
+                geometry=cmip_roi,
+                scale=25000,
+                maxPixels=1e9,
+                bestEffort=True,
+                tileScale=2
+            )
+            return ee.Feature(None, stats.set('year', y_num))
+
+        fc_fut = ee.FeatureCollection(ee.List(milestones).map(prep_fut))
+        fut_raw = _call_with_retry(lambda: fc_fut.getInfo()['features'])
+
+        timeline_proj = []
+        recent_lst_base = timeline_hist[-1]['lst']
+        delta_t_target = None
+        delta_p_pct_target = None
+
+        for f in fut_raw:
+            p = f.get('properties') or {}
+            if p.get('year') is None:
+                continue
+            m_year = int(p['year'])
+            f_tasmax = p.get('tasmax')
+            f_pr = p.get('pr')
+            if f_tasmax is None or f_pr is None:
+                continue
+            d_t = float(f_tasmax) - float(base_tasmax)
+            d_p_pct = ((float(f_pr) - float(base_pr)) / float(base_pr)) * 100.0
+
+            if m_year == target_year:
+                delta_t_target = d_t
+                delta_p_pct_target = d_p_pct
+
+            timeline_proj.append({
+                'year': m_year,
+                'temp_increase': round(d_t, 2),
+                'pr_anomaly_pct': round(d_p_pct, 1),
+                'projected_lst': round(recent_lst_base + d_t, 1)
+            })
+
+        if delta_t_target is None or delta_p_pct_target is None:
+            return jsonify({
+                'success': False,
+                'error': f'Seçilen senaryo ve {target_year} hedef yılı için yeterli CMIP6 verisi bulunamadı.'
+            }), 422
+
+        _sylva_check_cancelled()
+
+        # 4. Geçmiş Trendler ve Stres Skoru Algoritması
+        if len(timeline_hist) >= 4:
+            early_slice = timeline_hist[:3]
+            recent_slice = timeline_hist[-3:]
+            early_lst = sum(item['lst'] for item in early_slice) / len(early_slice)
+            recent_lst = sum(item['lst'] for item in recent_slice) / len(recent_slice)
+            early_ndwi = sum(item['ndwi'] for item in early_slice) / len(early_slice)
+            recent_ndwi = sum(item['ndwi'] for item in recent_slice) / len(recent_slice)
+            delta_lst = recent_lst - early_lst
+            delta_ndwi_pct = ((recent_ndwi - early_ndwi) / abs(early_ndwi) * 100.0) if early_ndwi != 0 else 0.0
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Geçmiş Landsat eğilimlerini hesaplamak için en az dört geçerli yıllık yaz kompoziti gereklidir.'
+            }), 422
+
+        # Tür Fizyolojik Eşikleri
+        lst_opt = float(species_info['lst_opt'])
+        lst_crit = float(species_info['lst_crit'])
+        ndwi_opt = float(species_info['ndwi_opt'])
+        ndwi_crit = float(species_info['ndwi_crit'])
+        dt_crit = float(species_info['delta_t_crit'])
+        dp_crit = float(species_info['delta_p_crit'])
+
+        # Geçmiş Stres Skoru (0-100) — %40 ağırlık
+        lst_proximity = max(0.0, min(1.0, (recent_lst - lst_opt) / max(0.1, lst_crit - lst_opt)))
+        lst_slope_stress = max(0.0, min(1.0, delta_lst / 2.0))
+        past_lst_stress = lst_proximity * 60.0 + lst_slope_stress * 40.0
+
+        ndwi_drop_stress = max(0.0, min(1.0, -delta_ndwi_pct / 30.0))
+        ndwi_proximity = max(0.0, min(1.0, (ndwi_opt - recent_ndwi) / max(0.001, ndwi_opt - ndwi_crit)))
+        past_ndwi_stress = ndwi_proximity * 60.0 + ndwi_drop_stress * 40.0
+
+        past_stress = max(0.0, min(100.0, 0.5 * past_lst_stress + 0.5 * past_ndwi_stress))
+
+        # Gelecek Stres Skoru (0-100) — %60 ağırlık
+        fut_temp_stress = max(0.0, min(100.0, (delta_t_target / max(0.5, dt_crit)) * 70.0))
+        fut_pr_stress = max(0.0, min(100.0, (-delta_p_pct_target / abs(dp_crit)) * 70.0)) if delta_p_pct_target < 0 else 0.0
+        fut_stress = max(0.0, min(100.0, 0.55 * fut_temp_stress + 0.45 * fut_pr_stress))
+
+        # Ağırlıklı Toplam Klimatik Stres Endeksi (0-100)
+        stress_score = int(round(max(0.0, min(100.0, 0.40 * past_stress + 0.60 * fut_stress))))
+
+        if stress_score < 35:
+            risk_category = 'low_risk'
+            suitability = 'Yüksek Uygunluk'
+        elif stress_score <= 65:
+            risk_category = 'moderate_risk'
+            suitability = 'Şarta Bağlı Uygun'
+        else:
+            risk_category = 'high_risk'
+            suitability = 'Yüksek Risk / Kritik'
+
+        # 5. Harita Katmanı İçin GEE MapID / Token Üretimi
+        _sylva_check_cancelled()
+        try:
+            # 1. Canlı Isı / NDWI Katmanı (Landsat 8/9 son 2 yıl yaz kompoziti)
+            recent_col = (ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
+                          .filterBounds(roi)
+                          .filterDate('2022-07-01', '2025-09-01')
+                          .merge(ee.ImageCollection('LANDSAT/LC09/C02/T1_L2')
+                                 .filterBounds(roi)
+                                 .filterDate('2022-07-01', '2025-09-01'))
+                          .map(lambda img: _mask_clouds(img, 'l89-l2')))
+            recent_median = recent_col.median()
+            recent_opt = recent_median.select(['SR_B5', 'SR_B6']).multiply(0.0000275).add(-0.2)
+            nir_r = recent_opt.select('SR_B5')
+            swir_r = recent_opt.select('SR_B6')
+            ndwi_img = nir_r.subtract(swir_r).divide(nir_r.add(swir_r)).clip(roi)
+            recent_lst_img = recent_median.select('ST_B10').multiply(0.00341802).add(149.0).subtract(273.15).clip(roi)
+            vis_ndwi = {'min': -0.1, 'max': 0.4, 'palette': ['#d7191c', '#fdae61', '#ffffbf', '#a6d96a', '#1a9641']}
+            map_ndwi = _call_with_retry(lambda: ndwi_img.getMapId(vis_ndwi), retries=1)
+            tile_ndwi = map_ndwi['tile_fetcher'].url_format
+
+            # 2. Topoğrafik bakı ve eğim düzeltmeli Gelecek Uygunluk Riski Katmanı
+            srtm = ee.Image('USGS/SRTMGL1_003').clip(roi)
+            terrain = ee.Algorithms.Terrain(srtm)
+            slope = terrain.select('slope')
+            aspect = terrain.select('aspect')
+            aspect_rad = aspect.subtract(180).multiply(3.14159265 / 180.0)
+            southness = aspect_rad.cos()
+            topo_mod = southness.multiply(slope.divide(45.0)).clamp(-1.0, 1.0)
+            pixel_heat_stress = recent_lst_img.subtract(lst_opt).divide(max(0.1, lst_crit - lst_opt)).clamp(0, 1)
+            pixel_water_stress = ee.Image.constant(ndwi_opt).subtract(ndwi_img).divide(max(0.001, ndwi_opt - ndwi_crit)).clamp(0, 1)
+            pixel_historical_stress = pixel_heat_stress.add(pixel_water_stress).multiply(50.0)
+            suit_raster = pixel_historical_stress.multiply(0.40).add(ee.Image.constant(fut_stress).multiply(0.60)).add(topo_mod.multiply(15.0)).clamp(0, 100).clip(roi)
+            vis_suit = {'min': 0, 'max': 100, 'palette': ['#1a9850', '#91cf60', '#d9ef8b', '#fee08b', '#fc8d59', '#d73027']}
+            map_suit = _call_with_retry(lambda: suit_raster.getMapId(vis_suit), retries=1)
+            tile_suit = map_suit['tile_fetcher'].url_format
+        except Exception as tile_err:
+            print("[Climate Suitability API] Tile URL generation error:", tile_err)
+            tile_ndwi = None
+            tile_suit = None
+
+        tile_urls = {
+            'heat_map': tile_suit,
+            'suitability_map': tile_suit,
+            'ndwi_anomaly': tile_ndwi,
+            'ndwi_map': tile_ndwi
+        }
+
+        # Numeric GeoTIFF links for the two climate rasters.
+        raster_downloads = {'suitability': None, 'ndwi': None}
+        try:
+            if 'suit_raster' in locals():
+                raster_downloads['suitability'] = _call_with_retry(lambda: suit_raster.getDownloadURL({
+                    'name': 'SylvaGIS_Climate_Suitability', 'region': roi,
+                    'scale': landsat_scale, 'format': 'GEO_TIFF'
+                }), retries=1)
+        except Exception as export_err:
+            print('[Climate Suitability API] Suitability GeoTIFF URL unavailable:', export_err)
+        try:
+            if 'ndwi_img' in locals():
+                raster_downloads['ndwi'] = _call_with_retry(lambda: ndwi_img.getDownloadURL({
+                    'name': 'SylvaGIS_Climate_NDWI', 'region': roi,
+                    'scale': landsat_scale, 'format': 'GEO_TIFF'
+                }), retries=1)
+        except Exception as export_err:
+            print('[Climate Suitability API] NDWI GeoTIFF URL unavailable:', export_err)
+
+        # AOI-wide terrain summary for the inline report and downloadable PDF.
+        # Aspect is circular, so its mean is calculated from the mean sine/cosine.
+        topography = {
+            'dataset': 'USGS/SRTMGL1_003',
+            'nominal_scale_m': 30,
+            'elevation_m': {},
+            'slope_deg': {},
+            'aspect_circular_mean_deg': None
+        }
+        try:
+            terrain_img = ee.Algorithms.Terrain(ee.Image('USGS/SRTMGL1_003').select('elevation').clip(roi))
+            aspect_rad = terrain_img.select('aspect').multiply(math.pi / 180.0)
+            terrain_stats_img = (terrain_img.select('elevation').rename('elevation')
+                                 .addBands(terrain_img.select('slope').rename('slope'))
+                                 .addBands(aspect_rad.sin().rename('aspect_sin'))
+                                 .addBands(aspect_rad.cos().rename('aspect_cos')))
+            terrain_stats = _call_with_retry(lambda: terrain_stats_img.reduceRegion(
+                reducer=ee.Reducer.minMax().combine(ee.Reducer.mean(), sharedInputs=True),
+                geometry=roi,
+                scale=30,
+                maxPixels=1e9,
+                bestEffort=True,
+                tileScale=4
+            ).getInfo()) or {}
+            for band, target in (('elevation', 'elevation_m'), ('slope', 'slope_deg')):
+                topography[target] = {
+                    'min': terrain_stats.get(band + '_min'),
+                    'mean': terrain_stats.get(band + '_mean'),
+                    'max': terrain_stats.get(band + '_max')
+                }
+            sin_mean = terrain_stats.get('aspect_sin_mean')
+            cos_mean = terrain_stats.get('aspect_cos_mean')
+            if sin_mean is not None and cos_mean is not None and (abs(sin_mean) + abs(cos_mean)) > 1e-8:
+                topography['aspect_circular_mean_deg'] = round((math.degrees(math.atan2(sin_mean, cos_mean)) + 360.0) % 360.0, 1)
+        except Exception as topo_err:
+            print('[Climate Suitability API] SRTM terrain summary unavailable:', topo_err)
+
+        # 6. Advisory Metni ve Yapılandırılmış JSON Yanıtı
+        advisory_text = _generate_climate_advisory(
+            species_key=species_key,
+            species_info=species_info,
+            delta_lst=delta_lst,
+            delta_ndwi_pct=delta_ndwi_pct,
+            delta_t=delta_t_target,
+            delta_p_pct=delta_p_pct_target,
+            stress_score=stress_score,
+            suitability=suitability,
+            target_year=target_year,
+            scenario=scenario
+        )
+
+        resp_payload = {
+            'success': True,
+            'metrics': {
+                'past_lst_trend': f"{'+' if delta_lst >= 0 else ''}{delta_lst:.1f}°C",
+                'past_ndwi_trend': f"{'+' if delta_ndwi_pct >= 0 else ''}{round(delta_ndwi_pct)}%",
+                'future_temp_increase': f"{'+' if delta_t_target >= 0 else ''}{delta_t_target:.1f}°C",
+                'stress_score': stress_score,
+                'suitability': suitability,
+                'risk_category': risk_category,
+                'species': species_info.get('name'),
+                'target_year': target_year,
+                'scenario': scenario.upper()
+            },
+            'model_metadata': {
+                'threshold_status': 'species-specific screening thresholds; not independently calibrated or source-verified for every taxon',
+                'threshold_note': species_info.get('tolerance_note', ''),
+                'historical_valid_year_count': len(timeline_hist),
+                'historical_valid_years': [item['year'] for item in timeline_hist],
+                'cmip6_models': cmip6_models,
+                'cmip6_baseline': '1995-2014 July-August ensemble mean',
+                'cmip6_target_window': f'{max(2015, target_year - 4)}-{min(2100, target_year + 4)} July-August ensemble mean',
+                'landsat_scale_m': landsat_scale,
+                'landsat_nominal_resolution_m': 30,
+                'cmip6_nominal_resolution_deg': 0.25,
+                'cmip6_nominal_resolution_km': 25,
+                'srtm_nominal_resolution_arcsec': 1,
+                'srtm_nominal_resolution_m': 30,
+                'topography': topography,
+                'historical_reference_year': timeline_hist[0]['year'] if timeline_hist else None,
+                'historical_reference_rule': 'first valid Landsat summer composite; calendar years with no valid observation are omitted, never interpolated',
+                'historical_composite_rule': 'annual median of valid Landsat 8/9 Collection 2 Tier 1 Level-2 scenes acquired July 1 through August 31 after QA_PIXEL cloud, cloud-shadow, cirrus and snow masking',
+                'indices': {
+                    'ndvi': '(NIR - RED) / (NIR + RED)',
+                    'ndwi': '(NIR - SWIR1) / (NIR + SWIR1)',
+                    'bsi': '((SWIR1 + RED) - (NIR + BLUE)) / ((SWIR1 + RED) + (NIR + BLUE))',
+                    'lst_celsius': 'ST_B10 * 0.00341802 + 149.0 - 273.15'
+                },
+                'stress_formula': {
+                    'past_lst': '60% normalized recent-temperature proximity + 40% normalized early-to-recent LST change',
+                    'past_ndwi': '60% normalized recent-moisture proximity + 40% normalized NDWI decline',
+                    'past_stress': '50% past LST stress + 50% past NDWI stress',
+                    'future_temperature': 'clamp(70 * Δtasmax / species temperature-stress threshold, 0, 100)',
+                    'future_precipitation': 'clamp(70 * max(0, -Δprecipitation%) / abs(species precipitation threshold), 0, 100)',
+                    'future_stress': '55% future-temperature stress + 45% future-precipitation stress',
+                    'csi': 'clamp(0.40 * past_stress + 0.60 * future_stress, 0, 100)',
+                    'topography': 'clamp(CSI + 15 * clamp(cos(aspect - 180°) * slope / 45°, -1, 1), 0, 100) for the mapped pixel layer'
+                },
+                'species_thresholds': {
+                    'lst_opt_c': lst_opt, 'lst_critical_c': lst_crit,
+                    'ndwi_opt': ndwi_opt, 'ndwi_critical': ndwi_crit,
+                    'delta_t_critical_c': dt_crit, 'delta_precipitation_critical_pct': dp_crit
+                },
+                'projected_lst_method': 'Landsat recent LST baseline plus CMIP6 tasmax anomaly; approximation, not direct CMIP6 LST',
+                'interpretation': 'screening-level climate stress projection; not a validated species distribution model'
+            },
+            'timeline': {
+                'historical': timeline_hist,
+                'projection': timeline_proj,
+                'series': timeline_hist + [
+                    {
+                        'year': item['year'],
+                        'is_projection': True,
+                        'temp_increase': item['temp_increase'],
+                        'pr_anomaly_pct': item['pr_anomaly_pct'],
+                        'projected_lst': item['projected_lst']
+                    } for item in timeline_proj
+                ]
+            },
+            'historical_timeline': timeline_hist,
+            'projection_timeline': timeline_proj,
+            'tile_urls': tile_urls,
+            'raster_downloads': raster_downloads,
+            'advisory': advisory_text
+        }
+
+        clean_resp = _sanitize_for_json(resp_payload)
+        return jsonify(clean_resp)
+
+    except ee.EEException as exc:
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': 'Earth Engine is temporarily unavailable.'}), 503
+    except Exception as exc:
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(exc)}), 500
 
 
 # Preserve endpoint names, request contracts and the established EE/Leaflet session.
 for _sylva_endpoint in ('download_geotiff', 'download_raw_bands', 'vector_download',
                         'vector_download_batch', 'download_geotiff_batch', 'topo_contour_vector',
-                        'analyze', 'timeseries', 'gemini_data_qa', 'api_carbon_simulation'):
+                        'analyze', 'timeseries', 'gemini_data_qa', 'api_carbon_simulation',
+                        'api_climate_suitability'):
     app.view_functions[_sylva_endpoint] = _sylva_cancellable_view(app.view_functions[_sylva_endpoint])
 
 
