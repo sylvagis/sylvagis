@@ -13309,8 +13309,8 @@ def download_geotiff_batch():
 # IPCC Tier 1 Standart Karbon Fraksiyonu: 1 ton fırın kurusu biyokütle başına 0.47 ton Karbon (tC)
 CARBON_FRACTION = 0.47
 
-# Moleküler Ağırlık Oranı: CO2 (44.01 g/mol) / C (12.011 g/mol) ≈ 3.6667
-CO2_TO_C_RATIO = 44.0 / 12.0
+# Moleküler Ağırlık Oranı: CO2 (44.01 g/mol) / C (12.011 g/mol) ≈ 3.6641
+CO2_TO_C_RATIO = 44.01 / 12.011
 
 
 # 2. Ülke → İklim Bölgesi Eşleme Tablosu (Country to Climate Zone Mapping)
@@ -14734,12 +14734,12 @@ def biomass_to_carbon(biomass_tonnes: float) -> float:
 
 
 def carbon_to_co2e(carbon_tonnes: float) -> float:
-    """Karbon stoğunu (ton C) CO2 eşdeğerine (ton CO2e) dönüştürür. (Çarpan: 44/12 ≈ 3.6667)"""
+    """Karbon stoğunu (ton C) CO2 eşdeğerine (ton CO2e) dönüştürür. (Çarpan: 44/12 ≈ 3.6641)"""
     return float(carbon_tonnes) * CO2_TO_C_RATIO
 
 
 def co2e_to_carbon(co2e_tonnes: float) -> float:
-    """CO2 eşdeğerini (ton CO2e) karbon stoğuna (ton C) dönüştürür. (Bölen: 44/12)"""
+    """CO2 eşdeğerini (ton CO2e) karbon stoğuna (ton C) dönüştürür. (Bölen: 44.01/12.011)"""
     return float(co2e_tonnes) / CO2_TO_C_RATIO
 
 
