@@ -16449,6 +16449,90 @@ def api_climate_suitability():
                     })
                 })
 
+        # Separate rolling 30-year retrospective context. Keep it out of the
+        # recent Landsat 8/9 series used by the existing stress-score model.
+        timeline_hist_30y = []
+        long_series_note = None
+        try:
+            long_years = list(range(1995, 2025))
+
+            def prep_landsat_long_year(y):
+                y_num = ee.Number(y)
+                s_date = ee.Date.fromYMD(y_num, 7, 1)
+                e_date = ee.Date.fromYMD(y_num, 9, 1)
+
+                def harmonize(collection_id, blue_band, red_band, nir_band, swir_band, thermal_band):
+                    col = (ee.ImageCollection(collection_id).filterBounds(roi)
+                           .filterDate(s_date, e_date))
+
+                    def prep(img):
+                        qa = img.select('QA_PIXEL')
+                        clear = (qa.bitwiseAnd(1 << 0).eq(0)
+                                 .And(qa.bitwiseAnd(1 << 1).eq(0))
+                                 .And(qa.bitwiseAnd(1 << 2).eq(0))
+                                 .And(qa.bitwiseAnd(1 << 3).eq(0))
+                                 .And(qa.bitwiseAnd(1 << 4).eq(0))
+                                 .And(qa.bitwiseAnd(1 << 5).eq(0))
+                                 .And(img.select('QA_RADSAT').eq(0)))
+                        opt = img.select([blue_band, red_band, nir_band, swir_band],
+                                         ['blue', 'red', 'nir', 'swir']).multiply(0.0000275).add(-0.2)
+                        thermal = img.select(thermal_band).multiply(0.00341802).add(149.0).subtract(273.15).rename('lst')
+                        return opt.addBands(thermal).updateMask(clear).copyProperties(img, ['system:time_start'])
+
+                    return col.map(prep)
+
+                l5 = harmonize('LANDSAT/LT05/C02/T1_L2', 'SR_B1', 'SR_B3', 'SR_B4', 'SR_B5', 'ST_B6')
+                l7 = harmonize('LANDSAT/LE07/C02/T1_L2', 'SR_B1', 'SR_B3', 'SR_B4', 'SR_B5', 'ST_B6')
+                l8 = harmonize('LANDSAT/LC08/C02/T1_L2', 'SR_B2', 'SR_B4', 'SR_B5', 'SR_B6', 'ST_B10')
+                l9 = harmonize('LANDSAT/LC09/C02/T1_L2', 'SR_B2', 'SR_B4', 'SR_B5', 'SR_B6', 'ST_B10')
+                merged_long = l5.merge(l7).merge(l8).merge(l9)
+
+                def calc_long_indices(img):
+                    blue, red = img.select('blue'), img.select('red')
+                    nir, swir = img.select('nir'), img.select('swir')
+                    ndvi = nir.subtract(red).divide(nir.add(red)).rename('ndvi')
+                    ndwi = nir.subtract(swir).divide(nir.add(swir)).rename('ndwi')
+                    bsi = swir.add(red).subtract(nir.add(blue)).divide(swir.add(red).add(nir.add(blue))).rename('bsi')
+                    return ndvi.addBands(ndwi).addBands(bsi).addBands(img.select('lst'))
+
+                med = merged_long.map(calc_long_indices).median()
+                valid_pct = (med.select('ndvi').mask().unmask(0).clip(roi)
+                             .rename('valid_pct').multiply(100.0))
+                stats = med.addBands(valid_pct).reduceRegion(
+                    reducer=ee.Reducer.mean(), geometry=roi, scale=landsat_scale,
+                    maxPixels=1e9, bestEffort=True, tileScale=4)
+                return ee.Feature(None, stats.set('year', y_num)
+                                  .set('landsat5_scene_count', l5.size())
+                                  .set('landsat7_scene_count', l7.size())
+                                  .set('landsat8_scene_count', l8.size())
+                                  .set('landsat9_scene_count', l9.size())
+                                  .set('composite_scene_count', merged_long.size()))
+
+            fc_long = ee.FeatureCollection(ee.List(long_years).map(prep_landsat_long_year))
+            long_raw = _call_with_retry(lambda: fc_long.getInfo()['features'])
+            for f in long_raw:
+                p = f.get('properties') or {}
+                if p.get('ndvi') is not None and p.get('lst') is not None:
+                    timeline_hist_30y.append({
+                        'year': int(p['year']), 'ndvi': round(float(p['ndvi']), 3),
+                        'ndwi': round(float(p.get('ndwi', 0.0)), 3), 'lst': round(float(p['lst']), 1),
+                        'bsi': round(float(p.get('bsi', 0.0)), 3),
+                        'valid_pixel_pct': round(float(p.get('valid_pct', 0.0)), 1),
+                        'qa_masked_pixel_pct': round(max(0.0, 100.0 - float(p.get('valid_pct', 0.0))), 1),
+                        'landsat5_scene_count': int(p.get('landsat5_scene_count') or 0),
+                        'landsat7_scene_count': int(p.get('landsat7_scene_count') or 0),
+                        'landsat8_scene_count': int(p.get('landsat8_scene_count') or 0),
+                        'landsat9_scene_count': int(p.get('landsat9_scene_count') or 0),
+                        'scene_count': int(p.get('composite_scene_count') or 0)
+                    })
+            timeline_hist_30y.sort(key=lambda item: item['year'])
+            if len(timeline_hist_30y) < 20:
+                long_series_note = 'Fewer than 20 valid summer years were available; interpret the 30-year series cautiously.'
+        except Exception as long_series_error:
+            app.logger.warning('30-year Landsat retrospective unavailable: %s', long_series_error)
+            timeline_hist_30y = []
+            long_series_note = 'The 30-year retrospective could not be calculated for this study area.'
+
         # Use only observed years; missing/cloudy years must not be replaced by synthetic values.
         timeline_hist.sort(key=lambda item: item['year'])
         if len(timeline_hist) < 4:
@@ -16786,6 +16870,10 @@ def api_climate_suitability():
                 'threshold_note': species_info.get('tolerance_note', ''),
                 'historical_valid_year_count': len(timeline_hist),
                 'historical_valid_years': [item['year'] for item in timeline_hist],
+                'historical_30y_valid_year_count': len(timeline_hist_30y),
+                'historical_30y_valid_years': [item['year'] for item in timeline_hist_30y],
+                'historical_30y_period': '1995-2024 July-August (rolling 30 calendar years)',
+                'historical_30y_note': long_series_note,
                 'cmip6_models': cmip6_models,
                 'cmip6_baseline': '1995-2014 July-August ensemble mean',
                 'cmip6_target_window': f'{max(2015, target_year - 4)}-{min(2100, target_year + 4)} July-August ensemble mean',
@@ -16799,6 +16887,7 @@ def api_climate_suitability():
                 'historical_reference_year': timeline_hist[0]['year'] if timeline_hist else None,
                 'historical_reference_rule': 'first valid Landsat summer composite; calendar years with no valid observation are omitted, never interpolated',
                 'historical_composite_rule': 'annual median of valid Landsat 8/9 Collection 2 Tier 1 Level-2 scenes acquired July 1 through August 31 after QA_PIXEL cloud, cloud-shadow, cirrus and snow masking',
+                'historical_30y_composite_rule': 'annual median of Landsat 5/7/8/9 Collection 2 Tier 1 Level-2 scenes acquired July 1 through August 31 after QA_PIXEL masking; sensor eras are combined without an explicit cross-sensor calibration and are intended for context, not attribution of small trends',
                 'indices': {
                     'ndvi': '(NIR - RED) / (NIR + RED)',
                     'ndwi': '(NIR - SWIR1) / (NIR + SWIR1)',
@@ -16825,6 +16914,8 @@ def api_climate_suitability():
             },
             'timeline': {
                 'historical': timeline_hist,
+                'historical_30y': timeline_hist_30y,
+                'historical_30y_note': long_series_note,
                 'projection': timeline_proj,
                 'series': timeline_hist + [
                     {
